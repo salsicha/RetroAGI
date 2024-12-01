@@ -1,5 +1,7 @@
 
-FROM ubuntu:noble AS build
+# FROM ubuntu:noble AS build
+# FROM ubuntu:jammy AS build
+FROM ubuntu:focal AS build
 
 ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US.UTF-8 \
