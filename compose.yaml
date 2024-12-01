@@ -6,7 +6,7 @@ services:
     volumes:
       - "/tmp/.X11-unix:/tmp/.X11-unix"
       - ./notebooks:/notebooks
-      - ./examples:/examples
+      - ./retro_examples:/examples
       - ./scripts:/scripts
     environment:
       - "DISPLAY=${DISPLAY}"
