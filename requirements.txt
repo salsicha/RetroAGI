@@ -4,3 +4,7 @@ torchvision
 jupyterlab
 jax
 gymnasium
+pygame 
+torchsummary
+wheel
+gym-super-mario-bros

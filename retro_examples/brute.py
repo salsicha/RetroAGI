@@ -14,7 +14,7 @@ import random
 
 import gymnasium as gym
 import numpy as np
-from gymnasium.wrappers.time_limit import TimeLimit
+from gymnasium.wrappers import TimeLimit
 
 import retro
 
