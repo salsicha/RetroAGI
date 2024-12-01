@@ -14,7 +14,7 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
     command: >
       stdbuf -o L
-      bash -c "jupyter-lab --no-browser --LabApp.token=''"
+      bash -c "jupyter-lab --port 9999 --no-browser --LabApp.token='' --allow-root"
     deploy:
       resources:
         reservations:

@@ -59,6 +59,6 @@ COPY --from=build / /
 WORKDIR /notebooks
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["jupyter-lab", "--ip", "0.0.0.0", "--no-browser", \
+CMD ["jupyter-lab", "--ip", "0.0.0.0", "--port", "9999", "--no-browser", \
     "--allow-root", "--ServerApp.token=docker_jupyter", \
     "--NotebookApp.allow_password_change=False"]
