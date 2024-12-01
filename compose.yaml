@@ -3,6 +3,7 @@ services:
   retro:
     network_mode: "host"
     image: tinyagi
+    user: "1000:1000"
     volumes:
       - "/tmp/.X11-unix:/tmp/.X11-unix"
       - ./notebooks:/notebooks

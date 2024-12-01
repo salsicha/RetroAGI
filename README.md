@@ -4,6 +4,8 @@
 ## Examples:
 python3 /stable-retro-scripts/model_trainer.py --env=Airstriker-Genesis --num_env=8 --num_timesteps=100_000_000 --play
 python3 /examples/ppo.py --game='Airstriker-Genesis'
+
+Defunct?
 gym_super_mario_bros -e SuperMarioBros-v0 -m human
 
 ## References

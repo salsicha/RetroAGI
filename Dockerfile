@@ -29,6 +29,7 @@ WORKDIR /
 COPY scripts /scripts
 COPY retro_examples /examples
 COPY notebooks /notebooks
+COPY roms /roms
 
 RUN wget https://github.com/MatPoliquin/stable-retro-scripts/archive/refs/heads/main.zip && \
     unzip main.zip && mv stable-retro-scripts-main stable-retro-scripts
@@ -37,11 +38,10 @@ RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/ma
 RUN cd stable-retro && pip3 install -e .
 
 ### Importing extra roms:
-# RUN mkdir /roms
-# RUN cd /roms && \
-#     wget __some_url__ && \
-#     unzip * && \
-#     python3 -m retro.import .
+RUN cd /roms && \
+    # wget __some_url__ && \
+    # unzip * && \
+    python3 -m retro.import .
 
 
 #####################################################################
