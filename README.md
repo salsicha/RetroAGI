@@ -1,6 +1,6 @@
 <a href="">
   <img src="https://media.githubusercontent.com/media/salsicha/RetroAGI/main/mario.gif"
-    height="120" align="right" alt="" />
+    height="80" align="right" alt="" />
 </a><br>
 
 # RetroAGI
