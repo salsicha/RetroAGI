@@ -49,7 +49,7 @@ RUN mkdir /roms && cd /roms && \
     unzip Super\ Mario\ Bros.\ 3\ \(USA\).zip && \
     python3 -m retro.import .
 
-ARG USERNAME=tinyagi
+ARG USERNAME=retroagi
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $USERNAME \
