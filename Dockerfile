@@ -13,7 +13,7 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     ccache wget sudo git xorg-dev libxcb-shm0 libglu1-mesa-dev python3-dev clang \
     libc++-dev libc++abi-dev libsdl2-dev ninja-build libxi-dev python3-gdbm \
     libtbb-dev libosmesa6-dev libudev-dev autoconf libtool make cmake \
-    zlib1g-dev libopenmpi-dev ffmpeg build-essential && \
+    zlib1g-dev libopenmpi-dev ffmpeg build-essential swig && \
     rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /venv
@@ -39,10 +39,20 @@ RUN cd stable-retro && pip3 install -e .
 
 ### Importing extra roms:
 RUN cd /roms && \
-    # wget __some_url__ && \
-    # unzip * && \
     python3 -m retro.import .
 
+ARG USERNAME=tinyagi
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME \
+    && apt-get update \
+    && apt-get install -y sudo \
+    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
+    && chmod 0440 /etc/sudoers.d/$USERNAME \
+    && usermod -a -G audio,video $USERNAME
+USER $USERNAME
+    
 
 #####################################################################
 FROM scratch

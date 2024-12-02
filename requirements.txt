@@ -12,3 +12,4 @@ httpx==0.27.2
 tensordict
 torchrl
 swig
+stable_baselines3

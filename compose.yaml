@@ -9,13 +9,13 @@ services:
       - ./notebooks:/notebooks
       - ./retro_examples:/examples
       - ./scripts:/scripts
+      - ./roms:/roms
+      - /dev/dri:/dev/dri
     environment:
       - "DISPLAY=${DISPLAY}"
       - XAUTHORITY
       - NVIDIA_DRIVER_CAPABILITIES=all
-    command: >
-      stdbuf -o L
-      bash -c "jupyter-lab --port 9999 --no-browser --LabApp.token='' --allow-root"
+    command: jupyter-lab --port 9999 --no-browser --LabApp.token='' --allow-root
     deploy:
       resources:
         reservations:

@@ -1,3 +1,9 @@
+<a href="">
+  <img src="https://media.githubusercontent.com/media/salsicha/TinyAGI/main/mario.gif"
+    height="120" align="left" alt="" />
+</a>
+
+
 
 # General purpose machine learning agent
 
