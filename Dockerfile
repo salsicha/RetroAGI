@@ -31,6 +31,9 @@ COPY retro_examples /examples
 COPY notebooks /notebooks
 COPY roms /roms
 
+RUN wget https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Learning/archive/69eace77a3437f98b1b437074adee5a578803581.zip && \
+    unzip 69eace77a3437f98b1b437074adee5a578803581.zip && rm 69eace77a3437f98b1b437074adee5a578803581.zip && \
+    mv Semantic-Segmentation-Boost-Reinforcement-Learning-69eace77a3437f98b1b437074adee5a578803581/ Semantic-Segmentation-Boost-Reinforcement-Learning
 RUN wget https://github.com/MatPoliquin/stable-retro-scripts/archive/refs/heads/main.zip && \
     unzip main.zip && mv stable-retro-scripts-main stable-retro-scripts
 RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/master.zip && \

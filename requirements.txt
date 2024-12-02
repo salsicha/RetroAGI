@@ -13,3 +13,11 @@ tensordict
 torchrl
 swig
 stable_baselines3
+Pillow
+numpy
+matplotlib
+scipy
+ipywidgets
+pandas
+opencv-python
+tqdm
