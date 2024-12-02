@@ -29,7 +29,6 @@ WORKDIR /
 COPY scripts /scripts
 COPY retro_examples /examples
 COPY notebooks /notebooks
-COPY roms /roms
 
 RUN wget https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Learning/archive/69eace77a3437f98b1b437074adee5a578803581.zip && \
     unzip 69eace77a3437f98b1b437074adee5a578803581.zip && rm 69eace77a3437f98b1b437074adee5a578803581.zip && \
@@ -41,7 +40,13 @@ RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/ma
 RUN cd stable-retro && pip3 install -e .
 
 ### Importing extra roms:
-RUN cd /roms && \
+RUN mkdir /roms && cd /roms && \
+    wget https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20\(Headered\)/Super%20Mario%20Bros.%20%28World%29.zip && \
+    unzip Super\ Mario\ Bros.\ \(World\).zip && \
+    wget https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20\(Headered\)/Super%20Mario%20Bros.%202%20%28USA%29.zip && \
+    unzip Super\ Mario\ Bros.\ 2\ \(USA\).zip && \
+    wget https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20\(Headered\)/Super%20Mario%20Bros.%203%20%28USA%29.zip && \
+    unzip Super\ Mario\ Bros.\ 3\ \(USA\).zip && \
     python3 -m retro.import .
 
 ARG USERNAME=tinyagi
