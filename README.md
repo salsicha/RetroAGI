@@ -5,7 +5,6 @@
 
 # RetroAGI
 
-##  General purpose machine learning agent
 
 ### TODO
 Train convolution model to sematically segment frames
