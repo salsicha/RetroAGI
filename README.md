@@ -8,7 +8,19 @@
 General purpose machine learning agent for retro games 
 
 
-### Examples
+## Build
+```bash
+./build.sh
+```
+
+
+## Usage
+```bash
+./run.sh
+```
+
+
+### Example scripts
 python3 /stable-retro-scripts/model_trainer.py --env=Airstriker-Genesis --num_env=8 --num_timesteps=100_000_000 --play  
 python3 /examples/ppo.py --game='Airstriker-Genesis'  
 gym_super_mario_bros -e SuperMarioBros-v0 -m human  
