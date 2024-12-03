@@ -16,14 +16,14 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     ccache wget sudo git xorg-dev libxcb-shm0 libglu1-mesa-dev python3-dev clang \
     libc++-dev libc++abi-dev libsdl2-dev ninja-build libxi-dev python3-gdbm \
     libtbb-dev libosmesa6-dev libudev-dev autoconf libtool make cmake \
-    zlib1g-dev libopenmpi-dev ffmpeg build-essential swig && \
+    zlib1g-dev libopenmpi-dev ffmpeg build-essential swig vim && \
     rm -rf /var/lib/apt/lists/*
 
 # CUDA
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
 RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
-    cuda-toolkit nvidia-gds && \
+    cuda-toolkit nvidia-gds nvidia-modprobe && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /

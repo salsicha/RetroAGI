@@ -28,3 +28,10 @@ https://github.com/Farama-Foundation/stable-retro?tab=readme-ov-file
 https://huggingface.co/transformers/v3.0.2/training.html  
 https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Learning  
 https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20(Headered)/  
+
+### Note
+Occasionally the CUDA driver throws an unknown error, this is sometimes a fix:
+```bash
+sudo rmmod nvidia_uvm
+sudo modprobe nvidia_uvm
+```
