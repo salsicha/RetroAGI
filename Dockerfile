@@ -26,11 +26,10 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     cuda-toolkit nvidia-gds && \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m venv /venv
-
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+RUN python3 -m venv /venv
 COPY requirements.txt /requirements.txt
 RUN . /venv/bin/activate && \
     pip install -r /requirements.txt && \
