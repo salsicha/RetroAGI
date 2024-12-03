@@ -34,9 +34,12 @@ RUN wget https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Lea
     unzip 69eace77a3437f98b1b437074adee5a578803581.zip && rm 69eace77a3437f98b1b437074adee5a578803581.zip && \
     mv Semantic-Segmentation-Boost-Reinforcement-Learning-69eace77a3437f98b1b437074adee5a578803581/ Semantic-Segmentation-Boost-Reinforcement-Learning
 RUN wget https://github.com/MatPoliquin/stable-retro-scripts/archive/refs/heads/main.zip && \
-    unzip main.zip && mv stable-retro-scripts-main stable-retro-scripts
+    unzip main.zip && rm main.zip && mv stable-retro-scripts-main stable-retro-scripts
 RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/master.zip && \
-    unzip master.zip && mv stable-retro-master stable-retro
+    unzip master.zip && rm master.zip && mv stable-retro-master stable-retro
+RUN wget https://github.com/harikris001/Super-Mario-Reinforcement_Learning/archive/refs/heads/master.zip && \
+    unzip master.zip && rm master.zip && mv Super-Mario-Reinforcement_Learning-master Super-Mario-Reinforcement_Learning
+
 RUN cd stable-retro && pip3 install -e .
 
 ### Importing extra roms:
