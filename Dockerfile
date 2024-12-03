@@ -20,7 +20,7 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # CUDA
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
 RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     cuda-toolkit nvidia-gds && \
