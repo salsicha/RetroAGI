@@ -6,7 +6,10 @@ ENV LANG=en_US.UTF-8 \
     TERM=xterm \
     PYTHONIOENCODING=UTF-8 \
     DEBIAN_FRONTEND=noninteractive \
-    PATH="/venv/bin:$PATH"
+    CUDACXX=/usr/local/cuda/bin/nvcc \
+    PATH="/usr/local/cuda/bin:$PATH" \
+    LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
+    SHELL=/bin/bash
 
 RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     python3-pip python3-venv curl gnupg2 lsb-release unzip ca-certificates cmake \
@@ -16,13 +19,21 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     zlib1g-dev libopenmpi-dev ffmpeg build-essential swig && \
     rm -rf /var/lib/apt/lists/*
 
+# CUDA
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
+RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
+    cuda-toolkit nvidia-gds && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN python3 -m venv /venv
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 COPY requirements.txt /requirements.txt
-RUN pip install -r /requirements.txt && \
+RUN . /venv/bin/activate && \
+    pip install -r /requirements.txt && \
     rm -rf /root/.cache
 
 WORKDIR /
@@ -40,7 +51,9 @@ RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/ma
 RUN wget https://github.com/harikris001/Super-Mario-Reinforcement_Learning/archive/refs/heads/master.zip && \
     unzip master.zip && rm master.zip && mv Super-Mario-Reinforcement_Learning-master Super-Mario-Reinforcement_Learning
 
-RUN cd stable-retro && pip3 install -e .
+RUN cd stable-retro && \
+    . /venv/bin/activate && \
+    pip3 install -e .
 
 ### Importing extra roms:
 RUN mkdir /roms && cd /roms && \
@@ -67,13 +80,6 @@ USER $USERNAME
 
 #####################################################################
 FROM scratch
-
-ENV LANG=en_US.UTF-8 \
-    LANGUAGE=en_US.UTF-8 \
-    TERM=xterm \
-    PYTHONIOENCODING=UTF-8 \
-    DEBIAN_FRONTEND=noninteractive \
-    PATH="/venv/bin:$PATH"
 
 COPY --from=build / /
 

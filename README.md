@@ -7,7 +7,6 @@
 
 
 ### TODO
-Semantic Model training notebook isn't generating data, look into it
 Train convolution model to sematically segment frames  
 Create behavior tree for apply user generated constraints  
 Create progressive perceptive field and occupancy detection for agent  
