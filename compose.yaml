@@ -2,14 +2,13 @@
 services:
   retro:
     network_mode: "host"
-    image: tinyagi
+    image: retroagi
     user: "1000:1000"
     volumes:
       - "/tmp/.X11-unix:/tmp/.X11-unix"
       - ./notebooks:/notebooks
       - ./retro_examples:/examples
       - ./scripts:/scripts
-      - ./roms:/roms
       - /dev/dri:/dev/dri
     environment:
       - "DISPLAY=${DISPLAY}"
