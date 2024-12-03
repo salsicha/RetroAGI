@@ -15,6 +15,7 @@ Implement DQN for filtering action tokens
 Create method for clustering sequences  
 Build system for training new DNNs on sequence clusters  
 Build system for generating new tokens and retraining transformer  
+Evaluation method for deterritorializing bad tokens
 
 
 ### Examples

@@ -1,1 +1,1 @@
-docker build . --force-rm -t tinyagi
+docker build . --force-rm -t retroagi
