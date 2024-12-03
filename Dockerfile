@@ -63,7 +63,7 @@ RUN mkdir /roms && cd /roms && \
     unzip Super\ Mario\ Bros.\ 2\ \(USA\).zip && \
     wget https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20\(Headered\)/Super%20Mario%20Bros.%203%20%28USA%29.zip && \
     unzip Super\ Mario\ Bros.\ 3\ \(USA\).zip && \
-    python3 -m retro.import .
+    . /venv/bin/activate && python3 -m retro.import .
 
 ARG USERNAME=retroagi
 ARG USER_UID=1000
@@ -76,7 +76,7 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME \
     && usermod -a -G audio,video $USERNAME
 USER $USERNAME
-    
+
 
 #####################################################################
 FROM scratch
