@@ -26,19 +26,14 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     cuda-toolkit nvidia-gds && \
     rm -rf /var/lib/apt/lists/*
 
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-RUN python3 -m venv /venv
-COPY requirements.txt /requirements.txt
-RUN . /venv/bin/activate && \
-    pip install -r /requirements.txt && \
-    rm -rf /root/.cache
-
 WORKDIR /
+
 COPY scripts /scripts
 COPY retro_examples /examples
 COPY notebooks /notebooks
+COPY entrypoint.sh /entrypoint.sh
+COPY requirements.txt /requirements.txt
+RUN chmod +x /entrypoint.sh
 
 RUN wget https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Learning/archive/69eace77a3437f98b1b437074adee5a578803581.zip && \
     unzip 69eace77a3437f98b1b437074adee5a578803581.zip && rm 69eace77a3437f98b1b437074adee5a578803581.zip && \
@@ -50,9 +45,10 @@ RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/ma
 RUN wget https://github.com/harikris001/Super-Mario-Reinforcement_Learning/archive/refs/heads/master.zip && \
     unzip master.zip && rm master.zip && mv Super-Mario-Reinforcement_Learning-master Super-Mario-Reinforcement_Learning
 
-RUN cd stable-retro && \
+RUN python3 -m venv /venv && \
     . /venv/bin/activate && \
-    pip3 install -e .
+    pip install -r /requirements.txt && \
+    cd stable-retro && pip3 install -e .
 
 ### Importing extra roms:
 RUN mkdir /roms && cd /roms && \
@@ -64,6 +60,7 @@ RUN mkdir /roms && cd /roms && \
     unzip Super\ Mario\ Bros.\ 3\ \(USA\).zip && \
     . /venv/bin/activate && python3 -m retro.import .
 
+# User
 ARG USERNAME=retroagi
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
