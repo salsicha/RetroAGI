@@ -21,3 +21,8 @@ ipywidgets
 pandas
 opencv-python
 tqdm
+treecluster
+scikit-learn
+nltk
+prefixspan
+graphviz

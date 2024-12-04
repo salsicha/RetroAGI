@@ -8,8 +8,8 @@ ENV LANG=en_US.UTF-8 \
     DEBIAN_FRONTEND=noninteractive \
     CUDACXX=/usr/local/cuda/bin/nvcc \
     PATH="/usr/local/cuda/bin:$PATH" \
-    LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
     SHELL=/bin/bash
+    # LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
 
 RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     python3-pip python3-venv curl gnupg2 lsb-release unzip ca-certificates cmake \
