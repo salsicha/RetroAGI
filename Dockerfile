@@ -29,7 +29,6 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
 WORKDIR /
 
 COPY scripts /scripts
-COPY retro_examples /examples
 COPY notebooks /notebooks
 COPY entrypoint.sh /entrypoint.sh
 COPY requirements.txt /requirements.txt

@@ -26,3 +26,5 @@ scikit-learn
 nltk
 prefixspan
 graphviz
+biopython
+stumpy

@@ -211,12 +211,12 @@ class nTreeClus:
         # print("seg mat: ", self.seg_mat.columns)
         # print("seg mat: ", self.seg_mat)
 
-        my_temp = self.seg_mat['Class'].copy()
+        # my_temp = self.seg_mat['Class'].copy()
         
         self.seg_mat                  = pd.get_dummies(self.seg_mat).reset_index(drop=True)
         # print("seg mat: ", self.seg_mat.columns)
 
-        self.seg_mat['Class'] = my_temp
+        # self.seg_mat['Class'] = my_temp
 
         ### One-hot encoding creates duplicate "Class" columns. Fix:
         # cols_to_merge = [col for col in self.seg_mat.columns if col.startswith('Class_')]
