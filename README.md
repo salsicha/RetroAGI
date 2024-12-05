@@ -5,7 +5,7 @@
 
 
 # RetroAGI
-General purpose machine learning agent for retro games 
+General purpose machine learning agent for retro games  
 
 
 ## Build
@@ -31,12 +31,14 @@ https://github.com/Farama-Foundation/stable-retro?tab=readme-ov-file
 https://huggingface.co/transformers/v3.0.2/training.html  
 https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Learning  
 https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20(Headered)/  
-https://link.springer.com/article/10.1007/s11042-022-13695-1
-https://arxiv.org/pdf/2309.01140
+https://link.springer.com/article/10.1007/s11042-022-13695-1  
+https://arxiv.org/pdf/2309.01140  
+https://s3-eu-west-1.amazonaws.com/pstorage-leicester-213265548798/18250955/ADMA2010.pdf  
+https://arxiv.org/pdf/2309.01140  
 
 
 ### Note on CUDA driver
-Occasionally the CUDA driver throws an unknown error, this is sometimes a fix:
+Occasionally the CUDA driver throws an unknown error, this is sometimes a fix:  
 ```bash
 sudo rmmod nvidia_uvm
 sudo modprobe nvidia_uvm
