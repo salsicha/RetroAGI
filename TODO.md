@@ -14,7 +14,7 @@
 5. Implement DQN for filtering action tokens
 
 6. Create method for discovering motifs
- - try getting vertical position of mario on screen, feed into matrixprofile method for action classification (STAMP, STOMP, SCRIMP+, ???)
+ - get vertical position of mario on screen, feed into matrixprofile method for action classification (STAMP, STOMP, SCRIMP+, ???), see if forward/backward move commands can be added as another dimension
 
 7. Build system for training new DNNs on sequence clusters
 

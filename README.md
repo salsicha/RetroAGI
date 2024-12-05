@@ -34,7 +34,11 @@ https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment
 https://link.springer.com/article/10.1007/s11042-022-13695-1  
 https://arxiv.org/pdf/2309.01140  
 https://s3-eu-west-1.amazonaws.com/pstorage-leicester-213265548798/18250955/ADMA2010.pdf  
-https://arxiv.org/pdf/2309.01140  
+https://homepages.cwi.nl/~pdg/ftp/mdlintro.pdf  
+https://arxiv.org/pdf/1704.05325  
+https://www.di.uminho.pt/~pja/ps/DS06-Finalversion.pdf  
+https://arxiv.org/abs/2105.13114  
+https://arxiv.org/pdf/2308.01578  
 
 
 ### Note on CUDA driver
