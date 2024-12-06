@@ -29,3 +29,7 @@ graphviz
 biopython
 stumpy
 matrixprofile-ts
+py-trees
+datasets
+huggingface-hub
+tensorflow
