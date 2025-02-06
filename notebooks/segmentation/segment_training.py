@@ -1183,6 +1183,212 @@ class TrainingUtils():
         # 
 
 
+    def train_epoch(self, args, model, device, train_loader, optimizer, epoch):
+        # switch to train mode
+        model.train()
+
+        train_loss = []
+        counter = 1
+
+        criterion = nn.CrossEntropyLoss(ignore_index=255)
+        
+        gts_all, predictions_all = [], []
+
+        for batch_idx, (images, mask) in enumerate(train_loader):
+
+            images, mask = images.to(device), mask.to(device)
+
+            outputs = model(images)['out']
+    
+            #Aggregated per-pixel loss
+            loss = criterion(outputs, mask.squeeze(1))
+            train_loss.append(loss.item())
+
+            optimizer.zero_grad()
+
+            loss.backward()
+
+            optimizer.step()
+
+            if counter % 15 == 0:
+                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Learning rate: {:.6f}'.format(
+                    epoch, int(counter * len(images)), len(train_loader.dataset),
+                    100. * counter / len(train_loader), loss.item(),
+                    optimizer.param_groups[0]['lr']))
+            counter = counter + 1
+        
+        return sum(train_loss) / len(train_loss) # per batch averaged loss for the current epoch.
+
+
+
+    def _fast_hist(self, label_pred, label_true, num_classes):
+        mask = (label_true >= 0) & (label_true < num_classes)
+        hist = np.bincount(
+            num_classes * label_true[mask].astype(int) +
+            label_pred[mask], minlength=num_classes ** 2).reshape(num_classes, num_classes)
+        return hist
+
+    def testing(self, args, model, device, test_loader):
+
+        model.eval()
+
+        loss_per_batch = []
+        test_loss = 0
+
+        criterion = nn.CrossEntropyLoss(ignore_index=255)
+
+        gts_all, predictions_all = [], []
+        with torch.no_grad():
+            for batch_idx, (images, mask) in enumerate(test_loader):
+
+                images, mask = images.to(device), mask.to(device)
+
+                outputs = model(images)['out']
+
+                loss = criterion(outputs,mask.squeeze(1))
+                loss_per_batch.append(loss.item())
+
+                # Adapt output size for histogram calculation.
+                preds = outputs.data.max(1)[1].squeeze(1).squeeze(0).cpu().numpy()
+                gts_all.append(mask.data.squeeze(0).cpu().numpy())
+                predictions_all.append(preds)
+
+        loss_per_epoch = [np.average(loss_per_batch)]
+
+        hist = np.zeros((args.num_classes, args.num_classes))
+        for lp, lt in zip(predictions_all, gts_all):
+            hist += _fast_hist(lp.flatten(), lt.flatten(), args.num_classes)
+
+        iou = np.diag(hist) / (hist.sum(axis=1) + hist.sum(axis=0) - np.diag(hist))
+
+        plt.figure()
+        plt.bar(np.arange(args.num_classes), iou)
+        plt.title('Class Accuracy in the validation set ')
+        plt.show()
+
+        mean_iou = np.nanmean(iou)
+
+        print('\nTest set ({:.0f}): Average loss: {:.4f}, mIoU: {:.4f}\n'.format(
+            len(test_loader.dataset), loss_per_epoch[-1], mean_iou))
+
+        return (loss_per_epoch, mean_iou)
+
+
+
+    '''
+    This script is used to extract the single sprites included in the tileset.png in the same folder.
+    '''
+    def ExtractTiles(self, path):
+        # Load the tileset
+        tileset = cv2.imread(path)[..., ::-1]
+
+        y, x, z = tileset.shape  # y,x,z
+
+        # the image includes 5 levels, from which only 4 are from the original super mario
+        # (Overworld, Underwold,Underwater and Castle)
+
+        # Iterate over each level region and extract sprites.
+        # Each region has 9 x 16 (hxw) sprites, with the 6 in the bottom right corner being 2x as high.
+
+        # Width and height for each level set of tiles
+        lvl_wide = x//3
+        lvl_height = y//2
+
+        # size for each tile
+        grid_size = (16, 16)  # y,x
+
+        # Extract all sprites for all valid levels
+        #(Overworld, Underwold,Underwater and Castle)
+        for level in np.arange(4):
+            # offsets for each level
+            x_offset_lvl = 1 + (lvl_wide+1)*(level % 3)
+            y_offset_lvl = 12 + (level//3)*(37+136)
+
+            # extract per row
+            for y_i in np.arange(136//grid_size[0]):
+                # extract per column
+                y_offset = (grid_size[0]+1)*y_i + y_offset_lvl
+                for x_i in np.arange((x//3)//grid_size[1]-1):
+                    x_offset = (grid_size[1]+1)*x_i + x_offset_lvl
+
+                    # if row is 6 and column is 10 or bigger, skip as those are 2x height sprites
+                    # probably resized on input tho
+                    if (y_i == 6 and x_i > 9):
+                        continue
+                    # Get the 2x height sprites
+                    elif (y_i == 7 and x_i > 9):
+                        sprite = tileset[y_offset-grid_size[0]-1:y_offset +
+                                        grid_size[0]-1, x_offset:x_offset+grid_size[0], :]
+
+                    else:
+                        sprite = tileset[y_offset:y_offset+grid_size[0],
+                                        x_offset:x_offset+grid_size[0], :]
+
+                    sprite_write = cv2.cvtColor(sprite, cv2.COLOR_RGB2BGR)
+                    cv2.imwrite("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite%d_%d_%d.png" %
+                                (level, x_i, y_i), sprite_write)
+
+
+
+    # Define the helper function
+    def decode_segmap(self, image, nc=21):
+        ## Color palette for visualization of the 21 classes
+        label_colors = np.array([(0, 0, 0),  # 0=background
+                    # 1=aeroplane, 2=bicycle, 3=bird, 4=boat, 5=bottle
+                    (0, 0,255), (127, 127, 0), (0, 255, 0), (255, 0, 0), (255, 255, 0),
+                    # 6=bus, 7=car, 8=cat, 9=chair, 10=cow
+                    (0, 128, 128), (128, 128, 128), (64, 0, 0), (192, 0, 0), (64, 128, 0),
+                    # 11=dining table, 12=dog, 13=horse, 14=motorbike, 15=person
+                    (192, 128, 0), (64, 0, 128), (192, 0, 128), (64, 128, 128), (192, 128, 128),
+                    # 16=potted plant, 17=sheep, 18=sofa, 19=train, 20=tv/monitor
+                    (0, 64, 0), (128, 64, 0), (0, 192, 0), (128, 192, 0), (0, 64, 128)])
+
+        r = np.zeros_like(image).astype(np.uint8)
+        g = np.zeros_like(image).astype(np.uint8)
+        b = np.zeros_like(image).astype(np.uint8)
+        
+        for l in range(0, nc):
+            idx = image == l
+            r[idx] = label_colors[l, 0]
+            g[idx] = label_colors[l, 1]
+            b[idx] = label_colors[l, 2]
+            
+        rgb = np.stack([r, g, b], axis=2)
+        return rgb
+
+    def segment(self, net, path, show_orig=True,transform=transforms.ToTensor(), dev='cuda'):
+        img = Image.open(path)
+        if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
+        
+        input_image = transform(img).unsqueeze(0).to(dev)
+        out = net(input_image)['out'][0]
+        
+        segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
+        segm_rgb = decode_segmap(segm)
+        plt.imshow(segm_rgb)
+        plt.axis('off')
+        #plt.savefig('1_1.png', format='png',dpi=300,bbox_inches = "tight")
+        plt.show()
+
+    def compare(self, net,net2, path, show_orig=True,transform=transforms.ToTensor(), dev='cuda'):
+        img = Image.open(path)
+        if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
+        
+        input_image = transform(img).unsqueeze(0).to(dev)
+        out = net(input_image)['out'][0]
+        
+        segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
+        segm_rgb = decode_segmap(segm)
+        plt.imshow(segm_rgb)
+        plt.axis('off'); plt.show()
+
+        input_image = transform(img).unsqueeze(0).to(dev)
+        out = net2(input_image)['out'][0]
+        
+        segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
+        segm_rgb = decode_segmap(segm)
+        plt.imshow(segm_rgb); plt.axis('off'); plt.show()
+
 
 
 ## Step 1: 
@@ -1211,99 +1417,14 @@ print("done")
 
 ## per pixel cross-entropy loss is to be computed
 
-def train_epoch(args, model, device, train_loader, optimizer, epoch):
-    # switch to train mode
-    model.train()
-
-    train_loss = []
-    counter = 1
-
-    criterion = nn.CrossEntropyLoss(ignore_index=255)
-    
-    gts_all, predictions_all = [], []
-
-    for batch_idx, (images, mask) in enumerate(train_loader):
-
-        images, mask = images.to(device), mask.to(device)
-
-        outputs = model(images)['out']
- 
-        #Aggregated per-pixel loss
-        loss = criterion(outputs, mask.squeeze(1))
-        train_loss.append(loss.item())
-
-        optimizer.zero_grad()
-
-        loss.backward()
-
-        optimizer.step()
-
-        if counter % 15 == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Learning rate: {:.6f}'.format(
-                epoch, int(counter * len(images)), len(train_loader.dataset),
-                100. * counter / len(train_loader), loss.item(),
-                optimizer.param_groups[0]['lr']))
-        counter = counter + 1
-    
-    return sum(train_loss) / len(train_loss) # per batch averaged loss for the current epoch.
-
+# moved
 
 
 ## Step 3: Validation Epoch
 
 ## Per pixel cross entropy loss 
 
-def _fast_hist(label_pred, label_true, num_classes):
-    mask = (label_true >= 0) & (label_true < num_classes)
-    hist = np.bincount(
-        num_classes * label_true[mask].astype(int) +
-        label_pred[mask], minlength=num_classes ** 2).reshape(num_classes, num_classes)
-    return hist
-
-def testing(args, model, device, test_loader):
-
-    model.eval()
-
-    loss_per_batch = []
-    test_loss = 0
-
-    criterion = nn.CrossEntropyLoss(ignore_index=255)
-
-    gts_all, predictions_all = [], []
-    with torch.no_grad():
-        for batch_idx, (images, mask) in enumerate(test_loader):
-
-            images, mask = images.to(device), mask.to(device)
-
-            outputs = model(images)['out']
-
-            loss = criterion(outputs,mask.squeeze(1))
-            loss_per_batch.append(loss.item())
-
-            # Adapt output size for histogram calculation.
-            preds = outputs.data.max(1)[1].squeeze(1).squeeze(0).cpu().numpy()
-            gts_all.append(mask.data.squeeze(0).cpu().numpy())
-            predictions_all.append(preds)
-
-    loss_per_epoch = [np.average(loss_per_batch)]
-
-    hist = np.zeros((args.num_classes, args.num_classes))
-    for lp, lt in zip(predictions_all, gts_all):
-        hist += _fast_hist(lp.flatten(), lt.flatten(), args.num_classes)
-
-    iou = np.diag(hist) / (hist.sum(axis=1) + hist.sum(axis=0) - np.diag(hist))
-
-    plt.figure()
-    plt.bar(np.arange(args.num_classes), iou)
-    plt.title('Class Accuracy in the validation set ')
-    plt.show()
-
-    mean_iou = np.nanmean(iou)
-
-    print('\nTest set ({:.0f}): Average loss: {:.4f}, mIoU: {:.4f}\n'.format(
-        len(test_loader.dataset), loss_per_epoch[-1], mean_iou))
-
-    return (loss_per_epoch, mean_iou)
+# moved
 
 
 ## Step 4: 
@@ -1324,59 +1445,7 @@ def testing(args, model, device, test_loader):
 
 ## Step 5: Extract sprites
 
-
-'''
-This script is used to extract the single sprites included in the tileset.png in the same folder.
-'''
-def ExtractTiles(path):
-    # Load the tileset
-    tileset = cv2.imread(path)[..., ::-1]
-
-    y, x, z = tileset.shape  # y,x,z
-
-    # the image includes 5 levels, from which only 4 are from the original super mario
-    # (Overworld, Underwold,Underwater and Castle)
-
-    # Iterate over each level region and extract sprites.
-    # Each region has 9 x 16 (hxw) sprites, with the 6 in the bottom right corner being 2x as high.
-
-    # Width and height for each level set of tiles
-    lvl_wide = x//3
-    lvl_height = y//2
-
-    # size for each tile
-    grid_size = (16, 16)  # y,x
-
-    # Extract all sprites for all valid levels
-    #(Overworld, Underwold,Underwater and Castle)
-    for level in np.arange(4):
-        # offsets for each level
-        x_offset_lvl = 1 + (lvl_wide+1)*(level % 3)
-        y_offset_lvl = 12 + (level//3)*(37+136)
-
-        # extract per row
-        for y_i in np.arange(136//grid_size[0]):
-            # extract per column
-            y_offset = (grid_size[0]+1)*y_i + y_offset_lvl
-            for x_i in np.arange((x//3)//grid_size[1]-1):
-                x_offset = (grid_size[1]+1)*x_i + x_offset_lvl
-
-                # if row is 6 and column is 10 or bigger, skip as those are 2x height sprites
-                # probably resized on input tho
-                if (y_i == 6 and x_i > 9):
-                    continue
-                # Get the 2x height sprites
-                elif (y_i == 7 and x_i > 9):
-                    sprite = tileset[y_offset-grid_size[0]-1:y_offset +
-                                    grid_size[0]-1, x_offset:x_offset+grid_size[0], :]
-
-                else:
-                    sprite = tileset[y_offset:y_offset+grid_size[0],
-                                    x_offset:x_offset+grid_size[0], :]
-
-                sprite_write = cv2.cvtColor(sprite, cv2.COLOR_RGB2BGR)
-                cv2.imwrite("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite%d_%d_%d.png" %
-                            (level, x_i, y_i), sprite_write)
+# moved
 
 #########################################################################
 
@@ -1391,7 +1460,7 @@ os.system("sudo chown -R 1000:1000 /Semantic-Segmentation-Boost-Reinforcement-Le
 
 # Cut sprites from tileset
 print(path_tileset)
-ExtractTiles(path_tileset)
+TrainingUtils.ExtractTiles(path_tileset)
 
 
 ## Step 6: Frame generator
@@ -1448,13 +1517,13 @@ for epoch in range(1, args.epoch + 1):
     st = time.time()
     
     print("DeepLabV3_Resnet50 training, epoch " + str(epoch))
-    loss_per_epoch = train_epoch(args,model,device,train_loader,optimizer,scheduler)
+    loss_per_epoch = TrainingUtils.train_epoch(args,model,device,train_loader,optimizer,scheduler)
 
     loss_train_epoch += [loss_per_epoch]
 
     scheduler.step()
 
-    loss_per_epoch_test, acc_val_per_epoch_i = testing(args,model,device,test_loader)
+    loss_per_epoch_test, acc_val_per_epoch_i = TrainingUtils.testing(args,model,device,test_loader)
 
     loss_test_epoch += loss_per_epoch_test
     acc_test_per_epoch += [acc_val_per_epoch_i]
@@ -1468,8 +1537,6 @@ for epoch in range(1, args.epoch + 1):
 
     if epoch==args.epoch:
         torch.save(model.state_dict(), "/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/"+args.model_file_name)
-
-    
 
     cont += 1
 
@@ -1516,79 +1583,21 @@ model.cuda()
 
 ## Step 13: Helpers???
 
-# Define the helper function
-def decode_segmap(image, nc=21):
-  ## Color palette for visualization of the 21 classes
-  label_colors = np.array([(0, 0, 0),  # 0=background
-               # 1=aeroplane, 2=bicycle, 3=bird, 4=boat, 5=bottle
-               (0, 0,255), (127, 127, 0), (0, 255, 0), (255, 0, 0), (255, 255, 0),
-               # 6=bus, 7=car, 8=cat, 9=chair, 10=cow
-               (0, 128, 128), (128, 128, 128), (64, 0, 0), (192, 0, 0), (64, 128, 0),
-               # 11=dining table, 12=dog, 13=horse, 14=motorbike, 15=person
-               (192, 128, 0), (64, 0, 128), (192, 0, 128), (64, 128, 128), (192, 128, 128),
-               # 16=potted plant, 17=sheep, 18=sofa, 19=train, 20=tv/monitor
-               (0, 64, 0), (128, 64, 0), (0, 192, 0), (128, 192, 0), (0, 64, 128)])
-
-  r = np.zeros_like(image).astype(np.uint8)
-  g = np.zeros_like(image).astype(np.uint8)
-  b = np.zeros_like(image).astype(np.uint8)
-  
-  for l in range(0, nc):
-    idx = image == l
-    r[idx] = label_colors[l, 0]
-    g[idx] = label_colors[l, 1]
-    b[idx] = label_colors[l, 2]
-    
-  rgb = np.stack([r, g, b], axis=2)
-  return rgb
-
-def segment(net, path, show_orig=True,transform=transforms.ToTensor(), dev='cuda'):
-  img = Image.open(path)
-  if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
-  
-  input_image = transform(img).unsqueeze(0).to(dev)
-  out = net(input_image)['out'][0]
-  
-  segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
-  segm_rgb = decode_segmap(segm)
-  plt.imshow(segm_rgb)
-  plt.axis('off')
-  #plt.savefig('1_1.png', format='png',dpi=300,bbox_inches = "tight")
-  plt.show()
-
-def compare(net,net2, path, show_orig=True,transform=transforms.ToTensor(), dev='cuda'):
-  img = Image.open(path)
-  if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
-  
-  input_image = transform(img).unsqueeze(0).to(dev)
-  out = net(input_image)['out'][0]
-  
-  segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
-  segm_rgb = decode_segmap(segm)
-  plt.imshow(segm_rgb)
-  plt.axis('off'); plt.show()
-
-  input_image = transform(img).unsqueeze(0).to(dev)
-  out = net2(input_image)['out'][0]
-  
-  segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
-  segm_rgb = decode_segmap(segm)
-  plt.imshow(segm_rgb); plt.axis('off'); plt.show()
-
+# moved
 
 
 ## Step 14: eval
 
 model.eval() #Or batch normalization gives error
 
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/1_1/4.png"
+frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/1_1/4.png"
 # frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/1_2/4.png"
 # frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/6_2/4.png"
 # frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/4_1/4.png"
 # frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/6_1/4.png"
 
 print(frame)
-segment(model,frame)
+TrainingUtils.segment(model,frame)
 
 
 
@@ -1600,3 +1609,4 @@ segment(model,frame)
 # ExtractTiles(), decode_segmap(), segment(), compare()
 # Into class:
 # TrainingUtils
+
