@@ -4,7 +4,6 @@
 
 1. Train segment model to sematically segment frames
  - notebook works, organize segmentation methods into class
- - what folder do they go in???
 
 2. Create behavior tree for apply user generated constraints
 

@@ -36,17 +36,13 @@ model.classifier = DeepLabHead(2048, 6)
 model = model.to(device)
 
 
-
-
 model = models.segmentation.deeplabv3_resnet50(
         pretrained=True, progress=True)
 # Added a Sigmoid activation after the last convolution layer
 model.classifier = DeepLabHead(2048, 6)
 
-# model.load_state_dict(torch.load("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/resnet_50.pth"))
 model.load_state_dict(torch.load("/models/segmentation/MarioSegmentationModel.pth"))
 model.cuda()
-
 
 
 # Define the helper function
@@ -108,15 +104,9 @@ def compare(net,net2, path, show_orig=True,transform=transforms.ToTensor(), dev=
   segm_rgb = decode_segmap(segm)
   plt.imshow(segm_rgb); plt.axis('off'); plt.show()
 
-
-
   model.eval() #Or batch normalization gives error
 
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/1_1/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/1_2/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/6_2/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/4_1/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/6_1/4.png"
+frame = "/examples/example_frames/1.png"
 
 print(frame)
 segment(model,frame)
