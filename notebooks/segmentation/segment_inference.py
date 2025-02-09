@@ -44,7 +44,7 @@ model = models.segmentation.deeplabv3_resnet50(
 model.classifier = DeepLabHead(2048, 6)
 
 # model.load_state_dict(torch.load("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/resnet_50.pth"))
-model.load_state_dict(torch.load("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/MarioSegmentationModel.pth"))
+model.load_state_dict(torch.load("/models/segmentation/MarioSegmentationModel.pth"))
 model.cuda()
 
 
