@@ -2,8 +2,12 @@
 
 # TODO
 
-1. Train segment model to sematically segment frames
- - notebook works, organize segmentation methods into class
+1. Train segment model
+ - done
+
+2. Run segment inference
+ - add segment inference to scripts
+ - run from cell in mario notebook
 
 2. Create behavior tree for apply user generated constraints
 
