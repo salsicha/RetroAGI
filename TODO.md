@@ -6,8 +6,8 @@
  - done
 
 2. Run segment inference
- - add segment inference to scripts
  - run from cell in mario notebook
+ - fix error
 
 3. Mario elevation
  - work out method for getting Mario's distance from bottom of game screen 
