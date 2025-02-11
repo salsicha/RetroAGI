@@ -11,6 +11,20 @@ ENV LANG=en_US.UTF-8 \
     SHELL=/bin/bash
     # LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH" \
 
+
+## Enable CUDA support (even when not using a CUDA base image), since evidently some versions of UE unconditionally assume
+## `libcuda.so.1` exists when using the NVIDIA proprietary drivers, and will fail to initialise the Vulkan RHI if it is missing
+ENV NVIDIA_DRIVER_CAPABILITIES ${NVIDIA_DRIVER_CAPABILITIES},compute
+
+## Add the "display" driver capability
+## (This allows us to run projects using VirtualGL, or with onscreen rendering when bind-mounting the host system's X11 socket)
+ENV NVIDIA_DRIVER_CAPABILITIES ${NVIDIA_DRIVER_CAPABILITIES},display
+
+## Enable NVENC support for use by Unreal Engine plugins that depend on it (e.g. Pixel Streaming)
+## (Note that adding `video` seems to implicitly enable `compute` as well, but we include separate directives here to clearly indicate the purpose of both)
+ENV NVIDIA_DRIVER_CAPABILITIES ${NVIDIA_DRIVER_CAPABILITIES},video
+
+
 RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     python3-pip python3-venv curl gnupg2 lsb-release unzip ca-certificates cmake \
     ccache wget sudo git xorg-dev libxcb-shm0 libglu1-mesa-dev python3-dev clang \
@@ -25,6 +39,14 @@ RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86
 RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
     cuda-toolkit nvidia-gds nvidia-modprobe && \
     rm -rf /var/lib/apt/lists/*
+
+    
+# TODO:
+# apt install  nvidia-cuda-toolkit ???
+# Test CUDA: "nvcc --versions"
+# import torch
+# torch.cuda.is_available()
+
 
 WORKDIR /
 

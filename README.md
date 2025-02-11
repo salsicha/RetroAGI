@@ -48,3 +48,9 @@ sudo rmmod nvidia_uvm
 sudo modprobe nvidia_uvm
 ```
 
+```
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
