@@ -47,6 +47,7 @@ class SegmenInf:
 
     self.model.load_state_dict(torch.load(model_path))
     self.model.cuda()
+    self.model.eval()
 
 
   # Define the helper function
