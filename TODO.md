@@ -3,11 +3,11 @@
 # TODO
 
 1. Train segment model
- - done
+ - Done
 
 2. Run segment inference
  - run from cell in mario notebook
- - fix error
+ - Done
 
 3. Mario elevation
  - work out method for getting Mario's distance from bottom of game screen 

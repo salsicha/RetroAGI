@@ -1,0 +1,20 @@
+I need to implement sensor fusion node in ROS2 in Python.
+Key requirements:
+1. The script should use rclpy to subscribe to a optical flow feature tracks topic.
+2. The script should use rcly to subscribe to an Imu topic.
+3. The script should use sensor fusion to calculate a PoseStamped message.
+4. The script should be able to handle sensor drift and noise.
+5. The script should be able to recover from sensor failures.
+6. The script should be able to operate in both indoor and outdoor environments.
+7. The script should be able to operate at a rate of 10 Hz or higher.
+8. The script should be able to handle multiple sensors simultaneously.
+9. The script should be able to handle sensor data with varying time stamps.
+10. The script should be able to handle sensor data with missing values.
+11. The script should be able to handle sensor data with outliers.
+Please consider:
+- Error handling
+- Edge cases
+- Performance optimization
+- Best practices for Python and ROS2
+Please do not unnecessarily remove any comments or code.
+Generate the code with clear comments explaining the logic.
