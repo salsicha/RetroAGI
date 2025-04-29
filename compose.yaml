@@ -10,6 +10,7 @@ services:
       - ./notebooks:/notebooks
       - ./retro_examples:/examples
       - ./scripts:/scripts
+      - /dev/dri:/dev/dri
       - ./models:/models
     environment:
       - "DISPLAY=${DISPLAY}"

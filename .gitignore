@@ -3,3 +3,4 @@ my_store.db
 .ipynb_checkpoints
 notebooks/checkpoints/
 Sprites
+.pyc
