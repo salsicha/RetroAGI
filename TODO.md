@@ -11,7 +11,8 @@
 
 3. Mario elevation  
  - work out method for getting Mario's distance from bottom of game screen   
-
+ - DONE  
+ 
 4. Create progressive perceptive field and occupancy detection for agent  
  - Segment game screen into progressive grid  
  - Create method for detecting the grid position of each sprite  
@@ -20,7 +21,7 @@
 
 6. Create tokens and transformer for actions  
 
-7. Implement DQN for filtering action tokens  
+7. Implement DQN for filtering action tokens???  
 
 8. Create method for discovering motifs
  - get vertical position of mario on screen, feed into matrixprofile method for action classification (STAMP, STOMP, SCRIMP+, ???), see if forward/backward move commands can be added as another dimension  
