@@ -50,6 +50,7 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
 
 WORKDIR /
 
+COPY files.zip /files.zip
 COPY scripts /scripts
 COPY notebooks /notebooks
 COPY entrypoint.sh /entrypoint.sh
@@ -71,15 +72,9 @@ RUN python3 -m venv /venv && \
     pip install -r /requirements.txt && \
     cd stable-retro && pip3 install -e .
 
-### Importing extra roms:
-RUN mkdir /roms && cd /roms && \
-    wget https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20\(Headered\)/Super%20Mario%20Bros.%20%28World%29.zip && \
-    unzip Super\ Mario\ Bros.\ \(World\).zip && \
-    wget https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20\(Headered\)/Super%20Mario%20Bros.%202%20%28USA%29.zip && \
-    unzip Super\ Mario\ Bros.\ 2\ \(USA\).zip && \
-    wget https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20\(Headered\)/Super%20Mario%20Bros.%203%20%28USA%29.zip && \
-    unzip Super\ Mario\ Bros.\ 3\ \(USA\).zip && \
-    . /venv/bin/activate && python3 -m retro.import .
+### Files:
+RUN unzip files.zip
+RUN cd files/ && . /venv/bin/activate && python3 -m retro.import .
 
 # User
 ARG USERNAME=retroagi
