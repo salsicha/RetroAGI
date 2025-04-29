@@ -4,12 +4,12 @@ services:
     network_mode: "host"
     image: retroagi
     user: "1000:1000"
+    privileged: true
     volumes:
       - "/tmp/.X11-unix:/tmp/.X11-unix"
       - ./notebooks:/notebooks
       - ./retro_examples:/examples
       - ./scripts:/scripts
-      - /dev/dri:/dev/dri
       - ./models:/models
     environment:
       - "DISPLAY=${DISPLAY}"
