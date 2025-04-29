@@ -3,7 +3,7 @@ torch
 torchvision
 jupyterlab
 jax
-gymnasium[all]
+gymnasium
 pygame 
 torchsummary
 wheel

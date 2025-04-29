@@ -56,12 +56,13 @@ RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/ma
 RUN wget https://github.com/harikris001/Super-Mario-Reinforcement_Learning/archive/refs/heads/master.zip && \
     unzip master.zip && rm master.zip && mv Super-Mario-Reinforcement_Learning-master Super-Mario-Reinforcement_Learning
 
+# Install Retro
 RUN python3 -m venv /venv && \
     . /venv/bin/activate && \
     pip install -r /requirements.txt && \
     cd stable-retro && pip3 install -e .
 
-### Files:
+# Install files:
 RUN unzip files.zip
 RUN cd files/ && . /venv/bin/activate && python3 -m retro.import .
 
