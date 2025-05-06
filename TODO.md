@@ -22,6 +22,7 @@
  - DONE
 
 6. Create tokens and transformer for actions  
+ - DONE
 
 7. Implement DQN for filtering action tokens???  
 
