@@ -16,8 +16,10 @@
 4. Create progressive perceptive field and occupancy detection for agent  
  - Segment game screen into progressive grid  
  - Create method for detecting the grid position of each sprite  
+ - DONE  
 
 5. Create behavior tree for apply user generated constraints  
+ - DONE
 
 6. Create tokens and transformer for actions  
 
