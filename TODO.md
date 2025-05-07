@@ -24,24 +24,19 @@
 6. Create tokens and transformer for actions  
  - DONE
 
-7. Implement DQN for filtering action tokens???  
+7. Create method for discovering motifs
+ - feed mario position into matrixprofile method for action classification (STAMP, STOMP, SCRIMP+, ???), see if forward/backward move commands can be added as another dimension  
 
-8. Create method for discovering motifs
- - get vertical position of mario on screen, feed into matrixprofile method for action classification (STAMP, STOMP, SCRIMP+, ???), see if forward/backward move commands can be added as another dimension  
+8. Build system for training new DNNs on sequence clusters  
 
-9. Build system for training new DNNs on sequence clusters  
+9. Build system for generating new tokens and retraining transformer  
 
-10. Build system for generating new tokens and retraining transformer  
-
-11. Evaluation method for deterritorializing bad tokens  
+10. Evaluation method for deterritorializing bad tokens  
 
 
 
 
 Notes:  
-Make starting embedding table  
-Mario height calculation in Mario notebook  
-Make perceptive field  
 Add dimension for time, all negative values, most recent is -1  
 Embeddings are just unit vectors  
 Clusters are just sums of action vectors  
@@ -64,4 +59,7 @@ First order magnitude: get to end of level
 Second order magnitude: get points  
 
 
+
+DQN
+https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Learning
 

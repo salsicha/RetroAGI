@@ -1,5 +1,10 @@
-up: true
-down: false
-left: true
-right: false
-
+commands:
+  - name: move_right
+    key: "right"
+    priority: 1
+  - name: jump
+    key: "z"
+    priority: 2
+  - name: run
+    key: "x"
+    priority: 3
