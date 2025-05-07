@@ -3,7 +3,7 @@ import py_trees
 from pynput.keyboard import Key, Controller
 
 # Load configuration from YAML file
-with open('config.yaml', 'r') as file:
+with open('behavior_config.yaml', 'r') as file:
     config = yaml.safe_load(file)
 
 # Extract flags

@@ -1,3 +1,4 @@
+pynput
 transformers
 torch
 torchvision
