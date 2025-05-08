@@ -34,7 +34,7 @@ RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
 RUN apt update && apt upgrade -y && apt install -q -y --no-install-recommends \
-    cuda-toolkit nvidia-gds nvidia-modprobe && \
+    cuda-toolkit-12-8 nvidia-gds-12-8 nvidia-modprobe && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
@@ -59,7 +59,7 @@ RUN wget https://github.com/harikris001/Super-Mario-Reinforcement_Learning/archi
 # Install Retro
 RUN python3 -m venv /venv && \
     . /venv/bin/activate && \
-    pip install -r /requirements.txt && \
+    pip3 install -r /requirements.txt && \
     cd stable-retro && pip3 install -e .
 
 # Install files:
