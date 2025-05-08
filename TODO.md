@@ -1,20 +1,6 @@
 
 
 
-The obective is MPC, which the predictions are single tokens that represent long strings of atomic actions
-the transformer produces a token that represents a string of actions
-we look at what the predicted outcome and assign a reward
-we look at the top tokens in the transformer outout and evaluate each of them
-we pick the top performing token
-we constant retrain the transfrmer on successful runs
-but we also look for progressively longer motifs to create new tokens
-the reward function is a field around boxes and coins and away from enemies
-and a global reward leading to the end of the level
-we then have to figure out how to forget old/unused tokens
-finally, the behavior tree functions as a regularization and human in the loop feedback
-
-
-
 # TODO
 
 1. Train segment model  
@@ -40,7 +26,8 @@ finally, the behavior tree functions as a regularization and human in the loop f
  - DONE
 
 7. Create method for discovering motifs
- - feed mario position into matrixprofile method for action classification (STAMP, STOMP, SCRIMP+, ???), see if forward/backward move commands can be added as another dimension  
+ - feed mario position into stumpy for action clustering  
+ - DONE
 
 8. Build system for training new DNNs on sequence clusters  
 
@@ -48,6 +35,21 @@ finally, the behavior tree functions as a regularization and human in the loop f
 
 10. Evaluation method for deterritorializing bad tokens  
 
+
+
+Objective:  
+
+The obective is MPC, which the predictions are single tokens that represent long strings of atomic actions  
+the transformer produces a token that represents a string of actions  
+we look at what the predicted outcome and assign a reward  
+we look at the top tokens in the transformer outout and evaluate each of them  
+we pick the top performing token  
+we constant retrain the transfrmer on successful runs  
+but we also look for progressively longer motifs to create new tokens  
+the reward function is a field around boxes and coins and away from enemies  
+and a global reward leading to the end of the level  
+we then have to figure out how to forget old/unused tokens  
+finally, the behavior tree functions as a regularization and human in the loop feedback  
 
 
 
