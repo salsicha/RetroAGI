@@ -1,24 +1,34 @@
-
-
-## WIP
-
-
-import numpy as np
 import stumpy
+import csv
+import numpy as np
 import matplotlib.pyplot as plt
 
-T = np.array([0, 1, 2, 3, 2, 1, 0, 1, 2, 3, 2, 1, 0, 5, 6, 7, 8, 7, 6, 5])
-m = 4  # subsequence length
+plt.rcParams["figure.figsize"] = [20, 6]  # width, height
+plt.rcParams['xtick.direction'] = 'out'
 
-mp = stumpy.stump(T, m)
+m = 24
+c = np.random.rand(10000)
+p = stumpy.stump(c, m)
 
-motif_groups = stumpy.motifs(T, mp[:, 0], max_motifs=3, k=3)
+dists, inde = stumpy.motifs(c, p[:, 0], max_motifs=2)
 
-for i, group in enumerate(motif_groups):
-    print(f"Motif Group {i+1}: start indices = {group}")
-    for idx in group:
-        plt.plot(range(idx, idx + m), T[idx:idx + m], label=f"Motif {idx}")
-    plt.legend()
-    plt.title(f"Motif Group {i+1}")
-    plt.show()
+fig, axs = plt.subplots(2, sharex=True, gridspec_kw={'hspace': 0})
+plt.suptitle('Motif (Pattern) Discovery', fontsize='30')
+axs[0].plot(c)
+axs[0].set_ylabel('CO2 ppm', fontsize='20')
 
+cols = ['red' , 'green', 'blue' ]
+
+for z in range(0, inde.shape[0]):
+    col = cols[z]
+    start = inde[z, 0]
+    stop = inde[z, 0] + m
+    matches = stumpy.match(c[start:stop],c, max_distance=2.0) 
+    for mt in range(matches.shape[0]):
+        s = matches[mt, 1]
+        st = s + m
+        axs[0].plot(np.arange(s, st), c[s : st], c=col)
+
+axs[1].plot(p[:, 0])
+axs[1].set_ylabel('Matrix profile', fontsize='20')
+plt.show()
