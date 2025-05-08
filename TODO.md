@@ -50,6 +50,7 @@ The reward function is a field around boxes and coins and away from enemies
 And a global reward leading to the end of the level  
 We then have to figure out how to forget old/unused tokens  
 Finally, the behavior tree functions as a regularization and human in the loop feedback  
+Because the vocab will be so small and the sequences so short, training will happen in real-time in the game loop  
 
 
 
