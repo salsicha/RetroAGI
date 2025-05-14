@@ -37,3 +37,19 @@ huggingface-hub
 tensorflow
 numba
 numba-cuda
+# CTM
+numpy
+torch
+torchvision
+matplotlib
+seaborn
+tdqm
+opencv-python
+imageio
+scikit-learn
+umap-learn
+python-dotenv
+gymnasium
+minigrid
+datasets
+autoclip
