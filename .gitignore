@@ -4,3 +4,4 @@ my_store.db
 notebooks/checkpoints/
 Sprites
 *.pyc
+notebooks/ctm/data/
