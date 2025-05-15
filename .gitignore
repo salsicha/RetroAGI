@@ -5,3 +5,4 @@ notebooks/checkpoints/
 Sprites
 *.pyc
 notebooks/ctm/data/
+*.gif
