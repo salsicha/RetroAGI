@@ -53,3 +53,4 @@ gymnasium
 minigrid
 datasets
 autoclip
+mediapy
