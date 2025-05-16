@@ -9,9 +9,7 @@ other_dir = os.path.join(current_dir, '..', '..', '..')
 sys.path.insert(0, other_dir)
 
 import gym
-import gym_super_mario_bros
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
-from nes_py.wrappers import JoypadSpace
+import retro
 import torch
 import torch.nn as nn
 import numpy as np
@@ -61,19 +59,8 @@ def preprocess(obs):
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # Version check and warning
-    import gym_super_mario_bros, nes_py, gym
-    # print(f"gym_super_mario_bros version: {gym_super_mario_bros.__version__}")
-    # print(f"nes_py version: {nes_py.__version__}")
-    # print(f"gym version: {gym.__version__}")
-    if hasattr(gym_super_mario_bros, 'make'):
-        try:
-            env = gym_super_mario_bros.make('SuperMarioBros-1-1-v0', render_mode=None)
-        except TypeError:
-            env = gym_super_mario_bros.make('SuperMarioBros-1-1-v0')
-    else:
-        env = gym.make('SuperMarioBros-1-1-v0')
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    # Use Gym Retro for Super Mario Bros
+    env = retro.make(game='SuperMarioBros-Nes', state='Level1-1')
     n_actions = env.action_space.n
 
     ctm = ContinuousThoughtMachineRL(**CTM_CONFIG).to(device)
