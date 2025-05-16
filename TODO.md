@@ -30,6 +30,7 @@
  - DONE
 
 8. Build system for training new DNNs on sequence clusters  
+ - clustering working
 
 9. Build system for generating new tokens and retraining transformer  
 
