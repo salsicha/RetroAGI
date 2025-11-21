@@ -3,6 +3,32 @@
 
 # TODO
 
+
+The main advantage of real neural networks over artificial ones is that the real ones are sample efficient.
+
+To make a neural network architecture sample efficient I'll try to build memory directly into the network.
+
+Create memory network
+
+Neural map:
+
+Memorize:
+Sense input -> Embedding -> Memory storage/recollection.
+
+Recall:
+Sense input -> Embedding -> Memory storage/recollection -> Language/output.
+
+Notes
+- So during storage the embedding activities and that embedding network is fully mapped to the memory network such that the memory network simply stores which embedding neurons activated most.
+- Do this with nmist?
+- There’s no sequence to the memories, a story telling transformer creates the narrative of the sequence of events
+- A memory only activates if feeding input to the encoder from the sensor activates the same neurons as the memory
+- Then long term memory is accomplished by training the networks normally
+- Intelligence is telling these stories in a loop with the environment while also being motivated toward some goal
+
+
+
+
 1. Train segment model  
  - DONE  
 
