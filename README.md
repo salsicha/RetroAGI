@@ -9,7 +9,7 @@ General purpose machine learning agent for retro games
 
 
 ## Diagram
-![Diagram](“https://github.com/salsicha/RetroAGI/blob/main/diagrams/brain.jpg”)
+![The Brain](https://github.com/salsicha/RetroAGI/blob/main/diagrams/brain.jpg)
 
 
 ## Build
