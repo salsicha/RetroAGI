@@ -8,6 +8,10 @@
 General purpose machine learning agent for retro games  
 
 
+## Diagram
+![Diagram](“diagrams/brain.jpg”)
+
+
 ## Build
 ```bash
 ./build.sh
