@@ -1,60 +1,18 @@
-<a href="">
-  <img src="https://media.githubusercontent.com/media/salsicha/RetroAGI/main/mario.gif"
-    height="80" align="right" alt="" />
-</a><br>
 
 
-# RetroAGI
-General purpose machine learning agent for retro games  
+# TODO
+
+The purpose of this project is to create a continuously learning agent with an architecture similiar to the human brain. The visual input from the Mario game is sent into the Occipital model. The Occipital output goees to a decoder that reconstructs the input image, and also send "what" latent parameters to the Temporal model and "where/how" latent parameters to the Parietal model. The Temporal model outputs to a decoder that semantically describes the sequence of events in the scene, and also to the Parietal model. The Parietal outputs to a decoder that outputs the areas of the scene that are Mario's short-term objectives/destinations, and also to the Motor, Frontal, and back to the Temporal model. The Frontal outputs to a decoder that outputs the long-term goals in the scene, and also back to the Parietal model. The Motor model outputs to a decoder that sends the next key press input back to the game.
 
 
-## Diagram
-![The Brain](https://github.com/salsicha/RetroAGI/blob/main/diagrams/brain.jpg)
+1. Build Occipital model and decoder that read images from the game scene and reconstructs them with the decoder so that we know the Occipital model has learned the latent parameters of the visual field in the game.
 
+2. Build Temporal model that takes latent inputs from the Occipital and Parietal models, and decoder that emit semantic sequences that describe the events in the games so that we know the Temporal model has learned the latent parameters of sequences of events in the game.
 
-## Build
-```bash
-./build.sh
-```
+3. Build Parietal model that takes inputs from the Temporal model, Occipital model, and Frontal model, and decoder that outputs the areas of the scene that are Mario's short-term objectives.
 
+4. Build Frontal model that takes inputs from the Parietal model, and decoder that outputs the long-term goals in the scene.
 
-## Usage
-```bash
-./run.sh
-```
+5. Build Motor model that takes in the latent output of the Parietal and uses a decoder to emit the next key press input to the game.
 
-
-### Example scripts
-python3 /stable-retro-scripts/model_trainer.py --env=Airstriker-Genesis --num_env=8 --num_timesteps=100_000_000 --play  
-python3 /examples/ppo.py --game='Airstriker-Genesis'  
-gym_super_mario_bros -e SuperMarioBros-v0 -m human  
-
-
-### References
-https://github.com/Farama-Foundation/stable-retro?tab=readme-ov-file  
-https://huggingface.co/transformers/v3.0.2/training.html  
-https://github.com/vpulab/Semantic-Segmentation-Boost-Reinforcement-Learning  
-https://myrient.erista.me/files/No-Intro/Nintendo%20-%20Nintendo%20Entertainment%20System%20(Headered)/  
-https://link.springer.com/article/10.1007/s11042-022-13695-1  
-https://arxiv.org/pdf/2309.01140  
-https://s3-eu-west-1.amazonaws.com/pstorage-leicester-213265548798/18250955/ADMA2010.pdf  
-https://homepages.cwi.nl/~pdg/ftp/mdlintro.pdf  
-https://arxiv.org/pdf/1704.05325  
-https://www.di.uminho.pt/~pja/ps/DS06-Finalversion.pdf  
-https://arxiv.org/abs/2105.13114  
-https://arxiv.org/pdf/2308.01578  
-
-
-### Note on CUDA driver
-Occasionally the CUDA driver throws an unknown error, this is sometimes a fix:  
-```bash
-sudo rmmod nvidia_uvm
-sudo modprobe nvidia_uvm
-```
-
-```
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
 
