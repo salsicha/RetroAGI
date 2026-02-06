@@ -1,7 +1,19 @@
 
 
-
 # TODO
+
+The purpose of this project is to create a continuously learning agent with an architecture similiar to the human brain.
+
+The visual input from the Mario game is sent into the Occipital model. The Occipital output goees to a decoder that reconstructs the input image, and also to the Temporal and Parietal models.
+
+The Temporal model outputs to a decoder that semantically describes the sequence of events in the scene, and also to the Parietal model.
+
+The Parietal outputs to a decoder that outputs the areas of the scene that are Mario's objectives/destinations, and also to the Motor, Frontal, and back to the Temporal model.
+
+The Frontal outputs to a decoder that outputs the long-term goals in the scene, and also back to the Parietal model.
+
+The Motor model outputs to a decoder that sends the next key press input back to the game.
+
 
 
 The main advantage of real neural networks over artificial ones is that the real ones are sample efficient.
@@ -64,7 +76,7 @@ Notes
 
 
 
-Objective:  
+Scraps:
 
 The obective is MPC, which the predictions are single tokens that represent long strings of atomic actions  
 The transformer produces a tokens (motifs) that represents a string of actions  
@@ -78,7 +90,6 @@ And a global reward leading to the end of the level
 We then have to figure out how to forget old/unused tokens  
 Finally, the behavior tree functions as a regularization and human in the loop feedback  
 Because the vocab will be so small and the sequences so short, training will happen in real-time in the game loop  
-
 
 
 Notes:  
