@@ -88,4 +88,4 @@ COPY --from=build / /
 WORKDIR /notebooks
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "main.py"]
+CMD ["python3", "/scripts/run.py"]
