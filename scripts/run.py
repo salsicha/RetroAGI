@@ -1,55 +1,25 @@
-## Mario
-
-import cv2
-from PIL import Image
-from torchvision import datasets, transforms, models
-import torch
-import torchvision
-import torch.nn as nn
-import torch.backends.cudnn as cudnn
-from torchvision.models.segmentation.deeplabv3 import DeepLabHead,DeepLabV3
-from torchvision import models
-import matplotlib.pyplot as plt
-
-import cv2
-import numpy as np
-
+"""
+Entry point for the RetroAGI agent.
+Sets up the environment and executes the main agent loop.
+"""
+import sys
 import os
 
-# sys.path.append("../scripts/")
+# Add the project root directory to the Python path
+# This allows imports like 'from src.models ...' to work
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-os.chdir('/scripts')
+from src.main import main
 
-import matplotlib.pyplot as plt
-import sys
-
-import retro
-
-# game_list = retro.data.list_games()
-# print(game_list)
-
-
-env = retro.make(game='SuperMarioBros-Nes')
-# env = retro.make(game='SuperMarioBros3-Nes')
-
-obs = env.reset()
-
-count = 2000
-
-while True:
-    count -= 1
-    if count < 0:
-        break
-
-    obs, rew, done, term, info = env.step(env.action_space.sample())
-
-    # print(f"Observation shape: {obs.shape} \n")
-    # print(f"Reward: {rew} \n")
-    # print(f"Done?: {done} \n")
-    # print(f"Terminated?: {term} \n")
-    # print(f"info: {info} \n")
-
-    env.render()
-    if done:
-        obs = env.reset()
-env.close()
+if __name__ == "__main__":
+    print(f"Starting RetroAGI from {project_root}...")
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc()

@@ -45,5 +45,9 @@ class OccipitalLobe(nn.Module):
     def get_latent(self, x):
         """
         Get the latent representation of the input image.
+        Returns two vectors: 'what' and 'where'.
         """
-        return self.encoder(x)
+        latent = self.encoder(x)
+        # Split the latent vector into two halves
+        what, where = torch.chunk(latent, 2, dim=1)
+        return what, where

@@ -10,6 +10,8 @@ services:
       - ./notebooks:/notebooks
       - ./retro_examples:/examples
       - ./scripts:/scripts
+      - ./src:/src
+      - ./data:/data
       - /dev/dri:/dev/dri
       - ./models:/models
     environment:

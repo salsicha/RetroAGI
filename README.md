@@ -20,24 +20,42 @@ General purpose machine learning agent for retro games
 
 
 ## Usage
-```bash
-./run.sh
-```
+1. Start the container environment:
+   ```bash
+   ./run.sh
+   ```
+2. Once inside the environment (via Jupyter terminal or shell), run the agent:
+   ```bash
+   python3 src/main.py
+   ```
+
+## Synthetic Data & Offline Training
+To pre-train the models without running the game loop in real-time:
+
+1. **Generate Synthetic Data:**
+   Run the generation pipeline. This plays the game using a heuristic agent and generates labeled data (images, text descriptions, objective maps).
+   ```bash
+   python3 scripts/generate_data.py
+   ```
+   Data will be saved to `data/synthetic/`.
+
+2. **Train Offline:**
+   Train all lobes using the generated dataset.
+   ```bash
+   python3 scripts/train.py
+   ```
 
 
-# TODO
+# Architecture
 
-The purpose of this project is to create a continuously learning agent with an architecture similiar to the human brain. The visual input from the Mario game is sent into the Occipital model. The Occipital output goees to a decoder that reconstructs the input image, and also send "what" latent parameters to the Temporal model and "where/how" latent parameters to the Parietal model. The Temporal model outputs to a decoder that semantically describes the sequence of events in the scene, and also to the Parietal model. The Parietal outputs to a decoder that outputs the areas of the scene that are Mario's short-term objectives/destinations, and also to the Motor, Frontal, and back to the Temporal model. The Frontal outputs to a decoder that outputs the long-term goals in the scene, and also back to the Parietal model. The Motor model outputs to a decoder that sends the next key press input back to the game.
+The purpose of this project is to create a continuously learning agent with an architecture similiar to the human brain. 
 
+- **Occipital Lobe:** Processes visual input (Mario game), reconstructs the image (autoencoder), and extracts "what" and "where" latent parameters.
+- **Temporal Lobe:** Receives "what" information and Parietal input to generate semantic descriptions of events and update its internal state.
+- **Parietal Lobe:** Integrates "where" information, Temporal state, and Frontal state to identify short-term objectives and form a spatial/action-oriented latent representation.
+- **Frontal Lobe:** Uses Parietal input to determine long-term goals.
+- **Motor Lobe:** Translates the Parietal latent representation into specific game actions (key presses).
 
-1. [Done] Build Occipital model and decoder that read images from the game scene and reconstructs them with the decoder so that we know the Occipital model has learned the latent parameters of the visual field in the game.
-
-2. Build Temporal model that takes latent inputs from the Occipital and Parietal models, and decoder that emit semantic sequences that describe the events in the games so that we know the Temporal model has learned the latent parameters of sequences of events in the game.
-
-3. Build Parietal model that takes inputs from the Temporal model, Occipital model, and Frontal model, and decoder that outputs the areas of the scene that are Mario's short-term objectives.
-
-4. Build Frontal model that takes inputs from the Parietal model, and decoder that outputs the long-term goals in the scene.
-
-5. Build Motor model that takes in the latent output of the Parietal and uses a decoder to emit the next key press input to the game.
+The system implements a continuous learning loop where the Occipital lobe optimizes for visual reconstruction and the Motor lobe optimizes using reinforcement learning (Policy Gradient) based on game rewards.
 
 
