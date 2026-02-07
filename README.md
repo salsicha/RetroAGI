@@ -48,14 +48,48 @@ To pre-train the models without running the game loop in real-time:
 
 # Architecture
 
-The purpose of this project is to create a continuously learning agent with an architecture similiar to the human brain. 
+The purpose of this project is to create a continuously learning agent with an architecture similar to the human brain, composed of five distinct "lobes" that interact to perceive, plan, and act.
 
-- **Occipital Lobe:** Processes visual input (Mario game), reconstructs the image (autoencoder), and extracts "what" and "where" latent parameters.
-- **Temporal Lobe:** Receives "what" information and Parietal input to generate semantic descriptions of events and update its internal state.
-- **Parietal Lobe:** Integrates "where" information, Temporal state, and Frontal state to identify short-term objectives and form a spatial/action-oriented latent representation.
-- **Frontal Lobe:** Uses Parietal input to determine long-term goals.
-- **Motor Lobe:** Translates the Parietal latent representation into specific game actions (key presses).
+### 1. Occipital Lobe (Vision & Perception)
+*   **Architecture:** Convolutional Autoencoder.
+*   **Function:** Processes raw pixel input from the game.
+*   **Output:** Reconstructs the image (self-supervised learning) and splits the latent space into two distinct vectors:
+    *   **"What":** Semantic object identity features.
+    *   **"Where":** Spatial location features.
 
-The system implements a continuous learning loop where the Occipital lobe optimizes for visual reconstruction and the Motor lobe optimizes using reinforcement learning (Policy Gradient) based on game rewards.
+### 2. Temporal Lobe (Sequence & Memory)
+*   **Architecture:** Recurrent Neural Network (GRU) with embeddings.
+*   **Function:** Maintains the short-term memory of events and context.
+*   **Input:** "What" vectors from the Occipital lobe and feedback from the Parietal lobe.
+*   **Output:** Generates semantic text descriptions of current events (e.g., "Mario jumps") and a hidden state vector representing temporal context.
+
+### 3. Parietal Lobe (Spatial Attention & Objectives)
+*   **Architecture:** Multi-modal Fusion Network with Deconvolutional Decoder.
+*   **Function:** Acts as the "bridge" between perception, memory, and action. Identifies short-term spatial objectives.
+*   **Input:** "Where" vectors (Occipital), Temporal hidden state, and Frontal goals.
+*   **Output:** A high-dimensional latent vector for action selection and a 2D "Objective Map" (saliency map) indicating where Mario should go.
+
+### 4. Frontal Lobe (Planning & Strategy)
+*   **Architecture:** High-level Planner / RNN.
+*   **Function:** Determines long-term goals based on the current situation.
+*   **Input:** Parietal latent vector.
+*   **Output:** High-level textual goals (e.g., "Reach the castle") and a state vector that influences the Parietal lobe's attention.
+
+### 5. Motor Lobe (Action Execution)
+*   **Architecture:** Policy Network (MLP).
+*   **Function:** Translates the brain's intent into precise motor commands.
+*   **Input:** Parietal latent vector.
+*   **Output:** Discrete game actions (NES controller button presses) trained via Reinforcement Learning (Policy Gradient).
+
+---
+
+# Next Steps and Future Improvements
+
+*   **Advanced RL Algorithms:** Transition from basic Policy Gradient/REINFORCE to more stable algorithms like PPO (Proximal Policy Optimization) or SAC (Soft Actor-Critic) for the Motor lobe.
+*   **Transformer Integration:** Replace GRUs in Temporal and Frontal lobes with Transformer blocks to handle longer context windows and more complex reasoning.
+*   **Hippocampal Memory:** Implement an external memory bank (Vector Database) to store and retrieve successful strategies from past gameplay sessions.
+*   **Curriculum Learning:** Design a training curriculum that starts with simple movement tasks before introducing enemies and complex platforming.
+*   **Multi-Modal Reinforcement:** Utilize the generated text descriptions (Temporal) and goals (Frontal) as auxiliary rewards or inputs for a more robust Critic network.
+*   **Real-Time Brain Visualization:** Create a dashboard to visualize the "thoughts" of the agent in real-time—showing the reconstructed view, attention maps, and generated text stream alongside the gameplay.
 
 
