@@ -35,7 +35,7 @@ WORKDIR /
 COPY files.zip /files.zip
 COPY scripts /scripts
 COPY src /src
-COPY notebooks /notebooks
+# COPY notebooks /notebooks
 COPY entrypoint.sh /entrypoint.sh
 COPY requirements.txt /requirements.txt
 RUN chmod +x /entrypoint.sh
