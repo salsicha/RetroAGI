@@ -12,6 +12,7 @@ from src.models.temporal import TemporalLobe
 from src.models.parietal import ParietalLobe
 from src.models.frontal import FrontalLobe
 from src.models.motor import MotorLobe
+from src.utils.tutor import Tutor
 
 def main():
     """Main function to run the agent."""
@@ -38,6 +39,9 @@ def main():
     parietal_lobe = ParietalLobe(input_dim=dim_where + dim_temporal_hidden + dim_frontal_hidden, latent_dim=dim_parietal_hidden).to(device)
     motor_lobe = MotorLobe(input_dim=dim_parietal_hidden, action_space=env.action_space.shape[0]).to(device)
 
+    # Initialize Tutor
+    tutor = Tutor(device=device)
+
     # Optimizers
     opt_occipital = optim.Adam(occipital_lobe.parameters(), lr=1e-4)
     opt_motor = optim.Adam(motor_lobe.parameters(), lr=1e-4)
@@ -57,6 +61,9 @@ def main():
     prev_frontal = torch.zeros(1, dim_frontal_hidden).to(device)
     prev_temporal = torch.zeros(1, dim_temporal_hidden).to(device)
 
+    # Training Flags
+    use_teacher_forcing = True # If True, pass Tutor ground truth to next lobe instead of model output
+
     try:
         step = 0
         while True:
@@ -64,11 +71,23 @@ def main():
             img_tensor = transform(obs).unsqueeze(0).to(device)
 
             # 2. Forward Pass
+            # Occipital
             reconstructed, (what, where) = occipital_lobe(img_tensor), occipital_lobe.get_latent(img_tensor)
+            
+            # Temporal
             generated_seq, new_temporal = temporal_lobe(what, prev_parietal)
             new_temporal = new_temporal.squeeze(0)
-            parietal_latent, objectives = parietal_lobe(where, new_temporal, prev_frontal)
+            
+            # Parietal
+            # Teacher Forcing: If enabled, we could replace 'where' with tutor's sprite map (if dimensions matched)
+            # For now, we just pass the model output, but we will train against the tutor.
+            parietal_latent, objectives_map = parietal_lobe(where, new_temporal, prev_frontal)
+            
+            # Frontal
             frontal_latent, goals = frontal_lobe(parietal_latent)
+            
+            # Motor
+            # If we had a "Perfect Action" from tutor, we could force it here.
             action_probs = motor_lobe(parietal_latent)
 
             # 3. Action Selection (Sample for exploration)
@@ -81,9 +100,17 @@ def main():
             # 4. Environment Step
             next_obs, rew, done, info = env.step(action)
             
+            # 5. Tutor Ground Truth
+            tutor_data = tutor.get_ground_truth(obs, info, env.action_space)
+
             # 5. Online Training
             # Train Occipital (Reconstruction)
             loss_recon = criterion_recon(reconstructed, img_tensor)
+            
+            # Train Parietal (Objective Map vs Tutor Truth)
+            # Assuming tutor_data['objective_map'] matches parietal output shape
+            loss_parietal = criterion_recon(objectives_map, tutor_data['objective_map'])
+            
             opt_occipital.zero_grad()
             loss_recon.backward(retain_graph=True) # Retain because other lobes might need grads from occipital latent
             opt_occipital.step()
@@ -97,12 +124,13 @@ def main():
             opt_motor.step()
 
             if step % 10 == 0:
-                print(f"Step {step}: Recon Loss={loss_recon.item():.4f}, Reward={rew}")
+                print(f"Step {step}: Recon Loss={loss_recon.item():.4f}, Par Loss={loss_parietal.item():.4f}, Reward={rew}")
 
             # 6. Visualization (Headless safe)
             try:
                 env.render()
                 cv2.imshow("Reconstructed", cv2.cvtColor(reconstructed.squeeze(0).permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_RGB2BGR))
+                cv2.imshow("Parietal Objectives", objectives_map.squeeze(0).squeeze(0).detach().cpu().numpy())
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
             except:
