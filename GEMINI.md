@@ -1,12 +1,6 @@
-Update: 
 
-The motor model should output sequences of tokens that are all the key presses to get to the short term goal (a transformer).
-The whole system is a closed loop. At each iteration of the loop, the frontal and parietal models should not be recomputed. Instead the long and short goals should be saved. If they are achieved, they can be added to the training dataset.
-The positive feedback loop closure is as follows: 
-When long term goal achieved, stop and learn on that goal. 
-When short term goal achieved, stop and learn that goal.
-When temporal prediction is correct, stop and learn
-When key sequence gets achieves the short term goal, stop and learn that sequence.
-Negative feedback loop closure is as follows:
-When death occurs, heavily negative weight long term goal, short term goal, and motor sequence, stop and lean to avoid those.
-When temporal model fails to predict the sequence of motion for other sprites in the game, assign a negative value to that and stop and learn.
+Update:
+
+Create a tutor that bootstraps the learning process. Use the script tutor/segmentation/segment_inference.py as a starting place. The tutor should be able to identify sprite positions for the occipital model. Another tutor script should be able to identify near term goals, and another one for long term goals. The tutor can be used to teach the individual models the correct output, and it can also replace the output of the individual models when doing closed loop training so that dependent models have valid inputs. 
+
+Also what is needed is a decoder for each model. Each model passes its latent parameters to the next model, but there also needs to be a decoder model that takes the latent output of a model and produces an output that can be verified. For the frontal and parietal models, the output is a hotspot on the screen that identifies the goal, for example.
