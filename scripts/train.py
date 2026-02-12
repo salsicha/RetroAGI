@@ -113,7 +113,7 @@ def train():
 
             # Frontal
             # Forward pass
-            frontal_latent, goals = frontal_lobe(parietal_latent)
+            frontal_latent, goals, goal_map = frontal_lobe(parietal_latent)
             loss_front = torch.tensor(0.0, requires_grad=True).to(device) # Placeholder for text loss
 
             # Motor

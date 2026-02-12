@@ -30,6 +30,17 @@ class FrontalLobe(nn.Module):
         self.word_to_idx = {word: i for i, word in enumerate(self.vocab)}
         self.idx_to_word = {i: word for i, word in enumerate(self.vocab)}
 
+        # Spatial Decoder for "Goal on Screen" (e.g. 32x32 map)
+        self.spatial_decoder = nn.Sequential(
+            nn.Linear(latent_dim, 128 * 8 * 8),
+            nn.ReLU(),
+            nn.Unflatten(1, (128, 8, 8)),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1), # 16x16
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 1, kernel_size=4, stride=2, padding=1),   # 32x32
+            nn.Sigmoid()
+        )
+
     def forward(self, parietal_latent):
         latent = self.fc(parietal_latent)
         
@@ -48,7 +59,9 @@ class FrontalLobe(nn.Module):
             outputs.append(topi)
             
         generated_goals = torch.stack(outputs, dim=1).squeeze()
-        return latent, generated_goals
+        
+        goal_map = self.spatial_decoder(latent)
+        return latent, generated_goals, goal_map
 
     def sequence_to_text(self, sequence):
         text = []

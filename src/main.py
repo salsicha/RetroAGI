@@ -45,6 +45,7 @@ def main():
     # Optimizers
     opt_occipital = optim.Adam(occipital_lobe.parameters(), lr=1e-4)
     opt_motor = optim.Adam(motor_lobe.parameters(), lr=1e-4)
+    opt_frontal = optim.Adam(frontal_lobe.parameters(), lr=1e-4)
     
     # Loss functions
     criterion_recon = nn.MSELoss()
@@ -84,7 +85,7 @@ def main():
             parietal_latent, objectives_map = parietal_lobe(where, new_temporal, prev_frontal)
             
             # Frontal
-            frontal_latent, goals = frontal_lobe(parietal_latent)
+            frontal_latent, goals, goal_map = frontal_lobe(parietal_latent)
             
             # Motor
             # If we had a "Perfect Action" from tutor, we could force it here.
@@ -111,9 +112,17 @@ def main():
             # Assuming tutor_data['objective_map'] matches parietal output shape
             loss_parietal = criterion_recon(objectives_map, tutor_data['objective_map'])
             
+            # Train Frontal (Goal Map vs Tutor Truth)
+            loss_frontal = criterion_recon(goal_map, tutor_data['goal_map'])
+            
             opt_occipital.zero_grad()
+            opt_frontal.zero_grad()
+            
             loss_recon.backward(retain_graph=True) # Retain because other lobes might need grads from occipital latent
+            loss_frontal.backward(retain_graph=True)
+            
             opt_occipital.step()
+            opt_frontal.step()
 
             # Train Motor (Policy Gradient - REINFORCE one step)
             # Very basic: Minimize -log_prob * reward
@@ -131,6 +140,7 @@ def main():
                 env.render()
                 cv2.imshow("Reconstructed", cv2.cvtColor(reconstructed.squeeze(0).permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_RGB2BGR))
                 cv2.imshow("Parietal Objectives", objectives_map.squeeze(0).squeeze(0).detach().cpu().numpy())
+                cv2.imshow("Frontal Goal", goal_map.squeeze(0).squeeze(0).detach().cpu().numpy())
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
             except:
