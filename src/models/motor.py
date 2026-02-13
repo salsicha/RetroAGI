@@ -33,6 +33,9 @@ class MotorLobe(nn.Module):
         # Project parietal latent to transformer dimension
         self.context_projection = nn.Linear(input_dim, d_model)
 
+        # Value Head for Actor-Critic (PPO)
+        self.value_head = nn.Linear(d_model, 1)
+
         # Action Embedding (vocab size = action_space + special tokens)
         # 0: <SOS>, 1: <EOS>, 2..N: Actions
         self.vocab_size = action_space + 2
@@ -60,6 +63,9 @@ class MotorLobe(nn.Module):
         # Prepare Memory (Context from Parietal)
         # Transformer expects memory shape: (mem_seq_len, batch_size, d_model)
         memory = self.context_projection(parietal_latent).unsqueeze(0) 
+        
+        # Calculate Value
+        value = self.value_head(memory.squeeze(0))
 
         if target_seq is not None:
             # Training mode (Teacher Forcing)
@@ -67,10 +73,13 @@ class MotorLobe(nn.Module):
             tgt_emb = self.pos_encoder(tgt_emb)
             tgt_mask = self.generate_square_subsequent_mask(target_seq.size(0)).to(device)
             output = self.transformer_decoder(tgt_emb, memory, tgt_mask=tgt_mask)
-            return self.fc_out(output)
+            return self.fc_out(output), value
         else:
             # Inference mode (Autoregressive generation)
-            return self.generate(memory, batch_size, device, sample=sample)
+            seq_output = self.generate(memory, batch_size, device, sample=sample)
+            if sample:
+                return seq_output[0], seq_output[1], value
+            return seq_output, value
 
     def generate(self, memory, batch_size, device, sample=False):
         input_token = torch.tensor([[0] * batch_size], device=device) # <SOS>
