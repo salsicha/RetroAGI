@@ -154,12 +154,13 @@ def main():
 
             # 6. Visualization (Headless safe)
             try:
-                env.render()
-                cv2.imshow("Reconstructed", cv2.cvtColor(reconstructed.squeeze(0).permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_RGB2BGR))
-                cv2.imshow("Parietal Objectives", objectives_map.squeeze(0).squeeze(0).detach().cpu().numpy())
-                cv2.imshow("Frontal Goal", goal_map.squeeze(0).squeeze(0).detach().cpu().numpy())
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+                if "DISPLAY" in os.environ:
+                    env.render()
+                    cv2.imshow("Reconstructed", cv2.cvtColor(reconstructed.squeeze(0).permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_RGB2BGR))
+                    cv2.imshow("Parietal Objectives", objectives_map.squeeze(0).squeeze(0).detach().cpu().numpy())
+                    cv2.imshow("Frontal Goal", goal_map.squeeze(0).squeeze(0).detach().cpu().numpy())
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
             except:
                 pass # Ignore render errors
 

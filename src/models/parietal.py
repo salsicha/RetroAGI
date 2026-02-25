@@ -30,13 +30,6 @@ class ParietalLobe(nn.Module):
 
     def forward(self, occipital_where, temporal_latent, frontal_latent):
         # Concatenate inputs
-        # Handle cases where inputs might be None (e.g. first step)
-        if temporal_latent is None:
-             temporal_latent = torch.zeros_like(occipital_where) # Assuming same batch size, careful with dim
-             # Wait, temporal_latent dim might be diff. 
-             # Let's assume the caller handles zeros or we infer batch size.
-             pass 
-        
         # simplified for now: assume inputs are provided and correct shape
         x = torch.cat((occipital_where, temporal_latent, frontal_latent), dim=1)
         latent = self.fc(x)

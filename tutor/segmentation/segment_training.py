@@ -24,6 +24,7 @@ import os
 import time
 from os.path import join
 import csv
+import shutil
 
 import cv2
 
@@ -55,7 +56,7 @@ class Configuration:
     self.test_batch_size = 4  # Test batch size
     self.model_file_name = "MarioSegmentationModel.pth"
     
-    self.dataset_root = "/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset"
+    self.dataset_root = os.path.join(os.path.dirname(__file__), "dataset")
     self.download   = False
     
     self.seed = 271828
@@ -65,7 +66,7 @@ class MarioDataset(data.Dataset):
     def __init__(self, args, mode, transform_input=transforms.ToTensor(), transform_mask=transforms.ToTensor()):
         self.args = args
         # self.folder = args.dataset_root
-        self.folder = "/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset"
+        self.folder = args.dataset_root
 
         #If you change how you create the dataset you may need to modify this:
         self.images_in_dataset = len(os.listdir(self.folder+"/PNG"))
@@ -1133,22 +1134,13 @@ class FrameGenerator():
         seeds = np.random.randint(100, size=threads)
 
         #creates the folder (removes if previously exists)
-        dir = '/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset'
+        dir = os.path.join(os.path.dirname(__file__), 'dataset')
         if os.path.exists(dir):
-            # shutil.rmtree(dir)
-            os.system("sudo rm -rf /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset")
-        # os.makedirs(dir)
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/")
+            shutil.rmtree(dir)
         
-        #and subfolders
-        # os.makedirs('/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/PNG/')
-        # os.makedirs('/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Segmentation/')
-        # os.makedirs('/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Labels/')
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/PNG/")
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Segmentation/")
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Labels/")
-        
-        os.system("sudo chown -R 1000:1000 /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/")
+        os.makedirs(os.path.join(dir, 'PNG'))
+        os.makedirs(os.path.join(dir, 'Segmentation'))
+        os.makedirs(os.path.join(dir, 'Labels'))
         
         # If only uses one core, execute the function once
         if self.cores == 1:
@@ -1609,4 +1601,3 @@ TrainingUtils.segment(model,frame)
 # ExtractTiles(), decode_segmap(), segment(), compare()
 # Into class:
 # TrainingUtils
-
