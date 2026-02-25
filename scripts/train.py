@@ -19,6 +19,7 @@ from src.models.parietal import ParietalLobe
 from src.models.frontal import FrontalLobe
 from src.models.motor import MotorLobe
 from src.utils.dataset import RetroAGIDataset
+from src.utils.predictive_coding import PrecisionEstimator
 
 def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -70,6 +71,13 @@ def train():
     criterion_mse = nn.MSELoss()
     criterion_ce = nn.CrossEntropyLoss()
     
+    # Predictive Coding Estimators
+    est_occ = PrecisionEstimator()
+    est_temp = PrecisionEstimator()
+    est_par = PrecisionEstimator()
+    est_front = PrecisionEstimator()
+    est_motor = PrecisionEstimator()
+    
     # Training Loop
     for epoch in range(epochs):
         print(f"Epoch {epoch+1}/{epochs}")
@@ -83,6 +91,8 @@ def train():
             # 1. Occipital Pass
             reconstructed, (what, where) = occipital_lobe(images), occipital_lobe.get_latent(images)
             loss_occ = criterion_mse(reconstructed, images)
+            w_occ = est_occ.update(loss_occ.item())
+            loss_occ = loss_occ * w_occ
             
             # 2. Temporal Pass (Teacher Forcing / Mock Inputs)
             # For simplicity, we use zero-init for other lobes context in this independent training step
@@ -102,6 +112,8 @@ def train():
             # We will just ensure the code runs and updates weights based on dummy objectives or available targets.
             generated_seq, new_temporal = temporal_lobe(what, dummy_parietal)
             loss_temp = torch.tensor(0.0, requires_grad=True).to(device) # Placeholder
+            # Even for placeholder, we update estimator to keep state consistent
+            est_temp.update(0.0)
 
             # Parietal
             # Target: 32x32 Gaussian map
@@ -110,11 +122,14 @@ def train():
             # Parietal decoder output is (B, 1, 32, 32) (Sigmoid)
             parietal_latent, pred_map = parietal_lobe(where, new_temporal.squeeze(0), dummy_frontal)
             loss_par = criterion_mse(pred_map.squeeze(1), parietal_maps)
+            w_par = est_par.update(loss_par.item())
+            loss_par = loss_par * w_par
 
             # Frontal
             # Forward pass
             frontal_latent, goals, goal_map = frontal_lobe(parietal_latent)
             loss_front = torch.tensor(0.0, requires_grad=True).to(device) # Placeholder for text loss
+            est_front.update(0.0)
 
             # Motor
             # Target: Action One-Hot or Multi-Binary
@@ -124,6 +139,8 @@ def train():
             # The recorder saved One-Hot-like (Single 1).
             target_indices = torch.argmax(actions, dim=1)
             loss_motor = criterion_ce(pred_actions, target_indices)
+            w_mot = est_motor.update(loss_motor.item())
+            loss_motor = loss_motor * w_mot
 
             # Backprop
             loss = loss_occ + loss_temp + loss_par + loss_front + loss_motor

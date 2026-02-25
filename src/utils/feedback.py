@@ -4,6 +4,7 @@ Handles the storage of high-level goals and implements the 'Stop and Learn' logi
 """
 import torch
 import torch.nn.functional as F
+from src.utils.predictive_coding import PrecisionEstimator
 
 class FeedbackLoop:
     def __init__(self, models, optimizers, device='cpu'):
@@ -25,6 +26,9 @@ class FeedbackLoop:
             'motor_log_probs': None,
             'value': None
         }
+        
+        # Estimator for reward signal volatility
+        self.precision_estimator = PrecisionEstimator()
 
     def start_planning_phase(self, frontal_latent, parietal_latent):
         """
@@ -68,6 +72,9 @@ class FeedbackLoop:
             old_log_probs = self.current_plan['motor_log_probs'].detach()
             old_value = self.current_plan['value'].detach()
             
+            # Update precision based on reward volatility
+            precision_weight = self.precision_estimator.update(reward)
+            
             # Returns and Advantage
             returns = torch.tensor([reward], device=self.device).expand_as(old_value)
             advantage = returns - old_value
@@ -99,7 +106,7 @@ class FeedbackLoop:
                 actor_loss = -torch.min(surr1, surr2).mean()
                 critic_loss = F.mse_loss(current_value, returns)
                 
-                loss = actor_loss + 0.5 * critic_loss
+                loss = (actor_loss + 0.5 * critic_loss) * precision_weight
                 
                 self.optimizers['motor'].zero_grad()
                 loss.backward()

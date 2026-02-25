@@ -13,6 +13,7 @@ from src.models.parietal import ParietalLobe
 from src.models.frontal import FrontalLobe
 from src.models.motor import MotorLobe
 from src.utils.tutor import Tutor
+from src.utils.predictive_coding import PrecisionEstimator
 
 def main():
     """Main function to run the agent."""
@@ -41,6 +42,13 @@ def main():
 
     # Initialize Tutor
     tutor = Tutor(device=device)
+
+    # Initialize Predictive Coding Estimators
+    # These will track the volatility of errors/signals for each lobe
+    prec_occ = PrecisionEstimator()
+    prec_par = PrecisionEstimator()
+    prec_front = PrecisionEstimator()
+    prec_motor = PrecisionEstimator()
 
     # Optimizers
     opt_occipital = optim.Adam(occipital_lobe.parameters(), lr=1e-4)
@@ -107,13 +115,20 @@ def main():
             # 5. Online Training
             # Train Occipital (Reconstruction)
             loss_recon = criterion_recon(reconstructed, img_tensor)
+            # Precision-Weighted Prediction Error
+            w_occ = prec_occ.update(loss_recon.item())
+            loss_recon = loss_recon * w_occ
             
             # Train Parietal (Objective Map vs Tutor Truth)
             # Assuming tutor_data['objective_map'] matches parietal output shape
             loss_parietal = criterion_recon(objectives_map, tutor_data['objective_map'])
+            w_par = prec_par.update(loss_parietal.item())
+            loss_parietal = loss_parietal * w_par
             
             # Train Frontal (Goal Map vs Tutor Truth)
             loss_frontal = criterion_recon(goal_map, tutor_data['goal_map'])
+            w_front = prec_front.update(loss_frontal.item())
+            loss_frontal = loss_frontal * w_front
             
             opt_occipital.zero_grad()
             opt_frontal.zero_grad()
@@ -127,7 +142,9 @@ def main():
             # Train Motor (Policy Gradient - REINFORCE one step)
             # Very basic: Minimize -log_prob * reward
             log_prob = dist.log_prob(action_idx)
-            loss_motor = -log_prob * rew
+            # Weight by the precision of the reward signal
+            w_motor = prec_motor.update(rew)
+            loss_motor = -log_prob * rew * w_motor
             opt_motor.zero_grad()
             loss_motor.backward()
             opt_motor.step()
