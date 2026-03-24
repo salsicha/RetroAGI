@@ -53,11 +53,13 @@ class OccipitalLobe(nn.Module):
         # Decoder: Reconstructs image from keypoints (using Gaussian blobs or deconv)
         self.decoder_fc = nn.Linear(num_keypoints * 2, 1024)
         self.decoder_net = nn.Sequential(
-            nn.ConvTranspose2d(64, 64, 4, stride=2, padding=1),
+            nn.ConvTranspose2d(64, 64, 4, stride=2, padding=1), # 8x8
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, 4, stride=2, padding=1),
+            nn.ConvTranspose2d(64, 32, 4, stride=2, padding=1), # 16x16
             nn.ReLU(),
-            nn.ConvTranspose2d(32, channels, 4, stride=2, padding=1),
+            nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1), # 32x32
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, channels, 4, stride=2, padding=1), # 64x64
             nn.Sigmoid()
         )
 
@@ -143,6 +145,18 @@ class Hippocampus(nn.Module):
         self.memory_keys = nn.Parameter(torch.randn(memory_size, input_dim))
         self.memory_values = nn.Parameter(torch.randn(memory_size, input_dim)) # Auto-associative
         
+        # Spatial Decoder
+        self.spatial_decoder_fc = nn.Linear(input_dim, 1024)
+        self.spatial_decoder_net = nn.Sequential(
+            nn.ConvTranspose2d(64, 64, 4, stride=2, padding=1), # 8x8
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 4, stride=2, padding=1), # 16x16
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1), # 32x32
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 6, 4, stride=2, padding=1)   # 64x64, 6 segmentation classes
+        )
+        
     def forward(self, x):
         # Simple attention mechanism to retrieve memory
         # x: (batch, input_dim)
@@ -152,9 +166,13 @@ class Hippocampus(nn.Module):
         # Retrieve
         retrieved = torch.matmul(attn, self.memory_values)
         
+        # Decode spatial semantic map
+        spatial_feat = self.spatial_decoder_fc(retrieved).view(-1, 64, 4, 4)
+        spatial_map = self.spatial_decoder_net(spatial_feat)
+        
         # Reconstruction (Decoder equivalent)
         # In predictive coding, we want to minimize x - retrieved
-        return retrieved
+        return retrieved, spatial_map
 
 class PrefrontalLobe(nn.Module):
     """

@@ -9,9 +9,7 @@ import torch
 import torch.optim as optim
 import numpy as np
 import cv2
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT, COMPLEX_MOVEMENT
-from nes_py.wrappers import JoypadSpace
-import gym_super_mario_bros
+import retro
 
 # Import our models
 # Assuming models.py is in the same directory or src/
@@ -22,8 +20,8 @@ from models import OccipitalLobe, TemporalLobe, Hippocampus, PrefrontalLobe, Mot
 FRAME_SIZE = 64
 NUM_KEYPOINTS = 16
 LATENT_DIM = NUM_KEYPOINTS * 2
-ACTION_SET = COMPLEX_MOVEMENT
-NUM_ACTIONS = len(ACTION_SET)
+# We will determine NUM_ACTIONS based on retro action space later
+NUM_ACTIONS = 9 # Usually 9 buttons for NES in retro
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 SAVE_PATH = "data/weights/"
 
@@ -49,8 +47,7 @@ def save_models(occipital, hippocampus, prefrontal, motor, epoch):
 
 def main():
     # 1. Initialize Environment
-    env = gym_super_mario_bros.make('SuperMarioBros-v0', apply_api_compatibility=True)
-    env = JoypadSpace(env, ACTION_SET)
+    env = retro.make(game='SuperMarioBros-Nes')
 
     # 2. Initialize Lobes
     occipital = OccipitalLobe(num_keypoints=NUM_KEYPOINTS).to(DEVICE) # Out: 32
@@ -110,7 +107,7 @@ def main():
         hippo_input = torch.cat([z_vision, pred_z], dim=1)
         
         # Reconstructive/Associative Learning
-        mem_recon = hippocampus(hippo_input)
+        mem_recon, spatial_map = hippocampus(hippo_input)
         loss_mem = torch.mean((hippo_input - mem_recon) ** 2)
         
         # --- PLANNING (Prefrontal) ---
