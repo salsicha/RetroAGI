@@ -51,9 +51,10 @@ def main():
     temporal = TemporalLobe(num_keypoints=NUM_KEYPOINTS)
     hippocampus = Hippocampus(input_dim=LATENT_DIM * 2).to(DEVICE)
     
-    # Joint optimizer for bootstrapped model
+    # Joint optimizer for bootstrapped model - deduplicated for shared universal parameters
+    unique_params = list({id(p): p for p in list(occipital.parameters()) + list(hippocampus.parameters())}.values())
     optimizer = optim.Adam(
-        list(occipital.parameters()) + list(hippocampus.parameters()), 
+        unique_params, 
         lr=1e-3
     )
 

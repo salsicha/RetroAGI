@@ -1,43 +1,49 @@
 """Tests for the Temporal Lobe model."""
 import torch
 import unittest
+import numpy as np
 
-from src.models.temporal import TemporalLobe
+from src.models import TemporalLobe
 
 
 class TestTemporalLobe(unittest.TestCase):
     """Test suite for the TemporalLobe model."""
 
-    def test_forward_pass(self):
+    def test_process_pass(self):
         """
-        Test the forward pass of the TemporalLobe model.
+        Test the process method of the TemporalLobe model.
         """
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = TemporalLobe(latent_dim=128, hidden_dim=128, vocab_size=10).to(device)
+        model = TemporalLobe(num_keypoints=16).to(device)
         
-        # Create a dummy latent vector
+        # Create a dummy visual latent vector from Occipital Lobe
         dummy_latent = torch.randn(1, 128).to(device)
         
-        # Pass the latent vector through the model
-        generated_sequence = model(dummy_latent)
+        # Process the latent vector
+        latent_t, sprite_pos_pred = model.process(dummy_latent)
         
-        # Check the output shape
-        self.assertEqual(generated_sequence.shape, (20,))
+        # Check output shapes
+        self.assertEqual(latent_t.shape, (1, 128))
+        self.assertEqual(sprite_pos_pred.shape, (1, 32))
 
-    def test_sequence_to_text(self):
+    def test_state_dict_serialization(self):
         """
-        Test the sequence_to_text method of the TemporalLobe model.
+        Test HGF state dictionary serialization and loading.
         """
-        model = TemporalLobe(latent_dim=128, hidden_dim=128, vocab_size=10)
+        model = TemporalLobe(num_keypoints=16)
         
-        # Create a dummy sequence of indices
-        dummy_sequence = torch.tensor([2, 3, 4, 5, 1])
+        # Modify some states
+        model.nodes[0].mean = 5.0
+        model.nodes[1].precision = 2.5
         
-        # Convert the sequence to text
-        generated_text = model.sequence_to_text(dummy_sequence)
+        state = model.state_dict()
         
-        # Check if the output is a string
-        self.assertIsInstance(generated_text, str)
+        # Create a new model and load states
+        new_model = TemporalLobe(num_keypoints=16)
+        new_model.load_state_dict(state)
+        
+        self.assertEqual(new_model.nodes[0].mean, 5.0)
+        self.assertEqual(new_model.nodes[1].precision, 2.5)
 
 
 if __name__ == '__main__':

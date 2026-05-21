@@ -2,7 +2,7 @@
 import torch
 import unittest
 
-from src.models.occipital import OccipitalLobe
+from src.models import OccipitalLobe
 
 
 class TestOccipitalLobe(unittest.TestCase):
@@ -19,7 +19,7 @@ class TestOccipitalLobe(unittest.TestCase):
         dummy_input = torch.randn(1, 3, 256, 256).to(device)
         
         # Pass the input through the model
-        reconstructed = model(dummy_input)
+        _, reconstructed = model(dummy_input)
         
         # Check if the output shape is the same as the input shape
         self.assertEqual(dummy_input.shape, reconstructed.shape)

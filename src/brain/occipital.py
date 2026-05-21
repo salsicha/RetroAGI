@@ -1,71 +1,92 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+from brain.universal import encoder, decoder
 
 class OccipitalLobe(nn.Module):
     """
-    Architecture: Spatial Autoencoder.
-    Input: Game Frames (Batch, C, H, W)
-    Output: Latent Keypoints (feature coordinates)
-    Decoder: Reconstructs input frames.
+    Occipital Lobe for spatial perception and frame reconstruction.
+    Uses the universal encoder and decoder to map pixel frames to the universal latent space.
     """
-    def __init__(self, num_keypoints=32, channels=3, input_size=(64, 64)):
+    def __init__(self, num_keypoints=32, channels=3, input_size=(64, 64), *args, **kwargs):
         super().__init__()
         self.num_keypoints = num_keypoints
+        self.channels = channels
         self.input_size = input_size
 
-        # Encoder: Extracts feature maps
-        self.encoder = nn.Sequential(
-            nn.Conv2d(channels, 32, 7, stride=2, padding=3),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 5, stride=2, padding=2),
-            nn.ReLU(),
-            nn.Conv2d(64, num_keypoints, 3, stride=1, padding=1)
-        )
-
-        # Spatial Softmax: Converts feature maps to (x,y) coordinates
-        self.softmax = nn.Softmax(dim=2)
-
-        # Decoder: Reconstructs image from keypoints
-        self.decoder_fc = nn.Linear(num_keypoints * 2, 64 * 4 * 4)
-        self.decoder_net = nn.Sequential(
-            nn.ConvTranspose2d(64, 64, 4, stride=2, padding=1), # 8x8
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, 4, stride=2, padding=1), # 16x16
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1), # 32x32
-            nn.ReLU(),
-            nn.ConvTranspose2d(16, channels, 4, stride=2, padding=1), # 64x64
-            nn.Sigmoid()
-        )
+        # Register global universal encoder and decoder as submodules
+        # This makes their parameters discoverable by occipital.parameters()
+        self.encoder = encoder
+        self.decoder = decoder
 
     def forward(self, x):
         z = self.encode(x)
         recon = self.decode(z)
         return z, recon
 
+    def get_latent(self, x):
+        return self.encode(x)
+
     def encode(self, x):
-        """Returns normalized (x,y) coordinates for each keypoint."""
-        feat = self.encoder(x)
-        b, k, h, w = feat.shape
-
-        # Spatial Softmax to get coordinates
-        # Coordinate grid
-        grid_x = torch.linspace(-1, 1, w).to(x.device).view(1, 1, 1, w).expand(b, k, h, w)
-        grid_y = torch.linspace(-1, 1, h).to(x.device).view(1, 1, h, 1).expand(b, k, h, w)
-
-        softmax_feat = F.softmax(feat.view(b, k, -1), dim=2).view(b, k, h, w)
-
-        avg_x = torch.sum(softmax_feat * grid_x, dim=(2, 3))
-        avg_y = torch.sum(softmax_feat * grid_y, dim=(2, 3))
-
-        # Concatenate [x1, y1, x2, y2, ...]
-        z = torch.stack([avg_x, avg_y], dim=2).view(b, -1)
-        return z
+        return self.encoder(x, modality='image')
 
     def decode(self, z):
-        x = self.decoder_fc(z).view(-1, 64, 4, 4)
-        return self.decoder_net(x)
+        return self.decoder(z, modality='image', target_shape=self.input_size)
+
+    def process(self, state):
+        """
+        Processes game frames from environment.
+        state: np.ndarray or torch.Tensor
+        Returns:
+            latent_v: torch.Tensor of shape (1, 128)
+            reconstruction: torch.Tensor of shape (1, channels, H, W)
+        """
+        device = next(self.parameters()).device
+        if isinstance(state, np.ndarray):
+            # Input is (H, W, C) from gym/retro, transpose to (C, H, W)
+            if len(state.shape) == 3:
+                state = state.transpose(2, 0, 1)
+            state_t = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device) / 255.0
+        else:
+            state_t = state.to(device)
+            if len(state_t.shape) == 3:
+                state_t = state_t.unsqueeze(0)
+            if state_t.max() > 1.0:
+                state_t = state_t / 255.0
+
+        self.eval()
+        with torch.no_grad():
+            z, recon = self.forward(state_t)
+        return z, recon
+
+    def learn(self, signal):
+        """
+        Online learning driven by predictive coding. Minimizes reconstruction surprise.
+        """
+        next_state = signal.get('actual_next_state')
+        if next_state is not None:
+            device = next(self.parameters()).device
+            if isinstance(next_state, np.ndarray):
+                if len(next_state.shape) == 3:
+                    next_state = next_state.transpose(2, 0, 1)
+                x = torch.tensor(next_state, dtype=torch.float32).unsqueeze(0).to(device) / 255.0
+            else:
+                x = next_state.to(device)
+                if len(x.shape) == 3:
+                    x = x.unsqueeze(0)
+                if x.max() > 1.0:
+                    x = x / 255.0
+
+            self.train()
+            # Set up online optimizer for the shared weights
+            optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
+            optimizer.zero_grad()
+            z, recon = self.forward(x)
+            loss = F.mse_loss(recon, x)
+            loss.backward()
+            optimizer.step()
+            self.eval()
 
     def save(self, path):
         torch.save(self.state_dict(), path)
