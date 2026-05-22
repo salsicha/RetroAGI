@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from brain.universal import encoder, decoder
+from src.brain.universal import encoder, decoder
 
 class HippocampusLobe(nn.Module):
     """

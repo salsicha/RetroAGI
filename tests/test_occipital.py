@@ -16,7 +16,7 @@ class TestOccipitalLobe(unittest.TestCase):
         model = OccipitalLobe(latent_dim=128).to(device)
         # Create a dummy input tensor
         # The shape is (batch_size, channels, height, width)
-        dummy_input = torch.randn(1, 3, 256, 256).to(device)
+        dummy_input = torch.randn(1, 3, 64, 64).to(device)
         
         # Pass the input through the model
         _, reconstructed = model(dummy_input)
@@ -31,7 +31,7 @@ class TestOccipitalLobe(unittest.TestCase):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = OccipitalLobe(latent_dim=128).to(device)
         # Create a dummy input tensor
-        dummy_input = torch.randn(1, 3, 256, 256).to(device)
+        dummy_input = torch.randn(1, 3, 64, 64).to(device)
 
         # Get the latent representation
         latent = model.get_latent(dummy_input)

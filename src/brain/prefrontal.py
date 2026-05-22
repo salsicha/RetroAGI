@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from brain.universal import encoder
+from src.brain.universal import encoder
 
 class PrefrontalLobe(nn.Module):
     """

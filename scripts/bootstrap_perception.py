@@ -48,7 +48,7 @@ def main():
     # 3. Initialize PyHGF Models
     print("Initializing RetroAGI Lobes...")
     occipital = OccipitalLobe(num_keypoints=NUM_KEYPOINTS).to(DEVICE)
-    temporal = TemporalLobe(num_keypoints=NUM_KEYPOINTS)
+    temporal = TemporalLobe(num_keypoints=NUM_KEYPOINTS).to(DEVICE)
     hippocampus = Hippocampus().to(DEVICE)
     
     # Joint optimizer for bootstrapped model - deduplicated for shared universal parameters

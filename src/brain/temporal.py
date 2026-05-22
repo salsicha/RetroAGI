@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from brain.universal import decoder
+from src.brain.universal import decoder
 
 class TemporalLobe(nn.Module):
     """

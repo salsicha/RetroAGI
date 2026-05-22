@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from brain.universal import decoder
+from src.brain.universal import decoder
 
 class MotorLobe(nn.Module):
     """

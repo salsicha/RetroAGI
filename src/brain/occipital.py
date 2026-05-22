@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from brain.universal import encoder, decoder
+from src.brain.universal import encoder, decoder
 
 class OccipitalLobe(nn.Module):
     """
