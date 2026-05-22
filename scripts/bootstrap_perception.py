@@ -49,7 +49,7 @@ def main():
     print("Initializing RetroAGI Lobes...")
     occipital = OccipitalLobe(num_keypoints=NUM_KEYPOINTS).to(DEVICE)
     temporal = TemporalLobe(num_keypoints=NUM_KEYPOINTS)
-    hippocampus = Hippocampus(input_dim=LATENT_DIM * 2).to(DEVICE)
+    hippocampus = Hippocampus().to(DEVICE)
     
     # Joint optimizer for bootstrapped model - deduplicated for shared universal parameters
     unique_params = list({id(p): p for p in list(occipital.parameters()) + list(hippocampus.parameters())}.values())
@@ -95,16 +95,15 @@ def main():
         loss_occ = F.mse_loss(recon, input_tensor) # Occipital target is raw frame
         
         # 2. Temporal processing
-        z_np = z_vision.detach().cpu().numpy()
-        pred_z_np = temporal.update(z_np)
-        pred_z = torch.tensor(pred_z_np, dtype=torch.float32).to(DEVICE).view(z_vision.shape)
+        pred_z, _ = temporal.process(z_vision)
         
         # 3. Hippocampus processing
-        hippo_input = torch.cat([z_vision, pred_z], dim=1)
-        mem_recon, spatial_map = hippocampus(hippo_input)
+        mem_recon, spatial_map = hippocampus(z_vision, pred_z)
         
         # associative loss for mapping
-        loss_mem = F.mse_loss(mem_recon, hippo_input.detach())
+        combined_latents = torch.cat([z_vision, pred_z], dim=-1)
+        target_latent_h = hippocampus.encoder(combined_latents, modality='vector')
+        loss_mem = F.mse_loss(mem_recon, target_latent_h.detach())
         # The key bootstrapping loss! Train hippocampus decoder to predict semantic locations
         loss_hippo_spatial = F.cross_entropy(spatial_map, target_tensor)
         
