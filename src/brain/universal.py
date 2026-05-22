@@ -45,11 +45,13 @@ class UniversalEncoder(nn.Module):
     def _get_vector_encoder(self, in_dim):
         key = str(in_dim)
         if key not in self.vector_encoders:
+            # Determine the current device of the encoder
+            device = next(self.parameters()).device
             self.vector_encoders[key] = nn.Sequential(
                 nn.Linear(in_dim, 128),
                 nn.ReLU(),
                 nn.Linear(128, self.latent_dim)
-            )
+            ).to(device)
         return self.vector_encoders[key]
 
     def forward(self, x, modality='image'):
@@ -121,11 +123,13 @@ class UniversalDecoder(nn.Module):
     def _get_vector_decoder(self, out_dim):
         key = str(out_dim)
         if key not in self.vector_decoders:
+            # Determine the current device of the decoder
+            device = next(self.parameters()).device
             self.vector_decoders[key] = nn.Sequential(
                 nn.Linear(self.latent_dim, 128),
                 nn.ReLU(),
                 nn.Linear(128, out_dim)
-            )
+            ).to(device)
         return self.vector_decoders[key]
 
     def forward(self, z, modality='image', target_shape=None, target_dim=None):

@@ -1,29 +1,34 @@
 import gym_super_mario_bros
 from nes_py.wrappers import JoypadSpace
-from supervisor import Supervisor
-from brain.occipital import OccipitalLobe
-from brain.temporal import TemporalLobe
-from brain.hippocampus import HippocampusLobe
-from brain.prefrontal import PrefrontalLobe
-from brain.motor import MotorLobe
+from src.supervisor import Supervisor
+from src.brain.occipital import OccipitalLobe
+from src.brain.temporal import TemporalLobe
+from src.brain.hippocampus import HippocampusLobe
+from src.brain.prefrontal import PrefrontalLobe
+from src.brain.motor import MotorLobe
 import numpy as np
+import torch
 
 def main():
+    # Detect device (GPU support)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Running RetroAGI on device: {device}")
+
     # Initialize environment
     env = gym_super_mario_bros.make('SuperMarioBros-v0')
     env = JoypadSpace(env, [['NOOP'], ['right'], ['right', 'A'], ['right', 'B'], ['right', 'A', 'B'], ['A'], ['left']])
     
-    # Initialize Lobes
+    # Initialize Lobes and move them to device
     # Occipital handles perception and reconstruction
-    occipital = OccipitalLobe()
+    occipital = OccipitalLobe().to(device)
     # Temporal handles action sequences and sprite tracking
-    temporal = TemporalLobe()
+    temporal = TemporalLobe().to(device)
     # Hippocampus handles spatial relationships
-    hippocampus = HippocampusLobe()
+    hippocampus = HippocampusLobe().to(device)
     # Prefrontal handles high-level strategy (Speedrun vs Max Coins)
-    prefrontal = PrefrontalLobe(planning_mode=0.5) # Default balanced
+    prefrontal = PrefrontalLobe(planning_mode=0.5).to(device) # Default balanced
     # Motor handles action execution
-    motor = MotorLobe()
+    motor = MotorLobe().to(device)
 
     supervisor = Supervisor([occipital, temporal, hippocampus, prefrontal, motor])
 
