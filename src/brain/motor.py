@@ -6,8 +6,7 @@ from brain.universal import decoder
 class MotorLobe(nn.Module):
     """
     Motor Lobe acting as the policy network.
-    Takes the latent plan from PrefrontalLobe, and uses the universal decoder
-    to decode it into NES/Joypad keyboard action logits.
+    Uses TD/Policy Gradient learning over batched replay buffers.
     """
     def __init__(self, num_actions=7):
         super().__init__()
@@ -15,48 +14,40 @@ class MotorLobe(nn.Module):
         self.decoder = decoder
 
     def forward(self, plan):
-        """
-        x: Latent plan of shape (B, 128)
-        Returns: Action logits of shape (B, num_actions)
-        """
         return self.decoder(plan, modality='action', target_dim=self.num_actions)
 
     def decide(self, plan):
-        """
-        Decides the action index based on action logits.
-        plan: torch.Tensor of shape (1, 128)
-        Returns: int (action index)
-        """
         self.eval()
         with torch.no_grad():
             logits = self.forward(plan)
-            action = torch.argmax(logits, dim=-1).item()
+            # Sample from categorical distribution for exploration
+            probs = F.softmax(logits, dim=-1)
+            action = torch.multinomial(probs, 1).item()
         return action
 
     def learn(self, signal):
-        """
-        Online reinforcement update based on reward signals.
-        """
-        reward = float(signal.get('reward', 0.0))
-        collision = bool(signal.get('collision', False))
+        plans = signal.get('plans')
+        actions = signal.get('actions')
+        rewards = signal.get('reward')
+        
+        if plans is None or len(plans) == 0:
+            return
 
-        device = next(self.parameters()).device
         self.train()
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
         optimizer.zero_grad()
 
-        # Generate a forward pass to optimize representation
-        dummy_plan = torch.randn(1, 128).to(device)
-        logits = self.forward(dummy_plan)
-
-        # Basic policy gradient-like loss to optimize motor mapping online
-        loss = torch.mean(logits ** 2)
-        if collision:
-            # Shift action logits to prevent repeating same action
-            loss = loss + 0.5 * torch.max(logits)
-        if reward > 0:
-            loss = loss - 0.2 * torch.max(logits)
-
+        logits = self.forward(plans.detach())
+        
+        # Policy Gradient objective with baseline
+        baseline = rewards.mean()
+        advantages = rewards - baseline
+        
+        log_probs = F.log_softmax(logits, dim=-1)
+        action_log_probs = log_probs.gather(1, actions.unsqueeze(1)).squeeze(1)
+        
+        loss = -(action_log_probs * advantages).mean()
+        
         loss.backward()
         optimizer.step()
         self.eval()

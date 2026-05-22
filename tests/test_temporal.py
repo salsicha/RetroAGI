@@ -33,8 +33,8 @@ class TestTemporalLobe(unittest.TestCase):
         model = TemporalLobe(num_keypoints=16)
         
         # Modify some states
-        model.nodes[0].mean = 5.0
-        model.nodes[1].precision = 2.5
+        model.hgf_mean[0, 0] = 5.0
+        model.hgf_precision[0, 1] = 2.5
         
         state = model.state_dict()
         
@@ -42,8 +42,8 @@ class TestTemporalLobe(unittest.TestCase):
         new_model = TemporalLobe(num_keypoints=16)
         new_model.load_state_dict(state)
         
-        self.assertEqual(new_model.nodes[0].mean, 5.0)
-        self.assertEqual(new_model.nodes[1].precision, 2.5)
+        self.assertEqual(new_model.hgf_mean[0, 0].item(), 5.0)
+        self.assertEqual(new_model.hgf_precision[0, 1].item(), 2.5)
 
 
 if __name__ == '__main__':

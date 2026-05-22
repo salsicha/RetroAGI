@@ -56,8 +56,13 @@ def main():
         next_state, reward, done, info = env.step(action)
         
         # 6. Supervision & Online Learning
-        # The supervisor uses 'info' to provide prediction error signals
-        supervisor.update(state, action, next_state, reward, info)
+        latents = {
+            'v': latent_v.detach().cpu(),
+            't': latent_t.detach().cpu(),
+            'h': latent_h.detach().cpu(),
+            'plan': plan.detach().cpu()
+        }
+        supervisor.update(state, action, next_state, reward, info, latents=latents)
         
         state = next_state
         step_count += 1

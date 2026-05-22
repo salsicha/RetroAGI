@@ -6,3 +6,4 @@ Sprites
 *.pyc
 notebooks/ctm/data/
 *.gif
+.venv/

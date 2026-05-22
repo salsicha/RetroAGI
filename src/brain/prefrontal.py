@@ -6,64 +6,45 @@ from brain.universal import encoder
 class PrefrontalLobe(nn.Module):
     """
     Prefrontal Lobe acting as the planner and meta-controller.
-    Takes latent inputs from Temporal Lobe and Hippocampus Lobe, combines them with
-    a mutable `planning_mode` bias parameter, and encodes it into the universal planning space.
+    Optimizes planning vector representations to correlate with high expected reward.
     """
     def __init__(self, planning_mode=0.5):
         super().__init__()
-        self.planning_mode = planning_mode # 0.0: Speedrun, 1.0: Max Coins
+        self.planning_mode = planning_mode
         self.encoder = encoder
 
     def forward(self, latent_t, latent_h):
-        # 1. Combine state context
-        combined = torch.cat([latent_t, latent_h], dim=-1) # (B, 256)
-
-        # 2. Append normalized planning mode bias parameter
+        combined = torch.cat([latent_t, latent_h], dim=-1)
         bias = torch.full((combined.size(0), 1), float(self.planning_mode)).to(combined.device)
-        x = torch.cat([combined, bias], dim=-1) # (B, 257)
-
-        # 3. Project to the universal planning goal latent space using universal vector encoder
-        plan = self.encoder(x, modality='vector') # (B, 128)
+        x = torch.cat([combined, bias], dim=-1)
+        plan = self.encoder(x, modality='vector')
         return plan
 
     def process(self, latent_t, latent_h):
-        """
-        Generates action planning goals based on context.
-        Returns:
-            plan: torch.Tensor of shape (1, 128)
-        """
         self.eval()
         with torch.no_grad():
             plan = self.forward(latent_t, latent_h)
         return plan
 
     def learn(self, signal):
-        """
-        Adjusts planning policy online based on feedback reward/penalty signals.
-        """
-        reward = float(signal.get('reward', 0.0))
-        collision = bool(signal.get('collision', False))
+        latents_t = signal.get('latents_t')
+        latents_h = signal.get('latents_h')
+        rewards = signal.get('reward')
+        
+        if latents_t is None or len(latents_t) == 0:
+            return
 
-        # Perform gradient update to optimize planning representations
-        device = next(self.parameters()).device
         self.train()
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
         optimizer.zero_grad()
 
-        dummy_t = torch.randn(1, 128).to(device)
-        dummy_h = torch.randn(1, 128).to(device)
-        plan = self.forward(dummy_t, dummy_h)
-
-        # We construct a synthetic goal-directed loss
-        # Minimizing loss means planning plans that correlate with high reward
-        # and penalizes plans when collision is true.
-        loss_goal = torch.mean(plan ** 2)  # Maintain stable normalized plans
-        if collision:
-            loss_goal = loss_goal + 1.0  # Penalize surprise collision states
-        if reward != 0:
-            loss_goal = loss_goal - 0.1 * reward
-
-        loss_goal.backward()
+        plans = self.forward(latents_t.detach(), latents_h.detach())
+        
+        # Use the magnitude/mean of the plan to predict the expected reward (TD-like objective)
+        plan_value = torch.mean(plans, dim=-1)
+        loss = F.mse_loss(plan_value, rewards)
+        
+        loss.backward()
         optimizer.step()
         self.eval()
 

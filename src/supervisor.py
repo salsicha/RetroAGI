@@ -1,44 +1,82 @@
 import torch
 import os
+import random
+from collections import deque
 
 class Supervisor:
     """
     The Supervisor handles the online training of the lobes, calculates
     prediction errors based on game rewards/penalties, and manages serialization.
+    Now uses Experience Replay and Batched Updates for stability and performance.
     """
-    def __init__(self, lobes, checkpoint_dir='data/checkpoints/'):
+    def __init__(self, lobes, checkpoint_dir='data/checkpoints/', batch_size=32, update_freq=8):
         self.lobes = lobes
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
-
-    def update(self, state, action, next_state, reward, info):
-        """
-        Updates models based on the prediction error (Surprise).
-        In Predictive Coding, learning is driven by the difference between 
-        predicted state and actual outcome.
-        """
-        # Penalty for dying or hitting enemies
-        life_lost = info.get('life', 2) < 2 # Simplified check
         
-        # Supervisor creates a training signal based on objectives
-        # Positive: Coins, Progress (x_pos)
-        # Negative: Time loss, Death, Enemy collision
-        training_signal = {
+        self.memory = deque(maxlen=5000) # Experience replay buffer
+        self.batch_size = batch_size
+        self.update_freq = update_freq
+        self.step_count = 0
+
+    def update(self, state, action, next_state, reward, info, latents=None):
+        self.step_count += 1
+        life_lost = info.get('life', 2) < 2
+        
+        transition = {
+            'state': state,
+            'action': action,
+            'next_state': next_state,
             'reward': reward,
-            'x_pos': info.get('x_pos'),
-            'coins': info.get('coins'),
+            'x_pos': info.get('x_pos', 0),
+            'coins': info.get('coins', 0),
             'collision': life_lost,
-            'actual_next_state': next_state
+            'latents': latents or {}
+        }
+        self.memory.append(transition)
+
+        # Decouple optimization step from environment step
+        if self.step_count % self.update_freq == 0 and len(self.memory) >= self.batch_size:
+            batch = random.sample(self.memory, self.batch_size)
+            self._train_on_batch(batch)
+
+    def _train_on_batch(self, batch):
+        try:
+            device = next(self.lobes[0].parameters()).device
+        except:
+            device = 'cpu'
+            
+        rewards = torch.tensor([b['reward'] for b in batch], dtype=torch.float32, device=device)
+        collisions = torch.tensor([b['collision'] for b in batch], dtype=torch.bool, device=device)
+        x_pos = torch.tensor([b['x_pos'] for b in batch], dtype=torch.float32, device=device)
+        next_states = [b['next_state'] for b in batch]
+        actions = torch.tensor([b['action'] for b in batch], dtype=torch.long, device=device)
+        
+        has_latents = all(['v' in b['latents'] for b in batch])
+        if has_latents:
+            # Re-upload latents from RAM to GPU memory for the batch
+            latents_v = torch.cat([b['latents']['v'] for b in batch], dim=0).to(device)
+            latents_t = torch.cat([b['latents']['t'] for b in batch], dim=0).to(device)
+            latents_h = torch.cat([b['latents']['h'] for b in batch], dim=0).to(device)
+            plans = torch.cat([b['latents']['plan'] for b in batch], dim=0).to(device)
+        
+        signal = {
+            'reward': rewards,
+            'collision': collisions,
+            'x_pos': x_pos,
+            'actual_next_state': next_states,
+            'latents_v': latents_v if has_latents else None,
+            'latents_t': latents_t if has_latents else None,
+            'latents_h': latents_h if has_latents else None,
+            'plans': plans if has_latents else None,
+            'actions': actions
         }
 
-        # Iterate through lobes to perform online weight updates
+        # Broadcast the batched signal to all lobes for backprop
         for lobe in self.lobes:
-            # Each lobe implements its own 'learn' method using pyhgf/backprop
-            # to minimize surprise/prediction error
-            lobe.learn(training_signal)
+            lobe.learn(signal)
 
     def checkpoint(self):
-        """Serializes model weights to disk."""
         print(f"Serializing models to {self.checkpoint_dir}...")
         for lobe in self.lobes:
             lobe_name = lobe.__class__.__name__
@@ -46,7 +84,6 @@ class Supervisor:
             lobe.save(path)
 
     def set_planning_mode(self, value):
-        """Updates the Prefrontal Lobe's mode (0: Speedrun, 1: Coins)"""
         for lobe in self.lobes:
             if hasattr(lobe, 'planning_mode'):
                 lobe.planning_mode = value
