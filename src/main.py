@@ -65,12 +65,12 @@ def main():
         supervisor.update(state, action, next_state, reward, info, latents=latents)
         
         state = next_state
-        step_count += 1
 
-        if step_count % 1000 == 0:
+        if supervisor.step_count % 1000 == 0:
             supervisor.checkpoint()
 
     env.close()
 
 if __name__ == "__main__":
+    main()__ == "__main__":
     main()

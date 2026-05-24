@@ -82,6 +82,30 @@ class Supervisor:
             lobe_name = lobe.__class__.__name__
             path = os.path.join(self.checkpoint_dir, f"{lobe_name}.pth")
             lobe.save(path)
+            
+        supervisor_state = {
+            'step_count': self.step_count
+        }
+        torch.save(supervisor_state, os.path.join(self.checkpoint_dir, 'supervisor.pth'))
+
+    def load_checkpoint(self):
+        supervisor_path = os.path.join(self.checkpoint_dir, 'supervisor.pth')
+        if os.path.exists(supervisor_path):
+            state = torch.load(supervisor_path)
+            self.step_count = state.get('step_count', 0)
+            print(f"Resuming supervisor state from step {self.step_count}")
+
+        checkpoint_found = False
+        for lobe in self.lobes:
+            lobe_name = lobe.__class__.__name__
+            path = os.path.join(self.checkpoint_dir, f"{lobe_name}.pth")
+            if os.path.exists(path):
+                if not checkpoint_found:
+                    print(f"Loading checkpoints from {self.checkpoint_dir}...")
+                    checkpoint_found = True
+                lobe.load(path)
+                print(f"Loaded {lobe_name} from checkpoint.")
+        return checkpoint_found
 
     def set_planning_mode(self, value):
         for lobe in self.lobes:
