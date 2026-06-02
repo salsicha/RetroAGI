@@ -41,16 +41,18 @@ class Supervisor:
             self._train_on_batch(batch)
 
     def _train_on_batch(self, batch):
-        try:
+        # Robust device detection
+        if self.lobes and hasattr(self.lobes[0], 'parameters'):
             device = next(self.lobes[0].parameters()).device
-        except:
-            device = 'cpu'
+        else:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             
-        rewards = torch.tensor([b['reward'] for b in batch], dtype=torch.float32, device=device)
-        collisions = torch.tensor([b['collision'] for b in batch], dtype=torch.bool, device=device)
-        x_pos = torch.tensor([b['x_pos'] for b in batch], dtype=torch.float32, device=device)
-        next_states = [b['next_state'] for b in batch]
-        actions = torch.tensor([b['action'] for b in batch], dtype=torch.long, device=device)
+        # Efficient batched tensor creation
+        rewards = torch.as_tensor([b['reward'] for b in batch], dtype=torch.float32, device=device)
+        collisions = torch.as_tensor([b['collision'] for b in batch], dtype=torch.bool, device=device)
+        x_pos = torch.as_tensor([b['x_pos'] for b in batch], dtype=torch.float32, device=device)
+        next_states = torch.as_tensor(np.array([b['next_state'] for b in batch]), dtype=torch.float32, device=device)
+        actions = torch.as_tensor([b['action'] for b in batch], dtype=torch.long, device=device)
         
         has_latents = all(['v' in b['latents'] for b in batch])
         if has_latents:

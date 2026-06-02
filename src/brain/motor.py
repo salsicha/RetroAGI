@@ -1,59 +1,55 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from src.brain.universal import decoder
+import torch.optim as optim
+from torch.distributions import Categorical
 
 class MotorLobe(nn.Module):
-    """
-    Motor Lobe acting as the policy network.
-    Uses TD/Policy Gradient learning over batched replay buffers.
-    """
-    def __init__(self, num_actions=7):
+    def __init__(self, input_dim=64, action_space=9):
         super().__init__()
-        self.num_actions = num_actions
-        self.decoder = decoder
-
-    def forward(self, plan):
-        return self.decoder(plan, modality='action', target_dim=self.num_actions)
+        # Policy Network
+        self.policy = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, action_space),
+            nn.Softmax(dim=-1)
+        )
+        self.optimizer = optim.Adam(self.parameters(), lr=1e-3)
 
     def decide(self, plan):
-        self.eval()
-        with torch.no_grad():
-            logits = self.forward(plan)
-            # Sample from categorical distribution for exploration
-            probs = F.softmax(logits, dim=-1)
-            action = torch.multinomial(probs, 1).item()
-        return action
+        probs = self.policy(plan)
+        dist = Categorical(probs)
+        action = dist.sample()
+        return action.item()
+
+    def forward(self, plan):
+        return self.policy(plan)
 
     def learn(self, signal):
-        plans = signal.get('plans')
-        actions = signal.get('actions')
-        rewards = signal.get('reward')
-        
-        if plans is None or len(plans) == 0:
+        # Reinforce with reward baseline from supervisor
+        if 'plans' not in signal or signal['plans'] is None:
             return
-
-        self.train()
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-        optimizer.zero_grad()
-
-        logits = self.forward(plans.detach())
+            
+        plans = signal['plans']
+        actions = signal['actions']
+        rewards = signal['reward']
         
-        # Policy Gradient objective with baseline
-        baseline = rewards.mean()
-        advantages = rewards - baseline
+        probs = self.policy(plans.detach())
+        dist = Categorical(probs)
+        log_probs = dist.log_prob(actions)
         
-        log_probs = F.log_softmax(logits, dim=-1)
-        action_log_probs = log_probs.gather(1, actions.unsqueeze(1)).squeeze(1)
+        # Calculate Entropy to encourage exploration
+        entropy = dist.entropy()
         
-        loss = -(action_log_probs * advantages).mean()
+        # Policy Gradient loss with Entropy Regularization
+        # The 0.05 multiplier controls the strength of the exploration bonus
+        loss = -(log_probs * rewards + 0.05 * entropy).mean()
         
+        self.optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
-        self.eval()
+        self.optimizer.step()
 
     def save(self, path):
         torch.save(self.state_dict(), path)
-
+        
     def load(self, path):
         self.load_state_dict(torch.load(path))

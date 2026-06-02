@@ -57,7 +57,7 @@ def train():
     temporal_lobe = TemporalLobe(input_dim=dim_what + dim_parietal_hidden, hidden_dim=dim_temporal_hidden, vocab_size=50).to(device)
     frontal_lobe = FrontalLobe(input_dim=dim_parietal_hidden, latent_dim=dim_frontal_hidden, vocab_size=50).to(device)
     parietal_lobe = ParietalLobe(input_dim=dim_where + dim_temporal_hidden + dim_frontal_hidden, latent_dim=dim_parietal_hidden).to(device)
-    motor_lobe = MotorLobe(input_dim=dim_parietal_hidden, action_space=9).to(device) # Assuming 9 actions
+    motor_lobe = MotorLobe(input_dim=dim_frontal_hidden, action_space=9).to(device) # Assuming 9 actions
 
     # Optimizers
     opt_occipital = optim.Adam(occipital_lobe.parameters(), lr=lr)
@@ -84,41 +84,32 @@ def train():
             reconstructed, (what, where) = occipital_lobe(images), occipital_lobe.get_latent(images)
             loss_occ = criterion_mse(reconstructed, images)
             
-            # 2. Temporal Pass (Teacher Forcing / Mock Inputs)
-            # For simplicity, we use zero-init for other lobes context in this independent training step
-            # OR we should ideally forward pass through the whole brain.
-            # Let's do a forward pass through the brain.
-            
-            # Dummy context for first pass
+            # 2. Predictive Coding Top-Down Integration
+            # We use a 2-pass approach to connect the gradient pathways fully, 
+            # replacing the disconnected dummies with actual recurrent context.
             dummy_parietal = torch.zeros(images.size(0), dim_parietal_hidden).to(device)
             dummy_frontal = torch.zeros(images.size(0), dim_frontal_hidden).to(device)
-            dummy_temporal = torch.zeros(images.size(0), dim_temporal_hidden).to(device)
 
-            # Temporal
-            # Generated sequence vs Target Text
-            # Note: Text training requires tokenization. 
-            # For this MVP, we will skip the actual text loss implementation and just run the forward pass
-            # because implementing a tokenizer and padding logic here is verbose.
-            # We will just ensure the code runs and updates weights based on dummy objectives or available targets.
-            generated_seq, new_temporal = temporal_lobe(what, dummy_parietal)
-            loss_temp = torch.tensor(0.0, requires_grad=True).to(device) # Placeholder
-
-            # Parietal
-            # Target: 32x32 Gaussian map
-            # Parietal Output: (Latent, Map)
-            # We need to reshape parietal_maps to match decoder output or vice versa.
-            # Parietal decoder output is (B, 1, 32, 32) (Sigmoid)
-            parietal_latent, pred_map = parietal_lobe(where, new_temporal.squeeze(0), dummy_frontal)
-            loss_par = criterion_mse(pred_map.squeeze(1), parietal_maps)
-
-            # Frontal
-            # Forward pass
+            # Pass 1: Feed-forward to get initial top-down contexts
+            _, new_temporal_init = temporal_lobe(what, dummy_parietal)
+            parietal_latent_init, _ = parietal_lobe(where, new_temporal_init.squeeze(0), dummy_frontal)
+            frontal_latent_init, _, _ = frontal_lobe(parietal_latent_init)
+            
+            # Pass 2: Full Forward Pass with Feedback (Gradient pathway complete)
+            generated_seq, new_temporal = temporal_lobe(what, parietal_latent_init)
+            parietal_latent, pred_map = parietal_lobe(where, new_temporal.squeeze(0), frontal_latent_init)
             frontal_latent, goals, goal_map = frontal_lobe(parietal_latent)
-            loss_front = torch.tensor(0.0, requires_grad=True).to(device) # Placeholder for text loss
+
+            # Predictive Coding Self-Consistency Losses
+            # This ensures top-down feedback aligns with bottom-up predictions
+            loss_temp = criterion_mse(new_temporal, new_temporal_init.detach())
+            loss_par = criterion_mse(pred_map.squeeze(1), parietal_maps)
+            loss_front = criterion_mse(frontal_latent, frontal_latent_init.detach())
 
             # Motor
             # Target: Action One-Hot or Multi-Binary
-            pred_actions = motor_lobe(parietal_latent)
+            # Now accurately flows from the Prefrontal planning lobe
+            pred_actions = motor_lobe(frontal_latent)
             # MotorLobe output is Softmax(dim=1). Action target is MultiBinary (from recorder).
             # Convert target to index for CrossEntropy
             # The recorder saved One-Hot-like (Single 1).
