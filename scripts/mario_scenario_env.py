@@ -1,6 +1,8 @@
 import numpy as np
 import pygame
 import math
+import json
+import os
 
 class MarioScenarioEnv:
     """
@@ -189,6 +191,11 @@ class MarioScenarioEnv:
         rgb_array = np.transpose(rgb_array, (1, 0, 2))
         return rgb_array
 
+    @staticmethod
+    def load_scenario_from_json(filepath):
+        """Loads a scenario dictionary from a JSON config file."""
+        with open(filepath, 'r') as f:
+            return json.load(f)
 
 # --- Interactive Demo ---
 if __name__ == "__main__":
@@ -210,7 +217,14 @@ if __name__ == "__main__":
         'goal': [230, 80, 16, 20]
     }
     
-    obs = env.reset(scenario=custom_scenario)
+    # Example of loading from a config file if it exists:
+    config_path = "scenarios/level_1.json"
+    if os.path.exists(config_path):
+        scenario_config = MarioScenarioEnv.load_scenario_from_json(config_path)
+    else:
+        scenario_config = custom_scenario
+
+    obs = env.reset(scenario=scenario_config)
     
     # Setup a display just to watch it play out
     display = pygame.display.set_mode((env.width, env.height))
