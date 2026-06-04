@@ -14,11 +14,8 @@ You could have grid cells since the decoding is super simple, they already make 
 Wait! Can everything be grid activations??? Video? Sounds? Language? All ideas are grid spaces. Grid space creation is learned. Learning and ideation is the bridging of grid spaces!!!
 This is why all knowledge is embedded!!!
 Grid cells are hexagonal.
-Invisible box problem: Need "place" neurons, not just predicted actions. An area needs a "qualia". Grid cells make a place, and the other senses turn a place into an "episode". Mario needs to remember places in the game. One network should be able to learn lots of places.
-It’s not just where, it’s also what.
-How is what constructed? Communicated?
-Grids can have grids, each grid is learned, but then another grid can connect those grids
-Is what and where combined like CNN…? 
+Invisible box problem: Need "place" neurons, not just predicted actions. An area needs a "qualia". Grid cells make a place, and the other senses turn a place into an "episode". Mario needs to remember places in the game. One network should be able to learn lots of places. It’s not just "where", it’s also "what".
+How is "what" constructed? Communicated? Grids can have grids, each grid is learned, but then another grid can connect those grids. LSTM... 
 RetroAGI is a single column in the thousands brain architecture 
 The neo cortex is 6 layers, LLMs are like 30???
 
