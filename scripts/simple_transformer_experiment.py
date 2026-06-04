@@ -264,7 +264,13 @@ def train_and_evaluate():
     tau_start = 5.0
     tau_end = 0.1
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
     print(f"Using device: {device}")
     
     # Create datasets
