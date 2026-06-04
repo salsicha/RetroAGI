@@ -3,7 +3,23 @@ Hierarchical recursive, actor-worldmodel-critic, architecture for learning to pl
 
 Next steps:
 
+Build a progressive resolution machine 
 Add badguys to the platforms in the pygame.
+Add enemies and all other mechanics to low res pygame version.
+Make adaptive controller an adaptive model predictive controller (AMPC)
+Predictive controller can start off as heuristic, but must become deep neural network in high resolution version 
+Split engine into high and low resolution scripts with compatible interfaces
+Break models into separate files with tests
+You could have grid cells since the decoding is super simple, they already make a 2d array of the input!!!!
+Wait! Can everything be grid activations??? Video? Sounds? Language? All ideas are grid spaces. Grid space creation is learned. Learning and ideation is the bridging of grid spaces!!!!
+This is why all knowledge is embedded!!!!!!!!!!!!!!!!!!
+It’s not just where, it’s also what.
+How is what constructed? Communicated?
+Grids can have grids, each grid is learned, but then another grid can connect those grids
+Is what and where combined like CNN…? 
+RetroAGI is a single column in the thousands brain architecture 
+The neo cortex is 6 layers, LLMs are like 30???
+
 Create a vision transformer for reading the pygame video frames, make the labels and tokens match the full version's labels.
 The vision transformer outputs to the actor model level A transformer.
 Instead of training the critic, use the pygame score as the critic.
@@ -11,3 +27,7 @@ Integrate the existing trained vision model for visually understanding video fra
 The adaptive controller should control how much each of the 4 direction keys are pressed. 0 or 1 for each key.
 Break the scripts into separate low-res and high-res versions, where the high-res version starts with the trained weights of the low res version but then continues to learn.
 Run in the full mario game.
+
+
+
+
