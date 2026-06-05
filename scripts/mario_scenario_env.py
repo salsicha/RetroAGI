@@ -23,8 +23,13 @@ class MarioScenarioEnv:
         # Physics constants
         self.gravity = 0.5
         self.max_fall_speed = 8.0
-        self.move_speed = 3.0
         self.jump_power = -8.5
+
+        # Horizontal momentum (SMB-style)
+        self.max_walk_speed = 3.0   # top speed
+        self.accel = 0.3            # ground acceleration per frame
+        self.decel = 0.2            # friction when no input
+        self.skid_decel = 0.5       # extra-fast decel when reversing direction
 
         # Actions
         # 0: NOOP, 1: RIGHT, 2: RIGHT+JUMP, 3: LEFT, 4: LEFT+JUMP, 5: JUMP
@@ -85,7 +90,9 @@ class MarioScenarioEnv:
             'y': float(scenario['mario'][1]),
             'vx': 0.0, 'vy': 0.0,
             'w': 14, 'h': 16,
-            'on_ground': False
+            'on_ground': False,
+            'facing': 1,       # 1 = right, -1 = left
+            'skidding': False,
         }
 
         self.platforms = [pygame.Rect(p[0], p[1], p[2], p[3]) for p in scenario.get('platforms', [])]
@@ -124,8 +131,29 @@ class MarioScenarioEnv:
         if action in [3, 4]: move_x = -1
         if action in [2, 4, 5]: jump = True
 
-        # 1. Horizontal movement
-        self.mario['vx'] = move_x * self.move_speed
+        # 1. Horizontal momentum (SMB-style acceleration / skid)
+        vx = self.mario['vx']
+        self.mario['skidding'] = False
+
+        if move_x != 0:
+            # Update facing direction
+            self.mario['facing'] = move_x
+            # Skidding: pressing opposite to current motion
+            if move_x > 0 and vx < 0 or move_x < 0 and vx > 0:
+                self.mario['skidding'] = True
+                vx += move_x * self.skid_decel
+            else:
+                vx += move_x * self.accel
+            # Clamp to top speed
+            vx = max(-self.max_walk_speed, min(self.max_walk_speed, vx))
+        else:
+            # No input — apply friction toward zero
+            if vx > 0:
+                vx = max(0.0, vx - self.decel)
+            elif vx < 0:
+                vx = min(0.0, vx + self.decel)
+
+        self.mario['vx'] = vx
 
         # 2. Jump
         if jump and self.mario['on_ground']:
@@ -185,8 +213,10 @@ class MarioScenarioEnv:
             done = True
             reward -= 10.0
 
-        # 9. Update enemies
+        # 9. Update enemies (skip dead ones)
         for enemy in self.enemies:
+            if enemy.get('dead'):
+                continue
             enemy['x'] += enemy['speed'] * enemy['direction']
             if enemy['x'] <= enemy['patrol_min']:
                 enemy['x'] = enemy['patrol_min']
@@ -195,10 +225,26 @@ class MarioScenarioEnv:
                 enemy['x'] = enemy['patrol_max']
                 enemy['direction'] = -1
 
-        # Enemy collision (any contact kills Mario)
+        # Enemy collision — stomp (falling onto top) kills enemy; side/bottom kills Mario
         for enemy in self.enemies:
+            if enemy.get('dead'):
+                continue
             enemy_rect = pygame.Rect(enemy['x'], enemy['y'], enemy['w'], enemy['h'])
-            if mario_rect.colliderect(enemy_rect):
+            if not mario_rect.colliderect(enemy_rect):
+                continue
+
+            # Stomp: Mario is falling AND his previous bottom was above the enemy's vertical midpoint
+            prev_mario_bottom = mario_rect.bottom - self.mario['vy']
+            stomped = self.mario['vy'] > 0 and prev_mario_bottom <= enemy_rect.centery
+
+            if stomped:
+                enemy['dead'] = True
+                reward += 5.0
+                self.score += 5
+                # Bounce Mario upward (half a normal jump)
+                self.mario['vy'] = self.jump_power * 0.55
+                self.mario['on_ground'] = False
+            else:
                 done = True
                 reward -= 10.0
 
@@ -255,19 +301,29 @@ class MarioScenarioEnv:
             screen_rect = pygame.Rect(self.goal.x - cam, self.goal.y, self.goal.w, self.goal.h)
             pygame.draw.rect(self.screen, (0, 255, 0), screen_rect)
 
-        # Enemies (purple + directional eye)
+        # Enemies (purple + directional eye; squished flat when dead)
         for enemy in self.enemies:
             sx = int(enemy['x']) - cam
             sy = int(enemy['y'])
-            enemy_rect = pygame.Rect(sx, sy, enemy['w'], enemy['h'])
-            pygame.draw.rect(self.screen, (160, 32, 240), enemy_rect)
-            eye_x = sx + (8 if enemy['direction'] > 0 else 2)
-            pygame.draw.circle(self.screen, (255, 255, 255), (eye_x, sy + 4), 2)
+            if enemy.get('dead'):
+                # Draw a squished flat rectangle at the bottom of where the enemy stood
+                squish_rect = pygame.Rect(sx, sy + enemy['h'] - 4, enemy['w'], 4)
+                pygame.draw.rect(self.screen, (100, 0, 160), squish_rect)
+            else:
+                enemy_rect = pygame.Rect(sx, sy, enemy['w'], enemy['h'])
+                pygame.draw.rect(self.screen, (160, 32, 240), enemy_rect)
+                eye_x = sx + (8 if enemy['direction'] > 0 else 2)
+                pygame.draw.circle(self.screen, (255, 255, 255), (eye_x, sy + 4), 2)
 
-        # Mario (red)
+        # Mario — red body; yellow when skidding; eye dot shows facing direction
         mario_sx = int(self.mario['x']) - cam
-        mario_rect = pygame.Rect(mario_sx, self.mario['y'], self.mario['w'], self.mario['h'])
-        pygame.draw.rect(self.screen, (255, 0, 0), mario_rect)
+        mario_rect = pygame.Rect(mario_sx, int(self.mario['y']), self.mario['w'], self.mario['h'])
+        body_color = (255, 220, 0) if self.mario['skidding'] else (255, 0, 0)
+        pygame.draw.rect(self.screen, body_color, mario_rect)
+        # Eye: small white dot on the facing side
+        eye_x = mario_sx + (10 if self.mario['facing'] > 0 else 2)
+        eye_y = int(self.mario['y']) + 4
+        pygame.draw.circle(self.screen, (255, 255, 255), (eye_x, eye_y), 2)
 
         # RGB array (H, W, 3)
         rgb_array = pygame.surfarray.array3d(self.screen)

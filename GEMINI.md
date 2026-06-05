@@ -1,9 +1,8 @@
 
-Hierarchical recursive, actor-worldmodel-critic, architecture for learning to play super mario bros. It is a progressive resolution machine, the resolution of the game and the model's knowledge of it increases as it "grows up". There architecture for generating action is be a three layer heirarchy, a high level planner, low level planner, and an adaptive controller, but there is also be world model that takes the predicted actions and predicts the outcome of the action, and a critic model feeding criticism of the world model back into the actor model. The entire model is essentially a single neo-cortex column in the "thousands brain theory" of intelligence. Except the LSTM, which is basically the hippocampus.
+Hierarchical recursive, actor-worldmodel-critic, architecture for learning to play super mario bros. It is a progressive resolution machine, the resolution of the game and the model's knowledge of it increases as it "grows up". Learning starts with a very low resolution simulation of the Super Mario Bros game. There architecture for generating action is be a three layer heirarchy, a high level planner, low level planner, and an adaptive controller, but there is also be world model that takes the predicted actions and predicts the outcome of the action, and a critic model feeding criticism of the world model back into the actor model. The entire model is essentially a single neo-cortex column in the "thousands brain theory" of intelligence. Except the LSTM, which is basically the hippocampus.
 
 Next steps:
 
-break scritps into high res and low res
 Add enemies and all other mechanics to low res pygame version.
 How to make LSTM take the context and retrieve what will happen next...?
 Make adaptive controller an adaptive model predictive controller (AMPC)
