@@ -8,97 +8,131 @@ class MarioScenarioEnv:
     """
     A lightweight, scriptable 2D platformer environment for AI training.
     Mimics the Gym API: reset(), step(action), render()
+
+    All game objects (Mario, platforms, coins, enemies) use WORLD coordinates.
+    The viewport is `width` x `height` pixels; `camera_x` tracks the left edge
+    of the viewport in world space.  The camera scrolls right following Mario
+    and never scrolls back left (classic SMB behaviour).
     """
-    def __init__(self, width=256, height=240):
+    def __init__(self, width=256, height=240, world_width=None):
         self.width = width
         self.height = height
-        
+        # Default world width equals viewport; overridden per-scenario.
+        self.world_width = world_width if world_width is not None else width
+
         # Physics constants
         self.gravity = 0.5
         self.max_fall_speed = 8.0
         self.move_speed = 3.0
         self.jump_power = -8.5
-        
+
         # Actions
         # 0: NOOP, 1: RIGHT, 2: RIGHT+JUMP, 3: LEFT, 4: LEFT+JUMP, 5: JUMP
         self.action_space_n = 6
-        
-        # Rendering
+
+        # Rendering — off-screen surface, same size as viewport
         pygame.init()
         self.screen = pygame.Surface((self.width, self.height))
-        
+
         # State
         self.mario = None
         self.platforms = []
         self.coins = []
+        self.enemies = []
         self.goal = None
+        self.camera_x = 0.0
         self.score = 0
         self.steps = 0
-        self.max_steps = 500
+        self.max_steps = 1000
 
+    # ------------------------------------------------------------------
+    # Reset
+    # ------------------------------------------------------------------
     def reset(self, scenario=None):
         """
         Resets the environment. You can pass a custom 'scenario' dict:
         {
+            'world_width': int,                          # optional, defaults to self.width
             'mario': [x, y],
             'platforms': [[x, y, w, h], ...],
             'coins': [[x, y, w, h], ...],
-            'goal': [x, y, w, h] # Optional end-level goal
+            'enemies': [[x, y, patrol_min_x, patrol_max_x], ...],
+            'goal': [x, y, w, h]                        # optional end-level goal
         }
+        All coordinates are in world space.
         """
         self.steps = 0
         self.score = 0
-        
+        self.camera_x = 0.0
+
         if scenario is None:
-            # Default simple scenario: A floor, one platform, and a coin
             scenario = {
                 'mario': [20, 180],
                 'platforms': [
-                    [0, 220, 256, 20],   # Floor
-                    [120, 170, 40, 10],  # Platform
+                    [0, 220, 256, 20],
+                    [120, 170, 40, 10],
                 ],
                 'coins': [
-                    [130, 140, 10, 10]   # Coin on top of platform
+                    [130, 140, 10, 10]
                 ]
             }
-            
+
+        # Allow scenario to override world width
+        self.world_width = scenario.get('world_width', self.width)
+
         self.mario = {
-            'x': scenario['mario'][0], 'y': scenario['mario'][1],
+            'x': float(scenario['mario'][0]),
+            'y': float(scenario['mario'][1]),
             'vx': 0.0, 'vy': 0.0,
             'w': 14, 'h': 16,
             'on_ground': False
         }
-        
+
         self.platforms = [pygame.Rect(p[0], p[1], p[2], p[3]) for p in scenario.get('platforms', [])]
-        # Store coins as dicts to track if they are collected
-        self.coins = [{'rect': pygame.Rect(c[0], c[1], c[2], c[3]), 'collected': False} for c in scenario.get('coins', [])]
-        self.goal = pygame.Rect(scenario['goal']) if 'goal' in scenario else None
-        
+        self.coins = [
+            {'rect': pygame.Rect(c[0], c[1], c[2], c[3]), 'collected': False}
+            for c in scenario.get('coins', [])
+        ]
+        self.enemies = [
+            {
+                'x': float(e[0]), 'y': float(e[1]),
+                'w': 12, 'h': 14,
+                'speed': 1.5,
+                'direction': 1,
+                'patrol_min': float(e[2]),
+                'patrol_max': float(e[3]),
+            }
+            for e in scenario.get('enemies', [])
+        ]
+        self.goal = pygame.Rect(*scenario['goal']) if 'goal' in scenario else None
+
         return self.render()
 
+    # ------------------------------------------------------------------
+    # Step
+    # ------------------------------------------------------------------
     def step(self, action):
         self.steps += 1
         reward = 0.0
         done = False
         info = {}
 
-        # Parse Action
+        # --- Parse action ---
         move_x = 0
         jump = False
-        
         if action in [1, 2]: move_x = 1
         if action in [3, 4]: move_x = -1
         if action in [2, 4, 5]: jump = True
 
-        # 1. Apply horizontal movement
+        # 1. Horizontal movement
         self.mario['vx'] = move_x * self.move_speed
-        
-        # 2. Apply jumping
+
+        # 2. Jump
         if jump and self.mario['on_ground']:
             self.mario['vy'] = self.jump_power
             self.mario['on_ground'] = False
 
-        # 3. Apply gravity
+        # 3. Gravity
         self.mario['vy'] += self.gravity
         if self.mario['vy'] > self.max_fall_speed:
             self.mario['vy'] = self.max_fall_speed
@@ -106,12 +140,12 @@ class MarioScenarioEnv:
         # 4. Resolve X collisions
         self.mario['x'] += self.mario['vx']
         mario_rect = pygame.Rect(self.mario['x'], self.mario['y'], self.mario['w'], self.mario['h'])
-        
+
         for plat in self.platforms:
             if mario_rect.colliderect(plat):
-                if self.mario['vx'] > 0: # Moving right
+                if self.mario['vx'] > 0:
                     mario_rect.right = plat.left
-                elif self.mario['vx'] < 0: # Moving left
+                elif self.mario['vx'] < 0:
                     mario_rect.left = plat.right
                 self.mario['x'] = mario_rect.x
                 self.mario['vx'] = 0
@@ -120,104 +154,179 @@ class MarioScenarioEnv:
         self.mario['y'] += self.mario['vy']
         mario_rect.y = self.mario['y']
         self.mario['on_ground'] = False
-        
+
         for plat in self.platforms:
             if mario_rect.colliderect(plat):
-                if self.mario['vy'] > 0: # Falling
+                if self.mario['vy'] > 0:   # falling
                     mario_rect.bottom = plat.top
                     self.mario['on_ground'] = True
-                elif self.mario['vy'] < 0: # Hitting head
+                elif self.mario['vy'] < 0: # hitting head
                     mario_rect.top = plat.bottom
                 self.mario['y'] = mario_rect.y
                 self.mario['vy'] = 0
 
-        # Prevent walking off screen boundaries
-        if self.mario['x'] < 0: self.mario['x'] = 0
-        if self.mario['x'] > self.width - self.mario['w']: self.mario['x'] = self.width - self.mario['w']
-        
-        # Check fall death
+        # 6. Update camera (follows Mario, never scrolls left, clamped to world)
+        # Target: keep Mario ~1/3 from the left edge of the viewport
+        target_camera_x = self.mario['x'] - self.width // 3
+        if target_camera_x > self.camera_x:          # only scroll right
+            self.camera_x = target_camera_x
+        self.camera_x = max(0.0, min(self.camera_x, self.world_width - self.width))
+
+        # 7. World boundaries
+        # Mario cannot move left of the camera's left edge (scrolled-off area is gone)
+        if self.mario['x'] < self.camera_x:
+            self.mario['x'] = self.camera_x
+        # Mario cannot walk past right edge of world
+        if self.mario['x'] > self.world_width - self.mario['w']:
+            self.mario['x'] = self.world_width - self.mario['w']
+
+        # 8. Fall death
         if self.mario['y'] > self.height:
             done = True
-            reward -= 10.0 # Penalty for falling in a pit
+            reward -= 10.0
 
-        # 6. Coin Collection
+        # 9. Update enemies
+        for enemy in self.enemies:
+            enemy['x'] += enemy['speed'] * enemy['direction']
+            if enemy['x'] <= enemy['patrol_min']:
+                enemy['x'] = enemy['patrol_min']
+                enemy['direction'] = 1
+            elif enemy['x'] >= enemy['patrol_max']:
+                enemy['x'] = enemy['patrol_max']
+                enemy['direction'] = -1
+
+        # Enemy collision (any contact kills Mario)
+        for enemy in self.enemies:
+            enemy_rect = pygame.Rect(enemy['x'], enemy['y'], enemy['w'], enemy['h'])
+            if mario_rect.colliderect(enemy_rect):
+                done = True
+                reward -= 10.0
+
+        # 10. Coin collection
         for coin in self.coins:
             if not coin['collected'] and mario_rect.colliderect(coin['rect']):
                 coin['collected'] = True
                 reward += 10.0
                 self.score += 10
-                
-        # Check Goal condition
+
+        # 11. Goal
         if self.goal and mario_rect.colliderect(self.goal):
             done = True
             reward += 50.0
 
-        # Check timeout
+        # 12. Timeout
         if self.steps >= self.max_steps:
             done = True
 
-        # Small negative reward to encourage speed
-        reward -= 0.01 
+        # Small per-step penalty to encourage speed
+        reward -= 0.01
 
         obs = self.render()
         return obs, reward, done, info
 
+    # ------------------------------------------------------------------
+    # Render
+    # ------------------------------------------------------------------
     def render(self):
         """
-        Draws the environment to a surface and returns a NumPy RGB array.
+        Draws the viewport (camera_x … camera_x+width) to an off-screen
+        surface and returns a NumPy RGB array of shape (H, W, 3).
+        All world-space positions are shifted left by camera_x before drawing.
         """
-        # Background (Sky Blue)
+        cam = int(self.camera_x)
+
+        # Background (sky blue)
         self.screen.fill((107, 140, 255))
-        
-        # Draw Platforms (Brown)
+
+        # Platforms (brown)
         for plat in self.platforms:
-            pygame.draw.rect(self.screen, (139, 69, 19), plat)
-            
-        # Draw Coins (Gold)
+            screen_rect = pygame.Rect(plat.x - cam, plat.y, plat.w, plat.h)
+            pygame.draw.rect(self.screen, (139, 69, 19), screen_rect)
+
+        # Coins (gold)
         for coin in self.coins:
             if not coin['collected']:
-                pygame.draw.ellipse(self.screen, (255, 215, 0), coin['rect'])
-                
-        # Draw Goal (Green Flagpole base)
+                r = coin['rect']
+                screen_rect = pygame.Rect(r.x - cam, r.y, r.w, r.h)
+                pygame.draw.ellipse(self.screen, (255, 215, 0), screen_rect)
+
+        # Goal (green)
         if self.goal:
-            pygame.draw.rect(self.screen, (0, 255, 0), self.goal)
+            screen_rect = pygame.Rect(self.goal.x - cam, self.goal.y, self.goal.w, self.goal.h)
+            pygame.draw.rect(self.screen, (0, 255, 0), screen_rect)
 
-        # Draw Mario (Red)
-        mario_rect = pygame.Rect(self.mario['x'], self.mario['y'], self.mario['w'], self.mario['h'])
+        # Enemies (purple + directional eye)
+        for enemy in self.enemies:
+            sx = int(enemy['x']) - cam
+            sy = int(enemy['y'])
+            enemy_rect = pygame.Rect(sx, sy, enemy['w'], enemy['h'])
+            pygame.draw.rect(self.screen, (160, 32, 240), enemy_rect)
+            eye_x = sx + (8 if enemy['direction'] > 0 else 2)
+            pygame.draw.circle(self.screen, (255, 255, 255), (eye_x, sy + 4), 2)
+
+        # Mario (red)
+        mario_sx = int(self.mario['x']) - cam
+        mario_rect = pygame.Rect(mario_sx, self.mario['y'], self.mario['w'], self.mario['h'])
         pygame.draw.rect(self.screen, (255, 0, 0), mario_rect)
-        
-        # Extract RGB array. Pygame surface is (W, H, 3). We transpose to (H, W, 3).
-        rgb_array = pygame.surfarray.array3d(self.screen)
-        rgb_array = np.transpose(rgb_array, (1, 0, 2))
-        return rgb_array
 
+        # RGB array (H, W, 3)
+        rgb_array = pygame.surfarray.array3d(self.screen)
+        return np.transpose(rgb_array, (1, 0, 2))
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
     @staticmethod
     def load_scenario_from_json(filepath):
         """Loads a scenario dictionary from a JSON config file."""
         with open(filepath, 'r') as f:
             return json.load(f)
 
+
 # --- Interactive Demo ---
 if __name__ == "__main__":
     env = MarioScenarioEnv()
-    
-    # Scripted scenario: Parkour
+
+    # Scrolling parkour level — world is 3× the viewport width
     custom_scenario = {
+        'world_width': 768,
         'mario': [20, 180],
         'platforms': [
-            [0, 220, 60, 20],     # Start platform
-            [90, 180, 40, 10],    # First jump
-            [160, 140, 40, 10],   # Second jump
-            [220, 100, 36, 140]   # End tower
+            # --- Screen 1 (0–256) ---
+            [0,   220, 100, 20],   # Start ground
+            [130, 180,  50, 10],   # First platform
+            [210, 140,  50, 10],   # Rising platform
+            # --- Screen 2 (256–512) ---
+            [270, 220, 120, 20],   # Ground chunk
+            [320, 170,  40, 10],   # Mid platform
+            [400, 130,  60, 10],   # High platform
+            [460, 190,  40, 10],   # Drop-down
+            # --- Screen 3 (512–768) ---
+            [520, 220, 248, 20],   # Final ground
+            [560, 170,  40, 10],   # Platform before goal
+            [640, 130,  40, 10],   # Platform before goal
+            [720, 100,  48, 120],  # Goal tower
         ],
         'coins': [
-            [105, 150, 10, 10],
-            [175, 110, 10, 10]
+            [145, 150, 10, 10],
+            [225, 110, 10, 10],
+            [335, 140, 10, 10],
+            [415, 100, 10, 10],
+            [575, 140, 10, 10],
+            [655, 100, 10, 10],
         ],
-        'goal': [230, 80, 16, 20]
+        # Enemies: [x, y, patrol_min_x, patrol_max_x]
+        'enemies': [
+            [10,  200,  2,   90],   # Start ground patrol
+            [132, 160, 130, 178],   # First platform
+            [272, 200, 270, 388],   # Second ground section
+            [325, 150, 322, 438],   # Mid platform
+            [522, 200, 520, 660],   # Final ground
+            [562, 150, 560, 598],   # Platform before goal
+        ],
+        'goal': [730, 80, 16, 20],
     }
-    
-    # Example of loading from a config file if it exists:
+
     config_path = "scenarios/level_1.json"
     if os.path.exists(config_path):
         scenario_config = MarioScenarioEnv.load_scenario_from_json(config_path)
@@ -225,33 +334,29 @@ if __name__ == "__main__":
         scenario_config = custom_scenario
 
     obs = env.reset(scenario=scenario_config)
-    
-    # Setup a display just to watch it play out
+
     display = pygame.display.set_mode((env.width, env.height))
     pygame.display.set_caption("Mario AI Scenario Simulator")
     clock = pygame.time.Clock()
-    
+
     running = True
     while running:
-        # Check for user closing the window
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-                
-        # Random action agent for demo
-        # (0: NOOP, 1: R, 2: R+J, 3: L, 4: L+J, 5: J)
-        action = np.random.choice([0, 1, 1, 2, 2, 5])
-        
+
+        # Bias toward moving right so the demo scrolls visibly
+        action = np.random.choice([0, 1, 1, 1, 2, 2, 5])
+
         obs, reward, done, info = env.step(action)
-        
-        # Blit array to screen for visualizing
+
         surface = pygame.surfarray.make_surface(np.transpose(obs, (1, 0, 2)))
         display.blit(surface, (0, 0))
         pygame.display.flip()
-        clock.tick(30) # 30 FPS
-        
+        clock.tick(30)
+
         if done:
-            print("Scenario finished! Score:", env.score)
+            print(f"Scenario finished! Score: {env.score}  Camera: {env.camera_x:.0f}")
             env.reset(scenario=custom_scenario)
-            
+
     pygame.quit()

@@ -3,8 +3,9 @@ Hierarchical recursive, actor-worldmodel-critic, architecture for learning to pl
 
 Next steps:
 
-Add badguys to the platforms in the pygame.
+break scritps into high res and low res
 Add enemies and all other mechanics to low res pygame version.
+How to make LSTM take the context and retrieve what will happen next...?
 Make adaptive controller an adaptive model predictive controller (AMPC)
 Predictive controller can start off as heuristic, but must become LSTM in high resolution version.
 LSTM preditive/memory model should include grid cells for place on the screen. 
