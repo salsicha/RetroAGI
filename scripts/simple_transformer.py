@@ -192,19 +192,17 @@ class HierarchicalAdaptiveModel(nn.Module):
         return logits_A, y_hat_C, w_pred, b_pred
 
 class WorldModel(nn.Module):
-    """Predicts the next state given current state and action."""
-    def __init__(self):
+    """Predicts the next state given current state and action using an LSTM."""
+    def __init__(self, hidden_size=32, num_layers=1):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(2, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
-        )
-        
+        self.lstm = nn.LSTM(input_size=2, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, 1)
+
     def forward(self, state, action):
         # state, action shapes: [batch_size, seq_len_c]
         x = torch.stack([state, action], dim=-1) # [batch_size, seq_len_c, 2]
-        return self.net(x).squeeze(-1) # [batch_size, seq_len_c]
+        lstm_out, _ = self.lstm(x)               # [batch_size, seq_len_c, hidden_size]
+        return self.fc(lstm_out).squeeze(-1)      # [batch_size, seq_len_c]
 
 class Critic(nn.Module):
     """Evaluates the predicted next state and outputs a criticism vector."""
