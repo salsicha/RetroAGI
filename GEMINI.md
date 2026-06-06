@@ -5,7 +5,7 @@ Next steps:
 
 1. Build a vision transformer model that extracts position and semantic information from the simplified pygame version of SMB. Align its interfaces with the "vision" model that works on the linear version of the hierarchical model and the segmentation model that has already been trained on the full version of SMB.
 
-2. Separate hierarchical learning architecture into different levels of resolution. Low level works on linear sequenceses. Next level works on simplified pygame version of SMB. Top level works on the full version of SMB.
+2. Separate hierarchical learning architecture into different levels of resolution. Low level works on linear sequenceses. Next level works on simplified pygame version of SMB. Top level works on the full version of SMB. Don't write separate scripts for each level, make a framework that works for all three.
 
 
 Old notes:
