@@ -192,17 +192,63 @@ class HierarchicalAdaptiveModel(nn.Module):
         return logits_A, y_hat_C, w_pred, b_pred
 
 class WorldModel(nn.Module):
-    """Predicts the next state given current state and action using an LSTM."""
-    def __init__(self, hidden_size=32, num_layers=1):
+    """
+    Predicts the next state using an episodic LSTM with:
+    - Grid-cell-like multi-frequency sinusoidal position encoding ("where")
+    - B-stream controller params as context ("what")
+    - Hidden state carried across B-token episodes within each sample (episodic memory)
+    """
+    def __init__(self, hidden_size=32, num_layers=1, num_freqs=4, ratio_bc=4):
         super().__init__()
-        self.lstm = nn.LSTM(input_size=2, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.num_freqs = num_freqs
+        self.ratio_bc = ratio_bc
+        # input: (state, action, w_context, b_context) + sin/cos phases per frequency
+        input_size = 4 + num_freqs * 2
+        self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
+                            num_layers=num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, 1)
 
-    def forward(self, state, action):
-        # state, action shapes: [batch_size, seq_len_c]
-        x = torch.stack([state, action], dim=-1) # [batch_size, seq_len_c, 2]
-        lstm_out, _ = self.lstm(x)               # [batch_size, seq_len_c, hidden_size]
-        return self.fc(lstm_out).squeeze(-1)      # [batch_size, seq_len_c]
+    def _make_phases(self, seq_len, device):
+        """Multi-frequency sinusoidal phases — analogous to grid cells at different scales."""
+        phases = []
+        for t in range(seq_len):
+            t_norm = t / seq_len
+            step_phases = []
+            for k in range(1, self.num_freqs + 1):
+                step_phases.append(math.sin(2 * math.pi * k * t_norm))
+                step_phases.append(math.cos(2 * math.pi * k * t_norm))
+            phases.append(step_phases)
+        return torch.tensor(phases, dtype=torch.float, device=device)  # [seq_len, num_freqs*2]
+
+    def forward(self, state, action, w_context, b_context):
+        # All inputs: [batch_size, seq_len_c]
+        batch_size = state.size(0)
+        seq_len_c  = state.size(1)
+        device     = state.device
+
+        # "Where": grid-cell phases broadcast over batch
+        phases = self._make_phases(seq_len_c, device)                   # [seq_len_c, num_freqs*2]
+        phases = phases.unsqueeze(0).expand(batch_size, -1, -1)         # [batch, seq_len_c, num_freqs*2]
+
+        # "What" + dynamics: concatenate all inputs
+        x = torch.stack([state, action, w_context, b_context], dim=-1)  # [batch, seq_len_c, 4]
+        x = torch.cat([x, phases], dim=-1)                               # [batch, seq_len_c, input_size]
+
+        # Episodic memory: reset (h, c) once per sample, carry across B-token episodes
+        h = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        c = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+
+        outputs = []
+        for ep_start in range(0, seq_len_c, self.ratio_bc):
+            ep_end = ep_start + self.ratio_bc
+            x_ep = x[:, ep_start:ep_end, :]           # [batch, ratio_bc, input_size]
+            out, (h, c) = self.lstm(x_ep, (h, c))     # state carries forward across episodes
+            outputs.append(out)
+
+        all_out = torch.cat(outputs, dim=1)            # [batch, seq_len_c, hidden_size]
+        return self.fc(all_out).squeeze(-1)             # [batch, seq_len_c]
 
 class Critic(nn.Module):
     """Evaluates the predicted next state and outputs a criticism vector."""
@@ -227,25 +273,30 @@ class AgentWorldModelCritic(nn.Module):
     Combines the Agent, World Model, and Critic.
     Executes a two-pass iterative refinement using criticism.
     """
-    def __init__(self, vocab_size, seq_len_a, seq_len_c, d_model=64):
+    def __init__(self, vocab_size, seq_len_a, seq_len_c, ratio_bc, d_model=64):
         super().__init__()
+        self.ratio_bc = ratio_bc
         self.agent = HierarchicalAdaptiveModel(vocab_size, d_model=d_model)
-        self.world_model = WorldModel()
+        self.world_model = WorldModel(ratio_bc=ratio_bc)
         self.critic = Critic(seq_len_c, seq_len_a, d_model)
-        
+
     def forward(self, src_A, src_B, src_C, tau=1.0):
         # Pass 1: Agent acts without criticism
         logits_A1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
-        
-        # World Model predicts the next state based on those actions
-        next_state_pred = self.world_model(src_C, actions1)
-        
+
+        # Upsample B-level params (seq_len_b) to C-level resolution (seq_len_c)
+        w_1_up = w_1.repeat_interleave(self.ratio_bc, dim=1)
+        b_1_up = b_1.repeat_interleave(self.ratio_bc, dim=1)
+
+        # World Model predicts the next state given actions, "what" context, and position
+        next_state_pred = self.world_model(src_C, actions1, w_1_up, b_1_up)
+
         # Critic evaluates the world model's prediction
         criticism = self.critic(next_state_pred)
-        
+
         # Pass 2: Agent acts again, this time incorporating the criticism
         logits_A2, actions2, w_2, b_2 = self.agent(src_A, src_B, src_C, criticism=criticism, tau=tau)
-        
+
         return actions1, next_state_pred, criticism, actions2, logits_A2, w_2, b_2
 
 # --------------------------------------------------------
@@ -286,7 +337,7 @@ def train_and_evaluate():
     seq_len_C = seq_len_A * ratio_AB * ratio_BC
     
     # Initialize model, loss, optimizer
-    model = AgentWorldModelCritic(vocab_size=vocab_size, seq_len_a=seq_len_A, seq_len_c=seq_len_C).to(device)
+    model = AgentWorldModelCritic(vocab_size=vocab_size, seq_len_a=seq_len_A, seq_len_c=seq_len_C, ratio_bc=ratio_BC).to(device)
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     

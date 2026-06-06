@@ -3,13 +3,15 @@ Hierarchical recursive, actor-worldmodel-critic, architecture for learning to pl
 
 Next steps:
 
-The world model will be an LSTM, it will have to take the context and retrieve what will happen next.
-Make adaptive controller an adaptive model predictive controller (AMPC)
-Predictive controller can start off as heuristic, but must become LSTM in high resolution version.
-LSTM preditive/memory model should include grid cells for place on the screen. 
-Split engine into high and low resolution scripts with compatible interfaces
-Break models into separate files with tests
+Make adaptive controller an adaptive model predictive controller (AMPC)? The World Model is the LSTM. Does the LSTM operate in the adaptive controller? No, too slow. Loop the LSTM with A or B transformer or both?
+
+
+Critic model is made of heuristics.
+Split engine into high and low resolution scripts with compatible interfaces.
+LSTM preditive/memory model could include grid cells for place on the screen in high resolution version.
+Break models into separate files with tests.
 You could have grid cells since the decoding is super simple, they already make a 2d array of the input!
+
 Wait! Can everything be grid activations??? Video? Sounds? Language? All ideas are grid spaces. Grid space creation is learned. Learning and ideation is the bridging of grid spaces!!!
 This is why all knowledge is embedded!!!
 Grid cells are hexagonal.
