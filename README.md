@@ -10,7 +10,7 @@ General purpose machine learning agent for retro games
 
 
 ## Diagram
-![The Brain](https://github.com/salsicha/RetroAGI/blob/main/diagrams/brain.jpg)
+![The Brain](https://github.com/salsicha/RetroAGI/blob/main/docs/architecture.html)
 
 
 ## Build
@@ -30,12 +30,4 @@ General purpose machine learning agent for retro games
    ```
 
 ## Training
-
-RetroAGI uses an **online learning** approach based on Predictive Coding. The models do not rely on a static, offline dataset. Instead, they learn dynamically as the agent plays the game. 
-
-To "train" the models, simply run the agent as described in the Usage section. 
-
-During gameplay:
-- The `Supervisor` module continuously provides prediction error signals (rewards/penalties) to each model (Occipital, Temporal, Hippocampus, Prefrontal, and Motor).
-- The models immediately perform weight updates via their `.learn()` methods to minimize surprise.
-- Model weights are automatically serialized and saved to `data/checkpoints/` every 1,000 steps.
+TBD
