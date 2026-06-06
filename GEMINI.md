@@ -7,6 +7,8 @@ Next steps:
 
 2. Separate hierarchical learning architecture into different levels of resolution. Low level works on linear sequenceses. Next level works on simplified pygame version of SMB. Top level works on the full version of SMB. Don't write separate scripts for each level, make a framework that works for all three.
 
+3. Build vision transformer for full resolution game by making look alike models running in a custom script that trains the model 
+
 
 Old notes:
 Make adaptive controller an adaptive model predictive controller (AMPC)? The World Model is the LSTM. Does the LSTM operate in the adaptive controller? No, too slow. Loop the LSTM with A or B transformer or both?
