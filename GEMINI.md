@@ -3,15 +3,18 @@ Hierarchical recursive, actor-worldmodel-critic, architecture for learning to pl
 
 Next steps:
 
+1. Build a vision transformer model that extracts position and semantic information from the simplified pygame version of SMB. Align its interfaces with the "vision" model that works on the linear version of the hierarchical model and the segmentation model that has already been trained on the full version of SMB.
+
+2. Separate hierarchical learning architecture into different levels of resolution. Low level works on linear sequenceses. Next level works on simplified pygame version of SMB. Top level works on the full version of SMB.
+
+
+Old notes:
 Make adaptive controller an adaptive model predictive controller (AMPC)? The World Model is the LSTM. Does the LSTM operate in the adaptive controller? No, too slow. Loop the LSTM with A or B transformer or both?
-
-
 Critic model is made of heuristics.
 Split engine into high and low resolution scripts with compatible interfaces.
 LSTM preditive/memory model could include grid cells for place on the screen in high resolution version.
 Break models into separate files with tests.
 You could have grid cells since the decoding is super simple, they already make a 2d array of the input!
-
 Wait! Can everything be grid activations??? Video? Sounds? Language? All ideas are grid spaces. Grid space creation is learned. Learning and ideation is the bridging of grid spaces!!!
 This is why all knowledge is embedded!!!
 Grid cells are hexagonal.
