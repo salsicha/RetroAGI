@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hierarchical Actor · World Model · Critic — Architecture</title>
+<style>
+  body { background: #0d1117; margin: 0; padding: 20px; }
+  svg { display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<svg width="1320" height="1020" viewBox="0 0 1320 1020" xmlns="http://www.w3.org/2000/svg">
+<defs>
+
+  <!-- Arrow markers -->
+  <marker id="arr"       markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#7788bb"/></marker>
+  <marker id="arr-red"   markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#e05555"/></marker>
+  <marker id="arr-amber" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#d4800a"/></marker>
+  <marker id="arr-teal"  markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2aaa88"/></marker>
+  <marker id="arr-blue"  markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4a88e8"/></marker>
+  <marker id="arr-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2acc44"/></marker>
+
+  <!-- Box gradients -->
+  <linearGradient id="gA"    x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0c1f4a"/><stop offset="100%" stop-color="#1a3a70"/></linearGradient>
+  <linearGradient id="gB"    x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#082030"/><stop offset="100%" stop-color="#124a60"/></linearGradient>
+  <linearGradient id="gCtrl" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#071f18"/><stop offset="100%" stop-color="#0f3d2a"/></linearGradient>
+  <linearGradient id="gWM"   x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#251200"/><stop offset="100%" stop-color="#3e2200"/></linearGradient>
+  <linearGradient id="gCrit" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#200808"/><stop offset="100%" stop-color="#3e1010"/></linearGradient>
+  <linearGradient id="gGame" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#081808"/><stop offset="100%" stop-color="#103010"/></linearGradient>
+  <linearGradient id="gRes"  x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#181830"/><stop offset="100%" stop-color="#0d0d1f"/></linearGradient>
+
+  <!-- Glow filter -->
+  <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur stdDeviation="4" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="glow-sm" x="-10%" y="-10%" width="120%" height="120%">
+    <feGaussianBlur stdDeviation="2" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+
+</defs>
+
+<!-- ── Background ─────────────────────────────────────────────── -->
+<rect width="1320" height="1020" fill="#0d1117"/>
+
+<!-- ── Title ──────────────────────────────────────────────────── -->
+<text x="660" y="34" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="21" font-weight="700" fill="#c8d8ff" filter="url(#glow-sm)">
+  Hierarchical Actor · World Model · Critic
+</text>
+<text x="660" y="56" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="13" fill="#5a6a99">
+  Progressive-Resolution Super Mario Bros  ·  Single Neocortical Column  ·  Thousand Brains Theory
+</text>
+
+<!-- ── Outer cortical column border ───────────────────────────── -->
+<rect x="22" y="68" width="1276" height="876" rx="18" fill="none"
+      stroke="#3a3a6a" stroke-width="1.5" stroke-dasharray="10,5"/>
+<text x="42" y="86" font-family="'Segoe UI',system-ui" font-size="10" fill="#4a4a7a" letter-spacing="2">
+  NEOCORTICAL COLUMN  ·  THOUSAND BRAINS THEORY
+</text>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     LEFT — Progressive Resolution
+     ═══════════════════════════════════════════════════════════════ -->
+<rect x="32" y="92" width="200" height="652" rx="12" fill="url(#gRes)" stroke="#28285a" stroke-width="1"/>
+<text x="132" y="113" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#7878cc" letter-spacing="1.5">
+  PROGRESSIVE RESOLUTION
+</text>
+
+<!-- Game frame 1 — 8×8 (very blocky) -->
+<text x="132" y="134" text-anchor="middle" font-size="9" fill="#44558a">Early · 8×8 — coarse world model</text>
+<rect x="57" y="140" width="150" height="95" rx="5" fill="#050510" stroke="#222255"/>
+<!-- sky -->
+<rect x="60"  y="143" width="144" height="28" fill="#3366bb"/>
+<!-- clouds (2 big blobs) -->
+<rect x="68"  y="148" width="24" height="12" fill="#ddeeff" rx="4"/>
+<rect x="140" y="148" width="24" height="12" fill="#ddeeff" rx="4"/>
+<!-- ground -->
+<rect x="60"  y="171" width="144" height="16" fill="#6b3d0a"/>
+<rect x="60"  y="187" width="144" height="16" fill="#44aa44"/>
+<!-- blocks -->
+<rect x="84"  y="155" width="14" height="14" fill="#c8a020"/>
+<rect x="100" y="155" width="14" height="14" fill="#c8a020"/>
+<!-- mario blob -->
+<rect x="68"  y="158" width="14" height="24" fill="#e04040"/>
+<rect x="68"  y="163" width="14" height="8"  fill="#ddaa44"/>
+<!-- pipe -->
+<rect x="160" y="157" width="18" height="30" fill="#228822"/>
+<rect x="157" y="155" width="24" height="6"  fill="#33aa33"/>
+
+<!-- Game frame 2 — 16×16 (medium) -->
+<text x="132" y="253" text-anchor="middle" font-size="9" fill="#44558a">Juvenile · 16×16 — finer planning</text>
+<rect x="47" y="259" width="170" height="100" rx="5" fill="#050510" stroke="#2a2a6a"/>
+<!-- sky -->
+<rect x="50"  y="262" width="164" height="30" fill="#3377cc"/>
+<!-- clouds -->
+<rect x="58"  y="267" width="30" height="10" fill="#eef6ff" rx="5"/>
+<rect x="62"  y="264" width="22" height="8"  fill="#eef6ff" rx="4"/>
+<rect x="150" y="267" width="30" height="10" fill="#eef6ff" rx="5"/>
+<!-- bricks row -->
+<rect x="90"  y="278" width="10" height="10" fill="#c87030" rx="1"/>
+<rect x="101" y="278" width="10" height="10" fill="#e09040" rx="1"/>
+<rect x="112" y="278" width="10" height="10" fill="#c87030" rx="1"/>
+<rect x="123" y="278" width="10" height="10" fill="#f0b020" rx="1"/>
+<!-- mario (more detail) -->
+<rect x="58"  y="276" width="12" height="6"  fill="#cc3030"/>
+<rect x="56"  y="282" width="16" height="10" fill="#cc3030"/>
+<rect x="58"  y="278" width="10" height="6"  fill="#ddaa55"/>
+<rect x="60"  y="289" width="5"  height="7"  fill="#44aacc"/>
+<rect x="66"  y="289" width="5"  height="7"  fill="#44aacc"/>
+<!-- pipe -->
+<rect x="178" y="272" width="20" height="35" fill="#228822"/>
+<rect x="175" y="270" width="26" height="7"  fill="#33bb33"/>
+<!-- ground blocks -->
+<rect x="50"  y="292" width="164" height="8"  fill="#6b3d0a"/>
+<rect x="50"  y="300" width="164" height="14" fill="#4aaa44"/>
+<rect x="50"  y="314" width="164" height="8"  fill="#228822"/>
+<!-- coin -->
+<circle cx="135" cy="268" r="4" fill="#ffcc00" filter="url(#glow-sm)"/>
+<circle cx="148" cy="268" r="4" fill="#ffcc00" filter="url(#glow-sm)"/>
+
+<!-- Game frame 3 — 32×32 (high detail) -->
+<text x="132" y="378" text-anchor="middle" font-size="9" fill="#44558a">Mature · 32×32 — full resolution</text>
+<rect x="37" y="384" width="190" height="105" rx="5" fill="#050510" stroke="#3a3a8e"/>
+<!-- sky gradient bands -->
+<rect x="40"  y="387" width="184" height="35" fill="#2255aa"/>
+<!-- cloud cluster -->
+<rect x="48"  y="395" width="34" height="8"  fill="#ddeeff" rx="6"/>
+<rect x="52"  y="392" width="26" height="8"  fill="#eef8ff" rx="5"/>
+<rect x="160" y="395" width="34" height="8"  fill="#ddeeff" rx="6"/>
+<rect x="164" y="392" width="26" height="8"  fill="#eef8ff" rx="5"/>
+<!-- platform bricks (2 rows, fine) -->
+<rect x="100" y="396" width="7" height="7" fill="#c87030" rx="1"/>
+<rect x="108" y="396" width="7" height="7" fill="#dd8840" rx="1"/>
+<rect x="116" y="396" width="7" height="7" fill="#c87030" rx="1"/>
+<rect x="124" y="396" width="7" height="7" fill="#ffcc00" rx="1" filter="url(#glow-sm)"/>
+<rect x="132" y="396" width="7" height="7" fill="#c87030" rx="1"/>
+<!-- mario (detailed) -->
+<rect x="50"  y="394" width="14" height="5"  fill="#bb2222"/>
+<rect x="48"  y="399" width="18" height="4"  fill="#bb2222"/>
+<rect x="50"  y="401" width="12" height="6"  fill="#ddaa55"/>
+<rect x="50"  y="403" width="12" height="4"  fill="#aa2222"/>
+<rect x="48"  y="407" width="18" height="7"  fill="#bb2222"/>
+<rect x="50"  y="414" width="5"  height="8"  fill="#3388cc"/>
+<rect x="58"  y="414" width="5"  height="8"  fill="#3388cc"/>
+<!-- pipe -->
+<rect x="195" y="400" width="22" height="40" fill="#1a7a1a"/>
+<rect x="192" y="397" width="28" height="7"  fill="#22aa22"/>
+<!-- goomba -->
+<rect x="168" y="412" width="12" height="8"  fill="#aa6611"/>
+<rect x="166" y="408" width="16" height="6"  fill="#aa6611" rx="8"/>
+<!-- coins -->
+<circle cx="142" cy="393" r="3" fill="#ffcc00" filter="url(#glow-sm)"/>
+<circle cx="152" cy="393" r="3" fill="#ffcc00" filter="url(#glow-sm)"/>
+<circle cx="162" cy="393" r="3" fill="#ffcc00" filter="url(#glow-sm)"/>
+<!-- ground -->
+<rect x="40"  y="422" width="184" height="6"  fill="#6b3d0a"/>
+<rect x="40"  y="428" width="184" height="10" fill="#4aaa44"/>
+<rect x="40"  y="438" width="184" height="5"  fill="#228822"/>
+<rect x="40"  y="443" width="184" height="5"  fill="#113311"/>
+<rect x="40"  y="448" width="184" height="10" fill="#4aaa44"/>
+<rect x="40"  y="458" width="184" height="10" fill="#6b3d0a"/>
+<rect x="40"  y="468" width="184" height="16" fill="#8B4513"/>
+
+<!-- resolution arrow (growing upward label) -->
+<line x1="22" y1="480" x2="22" y2="140" stroke="#44558a" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="15" y="320" text-anchor="middle" font-size="9" fill="#44558a" transform="rotate(-90 15 320)">Resolution grows with experience</text>
+
+<!-- Game State box -->
+<rect x="42" y="510" width="180" height="65" rx="8" fill="#111122" stroke="#28285a"/>
+<text x="132" y="530" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#7788cc">Game State Input</text>
+<text x="132" y="547" text-anchor="middle" font-size="9" fill="#44558a">Grid: tiles · enemies · gaps</text>
+<text x="132" y="562" text-anchor="middle" font-size="9" fill="#44558a">Semantic: coins · pipes · hazards</text>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     CENTER — Actor Hierarchy
+     ═══════════════════════════════════════════════════════════════ -->
+
+<!-- ── High-Level Planner ─────────────────────────────────── -->
+<rect x="370" y="92" width="310" height="155" rx="12" fill="url(#gA)" stroke="#4a6aaa" stroke-width="1.5" filter="url(#glow-sm)"/>
+<!-- Bio badge -->
+<rect x="375" y="97" width="170" height="20" rx="10" fill="#0d1a35" stroke="#2a4a7a"/>
+<text x="460" y="111" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#6a9acc">🧠 Prefrontal Cortex (PFC)</text>
+<!-- title -->
+<text x="525" y="138" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="16" font-weight="700" fill="#88aaee" filter="url(#glow-sm)">High-Level Planner</text>
+<text x="525" y="157" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="11" fill="#5588cc">Transformer A  ·  Slow Timescale</text>
+<text x="525" y="175" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#4466aa">Strategic goals  ·  Scene-level concepts</text>
+<text x="525" y="191" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#4466aa">Causal self-attention  ·  seq_len_A = 8</text>
+<text x="525" y="209" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#334477" font-style="italic">← receives criticism vector from Critic</text>
+
+<!-- A → B arrow -->
+<line x1="525" y1="247" x2="525" y2="288" stroke="#4a88e8" stroke-width="2" marker-end="url(#arr-blue)"/>
+<rect x="430" y="254" width="190" height="22" rx="8" fill="#0b1628"/>
+<text x="525" y="269" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#4a88e8">Gumbel-Softmax bridge  ·  τ annealed 5→0.1</text>
+
+<!-- ── Low-Level Planner ───────────────────────────────────── -->
+<rect x="370" y="291" width="310" height="155" rx="12" fill="url(#gB)" stroke="#2a88aa" stroke-width="1.5" filter="url(#glow-sm)"/>
+<rect x="375" y="296" width="178" height="20" rx="10" fill="#08202e" stroke="#1a5065"/>
+<text x="464" y="310" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#4aaa cc">🧠 Premotor Cortex (SMA)</text>
+
+<text x="525" y="337" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="16" font-weight="700" fill="#55ccee" filter="url(#glow-sm)">Low-Level Planner</text>
+<text x="525" y="356" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="11" fill="#33aacc">Transformer B  ·  Medium Timescale</text>
+<text x="525" y="374" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#227799">Action sequences  ·  Cross-attends A</text>
+<text x="525" y="390" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#227799">Causal cross-scale temporal mask</text>
+<text x="525" y="408" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#1a5566" font-style="italic">outputs controller params w, b per episode</text>
+
+<!-- B → Controller arrow -->
+<line x1="525" y1="446" x2="525" y2="490" stroke="#2aaa88" stroke-width="2" marker-end="url(#arr-teal)"/>
+<rect x="398" y="454" width="255" height="22" rx="8" fill="#081510"/>
+<text x="525" y="469" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#2aaa88">Controller params (w, b)  ·  repeat_interleave → seq_len_C</text>
+
+<!-- ── Adaptive Controller ─────────────────────────────────── -->
+<rect x="370" y="493" width="310" height="120" rx="12" fill="url(#gCtrl)" stroke="#1aaa66" stroke-width="1.5" filter="url(#glow-sm)"/>
+<rect x="375" y="498" width="215" height="20" rx="10" fill="#071a10" stroke="#135030"/>
+<text x="482" y="512" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#3acc88">🧠 Motor Cortex  ·  Cerebellum</text>
+
+<text x="525" y="540" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="16" font-weight="700" fill="#33dd99" filter="url(#glow-sm)">Adaptive Controller</text>
+<text x="525" y="558" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="11" fill="#22bb77">Fast Timescale  ·  Frame-by-frame</text>
+<text x="525" y="575" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#19884d">y = w · x + b  ·  no learned weights, pure parameterization</text>
+<text x="525" y="591" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#116633" font-style="italic">ratio_BC=4 fast steps per B episode</text>
+
+<!-- Controller → Game arrow -->
+<line x1="525" y1="613" x2="525" y2="655" stroke="#7788bb" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="453" y="620" width="144" height="20" rx="6" fill="#0d1117"/>
+<text x="525" y="634" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#6678aa">actions → environment</text>
+
+<!-- ── Game Environment ────────────────────────────────────── -->
+<rect x="383" y="658" width="284" height="88" rx="12" fill="url(#gGame)" stroke="#1acc44" stroke-width="1.5" filter="url(#glow-sm)"/>
+<text x="525" y="679" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#33cc44" letter-spacing="2">ENVIRONMENT</text>
+<text x="525" y="700" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="17" font-weight="700" fill="#33ee55" filter="url(#glow-sm)">Super Mario Bros</text>
+<text x="525" y="718" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#228833">Low → High resolution  ·  Progressive curriculum</text>
+<text x="525" y="734" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#175522" font-style="italic">resolution tier advances as policy matures</text>
+
+<!-- Game → state loop (left arc) -->
+<path d="M 383 702 C 310 702 300 600 310 542" stroke="#1acc44" stroke-width="1.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arr-green)"/>
+<text x="290" y="635" text-anchor="middle" font-size="9" fill="#1a8833" transform="rotate(-90 290 635)">reward + next state</text>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     RIGHT — World Model + Critic
+     ═══════════════════════════════════════════════════════════════ -->
+
+<!-- ── LSTM World Model ───────────────────────────────────── -->
+<rect x="858" y="92" width="316" height="285" rx="12" fill="url(#gWM)" stroke="#cc7700" stroke-width="1.5" filter="url(#glow-sm)"/>
+<!-- Hippocampus badge -->
+<rect x="863" y="97" width="148" height="20" rx="10" fill="#1a0d00" stroke="#6a3a00"/>
+<text x="937" y="111" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#cc8822">🧠 Hippocampus</text>
+
+<text x="1016" y="138" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="16" font-weight="700" fill="#ee9933" filter="url(#glow-sm)">LSTM World Model</text>
+<text x="1016" y="157" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="11" fill="#cc7722">Episodic Memory  ·  Predictive Model</text>
+
+<!-- Episode chunk diagram -->
+<rect x="868" y="168" width="296" height="110" rx="8" fill="#160900" stroke="#4a2800"/>
+<text x="1016" y="184" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#8a5500" letter-spacing="1">EPISODIC LSTM — (h, c) carried across B-token episodes</text>
+<!-- episode boxes -->
+<rect x="876" y="192" width="50" height="36" rx="4" fill="#1e0f00" stroke="#7a4a00"/>
+<text x="901" y="209" text-anchor="middle" font-size="8" fill="#cc8833">B-ep 1</text>
+<text x="901" y="220" text-anchor="middle" font-size="7" fill="#7a5520">ratio_BC C steps</text>
+<rect x="936" y="192" width="50" height="36" rx="4" fill="#1e0f00" stroke="#7a4a00"/>
+<text x="961" y="209" text-anchor="middle" font-size="8" fill="#cc8833">B-ep 2</text>
+<text x="961" y="220" text-anchor="middle" font-size="7" fill="#7a5520">ratio_BC C steps</text>
+<rect x="996" y="192" width="50" height="36" rx="4" fill="#1e0f00" stroke="#7a4a00"/>
+<text x="1021" y="209" text-anchor="middle" font-size="8" fill="#cc8833">B-ep N</text>
+<text x="1021" y="220" text-anchor="middle" font-size="7" fill="#7a5520">ratio_BC C steps</text>
+<rect x="1056" y="192" width="50" height="36" rx="4" fill="#160900" stroke="#4a2800" stroke-dasharray="3,2"/>
+<text x="1081" y="209" text-anchor="middle" font-size="8" fill="#7a5520">reset at</text>
+<text x="1081" y="220" text-anchor="middle" font-size="7" fill="#7a5520">A boundary</text>
+<!-- arrows between episodes -->
+<line x1="926" y1="210" x2="936" y2="210" stroke="#cc7700" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+<line x1="986" y1="210" x2="996" y2="210" stroke="#cc7700" stroke-width="1.5" marker-end="url(#arr-amber)"/>
+<line x1="1046" y1="210" x2="1056" y2="210" stroke="#cc7700" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arr-amber)"/>
+<!-- h,c label -->
+<text x="960" y="240" text-anchor="middle" font-size="8" fill="#8a5522">(h, c) →  →  →  →  →  →  →</text>
+
+<!-- Grid-cell phases row -->
+<text x="868" y="260" font-size="8" fill="#7a4a00">  Grid-cell phases  ·  4 frequencies  ·  "where"</text>
+<path d="M 876 270 Q 882 264 888 270 Q 894 276 900 270 Q 906 264 912 270 Q 918 276 924 270" stroke="#cc8822" fill="none" stroke-width="1.5"/>
+<path d="M 928 270 Q 936 260 944 270 Q 952 280 960 270" stroke="#cc8822" fill="none" stroke-width="1.5"/>
+<path d="M 964 270 Q 976 256 988 270 Q 1000 284 1012 270" stroke="#cc8822" fill="none" stroke-width="1.5"/>
+<path d="M 1016 270 Q 1032 250 1048 270 Q 1064 290 1080 270" stroke="#cc8822" fill="none" stroke-width="1.5"/>
+<text x="1095" y="274" font-size="8" fill="#7a4a00">← multi-scale</text>
+
+<!-- Inputs label -->
+<text x="1016" y="302" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#cc7722">Inputs: state · action · w_ctx · b_ctx · phases</text>
+<text x="1016" y="318" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#aa5511" font-style="italic">"what" (B params) + "where" (grid phases)</text>
+<text x="1016" y="340" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#884411">→ Predicts episode's next-state trajectory</text>
+<text x="1016" y="357" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#884411">→ (h, c) reset at each A-token boundary</text>
+
+<!-- WM → Critic arrow -->
+<line x1="1016" y1="377" x2="1016" y2="418" stroke="#d4800a" stroke-width="2" marker-end="url(#arr-amber)"/>
+<rect x="930" y="384" width="172" height="22" rx="6" fill="#160900"/>
+<text x="1016" y="399" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#d4800a">predicted next-state</text>
+
+<!-- ── Critic ────────────────────────────────────────────── -->
+<rect x="858" y="421" width="316" height="155" rx="12" fill="url(#gCrit)" stroke="#dd4444" stroke-width="1.5" filter="url(#glow-sm)"/>
+<rect x="863" y="426" width="188" height="20" rx="10" fill="#150505" stroke="#5a1010"/>
+<text x="957" y="440" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#cc4444">🧠 Basal Ganglia  ·  Amygdala</text>
+
+<text x="1016" y="466" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="16" font-weight="700" fill="#ee4444" filter="url(#glow-sm)">Heuristic Critic</text>
+<text x="1016" y="485" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="11" fill="#cc2222">Evaluates predicted outcomes</text>
+<text x="1016" y="503" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#991111">MLP: seq_len_c → seq_len_a × d_model</text>
+<text x="1016" y="519" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" fill="#991111">Outputs criticism injected into A embeddings</text>
+<text x="1016" y="537" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#771111" font-style="italic">Pass 1 → WM → Critic → Pass 2 (refinement)</text>
+<text x="1016" y="553" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#771111" font-style="italic">Gradients flow through Pass 2 loss only</text>
+<text x="1016" y="567" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#550d0d" font-style="italic">Loss: MSE(actions₂, C_target)</text>
+
+<!-- Critic → High-Level Planner (curved arrow, going left and up) -->
+<path d="M 858 490 C 780 490 770 168 680 168"
+      stroke="#ee4444" stroke-width="2" fill="none" marker-end="url(#arr-red)" filter="url(#glow-sm)"/>
+<rect x="760" y="450" width="120" height="36" rx="8" fill="#150505" stroke="#5a1010"/>
+<text x="820" y="464" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="8" fill="#ee4444" font-weight="600">criticism</text>
+<text x="820" y="477" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="8" fill="#cc3333">injected into A</text>
+<text x="820" y="488" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="7" fill="#881111">x_A = embed(A) + criticism</text>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     CROSS CONNECTIONS
+     ═══════════════════════════════════════════════════════════════ -->
+
+<!-- Game State (left panel) → LSTM (dashed amber, game state input) -->
+<path d="M 222 542 C 560 542 700 280 858 220"
+      stroke="#d4800a" stroke-width="1.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arr-amber)"/>
+<rect x="490" y="490" width="148" height="24" rx="6" fill="#160900"/>
+<text x="564" y="506" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="9" fill="#d4800a">grid + semantic state →</text>
+
+<!-- B params → LSTM "what" context (dashed amber) -->
+<path d="M 680 380 C 760 380 800 280 858 250"
+      stroke="#cc8800" stroke-width="1.2" fill="none" stroke-dasharray="4,4" marker-end="url(#arr-amber)"/>
+<text x="762" y="335" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="8" fill="#cc7700">w, b context →</text>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     BOTTOM — Losses + Timescale Legend
+     ═══════════════════════════════════════════════════════════════ -->
+<rect x="32" y="770" width="1256" height="90" rx="10" fill="#0d1117" stroke="#22223a" stroke-width="1"/>
+<text x="660" y="790" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#5566aa" letter-spacing="2">TRAINING LOSSES</text>
+
+<!-- Loss 1 -->
+<rect x="46"  y="798" width="190" height="50" rx="8" fill="#0a1830" stroke="#1a3a6a"/>
+<text x="141" y="815" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#4a88e8">Agent Loss — Pass 1</text>
+<text x="141" y="830" text-anchor="middle" font-size="9" fill="#336699">MSE(actions₁, C_target)</text>
+<text x="141" y="844" text-anchor="middle" font-size="8" fill="#224466">No critic — baseline</text>
+
+<!-- Loss 2 -->
+<rect x="248" y="798" width="190" height="50" rx="8" fill="#081e28" stroke="#124858"/>
+<text x="343" y="815" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#33aacc">Agent Loss — Pass 2</text>
+<text x="343" y="830" text-anchor="middle" font-size="9" fill="#226688">MSE(actions₂, C_target)</text>
+<text x="343" y="844" text-anchor="middle" font-size="8" fill="#174455">With critic  ·  refined</text>
+
+<!-- Loss WM -->
+<rect x="450" y="798" width="190" height="50" rx="8" fill="#180d00" stroke="#4a2800"/>
+<text x="545" y="815" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#ee9933">World Model Loss</text>
+<text x="545" y="830" text-anchor="middle" font-size="9" fill="#aa6611">MSE(ŝ, state + actions₁)</text>
+<text x="545" y="844" text-anchor="middle" font-size="8" fill="#7a4411">Dynamics accuracy</text>
+
+<!-- Loss B param -->
+<rect x="652" y="798" width="190" height="50" rx="8" fill="#081808" stroke="#124a20"/>
+<text x="747" y="815" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#33dd88">Param Error B</text>
+<text x="747" y="830" text-anchor="middle" font-size="9" fill="#229955">MSE(w_pred, sin(concept))</text>
+<text x="747" y="844" text-anchor="middle" font-size="8" fill="#176633">Concept grounding</text>
+
+<!-- Loss A accuracy -->
+<rect x="854" y="798" width="190" height="50" rx="8" fill="#150505" stroke="#4a1010"/>
+<text x="949" y="815" text-anchor="middle" font-family="'Segoe UI',system-ui" font-size="10" font-weight="600" fill="#ee4444">Concept Accuracy A</text>
+<text x="949" y="830" text-anchor="middle" font-size="9" fill="#aa2222">argmax(logits_A) == Y_A</text>
+<text x="949" y="844" text-anchor="middle" font-size="8" fill="#771111">Strategic planning</text>
+
+<!-- Timescale row -->
+<rect x="32" y="868" width="1256" height="58" rx="10" fill="#0d1117" stroke="#22223a" stroke-width="1"/>
+<text x="54" y="886" font-family="'Segoe UI',system-ui" font-size="9" fill="#5566aa" letter-spacing="1">TIMESCALES ·</text>
+<rect x="148" y="876" width="10" height="10" rx="2" fill="#1a3a70"/>
+<text x="163" y="886" font-size="9" fill="#6678aa">Slow: Transformer A  (seq_len_a=8, concept tokens)</text>
+<rect x="420" y="876" width="10" height="10" rx="2" fill="#124a60"/>
+<text x="435" y="886" font-size="9" fill="#6678aa">Medium: Transformer B  (×ratio_AB=2, action seqs)</text>
+<rect x="698" y="876" width="10" height="10" rx="2" fill="#0f3d2a"/>
+<text x="713" y="886" font-size="9" fill="#6678aa">Fast: Controller  (×ratio_BC=4, frame actions)</text>
+<rect x="950" y="876" width="10" height="10" rx="2" fill="#3e2200"/>
+<text x="965" y="886" font-size="9" fill="#6678aa">LSTM episodes = B-token intervals</text>
+
+<text x="54" y="912" font-family="'Segoe UI',system-ui" font-size="9" fill="#445577">BIO ANALOGY ·</text>
+<text x="148" y="912" font-size="9" fill="#445577">PFC (goals)  →  SMA (sequencing)  →  Motor/Cerebellum (execution)  +  Hippocampus (episodic WM)  +  Basal Ganglia/Amygdala (critic)</text>
+
+</svg>
+</body>
+</html>
