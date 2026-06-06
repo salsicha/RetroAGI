@@ -6,3 +6,4 @@ gym-super-mario-bros
 nes-py
 opencv-python
 pyhgf
+stable-retro
