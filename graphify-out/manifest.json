@@ -30,33 +30,13 @@
     "semantic_hash": ""
   },
   "scripts/mario_scenario_env.py": {
-    "mtime": 1780677303.288226,
-    "ast_hash": "4417d885c886ff720f8c5cd4d43bd039",
+    "mtime": 1780820773.8507314,
+    "ast_hash": "b5179b5df6e751a8d20704ad8a591662",
     "semantic_hash": ""
   },
   "scripts/run.py": {
-    "mtime": 1780774215.9012215,
-    "ast_hash": "9ad9800cccf7b47a61e04ee220e108da",
-    "semantic_hash": ""
-  },
-  "scripts/scenarios/level_1_flat.json": {
-    "mtime": 1780558794.2534041,
-    "ast_hash": "8faf1bb335a07c4b98e81093cbe0f4b7",
-    "semantic_hash": ""
-  },
-  "scripts/scenarios/level_2_gap.json": {
-    "mtime": 1780558794.2534997,
-    "ast_hash": "8d150c751b305615054a6d1deb484f5d",
-    "semantic_hash": ""
-  },
-  "scripts/scenarios/level_3_stairs.json": {
-    "mtime": 1780558794.2535892,
-    "ast_hash": "92fc341f506067c820de7061c85b2803",
-    "semantic_hash": ""
-  },
-  "scripts/scenarios/level_4_platforms.json": {
-    "mtime": 1780558794.253679,
-    "ast_hash": "81ec806911faf9e7445344b70a0f03fd",
+    "mtime": 1780820026.5639722,
+    "ast_hash": "578d68c26b53c9e9f5a7cb201192064c",
     "semantic_hash": ""
   },
   "scripts/segmentation/segment_inference.py": {
@@ -75,13 +55,13 @@
     "semantic_hash": ""
   },
   "scripts/simple_transformer.py": {
-    "mtime": 1780770841.870239,
-    "ast_hash": "42b5f18eba4ab1b83be0f9d8d5383b78",
+    "mtime": 1780820026.3837595,
+    "ast_hash": "b62a418cb1091070cf3526f048c8f197",
     "semantic_hash": ""
   },
   "scripts/tests/test_scenarios.py": {
-    "mtime": 1780811496.3195894,
-    "ast_hash": "a5a87de4842133c4c362d8ebdab07c69",
+    "mtime": 1780814076.0167835,
+    "ast_hash": "d6fbb50e3850c9e571fb709873c9bdb8",
     "semantic_hash": ""
   },
   "scripts/vit/extract_sprites.py": {
@@ -105,8 +85,8 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1780773814.132632,
-    "ast_hash": "51732f05536ed5be9c6a398a27e6686f",
+    "mtime": 1780814106.3520973,
+    "ast_hash": "c673d96b80a01d62b2399656d4789e25",
     "semantic_hash": ""
   },
   "compose.yaml": {
@@ -242,6 +222,96 @@
   "data/vit/preview_3.png": {
     "mtime": 1780785345.240145,
     "ast_hash": "f37f6f26551d9280c1c2291cd16496e6",
+    "semantic_hash": ""
+  },
+  ".gemini/settings.json": {
+    "mtime": 1780811865.860438,
+    "ast_hash": "f080aabf772e803c9e24b9ad0acbf2b6",
+    "semantic_hash": ""
+  },
+  "retroagi/__init__.py": {
+    "mtime": 1780813953.772777,
+    "ast_hash": "06699a2a4a39e80494a66c2869f16cd5",
+    "semantic_hash": ""
+  },
+  "retroagi/core/__init__.py": {
+    "mtime": 1780813953.8595734,
+    "ast_hash": "15f0bb3a7bf674412be84388111e2f45",
+    "semantic_hash": ""
+  },
+  "retroagi/core/interfaces.py": {
+    "mtime": 1780813953.9477746,
+    "ast_hash": "b1fc70ce126b37ff89c43fc4f4fc1b12",
+    "semantic_hash": ""
+  },
+  "retroagi/core/models.py": {
+    "mtime": 1780813954.036587,
+    "ast_hash": "b08f7c93fa73256179091c0ac0d68e5e",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/__init__.py": {
+    "mtime": 1780814035.2897587,
+    "ast_hash": "32b6bdc589f50f3f70d1cc646b16ceab",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/block_smb/__init__.py": {
+    "mtime": 1780814075.9237964,
+    "ast_hash": "10bbb0d9bed62dfd855a5485b6fd5d98",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/block_smb/adapter.py": {
+    "mtime": 1780814060.2132268,
+    "ast_hash": "bf5daf9fac2fb7e9f27015a23c999822",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/block_smb/env.py": {
+    "mtime": 1780820773.760046,
+    "ast_hash": "add42e60006abbe311f0a59e8e51c3b7",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/block_smb/scenarios/level_1_flat.json": {
+    "mtime": 1780558794.2534041,
+    "ast_hash": "8faf1bb335a07c4b98e81093cbe0f4b7",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/block_smb/scenarios/level_2_gap.json": {
+    "mtime": 1780558794.2534997,
+    "ast_hash": "8d150c751b305615054a6d1deb484f5d",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/block_smb/scenarios/level_3_stairs.json": {
+    "mtime": 1780558794.2535892,
+    "ast_hash": "92fc341f506067c820de7061c85b2803",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/block_smb/scenarios/level_4_platforms.json": {
+    "mtime": 1780558794.253679,
+    "ast_hash": "81ec806911faf9e7445344b70a0f03fd",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/full_smb/__init__.py": {
+    "mtime": 1780814035.5618663,
+    "ast_hash": "6b4721677999be816a895445070bdc10",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/full_smb/run.py": {
+    "mtime": 1780814076.1092887,
+    "ast_hash": "80dc7c0230f766d7bd96263e0c7fc60d",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/synthetic_1d/__init__.py": {
+    "mtime": 1780814035.381864,
+    "ast_hash": "e2cb266a5e6a380783c8ff448b4b8bb0",
+    "semantic_hash": ""
+  },
+  "retroagi/stages/synthetic_1d/train.py": {
+    "mtime": 1780819582.094278,
+    "ast_hash": "8effaba483c9a2a6f0146fbe5b7e475f",
+    "semantic_hash": ""
+  },
+  "GEMINI.md": {
+    "mtime": 1780811855.1973822,
+    "ast_hash": "82efb97a359f5c7290bf2513d14686be",
     "semantic_hash": ""
   }
 }

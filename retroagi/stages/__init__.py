@@ -1,0 +1,2 @@
+"""Curriculum stages for RetroAGI."""
+

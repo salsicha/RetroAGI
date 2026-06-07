@@ -1,27 +1,20 @@
 """Tests for the Mario scenario environments."""
 import unittest
-import os
-import sys
+from pathlib import Path
 
-# Ensure scripts can be imported
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from scripts.mario_scenario_env import MarioScenarioEnv
+from retroagi.stages.block_smb import SCENARIOS_DIR, MarioScenarioEnv
 
 class TestMarioScenarios(unittest.TestCase):
     """Test suite for the different Mario level configurations."""
 
     def setUp(self):
         self.env = MarioScenarioEnv()
-        self.scenarios_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            '..',
-            'scenarios'
-        )
+        self.scenarios_dir = Path(SCENARIOS_DIR)
 
     def _test_scenario(self, filename, expected_mario, expected_platforms, expected_coins, expected_goal):
         """Helper method to load a scenario and validate its instantiation."""
-        filepath = os.path.join(self.scenarios_dir, filename)
-        self.assertTrue(os.path.exists(filepath), f"Scenario file not found: {filepath}")
+        filepath = self.scenarios_dir / filename
+        self.assertTrue(filepath.exists(), f"Scenario file not found: {filepath}")
         
         scenario_config = MarioScenarioEnv.load_scenario_from_json(filepath)
         obs, _ = self.env.reset(scenario=scenario_config)

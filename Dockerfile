@@ -1,4 +1,6 @@
-FROM ubuntu:focal AS build
+# FROM ubuntu:focal AS build
+# FROM nvidia/cuda:12.9.2-cudnn-devel-ubuntu20.04 as build
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS build
 
 ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US.UTF-8 \
@@ -23,19 +25,18 @@ RUN apt-get update && apt-get install -q -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # Install CUDA (Official Nvidia Repo)
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb && \
-    dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
-RUN apt-get update && apt-get install -q -y --no-install-recommends \
-    cuda-toolkit-12-8 nvidia-gds-12-8 nvidia-modprobe && \
-    rm -rf /var/lib/apt/lists/*
+# RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb && \
+#     dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
+# RUN apt-get update && apt-get install -q -y --no-install-recommends \
+#     cuda-toolkit-12-8 nvidia-gds-12-8 nvidia-modprobe && \
+#     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
 
 # Copy Project Files
 COPY files.zip /files.zip
 COPY scripts /scripts
-COPY src /src
-# COPY notebooks /notebooks
+COPY retroagi /retroagi
 COPY entrypoint.sh /entrypoint.sh
 COPY requirements.txt /requirements.txt
 RUN chmod +x /entrypoint.sh
@@ -47,9 +48,9 @@ RUN pip3 install --upgrade pip wheel
 RUN pip3 install -r /requirements.txt
 
 # Install Stable Retro (Source)
-RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/master.zip && \
-    unzip master.zip && rm master.zip && mv stable-retro-master stable-retro && \
-    cd stable-retro && pip3 install -e .
+# RUN wget https://github.com/Farama-Foundation/stable-retro/archive/refs/heads/master.zip && \
+#     unzip master.zip && rm master.zip && mv Stable-Retro-main stable-retro && \
+#     cd stable-retro && pip3 install -e .
 
 # Import ROMs
 # Unzip to a specific folder to avoid clutter and ensure correct import

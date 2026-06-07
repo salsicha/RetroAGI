@@ -14,6 +14,7 @@ services:
       - ./data:/data
       - /dev/dri:/dev/dri
       - ./models:/models
+      - ./retroagi:/retroagi
     environment:
       - "DISPLAY=${DISPLAY}"
       - XAUTHORITY
