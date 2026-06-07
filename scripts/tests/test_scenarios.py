@@ -15,7 +15,7 @@ class TestMarioScenarios(unittest.TestCase):
         self.scenarios_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             '..',
-            'scripts'
+            'scenarios'
         )
 
     def _test_scenario(self, filename, expected_mario, expected_platforms, expected_coins, expected_goal):
@@ -24,7 +24,7 @@ class TestMarioScenarios(unittest.TestCase):
         self.assertTrue(os.path.exists(filepath), f"Scenario file not found: {filepath}")
         
         scenario_config = MarioScenarioEnv.load_scenario_from_json(filepath)
-        obs = self.env.reset(scenario=scenario_config)
+        obs, _ = self.env.reset(scenario=scenario_config)
         
         # Basic validation of the observation shape (H, W, 3)
         self.assertEqual(obs.shape, (self.env.height, self.env.width, 3))
@@ -41,7 +41,7 @@ class TestMarioScenarios(unittest.TestCase):
             self.assertIsNone(self.env.goal)
             
         # Perform one step to ensure the physics and rendering logic don't crash
-        _, _, _, _ = self.env.step(0) # NOOP action
+        _, _, _, _, _ = self.env.step(0) # NOOP action
 
     def test_level_1_flat(self):
         self._test_scenario('level_1_flat.json', expected_mario=[20, 200], expected_platforms=1, expected_coins=1, expected_goal=True)
