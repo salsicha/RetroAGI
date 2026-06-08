@@ -7,3 +7,4 @@ nes-py
 opencv-python
 pyhgf
 stable-retro
+pygame
