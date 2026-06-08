@@ -1,6 +1,6 @@
 # FROM ubuntu:focal AS build
 # FROM nvidia/cuda:12.9.2-cudnn-devel-ubuntu20.04 as build
-FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS build
+FROM nvidia/cuda:13.0.0-devel-ubuntu24.04 AS build
 
 ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US.UTF-8 \
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -q -y --no-install-recommends \
     ccache wget sudo git xorg-dev libxcb-shm0 libglu1-mesa-dev python3-dev clang \
     libc++-dev libc++abi-dev libsdl2-dev ninja-build libxi-dev python3-gdbm \
     libtbb-dev libosmesa6-dev libudev-dev autoconf libtool make zlib1g-dev \
-    libopenmpi-dev ffmpeg build-essential swig vim libgl1-mesa-glx && \
+    libopenmpi-dev ffmpeg build-essential swig vim && \
     rm -rf /var/lib/apt/lists/*
 
 # Install CUDA (Official Nvidia Repo)
@@ -62,9 +62,11 @@ RUN mkdir -p /roms && \
 ARG USERNAME=retroagi
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
-RUN groupadd --gid $USER_GID $USERNAME \
+RUN if getent passwd $USER_UID > /dev/null; then userdel -f $(getent passwd $USER_UID | cut -d: -f1); fi \
+    && if getent group $USER_GID > /dev/null; then groupdel $(getent group $USER_GID | cut -d: -f1); fi \
+    && groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME \
-    && echo $USERNAME ALL=(root) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
+    && echo "$USERNAME ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME \
     && usermod -a -G audio,video $USERNAME
 
