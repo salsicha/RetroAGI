@@ -7,4 +7,4 @@ Sprites
 notebooks/ctm/data/
 *.gif
 .venv/
-graphify-out/cache/
+graphify-out/

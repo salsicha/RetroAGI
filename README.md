@@ -70,6 +70,24 @@ Legacy wrappers still work:
    ```
 
 ## Training
+
+Train the Block SMB vision transformer directly from procedural pygame
+rollouts. Semantic masks and Mario positions are generated exactly from the
+renderer palette:
+
+```bash
+python scripts/vit/train_block_vit.py \
+  --epochs 20 \
+  --samples-per-epoch 2048 \
+  --val-samples 512
+```
+
+The best checkpoint and its JSON metrics are written to `data/block_vit/`.
+Training can be continued with:
+
+```bash
+python scripts/vit/train_block_vit.py --epochs 40 --resume data/block_vit/block_vit.pth
+```
 Stage 1 currently trains the shared hierarchical actor/world-model/critic stack
 on synthetic data. Stage 2 has the scriptable environment and adapter in place;
 training loops can now reuse `retroagi.core.models.AgentWorldModelCritic` and

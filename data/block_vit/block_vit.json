@@ -1,0 +1,27 @@
+{
+  "epoch": 1,
+  "metrics": {
+    "loss": 0.8327246606349945,
+    "semantic_loss": 0.7219383716583252,
+    "position_loss": 0.05539314262568951,
+    "accuracy": 0.9350911458333333,
+    "foreground_accuracy": 0.7119329673504767,
+    "mean_iou": 0.38211783779170977
+  },
+  "config": {
+    "epochs": 2,
+    "samples_per_epoch": 256,
+    "val_samples": 64,
+    "rollout_steps": 16,
+    "batch_size": 16,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.05,
+    "position_weight": 2.0,
+    "dim": 64,
+    "depth": 2,
+    "heads": 4,
+    "patch_size": 16,
+    "dropout": 0.1,
+    "seed": 7
+  }
+}

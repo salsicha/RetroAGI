@@ -1,92 +1,159 @@
 # RetroAGI TODO
 
-This roadmap prioritizes making RetroAGI reproducible, testable, and usable as
-an end-to-end curriculum from synthetic data through full Super Mario Bros.
+This roadmap is ordered by dependency and execution priority. Finish each
+milestone's exit criteria before expanding the next one.
 
-## P0: Establish a Reliable Baseline
+## Completed Foundations
 
-- [ ] Remove tracked `.venv/` files and keep virtual environments excluded.
-- [ ] Move large models and archives to Git LFS or external artifact storage.
-- [ ] Add pinned dependencies with supported Python and CUDA versions.
-- [ ] Add `pytest`, formatting, and linting dependencies.
-- [ ] Package the project with `pyproject.toml`.
-- [ ] Make tests run without manually setting `PYTHONPATH`.
-- [ ] Add CPU-only installation and execution paths.
+- [x] Separate shared actor/world-model/critic code from stage adapters.
+- [x] Define `StageSpec`, `StageBatch`, and the common `StageAdapter` protocol.
+- [x] Define shared `VisionSpec`, `VisionOutput`, and `VisionEncoder` contracts.
+- [x] Implement synthetic 1D, Block SMB, and Full SMB vision implementations.
+- [x] Implement the scriptable Block SMB environment and four fixed scenarios.
+- [x] Add deterministic Block SMB scenario generation and environment seeding.
+- [x] Implement baseline Block SMB rewards for progress, coins, enemies, death,
+      completion, and elapsed time.
+- [x] Train Block SMB perception from exact procedural semantic and position
+      labels.
+- [x] Add Block ViT metrics, checkpoint metadata, and resume support.
+- [x] Wrap the existing Full SMB DeepLab checkpoint in the shared vision API.
+- [x] Add scenario, vision-interface, checkpoint-load, and trainer smoke tests.
+
+## P0: Repository Baseline
+
+These tasks block reliable installation, collaboration, and public release.
+
+- [x] Remove the 550 tracked `.venv/` files; retain `.venv/` in `.gitignore`.
+- [x] Move trained models, generated datasets, and other large artifacts to Git
+      LFS or external artifact storage.
+- [ ] Add `pyproject.toml` with pinned runtime, test, formatting, and linting
+      dependencies.
+- [ ] Declare supported Python, PyTorch, CUDA, and CPU-only configurations.
+- [ ] Make a clean CPU installation pass the test suite without manual
+      `PYTHONPATH` changes.
 - [ ] Verify the Docker build from a clean checkout.
-- [ ] Document ROM import requirements without distributing copyrighted ROMs.
-- [ ] Archive or delete the obsolete `ai_experiment` branch.
+- [ ] Archive or delete the obsolete local and remote `ai_experiment` branches.
 
-## P1: Define the Full-System Contract
+**Exit criteria:** a clean checkout installs and tests on CPU and contains no
+tracked virtual environment or oversized generated artifact.
 
-- [ ] Specify observation, action, reward, and termination semantics for every
-      stage.
-- [ ] Document tensor shapes and timescales in `StageSpec` and `StageBatch`.
-- [ ] Define a common environment adapter interface.
-- [ ] Keep actor, world model, and critic interfaces independent of
-      Mario-specific code.
-- [ ] Add configuration objects for model dimensions, training, environments,
-      and checkpoints.
-- [ ] Validate and reject incompatible stage and model configurations.
+## P1: Freeze Cross-Stage Contracts
 
-## P2: Complete Stage 1
+Complete the contracts before building the Block SMB agent loop or Full SMB
+adapter against unstable assumptions.
 
-- [ ] Create deterministic training, validation, and test datasets.
-- [ ] Add reproducible seeding.
-- [ ] Add checkpoint saving and restoration.
-- [ ] Track actor, world-model, critic, and total losses independently.
-- [ ] Add evaluation metrics and baseline models.
-- [ ] Add a short smoke-training test that verifies loss decreases.
-- [ ] Demonstrate that learned policies outperform random actions.
+- [ ] Document observation, action, reward, termination, truncation, and reset
+      semantics for every stage.
+- [ ] Document all `StageSpec`, `StageBatch`, and `VisionOutput` tensor shapes,
+      dtypes, normalization ranges, and timescales.
+- [ ] Define one named action vocabulary shared by Block SMB and Full SMB.
+- [ ] Define how vision position, semantic logits, and patch tokens enter the
+      A/B/C hierarchy; replace sampling/resizing rules that are only temporary.
+- [ ] Add typed configuration objects for environment, model, training,
+      evaluation, and checkpoints.
+- [ ] Define a versioned checkpoint schema shared by every stage.
+- [ ] Validate stage/model/action/checkpoint compatibility at startup.
+- [ ] Add contract tests that run the same assertions against every adapter and
+      vision encoder.
 
-## P3: Make Stage 2 Trainable
+**Exit criteria:** each stage can be swapped behind the same tested interfaces,
+and incompatible dimensions, actions, or checkpoints fail with clear errors.
 
-- [ ] Implement a complete Block SMB training loop.
-- [ ] Standardize actions between Block SMB and Full SMB.
-- [ ] Define reward shaping for movement, coins, survival, and completion.
-- [ ] Add observation normalization and frame stacking.
-- [ ] Implement vectorized or parallel environments.
-- [ ] Add curriculum progression across scenario files.
-- [ ] Add success-rate evaluation for each scenario.
-- [ ] Record evaluation videos and trajectories.
-- [ ] Test collisions, gaps, goals, death, reset, and truncation behavior.
+## P2: Validate Stage 1
 
-## P4: Integrate Full SMB
+Use Synthetic 1D to prove the learning architecture before debugging it inside
+a game environment.
 
-- [ ] Verify `stable-retro` environment creation from a clean installation.
-- [ ] Create a Full SMB adapter that implements the common stage contract.
-- [ ] Map emulator buttons to the shared action space.
-- [ ] Extract reliable position, score, life, and terminal-state signals.
-- [ ] Add frame skipping, resizing, normalization, and stacking.
-- [ ] Add emulator-state saving for repeatable evaluation.
-- [ ] Implement a random-agent smoke test.
-- [ ] Transfer Stage 2 checkpoints into Stage 3.
-- [ ] Compare transferred policy performance with training from scratch.
+- [ ] Split deterministic train, validation, and test datasets by fixed seed.
+- [ ] Add reproducible training configuration and complete seeding.
+- [ ] Add checkpoint saving and restoration using the shared schema.
+- [ ] Track actor pass 1, actor pass 2, world-model, critic, and total losses.
+- [ ] Define evaluation metrics and random/simple baseline models.
+- [ ] Add a short CPU smoke test that verifies finite gradients and decreasing
+      loss.
+- [ ] Demonstrate that the trained policy beats its declared baselines.
+- [ ] Document expected runtime and results.
 
-## P5: Finish the Learning System
+**Exit criteria:** Stage 1 trains reproducibly from a clean checkout, resumes
+from a checkpoint, and beats a baseline on a held-out test split.
 
-- [ ] Define precisely how actor refinement uses critic and world-model
-      outputs.
-- [ ] Implement imagined rollouts through the world model.
-- [ ] Add target networks or other stabilization where required.
-- [ ] Separate representation, dynamics, reward, value, and policy losses.
-- [ ] Add replay-buffer or trajectory-storage abstractions.
-- [ ] Handle recurrent state and episode boundaries correctly.
-- [ ] Add gradient clipping and numerical checks.
-- [ ] Detect NaNs, collapsed policies, and exploding losses.
-- [ ] Create ablations showing whether each architectural component
-      contributes.
+## P3: Train the Block SMB Agent
+
+Perception is trainable; the missing deliverable is an end-to-end agent that
+uses it to complete scenarios.
+
+- [ ] Add a supported loader for `data/block_vit/block_vit.pth` and decide
+      whether perception is frozen or fine-tuned during policy training.
+- [ ] Implement the complete Block SMB actor/world-model/critic training loop.
+- [ ] Replace the temporary visual-to-A/B/C projection with the P1 contract.
+- [ ] Add observation normalization, temporal frame stacking, and episode masks.
+- [ ] Document and tune the existing reward terms rather than adding overlapping
+      reward logic in the trainer.
+- [ ] Add trajectory or replay storage with correct recurrent-state boundaries.
+- [ ] Add curriculum progression across the four fixed scenarios and generated
+      scenarios.
+- [ ] Report deterministic success rate and return for every fixed scenario.
+- [ ] Add focused physics tests for collisions, gaps, moving platforms, coins,
+      enemies, goals, death, reset, and truncation.
+- [ ] Add numerical checks, gradient clipping, and NaN/exploding-loss detection.
+- [ ] Record evaluation trajectories and videos.
+- [ ] Add vectorized or parallel environments after the single-environment loop
+      is correct and reproducible.
+
+**Exit criteria:** a seeded Block SMB checkpoint resumes correctly and completes
+all fixed scenarios at a documented success threshold.
+
+## P4: Complete the Learning System
+
+Do this after Stage 1 and Block SMB expose concrete failure modes.
+
+- [ ] Specify exactly how critic output changes the actor's second pass.
+- [ ] Separate representation, dynamics, reward, value, and policy objectives.
+- [ ] Handle recurrent state and episode boundaries in the world model.
+- [ ] Implement imagined rollouts through learned dynamics.
+- [ ] Add target networks or other stabilization only where measurements show
+      they are needed.
+- [ ] Add ablations for vision, world model, critic feedback, hierarchy levels,
+      and checkpoint transfer.
+
+**Exit criteria:** each architectural component has a defined loss, tested
+gradient path, and measured contribution.
+
+## P5: Integrate Full SMB
+
+The selected backend is `stable-retro`. The existing runner is only a random
+loop, and the DeepLab wrapper covers perception but not the stage adapter or
+environment semantics.
+
+- [ ] Implement `stable-retro` behind a Full SMB environment adapter.
+- [ ] Implement `FullSMBStage` with the common stage contract.
+- [ ] Map emulator buttons to the P1 shared action vocabulary.
+- [ ] Extract and test position, score, coins, lives, completion, death,
+      termination, and truncation signals.
+- [ ] Add frame skipping, resizing, normalization, stacking, and episode masks.
+- [ ] Add emulator state save/load for repeatable evaluation.
+- [ ] Add headless random-agent and deterministic reset smoke tests.
+- [ ] Transfer Block SMB perception and policy checkpoints into Full SMB.
+- [ ] Compare transferred checkpoints with training from scratch.
+
+**Exit criteria:** a clean installation can run deterministic headless
+evaluations and load a compatible Block SMB checkpoint.
 
 ## P6: Operations and Reproducibility
 
-- [ ] Add a single CLI, such as
-      `python -m retroagi train --stage block_smb`.
-- [ ] Store experiment configuration beside every checkpoint.
-- [ ] Integrate TensorBoard or Weights & Biases.
-- [ ] Add structured logging and periodic evaluation.
-- [ ] Support resuming interrupted training.
-- [ ] Add checkpoint versioning and compatibility checks.
-- [ ] Add GitHub Actions for linting, unit tests, and CPU smoke tests.
-- [ ] Document hardware, runtime, and expected results for each stage.
+- [ ] Add one CLI for training, evaluation, resume, and environment selection.
+- [ ] Store resolved configuration, code revision, metrics, and environment
+      metadata beside every checkpoint.
+- [ ] Add structured logging and periodic deterministic evaluation.
+- [ ] Integrate TensorBoard or Weights & Biases behind an optional dependency.
+- [ ] Add GitHub Actions for formatting, linting, unit tests, and CPU smoke
+      training.
+- [ ] Document hardware, runtime, expected metrics, and artifact locations for
+      every stage.
+- [ ] Publish a reproducibility procedure that starts from a clean checkout.
+
+**Exit criteria:** experiments are launchable through one interface, resumable,
+traceable to code/configuration, and checked automatically in CI.
 
 ## Definition of Done
 

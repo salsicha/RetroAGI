@@ -24,6 +24,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
+from retroagi.core import PatchVisionTransformer
+
 
 HERE    = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(os.path.dirname(HERE))
@@ -38,32 +40,28 @@ GW, GH = W // PATCH, H // PATCH      # 16 x 15
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
-class ViTSegmenter(nn.Module):
+class ViTSegmenter(PatchVisionTransformer):
+    """Compatibility wrapper around the shared patch vision encoder."""
+
     def __init__(self, dim=192, depth=6, heads=6, mlp_ratio=4.0, drop=0.1):
-        super().__init__()
-        self.patch_embed = nn.Conv2d(3, dim, kernel_size=PATCH, stride=PATCH)
-        self.num_tokens  = GH * GW
-        self.pos_embed   = nn.Parameter(torch.zeros(1, self.num_tokens, dim))
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
-        self.dropout = nn.Dropout(drop)
-
-        layer = nn.TransformerEncoderLayer(
-            d_model=dim, nhead=heads, dim_feedforward=int(dim * mlp_ratio),
-            dropout=drop, activation="gelu", batch_first=True, norm_first=True,
+        super().__init__(
+            semantic_classes=tuple(CLASSES),
+            image_size=(H, W),
+            patch_size=PATCH,
+            dim=dim,
+            depth=depth,
+            heads=heads,
+            mlp_ratio=mlp_ratio,
+            drop=drop,
+            position_class="mario",
+            name="smb_sprite_vit",
         )
-        self.encoder = nn.TransformerEncoder(layer, depth)
-        self.norm = nn.LayerNorm(dim)
-        self.head = nn.Linear(dim, NUM_CLASSES)
 
-    def forward(self, x):                       # x: [B,3,H,W]
-        x = self.patch_embed(x)                 # [B,dim,GH,GW]
-        B, D, gh, gw = x.shape
-        x = x.flatten(2).transpose(1, 2)        # [B, GH*GW, dim]
-        x = self.dropout(x + self.pos_embed)
-        x = self.encoder(x)
-        x = self.norm(x)
-        logits = self.head(x)                    # [B, GH*GW, C]
-        return logits.transpose(1, 2).reshape(B, NUM_CLASSES, gh, gw)
+    def forward(self, x):
+        return super().forward(x).semantic_logits
+
+    def encode(self, observation):
+        return PatchVisionTransformer.forward(self, observation)
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────

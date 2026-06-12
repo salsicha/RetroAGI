@@ -53,6 +53,40 @@ class AgentStep:
     b_b: torch.Tensor
 
 
+@dataclass(frozen=True)
+class VisionSpec:
+    """Describes a stage vision encoder's spatial and semantic contract."""
+
+    name: str
+    semantic_classes: tuple[str, ...]
+    token_dim: int
+    position_dim: int = 2
+
+    @property
+    def num_classes(self) -> int:
+        return len(self.semantic_classes)
+
+
+@dataclass
+class VisionOutput:
+    """Stage-independent position and semantic representation."""
+
+    position: torch.Tensor
+    semantic_logits: torch.Tensor
+    semantic_ids: torch.Tensor
+    tokens: torch.Tensor
+    metadata: Optional[Mapping[str, Any]] = None
+
+
+class VisionEncoder(Protocol):
+    """Common interface for synthetic, block-SMB, and full-SMB perception."""
+
+    spec: VisionSpec
+
+    def encode(self, observation: Any) -> VisionOutput:
+        """Extract normalized position, semantics, and latent tokens."""
+
+
 class StageAdapter(Protocol):
     """Minimal interface implemented by synthetic, block-SMB, and full-SMB stages."""
 
