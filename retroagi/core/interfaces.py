@@ -8,7 +8,7 @@ import torch
 
 @dataclass(frozen=True)
 class StageSpec:
-    """Describes the resolution and timing contract for a stage."""
+    """Resolution and timing metadata defined in docs/tensor-contracts.md."""
 
     name: str
     observation_kind: str
@@ -29,7 +29,7 @@ class StageSpec:
 
 @dataclass
 class StageBatch:
-    """Canonical tensors used by the hierarchical training loop."""
+    """Canonical hierarchy tensors defined in docs/tensor-contracts.md."""
 
     src_a: torch.Tensor
     target_a: Optional[torch.Tensor]
@@ -69,7 +69,7 @@ class VisionSpec:
 
 @dataclass
 class VisionOutput:
-    """Stage-independent position and semantic representation."""
+    """Stage-independent vision tensors defined in docs/tensor-contracts.md."""
 
     position: torch.Tensor
     semantic_logits: torch.Tensor

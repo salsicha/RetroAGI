@@ -1,5 +1,13 @@
 """Shared interfaces and model components for all training stages."""
 
+from .actions import (
+    SMB_ACTIONS,
+    SMBAction,
+    block_smb_action,
+    coerce_smb_action,
+    full_smb_action,
+)
+from .hierarchy import VisionHierarchyProjector
 from .interfaces import (
     AgentStep,
     StageBatch,
@@ -27,11 +35,17 @@ __all__ = [
     "LinearVisionEncoder",
     "PatchVisionTransformer",
     "PositionalEncoding",
+    "SMB_ACTIONS",
+    "SMBAction",
     "StageBatch",
     "StageSpec",
     "VisionEncoder",
+    "VisionHierarchyProjector",
     "VisionOutput",
     "VisionSpec",
     "WorldModel",
+    "block_smb_action",
+    "coerce_smb_action",
+    "full_smb_action",
 ]
 

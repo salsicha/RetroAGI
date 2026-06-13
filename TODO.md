@@ -47,10 +47,10 @@ adapter against unstable assumptions.
 
 - [x] Document observation, action, reward, termination, truncation, and reset
       semantics for every stage.
-- [ ] Define one named action vocabulary shared by Block SMB and Full SMB.
-- [ ] Document all `StageSpec`, `StageBatch`, and `VisionOutput` tensor shapes,
+- [x] Define one named action vocabulary shared by Block SMB and Full SMB.
+- [x] Document all `StageSpec`, `StageBatch`, and `VisionOutput` tensor shapes,
       dtypes, normalization ranges, and timescales.
-- [ ] Define how vision position, semantic logits, and patch tokens enter the
+- [x] Define how vision position, semantic logits, and patch tokens enter the
       A/B/C hierarchy; replace sampling/resizing rules that are only temporary.
 - [ ] Add typed configuration objects for environment, model, training,
       evaluation, and checkpoints.
@@ -87,7 +87,6 @@ uses it to complete scenarios.
 
 - [ ] Add a supported loader for `data/block_vit/block_vit.pth` and decide
       whether perception is frozen or fine-tuned during policy training.
-- [ ] Replace the temporary visual-to-A/B/C projection with the P1 contract.
 - [ ] Add observation normalization, temporal frame stacking, and episode masks.
 - [ ] Add focused physics tests for collisions, gaps, moving platforms, coins,
       enemies, goals, death, reset, and truncation.

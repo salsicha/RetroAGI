@@ -105,20 +105,27 @@ with `state_vec`.
 
 ### Action
 
-One integer action advances one physics and rendering frame:
+Both game stages use the shared `SMBAction` vocabulary. One action advances one
+physics and rendering frame:
 
-| Value | Meaning |
-| --- | --- |
-| `0` | No directional or jump input |
-| `1` | Move right |
-| `2` | Move right and hold jump |
-| `3` | Move left |
-| `4` | Move left and hold jump |
-| `5` | Hold jump without horizontal input |
+| Name | Stable ID | Block SMB | Full SMB NES buttons |
+| --- | ---: | ---: | --- |
+| `NOOP` | `0` | `0` | none |
+| `RIGHT` | `1` | `1` | `RIGHT` |
+| `RIGHT_JUMP` | `2` | `2` | `RIGHT` + `A` |
+| `LEFT` | `3` | `3` | `LEFT` |
+| `LEFT_JUMP` | `4` | `4` | `LEFT` + `A` |
+| `JUMP` | `5` | `5` | `A` |
 
 Jump actions are held controls, not one-shot events. A transition from
 non-jump to jump registers a buffered press; releasing jump while rising cuts
 upward velocity. Horizontal input uses acceleration, momentum, and skidding.
+Raw integer IDs remain accepted by `BlockSMBStage` for compatibility, but new
+code should use the enum names.
+
+This transfer vocabulary intentionally leaves NES-only buttons such as `B`,
+`START`, and `SELECT` released. Adding run/fire or menu actions requires an
+explicit vocabulary version rather than changing the six stable IDs above.
 
 ### Reward
 
@@ -196,10 +203,10 @@ contract.
 
 ### Action
 
-The current runner samples the backend's controller action space directly. The
-future adapter must accept the shared named Block/Full SMB action vocabulary and
-translate it to the `stable-retro` NES button vector. That vocabulary and
-mapping are tracked as separate P1/P5 tasks.
+The runner uses the shared `SMBAction` vocabulary defined in the Block SMB
+section. `full_smb_action` translates each action to the `stable-retro` NES
+button vector by reading `env.buttons`; it does not assume fixed button indices.
+The future `FullSMBStage` must use this mapping at its adapter boundary.
 
 ### Reward
 

@@ -2,8 +2,9 @@
 Entry point for the RetroAGI agent.
 Sets up the Super Mario Bros retro environment and runs the main loop.
 """
-import sys
 import os
+import random
+import sys
 
 import retro
 
@@ -12,6 +13,8 @@ import retro
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+from retroagi.core import SMB_ACTIONS, full_smb_action  # noqa: E402
 
 
 def main(num_steps=200):
@@ -26,13 +29,14 @@ def main(num_steps=200):
         if count < 0:
             break
 
-        # Take a random action to explore the environment
-        obs, rew, done, term, info = env.step(env.action_space.sample())
+        # Explore using the same named action vocabulary as Block SMB.
+        action = random.choice(SMB_ACTIONS)
+        obs, rew, done, term, info = env.step(full_smb_action(action, env.buttons))
 
         env.render()
 
         if done:
-            obs = env.reset()
+            env.reset()
 
     env.close()
 

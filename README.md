@@ -64,6 +64,9 @@ before creating an environment.
 The [stage semantics](docs/stage-semantics.md) define observations, actions,
 rewards, episode endings, and resets across the curriculum.
 
+The [tensor contracts](docs/tensor-contracts.md) define hierarchy and vision
+shapes, dtypes, normalization ranges, and timescales.
+
 
 ## Usage
 1. Start the container environment:
