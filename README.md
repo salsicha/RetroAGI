@@ -51,6 +51,19 @@ scripts/               # compatibility wrappers and older experiments
 ./build.sh
 ```
 
+## Supported Platforms
+
+RetroAGI supports Linux x86-64 with Python 3.12 and pins PyTorch 2.9.1 with
+torchvision 0.24.1. CPU-only execution is the baseline. CUDA 12.8 is the
+primary GPU target, and CUDA 13.0 is the supported container target. GPU and
+container verification remain separate test activities.
+
+See the [compatibility matrix and installation commands](docs/compatibility.md)
+before creating an environment.
+
+The [stage semantics](docs/stage-semantics.md) define observations, actions,
+rewards, episode endings, and resets across the curriculum.
+
 
 ## Usage
 1. Start the container environment:

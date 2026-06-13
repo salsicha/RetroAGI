@@ -88,15 +88,15 @@ class VisionEncoder(Protocol):
 
 
 class StageAdapter(Protocol):
-    """Minimal interface implemented by synthetic, block-SMB, and full-SMB stages."""
+    """Shared environment lifecycle described in docs/stage-semantics.md."""
 
     spec: StageSpec
 
     def reset(self, seed: Optional[int] = None) -> Any:
-        """Start a new episode and return a stage-native observation."""
+        """Start an episode, retain reset metadata, and return its observation."""
 
     def step(self, action: Any) -> tuple[Any, float, bool, bool, Mapping[str, Any]]:
-        """Advance the stage environment by one action."""
+        """Return observation, reward, terminated, truncated, and info."""
 
     def encode_observation(self, observation: Any, info: Mapping[str, Any]) -> StageBatch:
         """Convert a stage-native observation into the shared hierarchical batch."""

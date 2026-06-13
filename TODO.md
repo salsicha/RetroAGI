@@ -3,7 +3,9 @@
 This roadmap is ordered by dependency and execution priority. Finish each
 milestone's exit criteria before expanding the next one.
 
-## Completed Foundations
+## Completed Work
+
+**Architecture and stages**
 
 - [x] Separate shared actor/world-model/critic code from stage adapters.
 - [x] Define `StageSpec`, `StageBatch`, and the common `StageAdapter` protocol.
@@ -19,20 +21,21 @@ milestone's exit criteria before expanding the next one.
 - [x] Wrap the existing Full SMB DeepLab checkpoint in the shared vision API.
 - [x] Add scenario, vision-interface, checkpoint-load, and trainer smoke tests.
 
-## P0: Repository Baseline
-
-These tasks block reliable installation, collaboration, and public release.
+**Repository baseline**
 
 - [x] Remove the 550 tracked `.venv/` files; retain `.venv/` in `.gitignore`.
 - [x] Move trained models, generated datasets, and other large artifacts to Git
       LFS or external artifact storage.
-- [ ] Add `pyproject.toml` with pinned runtime, test, formatting, and linting
+- [x] Add `pyproject.toml` with pinned runtime, test, formatting, and linting
       dependencies.
-- [ ] Declare supported Python, PyTorch, CUDA, and CPU-only configurations.
+- [x] Declare supported Python, PyTorch, CUDA, and CPU-only configurations.
+
+## P0: Repository Baseline
+
+These tasks block reliable installation, collaboration, and public release.
+
 - [ ] Make a clean CPU installation pass the test suite without manual
       `PYTHONPATH` changes.
-- [ ] Verify the Docker build from a clean checkout.
-- [ ] Archive or delete the obsolete local and remote `ai_experiment` branches.
 
 **Exit criteria:** a clean checkout installs and tests on CPU and contains no
 tracked virtual environment or oversized generated artifact.
@@ -42,11 +45,11 @@ tracked virtual environment or oversized generated artifact.
 Complete the contracts before building the Block SMB agent loop or Full SMB
 adapter against unstable assumptions.
 
-- [ ] Document observation, action, reward, termination, truncation, and reset
+- [x] Document observation, action, reward, termination, truncation, and reset
       semantics for every stage.
+- [ ] Define one named action vocabulary shared by Block SMB and Full SMB.
 - [ ] Document all `StageSpec`, `StageBatch`, and `VisionOutput` tensor shapes,
       dtypes, normalization ranges, and timescales.
-- [ ] Define one named action vocabulary shared by Block SMB and Full SMB.
 - [ ] Define how vision position, semantic logits, and patch tokens enter the
       A/B/C hierarchy; replace sampling/resizing rules that are only temporary.
 - [ ] Add typed configuration objects for environment, model, training,
@@ -66,11 +69,11 @@ a game environment.
 
 - [ ] Split deterministic train, validation, and test datasets by fixed seed.
 - [ ] Add reproducible training configuration and complete seeding.
-- [ ] Add checkpoint saving and restoration using the shared schema.
 - [ ] Track actor pass 1, actor pass 2, world-model, critic, and total losses.
 - [ ] Define evaluation metrics and random/simple baseline models.
 - [ ] Add a short CPU smoke test that verifies finite gradients and decreasing
       loss.
+- [ ] Add checkpoint saving and restoration using the shared schema.
 - [ ] Demonstrate that the trained policy beats its declared baselines.
 - [ ] Document expected runtime and results.
 
@@ -84,18 +87,18 @@ uses it to complete scenarios.
 
 - [ ] Add a supported loader for `data/block_vit/block_vit.pth` and decide
       whether perception is frozen or fine-tuned during policy training.
-- [ ] Implement the complete Block SMB actor/world-model/critic training loop.
 - [ ] Replace the temporary visual-to-A/B/C projection with the P1 contract.
 - [ ] Add observation normalization, temporal frame stacking, and episode masks.
+- [ ] Add focused physics tests for collisions, gaps, moving platforms, coins,
+      enemies, goals, death, reset, and truncation.
 - [ ] Document and tune the existing reward terms rather than adding overlapping
       reward logic in the trainer.
+- [ ] Implement the complete Block SMB actor/world-model/critic training loop.
 - [ ] Add trajectory or replay storage with correct recurrent-state boundaries.
+- [ ] Add numerical checks, gradient clipping, and NaN/exploding-loss detection.
 - [ ] Add curriculum progression across the four fixed scenarios and generated
       scenarios.
 - [ ] Report deterministic success rate and return for every fixed scenario.
-- [ ] Add focused physics tests for collisions, gaps, moving platforms, coins,
-      enemies, goals, death, reset, and truncation.
-- [ ] Add numerical checks, gradient clipping, and NaN/exploding-loss detection.
 - [ ] Record evaluation trajectories and videos.
 - [ ] Add vectorized or parallel environments after the single-environment loop
       is correct and reproducible.
@@ -126,12 +129,12 @@ loop, and the DeepLab wrapper covers perception but not the stage adapter or
 environment semantics.
 
 - [ ] Implement `stable-retro` behind a Full SMB environment adapter.
-- [ ] Implement `FullSMBStage` with the common stage contract.
 - [ ] Map emulator buttons to the P1 shared action vocabulary.
 - [ ] Extract and test position, score, coins, lives, completion, death,
       termination, and truncation signals.
 - [ ] Add frame skipping, resizing, normalization, stacking, and episode masks.
 - [ ] Add emulator state save/load for repeatable evaluation.
+- [ ] Implement `FullSMBStage` with the common stage contract.
 - [ ] Add headless random-agent and deterministic reset smoke tests.
 - [ ] Transfer Block SMB perception and policy checkpoints into Full SMB.
 - [ ] Compare transferred checkpoints with training from scratch.
@@ -145,9 +148,9 @@ evaluations and load a compatible Block SMB checkpoint.
 - [ ] Store resolved configuration, code revision, metrics, and environment
       metadata beside every checkpoint.
 - [ ] Add structured logging and periodic deterministic evaluation.
-- [ ] Integrate TensorBoard or Weights & Biases behind an optional dependency.
 - [ ] Add GitHub Actions for formatting, linting, unit tests, and CPU smoke
       training.
+- [ ] Integrate TensorBoard or Weights & Biases behind an optional dependency.
 - [ ] Document hardware, runtime, expected metrics, and artifact locations for
       every stage.
 - [ ] Publish a reproducibility procedure that starts from a clean checkout.

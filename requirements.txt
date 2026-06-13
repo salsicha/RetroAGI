@@ -1,10 +1,6 @@
-torch
-torchvision
-numpy
-gymnasium
-gym-super-mario-bros
-nes-py
-opencv-python
-pyhgf
-stable-retro
-pygame
+numpy==2.3.2
+pygame==2.6.1
+stable-retro==1.0.0
+torch==2.9.1
+torchvision==0.24.1
+tqdm==4.67.1
