@@ -10,9 +10,9 @@ Example:
 import argparse
 import json
 import random
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass, field
 import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -24,28 +24,112 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.stages.block_smb import BlockVisionTransformer, MarioScenarioEnv
+from retroagi.core import (
+    CheckpointConfig,
+    EnvironmentConfig,
+    EvaluationConfig,
+    ExperimentConfig,
+    ModelConfig,
+    TrainingConfig,
+    build_checkpoint,
+    is_versioned_checkpoint,
+    validate_checkpoint_compatibility,
+    validate_model_vision_compatibility,
+    validate_stage_spec,
+)
+from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockVisionTransformer, MarioScenarioEnv
 
 
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "block_vit" / "block_vit.pth"
+DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "block_smb_vit" / "block_vit.pth"
+DEFAULT_EPOCHS = 20
+DEFAULT_SAMPLES_PER_EPOCH = 2048
+DEFAULT_VAL_SAMPLES = 512
+DEFAULT_ROLLOUT_STEPS = 32
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_LEARNING_RATE = 3e-4
+DEFAULT_WEIGHT_DECAY = 0.05
+DEFAULT_POSITION_WEIGHT = 2.0
+DEFAULT_DIM = 64
+DEFAULT_DEPTH = 2
+DEFAULT_HEADS = 4
+DEFAULT_PATCH_SIZE = 16
+DEFAULT_DROPOUT = 0.1
+DEFAULT_SEED = 7
+DEFAULT_GRADIENT_CLIP_NORM = 1.0
 
 
 @dataclass(frozen=True)
 class TrainConfig:
-    epochs: int = 20
-    samples_per_epoch: int = 2048
-    val_samples: int = 512
-    rollout_steps: int = 32
-    batch_size: int = 32
-    learning_rate: float = 3e-4
-    weight_decay: float = 0.05
-    position_weight: float = 2.0
-    dim: int = 64
-    depth: int = 2
-    heads: int = 4
-    patch_size: int = 16
-    dropout: float = 0.1
-    seed: int = 7
+    environment: EnvironmentConfig = field(
+        default_factory=lambda: EnvironmentConfig(
+            stage="block_smb",
+            seed=DEFAULT_SEED,
+            rollout_steps=DEFAULT_ROLLOUT_STEPS,
+        )
+    )
+    model: ModelConfig = field(
+        default_factory=lambda: ModelConfig(
+            name="block_smb_vit",
+            hidden_dim=DEFAULT_DIM,
+            depth=DEFAULT_DEPTH,
+            heads=DEFAULT_HEADS,
+            patch_size=DEFAULT_PATCH_SIZE,
+            dropout=DEFAULT_DROPOUT,
+        )
+    )
+    training: TrainingConfig = field(
+        default_factory=lambda: TrainingConfig(
+            epochs=DEFAULT_EPOCHS,
+            samples_per_epoch=DEFAULT_SAMPLES_PER_EPOCH,
+            batch_size=DEFAULT_BATCH_SIZE,
+            learning_rate=DEFAULT_LEARNING_RATE,
+            weight_decay=DEFAULT_WEIGHT_DECAY,
+            seed=DEFAULT_SEED,
+            gradient_clip_norm=DEFAULT_GRADIENT_CLIP_NORM,
+        )
+    )
+    evaluation: EvaluationConfig = field(
+        default_factory=lambda: EvaluationConfig(
+            samples=DEFAULT_VAL_SAMPLES,
+            seed=DEFAULT_SEED + 1_000_000,
+            metrics=(
+                "loss",
+                "semantic_loss",
+                "position_loss",
+                "accuracy",
+                "foreground_accuracy",
+                "mean_iou",
+            ),
+        )
+    )
+    checkpoints: CheckpointConfig = field(
+        default_factory=lambda: CheckpointConfig(
+            output_path=DEFAULT_OUTPUT,
+            best_metric="mean_iou",
+            best_mode="max",
+        )
+    )
+    position_weight: float = DEFAULT_POSITION_WEIGHT
+
+    def __post_init__(self) -> None:
+        if self.position_weight <= 0:
+            raise ValueError("position_weight must be positive")
+        if self.training.samples_per_epoch is None:
+            raise ValueError("training.samples_per_epoch must be set for Block ViT training")
+        if self.evaluation.samples is None:
+            raise ValueError("evaluation.samples must be set for Block ViT training")
+
+    def to_dict(self) -> dict:
+        experiment = ExperimentConfig(
+            environment=self.environment,
+            model=self.model,
+            training=self.training,
+            evaluation=self.evaluation,
+            checkpoints=self.checkpoints,
+            name="block_vit_training",
+            metadata={"position_weight": self.position_weight},
+        )
+        return experiment.to_dict()
 
 
 def select_device(name: str = "auto") -> torch.device:
@@ -229,70 +313,131 @@ def save_checkpoint(
     metrics: dict[str, float],
     config: TrainConfig,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-            "epoch": epoch,
-            "metrics": metrics,
-            "config": asdict(config),
-            "vision_spec": asdict(model.spec),
+    config_data = config.to_dict()
+    checkpoint = build_checkpoint(
+        stage=config.environment.stage,
+        model_name=config.model.name,
+        checkpoint_kind="vision_encoder",
+        epoch=epoch,
+        metrics=metrics,
+        config=config_data,
+        specs={"vision": asdict(model.spec)},
+        states={
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
         },
-        path,
+        metadata={"trainer": "scripts.vit.train_block_vit"},
     )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(checkpoint, path)
     path.with_suffix(".json").write_text(
-        json.dumps({"epoch": epoch, "metrics": metrics, "config": asdict(config)}, indent=2) + "\n"
+        json.dumps(
+            {
+                "checkpoint_schema_version": checkpoint["checkpoint_schema_version"],
+                "stage": checkpoint["stage"],
+                "model_name": checkpoint["model_name"],
+                "checkpoint_kind": checkpoint["checkpoint_kind"],
+                "epoch": epoch,
+                "global_step": checkpoint["global_step"],
+                "metrics": metrics,
+                "config": config_data,
+                "specs": checkpoint["specs"],
+                "metadata": checkpoint["metadata"],
+            },
+            indent=2,
+        )
+        + "\n"
     )
 
 
 def train(
     config: TrainConfig,
-    output: Path = DEFAULT_OUTPUT,
-    device_name: str = "auto",
+    output: Optional[Path] = None,
+    device_name: Optional[str] = None,
     resume: Optional[Path] = None,
 ) -> dict[str, float]:
-    seed_everything(config.seed)
-    device = select_device(device_name)
+    seed_everything(config.training.seed)
+    device = select_device(device_name or config.training.device)
+    output = output or config.checkpoints.output_path or DEFAULT_OUTPUT
+    resume = resume if resume is not None else config.checkpoints.resume_path
+    validate_stage_spec(BLOCK_SMB_SPEC, context="Block ViT startup stage")
+    if config.environment.stage != BLOCK_SMB_SPEC.name:
+        raise ValueError(
+            f"environment stage {config.environment.stage!r} does not match "
+            f"{BLOCK_SMB_SPEC.name!r}"
+        )
+
     model = BlockVisionTransformer(
-        dim=config.dim,
-        depth=config.depth,
-        heads=config.heads,
-        patch_size=config.patch_size,
-        drop=config.dropout,
+        dim=config.model.hidden_dim,
+        depth=config.model.depth,
+        heads=config.model.heads,
+        patch_size=config.model.patch_size or DEFAULT_PATCH_SIZE,
+        drop=config.model.dropout,
     ).to(device)
+    validate_model_vision_compatibility(
+        config.model, model.spec, context="Block ViT startup model"
+    )
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+        model.parameters(),
+        lr=config.training.learning_rate,
+        weight_decay=config.training.weight_decay,
     )
     start_epoch = 0
     if resume is not None:
         checkpoint = torch.load(resume, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        if is_versioned_checkpoint(checkpoint):
+            checkpoint = validate_checkpoint_compatibility(
+                checkpoint,
+                stage=BLOCK_SMB_SPEC,
+                model=config.model,
+                vision=model.spec,
+                checkpoint_kind="vision_encoder",
+                required_states=("model", "optimizer"),
+                context=f"resume checkpoint {resume}",
+            )
+            states = checkpoint["states"]
+            model.load_state_dict(states["model"])
+            optimizer.load_state_dict(states["optimizer"])
+        else:
+            model.load_state_dict(checkpoint["model_state"])
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
         start_epoch = int(checkpoint["epoch"]) + 1
 
     print(f"Device: {device}; parameters: {sum(p.numel() for p in model.parameters()):,}")
     print("Generating fixed validation rollout...")
     val_frames = collect_procedural_frames(
-        config.val_samples, config.seed + 1_000_000, config.rollout_steps, show_progress=True
+        config.evaluation.samples,
+        config.evaluation.seed,
+        config.environment.rollout_steps,
+        show_progress=True,
     )
     val_labels, val_positions = build_ground_truth(model, val_frames)
     val_loader = make_loader(
-        val_frames, val_labels, val_positions, config.batch_size, False, config.seed
+        val_frames,
+        val_labels,
+        val_positions,
+        config.training.batch_size,
+        False,
+        config.evaluation.seed,
     )
 
     best_iou = -1.0
     final_metrics = {}
-    for epoch in range(start_epoch, config.epochs):
+    for epoch in range(start_epoch, config.training.epochs):
         train_frames = collect_procedural_frames(
-            config.samples_per_epoch,
-            config.seed + epoch * 10_000,
-            config.rollout_steps,
+            config.training.samples_per_epoch,
+            config.environment.seed + epoch * 10_000,
+            config.environment.rollout_steps,
             show_progress=True,
         )
         train_labels, train_positions = build_ground_truth(model, train_frames)
         train_loader = make_loader(
-            train_frames, train_labels, train_positions, config.batch_size, True, config.seed + epoch
+            train_frames,
+            train_labels,
+            train_positions,
+            config.training.batch_size,
+            True,
+            config.training.seed + epoch,
         )
         weights = class_weights(train_labels, model.spec.num_classes, device)
 
@@ -305,14 +450,17 @@ def train(
                 model, images, labels, positions, weights, config.position_weight
             )
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if config.training.gradient_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), config.training.gradient_clip_norm
+                )
             optimizer.step()
             running += loss.item() * images.shape[0]
 
         final_metrics = evaluate(model, val_loader, weights, config.position_weight, device)
         train_loss = running / len(train_loader.dataset)
         print(
-            f"Epoch {epoch + 1:03d}/{config.epochs:03d} "
+            f"Epoch {epoch + 1:03d}/{config.training.epochs:03d} "
             f"train={train_loss:.4f} val={final_metrics['loss']:.4f} "
             f"fg_acc={final_metrics['foreground_accuracy'] * 100:5.1f}% "
             f"mIoU={final_metrics['mean_iou'] * 100:5.1f}% "
@@ -328,20 +476,20 @@ def train(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--epochs", type=int, default=TrainConfig.epochs)
-    parser.add_argument("--samples-per-epoch", type=int, default=TrainConfig.samples_per_epoch)
-    parser.add_argument("--val-samples", type=int, default=TrainConfig.val_samples)
-    parser.add_argument("--rollout-steps", type=int, default=TrainConfig.rollout_steps)
-    parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
-    parser.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate)
-    parser.add_argument("--weight-decay", type=float, default=TrainConfig.weight_decay)
-    parser.add_argument("--position-weight", type=float, default=TrainConfig.position_weight)
-    parser.add_argument("--dim", type=int, default=TrainConfig.dim)
-    parser.add_argument("--depth", type=int, default=TrainConfig.depth)
-    parser.add_argument("--heads", type=int, default=TrainConfig.heads)
-    parser.add_argument("--patch-size", type=int, default=TrainConfig.patch_size)
-    parser.add_argument("--dropout", type=float, default=TrainConfig.dropout)
-    parser.add_argument("--seed", type=int, default=TrainConfig.seed)
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
+    parser.add_argument("--samples-per-epoch", type=int, default=DEFAULT_SAMPLES_PER_EPOCH)
+    parser.add_argument("--val-samples", type=int, default=DEFAULT_VAL_SAMPLES)
+    parser.add_argument("--rollout-steps", type=int, default=DEFAULT_ROLLOUT_STEPS)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
+    parser.add_argument("--weight-decay", type=float, default=DEFAULT_WEIGHT_DECAY)
+    parser.add_argument("--position-weight", type=float, default=DEFAULT_POSITION_WEIGHT)
+    parser.add_argument("--dim", type=int, default=DEFAULT_DIM)
+    parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
+    parser.add_argument("--heads", type=int, default=DEFAULT_HEADS)
+    parser.add_argument("--patch-size", type=int, default=DEFAULT_PATCH_SIZE)
+    parser.add_argument("--dropout", type=float, default=DEFAULT_DROPOUT)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--resume", type=Path)
@@ -351,22 +499,50 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = TrainConfig(
-        epochs=args.epochs,
-        samples_per_epoch=args.samples_per_epoch,
-        val_samples=args.val_samples,
-        rollout_steps=args.rollout_steps,
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
+        environment=EnvironmentConfig(
+            stage="block_smb",
+            seed=args.seed,
+            rollout_steps=args.rollout_steps,
+        ),
+        model=ModelConfig(
+            name="block_smb_vit",
+            hidden_dim=args.dim,
+            depth=args.depth,
+            heads=args.heads,
+            patch_size=args.patch_size,
+            dropout=args.dropout,
+        ),
+        training=TrainingConfig(
+            epochs=args.epochs,
+            samples_per_epoch=args.samples_per_epoch,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            seed=args.seed,
+            device=args.device,
+            gradient_clip_norm=DEFAULT_GRADIENT_CLIP_NORM,
+        ),
+        evaluation=EvaluationConfig(
+            samples=args.val_samples,
+            seed=args.seed + 1_000_000,
+            metrics=(
+                "loss",
+                "semantic_loss",
+                "position_loss",
+                "accuracy",
+                "foreground_accuracy",
+                "mean_iou",
+            ),
+        ),
+        checkpoints=CheckpointConfig(
+            output_path=args.output,
+            resume_path=args.resume,
+            best_metric="mean_iou",
+            best_mode="max",
+        ),
         position_weight=args.position_weight,
-        dim=args.dim,
-        depth=args.depth,
-        heads=args.heads,
-        patch_size=args.patch_size,
-        dropout=args.dropout,
-        seed=args.seed,
     )
-    train(config, output=args.output, device_name=args.device, resume=args.resume)
+    train(config)
 
 
 if __name__ == "__main__":

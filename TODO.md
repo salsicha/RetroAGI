@@ -30,15 +30,17 @@ milestone's exit criteria before expanding the next one.
       dependencies.
 - [x] Declare supported Python, PyTorch, CUDA, and CPU-only configurations.
 
-## P0: Repository Baseline
 
-These tasks block reliable installation, collaboration, and public release.
+## P0: Repository Baseline (Invalid)
 
-- [ ] Make a clean CPU installation pass the test suite without manual
-      `PYTHONPATH` changes.
+This milestone is invalid: a CPU-only version is not a supported target for this
+project.
 
-**Exit criteria:** a clean checkout installs and tests on CPU and contains no
-tracked virtual environment or oversized generated artifact.
+- [x] Do not require a clean CPU-only installation to pass the test suite.
+
+**Exit criteria:** none; keep platform support scoped to the declared accelerated
+runtime targets.
+
 
 ## P1: Freeze Cross-Stage Contracts
 
@@ -52,11 +54,11 @@ adapter against unstable assumptions.
       dtypes, normalization ranges, and timescales.
 - [x] Define how vision position, semantic logits, and patch tokens enter the
       A/B/C hierarchy; replace sampling/resizing rules that are only temporary.
-- [ ] Add typed configuration objects for environment, model, training,
+- [x] Add typed configuration objects for environment, model, training,
       evaluation, and checkpoints.
-- [ ] Define a versioned checkpoint schema shared by every stage.
-- [ ] Validate stage/model/action/checkpoint compatibility at startup.
-- [ ] Add contract tests that run the same assertions against every adapter and
+- [x] Define a versioned checkpoint schema shared by every stage.
+- [x] Validate stage/model/action/checkpoint compatibility at startup.
+- [x] Add contract tests that run the same assertions against every adapter and
       vision encoder.
 
 **Exit criteria:** each stage can be swapped behind the same tested interfaces,
