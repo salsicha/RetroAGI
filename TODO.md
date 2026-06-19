@@ -69,10 +69,15 @@ and incompatible dimensions, actions, or checkpoints fail with clear errors.
 Use Synthetic 1D to prove the learning architecture before debugging it inside
 a game environment.
 
-- [ ] Split deterministic train, validation, and test datasets by fixed seed.
-- [ ] Add reproducible training configuration and complete seeding.
-- [ ] Track actor pass 1, actor pass 2, world-model, critic, and total losses.
-- [ ] Define evaluation metrics and random/simple baseline models.
+- [x] Split deterministic train, validation, and test datasets by fixed seed.
+- [x] Add reproducible training configuration and complete seeding.
+  - Add a SyntheticTrainingConfig dataclass for seed, split sizes/seeds, batch size, epochs, learning rate, tau schedule, device, deterministic mode.
+  - Add seed_everything() covering Python random, NumPy, Torch CPU/GPU, and deterministic Torch algorithms.
+  - Use config-derived split seeds and a seeded torch.Generator for torch.randperm(...) each epoch.
+  - Add tests proving seeded Python/NumPy/Torch streams reproduce and the train permutation is deterministic.
+
+- [x] Track actor pass 1, actor pass 2, world-model, critic, and total losses.
+- [x] Define evaluation metrics and random/simple baseline models.
 - [ ] Add a short CPU smoke test that verifies finite gradients and decreasing
       loss.
 - [ ] Add checkpoint saving and restoration using the shared schema.
