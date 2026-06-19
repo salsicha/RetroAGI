@@ -104,8 +104,28 @@ Training can be continued with:
 ```bash
 python scripts/vit/train_block_vit.py --epochs 40 --resume data/block_vit/block_vit.pth
 ```
+
+### Synthetic 1D validation
+
 Stage 1 currently trains the shared hierarchical actor/world-model/critic stack
-on synthetic data. Stage 2 has the scriptable environment and adapter in place;
-training loops can now reuse `retroagi.core.models.AgentWorldModelCritic` and
-consume `BlockSMBStage.encode_observation(...)`. Stage 3 keeps the full emulator
-runner isolated behind `retroagi/stages/full_smb`.
+on synthetic data. The deterministic validation path is covered by:
+
+```bash
+timeout 120s python3 -m unittest -v scripts.tests.test_synthetic_1d
+```
+
+Expected CPU runtime for this Stage 1 suite is under 20 seconds on the current
+development machine; the held-out baseline demonstration itself runs in about
+7 seconds. It trains a small `AgentWorldModelCritic` on deterministic Synthetic
+1D train data and evaluates on the fixed test split. The expected result is that
+the trained policy's held-out `controller_mse` is below both declared baselines:
+seeded `random` and train-marginal `simple`, with an asserted margin of at least
+25% below the simple baseline. The same suite also verifies finite CPU gradients,
+decreasing total loss, deterministic data/permutation seeding, shared-schema
+checkpoint save/restore, and these evaluation metrics: `controller_mse`,
+`controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`.
+
+Stage 2 has the scriptable environment and adapter in place; training loops can
+now reuse `retroagi.core.models.AgentWorldModelCritic` and consume
+`BlockSMBStage.encode_observation(...)`. Stage 3 keeps the full emulator runner
+isolated behind `retroagi/stages/full_smb`.

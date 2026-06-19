@@ -78,11 +78,11 @@ a game environment.
 
 - [x] Track actor pass 1, actor pass 2, world-model, critic, and total losses.
 - [x] Define evaluation metrics and random/simple baseline models.
-- [ ] Add a short CPU smoke test that verifies finite gradients and decreasing
+- [x] Add a short CPU smoke test that verifies finite gradients and decreasing
       loss.
-- [ ] Add checkpoint saving and restoration using the shared schema.
-- [ ] Demonstrate that the trained policy beats its declared baselines.
-- [ ] Document expected runtime and results.
+- [x] Add checkpoint saving and restoration using the shared schema.
+- [x] Demonstrate that the trained policy beats its declared baselines.
+- [x] Document expected runtime and results.
 
 **Exit criteria:** Stage 1 trains reproducibly from a clean checkout, resumes
 from a checkpoint, and beats a baseline on a held-out test split.

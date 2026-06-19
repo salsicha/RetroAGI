@@ -2,15 +2,21 @@
 
 import random
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import torch
 import torch.nn as nn
 
+from retroagi.core import AgentWorldModelCritic, build_checkpoint, load_checkpoint, save_checkpoint
 from retroagi.stages.synthetic_1d.train import (
     SYNTHETIC_1D_SPEC,
     SYNTHETIC_LOSS_KEYS,
+    SYNTHETIC_CHECKPOINT_KIND,
     SYNTHETIC_METRIC_KEYS,
+    SYNTHETIC_MODEL_NAME,
     MeanSyntheticBaseline,
     RandomSyntheticBaseline,
     SyntheticBaselinePredictions,
@@ -24,7 +30,11 @@ from retroagi.stages.synthetic_1d.train import (
     generate_hierarchical_data,
     make_empty_history,
     make_train_permutation,
+    restore_synthetic_checkpoint,
+    save_synthetic_checkpoint,
     seed_everything,
+    train_and_evaluate,
+    train_synthetic_epoch,
 )
 
 
@@ -305,6 +315,353 @@ class TestSynthetic1DEvaluationMetricsAndBaselines(unittest.TestCase):
             self.assertGreaterEqual(baseline_metrics["controller_mse"], 0.0)
             self.assertGreaterEqual(baseline_metrics["accuracy_A"], 0.0)
             self.assertLessEqual(baseline_metrics["accuracy_A"], 100.0)
+
+
+class TestSynthetic1DCPUSmoke(unittest.TestCase):
+    def test_tiny_cpu_training_step_has_finite_gradients_and_decreasing_loss(self):
+        seed_everything(2_024, deterministic=True)
+        xa, _ya, xb, _yb, xc, yc = generate_hierarchical_data(
+            4,
+            SYNTHETIC_1D_SPEC.seq_len_a,
+            SYNTHETIC_1D_SPEC.ratio_ab,
+            SYNTHETIC_1D_SPEC.ratio_bc,
+            SYNTHETIC_1D_SPEC.vocab_size,
+            seed=303,
+        )
+        model = AgentWorldModelCritic(
+            vocab_size=SYNTHETIC_1D_SPEC.vocab_size,
+            seq_len_a=SYNTHETIC_1D_SPEC.seq_len_a,
+            seq_len_c=SYNTHETIC_1D_SPEC.seq_len_c,
+            ratio_bc=SYNTHETIC_1D_SPEC.ratio_bc,
+            d_model=8,
+        ).cpu()
+        model.eval()
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.02)
+        criterion = nn.MSELoss()
+
+        def total_loss():
+            torch.manual_seed(404)
+            actions1, next_state_pred, criticism, actions2, _logits_a, _w_b, _b_b = model(
+                xa, xb, xc, tau=1.0
+            )
+            losses = compute_synthetic_training_losses(
+                actions1,
+                next_state_pred,
+                criticism,
+                actions2,
+                xc,
+                yc,
+                criterion,
+            )
+            return losses["loss_total"]
+
+        initial_loss = total_loss().item()
+        saw_nonzero_gradient = False
+        for _ in range(8):
+            optimizer.zero_grad()
+            loss = total_loss()
+            loss.backward()
+
+            gradients = [param.grad for param in model.parameters() if param.grad is not None]
+            self.assertTrue(gradients)
+            for gradient in gradients:
+                self.assertTrue(torch.isfinite(gradient).all().item())
+                saw_nonzero_gradient = saw_nonzero_gradient or bool(torch.count_nonzero(gradient).item())
+            optimizer.step()
+
+        final_loss = total_loss().item()
+        self.assertTrue(saw_nonzero_gradient)
+        self.assertTrue(torch.isfinite(torch.tensor(final_loss)).item())
+        self.assertLess(final_loss, initial_loss)
+
+
+class TestSynthetic1DCheckpointing(unittest.TestCase):
+    def make_model_and_optimizer(self):
+        model = AgentWorldModelCritic(
+            vocab_size=SYNTHETIC_1D_SPEC.vocab_size,
+            seq_len_a=SYNTHETIC_1D_SPEC.seq_len_a,
+            seq_len_c=SYNTHETIC_1D_SPEC.seq_len_c,
+            ratio_bc=SYNTHETIC_1D_SPEC.ratio_bc,
+            d_model=8,
+        )
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+        return model, optimizer
+
+    def step_optimizer_once(self, model, optimizer):
+        xa, _ya, xb, _yb, xc, yc = generate_hierarchical_data(
+            2,
+            SYNTHETIC_1D_SPEC.seq_len_a,
+            SYNTHETIC_1D_SPEC.ratio_ab,
+            SYNTHETIC_1D_SPEC.ratio_bc,
+            SYNTHETIC_1D_SPEC.vocab_size,
+            seed=707,
+        )
+        optimizer.zero_grad()
+        torch.manual_seed(808)
+        actions1, next_state_pred, criticism, actions2, _logits_a, _w_b, _b_b = model(
+            xa, xb, xc, tau=1.0
+        )
+        losses = compute_synthetic_training_losses(
+            actions1, next_state_pred, criticism, actions2, xc, yc, nn.MSELoss()
+        )
+        losses["loss_total"].backward()
+        optimizer.step()
+
+    def test_saves_shared_schema_checkpoint_payload(self):
+        model, optimizer = self.make_model_and_optimizer()
+        config = SyntheticTrainingConfig(seed=17, batch_size=4, epochs=2)
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "synthetic.pth"
+            save_synthetic_checkpoint(
+                path,
+                model,
+                optimizer,
+                epoch=2,
+                global_step=8,
+                metrics={"controller_mse": 0.75},
+                config=config,
+                metadata={"unit": True},
+            )
+            loaded = load_checkpoint(path)
+
+        self.assertEqual(loaded["stage"], SYNTHETIC_1D_SPEC.name)
+        self.assertEqual(loaded["model_name"], SYNTHETIC_MODEL_NAME)
+        self.assertEqual(loaded["checkpoint_kind"], SYNTHETIC_CHECKPOINT_KIND)
+        self.assertEqual(loaded["epoch"], 2)
+        self.assertEqual(loaded["global_step"], 8)
+        self.assertEqual(loaded["metrics"]["controller_mse"], 0.75)
+        self.assertEqual(loaded["config"]["seed"], 17)
+        self.assertEqual(loaded["specs"]["stage"]["seq_len_c"], SYNTHETIC_1D_SPEC.seq_len_c)
+        self.assertIn("model", loaded["states"])
+        self.assertIn("optimizer", loaded["states"])
+
+    def test_restores_model_and_optimizer_state(self):
+        seed_everything(909, deterministic=True)
+        model, optimizer = self.make_model_and_optimizer()
+        self.step_optimizer_once(model, optimizer)
+        expected_params = {name: value.detach().clone() for name, value in model.state_dict().items()}
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "synthetic.pth"
+            save_synthetic_checkpoint(
+                path, model, optimizer, epoch=1, global_step=1, metrics={"controller_mse": 1.0}
+            )
+            restored_model, restored_optimizer = self.make_model_and_optimizer()
+            restored = restore_synthetic_checkpoint(path, restored_model, restored_optimizer)
+
+        self.assertEqual(restored["epoch"], 1)
+        for name, value in restored_model.state_dict().items():
+            torch.testing.assert_close(value, expected_params[name])
+        self.assertTrue(restored_optimizer.state_dict()["state"])
+
+
+    def test_resume_continuation_matches_uninterrupted_training(self):
+        config = SyntheticTrainingConfig(
+            seed=515,
+            split_sizes=SyntheticSplitSizes(train=8, validation=2, test=2),
+            split_seeds=SyntheticSplitSeeds(train=616, validation=717, test=818),
+            batch_size=4,
+            epochs=2,
+            learning_rate=0.01,
+        )
+        splits = generate_dataset_splits(
+            sizes=config.split_sizes,
+            seeds=config.resolved_split_seeds,
+        )
+        criterion = nn.MSELoss()
+        device = torch.device("cpu")
+
+        seed_everything(config.seed, deterministic=True)
+        uninterrupted_model, uninterrupted_optimizer = self.make_model_and_optimizer()
+        train_synthetic_epoch(
+            uninterrupted_model,
+            uninterrupted_optimizer,
+            splits.train,
+            config,
+            0,
+            criterion,
+            device=device,
+        )
+        train_synthetic_epoch(
+            uninterrupted_model,
+            uninterrupted_optimizer,
+            splits.train,
+            config,
+            1,
+            criterion,
+            device=device,
+        )
+
+        seed_everything(config.seed, deterministic=True)
+        interrupted_model, interrupted_optimizer = self.make_model_and_optimizer()
+        train_synthetic_epoch(
+            interrupted_model,
+            interrupted_optimizer,
+            splits.train,
+            config,
+            0,
+            criterion,
+            device=device,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "resume.pth"
+            save_synthetic_checkpoint(
+                path,
+                interrupted_model,
+                interrupted_optimizer,
+                epoch=1,
+                global_step=2,
+                config=config,
+            )
+            resumed_model, resumed_optimizer = self.make_model_and_optimizer()
+            restore_synthetic_checkpoint(path, resumed_model, resumed_optimizer)
+            train_synthetic_epoch(
+                resumed_model,
+                resumed_optimizer,
+                splits.train,
+                config,
+                1,
+                criterion,
+                device=device,
+            )
+
+        for name, value in resumed_model.state_dict().items():
+            torch.testing.assert_close(value, uninterrupted_model.state_dict()[name])
+        self.assertEqual(
+            resumed_optimizer.state_dict()["state"].keys(),
+            uninterrupted_optimizer.state_dict()["state"].keys(),
+        )
+
+    def test_train_and_evaluate_saves_and_resumes_from_checkpoint(self):
+        with TemporaryDirectory() as tmpdir, patch("matplotlib.pyplot.show"):
+            path = Path(tmpdir) / "synthetic_resume.pth"
+            first_config = SyntheticTrainingConfig(
+                seed=919,
+                split_sizes=SyntheticSplitSizes(train=4, validation=2, test=2),
+                split_seeds=SyntheticSplitSeeds(train=920, validation=921, test=922),
+                batch_size=2,
+                epochs=1,
+                learning_rate=0.01,
+                checkpoint_path=path,
+                save_checkpoints=True,
+                device="cpu",
+            )
+            first_history = train_and_evaluate(first_config)
+            first_checkpoint = load_checkpoint(path)
+
+            resumed_config = SyntheticTrainingConfig(
+                seed=919,
+                split_sizes=SyntheticSplitSizes(train=4, validation=2, test=2),
+                split_seeds=SyntheticSplitSeeds(train=920, validation=921, test=922),
+                batch_size=2,
+                epochs=2,
+                learning_rate=0.01,
+                checkpoint_path=path,
+                resume_path=path,
+                save_checkpoints=True,
+                device="cpu",
+            )
+            resumed_history = train_and_evaluate(resumed_config)
+            resumed_checkpoint = load_checkpoint(path)
+
+        self.assertEqual(len(first_history["loss_total"]), 1)
+        self.assertEqual(len(resumed_history["loss_total"]), 1)
+        self.assertEqual(first_checkpoint["epoch"], 1)
+        self.assertEqual(resumed_checkpoint["epoch"], 2)
+        self.assertEqual(first_checkpoint["global_step"], 2)
+        self.assertEqual(resumed_checkpoint["global_step"], 4)
+
+    def test_restore_rejects_incompatible_stage_checkpoint(self):
+        model, optimizer = self.make_model_and_optimizer()
+        bad_checkpoint = build_checkpoint(
+            stage="block_smb",
+            model_name=SYNTHETIC_MODEL_NAME,
+            checkpoint_kind=SYNTHETIC_CHECKPOINT_KIND,
+            states={"model": model.state_dict(), "optimizer": optimizer.state_dict()},
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad.pth"
+            save_checkpoint(path, bad_checkpoint)
+            with self.assertRaisesRegex(ValueError, "checkpoint stage"):
+                restore_synthetic_checkpoint(path, model, optimizer)
+
+
+class TestSynthetic1DBaselineComparison(unittest.TestCase):
+    def test_trained_policy_beats_declared_baselines_on_held_out_controller_mse(self):
+        seed_everything(123, deterministic=True)
+        splits = generate_dataset_splits(
+            sizes=SyntheticSplitSizes(train=128, validation=32, test=64),
+            seeds=SyntheticSplitSeeds(train=101, validation=202, test=303),
+        )
+        train_xa, _train_ya, train_xb, _train_yb, train_xc, train_yc = splits.train
+        test_xa, _test_ya, test_xb, _test_yb, test_xc, _test_yc = splits.test
+        model = AgentWorldModelCritic(
+            vocab_size=SYNTHETIC_1D_SPEC.vocab_size,
+            seq_len_a=SYNTHETIC_1D_SPEC.seq_len_a,
+            seq_len_c=SYNTHETIC_1D_SPEC.seq_len_c,
+            ratio_bc=SYNTHETIC_1D_SPEC.ratio_bc,
+            d_model=16,
+        )
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
+        criterion = nn.MSELoss()
+        batch_size = 32
+
+        model.train()
+        for epoch in range(60):
+            permutation = torch.randperm(
+                train_xa.size(0), generator=torch.Generator().manual_seed(500 + epoch)
+            )
+            for start in range(0, train_xa.size(0), batch_size):
+                indices = permutation[start : start + batch_size]
+                torch.manual_seed(10_000 + epoch * 10 + start)
+                optimizer.zero_grad()
+                actions1, next_state_pred, criticism, actions2, _logits_a, _w_b, _b_b = model(
+                    train_xa[indices], train_xb[indices], train_xc[indices], tau=1.0
+                )
+                losses = compute_synthetic_training_losses(
+                    actions1,
+                    next_state_pred,
+                    criticism,
+                    actions2,
+                    train_xc[indices],
+                    train_yc[indices],
+                    criterion,
+                )
+                losses["loss_total"].backward()
+                optimizer.step()
+
+        model.eval()
+        with torch.no_grad():
+            torch.manual_seed(999)
+            _actions1, _next_state, _criticism, actions2, logits_a, w_b, b_b = model(
+                test_xa, test_xb, test_xc, tau=0.1
+            )
+        trained_metrics = compute_synthetic_evaluation_metrics(
+            SyntheticBaselinePredictions(
+                actions_c=actions2,
+                logits_a=logits_a,
+                w_b=w_b,
+                b_b=b_b,
+            ),
+            splits.test,
+        )
+        baseline_metrics = evaluate_synthetic_baselines(splits.train, splits.test, seed=123)
+
+        self.assertLess(
+            trained_metrics["controller_mse"],
+            baseline_metrics["random"]["controller_mse"],
+        )
+        self.assertLess(
+            trained_metrics["controller_mse"],
+            baseline_metrics["simple"]["controller_mse"],
+        )
+        self.assertLess(
+            trained_metrics["controller_mse"],
+            0.75 * baseline_metrics["simple"]["controller_mse"],
+        )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import torch
@@ -10,7 +11,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
 
-from retroagi.core import AgentWorldModelCritic, StageSpec
+from retroagi.core import (
+    AgentWorldModelCritic,
+    StageSpec,
+    build_checkpoint,
+    load_checkpoint,
+    save_checkpoint as save_versioned_checkpoint,
+    to_plain_data,
+)
 
 SYNTHETIC_1D_SPEC = StageSpec(
     name="synthetic_1d",
@@ -48,6 +56,8 @@ SYNTHETIC_METRIC_KEYS = (
     "error_B",
     "accuracy_A",
 )
+SYNTHETIC_MODEL_NAME = "synthetic_1d_actor_world_model_critic"
+SYNTHETIC_CHECKPOINT_KIND = "stage1_trainer"
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,9 @@ class SyntheticTrainingConfig:
     tau_end: float = 0.1
     device: str = "auto"
     deterministic: bool = True
+    checkpoint_path: Optional[Path] = None
+    resume_path: Optional[Path] = None
+    save_checkpoints: bool = False
 
     def __post_init__(self) -> None:
         if self.batch_size <= 0:
@@ -119,6 +132,8 @@ class SyntheticTrainingConfig:
             raise ValueError("tau_end must be positive")
         if not self.device:
             raise ValueError("device must be non-empty")
+        if self.save_checkpoints and self.checkpoint_path is None:
+            raise ValueError("checkpoint_path is required when save_checkpoints is true")
 
     @property
     def resolved_split_seeds(self) -> SyntheticSplitSeeds:
@@ -316,6 +331,165 @@ def evaluate_synthetic_baselines(
         for name, model in baselines.items()
     }
 
+
+def synthetic_spec_metadata(spec: StageSpec = SYNTHETIC_1D_SPEC) -> dict[str, Any]:
+    return {
+        "stage": {
+            "name": spec.name,
+            "seq_len_a": spec.seq_len_a,
+            "seq_len_b": spec.seq_len_b,
+            "seq_len_c": spec.seq_len_c,
+            "ratio_ab": spec.ratio_ab,
+            "ratio_bc": spec.ratio_bc,
+            "vocab_size": spec.vocab_size,
+        }
+    }
+
+
+def save_synthetic_checkpoint(
+    path: Path,
+    model: AgentWorldModelCritic,
+    optimizer: optim.Optimizer,
+    *,
+    epoch: int,
+    global_step: int,
+    metrics: Optional[Mapping[str, float]] = None,
+    config: Optional[SyntheticTrainingConfig] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    checkpoint = build_checkpoint(
+        stage=SYNTHETIC_1D_SPEC.name,
+        model_name=SYNTHETIC_MODEL_NAME,
+        checkpoint_kind=SYNTHETIC_CHECKPOINT_KIND,
+        epoch=epoch,
+        global_step=global_step,
+        metrics=metrics or {},
+        config=to_plain_data(config) if config is not None else {},
+        specs=synthetic_spec_metadata(),
+        states={
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "torch_rng": torch.get_rng_state(),
+            "python_rng": random.getstate(),
+            "numpy_rng": np.random.get_state(),
+        },
+        metadata=metadata or {},
+    )
+    save_versioned_checkpoint(path, checkpoint)
+    return checkpoint
+
+
+def restore_synthetic_checkpoint(
+    path: Path,
+    model: AgentWorldModelCritic,
+    optimizer: Optional[optim.Optimizer] = None,
+    *,
+    map_location: Any = "cpu",
+) -> dict[str, Any]:
+    checkpoint = load_checkpoint(path, map_location=map_location)
+    if checkpoint["stage"] != SYNTHETIC_1D_SPEC.name:
+        raise ValueError(
+            f"checkpoint stage {checkpoint['stage']!r} does not match {SYNTHETIC_1D_SPEC.name!r}"
+        )
+    if checkpoint["model_name"] != SYNTHETIC_MODEL_NAME:
+        raise ValueError(
+            f"checkpoint model {checkpoint['model_name']!r} does not match {SYNTHETIC_MODEL_NAME!r}"
+        )
+    if checkpoint["checkpoint_kind"] != SYNTHETIC_CHECKPOINT_KIND:
+        raise ValueError(
+            f"checkpoint kind {checkpoint['checkpoint_kind']!r} does not match "
+            f"{SYNTHETIC_CHECKPOINT_KIND!r}"
+        )
+
+    states = checkpoint["states"]
+    if "torch_rng" in states:
+        torch.set_rng_state(states["torch_rng"].cpu())
+    if "python_rng" in states:
+        random.setstate(states["python_rng"])
+    if "numpy_rng" in states:
+        np.random.set_state(states["numpy_rng"])
+    model.load_state_dict(states["model"])
+    if optimizer is not None:
+        if "optimizer" not in states:
+            raise ValueError("checkpoint is missing optimizer state")
+        optimizer.load_state_dict(states["optimizer"])
+    return checkpoint
+
+def train_synthetic_epoch(
+    model: AgentWorldModelCritic,
+    optimizer: optim.Optimizer,
+    train_dataset: SyntheticDataset,
+    config: SyntheticTrainingConfig,
+    epoch: int,
+    criterion: nn.Module,
+    *,
+    device: torch.device,
+) -> dict[str, float]:
+    train_xa, train_ya, train_xb, train_yb, train_xc, train_yc = train_dataset
+    del train_ya, train_yb
+    model.train()
+    permutation = make_train_permutation(train_xa.size(0), config, epoch).to(device)
+    epoch_losses = {key: 0.0 for key in SYNTHETIC_LOSS_KEYS}
+    batch_count = 0
+    tau = max(
+        config.tau_end,
+        config.tau_start
+        - (config.tau_start - config.tau_end) * (epoch / max(1, config.epochs - 1)),
+    )
+
+    for start in range(0, train_xa.size(0), config.batch_size):
+        indices = permutation[start : start + config.batch_size]
+        batch_xa = train_xa[indices]
+        batch_xb = train_xb[indices]
+        batch_xc_in = train_xc[indices]
+        batch_yc_target = train_yc[indices]
+
+        optimizer.zero_grad()
+        actions1, next_state_pred, criticism, actions2, _logits_a, _w_b, _b_b = model(
+            batch_xa, batch_xb, batch_xc_in, tau=tau
+        )
+        losses = compute_synthetic_training_losses(
+            actions1,
+            next_state_pred,
+            criticism,
+            actions2,
+            batch_xc_in,
+            batch_yc_target,
+            criterion,
+            critic_loss_weight=config.critic_loss_weight,
+        )
+        losses["loss_total"].backward()
+        optimizer.step()
+
+        for key in SYNTHETIC_LOSS_KEYS:
+            epoch_losses[key] += losses[key].item()
+        batch_count += 1
+
+    return {key: value / batch_count for key, value in epoch_losses.items()}
+
+
+def evaluate_synthetic_model(
+    model: AgentWorldModelCritic,
+    dataset: SyntheticDataset,
+    *,
+    tau: float,
+) -> SyntheticMetrics:
+    eval_xa, eval_ya, eval_xb, eval_yb, eval_xc, eval_yc = dataset
+    model.eval()
+    with torch.no_grad():
+        _actions1, _next_state, _criticism, actions2, logits_a, w_b, b_b = model(
+            eval_xa, eval_xb, eval_xc, tau=tau
+        )
+    return compute_synthetic_evaluation_metrics(
+        SyntheticBaselinePredictions(
+            actions_c=actions2,
+            logits_a=logits_a,
+            w_b=w_b,
+            b_b=b_b,
+        ),
+        (eval_xa, eval_ya, eval_xb, eval_yb, eval_xc, eval_yc),
+    )
+
 # --------------------------------------------------------
 # 1. Synthetic Data Generator
 # --------------------------------------------------------
@@ -475,72 +649,46 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
     optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
     
     history = make_empty_history()
-    
+    start_epoch = 0
+    global_step = 0
+    if config.resume_path is not None:
+        checkpoint = restore_synthetic_checkpoint(
+            config.resume_path, model, optimizer, map_location=device
+        )
+        start_epoch = checkpoint["epoch"]
+        global_step = checkpoint["global_step"]
+
     print("\nStarting Hierarchical Adaptive Controller Training...")
-    for epoch in tqdm(range(epochs), desc="Training Epochs"):
-        # Linearly decay temperature from tau_start to tau_end over the epochs
-        tau = max(tau_end, tau_start - (tau_start - tau_end) * (epoch / max(1, epochs - 1)))
-        
-        model.train()
-        
-        permutation = make_train_permutation(train_XA.size()[0], config, epoch).to(device)
-        epoch_losses = {key: 0.0 for key in SYNTHETIC_LOSS_KEYS}
-        batch_count = 0
-
-        for i in range(0, train_XA.size()[0], batch_size):
-            indices = permutation[i:i+batch_size]
-            batch_xa, batch_ya = train_XA[indices], train_YA[indices]
-            batch_xb = train_XB[indices]
-            batch_xc_in, batch_yc_target = train_XC[indices], train_YC[indices]
-            
-            optimizer.zero_grad()
-            actions1, next_state_pred, criticism, actions2, _logits_A2, _w_2, _b_2 = model(
-                batch_xa, batch_xb, batch_xc_in, tau=tau
-            )
-            losses = compute_synthetic_training_losses(
-                actions1,
-                next_state_pred,
-                criticism,
-                actions2,
-                batch_xc_in,
-                batch_yc_target,
-                criterion,
-                critic_loss_weight=config.critic_loss_weight,
-            )
-            losses["loss_total"].backward()
-            optimizer.step()
-
-            for key in SYNTHETIC_LOSS_KEYS:
-                epoch_losses[key] += losses[key].item()
-            batch_count += 1
-
-        # Validation step
-        model.eval()
-        with torch.no_grad():
-            # Evaluate with the lowest temperature to simulate hard discrete choices
-            (
-                _val_actions1,
-                _val_next_state,
-                _val_crit,
-                val_actions2,
-                val_logits_A2,
-                w_pred,
-                b_pred,
-            ) = model(val_XA, val_XB, val_XC, tau=tau_end)
-            
-            metrics = compute_synthetic_evaluation_metrics(
-                SyntheticBaselinePredictions(
-                    actions_c=val_actions2,
-                    logits_a=val_logits_A2,
-                    w_b=w_pred,
-                    b_b=b_pred,
-                ),
-                (val_XA, val_YA, val_XB, val_YB, val_XC, val_YC),
-            )
-
-        avg_losses = {key: value / batch_count for key, value in epoch_losses.items()}
+    for epoch in tqdm(range(start_epoch, epochs), desc="Training Epochs"):
+        avg_losses = train_synthetic_epoch(
+            model,
+            optimizer,
+            (train_XA, train_YA, train_XB, train_YB, train_XC, train_YC),
+            config,
+            epoch,
+            criterion,
+            device=device,
+        )
+        global_step += (train_XA.size(0) + batch_size - 1) // batch_size
+        metrics = evaluate_synthetic_model(
+            model,
+            (val_XA, val_YA, val_XB, val_YB, val_XC, val_YC),
+            tau=tau_end,
+        )
         append_epoch_history(history, avg_losses, metrics)
 
+        if config.save_checkpoints and config.checkpoint_path is not None:
+            save_synthetic_checkpoint(
+                config.checkpoint_path,
+                model,
+                optimizer,
+                epoch=epoch + 1,
+                global_step=global_step,
+                metrics=metrics,
+                config=config,
+            )
+
+        tau = max(tau_end, tau_start - (tau_start - tau_end) * (epoch / max(1, epochs - 1)))
         if (epoch + 1) % 5 == 0:
             tqdm.write(
                 f"Epoch {epoch+1:02d}/{epochs} [Tau: {tau:.2f}] - "
@@ -552,11 +700,12 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
                 f"C MSE: {metrics['controller_mse']:.4f} | "
                 f"Param Err B: {metrics['error_B']:.4f} | Acc A: {metrics['accuracy_A']:.1f}%"
             )
-            
-            # Show a sample prediction during training
+            with torch.no_grad():
+                _a1, _ns, _crit, val_actions2, _la, _w, _b = model(
+                    val_XA, val_XB, val_XC, tau=tau_end
+                )
             target_c = val_YC[0].cpu().numpy()
             pred_c = val_actions2[0].cpu().numpy()
-            
             tqdm.write(f"   [Controller Target C] : {target_c[:5].round(2)}...")
             tqdm.write(f"   [Controller Pred C]   : {pred_c[:5].round(2)}...\n")
 
