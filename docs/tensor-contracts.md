@@ -135,9 +135,21 @@ in declared slots. No semantic-grid point sampling or interpolation across
 position, class probabilities, state, and token features remains.
 
 Position and probabilities are in `[0,1]`; bounded token content is in
-`[-1,1]`. Most state features are normalized near `[-1,1]` or `[0,1]`.
-The state section is not strictly bounded because normalized vertical position
-can exceed `1` on a terminal fall.
+`[-1,1]`. State features are converted to finite `float32` values and clipped
+to the adapter-configured range, which defaults to `[-1,1]`.
+
+Block SMB observation preprocessing is recorded in `metadata["observation"]`:
+
+- `frame_stack`: normalized RGB frames with shape `[1,T,3,240,256]`, where
+  `T` defaults to `4` and values are clipped to `[0,1]`.
+- `frame_mask`: boolean shape `[1,T]`; reset padding is `False`, real frames
+  are `True`.
+- `frame_stack_size`, `normalized_range`, and `state_range`: the resolved
+  preprocessing contract used by the adapter.
+
+Episode boundaries are recorded in `metadata["episode"]`. `mask` has shape
+`[1]` and is `1.0` for continuing transitions, `0.0` after termination or
+truncation; `terminated` and `truncated` retain the environment booleans.
 
 ### Full SMB
 

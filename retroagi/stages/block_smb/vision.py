@@ -1,11 +1,19 @@
 """Vision Transformer and semantic supervision for block SMB."""
 
-from typing import Any
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
 
-from retroagi.core import PatchVisionTransformer, VisionOutput
+from retroagi.core import (
+    ModelConfig,
+    PatchVisionTransformer,
+    VisionOutput,
+    load_checkpoint,
+    validate_checkpoint_compatibility,
+)
 from retroagi.core.vision import image_tensor
 
 
@@ -28,6 +36,86 @@ BLOCK_CLASS_COLORS = {
     "enemy": ((160, 32, 240), (100, 0, 160)),
     "moving_platform": ((80, 160, 40),),
 }
+
+DEFAULT_BLOCK_VIT_CHECKPOINT = Path("data/block_vit/block_vit.pth")
+FALLBACK_BLOCK_VIT_CHECKPOINT = Path("data/block_smb_vit/block_vit.pth")
+
+
+@dataclass(frozen=True)
+class BlockVITLoadResult:
+    model: "BlockVisionTransformer"
+    checkpoint: dict[str, Any]
+    path: Path
+    frozen: bool
+
+
+def _resolve_block_vit_checkpoint(path: Optional[Path] = None) -> Path:
+    if path is not None:
+        return Path(path)
+    if DEFAULT_BLOCK_VIT_CHECKPOINT.exists():
+        return DEFAULT_BLOCK_VIT_CHECKPOINT
+    return FALLBACK_BLOCK_VIT_CHECKPOINT
+
+
+def set_block_vit_trainable(model: "BlockVisionTransformer", trainable: bool) -> None:
+    for parameter in model.parameters():
+        parameter.requires_grad_(trainable)
+    model.train(trainable)
+
+
+def load_block_vit_checkpoint(
+    path: Optional[Path] = None,
+    *,
+    device: str | torch.device = "cpu",
+    freeze: bool = True,
+) -> BlockVITLoadResult:
+    """Load the supported Block SMB ViT checkpoint for policy training.
+
+    Perception is frozen by default for policy training. Pass ``freeze=False``
+    only for explicit fine-tuning experiments.
+    """
+    checkpoint_path = _resolve_block_vit_checkpoint(path)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(
+            f"Block ViT checkpoint not found at {checkpoint_path}; train it with "
+            "scripts/vit/train_block_vit.py or pass an explicit checkpoint path"
+        )
+
+    from .adapter import BLOCK_SMB_SPEC
+
+    checkpoint = load_checkpoint(checkpoint_path, map_location=device)
+    config = checkpoint.get("config", {})
+    model_config = config.get("model", {}) if isinstance(config, dict) else {}
+    model = BlockVisionTransformer(
+        dim=int(model_config.get("hidden_dim", 64)),
+        depth=int(model_config.get("depth", 2)),
+        heads=int(model_config.get("heads", 4)),
+        patch_size=int(model_config.get("patch_size", 16)),
+        drop=float(model_config.get("dropout", 0.1)),
+    ).to(device)
+    validate_checkpoint_compatibility(
+        checkpoint,
+        stage=BLOCK_SMB_SPEC,
+        model=ModelConfig(
+            name="block_smb_vit",
+            hidden_dim=model.spec.token_dim,
+            depth=len(model.encoder.layers),
+            heads=int(model.encoder.layers[0].self_attn.num_heads),
+            patch_size=model.patch_size,
+            dropout=float(model.dropout.p),
+        ),
+        vision=model.spec,
+        checkpoint_kind="vision_encoder",
+        required_states=("model",),
+        context=f"Block ViT policy loader {checkpoint_path}",
+    )
+    model.load_state_dict(checkpoint["states"]["model"])
+    set_block_vit_trainable(model, trainable=not freeze)
+    if freeze:
+        model.eval()
+    return BlockVITLoadResult(
+        model=model, checkpoint=checkpoint, path=checkpoint_path, frozen=freeze
+    )
 
 
 class BlockVisionTransformer(PatchVisionTransformer):

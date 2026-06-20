@@ -92,9 +92,9 @@ from a checkpoint, and beats a baseline on a held-out test split.
 Perception is trainable; the missing deliverable is an end-to-end agent that
 uses it to complete scenarios.
 
-- [ ] Add a supported loader for `data/block_vit/block_vit.pth` and decide
+- [x] Add a supported loader for `data/block_vit/block_vit.pth` and decide
       whether perception is frozen or fine-tuned during policy training.
-- [ ] Add observation normalization, temporal frame stacking, and episode masks.
+- [x] Add observation normalization, temporal frame stacking, and episode masks.
 - [ ] Add focused physics tests for collisions, gaps, moving platforms, coins,
       enemies, goals, death, reset, and truncation.
 - [ ] Document and tune the existing reward terms rather than adding overlapping

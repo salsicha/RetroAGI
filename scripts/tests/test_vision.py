@@ -1,12 +1,24 @@
 """Tests for the unified curriculum vision interface."""
 
 import unittest
+from dataclasses import asdict
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import torch
 
-from retroagi.core import LinearVisionEncoder, VisionOutput
-from retroagi.stages.block_smb import BlockSMBStage, BlockVisionTransformer
+from retroagi.core import (
+    LinearVisionEncoder,
+    VisionOutput,
+    build_checkpoint,
+    save_checkpoint,
+)
+from retroagi.stages.block_smb import (
+    BLOCK_SMB_SPEC,
+    BlockSMBStage,
+    BlockVisionTransformer,
+    load_block_vit_checkpoint,
+)
 from scripts.vit.train_vit import ViTSegmenter
 from scripts.vit.train_block_vit import (
     build_ground_truth,
@@ -15,7 +27,6 @@ from scripts.vit.train_block_vit import (
     compute_loss,
     make_loader,
 )
-
 
 
 class TestVisionInterface(unittest.TestCase):
@@ -79,6 +90,7 @@ class TestVisionInterface(unittest.TestCase):
         self.assertTrue(torch.isfinite(semantic_loss))
         self.assertTrue(torch.isfinite(position_loss))
         self.assertFalse(torch.equal(before, model.patch_embed.weight))
+
     def test_block_stage_populates_hierarchical_streams_from_vision(self):
         encoder = BlockVisionTransformer(dim=32, depth=1, heads=4, drop=0.0).eval()
         stage = BlockSMBStage(vision=encoder)
@@ -93,6 +105,59 @@ class TestVisionInterface(unittest.TestCase):
             self.assertIsInstance(batch.metadata["vision"], VisionOutput)
         finally:
             stage.env.close()
+
+    def make_block_vit_checkpoint(
+        self, path: Path, model: BlockVisionTransformer
+    ) -> None:
+        checkpoint = build_checkpoint(
+            stage=BLOCK_SMB_SPEC.name,
+            model_name=model.spec.name,
+            checkpoint_kind="vision_encoder",
+            states={"model": model.state_dict()},
+            config={
+                "model": {
+                    "name": model.spec.name,
+                    "hidden_dim": model.spec.token_dim,
+                    "depth": len(model.encoder.layers),
+                    "heads": int(model.encoder.layers[0].self_attn.num_heads),
+                    "patch_size": model.patch_size,
+                    "dropout": float(model.dropout.p),
+                }
+            },
+            specs={"vision": asdict(model.spec)},
+        )
+        save_checkpoint(path, checkpoint)
+
+    def test_block_vit_policy_loader_freezes_checkpoint_by_default(self):
+        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "block_vit.pth"
+            self.make_block_vit_checkpoint(path, source)
+
+            result = load_block_vit_checkpoint(path, freeze=True)
+
+        self.assertTrue(result.frozen)
+        self.assertEqual(result.checkpoint["checkpoint_kind"], "vision_encoder")
+        self.assertFalse(
+            any(parameter.requires_grad for parameter in result.model.parameters())
+        )
+        self.assertFalse(result.model.training)
+        for name, value in result.model.state_dict().items():
+            torch.testing.assert_close(value, source.state_dict()[name])
+
+    def test_block_vit_policy_loader_can_enable_fine_tuning(self):
+        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "block_vit.pth"
+            self.make_block_vit_checkpoint(path, source)
+
+            result = load_block_vit_checkpoint(path, freeze=False)
+
+        self.assertFalse(result.frozen)
+        self.assertTrue(
+            all(parameter.requires_grad for parameter in result.model.parameters())
+        )
+        self.assertTrue(result.model.training)
 
     def test_existing_vit_checkpoint_loads_into_shared_architecture(self):
         checkpoint = Path("data/vit/vit_smb.pth")
