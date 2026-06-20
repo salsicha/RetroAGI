@@ -1,10 +1,3 @@
-
-<a href="">
-  <img src="https://media.githubusercontent.com/media/salsicha/RetroAGI/main/mario.gif"
-    height="80" align="right" alt="" />
-</a><br>
-
-
 # RetroAGI
 General purpose machine learning agent for retro games  
 
@@ -12,8 +5,8 @@ RetroAGI is organized as a three-stage curriculum for training an architecture
 to play Super Mario Bros:
 
 1. **Synthetic 1D** validates the hierarchy on procedural sequence data.
-2. **Block SMB** uses a scriptable pygame platformer with low-resolution,
-   scenario-driven tasks.
+2. **Block SMB** uses a scriptable pygame-ce-backed platformer with
+   low-resolution, scenario-driven tasks.
 3. **Full SMB** connects the same architecture to the full emulator.
 
 The stage code is separated, but all stages share the same core contract:
@@ -37,13 +30,15 @@ retroagi/
     models.py          # reusable actor, world model, critic, controller
   stages/
     synthetic_1d/      # procedural one-dimensional validation
-    block_smb/         # pygame SMB-like scenarios and adapter
+    block_smb/         # pygame-ce SMB-like scenarios and adapter
     full_smb/          # stable-retro / emulator runner
 scripts/               # compatibility wrappers and older experiments
 ```
 
-## Diagram
-![The Brain](https://github.com/salsicha/RetroAGI/blob/main/docs/architecture.html)
+## Architecture
+
+See the [architecture diagram](docs/architecture.html) for the hierarchical
+actor/world-model/critic flow.
 
 
 ## Build
@@ -88,7 +83,7 @@ Legacy wrappers still work:
 
 ## Training
 
-Train the Block SMB vision transformer directly from procedural pygame
+Train the Block SMB vision transformer directly from procedural pygame-ce
 rollouts. Semantic masks and Mario positions are generated exactly from the
 renderer palette:
 
