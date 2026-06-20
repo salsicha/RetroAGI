@@ -95,7 +95,7 @@ uses it to complete scenarios.
 - [x] Add a supported loader for `data/block_vit/block_vit.pth` and decide
       whether perception is frozen or fine-tuned during policy training.
 - [x] Add observation normalization, temporal frame stacking, and episode masks.
-- [ ] Add focused physics tests for collisions, gaps, moving platforms, coins,
+- [x] Add focused physics tests for collisions, gaps, moving platforms, coins,
       enemies, goals, death, reset, and truncation.
 - [ ] Document and tune the existing reward terms rather than adding overlapping
       reward logic in the trainer.
