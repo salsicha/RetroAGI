@@ -17,6 +17,7 @@ from retroagi.core import (
     build_checkpoint,
     load_checkpoint,
     save_checkpoint as save_versioned_checkpoint,
+    select_device,
     to_plain_data,
 )
 
@@ -151,23 +152,14 @@ class SyntheticTrainingConfig:
         return self.seed + 1_000_003 + epoch
 
 
-def select_device(name: str = "auto") -> torch.device:
-    if name != "auto":
-        return torch.device(name)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
 def seed_everything(seed: int, deterministic: bool = True) -> None:
     """Seed Python, NumPy, and Torch RNGs, including available accelerators."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
     if deterministic:
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.use_deterministic_algorithms(deterministic)
@@ -710,6 +702,9 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
             tqdm.write(f"   [Controller Pred C]   : {pred_c[:5].round(2)}...\n")
 
     # Visualization
+    import matplotlib
+
+    matplotlib.use(os.environ.get("MPLBACKEND", "Agg"), force=True)
     import matplotlib.pyplot as plt
 
     plt.figure(figsize=(24, 8))

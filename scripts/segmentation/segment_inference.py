@@ -24,29 +24,30 @@ import sys
 import argparse
 import os
 import time
+from pathlib import Path
 from os.path import join
 import csv
 
 from torchvision.models.segmentation.deeplabv3 import DeepLabHead,DeepLabV3
 from torchvision import models
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+  sys.path.insert(0, str(PROJECT_ROOT))
+
+from retroagi.core import select_device
+
 
 class SegmenInf:
 
 
-  def __init__(self, model_path="/models/segmentation/MarioSegmentationModel.pth"):
-    self.device = 'cuda'
+  def __init__(self, model_path="/models/segmentation/MarioSegmentationModel.pth", device="auto"):
+    self.device = select_device(device)
     self.model = models.segmentation.deeplabv3_resnet50(pretrained=True, progress=True)
     self.model.classifier = DeepLabHead(2048, 6)
+
+    self.model.load_state_dict(torch.load(model_path, map_location="cpu"))
     self.model = self.model.to(self.device)
-
-    self.model = models.segmentation.deeplabv3_resnet50(
-            pretrained=True, progress=True)
-    # Added a Sigmoid activation after the last convolution layer
-    self.model.classifier = DeepLabHead(2048, 6)
-
-    self.model.load_state_dict(torch.load(model_path))
-    self.model.cuda()
     self.model.eval()
 
 
@@ -77,7 +78,8 @@ class SegmenInf:
     return rgb
 
 
-  def segment(self, net, path, show_orig=True, transform=transforms.ToTensor(), dev='cuda'):
+  def segment(self, net, path, show_orig=True, transform=transforms.ToTensor(), dev=None):
+    dev = self.device if dev is None else select_device(dev)
     img = Image.open(path)
     # if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
     
@@ -95,7 +97,8 @@ class SegmenInf:
     # plt.show()
 
 
-  def compare(self, net, net2, path, show_orig=True, transform=transforms.ToTensor(), dev='cuda'):
+  def compare(self, net, net2, path, show_orig=True, transform=transforms.ToTensor(), dev=None):
+    dev = self.device if dev is None else select_device(dev)
     img = Image.open(path)
     # if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
     
@@ -123,4 +126,3 @@ class SegmenInf:
     # print(frame)
 
     return self.segment(self.model, frame)
-

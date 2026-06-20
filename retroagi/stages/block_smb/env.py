@@ -80,8 +80,8 @@ class MarioScenarioEnv:
         self.action_space_n    = 6  # legacy alias
         self.observation_space = _BoxSpace((height, width, 3))
 
-        # Rendering
-        pygame.init()
+        # Offscreen observations only need software surfaces; the interactive
+        # demo initializes the display subsystem when it opens a window.
         self.screen = pygame.Surface((self.width, self.height))
 
         # RNG (seeded via self.seed())
@@ -688,6 +688,7 @@ class MarioScenarioEnv:
 
 def main():
     """Run the interactive pygame scenario simulator."""
+    pygame.init()
     env = MarioScenarioEnv()
 
     # Hand-crafted scrolling level with moving platforms and varied enemies

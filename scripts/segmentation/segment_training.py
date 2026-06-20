@@ -22,6 +22,7 @@ import sys
 import argparse
 import os
 import time
+from pathlib import Path
 from os.path import join
 import csv
 
@@ -29,6 +30,12 @@ import cv2
 
 from torchvision.models.segmentation.deeplabv3 import DeepLabHead,DeepLabV3
 from torchvision import models
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from retroagi.core import select_device
 
 print('PyTorch version:', torch.__version__)
 
@@ -1356,7 +1363,8 @@ class TrainingUtils():
         rgb = np.stack([r, g, b], axis=2)
         return rgb
 
-    def segment(self, net, path, show_orig=True,transform=transforms.ToTensor(), dev='cuda'):
+    def segment(self, net, path, show_orig=True,transform=transforms.ToTensor(), dev=None):
+        dev = device if dev is None else select_device(dev)
         img = Image.open(path)
         if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
         
@@ -1370,7 +1378,8 @@ class TrainingUtils():
         #plt.savefig('1_1.png', format='png',dpi=300,bbox_inches = "tight")
         plt.show()
 
-    def compare(self, net,net2, path, show_orig=True,transform=transforms.ToTensor(), dev='cuda'):
+    def compare(self, net,net2, path, show_orig=True,transform=transforms.ToTensor(), dev=None):
+        dev = device if dev is None else select_device(dev)
         img = Image.open(path)
         if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
         
@@ -1399,13 +1408,14 @@ class TrainingUtils():
 ## Create arguments object
 args = Configuration()
 
-device = 'cuda'
+device = select_device("auto")
 
 
 # Set random seed for reproducibility
 torch.backends.cudnn.deterministic = True  # fix the GPU to deterministic mode
 torch.manual_seed(args.seed)  # CPU seed
-torch.cuda.manual_seed_all(args.seed)  # GPU seed
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(args.seed)  # GPU seed
 random.seed(args.seed)  # python seed for image transformation
 np.random.seed(args.seed)
 
@@ -1488,7 +1498,7 @@ print("done")
 
 ## Step 8: define model and download pretrained weights
 
-device = 'cuda'
+device = select_device("auto")
 model = models.segmentation.deeplabv3_resnet50(pretrained=True, progress=True)
 model.classifier = DeepLabHead(2048, 6)
 model = model.to(device)
@@ -1578,7 +1588,7 @@ model.classifier = DeepLabHead(2048, 6)
 
 # model.load_state_dict(torch.load("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/resnet_50.pth"))
 model.load_state_dict(torch.load("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/MarioSegmentationModel.pth"))
-model.cuda()
+model = model.to(device)
 
 
 ## Step 13: Helpers???
@@ -1609,4 +1619,3 @@ TrainingUtils.segment(model,frame)
 # ExtractTiles(), decode_segmap(), segment(), compare()
 # Into class:
 # TrainingUtils
-

@@ -32,6 +32,7 @@ from .config import (
     TrainingConfig,
     to_plain_data,
 )
+from .devices import is_mps_available, is_mps_built, select_device
 from .hierarchy import VisionHierarchyProjector
 from .interfaces import (
     AgentStep,
@@ -84,12 +85,14 @@ __all__ = [
     "coerce_smb_action",
     "full_smb_action",
     "is_versioned_checkpoint",
+    "is_mps_available",
+    "is_mps_built",
     "load_checkpoint",
     "save_checkpoint",
+    "select_device",
     "to_plain_data",
     "validate_checkpoint_compatibility",
     "validate_model_vision_compatibility",
     "validate_stage_spec",
     "validate_checkpoint",
 ]
-

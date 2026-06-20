@@ -33,6 +33,7 @@ from retroagi.core import (
     TrainingConfig,
     build_checkpoint,
     is_versioned_checkpoint,
+    select_device,
     validate_checkpoint_compatibility,
     validate_model_vision_compatibility,
     validate_stage_spec,
@@ -130,16 +131,6 @@ class TrainConfig:
             metadata={"position_weight": self.position_weight},
         )
         return experiment.to_dict()
-
-
-def select_device(name: str = "auto") -> torch.device:
-    if name != "auto":
-        return torch.device(name)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def seed_everything(seed: int) -> None:

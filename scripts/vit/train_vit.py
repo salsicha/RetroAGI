@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-from retroagi.core import PatchVisionTransformer
+from retroagi.core import PatchVisionTransformer, select_device
 
 
 HERE    = os.path.dirname(os.path.abspath(__file__))
@@ -136,10 +136,10 @@ def main():
     ap.add_argument("--lr",     type=float, default=3e-4)
     ap.add_argument("--dim",    type=int, default=192)
     ap.add_argument("--depth",  type=int, default=6)
+    ap.add_argument("--device", default="auto")
     args = ap.parse_args()
 
-    device = torch.device("mps" if torch.backends.mps.is_available()
-                          else "cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device(args.device)
     print(f"Device: {device}")
 
     train_ds, val_ds = load_split("train"), load_split("val")

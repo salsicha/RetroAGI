@@ -7,16 +7,20 @@ name = "retroagi"
 version = "0.1.0"
 description = "Hierarchical actor-world-model-critic research for retro games"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.15"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
     "numpy==2.3.2",
-    "pygame==2.6.1",
-    "stable-retro==1.0.0",
+    "pygame-ce==2.5.7",
+    "stable-retro==1.0.0; python_version < '3.13'",
+    "stable-retro @ git+https://github.com/Farama-Foundation/stable-retro.git@778186c71e003f7c8a5682187832ba430b8e34b3 ; python_version >= '3.13'",
     "torch==2.9.1",
     "torchvision==0.24.1",
     "tqdm==4.67.1",
