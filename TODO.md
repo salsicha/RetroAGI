@@ -167,6 +167,8 @@ evaluations and load a compatible Block SMB checkpoint.
 
 ## P6: Operations and Reproducibility
 
+- [ ] Remove the Dockerfile from the project and update Docker-dependent
+      build/run scripts and documentation to use the supported native setup.
 - [ ] Add one CLI for training, evaluation, resume, and environment selection.
 - [ ] Store resolved configuration, code revision, metrics, and environment
       metadata beside every checkpoint.
