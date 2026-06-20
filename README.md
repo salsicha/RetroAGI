@@ -63,6 +63,9 @@ rewards, episode endings, and resets across the curriculum.
 The [tensor contracts](docs/tensor-contracts.md) define hierarchy and vision
 shapes, dtypes, normalization ranges, and timescales.
 
+The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
+10-week path for using the project to teach practical AI engineering.
+
 
 ## Usage
 1. Start the container environment:
