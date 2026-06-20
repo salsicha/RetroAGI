@@ -97,7 +97,7 @@ uses it to complete scenarios.
 - [x] Add observation normalization, temporal frame stacking, and episode masks.
 - [x] Add focused physics tests for collisions, gaps, moving platforms, coins,
       enemies, goals, death, reset, and truncation.
-- [ ] Document and tune the existing reward terms rather than adding overlapping
+- [x] Document and tune the existing reward terms rather than adding overlapping
       reward logic in the trainer.
 - [ ] Implement the complete Block SMB actor/world-model/critic training loop.
 - [ ] Add trajectory or replay storage with correct recurrent-state boundaries.

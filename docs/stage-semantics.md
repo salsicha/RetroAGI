@@ -145,6 +145,24 @@ Progress is rewarded only when Mario exceeds the episode's previous maximum
 x-position. Event rewards are additive; the `score` field tracks coin and enemy
 points but is not the episode reward.
 
+The authoritative reward values live in `BlockSMBRewardConfig`, which is passed
+to `MarioScenarioEnv`. The default config preserves the table above. Reward
+experiments should tune that config at environment construction time rather than
+adding overlapping progress, coin, enemy, death, or goal shaping in the trainer.
+The trainer should consume the scalar `reward` returned by `step` as the only
+optimization reward.
+
+Every `step` info dict includes reward diagnostics:
+
+- `reward_terms`: additive components for `progress`, `coin`, `enemy_stomp`,
+  `goal`, `fall_death`, `enemy_hit`, and `step_penalty`.
+- `reward_total`: the scalar transition reward after summing all terms.
+- `reward_config`: the resolved reward config for the transition.
+
+These diagnostics are for logging, tests, and ablations. They are not separate
+trainer rewards unless a future task explicitly defines a multi-objective
+training interface.
+
 ### Termination
 
 `terminated` becomes true when any of these occurs:

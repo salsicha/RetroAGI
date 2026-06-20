@@ -5,6 +5,8 @@ Gym v26 API: reset() → (obs, info)   step() → (obs, reward, terminated, trun
 All coordinates are in world space; camera_x is the left edge of the viewport.
 """
 
+from dataclasses import asdict, dataclass
+
 import numpy as np
 import pygame
 import json
@@ -35,6 +37,19 @@ JUMP_BUFFER_FRAMES = 6   # frames before landing where a queued jump fires on co
 JUMP_CUT_FACTOR    = 0.45  # vy multiplier when jump is released early (variable height)
 
 
+@dataclass(frozen=True)
+class BlockSMBRewardConfig:
+    """Single source of truth for Block SMB environment reward shaping."""
+
+    progress_scale: float = 0.05
+    coin: float = 10.0
+    enemy_stomp: float = 5.0
+    goal: float = 50.0
+    fall_death: float = -10.0
+    enemy_hit: float = -10.0
+    step_penalty: float = -0.01
+
+
 # ── Main environment ──────────────────────────────────────────────────────────
 
 class MarioScenarioEnv:
@@ -59,10 +74,17 @@ class MarioScenarioEnv:
 
     # ── Construction ─────────────────────────────────────────────────────────
 
-    def __init__(self, width: int = 256, height: int = 240, world_width: int = None):
+    def __init__(
+        self,
+        width: int = 256,
+        height: int = 240,
+        world_width: int = None,
+        reward_config: BlockSMBRewardConfig = BlockSMBRewardConfig(),
+    ):
         self.width  = width
         self.height = height
         self.world_width = world_width if world_width is not None else width
+        self.reward_config = reward_config
 
         # Physics
         self.gravity        = 0.5
@@ -187,6 +209,7 @@ class MarioScenarioEnv:
         """
         self.steps += 1
         reward     = 0.0
+        reward_terms = self._empty_reward_terms()
         terminated = False
         truncated  = False
         info       = {}
@@ -321,13 +344,19 @@ class MarioScenarioEnv:
 
         # ── 12. Rightward-progress reward ─────────────────────────────────────
         if self.mario['x'] > self._max_x_reached:
-            reward += (self.mario['x'] - self._max_x_reached) * 0.05
+            progress_reward = (
+                (self.mario['x'] - self._max_x_reached)
+                * self.reward_config.progress_scale
+            )
+            reward_terms['progress'] += progress_reward
+            reward += progress_reward
             self._max_x_reached = self.mario['x']
 
         # ── 13. Fall death ────────────────────────────────────────────────────
         if self.mario['y'] > self.height:
             terminated = True
-            reward    -= 10.0
+            reward_terms['fall_death'] += self.reward_config.fall_death
+            reward += self.reward_config.fall_death
 
         # ── 14. Update enemies ────────────────────────────────────────────────
         rects = [p['rect'] for p in self.platforms]
@@ -347,36 +376,54 @@ class MarioScenarioEnv:
             if self.mario['vy'] > 0 and prev_bottom <= er.centery:
                 # Stomp!
                 enemy['dead'] = True
-                reward       += 5.0
+                reward_terms['enemy_stomp'] += self.reward_config.enemy_stomp
+                reward += self.reward_config.enemy_stomp
                 self.score   += 5
                 self.mario['vy']        = self.jump_power * 0.55
                 self.mario['on_ground'] = False
             else:
                 terminated = True
-                reward    -= 10.0
+                reward_terms['enemy_hit'] += self.reward_config.enemy_hit
+                reward += self.reward_config.enemy_hit
 
         # ── 16. Coin collection ───────────────────────────────────────────────
         for coin in self.coins:
             if not coin['collected'] and mario_rect.colliderect(coin['rect']):
                 coin['collected'] = True
-                reward           += 10.0
+                reward_terms['coin'] += self.reward_config.coin
+                reward += self.reward_config.coin
                 self.score       += 10
 
         # ── 17. Goal ──────────────────────────────────────────────────────────
         if self.goal and mario_rect.colliderect(self.goal):
             terminated = True
-            reward    += 50.0
+            reward_terms['goal'] += self.reward_config.goal
+            reward += self.reward_config.goal
 
         # ── 18. Timeout ───────────────────────────────────────────────────────
         if self.steps >= self.max_steps:
             truncated = True
 
-        # Small per-step penalty to encourage speed
-        reward -= 0.01
+        reward_terms['step_penalty'] += self.reward_config.step_penalty
+        reward += self.reward_config.step_penalty
 
         obs  = self.render()
         info = self._build_info()
+        info['reward_terms'] = reward_terms
+        info['reward_config'] = asdict(self.reward_config)
+        info['reward_total'] = float(reward)
         return obs, reward, terminated, truncated, info
+
+    def _empty_reward_terms(self) -> dict[str, float]:
+        return {
+            'progress': 0.0,
+            'coin': 0.0,
+            'enemy_stomp': 0.0,
+            'goal': 0.0,
+            'fall_death': 0.0,
+            'enemy_hit': 0.0,
+            'step_penalty': 0.0,
+        }
 
     # ── Render ────────────────────────────────────────────────────────────────
 

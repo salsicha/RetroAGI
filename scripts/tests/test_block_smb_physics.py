@@ -2,7 +2,7 @@
 
 import unittest
 
-from retroagi.stages.block_smb import MarioScenarioEnv
+from retroagi.stages.block_smb import BlockSMBRewardConfig, MarioScenarioEnv
 
 
 class TestBlockSMBPhysics(unittest.TestCase):
@@ -166,6 +166,67 @@ class TestBlockSMBPhysics(unittest.TestCase):
 
             regenerated = MarioScenarioEnv.generate_scenario(seed=77)
             self.assertEqual(scenario, regenerated)
+        finally:
+            env.close()
+
+    def test_reward_terms_sum_to_transition_reward(self):
+        env = self.make_env(
+            {
+                "mario": [20, 204],
+                "platforms": [[0, 220, 256, 20]],
+                "coins": [[22, 204, 10, 10]],
+            }
+        )
+        try:
+            _, reward, _, _, info = env.step(0)
+            terms = info["reward_terms"]
+
+            self.assertEqual(
+                set(terms),
+                {
+                    "progress",
+                    "coin",
+                    "enemy_stomp",
+                    "goal",
+                    "fall_death",
+                    "enemy_hit",
+                    "step_penalty",
+                },
+            )
+            self.assertEqual(terms["coin"], env.reward_config.coin)
+            self.assertEqual(terms["step_penalty"], env.reward_config.step_penalty)
+            self.assertAlmostEqual(sum(terms.values()), reward)
+            self.assertAlmostEqual(info["reward_total"], reward)
+            self.assertEqual(info["reward_config"]["coin"], env.reward_config.coin)
+        finally:
+            env.close()
+
+    def test_reward_config_tunes_environment_reward_terms(self):
+        reward_config = BlockSMBRewardConfig(
+            progress_scale=0.0,
+            coin=2.0,
+            enemy_stomp=1.0,
+            goal=5.0,
+            fall_death=-3.0,
+            enemy_hit=-4.0,
+            step_penalty=-0.5,
+        )
+        env = MarioScenarioEnv(reward_config=reward_config)
+        env.reset(
+            scenario={
+                "mario": [20, 204],
+                "platforms": [[0, 220, 256, 20]],
+                "coins": [[22, 204, 10, 10]],
+            },
+            seed=123,
+        )
+        try:
+            _, reward, _, _, info = env.step(0)
+
+            self.assertEqual(info["reward_terms"]["progress"], 0.0)
+            self.assertEqual(info["reward_terms"]["coin"], 2.0)
+            self.assertEqual(info["reward_terms"]["step_penalty"], -0.5)
+            self.assertAlmostEqual(reward, 1.5)
         finally:
             env.close()
 

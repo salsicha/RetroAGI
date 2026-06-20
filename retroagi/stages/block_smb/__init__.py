@@ -6,7 +6,7 @@ from .adapter import (
     BlockSMBObservationConfig,
     BlockSMBStage,
 )
-from .env import MarioScenarioEnv
+from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .vision import (
     BLOCK_SEMANTIC_CLASSES,
     DEFAULT_BLOCK_VIT_CHECKPOINT,
@@ -21,6 +21,7 @@ __all__ = [
     "BLOCK_SEMANTIC_CLASSES",
     "BLOCK_SMB_SPEC",
     "BlockSMBObservationConfig",
+    "BlockSMBRewardConfig",
     "BlockSMBStage",
     "BlockVITLoadResult",
     "BlockVisionTransformer",
