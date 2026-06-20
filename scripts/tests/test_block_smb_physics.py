@@ -11,6 +11,37 @@ class TestBlockSMBPhysics(unittest.TestCase):
         env.reset(scenario=scenario, seed=123)
         return env
 
+    def assert_reward_total_matches_terms(self, reward, info):
+        terms = info["reward_terms"]
+        summed_terms = sum(value for name, value in terms.items() if name != "total")
+        self.assertAlmostEqual(reward, terms["total"])
+        self.assertAlmostEqual(reward, summed_terms)
+
+    def test_reward_config_controls_terms_without_spawn_progress_bonus(self):
+        config = BlockSMBRewardConfig(progress_per_pixel=1.0, frame_penalty=-0.25)
+        env = MarioScenarioEnv(reward_config=config)
+        try:
+            _, info = env.reset(
+                scenario={
+                    "mario": [20, 204],
+                    "platforms": [[0, 220, 256, 20]],
+                },
+                seed=123,
+            )
+            self.assertEqual(info["max_x_reached"], 20.0)
+            self.assertEqual(info["reward_terms"]["total"], 0.0)
+
+            _, reward, terminated, truncated, info = env.step(0)
+
+            self.assertFalse(terminated)
+            self.assertFalse(truncated)
+            self.assertEqual(info["reward_terms"]["progress"], 0.0)
+            self.assertEqual(info["reward_terms"]["frame_penalty"], -0.25)
+            self.assertAlmostEqual(reward, -0.25)
+            self.assert_reward_total_matches_terms(reward, info)
+        finally:
+            env.close()
+
     def test_vertical_and_horizontal_platform_collisions_resolve(self):
         env = self.make_env(
             {
@@ -86,12 +117,14 @@ class TestBlockSMBPhysics(unittest.TestCase):
             }
         )
         try:
-            _, reward, terminated, truncated, _ = env.step(0)
+            _, reward, terminated, truncated, info = env.step(0)
 
             self.assertFalse(terminated)
             self.assertFalse(truncated)
             self.assertTrue(env.coins[0]["collected"])
             self.assertEqual(env.score, 10)
+            self.assertEqual(info["reward_terms"]["coin"], env.reward_config.coin)
+            self.assert_reward_total_matches_terms(reward, info)
             self.assertGreaterEqual(reward, 9.0)
         finally:
             env.close()
@@ -105,9 +138,14 @@ class TestBlockSMBPhysics(unittest.TestCase):
             }
         )
         try:
-            _, reward, terminated, truncated, _ = side_env.step(0)
+            _, reward, terminated, truncated, info = side_env.step(0)
             self.assertTrue(terminated)
             self.assertFalse(truncated)
+            self.assertEqual(
+                info["reward_terms"]["enemy_hit"],
+                side_env.reward_config.enemy_hit,
+            )
+            self.assert_reward_total_matches_terms(reward, info)
             self.assertLess(reward, -9.0)
         finally:
             side_env.close()
@@ -121,11 +159,16 @@ class TestBlockSMBPhysics(unittest.TestCase):
         )
         try:
             stomp_env.mario["vy"] = 8.0
-            _, reward, terminated, truncated, _ = stomp_env.step(0)
+            _, reward, terminated, truncated, info = stomp_env.step(0)
             self.assertFalse(terminated)
             self.assertFalse(truncated)
             self.assertTrue(stomp_env.enemies[0]["dead"])
             self.assertEqual(stomp_env.score, 5)
+            self.assertEqual(
+                info["reward_terms"]["enemy_stomp"],
+                stomp_env.reward_config.enemy_stomp,
+            )
+            self.assert_reward_total_matches_terms(reward, info)
             self.assertGreater(reward, 4.0)
             self.assertLess(stomp_env.mario["vy"], 0)
         finally:
@@ -140,10 +183,12 @@ class TestBlockSMBPhysics(unittest.TestCase):
             }
         )
         try:
-            _, reward, terminated, truncated, _ = env.step(0)
+            _, reward, terminated, truncated, info = env.step(0)
 
             self.assertTrue(terminated)
             self.assertFalse(truncated)
+            self.assertEqual(info["reward_terms"]["goal"], env.reward_config.goal)
+            self.assert_reward_total_matches_terms(reward, info)
             self.assertGreaterEqual(reward, 49.0)
         finally:
             env.close()
@@ -162,7 +207,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
             self.assertEqual(env.camera_x, 0.0)
             self.assertEqual(env.mario["x"], scenario["mario"][0])
             self.assertEqual(env.mario["y"], scenario["mario"][1])
-            self.assertEqual(info["max_x_reached"], 0.0)
+            self.assertEqual(info["max_x_reached"], float(scenario["mario"][0]))
 
             regenerated = MarioScenarioEnv.generate_scenario(seed=77)
             self.assertEqual(scenario, regenerated)
@@ -190,12 +235,20 @@ class TestBlockSMBPhysics(unittest.TestCase):
                     "goal",
                     "fall_death",
                     "enemy_hit",
-                    "step_penalty",
+                    "frame_penalty",
+                    "total",
                 },
             )
             self.assertEqual(terms["coin"], env.reward_config.coin)
-            self.assertEqual(terms["step_penalty"], env.reward_config.step_penalty)
-            self.assertAlmostEqual(sum(terms.values()), reward)
+            self.assertEqual(
+                terms["frame_penalty"],
+                env.reward_config.frame_penalty,
+            )
+            self.assertAlmostEqual(
+                sum(value for name, value in terms.items() if name != "total"),
+                reward,
+            )
+            self.assertAlmostEqual(terms["total"], reward)
             self.assertAlmostEqual(info["reward_total"], reward)
             self.assertEqual(info["reward_config"]["coin"], env.reward_config.coin)
         finally:
@@ -203,13 +256,13 @@ class TestBlockSMBPhysics(unittest.TestCase):
 
     def test_reward_config_tunes_environment_reward_terms(self):
         reward_config = BlockSMBRewardConfig(
-            progress_scale=0.0,
+            progress_per_pixel=0.0,
             coin=2.0,
             enemy_stomp=1.0,
             goal=5.0,
             fall_death=-3.0,
             enemy_hit=-4.0,
-            step_penalty=-0.5,
+            frame_penalty=-0.5,
         )
         env = MarioScenarioEnv(reward_config=reward_config)
         env.reset(
@@ -225,7 +278,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
 
             self.assertEqual(info["reward_terms"]["progress"], 0.0)
             self.assertEqual(info["reward_terms"]["coin"], 2.0)
-            self.assertEqual(info["reward_terms"]["step_penalty"], -0.5)
+            self.assertEqual(info["reward_terms"]["frame_penalty"], -0.5)
             self.assertAlmostEqual(reward, 1.5)
         finally:
             env.close()

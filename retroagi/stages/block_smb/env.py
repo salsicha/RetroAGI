@@ -39,15 +39,36 @@ JUMP_CUT_FACTOR    = 0.45  # vy multiplier when jump is released early (variable
 
 @dataclass(frozen=True)
 class BlockSMBRewardConfig:
-    """Single source of truth for Block SMB environment reward shaping."""
+    """Tunable scalar rewards owned by the Block SMB environment."""
 
-    progress_scale: float = 0.05
+    progress_per_pixel: float = 0.05
     coin: float = 10.0
     enemy_stomp: float = 5.0
     goal: float = 50.0
     fall_death: float = -10.0
     enemy_hit: float = -10.0
-    step_penalty: float = -0.01
+    frame_penalty: float = -0.01
+
+    def __post_init__(self) -> None:
+        if self.progress_per_pixel < 0:
+            raise ValueError("progress_per_pixel must be non-negative")
+        for name in ("coin", "enemy_stomp", "goal"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be non-negative")
+        for name in ("fall_death", "enemy_hit", "frame_penalty"):
+            if getattr(self, name) > 0:
+                raise ValueError(f"{name} must be non-positive")
+
+    def zero_terms(self) -> dict[str, float]:
+        return {
+            "progress": 0.0,
+            "coin": 0.0,
+            "enemy_stomp": 0.0,
+            "goal": 0.0,
+            "fall_death": 0.0,
+            "enemy_hit": 0.0,
+            "frame_penalty": 0.0,
+        }
 
 
 # ── Main environment ──────────────────────────────────────────────────────────
@@ -175,6 +196,7 @@ class MarioScenarioEnv:
             'jump_buffer':   0,     # counts down after jump pressed in air
             'jump_held':     False, # was jump action present last frame?
         }
+        self._max_x_reached = self.mario['x']
 
         # Platforms — accept list [x,y,w,h] or dict
         self.platforms = []
@@ -195,7 +217,8 @@ class MarioScenarioEnv:
         self.goal = pygame.Rect(*scenario['goal']) if 'goal' in scenario else None
 
         obs  = self.render()
-        info = self._build_info()
+        _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
+        info = self._build_info(reward_terms=reward_terms)
         return obs, info
 
     # ── Step ──────────────────────────────────────────────────────────────────
@@ -208,8 +231,7 @@ class MarioScenarioEnv:
         truncated  = timeout
         """
         self.steps += 1
-        reward     = 0.0
-        reward_terms = self._empty_reward_terms()
+        reward_terms = self.reward_config.zero_terms()
         terminated = False
         truncated  = False
         info       = {}
@@ -296,6 +318,8 @@ class MarioScenarioEnv:
                 self.mario['vx'] = 0
 
         # ── 7. Resolve Y collisions ───────────────────────────────────────────
+        previous_y = self.mario['y']
+        previous_bottom = previous_y + self.mario['h']
         self.mario['y'] += self.mario['vy']
         mario_rect.y = self.mario['y']
         prev_on_ground      = self.mario['on_ground']
@@ -304,7 +328,19 @@ class MarioScenarioEnv:
 
         for plat in self.platforms:
             r = plat['rect']
-            if mario_rect.colliderect(r):
+            horizontal_overlap = mario_rect.right > r.left and mario_rect.left < r.right
+            current_bottom = self.mario['y'] + self.mario['h']
+            landed_on_top = (
+                self.mario['vy'] >= 0
+                and horizontal_overlap
+                and previous_bottom <= r.top <= current_bottom
+            )
+            hit_ceiling = (
+                self.mario['vy'] < 0
+                and horizontal_overlap
+                and previous_y >= r.bottom >= self.mario['y']
+            )
+            if mario_rect.colliderect(r) or landed_on_top or hit_ceiling:
                 if self.mario['vy'] >= 0:    # falling / level
                     mario_rect.bottom = r.top
                     self.mario['on_ground'] = True
@@ -344,19 +380,16 @@ class MarioScenarioEnv:
 
         # ── 12. Rightward-progress reward ─────────────────────────────────────
         if self.mario['x'] > self._max_x_reached:
-            progress_reward = (
+            reward_terms["progress"] += (
                 (self.mario['x'] - self._max_x_reached)
-                * self.reward_config.progress_scale
+                * self.reward_config.progress_per_pixel
             )
-            reward_terms['progress'] += progress_reward
-            reward += progress_reward
             self._max_x_reached = self.mario['x']
 
         # ── 13. Fall death ────────────────────────────────────────────────────
         if self.mario['y'] > self.height:
             terminated = True
-            reward_terms['fall_death'] += self.reward_config.fall_death
-            reward += self.reward_config.fall_death
+            reward_terms["fall_death"] += self.reward_config.fall_death
 
         # ── 14. Update enemies ────────────────────────────────────────────────
         rects = [p['rect'] for p in self.platforms]
@@ -376,54 +409,37 @@ class MarioScenarioEnv:
             if self.mario['vy'] > 0 and prev_bottom <= er.centery:
                 # Stomp!
                 enemy['dead'] = True
-                reward_terms['enemy_stomp'] += self.reward_config.enemy_stomp
-                reward += self.reward_config.enemy_stomp
+                reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
                 self.score   += 5
                 self.mario['vy']        = self.jump_power * 0.55
                 self.mario['on_ground'] = False
             else:
                 terminated = True
-                reward_terms['enemy_hit'] += self.reward_config.enemy_hit
-                reward += self.reward_config.enemy_hit
+                reward_terms["enemy_hit"] += self.reward_config.enemy_hit
 
         # ── 16. Coin collection ───────────────────────────────────────────────
         for coin in self.coins:
             if not coin['collected'] and mario_rect.colliderect(coin['rect']):
                 coin['collected'] = True
-                reward_terms['coin'] += self.reward_config.coin
-                reward += self.reward_config.coin
+                reward_terms["coin"] += self.reward_config.coin
                 self.score       += 10
 
         # ── 17. Goal ──────────────────────────────────────────────────────────
         if self.goal and mario_rect.colliderect(self.goal):
             terminated = True
-            reward_terms['goal'] += self.reward_config.goal
-            reward += self.reward_config.goal
+            reward_terms["goal"] += self.reward_config.goal
 
         # ── 18. Timeout ───────────────────────────────────────────────────────
         if self.steps >= self.max_steps:
             truncated = True
 
-        reward_terms['step_penalty'] += self.reward_config.step_penalty
-        reward += self.reward_config.step_penalty
+        # Small per-step penalty to encourage speed.
+        reward_terms["frame_penalty"] += self.reward_config.frame_penalty
+        reward, reward_terms = self._finalize_reward_terms(reward_terms)
 
         obs  = self.render()
-        info = self._build_info()
-        info['reward_terms'] = reward_terms
-        info['reward_config'] = asdict(self.reward_config)
-        info['reward_total'] = float(reward)
+        info = self._build_info(reward_terms=reward_terms)
         return obs, reward, terminated, truncated, info
-
-    def _empty_reward_terms(self) -> dict[str, float]:
-        return {
-            'progress': 0.0,
-            'coin': 0.0,
-            'enemy_stomp': 0.0,
-            'goal': 0.0,
-            'fall_death': 0.0,
-            'enemy_hit': 0.0,
-            'step_penalty': 0.0,
-        }
 
     # ── Render ────────────────────────────────────────────────────────────────
 
@@ -477,7 +493,18 @@ class MarioScenarioEnv:
 
     # ── Structured state / info ───────────────────────────────────────────────
 
-    def _build_info(self) -> dict:
+    @staticmethod
+    def _finalize_reward_terms(reward_terms: dict[str, float]) -> tuple[float, dict[str, float]]:
+        terms = {
+            name: float(value)
+            for name, value in reward_terms.items()
+            if name != "total"
+        }
+        total = float(sum(terms.values()))
+        terms["total"] = total
+        return total, terms
+
+    def _build_info(self, reward_terms: dict[str, float] = None) -> dict:
         """
         Returns a rich info dict containing:
         - mario   : core kinematic state
@@ -485,7 +512,14 @@ class MarioScenarioEnv:
         - nearest_coin, nearest_enemy : {dx, dy, dist}  (normalised 0-1)
         - platform_below_dist          : normalised 0-1
         - state_vec                    : flat float32 array ready for RL (14 dims)
+        - reward_terms                 : transition reward breakdown
+        - reward_total                 : scalar transition reward
+        - reward_config                : resolved reward configuration
         """
+        reward_total, reward_terms = self._finalize_reward_terms(
+            reward_terms or self.reward_config.zero_terms()
+        )
+
         m   = self.mario
         ww  = self.world_width
         wh  = self.height
@@ -540,6 +574,9 @@ class MarioScenarioEnv:
             'nearest_coin':        nc,
             'nearest_enemy':       ne,
             'platform_below_dist': plat_below,
+            'reward_terms':        dict(reward_terms),
+            'reward_total':        reward_total,
+            'reward_config':       asdict(self.reward_config),
             'state_vec':           state_vec,
         }
 

@@ -129,33 +129,34 @@ explicit vocabulary version rather than changing the six stable IDs above.
 
 ### Reward
 
-Transition reward is the sum of all events on the frame:
+Transition reward is owned by `MarioScenarioEnv` and is the sum of named terms
+from `BlockSMBRewardConfig`:
 
-| Event | Reward |
-| --- | ---: |
-| New maximum x-position | `0.05 * delta_x` |
-| Collect a coin | `+10.0` |
-| Stomp an enemy | `+5.0` |
-| Touch the goal | `+50.0` |
-| Fall below the viewport | `-10.0` |
-| Touch a live enemy without stomping | `-10.0` |
-| Every frame | `-0.01` |
+| Term | Default | Notes |
+| --- | ---: | --- |
+| `progress` | `0.05 * delta_x` | Added only when Mario exceeds the episode's previous maximum x-position |
+| `coin` | `+10.0` | Added once for each newly collected coin |
+| `enemy_stomp` | `+5.0` | Added when a stomp kills a live enemy |
+| `goal` | `+50.0` | Added when Mario intersects the goal rectangle |
+| `fall_death` | `-10.0` | Added when Mario falls below the viewport |
+| `enemy_hit` | `-10.0` | Added when Mario touches a live enemy without stomping |
+| `frame_penalty` | `-0.01` | Added once per `step` transition |
 
-Progress is rewarded only when Mario exceeds the episode's previous maximum
-x-position. Event rewards are additive; the `score` field tracks coin and enemy
-points but is not the episode reward.
+Progress is initialized to Mario's reset x-position, so spawning at `x > 0`
+does not grant a progress bonus. Event rewards are additive; the `score` field
+tracks coin and enemy points but is not the episode reward.
 
-The authoritative reward values live in `BlockSMBRewardConfig`, which is passed
-to `MarioScenarioEnv`. The default config preserves the table above. Reward
-experiments should tune that config at environment construction time rather than
-adding overlapping progress, coin, enemy, death, or goal shaping in the trainer.
-The trainer should consume the scalar `reward` returned by `step` as the only
-optimization reward.
+Every `step` info dict includes `reward_terms`, with each term above plus
+`total`. The returned scalar reward must equal `info["reward_terms"]["total"]`.
+Block SMB trainers must consume that environment reward directly. If a training
+experiment needs different shaping, it should tune `BlockSMBRewardConfig` at
+environment construction and log the resolved config, not add overlapping
+progress, coin, enemy, goal, death, or time rewards inside the trainer.
 
 Every `step` info dict includes reward diagnostics:
 
 - `reward_terms`: additive components for `progress`, `coin`, `enemy_stomp`,
-  `goal`, `fall_death`, `enemy_hit`, and `step_penalty`.
+  `goal`, `fall_death`, `enemy_hit`, `frame_penalty`, and `total`.
 - `reward_total`: the scalar transition reward after summing all terms.
 - `reward_config`: the resolved reward config for the transition.
 
@@ -191,7 +192,8 @@ observation, info = env.reset(scenario=scenario, seed=seed)
 
 Reset:
 
-- sets steps, score, camera position, and maximum progress to zero;
+- sets steps, score, and camera position to zero;
+- sets maximum progress to Mario's initial x-position;
 - recreates Mario, platform, coin, enemy, and goal state from the scenario;
 - clears velocity, collection, enemy-death, and jump state;
 - renders and returns the initial RGB frame and structured `info`.
