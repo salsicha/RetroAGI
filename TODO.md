@@ -29,6 +29,8 @@ milestone's exit criteria before expanding the next one.
 - [x] Add `pyproject.toml` with pinned runtime, test, formatting, and linting
       dependencies.
 - [x] Declare supported Python, PyTorch, CUDA, and CPU-only configurations.
+- [x] Remove obsolete Docker setup references and document the supported native
+      installation flow.
 
 
 ## P0: Repository Baseline (Invalid)
@@ -167,7 +169,7 @@ evaluations and load a compatible Block SMB checkpoint.
 
 ## P6: Operations and Reproducibility
 
-- [ ] Remove the Dockerfile from the project and update Docker-dependent
+- [x] Remove the Dockerfile from the project and update Docker-dependent
       build/run scripts and documentation to use the supported native setup.
 - [ ] Add one CLI for training, evaluation, resume, and environment selection.
 - [ ] Store resolved configuration, code revision, metrics, and environment
@@ -187,7 +189,7 @@ traceable to code/configuration, and checked automatically in CI.
 
 The full system is working when a clean checkout can:
 
-1. Install or build using documented commands.
+1. Install using documented commands.
 2. Pass its test suite on CPU.
 3. Train Stage 1 reproducibly.
 4. Train Block SMB to complete all included scenarios.

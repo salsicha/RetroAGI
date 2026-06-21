@@ -41,18 +41,13 @@ See the [architecture diagram](docs/architecture.html) for the hierarchical
 actor/world-model/critic flow.
 
 
-## Build
-```bash
-./build.sh
-```
-
 ## Supported Platforms
 
 RetroAGI supports Linux x86-64 and macOS Apple Silicon with Python 3.12
 through 3.14. It pins PyTorch 2.9.1 with torchvision 0.24.1. CPU-only
 execution is the baseline; CUDA and Apple Metal/MPS acceleration are selected
 automatically when available. CUDA 12.8 is the primary Linux GPU target, CUDA
-13.0 is the supported container target, and MPS is the native macOS GPU target.
+13.0 is the secondary Linux GPU target, and MPS is the native macOS GPU target.
 
 See the [compatibility matrix and installation commands](docs/compatibility.md)
 before creating an environment.
@@ -68,14 +63,16 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
 
 
 ## Usage
-1. Start the container environment:
-   ```bash
-   ./run.sh
-   ```
+1. Create and activate a supported Python environment using the commands in
+   [docs/compatibility.md](docs/compatibility.md).
 2. Run a curriculum stage:
    ```bash
    python -m retroagi.stages.synthetic_1d.train
    python -m retroagi.stages.full_smb.run --steps 500
+   ```
+3. Run the test suite:
+   ```bash
+   python -m unittest discover -s scripts/tests -v
    ```
 
 Legacy wrappers still work:

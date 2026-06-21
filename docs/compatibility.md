@@ -7,7 +7,7 @@ runs use a reproducible tensor ABI.
 
 | Component | Supported version | Status |
 | --- | --- | --- |
-| Operating system | Linux x86-64, macOS Apple Silicon | Linux is the primary container platform; macOS uses native Python/MPS |
+| Operating system | Linux x86-64, macOS Apple Silicon | Linux is the primary native platform; macOS uses native Python/MPS |
 | Python | 3.12.x, 3.13.x, 3.14.x | Required by `pyproject.toml` |
 | PyTorch | 2.9.1 | Pinned runtime dependency |
 | torchvision | 0.24.1 | Pinned to the matching PyTorch release |
@@ -15,7 +15,7 @@ runs use a reproducible tensor ABI.
 | stable-retro | `stable-retro==1.0.0` on Python <3.13, pinned upstream source on Python 3.13+ | Source pin is used until a PyPI release carries Python 3.13/3.14 metadata |
 | CPU | PyTorch 2.9.1 CPU wheel | Supported baseline for tests, environments, and training |
 | CUDA 12.8 | PyTorch `cu128` wheel | Primary GPU target; wheel selection is verified, GPU execution is pending |
-| CUDA 13.0 | PyTorch `cu130` wheel | Supported container target; Docker and GPU verification are pending |
+| CUDA 13.0 | PyTorch `cu130` wheel | Secondary Linux GPU target; GPU execution verification is pending |
 | Apple Metal/MPS | PyTorch `mps` backend | Native macOS GPU target |
 
 Python 3.11 and earlier, Python 3.15 and later, ROCm, and CUDA versions other
