@@ -59,11 +59,12 @@ an input to `generate_hierarchical_data`.
 
 ### Reward
 
-There is no scalar environment reward. Training uses three losses:
+There is no scalar environment reward. Training uses four losses:
 
 - first-pass controller mean squared error,
 - second-pass controller mean squared error,
-- world-model mean squared error.
+- world-model mean squared error,
+- critic feedback magnitude regularization.
 
 Evaluation additionally reports A-token accuracy and B-parameter error.
 

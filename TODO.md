@@ -20,6 +20,7 @@ milestone's exit criteria before expanding the next one.
 - [x] Add Block ViT metrics, checkpoint metadata, and resume support.
 - [x] Wrap the existing Full SMB DeepLab checkpoint in the shared vision API.
 - [x] Add scenario, vision-interface, checkpoint-load, and trainer smoke tests.
+- [x] Specify and test how critic feedback changes the actor's second pass.
 
 **Repository baseline**
 
@@ -118,7 +119,7 @@ all fixed scenarios at a documented success threshold.
 
 Do this after Stage 1 and Block SMB expose concrete failure modes.
 
-- [ ] Specify exactly how critic output changes the actor's second pass.
+- [x] Specify exactly how critic output changes the actor's second pass.
 - [ ] Investigate whether the low-level adaptive controller parameters should
       be gain schedules.
 - [ ] Separate representation, dynamics, reward, value, and policy objectives.

@@ -74,6 +74,31 @@ class HierarchicalAdaptiveModel(nn.Module):
                     mask[i, j] = 0.0
         return mask.masked_fill(mask == 1, float("-inf"))
 
+    def apply_critic_feedback(self, encoded_a, criticism):
+        """
+        Inject critic feedback into the A stream as an additive residual.
+
+        The critic output must match the encoded A tensor exactly:
+        `[batch, seq_len_a, d_model]`. No scaling, gating, normalization, or
+        detach is applied here; training losses decide how strongly the critic
+        pathway is shaped.
+        """
+        if criticism is None:
+            return encoded_a
+        if criticism.shape != encoded_a.shape:
+            raise ValueError(
+                "criticism shape must match encoded A stream shape "
+                f"{tuple(encoded_a.shape)}, got {tuple(criticism.shape)}"
+            )
+        if criticism.device != encoded_a.device:
+            raise ValueError(
+                "criticism device must match encoded A stream device "
+                f"{encoded_a.device}, got {criticism.device}"
+            )
+        if not torch.is_floating_point(criticism):
+            raise TypeError("criticism must be a floating-point tensor")
+        return encoded_a + criticism.to(dtype=encoded_a.dtype)
+
     def forward(self, src_A, src_B, src_C, criticism=None, tau=1.0):
         seq_len_a = src_A.size(1)
         seq_len_b = src_B.size(1)
@@ -84,8 +109,7 @@ class HierarchicalAdaptiveModel(nn.Module):
 
         x_a = self.embedding(src_A) * math.sqrt(self.d_model)
         x_a = self.pos_encoder(x_a)
-        if criticism is not None:
-            x_a = x_a + criticism
+        x_a = self.apply_critic_feedback(x_a, criticism)
 
         hidden_a = self.transformer_A(x_a, mask=causal_mask_a)
         logits_a = self.fc_out_A(hidden_a)
@@ -156,7 +180,7 @@ class WorldModel(nn.Module):
 
 
 class Critic(nn.Module):
-    """Evaluates the predicted next state and outputs a criticism vector."""
+    """Evaluates predicted C state and returns `[B, L_A, d_model]` feedback."""
 
     def __init__(self, seq_len_c, seq_len_a, d_model):
         super().__init__()
@@ -170,7 +194,14 @@ class Critic(nn.Module):
 
 
 class AgentWorldModelCritic(nn.Module):
-    """Combines the actor, world model, and critic in a two-pass refinement loop."""
+    """
+    Combines the actor, world model, and critic in a two-pass refinement loop.
+
+    Pass one runs the actor with no feedback. Its C actions and B controller
+    parameters feed the world model. The critic maps that predicted C state to
+    A-level feedback, and pass two reruns the same actor inputs with that
+    feedback added to the encoded A stream.
+    """
 
     def __init__(self, vocab_size, seq_len_a, seq_len_c, ratio_bc, d_model=64):
         super().__init__()
@@ -190,4 +221,3 @@ class AgentWorldModelCritic(nn.Module):
         logits_a2, actions2, w_2, b_2 = self.agent(src_A, src_B, src_C, criticism=criticism, tau=tau)
 
         return actions1, next_state_pred, criticism, actions2, logits_a2, w_2, b_2
-

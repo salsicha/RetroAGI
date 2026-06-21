@@ -102,6 +102,32 @@ not yet instantiate the dataclass.
 the four C targets beneath each B step. The trainer passes these tensors
 directly to the model rather than through a stage adapter.
 
+### Actor/Critic Refinement
+
+`AgentWorldModelCritic` runs the shared actor twice for every batch:
+
+1. The first actor pass receives `src_a`, `src_b`, and `src_c` with
+   `criticism=None`.
+2. The first pass C actions and B-level controller parameters are upsampled to
+   C resolution and passed to the world model.
+3. The critic maps the predicted C state to a feedback tensor with shape
+   `[B, L_A, d_model]`.
+4. The second actor pass receives the original `src_a`, `src_b`, and `src_c`
+   plus that exact critic tensor.
+
+The critic tensor is added as an unscaled residual to the A stream after token
+embedding and positional encoding, and before the A-level transformer:
+
+```text
+encoded_A = positional_encoding(embedding(src_a) * sqrt(d_model))
+refined_A = encoded_A + criticism
+```
+
+No gating, normalization, clipping, detach, or loss weighting is applied inside
+the actor. Loss weights and critic regularization remain trainer-owned. The
+critic output must match the encoded A shape exactly and live on the same
+device.
+
 ### Block SMB
 
 `BlockSMBStage.encode_observation` returns:
