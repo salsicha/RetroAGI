@@ -111,6 +111,25 @@ uses it to complete scenarios.
 - [x] Record evaluation trajectories and videos.
 - [x] Add vectorized or parallel environments after the single-environment loop
       is correct and reproducible.
+- [ ] Add a real CLI command for Block SMB training, evaluation, checkpoint
+      resume, and recording instead of requiring Python API calls.
+- [ ] Run real Block SMB policy training with the actual Block ViT checkpoint
+      and record the resolved config, seed, metrics, checkpoint path, and
+      evaluation artifacts.
+- [ ] Define and document a success threshold for each fixed Block SMB scenario.
+- [ ] Save a known-good Block SMB policy checkpoint with deterministic metrics
+      and evaluation recordings.
+- [ ] Revisit the Block SMB learning objective and separate representation,
+      dynamics, reward, value, and policy terms where measurements show the
+      current return-as-controller-target objective is limiting learning.
+- [ ] Handle recurrent world-model state boundaries inside the model, not only
+      through replay metadata.
+- [ ] Tune Block SMB reward terms, training config, and hyperparameters against
+      deterministic return and success-rate metrics.
+- [ ] Improve or retrain Block ViT perception if deterministic policy training
+      is bottlenecked by semantic or position quality.
+- [ ] Add Block SMB ablations for vision, critic feedback, hierarchy levels,
+      recurrent state handling, and checkpoint transfer.
 
 **Exit criteria:** a seeded Block SMB checkpoint resumes correctly and completes
 all fixed scenarios at a documented success threshold.
