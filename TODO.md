@@ -99,14 +99,14 @@ uses it to complete scenarios.
       enemies, goals, death, reset, and truncation.
 - [x] Document and tune the existing reward terms rather than adding overlapping
       reward logic in the trainer.
-- [ ] Implement the complete Block SMB actor/world-model/critic training loop.
-- [ ] Add trajectory or replay storage with correct recurrent-state boundaries.
-- [ ] Add numerical checks, gradient clipping, and NaN/exploding-loss detection.
-- [ ] Add curriculum progression across the four fixed scenarios and generated
+- [x] Implement the complete Block SMB actor/world-model/critic training loop.
+- [x] Add trajectory or replay storage with correct recurrent-state boundaries.
+- [x] Add numerical checks, gradient clipping, and NaN/exploding-loss detection.
+- [x] Add curriculum progression across the four fixed scenarios and generated
       scenarios.
-- [ ] Report deterministic success rate and return for every fixed scenario.
-- [ ] Record evaluation trajectories and videos.
-- [ ] Add vectorized or parallel environments after the single-environment loop
+- [x] Report deterministic success rate and return for every fixed scenario.
+- [x] Record evaluation trajectories and videos.
+- [x] Add vectorized or parallel environments after the single-environment loop
       is correct and reproducible.
 
 **Exit criteria:** a seeded Block SMB checkpoint resumes correctly and completes

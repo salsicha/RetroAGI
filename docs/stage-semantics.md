@@ -164,6 +164,25 @@ These diagnostics are for logging, tests, and ablations. They are not separate
 trainer rewards unless a future task explicitly defines a multi-objective
 training interface.
 
+### Training And Evaluation
+
+`train_and_evaluate_block_smb` is the supported P3 trainer entry point. It uses
+the shared actor/world-model/critic module, stores rollout transitions in
+`BlockSMBReplayBuffer`, and keeps `episode_mask=0.0` on terminal or truncated
+transitions so recurrent consumers can reset hidden state at episode boundaries.
+
+The trainer applies finite-loss and finite-gradient checks before each optimizer
+step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
+Curriculum order starts with the four fixed scenario files and can append seeded
+procedural scenarios through `generated_scenarios`. Evaluation reports deterministic
+return and success rate for each fixed scenario. Optional recording writes compressed
+`.npz` archives containing RGB frames, selected actions, and rewards for each
+evaluation episode.
+
+`SequentialBlockSMBVectorEnv` is the supported vector-environment scaffold for
+P3. It steps multiple independent `MarioScenarioEnv` instances sequentially; true
+parallel execution remains an optimization layer above this tested contract.
+
 ### Termination
 
 `terminated` becomes true when any of these occurs:

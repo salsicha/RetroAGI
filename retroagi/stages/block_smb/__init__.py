@@ -7,6 +7,21 @@ from .adapter import (
     BlockSMBStage,
 )
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
+from .train import (
+    BLOCK_SMB_CHECKPOINT_KIND,
+    BLOCK_SMB_MODEL_NAME,
+    BlockSMBReplayBuffer,
+    BlockSMBTrainingConfig,
+    BlockSMBTrajectory,
+    BlockSMBTransition,
+    SequentialBlockSMBVectorEnv,
+    build_curriculum,
+    evaluate_block_smb,
+    restore_block_smb_checkpoint,
+    save_block_smb_checkpoint,
+    train_and_evaluate_block_smb,
+    train_block_smb_epoch,
+)
 from .vision import (
     BLOCK_SEMANTIC_CLASSES,
     DEFAULT_BLOCK_VIT_CHECKPOINT,
@@ -18,6 +33,19 @@ from .vision import (
 )
 
 __all__ = [
+    "BLOCK_SMB_CHECKPOINT_KIND",
+    "BLOCK_SMB_MODEL_NAME",
+    "BlockSMBReplayBuffer",
+    "BlockSMBTrainingConfig",
+    "BlockSMBTrajectory",
+    "BlockSMBTransition",
+    "SequentialBlockSMBVectorEnv",
+    "build_curriculum",
+    "evaluate_block_smb",
+    "restore_block_smb_checkpoint",
+    "save_block_smb_checkpoint",
+    "train_and_evaluate_block_smb",
+    "train_block_smb_epoch",
     "BLOCK_SEMANTIC_CLASSES",
     "BLOCK_SMB_SPEC",
     "BlockSMBObservationConfig",
