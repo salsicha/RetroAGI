@@ -111,6 +111,8 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--value-loss-weight", type=_non_negative_float)
     parser.add_argument("--action-aux-weight", type=_non_negative_float)
     parser.add_argument("--critic-loss-weight", type=_non_negative_float)
+    parser.add_argument("--imagined-rollout-weight", type=_non_negative_float)
+    parser.add_argument("--imagined-rollout-horizon", type=_non_negative_int)
     parser.add_argument("--reward-progress-per-pixel", type=_non_negative_float)
     parser.add_argument("--reward-coin", type=_non_negative_float)
     parser.add_argument("--reward-enemy-stomp", type=_non_negative_float)
@@ -279,6 +281,8 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "value_loss_weight",
         "action_aux_weight",
         "critic_loss_weight",
+        "imagined_rollout_weight",
+        "imagined_rollout_horizon",
         "gradient_clip_norm",
         "hidden_dim",
         "controller_schedule",

@@ -187,6 +187,7 @@ discounted return as a C-level controller target:
 | Value | `loss_value` | value head predicts the discounted return target |
 | Policy | `loss_policy` | actor log probability is weighted by return advantage |
 | Critic feedback | `loss_critic_feedback` | critic output magnitude stays bounded |
+| Imagined rollout | `loss_imagined_rollout` | learned dynamics are recursively unrolled from replay states and matched to observed future C states and rewards |
 | Entropy | `loss_entropy` | action entropy is logged and weighted as an exploration bonus |
 
 Legacy aliases (`loss_actor_pass1`, `loss_actor_pass2`, `loss_world_model`, and
@@ -208,6 +209,17 @@ scenario results:
 
 Use these fields to compare reward and hyperparameter changes. A higher return
 without a higher threshold pass rate should not be treated as solving P3.
+
+Imagined rollouts are controlled by
+`BlockSMBTrainingConfig.imagined_rollout_horizon` and
+`imagined_rollout_weight`, exposed by the CLI as
+`--imagined-rollout-horizon` and `--imagined-rollout-weight`. A horizon of zero
+preserves the one-step objective. Positive horizons start from real replay
+states, recursively feed predicted C states through the actor/world-model loop,
+and compare each imagined future against the matching observed transition inside
+the same trajectory. The trainer logs `loss_imagined_dynamics`,
+`loss_imagined_reward`, `loss_imagined_rollout`, and
+`imagined_rollout_steps`.
 
 The low-level adaptive controller supports `controller_schedule="constant"` and
 `controller_schedule="linear"`, exposed by the CLI as

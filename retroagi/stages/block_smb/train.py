@@ -76,6 +76,8 @@ class BlockSMBTrainingConfig:
     value_loss_weight: float = 0.25
     action_aux_weight: float = 0.01
     critic_loss_weight: float = 0.001
+    imagined_rollout_weight: float = 0.0
+    imagined_rollout_horizon: int = 0
     gradient_clip_norm: float = 1.0
     hidden_dim: int = 32
     controller_schedule: str = "constant"
@@ -128,6 +130,8 @@ class BlockSMBTrainingConfig:
                 raise ValueError(f"{name} must be positive")
         if self.generated_scenarios < 0:
             raise ValueError("generated_scenarios must be non-negative")
+        if self.imagined_rollout_horizon < 0:
+            raise ValueError("imagined_rollout_horizon must be non-negative")
         if self.controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
             raise ValueError(
                 "controller_schedule must be one of "
@@ -142,6 +146,7 @@ class BlockSMBTrainingConfig:
             self.value_loss_weight,
             self.action_aux_weight,
             self.critic_loss_weight,
+            self.imagined_rollout_weight,
         )
         if any(weight < 0 for weight in loss_weights):
             raise ValueError("loss weights must be non-negative")
@@ -546,11 +551,92 @@ def collect_trajectory(
     return trajectory
 
 
+def compute_imagined_rollout_losses(
+    model: AgentWorldModelCritic,
+    trajectories: list[BlockSMBTrajectory],
+    config: BlockSMBTrainingConfig,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    """Unroll learned dynamics from replay states and compare to real futures."""
+
+    zero = torch.zeros((), dtype=torch.float32, device=device)
+    if config.imagined_rollout_horizon <= 0 or not trajectories:
+        return {
+            "loss_imagined_dynamics": zero,
+            "loss_imagined_reward": zero,
+            "loss_imagined_rollout": zero,
+            "imagined_rollout_steps": zero,
+        }
+
+    dynamics_terms = []
+    reward_terms = []
+    for trajectory in trajectories:
+        steps = trajectory.transitions
+        for start_index in range(len(steps)):
+            imagined_state = steps[start_index].batch.src_c.detach().to(device)
+            for offset in range(config.imagined_rollout_horizon):
+                step_index = start_index + offset
+                if step_index >= len(steps):
+                    break
+                step = steps[step_index]
+                (
+                    _actions1,
+                    next_state_pred,
+                    _criticism,
+                    _actions2,
+                    _logits_a,
+                    _w_b,
+                    _b_b,
+                ) = model(
+                    step.batch.src_a.detach().to(device),
+                    step.batch.src_b.detach().to(device),
+                    imagined_state,
+                    tau=1.0,
+                    critic_feedback_enabled=config.ablation.critic_feedback_enabled,
+                )
+                dynamics_terms.append(
+                    F.mse_loss(next_state_pred, step.next_batch.src_c.detach().to(device))
+                )
+                reward_pred = model.predict_reward(next_state_pred)
+                reward_target = torch.full_like(
+                    reward_pred,
+                    float(step.reward),
+                    device=device,
+                )
+                reward_terms.append(F.mse_loss(reward_pred, reward_target))
+                imagined_state = next_state_pred
+                if step.done:
+                    break
+
+    if not dynamics_terms:
+        return {
+            "loss_imagined_dynamics": zero,
+            "loss_imagined_reward": zero,
+            "loss_imagined_rollout": zero,
+            "imagined_rollout_steps": zero,
+        }
+
+    loss_imagined_dynamics = torch.stack(dynamics_terms).mean()
+    loss_imagined_reward = torch.stack(reward_terms).mean()
+    loss_imagined_rollout = (
+        loss_imagined_dynamics + config.reward_loss_weight * loss_imagined_reward
+    )
+    return {
+        "loss_imagined_dynamics": loss_imagined_dynamics,
+        "loss_imagined_reward": loss_imagined_reward,
+        "loss_imagined_rollout": loss_imagined_rollout,
+        "imagined_rollout_steps": torch.tensor(
+            float(len(dynamics_terms)), dtype=torch.float32, device=device
+        ),
+    }
+
+
 def compute_block_smb_losses(
     model: AgentWorldModelCritic,
     transitions: list[BlockSMBTransition],
     config: BlockSMBTrainingConfig,
     device: torch.device,
+    trajectories: Optional[list[BlockSMBTrajectory]] = None,
 ) -> dict[str, torch.Tensor]:
     if not transitions:
         raise ValueError("transitions must be non-empty")
@@ -596,6 +682,9 @@ def compute_block_smb_losses(
     loss_policy = torch.stack(policy_terms).mean()
     loss_critic_feedback = torch.stack(critic_terms).mean()
     entropy_bonus = torch.stack(entropy_terms).mean()
+    imagined_losses = compute_imagined_rollout_losses(
+        model, trajectories or [], config, device
+    )
     loss_total = (
         config.representation_weight * loss_representation
         + config.world_model_weight * loss_dynamics
@@ -603,6 +692,8 @@ def compute_block_smb_losses(
         + config.value_loss_weight * loss_value
         + config.policy_loss_weight * loss_policy
         + config.critic_loss_weight * loss_critic_feedback
+        + config.imagined_rollout_weight
+        * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
     losses = {
@@ -612,6 +703,7 @@ def compute_block_smb_losses(
         "loss_value": loss_value,
         "loss_policy": loss_policy,
         "loss_critic_feedback": loss_critic_feedback,
+        **imagined_losses,
         "loss_entropy": entropy_bonus,
         "loss_total": loss_total,
         # Backward-compatible metric aliases for existing run summaries.
@@ -661,7 +753,13 @@ def train_block_smb_epoch(
             stage.env.close()
         replay.add(trajectory)
 
-    losses = compute_block_smb_losses(model, replay.transitions(), config, device)
+    losses = compute_block_smb_losses(
+        model,
+        replay.transitions(),
+        config,
+        device,
+        trajectories=replay.trajectories,
+    )
     optimizer.zero_grad(set_to_none=True)
     losses["loss_total"].backward()
     check_model_gradients(model)

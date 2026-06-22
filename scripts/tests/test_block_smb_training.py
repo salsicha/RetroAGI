@@ -28,6 +28,8 @@ from retroagi.stages.block_smb import (
 )
 from retroagi.stages.block_smb.train import (
     apply_block_smb_ablations,
+    compute_block_smb_losses,
+    compute_imagined_rollout_losses,
     collect_trajectory,
     make_block_smb_model,
 )
@@ -140,6 +142,54 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertIn(step.episode_mask, (0.0, 1.0))
             self.assertEqual(step.batch.src_c.shape, (1, BLOCK_SMB_SPEC.seq_len_c))
 
+    def test_imagined_rollout_loss_unrolls_within_trajectory(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            rollout_steps=3,
+            imagined_rollout_horizon=2,
+            imagined_rollout_weight=0.2,
+        )
+        model = make_block_smb_model(config)
+        scenario_name, scenario = build_curriculum(config)[0]
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                scenario_name,
+                rollout_steps=3,
+                seed=4,
+                deterministic=True,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+
+        imagined = compute_imagined_rollout_losses(
+            model,
+            [trajectory],
+            config,
+            torch.device("cpu"),
+        )
+        losses = compute_block_smb_losses(
+            model,
+            trajectory.transitions,
+            config,
+            torch.device("cpu"),
+            trajectories=[trajectory],
+        )
+
+        self.assertGreater(imagined["imagined_rollout_steps"].item(), 0.0)
+        for key in (
+            "loss_imagined_dynamics",
+            "loss_imagined_reward",
+            "loss_imagined_rollout",
+            "imagined_rollout_steps",
+        ):
+            self.assertTrue(torch.isfinite(imagined[key]).item())
+            self.assertTrue(torch.isfinite(losses[key]).item())
+        self.assertTrue(torch.isfinite(losses["loss_total"]).item())
+
     def test_block_smb_ablations_mask_expected_hierarchy_slots(self):
         config = tiny_config(generated_scenarios=0)
         scenario_name, scenario = build_curriculum(config)[0]
@@ -227,6 +277,10 @@ class TestBlockSMBTraining(unittest.TestCase):
                 "loss_value",
                 "loss_policy",
                 "loss_critic_feedback",
+                "loss_imagined_dynamics",
+                "loss_imagined_reward",
+                "loss_imagined_rollout",
+                "imagined_rollout_steps",
                 "loss_actor_pass1",
                 "loss_actor_pass2",
                 "loss_world_model",

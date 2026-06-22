@@ -68,6 +68,10 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "4",
                     "--controller-schedule",
                     "linear",
+                    "--imagined-rollout-horizon",
+                    "2",
+                    "--imagined-rollout-weight",
+                    "0.2",
                     "--checkpoint",
                     "data/block_smb/policy.pth",
                     "--resume",
@@ -104,6 +108,8 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.epochs, 3)
         self.assertEqual(config.episodes_per_epoch, 4)
         self.assertEqual(config.controller_schedule, "linear")
+        self.assertEqual(config.imagined_rollout_horizon, 2)
+        self.assertEqual(config.imagined_rollout_weight, 0.2)
         self.assertEqual(config.checkpoint_path, Path("data/block_smb/policy.pth"))
         self.assertEqual(config.resume_path, Path("data/block_smb/old_policy.pth"))
         self.assertTrue(config.save_checkpoints)
@@ -125,6 +131,8 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertNotIn("model", payload)
         self.assertEqual(payload["config"]["epochs"], 3)
         self.assertEqual(payload["config"]["controller_schedule"], "linear")
+        self.assertEqual(payload["config"]["imagined_rollout_horizon"], 2)
+        self.assertEqual(payload["config"]["imagined_rollout_weight"], 0.2)
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
         self.assertFalse(payload["vision"]["checkpoint_transfer"])
