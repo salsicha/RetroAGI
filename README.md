@@ -73,20 +73,25 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
 2. Run a curriculum stage:
    ```bash
    python -m retroagi.stages.synthetic_1d.train
-   retroagi-block-smb train --epochs 5 \
+   retroagi train --stage block-smb --epochs 5 \
      --vision-checkpoint data/block_vit/block_vit.pth \
      --checkpoint data/block_smb/policy.pth \
      --output artifacts/block_smb/latest/run_summary.json
-   retroagi-block-smb evaluate --checkpoint data/block_smb/policy.pth
-   retroagi-block-smb record --checkpoint data/block_smb/policy.pth --record-dir artifacts/block_smb/recordings
-   python -m retroagi.stages.full_smb.transfer \
+   retroagi resume --stage block-smb --checkpoint data/block_smb/policy.pth --epochs 10
+   retroagi evaluate --stage block-smb --checkpoint data/block_smb/policy.pth
+   retroagi record --stage block-smb --checkpoint data/block_smb/policy.pth --record-dir artifacts/block_smb/recordings
+   retroagi transfer --stage full-smb \
      --block-policy-checkpoint data/block_smb/policy.pth \
      --output-checkpoint data/full_smb/transferred_policy.pth
-   python -m retroagi.stages.full_smb.compare \
+   retroagi compare --stage full-smb \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
      --output artifacts/full_smb/transfer_vs_scratch.json
-   python -m retroagi.stages.full_smb.run --steps 500 --seed 0
+   retroagi evaluate --stage full-smb --steps 500 --seed 0
    ```
+   The `retroagi` command is the preferred entry point for stage selection.
+   Stage-specific options are forwarded to the selected implementation; the
+   legacy `retroagi-block-smb` command remains available for Block SMB-only
+   workflows.
    Block SMB ablations can be run with paired switches such as
    `--disable-vision`, `--disable-world-model`, `--disable-critic-feedback`,
    `--disable-hierarchy`, `--disable-recurrent-state`, and
