@@ -1,5 +1,6 @@
 """Tests for deterministic Synthetic 1D dataset splits and training seeds."""
 
+import json
 import random
 import unittest
 from pathlib import Path
@@ -10,7 +11,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from retroagi.core import AgentWorldModelCritic, build_checkpoint, load_checkpoint, save_checkpoint
+from retroagi.core import (
+    AgentWorldModelCritic,
+    build_checkpoint,
+    checkpoint_summary_path,
+    load_checkpoint,
+    save_checkpoint,
+)
 from retroagi.stages.synthetic_1d.train import (
     SYNTHETIC_1D_SPEC,
     SYNTHETIC_LOSS_KEYS,
@@ -424,6 +431,7 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
                 metadata={"unit": True},
             )
             loaded = load_checkpoint(path)
+            summary = json.loads(checkpoint_summary_path(path).read_text(encoding="utf-8"))
 
         self.assertEqual(loaded["stage"], SYNTHETIC_1D_SPEC.name)
         self.assertEqual(loaded["model_name"], SYNTHETIC_MODEL_NAME)
@@ -433,6 +441,13 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
         self.assertEqual(loaded["metrics"]["controller_mse"], 0.75)
         self.assertEqual(loaded["config"]["seed"], 17)
         self.assertEqual(loaded["specs"]["stage"]["seq_len_c"], SYNTHETIC_1D_SPEC.seq_len_c)
+        self.assertTrue(loaded["metadata"]["unit"])
+        self.assertIn("code_revision", loaded["metadata"])
+        self.assertIn("runtime_environment", loaded["metadata"])
+        self.assertEqual(summary["stage"], SYNTHETIC_1D_SPEC.name)
+        self.assertEqual(summary["metrics"]["controller_mse"], 0.75)
+        self.assertEqual(summary["config"]["seed"], 17)
+        self.assertIn("optimizer", summary["state_keys"])
         self.assertIn("model", loaded["states"])
         self.assertIn("optimizer", loaded["states"])
 

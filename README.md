@@ -92,6 +92,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    Stage-specific options are forwarded to the selected implementation; the
    legacy `retroagi-block-smb` command remains available for Block SMB-only
    workflows.
+   Each versioned checkpoint also writes a JSON sidecar beside the `.pth` file
+   containing the resolved config, metrics, code revision, runtime environment,
+   specs, metadata, and state keys.
    Block SMB ablations can be run with paired switches such as
    `--disable-vision`, `--disable-world-model`, `--disable-critic-feedback`,
    `--disable-hierarchy`, `--disable-recurrent-state`, and

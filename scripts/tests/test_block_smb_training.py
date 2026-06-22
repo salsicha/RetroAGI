@@ -1,5 +1,6 @@
 """Tests for Block SMB trainer plumbing."""
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,6 +11,7 @@ from retroagi.core import (
     VisionOutput,
     VisionSpec,
     build_checkpoint,
+    checkpoint_summary_path,
     load_checkpoint,
     save_checkpoint,
 )
@@ -504,6 +506,9 @@ class TestBlockSMBTraining(unittest.TestCase):
                 metrics={"loss_total": 1.0},
                 target_model=target_model,
             )
+            summary = json.loads(
+                checkpoint_summary_path(checkpoint_path).read_text(encoding="utf-8")
+            )
             restored_model = make_block_smb_model(config)
             restored_target = make_target_network(restored_model)
             restored_optimizer = torch.optim.AdamW(
@@ -517,6 +522,11 @@ class TestBlockSMBTraining(unittest.TestCase):
             )
 
         self.assertIn("target_model", restored["states"])
+        self.assertEqual(summary["stage"], BLOCK_SMB_SPEC.name)
+        self.assertEqual(summary["metrics"]["loss_total"], 1.0)
+        self.assertIn("target_model", summary["state_keys"])
+        self.assertIn("code_revision", summary)
+        self.assertIn("environment", summary)
         for original, restored_parameter in zip(
             target_model.parameters(), restored_target.parameters()
         ):

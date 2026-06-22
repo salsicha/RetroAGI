@@ -8,7 +8,6 @@ Example:
 """
 
 import argparse
-import json
 import random
 from dataclasses import asdict, dataclass, field
 import sys
@@ -33,6 +32,7 @@ from retroagi.core import (
     TrainingConfig,
     build_checkpoint,
     is_versioned_checkpoint,
+    save_checkpoint as save_versioned_checkpoint,
     select_device,
     validate_checkpoint_compatibility,
     validate_model_vision_compatibility,
@@ -319,26 +319,7 @@ def save_checkpoint(
         },
         metadata={"trainer": "scripts.vit.train_block_vit"},
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(checkpoint, path)
-    path.with_suffix(".json").write_text(
-        json.dumps(
-            {
-                "checkpoint_schema_version": checkpoint["checkpoint_schema_version"],
-                "stage": checkpoint["stage"],
-                "model_name": checkpoint["model_name"],
-                "checkpoint_kind": checkpoint["checkpoint_kind"],
-                "epoch": epoch,
-                "global_step": checkpoint["global_step"],
-                "metrics": metrics,
-                "config": config_data,
-                "specs": checkpoint["specs"],
-                "metadata": checkpoint["metadata"],
-            },
-            indent=2,
-        )
-        + "\n"
-    )
+    save_versioned_checkpoint(path, checkpoint)
 
 
 def train(

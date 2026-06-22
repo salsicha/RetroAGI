@@ -1,5 +1,6 @@
 """Tests for the shared versioned checkpoint schema."""
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,6 +10,7 @@ import torch
 from retroagi.core import (
     CHECKPOINT_SCHEMA_VERSION,
     build_checkpoint,
+    checkpoint_summary_path,
     load_checkpoint,
     save_checkpoint as save_versioned_checkpoint,
     validate_checkpoint,
@@ -40,18 +42,31 @@ class TestCheckpointSchema(unittest.TestCase):
         self.assertEqual(checkpoint["model_name"], "block_smb_vit")
         self.assertEqual(checkpoint["checkpoint_kind"], "vision_encoder")
         self.assertEqual(checkpoint["states"]["model"]["weight"].item(), 1.0)
+        self.assertTrue(checkpoint["metadata"]["unit"])
+        self.assertIn("code_revision", checkpoint["metadata"])
+        self.assertIn("runtime_environment", checkpoint["metadata"])
 
-    def test_round_trips_through_torch_file(self):
+    def test_round_trips_through_torch_file_and_writes_sidecar_summary(self):
         checkpoint = self.make_checkpoint()
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "checkpoint.pth"
 
             save_versioned_checkpoint(path, checkpoint)
             loaded = load_checkpoint(path)
+            sidecar = checkpoint_summary_path(path)
+            summary = json.loads(sidecar.read_text(encoding="utf-8"))
 
         self.assertEqual(loaded["checkpoint_schema_version"], CHECKPOINT_SCHEMA_VERSION)
         self.assertEqual(loaded["epoch"], 3)
         self.assertEqual(loaded["states"]["model"]["weight"].item(), 1.0)
+        self.assertEqual(sidecar.name, "checkpoint.json")
+        self.assertEqual(summary["stage"], "block_smb")
+        self.assertEqual(summary["metrics"]["mean_iou"], 0.5)
+        self.assertEqual(summary["config"]["environment"]["stage"], "block_smb")
+        self.assertEqual(summary["state_keys"], ["model"])
+        self.assertNotIn("states", summary)
+        self.assertIn("code_revision", summary)
+        self.assertIn("environment", summary)
 
     def test_rejects_missing_and_unknown_schema_versions(self):
         with self.assertRaisesRegex(ValueError, "checkpoint_schema_version"):
@@ -70,6 +85,7 @@ class TestCheckpointSchema(unittest.TestCase):
                 path, model, optimizer, epoch=1, metrics={"mean_iou": 0.25}, config=config
             )
             loaded = load_checkpoint(path)
+            summary = json.loads(checkpoint_summary_path(path).read_text(encoding="utf-8"))
 
         self.assertEqual(loaded["stage"], "block_smb")
         self.assertEqual(loaded["model_name"], "block_smb_vit")
@@ -77,6 +93,10 @@ class TestCheckpointSchema(unittest.TestCase):
         self.assertIn("model", loaded["states"])
         self.assertIn("optimizer", loaded["states"])
         self.assertEqual(loaded["specs"]["vision"]["name"], model.spec.name)
+        self.assertEqual(summary["stage"], "block_smb")
+        self.assertEqual(summary["metrics"]["mean_iou"], 0.25)
+        self.assertIn("code_revision", summary)
+        self.assertIn("environment", summary)
 
 
 if __name__ == "__main__":

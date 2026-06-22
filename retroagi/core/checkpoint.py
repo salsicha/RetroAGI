@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+import platform
 from pathlib import Path
+import subprocess
+import sys
+from functools import lru_cache
 from typing import Any, Mapping, Optional
 
 import torch
@@ -15,6 +20,87 @@ CHECKPOINT_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_KEY = "checkpoint_schema_version"
 
 StateDict = Mapping[str, Any]
+
+
+def collect_code_revision_metadata(repo_root: Optional[Path] = None) -> dict[str, Any]:
+    """Return best-effort source revision metadata for checkpoint traceability."""
+
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
+    return dict(_collect_code_revision_metadata(str(root)))
+
+
+@lru_cache(maxsize=None)
+def _collect_code_revision_metadata(repo_root: str) -> tuple[tuple[str, Any], ...]:
+    root = Path(repo_root)
+    revision = _git_output(root, "rev-parse", "HEAD")
+    short_revision = _git_output(root, "rev-parse", "--short", "HEAD")
+    branch = _git_output(root, "branch", "--show-current")
+    status = _git_output(root, "status", "--porcelain")
+    return tuple(
+        {
+            "system": "git",
+            "root": str(root),
+            "revision": revision,
+            "short_revision": short_revision,
+            "branch": branch,
+            "dirty": bool(status) if status is not None else None,
+        }.items()
+    )
+
+
+def _git_output(repo_root: Path, *args: str) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ("git", *args),
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def collect_runtime_environment_metadata() -> dict[str, Any]:
+    """Return runtime and hardware metadata that affects reproducibility."""
+
+    mps_backend = getattr(torch.backends, "mps", None)
+    return {
+        "python": {
+            "version": platform.python_version(),
+            "implementation": platform.python_implementation(),
+            "executable": sys.executable,
+        },
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "version": platform.version(),
+            "machine": platform.machine(),
+            "processor": platform.processor(),
+        },
+        "torch": {
+            "version": torch.__version__,
+            "cuda_version": torch.version.cuda,
+            "cuda_available": torch.cuda.is_available(),
+            "mps_available": bool(mps_backend and mps_backend.is_available()),
+            "mps_built": bool(mps_backend and mps_backend.is_built()),
+        },
+    }
+
+
+def checkpoint_trace_metadata(
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Merge caller metadata with standard checkpoint traceability fields."""
+
+    merged = dict(to_plain_data(metadata or {}))
+    merged.setdefault("code_revision", collect_code_revision_metadata())
+    merged.setdefault("runtime_environment", collect_runtime_environment_metadata())
+    return merged
 
 
 @dataclass(frozen=True)
@@ -92,7 +178,7 @@ def build_checkpoint(
         metrics=metrics or {},
         config=config or {},
         specs=specs or {},
-        metadata=metadata or {},
+        metadata=checkpoint_trace_metadata(metadata),
     )
     return payload.to_dict()
 
@@ -132,10 +218,54 @@ def validate_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
     return payload.to_dict()
 
 
+def checkpoint_summary_path(path: Path) -> Path:
+    """Return the JSON sidecar path for a checkpoint file."""
+
+    return Path(path).with_suffix(".json")
+
+
+def checkpoint_summary(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a JSON-friendly sidecar summary without tensor state payloads."""
+
+    metadata = to_plain_data(checkpoint.get("metadata", {}))
+    states = checkpoint.get("states", {})
+    state_keys = sorted(states) if isinstance(states, Mapping) else []
+    return {
+        CHECKPOINT_SCHEMA_KEY: checkpoint.get(CHECKPOINT_SCHEMA_KEY),
+        "stage": checkpoint.get("stage"),
+        "model_name": checkpoint.get("model_name"),
+        "checkpoint_kind": checkpoint.get("checkpoint_kind"),
+        "epoch": checkpoint.get("epoch", 0),
+        "global_step": checkpoint.get("global_step", 0),
+        "metrics": to_plain_data(checkpoint.get("metrics", {})),
+        "config": to_plain_data(checkpoint.get("config", {})),
+        "specs": to_plain_data(checkpoint.get("specs", {})),
+        "metadata": metadata,
+        "code_revision": metadata.get("code_revision", {}),
+        "environment": metadata.get("runtime_environment", {}),
+        "state_keys": state_keys,
+    }
+
+
+def write_checkpoint_summary(path: Path, checkpoint: Mapping[str, Any]) -> Path:
+    """Write the checkpoint sidecar summary and return its path."""
+
+    summary_path = checkpoint_summary_path(path)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(
+        json.dumps(checkpoint_summary(checkpoint), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary_path
+
+
 def save_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
     """Validate and write a versioned checkpoint."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(validate_checkpoint(checkpoint), path)
+    normalized = validate_checkpoint(checkpoint)
+    normalized["metadata"] = checkpoint_trace_metadata(normalized.get("metadata", {}))
+    torch.save(normalized, path)
+    write_checkpoint_summary(path, normalized)
 
 
 def load_checkpoint(path: Path, *, map_location: Any = "cpu") -> dict[str, Any]:

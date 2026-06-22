@@ -194,7 +194,7 @@ evaluations and load a compatible Block SMB checkpoint.
 - [x] Remove the Dockerfile from the project and update Docker-dependent
       build/run scripts and documentation to use the supported native setup.
 - [x] Add one CLI for training, evaluation, resume, and environment selection.
-- [ ] Store resolved configuration, code revision, metrics, and environment
+- [x] Store resolved configuration, code revision, metrics, and environment
       metadata beside every checkpoint.
 - [ ] Add structured logging and periodic deterministic evaluation.
 - [ ] Add GitHub Actions for formatting, linting, unit tests, and CPU smoke
