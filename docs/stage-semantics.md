@@ -221,6 +221,19 @@ the same trajectory. The trainer logs `loss_imagined_dynamics`,
 `loss_imagined_reward`, `loss_imagined_rollout`, and
 `imagined_rollout_steps`.
 
+Target-network stabilization is available through
+`BlockSMBTrainingConfig.target_network_mode`, `target_network_tau`, and
+`target_network_instability_threshold`, exposed by the CLI as
+`--target-network-mode`, `--target-network-tau`, and
+`--target-network-instability-threshold`. The default mode is `off`. Mode `on`
+always uses an exponential-moving-average copy of the actor/world-model/critic
+for representation targets. Mode `auto` enables that target only when the
+measured one-step dynamics MSE from the current replay exceeds the configured
+threshold. This keeps stabilization tied to measured instability instead of
+silently changing the default objective. Checkpoints store the target-network
+state when it exists. The trainer logs `target_network_active`,
+`target_network_instability`, `target_network_drift`, and `target_network_tau`.
+
 The low-level adaptive controller supports `controller_schedule="constant"` and
 `controller_schedule="linear"`, exposed by the CLI as
 `--controller-schedule`. The default `constant` schedule preserves existing

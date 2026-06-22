@@ -89,6 +89,8 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--controller-schedule constant|linear`.
    Learned-dynamics imagination is selectable with
    `--imagined-rollout-horizon` and `--imagined-rollout-weight`.
+   Target-network stabilization is selectable with `--target-network-mode`,
+   `--target-network-tau`, and `--target-network-instability-threshold`.
 3. Run the test suite:
    ```bash
    python -m unittest discover -s scripts/tests -v

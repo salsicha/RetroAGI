@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import random
 from dataclasses import dataclass, field
@@ -34,6 +35,7 @@ from .vision import BlockVisionTransformer
 BLOCK_SMB_MODEL_NAME = "block_smb_actor_world_model_critic"
 BLOCK_SMB_CHECKPOINT_KIND = "block_smb_trainer"
 BLOCK_SMB_ACTION_COUNT = 6
+TARGET_NETWORK_MODES = ("off", "on", "auto")
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,9 @@ class BlockSMBTrainingConfig:
     critic_loss_weight: float = 0.001
     imagined_rollout_weight: float = 0.0
     imagined_rollout_horizon: int = 0
+    target_network_mode: str = "off"
+    target_network_tau: float = 0.01
+    target_network_instability_threshold: float = 1.0
     gradient_clip_norm: float = 1.0
     hidden_dim: int = 32
     controller_schedule: str = "constant"
@@ -132,6 +137,16 @@ class BlockSMBTrainingConfig:
             raise ValueError("generated_scenarios must be non-negative")
         if self.imagined_rollout_horizon < 0:
             raise ValueError("imagined_rollout_horizon must be non-negative")
+        if self.target_network_mode not in TARGET_NETWORK_MODES:
+            raise ValueError(
+                f"target_network_mode must be one of {TARGET_NETWORK_MODES}"
+            )
+        if not 0 < self.target_network_tau <= 1:
+            raise ValueError("target_network_tau must be in (0, 1]")
+        if self.target_network_instability_threshold < 0:
+            raise ValueError(
+                "target_network_instability_threshold must be non-negative"
+            )
         if self.controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
             raise ValueError(
                 "controller_schedule must be one of "
@@ -292,6 +307,49 @@ def make_block_smb_model(config: BlockSMBTrainingConfig) -> AgentWorldModelCriti
         d_model=config.hidden_dim,
         controller_schedule=config.controller_schedule,
     )
+
+
+def make_target_network(model: AgentWorldModelCritic) -> AgentWorldModelCritic:
+    target_model = copy.deepcopy(model)
+    target_model.eval()
+    for parameter in target_model.parameters():
+        parameter.requires_grad_(False)
+    return target_model
+
+
+@torch.no_grad()
+def update_target_network(
+    target_model: AgentWorldModelCritic,
+    source_model: AgentWorldModelCritic,
+    tau: float,
+) -> None:
+    if not 0 < tau <= 1:
+        raise ValueError("tau must be in (0, 1]")
+    for target_parameter, source_parameter in zip(
+        target_model.parameters(), source_model.parameters()
+    ):
+        target_parameter.mul_(1.0 - tau).add_(source_parameter, alpha=tau)
+    for target_buffer, source_buffer in zip(
+        target_model.buffers(), source_model.buffers()
+    ):
+        target_buffer.copy_(source_buffer)
+    target_model.eval()
+
+
+def target_network_parameter_delta(
+    model: AgentWorldModelCritic,
+    target_model: Optional[AgentWorldModelCritic],
+    device: torch.device,
+) -> torch.Tensor:
+    if target_model is None:
+        return torch.zeros((), dtype=torch.float32, device=device)
+    terms = [
+        F.mse_loss(parameter.detach(), target_parameter.detach().to(parameter.device))
+        for parameter, target_parameter in zip(model.parameters(), target_model.parameters())
+    ]
+    if not terms:
+        return torch.zeros((), dtype=torch.float32, device=device)
+    return torch.stack([term.to(device) for term in terms]).mean()
 
 
 def finite_or_raise(name: str, tensor: torch.Tensor) -> None:
@@ -631,15 +689,49 @@ def compute_imagined_rollout_losses(
     }
 
 
+def measured_dynamics_instability(
+    transitions: list[BlockSMBTransition], device: torch.device
+) -> torch.Tensor:
+    if not transitions:
+        return torch.zeros((), dtype=torch.float32, device=device)
+    terms = [
+        F.mse_loss(
+            step.next_state_pred.detach().to(device),
+            step.next_batch.src_c.detach().to(device),
+        )
+        for step in transitions
+    ]
+    return torch.stack(terms).mean()
+
+
+def target_network_is_active(
+    config: BlockSMBTrainingConfig,
+    target_model: Optional[AgentWorldModelCritic],
+    instability: torch.Tensor,
+) -> bool:
+    if target_model is None or config.target_network_mode == "off":
+        return False
+    if config.target_network_mode == "on":
+        return True
+    return (
+        float(instability.detach().cpu())
+        >= config.target_network_instability_threshold
+    )
+
+
 def compute_block_smb_losses(
     model: AgentWorldModelCritic,
     transitions: list[BlockSMBTransition],
     config: BlockSMBTrainingConfig,
     device: torch.device,
     trajectories: Optional[list[BlockSMBTrajectory]] = None,
+    target_model: Optional[AgentWorldModelCritic] = None,
 ) -> dict[str, torch.Tensor]:
     if not transitions:
         raise ValueError("transitions must be non-empty")
+    target_instability = measured_dynamics_instability(transitions, device)
+    target_active = target_network_is_active(config, target_model, target_instability)
+    target_model_for_loss = target_model if target_active else model
     returns = discounted_returns(
         [step.reward for step in transitions],
         [step.episode_mask for step in transitions],
@@ -659,9 +751,10 @@ def compute_block_smb_losses(
         value_pred = model.predict_value(step.batch.src_c.detach())
         reward_pred = model.predict_reward(step.next_state_pred)
         predicted_representation = model.transition_representation(step.next_state_pred)
-        target_representation = model.transition_representation(
-            step.next_batch.src_c.detach()
-        ).detach()
+        with torch.no_grad():
+            target_representation = target_model_for_loss.transition_representation(
+                step.next_batch.src_c.detach()
+            )
         advantage = (return_target - value_pred.detach()).detach()
 
         policy_terms.append(-step.log_prob * advantage.squeeze(0))
@@ -704,6 +797,16 @@ def compute_block_smb_losses(
         "loss_policy": loss_policy,
         "loss_critic_feedback": loss_critic_feedback,
         **imagined_losses,
+        "target_network_active": torch.tensor(
+            float(target_active), dtype=torch.float32, device=device
+        ),
+        "target_network_instability": target_instability,
+        "target_network_drift": target_network_parameter_delta(
+            model, target_model, device
+        ),
+        "target_network_tau": torch.tensor(
+            config.target_network_tau, dtype=torch.float32, device=device
+        ),
         "loss_entropy": entropy_bonus,
         "loss_total": loss_total,
         # Backward-compatible metric aliases for existing run summaries.
@@ -726,8 +829,11 @@ def train_block_smb_epoch(
     *,
     device: torch.device,
     vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
+    target_model: Optional[AgentWorldModelCritic] = None,
 ) -> tuple[dict[str, float], BlockSMBReplayBuffer]:
     model.train()
+    if target_model is not None:
+        target_model.eval()
     replay = BlockSMBReplayBuffer()
     for episode in range(config.episodes_per_epoch):
         scenario_name, scenario = curriculum[
@@ -759,6 +865,7 @@ def train_block_smb_epoch(
         config,
         device,
         trajectories=replay.trajectories,
+        target_model=target_model,
     )
     optimizer.zero_grad(set_to_none=True)
     losses["loss_total"].backward()
@@ -769,6 +876,8 @@ def train_block_smb_epoch(
     if not torch.isfinite(grad_norm).item():
         raise FloatingPointError("gradient norm is NaN or infinite")
     optimizer.step()
+    if target_model is not None:
+        update_target_network(target_model, model, config.target_network_tau)
     epoch_losses = {key: float(value.detach().cpu()) for key, value in losses.items()}
     epoch_losses["gradient_norm"] = float(grad_norm.detach().cpu())
     epoch_losses["mean_return"] = float(
@@ -880,7 +989,17 @@ def save_block_smb_checkpoint(
     global_step: int,
     config: BlockSMBTrainingConfig,
     metrics: Mapping[str, float],
+    target_model: Optional[AgentWorldModelCritic] = None,
 ) -> dict[str, Any]:
+    states = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "torch_rng": torch.get_rng_state(),
+        "python_rng": random.getstate(),
+        "numpy_rng": np.random.get_state(),
+    }
+    if target_model is not None:
+        states["target_model"] = target_model.state_dict()
     checkpoint = build_checkpoint(
         stage=BLOCK_SMB_SPEC.name,
         model_name=BLOCK_SMB_MODEL_NAME,
@@ -899,13 +1018,7 @@ def save_block_smb_checkpoint(
                 "vocab_size": BLOCK_SMB_SPEC.vocab_size,
             }
         },
-        states={
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "torch_rng": torch.get_rng_state(),
-            "python_rng": random.getstate(),
-            "numpy_rng": np.random.get_state(),
-        },
+        states=states,
     )
     save_checkpoint(path, checkpoint)
     return checkpoint
@@ -917,6 +1030,7 @@ def restore_block_smb_checkpoint(
     optimizer: Optional[optim.Optimizer] = None,
     *,
     map_location: Any = "cpu",
+    target_model: Optional[AgentWorldModelCritic] = None,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
@@ -949,6 +1063,10 @@ def restore_block_smb_checkpoint(
         except ValueError:
             if unsupported_missing or not load_result.missing_keys:
                 raise
+    if target_model is not None:
+        target_state = states.get("target_model", states["model"])
+        target_model.load_state_dict(target_state, strict=False)
+        target_model.eval()
     if "torch_rng" in states:
         torch.set_rng_state(states["torch_rng"].cpu())
     if "python_rng" in states:
@@ -968,14 +1086,25 @@ def train_and_evaluate_block_smb(
     device = select_device(config.device)
     model = make_block_smb_model(config).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
+    target_model = (
+        make_target_network(model).to(device)
+        if config.target_network_mode != "off"
+        else None
+    )
     start_epoch = 0
     global_step = 0
     if config.resume_path is not None:
         checkpoint = restore_block_smb_checkpoint(
-            config.resume_path, model, optimizer, map_location=device
+            config.resume_path,
+            model,
+            optimizer,
+            map_location=device,
+            target_model=target_model,
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
+    elif target_model is not None:
+        update_target_network(target_model, model, tau=1.0)
     curriculum = build_curriculum(config)
     vector_env = SequentialBlockSMBVectorEnv(
         curriculum,
@@ -994,6 +1123,7 @@ def train_and_evaluate_block_smb(
             epoch,
             device=device,
             vision_factory=vision_factory,
+            target_model=target_model,
         )
         global_step += int(losses["episodes"])
         evaluation = evaluate_block_smb(
@@ -1022,6 +1152,7 @@ def train_and_evaluate_block_smb(
                 global_step=global_step,
                 config=config,
                 metrics=last_metrics,
+                target_model=target_model,
             )
     evaluation = evaluate_block_smb(
         model,

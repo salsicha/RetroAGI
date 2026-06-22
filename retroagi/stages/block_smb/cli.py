@@ -23,6 +23,7 @@ from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .train import (
     BlockSMBAblationConfig,
     BlockSMBTrainingConfig,
+    TARGET_NETWORK_MODES,
     train_and_evaluate_block_smb,
 )
 from .vision import (
@@ -113,6 +114,12 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--critic-loss-weight", type=_non_negative_float)
     parser.add_argument("--imagined-rollout-weight", type=_non_negative_float)
     parser.add_argument("--imagined-rollout-horizon", type=_non_negative_int)
+    parser.add_argument("--target-network-mode", choices=TARGET_NETWORK_MODES)
+    parser.add_argument("--target-network-tau", type=_positive_float)
+    parser.add_argument(
+        "--target-network-instability-threshold",
+        type=_non_negative_float,
+    )
     parser.add_argument("--reward-progress-per-pixel", type=_non_negative_float)
     parser.add_argument("--reward-coin", type=_non_negative_float)
     parser.add_argument("--reward-enemy-stomp", type=_non_negative_float)
@@ -283,6 +290,9 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "critic_loss_weight",
         "imagined_rollout_weight",
         "imagined_rollout_horizon",
+        "target_network_mode",
+        "target_network_tau",
+        "target_network_instability_threshold",
         "gradient_clip_norm",
         "hidden_dim",
         "controller_schedule",

@@ -31,7 +31,11 @@ from retroagi.stages.block_smb.train import (
     compute_block_smb_losses,
     compute_imagined_rollout_losses,
     collect_trajectory,
+    make_target_network,
     make_block_smb_model,
+    save_block_smb_checkpoint,
+    target_network_parameter_delta,
+    update_target_network,
 )
 
 
@@ -117,6 +121,11 @@ class TestBlockSMBTraining(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "controller_schedule"):
             tiny_config(controller_schedule="quadratic")
 
+        with self.assertRaisesRegex(ValueError, "target_network_mode"):
+            tiny_config(target_network_mode="sometimes")
+        with self.assertRaisesRegex(ValueError, "target_network_tau"):
+            tiny_config(target_network_tau=1.5)
+
     def test_collect_trajectory_records_episode_masks(self):
         config = tiny_config(generated_scenarios=0)
         model = make_block_smb_model(config)
@@ -189,6 +198,54 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertTrue(torch.isfinite(imagined[key]).item())
             self.assertTrue(torch.isfinite(losses[key]).item())
         self.assertTrue(torch.isfinite(losses["loss_total"]).item())
+
+    def test_target_network_auto_activation_and_ema_update(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            target_network_mode="auto",
+            target_network_instability_threshold=0.0,
+            target_network_tau=0.5,
+        )
+        model = make_block_smb_model(config)
+        target_model = make_target_network(model)
+        scenario_name, scenario = build_curriculum(config)[0]
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                scenario_name,
+                rollout_steps=2,
+                seed=5,
+                deterministic=True,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+
+        losses = compute_block_smb_losses(
+            model,
+            trajectory.transitions,
+            config,
+            torch.device("cpu"),
+            trajectories=[trajectory],
+            target_model=target_model,
+        )
+        self.assertEqual(losses["target_network_active"].item(), 1.0)
+        self.assertGreaterEqual(losses["target_network_instability"].item(), 0.0)
+        self.assertTrue(torch.isfinite(losses["target_network_drift"]).item())
+
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.add_(1.0)
+                break
+        before = target_network_parameter_delta(
+            model, target_model, torch.device("cpu")
+        )
+        update_target_network(target_model, model, tau=0.5)
+        after = target_network_parameter_delta(model, target_model, torch.device("cpu"))
+
+        self.assertGreater(before.item(), after.item())
 
     def test_block_smb_ablations_mask_expected_hierarchy_slots(self):
         config = tiny_config(generated_scenarios=0)
@@ -281,6 +338,10 @@ class TestBlockSMBTraining(unittest.TestCase):
                 "loss_imagined_reward",
                 "loss_imagined_rollout",
                 "imagined_rollout_steps",
+                "target_network_active",
+                "target_network_instability",
+                "target_network_drift",
+                "target_network_tau",
                 "loss_actor_pass1",
                 "loss_actor_pass2",
                 "loss_world_model",
@@ -376,6 +437,46 @@ class TestBlockSMBTraining(unittest.TestCase):
             )
 
         self.assertEqual(restored["model_name"], BLOCK_SMB_MODEL_NAME)
+
+    def test_checkpoint_round_trips_target_network_state(self):
+        with TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "target_block_smb.pth"
+            config = tiny_config(target_network_mode="on")
+            model = make_block_smb_model(config)
+            target_model = make_target_network(model)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            with torch.no_grad():
+                for parameter in target_model.parameters():
+                    parameter.add_(0.5)
+                    break
+
+            save_block_smb_checkpoint(
+                checkpoint_path,
+                model,
+                optimizer,
+                epoch=1,
+                global_step=2,
+                config=config,
+                metrics={"loss_total": 1.0},
+                target_model=target_model,
+            )
+            restored_model = make_block_smb_model(config)
+            restored_target = make_target_network(restored_model)
+            restored_optimizer = torch.optim.AdamW(
+                restored_model.parameters(), lr=config.learning_rate
+            )
+            restored = restore_block_smb_checkpoint(
+                checkpoint_path,
+                restored_model,
+                restored_optimizer,
+                target_model=restored_target,
+            )
+
+        self.assertIn("target_model", restored["states"])
+        for original, restored_parameter in zip(
+            target_model.parameters(), restored_target.parameters()
+        ):
+            torch.testing.assert_close(original, restored_parameter)
 
 
 if __name__ == "__main__":

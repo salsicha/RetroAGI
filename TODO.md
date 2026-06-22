@@ -146,7 +146,7 @@ Do this after Stage 1 and Block SMB expose concrete failure modes.
 - [x] Separate representation, dynamics, reward, value, and policy objectives.
 - [x] Handle recurrent state and episode boundaries in the world model.
 - [x] Implement imagined rollouts through learned dynamics.
-- [ ] Add target networks or other stabilization only where measurements show
+- [x] Add target networks or other stabilization only where measurements show
       they are needed.
 - [ ] Add ablations for vision, world model, critic feedback, hierarchy levels,
       and checkpoint transfer.
