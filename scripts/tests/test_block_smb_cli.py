@@ -66,6 +66,8 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "3",
                     "--episodes-per-epoch",
                     "4",
+                    "--controller-schedule",
+                    "linear",
                     "--checkpoint",
                     "data/block_smb/policy.pth",
                     "--resume",
@@ -101,6 +103,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         config = train.call_args.args[0]
         self.assertEqual(config.epochs, 3)
         self.assertEqual(config.episodes_per_epoch, 4)
+        self.assertEqual(config.controller_schedule, "linear")
         self.assertEqual(config.checkpoint_path, Path("data/block_smb/policy.pth"))
         self.assertEqual(config.resume_path, Path("data/block_smb/old_policy.pth"))
         self.assertTrue(config.save_checkpoints)
@@ -121,6 +124,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertFalse(config.ablation.checkpoint_transfer_enabled)
         self.assertNotIn("model", payload)
         self.assertEqual(payload["config"]["epochs"], 3)
+        self.assertEqual(payload["config"]["controller_schedule"], "linear")
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
         self.assertFalse(payload["vision"]["checkpoint_transfer"])

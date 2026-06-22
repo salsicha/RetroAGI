@@ -16,6 +16,7 @@ import torch.optim as optim
 from retroagi.core import (
     AgentWorldModelCritic,
     StageBatch,
+    SUPPORTED_CONTROLLER_SCHEDULES,
     VisionEncoder,
     WorldModelState,
     build_checkpoint,
@@ -77,6 +78,7 @@ class BlockSMBTrainingConfig:
     critic_loss_weight: float = 0.001
     gradient_clip_norm: float = 1.0
     hidden_dim: int = 32
+    controller_schedule: str = "constant"
     device: str = "auto"
     deterministic: bool = True
     fixed_scenarios: tuple[str, ...] = (
@@ -126,6 +128,11 @@ class BlockSMBTrainingConfig:
                 raise ValueError(f"{name} must be positive")
         if self.generated_scenarios < 0:
             raise ValueError("generated_scenarios must be non-negative")
+        if self.controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
+            raise ValueError(
+                "controller_schedule must be one of "
+                f"{SUPPORTED_CONTROLLER_SCHEDULES}"
+            )
         loss_weights = (
             self.entropy_weight,
             self.policy_loss_weight,
@@ -278,6 +285,7 @@ def make_block_smb_model(config: BlockSMBTrainingConfig) -> AgentWorldModelCriti
         BLOCK_SMB_SPEC.seq_len_c,
         BLOCK_SMB_SPEC.ratio_bc,
         d_model=config.hidden_dim,
+        controller_schedule=config.controller_schedule,
     )
 
 

@@ -106,6 +106,15 @@ class TestBlockSMBTraining(unittest.TestCase):
         finally:
             vector_env.close()
 
+    def test_controller_schedule_configures_block_smb_model(self):
+        config = tiny_config(controller_schedule="linear")
+        model = make_block_smb_model(config)
+
+        self.assertEqual(model.agent.controller.schedule, "linear")
+
+        with self.assertRaisesRegex(ValueError, "controller_schedule"):
+            tiny_config(controller_schedule="quadratic")
+
     def test_collect_trajectory_records_episode_masks(self):
         config = tiny_config(generated_scenarios=0)
         model = make_block_smb_model(config)

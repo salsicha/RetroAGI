@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from retroagi.core import (
+    AdaptiveController,
     AgentWorldModelCritic,
     HierarchicalAdaptiveModel,
     WorldModel,
@@ -47,6 +48,98 @@ class FixedCritic(nn.Module):
 
     def forward(self, next_state_pred):
         return self.criticism[: next_state_pred.size(0)]
+
+
+class FixedControllerAgent(nn.Module):
+    def __init__(self, seq_len_a, vocab_size, w_b, b_b, schedule="linear"):
+        super().__init__()
+        self.seq_len_a = seq_len_a
+        self.vocab_size = vocab_size
+        self.controller = AdaptiveController(schedule=schedule)
+        self.register_buffer("w_b", w_b)
+        self.register_buffer("b_b", b_b)
+
+    def forward(self, src_a, src_b, src_c, criticism=None, tau=1.0):
+        batch_size = src_a.size(0)
+        logits = torch.zeros(
+            batch_size,
+            self.seq_len_a,
+            self.vocab_size,
+            device=src_a.device,
+        )
+        actions = src_c.clone()
+        return (
+            logits,
+            actions,
+            self.w_b[:batch_size].to(src_a.device),
+            self.b_b[:batch_size].to(src_a.device),
+        )
+
+
+class RecordingWorldModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.w_context = None
+        self.b_context = None
+
+    def forward(self, state, action, w_context, b_context):
+        self.w_context = w_context.detach().clone()
+        self.b_context = b_context.detach().clone()
+        return state + action
+
+
+class TestAdaptiveControllerSchedules(unittest.TestCase):
+    def test_constant_schedule_repeats_b_level_gains(self):
+        controller = AdaptiveController(schedule="constant")
+        x_c = torch.arange(1, 7, dtype=torch.float32).view(1, 6)
+        w_b = torch.tensor([[2.0, 4.0]])
+        b_b = torch.tensor([[1.0, -1.0]])
+
+        w_context, b_context = controller.expand_context(x_c, w_b, b_b)
+        output = controller(x_c, w_b, b_b)
+
+        torch.testing.assert_close(
+            w_context,
+            torch.tensor([[2.0, 2.0, 2.0, 4.0, 4.0, 4.0]]),
+        )
+        torch.testing.assert_close(
+            b_context,
+            torch.tensor([[1.0, 1.0, 1.0, -1.0, -1.0, -1.0]]),
+        )
+        torch.testing.assert_close(output, w_context * x_c + b_context)
+
+    def test_linear_schedule_interpolates_between_b_level_gains(self):
+        controller = AdaptiveController(schedule="linear")
+        x_c = torch.ones(1, 6)
+        w_b = torch.tensor([[1.0, 4.0]])
+        b_b = torch.tensor([[0.0, 6.0]])
+
+        w_context, b_context = controller.expand_context(x_c, w_b, b_b)
+        output = controller(x_c, w_b, b_b)
+
+        torch.testing.assert_close(
+            w_context,
+            torch.tensor([[1.0, 2.0, 3.0, 4.0, 4.0, 4.0]]),
+        )
+        torch.testing.assert_close(
+            b_context,
+            torch.tensor([[0.0, 2.0, 4.0, 6.0, 6.0, 6.0]]),
+        )
+        torch.testing.assert_close(
+            output,
+            torch.tensor([[1.0, 4.0, 7.0, 10.0, 10.0, 10.0]]),
+        )
+
+    def test_schedule_rejects_invalid_lengths_and_modes(self):
+        with self.assertRaisesRegex(ValueError, "controller schedule"):
+            AdaptiveController(schedule="quadratic")
+        controller = AdaptiveController(schedule="linear")
+        with self.assertRaisesRegex(ValueError, "divisible"):
+            controller.expand_context(
+                torch.zeros(1, 5),
+                torch.zeros(1, 2),
+                torch.zeros(1, 2),
+            )
 
 
 class TestCriticFeedbackContract(unittest.TestCase):
@@ -149,6 +242,44 @@ class TestCriticFeedbackContract(unittest.TestCase):
         self.assertIsNone(recording_agent.criticisms[1])
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c)
+
+    def test_world_model_receives_scheduled_controller_context(self):
+        seq_len_a = 2
+        seq_len_c = 6
+        vocab_size = 7
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=3,
+            d_model=4,
+            controller_schedule="linear",
+        )
+        recording_world_model = RecordingWorldModel()
+        model.agent = FixedControllerAgent(
+            seq_len_a,
+            vocab_size,
+            w_b=torch.tensor([[1.0, 4.0]]),
+            b_b=torch.tensor([[0.0, 6.0]]),
+            schedule="linear",
+        )
+        model.world_model = recording_world_model
+        model.critic = FixedCritic(torch.zeros(1, seq_len_a, 4))
+
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, 2, dtype=torch.long)
+        src_c = torch.ones(1, seq_len_c)
+
+        model(src_a, src_b, src_c)
+
+        torch.testing.assert_close(
+            recording_world_model.w_context,
+            torch.tensor([[1.0, 2.0, 3.0, 4.0, 4.0, 4.0]]),
+        )
+        torch.testing.assert_close(
+            recording_world_model.b_context,
+            torch.tensor([[0.0, 2.0, 4.0, 6.0, 6.0, 6.0]]),
+        )
 
     def test_auxiliary_objective_heads_produce_scalar_reward_value_and_representation(self):
         model = AgentWorldModelCritic(

@@ -108,8 +108,9 @@ directly to the model rather than through a stage adapter.
 
 1. The first actor pass receives `src_a`, `src_b`, and `src_c` with
    `criticism=None`.
-2. The first pass C actions and B-level controller parameters are upsampled to
-   C resolution and passed to the world model.
+2. The first pass C actions and B-level controller parameters are expanded to
+   C resolution by the selected low-level controller schedule and passed to the
+   world model.
 3. The critic maps the predicted C state to a feedback tensor with shape
    `[B, L_A, d_model]`.
 4. The second actor pass receives the original `src_a`, `src_b`, and `src_c`
@@ -127,6 +128,21 @@ No gating, normalization, clipping, detach, or loss weighting is applied inside
 the actor. Loss weights and critic regularization remain trainer-owned. The
 critic output must match the encoded A shape exactly and live on the same
 device.
+
+### Low-Level Controller Schedules
+
+`AdaptiveController` treats the B-level `w_b` and `b_b` outputs as control
+points for C-level gains. The supported schedules are:
+
+| Schedule | C-level gain construction | Use |
+| --- | --- | --- |
+| `constant` | Repeat each B gain across its `R_BC` C slots. | Backward-compatible default for existing checkpoints and Synthetic 1D metrics. |
+| `linear` | Linearly interpolate from each B gain to the next B gain across the current C chunk; the last B slot holds its own value. | Block SMB gain-schedule comparison when piecewise-constant control may be too abrupt. |
+
+The actor still returns `w_b` and `b_b` with shape `[B,L_B]` in both modes.
+`AgentWorldModelCritic` expands them through the actor's controller and passes
+that same C-level context to the world model, so dynamics prediction observes
+the low-level gains that produced the C actions.
 
 The world model accepts an optional `WorldModelState` carrying LSTM hidden and
 cell tensors between calls. Without a state it starts from zeros. Callers can
@@ -259,7 +275,7 @@ a learned embedding width comparable to ViT tokens.
 
 - Batch size agrees across every tensor in one object.
 - A/B lengths follow `R_AB`; C length follows `R_BC` and is divisible by B
-  length for the current controller.
+  length for the selected controller schedule.
 - A/B IDs remain below `vocab_size` before embedding.
 - Position order is `(x,y)` whenever `P=2`.
 - Semantic class ordering is exactly `VisionSpec.semantic_classes`.

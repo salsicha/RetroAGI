@@ -12,7 +12,12 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import torch
 
-from retroagi.core import load_checkpoint, select_device, to_plain_data
+from retroagi.core import (
+    SUPPORTED_CONTROLLER_SCHEDULES,
+    load_checkpoint,
+    select_device,
+    to_plain_data,
+)
 
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .train import (
@@ -115,6 +120,11 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reward-frame-penalty", type=_non_positive_float)
     parser.add_argument("--gradient-clip-norm", type=_positive_float)
     parser.add_argument("--hidden-dim", type=_positive_int)
+    parser.add_argument(
+        "--controller-schedule",
+        choices=SUPPORTED_CONTROLLER_SCHEDULES,
+        help="low-level controller gain schedule",
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"))
     parser.add_argument("--fixed-scenario", action="append", dest="fixed_scenarios")
     parser.add_argument("--generated-scenarios", type=_non_negative_int)
@@ -271,6 +281,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "critic_loss_weight",
         "gradient_clip_norm",
         "hidden_dim",
+        "controller_schedule",
         "device",
         "fixed_scenarios",
         "generated_scenarios",

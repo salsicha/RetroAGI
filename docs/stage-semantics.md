@@ -209,6 +209,16 @@ scenario results:
 Use these fields to compare reward and hyperparameter changes. A higher return
 without a higher threshold pass rate should not be treated as solving P3.
 
+The low-level adaptive controller supports `controller_schedule="constant"` and
+`controller_schedule="linear"`, exposed by the CLI as
+`--controller-schedule`. The default `constant` schedule preserves existing
+checkpoint behavior by repeating each B-level gain across its C slots. The
+`linear` schedule treats B-level gains as control points and interpolates C-level
+gains inside each B chunk. This is the implemented answer to the P4 gain-schedule
+question: the project can now measure piecewise-constant control against a
+smooth gain schedule with the resolved choice saved in run summaries and
+checkpoints.
+
 Block SMB ablation runs are part of `BlockSMBTrainingConfig.ablation` and are
 recorded in checkpoint and run-summary configs. The CLI exposes each switch in
 both enable and disable form so saved checkpoint settings can be inherited or

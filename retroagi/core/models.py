@@ -8,6 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+SUPPORTED_CONTROLLER_SCHEDULES = ("constant", "linear")
+
+
 @dataclass(frozen=True)
 class WorldModelState:
     """LSTM state carried between world-model calls."""
@@ -38,20 +41,69 @@ class PositionalEncoding(nn.Module):
 class AdaptiveController(nn.Module):
     """Applies B-level controller parameters at C-level resolution."""
 
-    def __init__(self):
+    def __init__(self, schedule="constant"):
         super().__init__()
+        if schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
+            raise ValueError(
+                "controller schedule must be one of "
+                f"{SUPPORTED_CONTROLLER_SCHEDULES}, got {schedule!r}"
+            )
+        self.schedule = schedule
+
+    def expand_context(self, x_c, w, b):
+        if x_c.ndim != 2 or w.ndim != 2 or b.ndim != 2:
+            raise ValueError("x_c, w, and b must all have shape [batch, length]")
+        if w.shape != b.shape:
+            raise ValueError(f"w and b shapes must match, got {w.shape} and {b.shape}")
+        if x_c.size(0) != w.size(0):
+            raise ValueError(
+                "x_c, w, and b batch sizes must match, got "
+                f"{x_c.size(0)} and {w.size(0)}"
+            )
+        if x_c.size(1) % w.size(1) != 0:
+            raise ValueError(
+                "C length must be divisible by B length, got "
+                f"{x_c.size(1)} and {w.size(1)}"
+            )
+        ratio_bc = x_c.size(1) // w.size(1)
+        if self.schedule == "constant":
+            return (
+                w.repeat_interleave(ratio_bc, dim=1),
+                b.repeat_interleave(ratio_bc, dim=1),
+            )
+
+        phase = (
+            torch.arange(ratio_bc, device=x_c.device, dtype=x_c.dtype)
+            / float(ratio_bc)
+        )
+        w = w.to(device=x_c.device, dtype=x_c.dtype)
+        b = b.to(device=x_c.device, dtype=x_c.dtype)
+        w_next = torch.cat((w[:, 1:], w[:, -1:]), dim=1)
+        b_next = torch.cat((b[:, 1:], b[:, -1:]), dim=1)
+        w_context = (w.unsqueeze(-1) + (w_next - w).unsqueeze(-1) * phase).reshape(
+            x_c.size(0), x_c.size(1)
+        )
+        b_context = (b.unsqueeze(-1) + (b_next - b).unsqueeze(-1) * phase).reshape(
+            x_c.size(0), x_c.size(1)
+        )
+        return w_context, b_context
 
     def forward(self, x_c, w, b):
-        ratio_bc = x_c.size(1) // w.size(1)
-        w_upsampled = w.repeat_interleave(ratio_bc, dim=1)
-        b_upsampled = b.repeat_interleave(ratio_bc, dim=1)
-        return w_upsampled * x_c + b_upsampled
+        w_context, b_context = self.expand_context(x_c, w, b)
+        return w_context * x_c + b_context
 
 
 class HierarchicalAdaptiveModel(nn.Module):
     """Three-level actor: Transformer A -> Transformer B -> adaptive controller."""
 
-    def __init__(self, vocab_size, d_model=64, nhead=4, num_layers=2):
+    def __init__(
+        self,
+        vocab_size,
+        d_model=64,
+        nhead=4,
+        num_layers=2,
+        controller_schedule="constant",
+    ):
         super().__init__()
         self.d_model = d_model
 
@@ -70,7 +122,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         self.transformer_B = nn.TransformerDecoder(decoder_layers_b, num_layers)
         self.fc_controller_params = nn.Linear(d_model, 2)
 
-        self.controller = AdaptiveController()
+        self.controller = AdaptiveController(schedule=controller_schedule)
 
     def generate_causal_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
@@ -313,10 +365,22 @@ class AgentWorldModelCritic(nn.Module):
     feedback added to the encoded A stream.
     """
 
-    def __init__(self, vocab_size, seq_len_a, seq_len_c, ratio_bc, d_model=64):
+    def __init__(
+        self,
+        vocab_size,
+        seq_len_a,
+        seq_len_c,
+        ratio_bc,
+        d_model=64,
+        controller_schedule="constant",
+    ):
         super().__init__()
         self.ratio_bc = ratio_bc
-        self.agent = HierarchicalAdaptiveModel(vocab_size, d_model=d_model)
+        self.agent = HierarchicalAdaptiveModel(
+            vocab_size,
+            d_model=d_model,
+            controller_schedule=controller_schedule,
+        )
         self.world_model = WorldModel(ratio_bc=ratio_bc)
         self.critic = Critic(seq_len_c, seq_len_a, d_model)
         self.transition_representation_head = nn.Sequential(
@@ -347,6 +411,16 @@ class AgentWorldModelCritic(nn.Module):
     def initial_world_model_state(self, batch_size, device, dtype=torch.float32):
         return self.world_model.initial_state(batch_size, device, dtype=dtype)
 
+    def controller_context(self, src_c, w, b):
+        controller = getattr(self.agent, "controller", None)
+        if hasattr(controller, "expand_context"):
+            return controller.expand_context(src_c, w, b)
+        ratio_bc = src_c.size(1) // w.size(1)
+        return (
+            w.repeat_interleave(ratio_bc, dim=1),
+            b.repeat_interleave(ratio_bc, dim=1),
+        )
+
     def forward(
         self,
         src_A,
@@ -361,21 +435,22 @@ class AgentWorldModelCritic(nn.Module):
     ):
         logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
 
-        w_1_up = w_1.repeat_interleave(self.ratio_bc, dim=1)
-        b_1_up = b_1.repeat_interleave(self.ratio_bc, dim=1)
+        w_1_context, b_1_context = self.controller_context(src_C, w_1, b_1)
         if (
             world_model_state is None
             and episode_mask is None
             and not return_world_model_state
         ):
-            next_state_pred = self.world_model(src_C, actions1, w_1_up, b_1_up)
+            next_state_pred = self.world_model(
+                src_C, actions1, w_1_context, b_1_context
+            )
             next_world_model_state = None
         else:
             next_state_pred, next_world_model_state = self.world_model(
                 src_C,
                 actions1,
-                w_1_up,
-                b_1_up,
+                w_1_context,
+                b_1_context,
                 initial_state=world_model_state,
                 episode_mask=episode_mask,
                 return_state=True,

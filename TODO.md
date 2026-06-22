@@ -141,7 +141,7 @@ all fixed scenarios at a documented success threshold.
 Do this after Stage 1 and Block SMB expose concrete failure modes.
 
 - [x] Specify exactly how critic output changes the actor's second pass.
-- [ ] Investigate whether the low-level adaptive controller parameters should
+- [x] Investigate whether the low-level adaptive controller parameters should
       be gain schedules.
 - [x] Separate representation, dynamics, reward, value, and policy objectives.
 - [x] Handle recurrent state and episode boundaries in the world model.

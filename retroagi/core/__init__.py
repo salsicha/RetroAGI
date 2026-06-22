@@ -48,6 +48,7 @@ from .models import (
     Critic,
     HierarchicalAdaptiveModel,
     PositionalEncoding,
+    SUPPORTED_CONTROLLER_SCHEDULES,
     WorldModel,
     WorldModelState,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "PositionalEncoding",
     "SMB_ACTIONS",
     "SMBAction",
+    "SUPPORTED_CONTROLLER_SCHEDULES",
     "StageBatch",
     "StageSpec",
     "TrainingConfig",

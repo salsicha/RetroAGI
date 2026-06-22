@@ -85,6 +85,8 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--disable-vision`, `--disable-critic-feedback`, `--disable-hierarchy`,
    `--disable-recurrent-state`, and `--disable-checkpoint-transfer`. The
    resolved ablation config is written beside each run summary and checkpoint.
+   Low-level controller gain schedules are selectable with
+   `--controller-schedule constant|linear`.
 3. Run the test suite:
    ```bash
    python -m unittest discover -s scripts/tests -v
