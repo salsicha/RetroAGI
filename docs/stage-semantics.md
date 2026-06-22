@@ -209,6 +209,23 @@ scenario results:
 Use these fields to compare reward and hyperparameter changes. A higher return
 without a higher threshold pass rate should not be treated as solving P3.
 
+If deterministic policy training stalls, run the Block ViT perception
+diagnostic before changing policy losses:
+
+```bash
+retroagi-block-smb diagnose-vision \
+  --vision-checkpoint data/block_vit/block_vit.pth \
+  --samples 64 \
+  --rollout-steps 32
+```
+
+The diagnostic compares semantic patch IDs and normalized Mario position
+against exact palette-derived labels from procedural Block SMB frames. It
+reports accuracy, foreground accuracy, mean IoU, per-class IoU, position RMSE,
+and `bottleneck_reasons`. If `perception.bottleneck` is true, improve or
+retrain the Block ViT checkpoint before interpreting low policy success as an
+actor/world-model/critic failure.
+
 The trainer applies finite-loss and finite-gradient checks before each optimizer
 step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
 Curriculum order starts with the four fixed scenario files and can append seeded

@@ -126,8 +126,10 @@ uses it to complete scenarios.
       through replay metadata.
 - [x] Tune Block SMB reward terms, training config, and hyperparameters against
       deterministic return and success-rate metrics.
-- [ ] Improve or retrain Block ViT perception if deterministic policy training
-      is bottlenecked by semantic or position quality.
+- [x] Add deterministic Block ViT perception diagnostics for semantic and
+      position bottlenecks before blaming policy training failures.
+- [ ] Improve or retrain Block ViT perception; the diagnostic currently flags
+      semantic and position quality as policy-training bottlenecks.
 - [ ] Add Block SMB ablations for vision, critic feedback, hierarchy levels,
       recurrent state handling, and checkpoint transfer.
 

@@ -15,8 +15,10 @@ from retroagi.core import (
 )
 from retroagi.stages.block_smb import (
     BLOCK_SMB_SPEC,
+    BlockVITPerceptionThresholds,
     BlockSMBStage,
     BlockVisionTransformer,
+    evaluate_block_vit_perception,
     load_block_vit_checkpoint,
 )
 from scripts.vit.train_vit import ViTSegmenter
@@ -27,6 +29,57 @@ from scripts.vit.train_block_vit import (
     compute_loss,
     make_loader,
 )
+
+
+class OracleBlockVisionTransformer(BlockVisionTransformer):
+    def forward(self, observation):
+        labels = self.patch_targets(observation)
+        logits = torch.full(
+            (labels.shape[0], self.spec.num_classes, *labels.shape[1:]),
+            -12.0,
+            device=labels.device,
+        )
+        logits.scatter_(1, labels.unsqueeze(1), 12.0)
+        return VisionOutput(
+            position=self.position_targets(observation),
+            semantic_logits=logits,
+            semantic_ids=labels,
+            tokens=torch.zeros(
+                labels.shape[0],
+                labels.shape[1] * labels.shape[2],
+                self.spec.token_dim,
+                device=labels.device,
+            ),
+            metadata={},
+        )
+
+
+class BackgroundOnlyBlockVisionTransformer(BlockVisionTransformer):
+    def forward(self, observation):
+        image = torch.as_tensor(observation)
+        if image.ndim == 3:
+            batch_size = 1
+        else:
+            batch_size = image.shape[0]
+        height, width = self.grid_size
+        logits = torch.full(
+            (batch_size, self.spec.num_classes, height, width),
+            -12.0,
+            device=self.pos_embed.device,
+        )
+        logits[:, 0] = 12.0
+        return VisionOutput(
+            position=torch.zeros(batch_size, 2, device=self.pos_embed.device),
+            semantic_logits=logits,
+            semantic_ids=logits.argmax(dim=1),
+            tokens=torch.zeros(
+                batch_size,
+                height * width,
+                self.spec.token_dim,
+                device=self.pos_embed.device,
+            ),
+            metadata={},
+        )
 
 
 class TestVisionInterface(unittest.TestCase):
@@ -61,6 +114,62 @@ class TestVisionInterface(unittest.TestCase):
         finally:
             stage.env.close()
 
+    def test_block_vit_perception_diagnostic_accepts_oracle_predictions(self):
+        encoder = OracleBlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        stage = BlockSMBStage(vision=encoder)
+        try:
+            frames = []
+            observation = stage.reset(seed=5)
+            frames.append(torch.as_tensor(observation))
+            observation, _reward, _terminated, _truncated, _info = stage.step(1)
+            frames.append(torch.as_tensor(observation))
+            metrics = evaluate_block_vit_perception(
+                encoder,
+                torch.stack(frames),
+                thresholds=BlockVITPerceptionThresholds(
+                    min_accuracy=1.0,
+                    min_foreground_accuracy=1.0,
+                    min_mean_iou=1.0,
+                    max_position_rmse=0.0,
+                    min_position_within_tolerance=1.0,
+                    position_tolerance=0.0,
+                ),
+                batch_size=1,
+            )
+        finally:
+            stage.env.close()
+
+        self.assertFalse(metrics["bottleneck"])
+        self.assertEqual(metrics["bottleneck_reasons"], [])
+        self.assertEqual(metrics["accuracy"], 1.0)
+        self.assertEqual(metrics["foreground_accuracy"], 1.0)
+        self.assertEqual(metrics["mean_iou"], 1.0)
+        self.assertEqual(metrics["position_rmse"], 0.0)
+
+    def test_block_vit_perception_diagnostic_flags_bad_predictions(self):
+        encoder = BackgroundOnlyBlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        stage = BlockSMBStage(vision=encoder)
+        try:
+            observation = stage.reset(seed=6)
+            metrics = evaluate_block_vit_perception(
+                encoder,
+                torch.as_tensor(observation),
+                thresholds=BlockVITPerceptionThresholds(
+                    min_accuracy=0.99,
+                    min_foreground_accuracy=0.99,
+                    min_mean_iou=0.99,
+                    max_position_rmse=0.001,
+                    min_position_within_tolerance=0.99,
+                    position_tolerance=0.001,
+                ),
+            )
+        finally:
+            stage.env.close()
+
+        self.assertTrue(metrics["bottleneck"])
+        self.assertIn("foreground_accuracy", metrics["bottleneck_reasons"])
+        self.assertIn("mean_iou", metrics["bottleneck_reasons"])
+        self.assertIn("position_rmse", metrics["bottleneck_reasons"])
 
     def test_procedural_trainer_executes_an_optimizer_step(self):
         frames = collect_procedural_frames(8, seed=12, rollout_steps=4)

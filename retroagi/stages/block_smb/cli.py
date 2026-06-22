@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+import torch
+
 from retroagi.core import load_checkpoint, select_device, to_plain_data
 
-from .env import BlockSMBRewardConfig
+from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .train import BlockSMBTrainingConfig, train_and_evaluate_block_smb
-from .vision import load_block_vit_checkpoint
+from .vision import evaluate_block_vit_perception, load_block_vit_checkpoint
 
 DEFAULT_RECORD_DIR = Path("artifacts/block_smb/recordings")
+DEFAULT_VISION_DIAGNOSTIC_SAMPLES = 64
+DEFAULT_VISION_DIAGNOSTIC_ROLLOUT_STEPS = 32
 
 
 def _positive_int(value: str) -> int:
@@ -143,6 +149,24 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_config_args(record)
     record.add_argument("--checkpoint", type=Path, required=True)
     record.add_argument("--record-dir", type=Path, default=DEFAULT_RECORD_DIR)
+
+    diagnose = subparsers.add_parser(
+        "diagnose-vision",
+        help="measure Block ViT semantic and position quality on procedural frames",
+    )
+    diagnose.add_argument("--output", type=Path, help="write the diagnostic JSON")
+    diagnose.add_argument("--vision-checkpoint", type=Path)
+    diagnose.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
+    diagnose.add_argument("--seed", type=int, default=7)
+    diagnose.add_argument(
+        "--samples", type=_positive_int, default=DEFAULT_VISION_DIAGNOSTIC_SAMPLES
+    )
+    diagnose.add_argument(
+        "--rollout-steps",
+        type=_positive_int,
+        default=DEFAULT_VISION_DIAGNOSTIC_ROLLOUT_STEPS,
+    )
+    diagnose.add_argument("--batch-size", type=_positive_int, default=32)
     return parser
 
 
@@ -295,6 +319,82 @@ def _make_vision_factory(
     return factory, vision_info
 
 
+def _sample_vision_diagnostic_action(rng: random.Random) -> int:
+    return rng.choices((0, 1, 2, 3, 4, 5), weights=(5, 25, 35, 2, 3, 10), k=1)[0]
+
+
+def _collect_vision_diagnostic_frames(
+    *,
+    samples: int,
+    seed: int,
+    rollout_steps: int,
+) -> torch.Tensor:
+    if samples <= 0:
+        raise ValueError("samples must be positive")
+    if rollout_steps <= 0:
+        raise ValueError("rollout_steps must be positive")
+    rng = random.Random(seed)
+    env = MarioScenarioEnv()
+    frames = []
+    scenario_index = 0
+    try:
+        while len(frames) < samples:
+            scenario_seed = seed + scenario_index
+            scenario = MarioScenarioEnv.generate_scenario(
+                num_screens=rng.randint(1, 3),
+                enemy_density=rng.uniform(0.25, 0.9),
+                moving_platform_chance=rng.uniform(0.1, 0.5),
+                seed=scenario_seed,
+            )
+            observation, _info = env.reset(scenario=scenario, seed=scenario_seed)
+            frames.append(observation.copy())
+            for _ in range(rollout_steps - 1):
+                if len(frames) >= samples:
+                    break
+                action = _sample_vision_diagnostic_action(rng)
+                observation, _reward, terminated, truncated, _info = env.step(action)
+                frames.append(observation.copy())
+                if terminated or truncated:
+                    break
+            scenario_index += 1
+    finally:
+        env.close()
+    return torch.from_numpy(np.stack(frames[:samples])).to(torch.uint8)
+
+
+def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
+    device = select_device(args.device)
+    loaded = load_block_vit_checkpoint(
+        args.vision_checkpoint,
+        device=device,
+        freeze=True,
+    )
+    frames = _collect_vision_diagnostic_frames(
+        samples=args.samples,
+        seed=args.seed,
+        rollout_steps=args.rollout_steps,
+    )
+    metrics = evaluate_block_vit_perception(
+        loaded.model,
+        frames,
+        batch_size=args.batch_size,
+    )
+    return {
+        "config": {
+            "samples": args.samples,
+            "seed": args.seed,
+            "rollout_steps": args.rollout_steps,
+            "batch_size": args.batch_size,
+            "device": str(device),
+        },
+        "vision": {
+            "checkpoint_path": str(loaded.path),
+            "frozen": loaded.frozen,
+        },
+        "perception": metrics,
+    }
+
+
 def _public_result(
     result: Mapping[str, Any],
     config: BlockSMBTrainingConfig,
@@ -318,6 +418,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         config = _make_checkpoint_config(args, record=False)
     elif args.command == "record":
         config = _make_checkpoint_config(args, record=True)
+    elif args.command == "diagnose-vision":
+        return _run_vision_diagnostic(args)
     else:
         raise ValueError(f"unknown command {args.command!r}")
     vision_factory, vision_info = _make_vision_factory(

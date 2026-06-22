@@ -50,6 +50,42 @@ class BlockVITLoadResult:
     frozen: bool
 
 
+@dataclass(frozen=True)
+class BlockVITPerceptionThresholds:
+    """Minimum perception quality before policy failures blame the trainer."""
+
+    min_accuracy: float = 0.95
+    min_foreground_accuracy: float = 0.90
+    min_mean_iou: float = 0.70
+    max_position_rmse: float = 0.06
+    min_position_within_tolerance: float = 0.90
+    position_tolerance: float = 0.05
+
+    def __post_init__(self) -> None:
+        for name in (
+            "min_accuracy",
+            "min_foreground_accuracy",
+            "min_mean_iou",
+            "min_position_within_tolerance",
+            "position_tolerance",
+        ):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if self.max_position_rmse < 0:
+            raise ValueError("max_position_rmse must be non-negative")
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "min_accuracy": self.min_accuracy,
+            "min_foreground_accuracy": self.min_foreground_accuracy,
+            "min_mean_iou": self.min_mean_iou,
+            "max_position_rmse": self.max_position_rmse,
+            "min_position_within_tolerance": self.min_position_within_tolerance,
+            "position_tolerance": self.position_tolerance,
+        }
+
+
 def _resolve_block_vit_checkpoint(path: Optional[Path] = None) -> Path:
     if path is not None:
         return Path(path)
@@ -178,6 +214,119 @@ def load_block_vit_checkpoint(
     return BlockVITLoadResult(
         model=model, checkpoint=checkpoint, path=checkpoint_path, frozen=freeze
     )
+
+
+@torch.no_grad()
+def evaluate_block_vit_perception(
+    model: "BlockVisionTransformer",
+    observations: Any,
+    *,
+    thresholds: BlockVITPerceptionThresholds = BlockVITPerceptionThresholds(),
+    batch_size: int = 32,
+) -> dict[str, Any]:
+    """Evaluate Block ViT semantics and position against exact palette labels."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    frames = torch.as_tensor(observations)
+    if frames.ndim == 3:
+        frames = frames.unsqueeze(0)
+    if frames.ndim != 4:
+        raise ValueError("observations must have shape [N,H,W,C] or [N,C,H,W]")
+    if frames.shape[0] <= 0:
+        raise ValueError("observations must contain at least one frame")
+
+    device = model.pos_embed.device
+    was_training = model.training
+    model.eval()
+    samples = correct = foreground_correct = foreground_total = patches = 0
+    position_squared_error = 0.0
+    position_within_tolerance = 0
+    intersections = torch.zeros(model.spec.num_classes, dtype=torch.float64)
+    unions = torch.zeros(model.spec.num_classes, dtype=torch.float64)
+
+    for start in range(0, frames.shape[0], batch_size):
+        batch = frames[start : start + batch_size].to(device)
+        labels = model.patch_targets(batch)
+        positions = model.position_targets(batch)
+        output = model.encode(batch)
+        prediction = output.semantic_ids
+        if prediction.shape != labels.shape:
+            raise ValueError(
+                "vision semantic_ids shape must match patch targets "
+                f"{tuple(labels.shape)}, got {tuple(prediction.shape)}"
+            )
+        if output.position.shape != positions.shape:
+            raise ValueError(
+                "vision position shape must match position targets "
+                f"{tuple(positions.shape)}, got {tuple(output.position.shape)}"
+            )
+
+        batch_size_actual = batch.shape[0]
+        samples += batch_size_actual
+        patches += labels.numel()
+        correct += (prediction == labels).sum().item()
+        foreground = labels != 0
+        foreground_correct += (prediction[foreground] == labels[foreground]).sum().item()
+        foreground_total += foreground.sum().item()
+        position_delta = output.position - positions
+        position_squared_error += position_delta.pow(2).sum().item()
+        position_error = torch.linalg.vector_norm(position_delta, dim=1)
+        position_within_tolerance += (
+            position_error <= thresholds.position_tolerance
+        ).sum().item()
+        for class_id in range(model.spec.num_classes):
+            predicted = prediction == class_id
+            target = labels == class_id
+            intersections[class_id] += (predicted & target).sum().cpu()
+            unions[class_id] += (predicted | target).sum().cpu()
+
+    if was_training:
+        model.train()
+    valid = unions > 0
+    per_class_iou = {
+        class_name: (
+            float((intersections[index] / unions[index]).item())
+            if bool(valid[index])
+            else None
+        )
+        for index, class_name in enumerate(model.spec.semantic_classes)
+    }
+    mean_iou = (
+        float((intersections[valid] / unions[valid]).mean().item())
+        if bool(valid.any())
+        else 0.0
+    )
+    accuracy = correct / max(patches, 1)
+    foreground_accuracy = foreground_correct / max(foreground_total, 1)
+    position_mse = position_squared_error / max(samples * model.spec.position_dim, 1)
+    position_rmse = position_mse ** 0.5
+    position_within_rate = position_within_tolerance / max(samples, 1)
+    bottleneck_reasons = []
+    if accuracy < thresholds.min_accuracy:
+        bottleneck_reasons.append("semantic_accuracy")
+    if foreground_accuracy < thresholds.min_foreground_accuracy:
+        bottleneck_reasons.append("foreground_accuracy")
+    if mean_iou < thresholds.min_mean_iou:
+        bottleneck_reasons.append("mean_iou")
+    if position_rmse > thresholds.max_position_rmse:
+        bottleneck_reasons.append("position_rmse")
+    if position_within_rate < thresholds.min_position_within_tolerance:
+        bottleneck_reasons.append("position_within_tolerance")
+    return {
+        "samples": float(samples),
+        "patches": float(patches),
+        "foreground_patches": float(foreground_total),
+        "accuracy": float(accuracy),
+        "foreground_accuracy": float(foreground_accuracy),
+        "mean_iou": float(mean_iou),
+        "per_class_iou": per_class_iou,
+        "position_mse": float(position_mse),
+        "position_rmse": float(position_rmse),
+        "position_within_tolerance": float(position_within_rate),
+        "thresholds": thresholds.to_dict(),
+        "bottleneck": bool(bottleneck_reasons),
+        "bottleneck_reasons": bottleneck_reasons,
+    }
 
 
 class BlockVisionTransformer(PatchVisionTransformer):

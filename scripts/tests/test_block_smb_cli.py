@@ -9,6 +9,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import torch
+
 from retroagi.stages.block_smb import cli
 
 
@@ -220,6 +222,64 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertTrue(config.record_videos)
         self.assertEqual(config.video_dir, Path("artifacts/records"))
         self.assertEqual(payload["config"]["video_dir"], "artifacts/records")
+
+    def test_diagnose_vision_command_reports_perception_metrics(self):
+        loaded_model = object()
+        fake_metrics = {
+            "samples": 2.0,
+            "accuracy": 0.75,
+            "foreground_accuracy": 0.5,
+            "mean_iou": 0.25,
+            "position_rmse": 0.1,
+            "position_within_tolerance": 0.0,
+            "bottleneck": True,
+            "bottleneck_reasons": ["mean_iou"],
+            "thresholds": {},
+            "per_class_iou": {},
+        }
+
+        with patch(
+            "retroagi.stages.block_smb.cli.load_block_vit_checkpoint",
+            return_value=SimpleNamespace(
+                model=loaded_model,
+                path=Path("data/block_vit/block_vit.pth"),
+                frozen=True,
+            ),
+        ) as load_vision:
+            with patch(
+                "retroagi.stages.block_smb.cli._collect_vision_diagnostic_frames",
+                return_value=torch.zeros(2, 240, 256, 3, dtype=torch.uint8),
+            ) as collect:
+                with patch(
+                    "retroagi.stages.block_smb.cli.evaluate_block_vit_perception",
+                    return_value=fake_metrics,
+                ) as evaluate:
+                    exit_code, payload = self.run_main(
+                        [
+                            "diagnose-vision",
+                            "--vision-checkpoint",
+                            "data/block_vit/block_vit.pth",
+                            "--device",
+                            "cpu",
+                            "--samples",
+                            "2",
+                            "--rollout-steps",
+                            "4",
+                            "--batch-size",
+                            "2",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(load_vision.call_args.args[0], Path("data/block_vit/block_vit.pth"))
+        self.assertEqual(str(load_vision.call_args.kwargs["device"]), "cpu")
+        collect.assert_called_once_with(samples=2, seed=7, rollout_steps=4)
+        evaluate.assert_called_once()
+        self.assertIs(evaluate.call_args.args[0], loaded_model)
+        self.assertEqual(evaluate.call_args.kwargs["batch_size"], 2)
+        self.assertEqual(payload["vision"]["checkpoint_path"], "data/block_vit/block_vit.pth")
+        self.assertTrue(payload["perception"]["bottleneck"])
+        self.assertEqual(payload["perception"]["bottleneck_reasons"], ["mean_iou"])
 
 
 if __name__ == "__main__":
