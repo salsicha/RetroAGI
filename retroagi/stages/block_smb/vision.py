@@ -2,12 +2,13 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import torch
 import torch.nn.functional as F
 
 from retroagi.core import (
+    build_checkpoint,
     ModelConfig,
     PatchVisionTransformer,
     VisionOutput,
@@ -63,6 +64,55 @@ def set_block_vit_trainable(model: "BlockVisionTransformer", trainable: bool) ->
     model.train(trainable)
 
 
+def _legacy_block_vit_checkpoint(
+    checkpoint: Mapping[str, Any],
+    checkpoint_path: Path,
+) -> dict[str, Any]:
+    """Normalize the original Block ViT trainer checkpoint to schema v1."""
+    if "model_state" not in checkpoint:
+        raise ValueError("legacy Block ViT checkpoint is missing model_state")
+    legacy_config = checkpoint.get("config", {})
+    if not isinstance(legacy_config, Mapping):
+        legacy_config = {}
+    vision_spec = checkpoint.get("vision_spec", {})
+    if not isinstance(vision_spec, Mapping):
+        vision_spec = {}
+
+    semantic_classes = tuple(vision_spec.get("semantic_classes", BLOCK_SEMANTIC_CLASSES))
+    model_config = {
+        "name": "block_smb_vit",
+        "hidden_dim": int(legacy_config.get("hidden_dim", legacy_config.get("dim", 64))),
+        "depth": int(legacy_config.get("depth", 2)),
+        "heads": int(legacy_config.get("heads", 4)),
+        "patch_size": int(legacy_config.get("patch_size", 16)),
+        "dropout": float(legacy_config.get("dropout", 0.1)),
+    }
+    return build_checkpoint(
+        stage="block_smb",
+        model_name="block_smb_vit",
+        checkpoint_kind="vision_encoder",
+        epoch=int(checkpoint.get("epoch", 0)),
+        metrics=checkpoint.get("metrics", {}),
+        config={
+            "model": model_config,
+            "legacy_training": dict(legacy_config),
+        },
+        specs={
+            "vision": {
+                "name": str(vision_spec.get("name", "block_smb_vit")),
+                "semantic_classes": semantic_classes,
+                "token_dim": int(vision_spec.get("token_dim", model_config["hidden_dim"])),
+                "position_dim": int(vision_spec.get("position_dim", 2)),
+            }
+        },
+        states={"model": checkpoint["model_state"]},
+        metadata={
+            "legacy_checkpoint": True,
+            "source_path": str(checkpoint_path),
+        },
+    )
+
+
 def load_block_vit_checkpoint(
     path: Optional[Path] = None,
     *,
@@ -83,7 +133,19 @@ def load_block_vit_checkpoint(
 
     from .adapter import BLOCK_SMB_SPEC
 
-    checkpoint = load_checkpoint(checkpoint_path, map_location=device)
+    try:
+        checkpoint = load_checkpoint(checkpoint_path, map_location=device)
+    except ValueError as exc:
+        if "checkpoint_schema_version" not in str(exc):
+            raise
+        legacy_checkpoint = torch.load(
+            checkpoint_path,
+            map_location=device,
+            weights_only=False,
+        )
+        if not isinstance(legacy_checkpoint, Mapping):
+            raise ValueError("legacy Block ViT checkpoint must be a mapping") from exc
+        checkpoint = _legacy_block_vit_checkpoint(legacy_checkpoint, checkpoint_path)
     config = checkpoint.get("config", {})
     model_config = config.get("model", {}) if isinstance(config, dict) else {}
     model = BlockVisionTransformer(

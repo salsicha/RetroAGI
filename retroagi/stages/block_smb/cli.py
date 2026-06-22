@@ -7,9 +7,10 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from retroagi.core import load_checkpoint, to_plain_data
+from retroagi.core import load_checkpoint, select_device, to_plain_data
 
 from .train import BlockSMBTrainingConfig, train_and_evaluate_block_smb
+from .vision import load_block_vit_checkpoint
 
 DEFAULT_RECORD_DIR = Path("artifacts/block_smb/recordings")
 
@@ -43,6 +44,12 @@ def _non_negative_float(value: str) -> float:
 
 
 def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--output", type=Path, help="write the resolved run summary JSON")
+    parser.add_argument(
+        "--vision-checkpoint",
+        type=Path,
+        help="Block ViT checkpoint to freeze and use for policy observations",
+    )
     parser.add_argument("--seed", type=int, help="base random seed")
     parser.add_argument("--epochs", type=_positive_int, help="total training epochs")
     parser.add_argument("--episodes-per-epoch", type=_positive_int)
@@ -198,9 +205,41 @@ def _make_checkpoint_config(
     return BlockSMBTrainingConfig(**values)
 
 
-def _public_result(result: Mapping[str, Any], config: BlockSMBTrainingConfig) -> dict[str, Any]:
+def _make_vision_factory(
+    config: BlockSMBTrainingConfig,
+    checkpoint_path: Path | None,
+) -> tuple[Any, dict[str, Any]]:
+    device = select_device(config.device)
+    cache: dict[str, Any] = {}
+    vision_info: dict[str, Any] = {
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        "frozen": True,
+    }
+
+    def factory():
+        if "model" not in cache:
+            loaded = load_block_vit_checkpoint(
+                checkpoint_path,
+                device=device,
+                freeze=True,
+            )
+            cache["model"] = loaded.model
+            vision_info["checkpoint_path"] = str(loaded.path)
+            vision_info["frozen"] = loaded.frozen
+        return cache["model"]
+
+    return factory, vision_info
+
+
+def _public_result(
+    result: Mapping[str, Any],
+    config: BlockSMBTrainingConfig,
+    *,
+    vision: Mapping[str, Any],
+) -> dict[str, Any]:
     return {
         "config": to_plain_data(config),
+        "vision": dict(vision),
         "history": result.get("history", []),
         "metrics": result.get("metrics", {}),
         "evaluation": result.get("evaluation", {}),
@@ -217,15 +256,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         config = _make_checkpoint_config(args, record=True)
     else:
         raise ValueError(f"unknown command {args.command!r}")
-    result = train_and_evaluate_block_smb(config)
-    return _public_result(result, config)
+    vision_factory, vision_info = _make_vision_factory(
+        config,
+        getattr(args, "vision_checkpoint", None),
+    )
+    result = train_and_evaluate_block_smb(config, vision_factory=vision_factory)
+    return _public_result(result, config, vision=vision_info)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     result = run(args)
-    print(json.dumps(result, indent=2, sort_keys=True))
+    output = json.dumps(result, indent=2, sort_keys=True)
+    if getattr(args, "output", None) is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(output + "\n", encoding="utf-8")
+    print(output)
     return 0
 
 

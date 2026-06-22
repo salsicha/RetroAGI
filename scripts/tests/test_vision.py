@@ -145,6 +145,36 @@ class TestVisionInterface(unittest.TestCase):
         for name, value in result.model.state_dict().items():
             torch.testing.assert_close(value, source.state_dict()[name])
 
+    def test_block_vit_policy_loader_normalizes_legacy_checkpoint(self):
+        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "legacy_block_vit.pth"
+            torch.save(
+                {
+                    "model_state": source.state_dict(),
+                    "epoch": 3,
+                    "metrics": {"mean_iou": 0.5},
+                    "config": {
+                        "dim": 16,
+                        "depth": 1,
+                        "heads": 4,
+                        "patch_size": 16,
+                        "dropout": 0.0,
+                    },
+                    "vision_spec": asdict(source.spec),
+                },
+                path,
+            )
+
+            result = load_block_vit_checkpoint(path, freeze=True)
+
+        self.assertEqual(result.checkpoint["checkpoint_schema_version"], 1)
+        self.assertTrue(result.checkpoint["metadata"]["legacy_checkpoint"])
+        self.assertEqual(result.checkpoint["metadata"]["source_path"], str(path))
+        self.assertEqual(result.checkpoint["metrics"]["mean_iou"], 0.5)
+        for name, value in result.model.state_dict().items():
+            torch.testing.assert_close(value, source.state_dict()[name])
+
     def test_block_vit_policy_loader_can_enable_fine_tuning(self):
         source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
         with TemporaryDirectory() as tmpdir:

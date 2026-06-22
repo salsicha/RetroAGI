@@ -1,0 +1,96 @@
+{
+  "config": {
+    "action_aux_weight": 0.01,
+    "checkpoint_path": "artifacts/block_smb/real_block_vit_seed20260622/policy.pth",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cpu",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 2,
+    "epochs": 1,
+    "evaluation_episodes": 1,
+    "evaluation_max_steps": 120,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 2,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 32,
+    "learning_rate": 0.0003,
+    "num_envs": 1,
+    "record_videos": true,
+    "resume_path": null,
+    "rollout_steps": 32,
+    "save_checkpoints": true,
+    "seed": 20260622,
+    "video_dir": "artifacts/block_smb/real_block_vit_seed20260622/evaluation",
+    "world_model_weight": 0.1
+  },
+  "curriculum": [
+    "level_1_flat.json",
+    "level_2_gap.json",
+    "level_3_stairs.json",
+    "level_4_platforms.json",
+    "generated_000",
+    "generated_001"
+  ],
+  "evaluation": {
+    "fixed_scenarios": {
+      "level_1_flat.json": {
+        "return": -1.2,
+        "success_rate": 0.0
+      },
+      "level_2_gap.json": {
+        "return": -1.2,
+        "success_rate": 0.0
+      },
+      "level_3_stairs.json": {
+        "return": -1.2,
+        "success_rate": 0.0
+      },
+      "level_4_platforms.json": {
+        "return": -1.2,
+        "success_rate": 0.0
+      }
+    },
+    "mean_return": -1.2,
+    "success_rate": 0.0
+  },
+  "history": [
+    {
+      "episodes": 2.0,
+      "eval_mean_return": -1.2,
+      "eval_success_rate": 0.0,
+      "gradient_norm": 0.5188508033752441,
+      "loss_actor_pass1": 1.2113982439041138,
+      "loss_actor_pass2": 0.0011231405660510063,
+      "loss_critic": 0.004040311090648174,
+      "loss_entropy": 1.6562169790267944,
+      "loss_total": 0.00747208297252655,
+      "loss_world_model": 0.10793090611696243,
+      "mean_return": -0.3049999999999999
+    }
+  ],
+  "metrics": {
+    "episodes": 2.0,
+    "eval_mean_return": -1.2,
+    "eval_success_rate": 0.0,
+    "gradient_norm": 0.5188508033752441,
+    "loss_actor_pass1": 1.2113982439041138,
+    "loss_actor_pass2": 0.0011231405660510063,
+    "loss_critic": 0.004040311090648174,
+    "loss_entropy": 1.6562169790267944,
+    "loss_total": 0.00747208297252655,
+    "loss_world_model": 0.10793090611696243,
+    "mean_return": -0.3049999999999999
+  },
+  "vision": {
+    "checkpoint_path": "data/block_vit/block_vit.pth",
+    "frozen": true
+  }
+}

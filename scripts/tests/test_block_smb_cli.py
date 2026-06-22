@@ -5,6 +5,8 @@ import json
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from retroagi.stages.block_smb import cli
@@ -67,6 +69,49 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.fixed_scenarios, ("level_1_flat.json",))
         self.assertNotIn("model", payload)
         self.assertEqual(payload["config"]["epochs"], 3)
+
+    def test_train_command_loads_frozen_vision_checkpoint_and_writes_summary(self):
+        loaded_model = object()
+
+        def fake_train(_config, *, vision_factory):
+            self.assertIs(vision_factory(), loaded_model)
+            return fake_result()
+
+        with TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "run_summary.json"
+            with patch(
+                "retroagi.stages.block_smb.cli.load_block_vit_checkpoint",
+                return_value=SimpleNamespace(
+                    model=loaded_model,
+                    path=Path("data/block_vit/block_vit.pth"),
+                    frozen=True,
+                ),
+            ) as load_vision:
+                with patch(
+                    "retroagi.stages.block_smb.cli.train_and_evaluate_block_smb",
+                    side_effect=fake_train,
+                ):
+                    exit_code, payload = self.run_main(
+                        [
+                            "train",
+                            "--device",
+                            "cpu",
+                            "--vision-checkpoint",
+                            "data/block_vit/block_vit.pth",
+                            "--output",
+                            str(output),
+                        ]
+                    )
+
+            written = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(load_vision.call_args.args[0], Path("data/block_vit/block_vit.pth"))
+        self.assertEqual(str(load_vision.call_args.kwargs["device"]), "cpu")
+        self.assertTrue(load_vision.call_args.kwargs["freeze"])
+        self.assertEqual(payload["vision"]["checkpoint_path"], "data/block_vit/block_vit.pth")
+        self.assertTrue(payload["vision"]["frozen"])
+        self.assertEqual(written["vision"], payload["vision"])
 
     def test_evaluate_command_reuses_checkpoint_config_without_training(self):
         checkpoint = {

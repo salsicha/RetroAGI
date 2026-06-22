@@ -113,7 +113,7 @@ uses it to complete scenarios.
       is correct and reproducible.
 - [x] Add a real CLI command for Block SMB training, evaluation, checkpoint
       resume, and recording instead of requiring Python API calls.
-- [ ] Run real Block SMB policy training with the actual Block ViT checkpoint
+- [x] Run real Block SMB policy training with the actual Block ViT checkpoint
       and record the resolved config, seed, metrics, checkpoint path, and
       evaluation artifacts.
 - [ ] Define and document a success threshold for each fixed Block SMB scenario.
