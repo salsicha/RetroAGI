@@ -15,8 +15,11 @@ from retroagi.core import (
 from retroagi.stages.full_smb import (
     FULL_SMB_SPEC,
     FullSMBObservationConfig,
+    FullSMBSmokeConfig,
     FullSMBStage,
     extract_full_smb_signals,
+    run_deterministic_reset_smoke,
+    run_headless_random_agent_smoke,
 )
 
 
@@ -141,7 +144,87 @@ class SaveStateRetroEnv(FrameSkipRetroEnv):
         self.em = EmulatorStateProxy(self)
 
 
+class SeededHeadlessRetroEnv:
+    buttons = ("B", "A", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT")
+
+    def __init__(self, episode_length=8):
+        self.episode_length = episode_length
+        self.seed_value = 0
+        self.step_count = 0
+        self.actions = []
+        self.render_calls = 0
+        self.closed = False
+
+    def reset(self, seed=None):
+        self.seed_value = 0 if seed is None else int(seed)
+        self.step_count = 0
+        return self._observation(0), self._info(terminated=False)
+
+    def step(self, action):
+        button_vector = np.asarray(action, dtype=np.int8)
+        self.actions.append(button_vector.copy())
+        self.step_count += 1
+        action_value = int(np.flatnonzero(button_vector).sum())
+        terminated = self.step_count >= self.episode_length
+        reward = float(self.step_count + action_value)
+        return (
+            self._observation(action_value),
+            reward,
+            terminated,
+            False,
+            self._info(terminated=terminated),
+        )
+
+    def render(self):
+        self.render_calls += 1
+
+    def close(self):
+        self.closed = True
+
+    def _observation(self, action_value):
+        height, width = 16, 20
+        y = np.arange(height, dtype=np.uint16).reshape(height, 1)
+        x = np.arange(width, dtype=np.uint16).reshape(1, width)
+        base = (
+            self.seed_value * 17
+            + self.step_count * 31
+            + action_value * 13
+            + x
+            + y
+        ) % 256
+        return np.stack(
+            (
+                base,
+                (base * 2) % 256,
+                (base * 3) % 256,
+            ),
+            axis=-1,
+        ).astype(np.uint8)
+
+    def _info(self, *, terminated):
+        return {
+            "x_pos": self.seed_value + self.step_count * 4,
+            "y_pos": 96 + self.step_count,
+            "score": self.step_count * 100,
+            "coins": self.step_count % 10,
+            "lives": 3,
+            "level_complete": bool(terminated),
+            "termination_reason": "level_complete" if terminated else None,
+        }
+
+
 class TestFullSMBStage(unittest.TestCase):
+    def make_seeded_headless_stage(self, *, episode_length=8):
+        return FullSMBStage(
+            env=SeededHeadlessRetroEnv(episode_length=episode_length),
+            vision=StaticFullSMBVision(),
+            observation_config=FullSMBObservationConfig(
+                frame_skip=1,
+                frame_stack=2,
+                resize_shape=(8, 8),
+            ),
+        )
+
     def test_signal_extractor_accepts_nested_position_and_death_reason(self):
         signals = extract_full_smb_signals(
             {
@@ -351,6 +434,48 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertTrue(truncated)
         self.assertFalse(_info["full_smb_signals"]["terminated"])
         self.assertTrue(_info["full_smb_signals"]["truncated"])
+
+    def test_headless_random_agent_smoke_runs_without_rendering(self):
+        stage = self.make_seeded_headless_stage(episode_length=3)
+        env = stage.env
+        try:
+            result = run_headless_random_agent_smoke(
+                stage,
+                FullSMBSmokeConfig(
+                    steps=5,
+                    seed=11,
+                    encode_observations=True,
+                    reset_on_done=True,
+                ),
+            )
+        finally:
+            stage.close()
+
+        self.assertEqual(result.requested_steps, 5)
+        self.assertEqual(result.executed_steps, 5)
+        self.assertEqual(len(result.action_ids), 5)
+        self.assertEqual(result.resets, 2)
+        self.assertEqual(result.completed_episodes, 1)
+        self.assertEqual(result.terminated_count, 1)
+        self.assertEqual(result.truncated_count, 0)
+        self.assertEqual(result.encoded_observations, 7)
+        self.assertEqual(env.render_calls, 0)
+        self.assertTrue(env.closed)
+        self.assertEqual(result.final_signals["terminated"], False)
+
+    def test_deterministic_reset_smoke_compares_seeded_rollouts(self):
+        result = run_deterministic_reset_smoke(
+            lambda: self.make_seeded_headless_stage(episode_length=10),
+            seed=23,
+            steps=6,
+            encode_observations=True,
+        )
+
+        self.assertTrue(result.deterministic, result.mismatch)
+        self.assertIsNone(result.mismatch)
+        self.assertEqual(result.first, result.second)
+        self.assertEqual(len(result.first.action_ids), 6)
+        self.assertEqual(result.first.encoded_observations, 7)
 
 
 if __name__ == "__main__":

@@ -79,7 +79,7 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --output artifacts/block_smb/latest/run_summary.json
    retroagi-block-smb evaluate --checkpoint data/block_smb/policy.pth
    retroagi-block-smb record --checkpoint data/block_smb/policy.pth --record-dir artifacts/block_smb/recordings
-   python -m retroagi.stages.full_smb.run --steps 500
+   python -m retroagi.stages.full_smb.run --steps 500 --seed 0
    ```
    Block SMB ablations can be run with paired switches such as
    `--disable-vision`, `--disable-world-model`, `--disable-critic-feedback`,
@@ -87,7 +87,8 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--disable-checkpoint-transfer`. The
    resolved ablation config is written beside each run summary and checkpoint.
    Low-level controller gain schedules are selectable with
-   `--controller-schedule constant|linear`.
+   `--controller-schedule constant|linear`. The Full SMB random-agent runner is
+   headless by default; pass `--render` only for local visual inspection.
    Learned-dynamics imagination is selectable with
    `--imagined-rollout-horizon` and `--imagined-rollout-weight`.
    Target-network stabilization is selectable with `--target-network-mode`,

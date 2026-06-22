@@ -182,7 +182,7 @@ environment semantics.
   - [x] Replace `FullSMBSegmentationVision`'s DeepLab implementation with the ViT
     loader while preserving the shared `VisionOutput` contract and checkpoint
     compatibility checks.
-- [ ] Add headless random-agent and deterministic reset smoke tests.
+- [x] Add headless random-agent and deterministic reset smoke tests.
 - [ ] Transfer Block SMB perception and policy checkpoints into Full SMB.
 - [ ] Compare transferred checkpoints with training from scratch.
 

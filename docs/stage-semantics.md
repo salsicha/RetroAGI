@@ -439,6 +439,27 @@ supports it. If the backend reset does not accept `seed`, the adapter calls
 episode, clears adapter-owned episode mask state, and repopulates the frame
 stack with invalid reset padding plus the first valid reset frame.
 
+### Smoke Checks
+
+`run_headless_random_agent_smoke(stage, FullSMBSmokeConfig(...))` runs seeded
+random actions without calling `render()` unless rendering is explicitly
+enabled. It records executed steps, resets, episode endings, reward totals,
+action IDs, observation checksums, final signals, and optional
+`encode_observation` coverage.
+
+`run_deterministic_reset_smoke(make_stage, seed=..., steps=...)` creates two
+fresh stages, resets both with the same seed, replays the same action sequence,
+and compares observation checksums, rewards, ending flags, signals, and executed
+action IDs. A mismatch names the first trace field that diverged.
+
+The default command-line smoke runner is headless:
+
+```bash
+python -m retroagi.stages.full_smb.run --steps 500 --seed 0
+```
+
+Pass `--render` only for local visual inspection.
+
 ### Emulator State
 
 `FullSMBStage.save_emulator_state()` captures a `FullSMBEmulatorState` snapshot
