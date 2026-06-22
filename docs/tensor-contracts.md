@@ -42,14 +42,13 @@ L_B = L_A * R_AB
 L_C = L_B * R_BC
 ```
 
-Synthetic 1D and Block SMB both currently use `L_A=8`, `R_AB=2`,
-`R_BC=4`, and `vocab_size=20`, producing `L_B=16` and `L_C=64`.
-These are representation lengths, not wall-clock durations.
+Synthetic 1D, Block SMB, and Full SMB currently use `L_A=8`, `R_AB=2`,
+`R_BC=4`, and `vocab_size=20`, producing `L_B=16` and `L_C=64`. These are
+representation lengths, not wall-clock durations.
 
 Timescale ordering is slow A, medium B, fast C. One A slot spans two B slots
 and eight C slots; one B slot spans four C slots. C-stream recurrent
-processing currently uses groups of `R_BC=4` values. Full SMB has no
-`StageSpec` until `FullSMBStage` is implemented.
+processing currently uses groups of `R_BC=4` values.
 
 ## StageBatch
 
@@ -212,9 +211,9 @@ truncation; `terminated` and `truncated` retain the environment booleans.
 `ratio_bc=4`, `seq_len_b=16`, `seq_len_c=64`, and `vocab_size=20`. Its
 `StageBatch` is produced by `VisionHierarchyProjector`. With the current
 DeepLab output, the C prefix contains two normalized position values followed
-by six semantic probabilities. No emulator game-variable state vector is defined
-yet; if a test or backend supplies a pre-normalized `info["state_vec"]`, it is
-inserted after the semantic probabilities and before pooled patch-token slots.
+by six semantic probabilities, then the nine-value Full SMB signal vector:
+normalized x, y, score, coins, lives, completion, death, terminated, and
+truncated. The remaining C slots contain pooled patch-token features.
 
 ## VisionOutput
 

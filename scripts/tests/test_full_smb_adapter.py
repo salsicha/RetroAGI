@@ -12,7 +12,11 @@ from retroagi.core import (
     VisionSpec,
     full_smb_action,
 )
-from retroagi.stages.full_smb import FULL_SMB_SPEC, FullSMBStage
+from retroagi.stages.full_smb import (
+    FULL_SMB_SPEC,
+    FullSMBStage,
+    extract_full_smb_signals,
+)
 
 
 class StaticFullSMBVision:
@@ -47,7 +51,7 @@ class GymnasiumRetroEnv:
         self.reset_seed = seed
         return (
             np.zeros((224, 256, 4), dtype=np.uint8),
-            {"state_vec": np.array([0.0, 0.25], dtype=np.float32)},
+            {"x_pos": 12, "y_pos": 42, "score": 0, "coins": 0, "lives": 3},
         )
 
     def step(self, action):
@@ -57,7 +61,17 @@ class GymnasiumRetroEnv:
             3.5,
             True,
             False,
-            {"score": 100, "state_vec": np.array([0.5, 1.0], dtype=np.float32)},
+            {
+                "xscrollHi": 1,
+                "xscrollLo": 44,
+                "screen_x": 6,
+                "ypos": 180,
+                "score": 100,
+                "coins": 7,
+                "lives": 2,
+                "level_complete": True,
+                "termination_reason": "level_complete",
+            },
         )
 
     def close(self):
@@ -76,6 +90,28 @@ class LegacyRetroEnv(GymnasiumRetroEnv):
 
 
 class TestFullSMBStage(unittest.TestCase):
+    def test_signal_extractor_accepts_nested_position_and_death_reason(self):
+        signals = extract_full_smb_signals(
+            {
+                "position": {"player_x": 144, "player_y": 96},
+                "Score": 1234,
+                "coin_count": 12,
+                "lives_left": 1,
+                "done_reason": "death",
+            },
+            terminated=True,
+            truncated=False,
+        )
+
+        self.assertEqual(signals.position, (144.0, 96.0))
+        self.assertEqual(signals.score, 1234)
+        self.assertEqual(signals.coins, 12)
+        self.assertEqual(signals.lives, 1)
+        self.assertFalse(signals.completion)
+        self.assertTrue(signals.death)
+        self.assertTrue(signals.terminated)
+        self.assertFalse(signals.truncated)
+
     def test_stage_maps_shared_actions_and_projects_observations(self):
         env = GymnasiumRetroEnv()
         stage = FullSMBStage(env=env, vision=StaticFullSMBVision())
@@ -97,6 +133,37 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertTrue(terminated)
             self.assertFalse(truncated)
             self.assertEqual(info["action"]["shared_name"], "RIGHT_JUMP")
+            self.assertEqual(
+                info["full_smb_signals"],
+                {
+                    "position": (306.0, 180.0),
+                    "score": 100,
+                    "coins": 7,
+                    "lives": 2,
+                    "completion": True,
+                    "death": False,
+                    "terminated": True,
+                    "truncated": False,
+                    "termination_reason": "level_complete",
+                },
+            )
+            np.testing.assert_allclose(
+                info["state_vec"],
+                np.array(
+                    [
+                        306.0 / 4096.0,
+                        180.0 / 240.0,
+                        100.0 / 999_999.0,
+                        7.0 / 99.0,
+                        2.0 / 99.0,
+                        1.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                    ],
+                    dtype=np.float32,
+                ),
+            )
 
             batch = stage.encode_observation(next_observation, info)
             self.assertIsInstance(batch, StageBatch)
@@ -105,7 +172,7 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertEqual(batch.src_b.shape, (1, FULL_SMB_SPEC.seq_len_b))
             self.assertEqual(batch.src_c.shape, (1, FULL_SMB_SPEC.seq_len_c))
             self.assertEqual(batch.metadata["episode"]["mask"].item(), 0.0)
-            self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (8, 10))
+            self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (8, 17))
         finally:
             stage.close()
         self.assertTrue(env.closed)
@@ -124,6 +191,8 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(reward, -1.0)
         self.assertFalse(terminated)
         self.assertTrue(truncated)
+        self.assertFalse(_info["full_smb_signals"]["terminated"])
+        self.assertTrue(_info["full_smb_signals"]["truncated"])
 
 
 if __name__ == "__main__":

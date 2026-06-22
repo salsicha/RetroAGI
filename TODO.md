@@ -162,7 +162,7 @@ environment semantics.
 
 - [x] Implement `stable-retro` behind a Full SMB environment adapter.
 - [x] Map emulator buttons to the P1 shared action vocabulary.
-- [ ] Extract and test position, score, coins, lives, completion, death,
+- [x] Extract and test position, score, coins, lives, completion, death,
       termination, and truncation signals.
 - [ ] Add frame skipping, resizing, normalization, stacking, and episode masks.
 - [ ] Add emulator state save/load for repeatable evaluation.

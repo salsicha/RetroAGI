@@ -341,8 +341,9 @@ passing a seed to `MarioScenarioEnv.generate_scenario`.
 wraps `stable-retro` lazily, maps the shared SMB action vocabulary to
 backend-specific button vectors, and normalizes both Gym-style four-value and
 Gymnasium-style five-value `step` results into the shared stage contract.
-Backend game-variable extraction, emulator save states, frame skipping, and
-frame stacking are not yet implemented.
+Backend game-variable extraction is normalized into `full_smb_signals` and
+`state_vec`. Emulator save states, frame skipping, and frame stacking are not
+yet implemented.
 
 Backend-specific values must be normalized at this boundary rather than leaking
 into shared training code.
@@ -363,6 +364,26 @@ button vector by reading `env.buttons`; it does not assume fixed button indices.
 The adapter records the shared action ID, name, backend button names, and button
 vector in `info["action"]`.
 
+### Info Signals
+
+`FullSMBStage` extracts common stable-retro game variables into
+`info["full_smb_signals"]`:
+
+| Field | Meaning |
+| --- | --- |
+| `position` | Raw `(x, y)` player/world position when backend variables expose it. X may be derived from `xscrollHi`, `xscrollLo`, and `screen_x`. |
+| `score` | Backend score counter, if present. |
+| `coins` | Coin counter, if present. |
+| `lives` | Lives counter, if present. |
+| `completion` | True when a completion flag or terminal reason indicates level clear, goal, or flag completion. |
+| `death` | True when a death flag or terminal reason indicates death or game over. |
+| `terminated` | The adapter-level termination boolean for the transition. |
+| `truncated` | The adapter-level truncation boolean for the transition. |
+
+The adapter also writes `info["state_vec"]`, a nine-value `float32` vector with
+normalized x, y, score, coins, lives, completion, death, terminated, and
+truncated values. Missing raw values are encoded as zero.
+
 ### Reward
 
 Until a project-level reward contract is implemented, the adapter passes
@@ -377,8 +398,9 @@ The adapter forwards the backend's `terminated` value when the backend returns a
 five-value Gymnasium step result. For legacy four-value Gym results, `done`
 maps to `terminated` unless `info["truncated"]` or
 `info["TimeLimit.truncated"]` is true. Terminal game conditions such as death,
-game over, or level completion must be represented by the game integration and
-exposed with a reason in `info` when available.
+game over, or level completion are also reflected in
+`info["full_smb_signals"]` when the backend exposes a matching flag or terminal
+reason.
 
 ### Truncation
 
