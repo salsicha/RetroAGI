@@ -1,0 +1,113 @@
+{
+  "checkpoint": {
+    "checkpoint_kind": "scripted_policy",
+    "checkpoint_schema_version": 1,
+    "metadata": {
+      "policy_type": "scripted_known_good"
+    },
+    "metrics": {
+      "mean_return": 69.12500000000003,
+      "success_rate": 1.0,
+      "success_thresholds_met": 1.0
+    },
+    "model_name": "block_smb_scripted_known_good",
+    "stage": "block_smb"
+  },
+  "checkpoint_path": "artifacts/block_smb/known_good_scripted_seed20260622/policy.pth",
+  "evaluation": {
+    "fixed_scenarios": {
+      "level_1_flat.json": {
+        "return": 69.26500000000001,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+          "scenario_name": "level_1_flat.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_2_gap.json": {
+        "return": 68.70500000000001,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+          "scenario_name": "level_2_gap.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_3_stairs.json": {
+        "return": 68.70500000000003,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+          "scenario_name": "level_3_stairs.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_4_platforms.json": {
+        "return": 69.82500000000002,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+          "scenario_name": "level_4_platforms.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      }
+    },
+    "mean_return": 69.12500000000003,
+    "success_rate": 1.0,
+    "success_thresholds_met": true
+  },
+  "evaluation_episodes": 3,
+  "evaluation_max_steps": 200,
+  "policy_type": "scripted_known_good",
+  "record_dir": "artifacts/block_smb/known_good_scripted_seed20260622/evaluation",
+  "seed": 20260622
+}

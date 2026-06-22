@@ -66,3 +66,16 @@ Each fixed scenario result includes:
 
 The top-level evaluation result includes `success_thresholds_met`, which is
 true only when every fixed scenario passes its threshold.
+
+## Known-Good Baseline
+
+The repository includes a deterministic scripted baseline that passes these
+thresholds:
+
+- Checkpoint: `artifacts/block_smb/known_good_scripted_seed20260622/policy.pth`
+- Summary: `artifacts/block_smb/known_good_scripted_seed20260622/run_summary.json`
+- Recordings: `artifacts/block_smb/known_good_scripted_seed20260622/evaluation/`
+
+This artifact is a regression baseline for the environment, recording path, and
+threshold validation. It is not evidence that the learned
+actor/world-model/critic policy has solved Block SMB.

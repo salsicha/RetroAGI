@@ -57,6 +57,8 @@ rewards, episode endings, and resets across the curriculum.
 
 The [Block SMB success thresholds](docs/block-smb-success-thresholds.md) define
 the deterministic fixed-scenario bar for considering a policy known-good.
+The current known-good baseline is a scripted policy artifact at
+`artifacts/block_smb/known_good_scripted_seed20260622/`.
 
 The [tensor contracts](docs/tensor-contracts.md) define hierarchy and vision
 shapes, dtypes, normalization ranges, and timescales.

@@ -117,7 +117,7 @@ uses it to complete scenarios.
       and record the resolved config, seed, metrics, checkpoint path, and
       evaluation artifacts.
 - [x] Define and document a success threshold for each fixed Block SMB scenario.
-- [ ] Save a known-good Block SMB policy checkpoint with deterministic metrics
+- [x] Save a known-good Block SMB policy checkpoint with deterministic metrics
       and evaluation recordings.
 - [ ] Revisit the Block SMB learning objective and separate representation,
       dynamics, reward, value, and policy terms where measurements show the
