@@ -1,6 +1,7 @@
 """Full-SMB stable-retro adapter for the shared stage contract."""
 
 from collections import deque
+import copy
 from dataclasses import dataclass
 import inspect
 from typing import Any, Mapping, Optional
@@ -83,6 +84,20 @@ class FullSMBObservationConfig:
             height, width = self.resize_shape
             if height <= 0 or width <= 0:
                 raise ValueError("resize_shape dimensions must be positive")
+
+
+@dataclass(frozen=True)
+class FullSMBEmulatorState:
+    """Snapshot of backend emulator state plus adapter-owned rollout state."""
+
+    backend_state: Any
+    observation: np.ndarray
+    last_info: dict[str, Any]
+    episode_mask: float
+    terminated: bool
+    truncated: bool
+    frame_stack: tuple[torch.Tensor, ...]
+    frame_mask: tuple[bool, ...]
 
 
 @dataclass(frozen=True)
@@ -218,6 +233,7 @@ class FullSMBStage:
         self._frame_mask: deque[bool] = deque(
             maxlen=self.observation_config.frame_stack
         )
+        self._last_observation: Optional[np.ndarray] = None
 
     @property
     def buttons(self) -> tuple[str, ...]:
@@ -237,6 +253,7 @@ class FullSMBStage:
         self._last_terminal = False
         self._last_truncated = False
         self._reset_frame_stack(observation)
+        self._last_observation = observation.copy()
         return observation
 
     def step(
@@ -277,7 +294,48 @@ class FullSMBStage:
         self._last_episode_mask = 0.0 if terminated or truncated else 1.0
         self._last_terminal = terminated
         self._last_truncated = truncated
+        self._last_observation = observation.copy()
         return observation, total_reward, terminated, truncated, info
+
+    def save_emulator_state(self) -> FullSMBEmulatorState:
+        """Snapshot backend emulator state and adapter metadata."""
+
+        if self._last_observation is None:
+            raise RuntimeError("cannot save Full SMB emulator state before reset")
+        owner = self._emulator_state_owner()
+        return FullSMBEmulatorState(
+            backend_state=copy.deepcopy(owner.get_state()),
+            observation=self._last_observation.copy(),
+            last_info=copy.deepcopy(dict(self.last_info)),
+            episode_mask=float(self._last_episode_mask),
+            terminated=bool(self._last_terminal),
+            truncated=bool(self._last_truncated),
+            frame_stack=tuple(frame.clone() for frame in self._frame_stack),
+            frame_mask=tuple(bool(item) for item in self._frame_mask),
+        )
+
+    def load_emulator_state(self, state: FullSMBEmulatorState) -> np.ndarray:
+        """Restore a snapshot and return its current RGB observation."""
+
+        if not isinstance(state, FullSMBEmulatorState):
+            raise TypeError("state must be a FullSMBEmulatorState")
+        if len(state.frame_stack) > self.observation_config.frame_stack:
+            raise ValueError("saved frame stack is larger than this stage config")
+        owner = self._emulator_state_owner()
+        owner.set_state(copy.deepcopy(state.backend_state))
+        observation = self._rgb_observation(state.observation)
+        self._last_observation = observation.copy()
+        self.last_info = copy.deepcopy(state.last_info)
+        self._last_episode_mask = float(state.episode_mask)
+        self._last_terminal = bool(state.terminated)
+        self._last_truncated = bool(state.truncated)
+        self._frame_stack.clear()
+        self._frame_mask.clear()
+        for frame in state.frame_stack:
+            self._frame_stack.append(frame.clone())
+        for valid in state.frame_mask:
+            self._frame_mask.append(bool(valid))
+        return observation
 
     def encode_observation(
         self, observation: np.ndarray, info: Optional[Mapping[str, Any]] = None
@@ -326,6 +384,16 @@ class FullSMBStage:
         if seed_fn is not None:
             seed_fn(seed)
         return reset()
+
+    def _emulator_state_owner(self):
+        if _has_state_api(self.env):
+            return self.env
+        emulator = getattr(self.env, "em", None)
+        if _has_state_api(emulator):
+            return emulator
+        raise RuntimeError(
+            "Full SMB backend must expose get_state/set_state on env or env.em"
+        )
 
     @staticmethod
     def _rgb_observation(observation: Any) -> np.ndarray:
@@ -492,6 +560,12 @@ def _call_accepts_keyword(callable_obj: Any, keyword: str) -> bool:
         if parameter.name == keyword:
             return True
     return False
+
+
+def _has_state_api(owner: Any) -> bool:
+    return callable(getattr(owner, "get_state", None)) and callable(
+        getattr(owner, "set_state", None)
+    )
 
 
 def _position_value(info: Mapping[str, Any]) -> Optional[tuple[float, float]]:

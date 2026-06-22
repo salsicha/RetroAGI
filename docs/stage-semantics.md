@@ -343,7 +343,8 @@ backend-specific button vectors, and normalizes both Gym-style four-value and
 Gymnasium-style five-value `step` results into the shared stage contract.
 Backend game-variable extraction is normalized into `full_smb_signals` and
 `state_vec`. Frame skipping, resizing, normalization, stacking, and episode
-masks are implemented. Emulator save states are not yet implemented.
+masks are implemented. Emulator state snapshots are implemented for repeatable
+evaluation.
 
 Backend-specific values must be normalized at this boundary rather than leaking
 into shared training code.
@@ -434,4 +435,19 @@ supports it. If the backend reset does not accept `seed`, the adapter calls
 `env.seed(seed)` when available before resetting. Reset begins a new emulator
 episode, clears adapter-owned episode mask state, and repopulates the frame
 stack with invalid reset padding plus the first valid reset frame.
-Deterministic emulator save-state reset is not implemented yet.
+
+### Emulator State
+
+`FullSMBStage.save_emulator_state()` captures a `FullSMBEmulatorState` snapshot
+containing:
+
+- the backend emulator state from `env.get_state()` / `env.set_state()` or
+  stable-retro-style `env.em.get_state()` / `env.em.set_state()`;
+- the last RGB observation;
+- `last_info`, episode mask, termination, and truncation flags;
+- adapter-owned frame stack tensors and frame-mask values.
+
+`FullSMBStage.load_emulator_state(snapshot)` restores the backend and adapter
+state and returns the restored RGB observation. Replaying the same action after
+load must produce the same next backend transition when the underlying emulator
+state API is deterministic.

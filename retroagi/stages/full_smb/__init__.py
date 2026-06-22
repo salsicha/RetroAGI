@@ -3,6 +3,7 @@
 from .adapter import (
     FULL_SMB_GAME,
     FULL_SMB_SPEC,
+    FullSMBEmulatorState,
     FullSMBEnvConfig,
     FullSMBObservationConfig,
     FullSMBSignalConfig,
@@ -17,6 +18,7 @@ __all__ = [
     "FULL_SMB_GAME",
     "FULL_SMB_SEMANTIC_CLASSES",
     "FULL_SMB_SPEC",
+    "FullSMBEmulatorState",
     "FullSMBEnvConfig",
     "FullSMBObservationConfig",
     "FullSMBSignalConfig",

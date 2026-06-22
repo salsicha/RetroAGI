@@ -124,6 +124,23 @@ class FrameSkipRetroEnv(GymnasiumRetroEnv):
         )
 
 
+class EmulatorStateProxy:
+    def __init__(self, env):
+        self.env = env
+
+    def get_state(self):
+        return {"step_count": self.env.step_count}
+
+    def set_state(self, state):
+        self.env.step_count = int(state["step_count"])
+
+
+class SaveStateRetroEnv(FrameSkipRetroEnv):
+    def __init__(self):
+        super().__init__()
+        self.em = EmulatorStateProxy(self)
+
+
 class TestFullSMBStage(unittest.TestCase):
     def test_signal_extractor_accepts_nested_position_and_death_reason(self):
         signals = extract_full_smb_signals(
@@ -187,6 +204,71 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(observation_metadata["resize_shape"], (12, 16))
         self.assertEqual(tuple(vision.observations[-1].shape), (12, 16, 3))
         self.assertLessEqual(float(vision.observations[-1].max()), 1.0)
+
+    def test_emulator_state_round_trips_backend_and_adapter_state(self):
+        env = SaveStateRetroEnv()
+        stage = FullSMBStage(
+            env=env,
+            vision=StaticFullSMBVision(),
+            observation_config=FullSMBObservationConfig(
+                frame_skip=1,
+                frame_stack=2,
+                resize_shape=(8, 8),
+            ),
+        )
+        try:
+            stage.reset(seed=7)
+            observation_1, _reward_1, _terminated_1, _truncated_1, _info_1 = (
+                stage.step(SMBAction.RIGHT)
+            )
+            saved = stage.save_emulator_state()
+
+            observation_2, reward_2, terminated_2, truncated_2, info_2 = stage.step(
+                SMBAction.LEFT
+            )
+            batch_2 = stage.encode_observation(observation_2, info_2)
+
+            restored_observation = stage.load_emulator_state(saved)
+            self.assertEqual(env.step_count, 1)
+            np.testing.assert_array_equal(restored_observation, observation_1)
+            self.assertEqual(
+                stage.last_info["full_smb_signals"],
+                saved.last_info["full_smb_signals"],
+            )
+            np.testing.assert_allclose(
+                stage.last_info["state_vec"],
+                saved.last_info["state_vec"],
+            )
+
+            (
+                replay_observation,
+                replay_reward,
+                replay_terminated,
+                replay_truncated,
+                replay_info,
+            ) = stage.step(SMBAction.LEFT)
+            replay_batch = stage.encode_observation(replay_observation, replay_info)
+        finally:
+            stage.close()
+
+        np.testing.assert_array_equal(replay_observation, observation_2)
+        self.assertEqual(replay_reward, reward_2)
+        self.assertEqual(replay_terminated, terminated_2)
+        self.assertEqual(replay_truncated, truncated_2)
+        self.assertEqual(
+            replay_info["full_smb_signals"],
+            info_2["full_smb_signals"],
+        )
+        torch.testing.assert_close(
+            replay_batch.metadata["observation"]["frame_stack"],
+            batch_2.metadata["observation"]["frame_stack"],
+        )
+        self.assertTrue(
+            torch.equal(
+                replay_batch.metadata["observation"]["frame_mask"],
+                batch_2.metadata["observation"]["frame_mask"],
+            )
+        )
 
     def test_stage_maps_shared_actions_and_projects_observations(self):
         env = GymnasiumRetroEnv()
