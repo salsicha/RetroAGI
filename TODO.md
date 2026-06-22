@@ -183,7 +183,7 @@ environment semantics.
     loader while preserving the shared `VisionOutput` contract and checkpoint
     compatibility checks.
 - [x] Add headless random-agent and deterministic reset smoke tests.
-- [ ] Transfer Block SMB perception and policy checkpoints into Full SMB.
+- [x] Transfer Block SMB perception and policy checkpoints into Full SMB.
 - [ ] Compare transferred checkpoints with training from scratch.
 
 **Exit criteria:** a clean installation can run deterministic headless

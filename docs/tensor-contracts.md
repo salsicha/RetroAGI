@@ -210,10 +210,11 @@ truncation; `terminated` and `truncated` retain the environment booleans.
 `FullSMBStage` uses `FULL_SMB_SPEC` with `seq_len_a=8`, `ratio_ab=2`,
 `ratio_bc=4`, `seq_len_b=16`, `seq_len_c=64`, and `vocab_size=20`. Its
 `StageBatch` is produced by `VisionHierarchyProjector`. With the current
-DeepLab output, the C prefix contains two normalized position values followed
-by six semantic probabilities, then the nine-value Full SMB signal vector:
-normalized x, y, score, coins, lives, completion, death, terminated, and
-truncated. The remaining C slots contain pooled patch-token features.
+Full SMB ViT output, the C prefix contains two normalized position values
+followed by thirteen semantic probabilities, then the nine-value Full SMB
+signal vector: normalized x, y, score, coins, lives, completion, death,
+terminated, and truncated. The remaining C slots contain pooled patch-token
+features.
 
 Full SMB observation metadata includes normalized resized frame tensors:
 `frame_stack` has shape `[B, S, 3, H, W]`, where `S` is

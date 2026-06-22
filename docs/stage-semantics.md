@@ -460,6 +460,30 @@ python -m retroagi.stages.full_smb.run --steps 500 --seed 0
 
 Pass `--render` only for local visual inspection.
 
+### Checkpoint Transfer
+
+`transfer_block_smb_checkpoint_to_full_smb(...)` loads a schema-v1 Block SMB
+trainer checkpoint, validates that its A/B/C hierarchy dimensions and
+`SMBAction` vocabulary match `FULL_SMB_SPEC`, reuses the actor/world-model/critic
+weights, and writes a Full SMB transfer checkpoint with source provenance.
+
+Block ViT perception weights are validated and recorded as source provenance,
+but they are not loaded into Full SMB directly because the semantic vocabularies
+differ. Full SMB policy execution uses the versioned Full SMB ViT checkpoint
+through `FullSMBSegmentationVision`.
+
+```bash
+python -m retroagi.stages.full_smb.transfer \
+  --block-policy-checkpoint data/block_smb/policy.pth \
+  --output-checkpoint data/full_smb/transferred_policy.pth \
+  --block-vision-checkpoint data/block_vit/block_vit.pth \
+  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth
+```
+
+`load_transferred_full_smb_policy(...)` restores a saved transfer checkpoint,
+and `select_transferred_full_smb_action(...)` runs deterministic or sampled
+action selection from a `FullSMBStage.encode_observation(...)` batch.
+
 ### Emulator State
 
 `FullSMBStage.save_emulator_state()` captures a `FullSMBEmulatorState` snapshot
