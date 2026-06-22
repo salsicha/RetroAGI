@@ -43,7 +43,11 @@ class BlockSMBTrainingConfig:
     learning_rate: float = 3e-4
     gamma: float = 0.95
     entropy_weight: float = 0.01
+    policy_loss_weight: float = 1.0
+    representation_weight: float = 0.05
     world_model_weight: float = 0.1
+    reward_loss_weight: float = 0.01
+    value_loss_weight: float = 0.25
     action_aux_weight: float = 0.01
     critic_loss_weight: float = 0.001
     gradient_clip_norm: float = 1.0
@@ -87,7 +91,11 @@ class BlockSMBTrainingConfig:
             raise ValueError("generated_scenarios must be non-negative")
         loss_weights = (
             self.entropy_weight,
+            self.policy_loss_weight,
+            self.representation_weight,
             self.world_model_weight,
+            self.reward_loss_weight,
+            self.value_loss_weight,
             self.action_aux_weight,
             self.critic_loss_weight,
         )
@@ -357,6 +365,7 @@ def collect_trajectory(
 
 
 def compute_block_smb_losses(
+    model: AgentWorldModelCritic,
     transitions: list[BlockSMBTransition],
     config: BlockSMBTrainingConfig,
     device: torch.device,
@@ -371,42 +380,63 @@ def compute_block_smb_losses(
     )
     policy_terms = []
     entropy_terms = []
-    world_terms = []
-    action1_terms = []
-    action2_terms = []
+    representation_terms = []
+    dynamics_terms = []
+    reward_terms = []
+    value_terms = []
     critic_terms = []
     for index, step in enumerate(transitions):
-        reward_target = torch.full_like(step.actions2, returns[index])
-        policy_terms.append(-step.log_prob * returns[index].detach())
+        return_target = returns[index].view(1)
+        reward_target = torch.tensor([step.reward], dtype=torch.float32, device=device)
+        value_pred = model.predict_value(step.batch.src_c.detach())
+        reward_pred = model.predict_reward(step.next_state_pred)
+        predicted_representation = model.transition_representation(step.next_state_pred)
+        target_representation = model.transition_representation(
+            step.next_batch.src_c.detach()
+        ).detach()
+        advantage = (return_target - value_pred.detach()).detach()
+
+        policy_terms.append(-step.log_prob * advantage.squeeze(0))
         entropy_terms.append(step.entropy)
-        world_terms.append(
+        representation_terms.append(
+            F.mse_loss(predicted_representation, target_representation)
+        )
+        dynamics_terms.append(
             F.mse_loss(step.next_state_pred, step.next_batch.src_c.detach())
         )
-        action1_terms.append(F.mse_loss(step.actions1, reward_target.detach()))
-        action2_terms.append(F.mse_loss(step.actions2, reward_target.detach()))
+        reward_terms.append(F.mse_loss(reward_pred, reward_target))
+        value_terms.append(F.mse_loss(value_pred, return_target.detach()))
         critic_terms.append(step.criticism.pow(2).mean())
-    loss_actor_pass1 = torch.stack(action1_terms).mean()
-    loss_actor_pass2 = (
-        torch.stack(policy_terms).mean()
-        + config.action_aux_weight * torch.stack(action2_terms).mean()
-    )
-    loss_world_model = torch.stack(world_terms).mean()
-    loss_critic = torch.stack(critic_terms).mean()
+    loss_representation = torch.stack(representation_terms).mean()
+    loss_dynamics = torch.stack(dynamics_terms).mean()
+    loss_reward = torch.stack(reward_terms).mean()
+    loss_value = torch.stack(value_terms).mean()
+    loss_policy = torch.stack(policy_terms).mean()
+    loss_critic_feedback = torch.stack(critic_terms).mean()
     entropy_bonus = torch.stack(entropy_terms).mean()
     loss_total = (
-        loss_actor_pass1 * config.action_aux_weight
-        + loss_actor_pass2
-        + loss_world_model * config.world_model_weight
-        + loss_critic * config.critic_loss_weight
+        config.representation_weight * loss_representation
+        + config.world_model_weight * loss_dynamics
+        + config.reward_loss_weight * loss_reward
+        + config.value_loss_weight * loss_value
+        + config.policy_loss_weight * loss_policy
+        + config.critic_loss_weight * loss_critic_feedback
         - config.entropy_weight * entropy_bonus
     )
     losses = {
-        "loss_actor_pass1": loss_actor_pass1,
-        "loss_actor_pass2": loss_actor_pass2,
-        "loss_world_model": loss_world_model,
-        "loss_critic": loss_critic,
+        "loss_representation": loss_representation,
+        "loss_dynamics": loss_dynamics,
+        "loss_reward": loss_reward,
+        "loss_value": loss_value,
+        "loss_policy": loss_policy,
+        "loss_critic_feedback": loss_critic_feedback,
         "loss_entropy": entropy_bonus,
         "loss_total": loss_total,
+        # Backward-compatible metric aliases for existing run summaries.
+        "loss_actor_pass1": loss_representation,
+        "loss_actor_pass2": loss_policy,
+        "loss_world_model": loss_dynamics,
+        "loss_critic": loss_critic_feedback,
     }
     for name, value in losses.items():
         finite_or_raise(name, value)
@@ -444,7 +474,7 @@ def train_block_smb_epoch(
             stage.env.close()
         replay.add(trajectory)
 
-    losses = compute_block_smb_losses(replay.transitions(), config, device)
+    losses = compute_block_smb_losses(model, replay.transitions(), config, device)
     optimizer.zero_grad(set_to_none=True)
     losses["loss_total"].backward()
     check_model_gradients(model)
@@ -604,9 +634,29 @@ def restore_block_smb_checkpoint(
     if checkpoint["checkpoint_kind"] != BLOCK_SMB_CHECKPOINT_KIND:
         raise ValueError("checkpoint kind does not match Block SMB trainer")
     states = checkpoint["states"]
-    model.load_state_dict(states["model"])
+    load_result = model.load_state_dict(states["model"], strict=False)
+    allowed_missing_prefixes = (
+        "transition_representation_head.",
+        "reward_head.",
+        "value_head.",
+    )
+    unexpected = list(load_result.unexpected_keys)
+    unsupported_missing = [
+        key
+        for key in load_result.missing_keys
+        if not key.startswith(allowed_missing_prefixes)
+    ]
+    if unexpected or unsupported_missing:
+        raise ValueError(
+            "checkpoint model state is incompatible with Block SMB trainer; "
+            f"missing={unsupported_missing}, unexpected={unexpected}"
+        )
     if optimizer is not None:
-        optimizer.load_state_dict(states["optimizer"])
+        try:
+            optimizer.load_state_dict(states["optimizer"])
+        except ValueError:
+            if unsupported_missing or not load_result.missing_keys:
+                raise
     if "torch_rng" in states:
         torch.set_rng_state(states["torch_rng"].cpu())
     if "python_rng" in states:

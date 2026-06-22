@@ -119,7 +119,7 @@ uses it to complete scenarios.
 - [x] Define and document a success threshold for each fixed Block SMB scenario.
 - [x] Save a known-good Block SMB policy checkpoint with deterministic metrics
       and evaluation recordings.
-- [ ] Revisit the Block SMB learning objective and separate representation,
+- [x] Revisit the Block SMB learning objective and separate representation,
       dynamics, reward, value, and policy terms where measurements show the
       current return-as-controller-target objective is limiting learning.
 - [ ] Handle recurrent world-model state boundaries inside the model, not only

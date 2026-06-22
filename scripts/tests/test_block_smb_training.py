@@ -6,7 +6,13 @@ from tempfile import TemporaryDirectory
 
 import torch
 
-from retroagi.core import VisionOutput, VisionSpec, load_checkpoint
+from retroagi.core import (
+    VisionOutput,
+    VisionSpec,
+    build_checkpoint,
+    load_checkpoint,
+    save_checkpoint,
+)
 from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
@@ -150,6 +156,12 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertFalse(level_result["threshold_met"])
             self.assertTrue((video_dir / "level_1_flat.json_episode0.npz").exists())
             for key in (
+                "loss_representation",
+                "loss_dynamics",
+                "loss_reward",
+                "loss_value",
+                "loss_policy",
+                "loss_critic_feedback",
                 "loss_actor_pass1",
                 "loss_actor_pass2",
                 "loss_world_model",
@@ -177,6 +189,47 @@ class TestBlockSMBTraining(unittest.TestCase):
             optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
             restored = restore_block_smb_checkpoint(checkpoint, model, optimizer)
             self.assertEqual(restored["epoch"], 2)
+
+    def test_restore_accepts_checkpoint_without_separated_objective_heads(self):
+        with TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "legacy_block_smb.pth"
+            config = tiny_config()
+            source_model = make_block_smb_model(config)
+            source_optimizer = torch.optim.AdamW(
+                source_model.parameters(), lr=config.learning_rate
+            )
+            legacy_state = {
+                key: value
+                for key, value in source_model.state_dict().items()
+                if not key.startswith(
+                    (
+                        "transition_representation_head.",
+                        "reward_head.",
+                        "value_head.",
+                    )
+                )
+            }
+            checkpoint = build_checkpoint(
+                stage=BLOCK_SMB_SPEC.name,
+                model_name=BLOCK_SMB_MODEL_NAME,
+                checkpoint_kind=BLOCK_SMB_CHECKPOINT_KIND,
+                states={
+                    "model": legacy_state,
+                    "optimizer": source_optimizer.state_dict(),
+                },
+                config={"legacy": True},
+            )
+            save_checkpoint(checkpoint_path, checkpoint)
+
+            restored_model = make_block_smb_model(config)
+            restored_optimizer = torch.optim.AdamW(
+                restored_model.parameters(), lr=config.learning_rate
+            )
+            restored = restore_block_smb_checkpoint(
+                checkpoint_path, restored_model, restored_optimizer
+            )
+
+        self.assertEqual(restored["model_name"], BLOCK_SMB_MODEL_NAME)
 
 
 if __name__ == "__main__":

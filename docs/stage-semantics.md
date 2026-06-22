@@ -172,6 +172,23 @@ the shared actor/world-model/critic module, stores rollout transitions in
 `BlockSMBReplayBuffer`, and keeps `episode_mask=0.0` on terminal or truncated
 transitions so recurrent consumers can reset hidden state at episode boundaries.
 
+The Block SMB trainer reports separate objective terms instead of treating the
+discounted return as a C-level controller target:
+
+| Term | Metric | Target |
+| --- | --- | --- |
+| Representation | `loss_representation` | predicted next-state representation matches the next observation representation |
+| Dynamics | `loss_dynamics` | world model predicts the next C-stream state |
+| Reward | `loss_reward` | reward head predicts the immediate environment reward |
+| Value | `loss_value` | value head predicts the discounted return target |
+| Policy | `loss_policy` | actor log probability is weighted by return advantage |
+| Critic feedback | `loss_critic_feedback` | critic output magnitude stays bounded |
+| Entropy | `loss_entropy` | action entropy is logged and weighted as an exploration bonus |
+
+Legacy aliases (`loss_actor_pass1`, `loss_actor_pass2`, `loss_world_model`, and
+`loss_critic`) remain in metrics for older run-summary consumers, but new
+analysis should use the separated terms above.
+
 The trainer applies finite-loss and finite-gradient checks before each optimizer
 step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
 Curriculum order starts with the four fixed scenario files and can append seeded

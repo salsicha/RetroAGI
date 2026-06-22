@@ -209,6 +209,30 @@ class AgentWorldModelCritic(nn.Module):
         self.agent = HierarchicalAdaptiveModel(vocab_size, d_model=d_model)
         self.world_model = WorldModel(ratio_bc=ratio_bc)
         self.critic = Critic(seq_len_c, seq_len_a, d_model)
+        self.transition_representation_head = nn.Sequential(
+            nn.Linear(seq_len_c, d_model),
+            nn.LayerNorm(d_model),
+            nn.Tanh(),
+        )
+        self.reward_head = nn.Sequential(
+            nn.Linear(seq_len_c, d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, 1),
+        )
+        self.value_head = nn.Sequential(
+            nn.Linear(seq_len_c, d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, 1),
+        )
+
+    def transition_representation(self, state):
+        return self.transition_representation_head(state)
+
+    def predict_reward(self, next_state_pred):
+        return self.reward_head(next_state_pred).squeeze(-1)
+
+    def predict_value(self, state):
+        return self.value_head(state).squeeze(-1)
 
     def forward(self, src_A, src_B, src_C, tau=1.0):
         logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)

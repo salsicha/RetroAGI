@@ -109,6 +109,27 @@ class TestCriticFeedbackContract(unittest.TestCase):
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c + fixed_criticism.mean(dim=(1, 2)).unsqueeze(1))
 
+    def test_auxiliary_objective_heads_produce_scalar_reward_value_and_representation(self):
+        model = AgentWorldModelCritic(
+            vocab_size=7,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+        )
+        state = torch.ones(3, 8)
+
+        representation = model.transition_representation(state)
+        reward = model.predict_reward(state)
+        value = model.predict_value(state)
+
+        self.assertEqual(representation.shape, (3, 4))
+        self.assertEqual(reward.shape, (3,))
+        self.assertEqual(value.shape, (3,))
+        self.assertTrue(torch.isfinite(representation).all())
+        self.assertTrue(torch.isfinite(reward).all())
+        self.assertTrue(torch.isfinite(value).all())
+
 
 if __name__ == "__main__":
     unittest.main()
