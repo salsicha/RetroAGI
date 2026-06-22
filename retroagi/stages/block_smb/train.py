@@ -26,6 +26,7 @@ from retroagi.core import (
 
 from .adapter import BLOCK_SMB_SPEC, SCENARIOS_DIR, BlockSMBStage
 from .env import MarioScenarioEnv
+from .success import evaluate_fixed_success_thresholds
 from .vision import BlockVisionTransformer
 
 BLOCK_SMB_MODEL_NAME = "block_smb_actor_world_model_critic"
@@ -522,10 +523,29 @@ def evaluate_block_smb(
             }
             returns.extend(scenario_returns)
             successes.extend(scenario_successes)
+    threshold_results = evaluate_fixed_success_thresholds(
+        results,
+        evaluation_episodes=config.evaluation_episodes,
+        evaluation_max_steps=config.evaluation_max_steps,
+    )
+    for scenario_name, threshold_result in threshold_results.items():
+        results[scenario_name]["threshold"] = threshold_result["threshold"]
+        results[scenario_name]["threshold_met"] = threshold_result["threshold_met"]
+        results[scenario_name]["threshold_diagnostics"] = {
+            key: value
+            for key, value in threshold_result.items()
+            if key not in {"threshold", "threshold_met"}
+        }
     return {
         "fixed_scenarios": results,
         "mean_return": float(np.mean(returns)) if returns else 0.0,
         "success_rate": float(np.mean(successes)) if successes else 0.0,
+        "success_thresholds_met": all(
+            threshold_result["threshold_met"]
+            for threshold_result in threshold_results.values()
+        )
+        if threshold_results
+        else False,
     }
 
 

@@ -22,6 +22,13 @@ from .train import (
     train_and_evaluate_block_smb,
     train_block_smb_epoch,
 )
+from .success import (
+    FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS,
+    BlockSMBSuccessThreshold,
+    evaluate_fixed_success_thresholds,
+    evaluate_success_threshold,
+    fixed_scenario_success_threshold,
+)
 from .vision import (
     BLOCK_SEMANTIC_CLASSES,
     DEFAULT_BLOCK_VIT_CHECKPOINT,
@@ -50,13 +57,18 @@ __all__ = [
     "BLOCK_SMB_SPEC",
     "BlockSMBObservationConfig",
     "BlockSMBRewardConfig",
+    "BlockSMBSuccessThreshold",
     "BlockSMBStage",
     "BlockVITLoadResult",
     "BlockVisionTransformer",
     "DEFAULT_BLOCK_VIT_CHECKPOINT",
     "FALLBACK_BLOCK_VIT_CHECKPOINT",
+    "FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS",
     "MarioScenarioEnv",
     "SCENARIOS_DIR",
+    "evaluate_fixed_success_thresholds",
+    "evaluate_success_threshold",
+    "fixed_scenario_success_threshold",
     "load_block_vit_checkpoint",
     "set_block_vit_trainable",
 ]

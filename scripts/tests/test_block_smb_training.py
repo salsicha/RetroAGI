@@ -141,7 +141,13 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertEqual(saved["checkpoint_kind"], BLOCK_SMB_CHECKPOINT_KIND)
             self.assertEqual(saved["epoch"], 1)
             self.assertEqual(saved["global_step"], 1)
-            self.assertIn("level_1_flat.json", result["evaluation"]["fixed_scenarios"])
+            evaluation = result["evaluation"]
+            self.assertIn("level_1_flat.json", evaluation["fixed_scenarios"])
+            self.assertFalse(evaluation["success_thresholds_met"])
+            level_result = evaluation["fixed_scenarios"]["level_1_flat.json"]
+            self.assertIn("threshold", level_result)
+            self.assertIn("threshold_diagnostics", level_result)
+            self.assertFalse(level_result["threshold_met"])
             self.assertTrue((video_dir / "level_1_flat.json_episode0.npz").exists())
             for key in (
                 "loss_actor_pass1",

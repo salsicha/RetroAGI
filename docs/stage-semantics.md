@@ -176,9 +176,11 @@ The trainer applies finite-loss and finite-gradient checks before each optimizer
 step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
 Curriculum order starts with the four fixed scenario files and can append seeded
 procedural scenarios through `generated_scenarios`. Evaluation reports deterministic
-return and success rate for each fixed scenario. Optional recording writes compressed
-`.npz` archives containing RGB frames, selected actions, and rewards for each
-evaluation episode.
+return and success rate for each fixed scenario. It also attaches the documented
+[Block SMB success thresholds](block-smb-success-thresholds.md), per-scenario
+threshold diagnostics, and a top-level `success_thresholds_met` boolean. Optional
+recording writes compressed `.npz` archives containing RGB frames, selected
+actions, and rewards for each evaluation episode.
 
 `SequentialBlockSMBVectorEnv` is the supported vector-environment scaffold for
 P3. It steps multiple independent `MarioScenarioEnv` instances sequentially; true
