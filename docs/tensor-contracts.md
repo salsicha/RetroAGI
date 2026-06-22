@@ -128,6 +128,19 @@ the actor. Loss weights and critic regularization remain trainer-owned. The
 critic output must match the encoded A shape exactly and live on the same
 device.
 
+The world model accepts an optional `WorldModelState` carrying LSTM hidden and
+cell tensors between calls. Without a state it starts from zeros. Callers can
+pass `episode_mask` to reset recurrent memory inside the model:
+
+- shape `[B]` or `[B,1]`: reset or keep state before the first C chunk;
+- shape `[B,ceil(L_C / R_BC)]`: reset or keep state before each recurrent
+  C chunk.
+
+Mask values use `1.0` to keep memory and `0.0` to reset it. When
+`return_world_model_state=True`, `AgentWorldModelCritic` appends the next
+`WorldModelState` to its usual output tuple. Default calls keep the original
+seven-output contract.
+
 ### Block SMB
 
 `BlockSMBStage.encode_observation` returns:

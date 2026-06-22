@@ -122,7 +122,7 @@ uses it to complete scenarios.
 - [x] Revisit the Block SMB learning objective and separate representation,
       dynamics, reward, value, and policy terms where measurements show the
       current return-as-controller-target objective is limiting learning.
-- [ ] Handle recurrent world-model state boundaries inside the model, not only
+- [x] Handle recurrent world-model state boundaries inside the model, not only
       through replay metadata.
 - [ ] Tune Block SMB reward terms, training config, and hyperparameters against
       deterministic return and success-rate metrics.
@@ -142,7 +142,7 @@ Do this after Stage 1 and Block SMB expose concrete failure modes.
 - [ ] Investigate whether the low-level adaptive controller parameters should
       be gain schedules.
 - [ ] Separate representation, dynamics, reward, value, and policy objectives.
-- [ ] Handle recurrent state and episode boundaries in the world model.
+- [x] Handle recurrent state and episode boundaries in the world model.
 - [ ] Implement imagined rollouts through learned dynamics.
 - [ ] Add target networks or other stabilization only where measurements show
       they are needed.

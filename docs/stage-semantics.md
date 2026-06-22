@@ -169,8 +169,12 @@ training interface.
 
 `train_and_evaluate_block_smb` is the supported P3 trainer entry point. It uses
 the shared actor/world-model/critic module, stores rollout transitions in
-`BlockSMBReplayBuffer`, and keeps `episode_mask=0.0` on terminal or truncated
-transitions so recurrent consumers can reset hidden state at episode boundaries.
+`BlockSMBReplayBuffer`, passes each batch's episode mask into the shared world
+model, and carries `WorldModelState` between rollout steps while the episode
+continues. Terminal or truncated transitions drop that state so the next
+episode starts from zero recurrent memory. The collector detaches carried state
+between environment steps, keeping temporal context explicit without growing an
+unbounded rollout graph.
 
 The Block SMB trainer reports separate objective terms instead of treating the
 discounted return as a C-level controller target:

@@ -1,10 +1,22 @@
 """Reusable hierarchical actor, world-model, and critic components."""
 
 import math
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+@dataclass(frozen=True)
+class WorldModelState:
+    """LSTM state carried between world-model calls."""
+
+    hidden: torch.Tensor
+    cell: torch.Tensor
+
+    def detach(self):
+        return WorldModelState(self.hidden.detach(), self.cell.detach())
 
 
 class PositionalEncoding(nn.Module):
@@ -146,7 +158,77 @@ class WorldModel(nn.Module):
         self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, 1)
 
-    def _make_phases(self, seq_len, device):
+    def initial_state(self, batch_size, device, dtype=torch.float32):
+        hidden = torch.zeros(
+            self.num_layers,
+            batch_size,
+            self.hidden_size,
+            device=device,
+            dtype=dtype,
+        )
+        cell = torch.zeros_like(hidden)
+        return WorldModelState(hidden, cell)
+
+    def _coerce_state(self, state, batch_size, device, dtype):
+        if state is None:
+            return self.initial_state(batch_size, device, dtype=dtype)
+        if isinstance(state, WorldModelState):
+            hidden, cell = state.hidden, state.cell
+        else:
+            hidden, cell = state
+        expected = (self.num_layers, batch_size, self.hidden_size)
+        if tuple(hidden.shape) != expected or tuple(cell.shape) != expected:
+            raise ValueError(
+                "world model recurrent state must have hidden and cell shape "
+                f"{expected}, got {tuple(hidden.shape)} and {tuple(cell.shape)}"
+            )
+        return WorldModelState(
+            hidden.to(device=device, dtype=dtype),
+            cell.to(device=device, dtype=dtype),
+        )
+
+    def _normalize_episode_mask(self, episode_mask, batch_size, chunk_count, device, dtype):
+        chunk_masks = torch.ones(batch_size, chunk_count, device=device, dtype=dtype)
+        if episode_mask is None:
+            return chunk_masks
+
+        mask = torch.as_tensor(episode_mask, device=device, dtype=dtype)
+        if mask.ndim == 0:
+            mask = mask.view(1)
+        if mask.ndim == 1:
+            if mask.numel() == 1 and batch_size != 1:
+                mask = mask.expand(batch_size)
+            if tuple(mask.shape) != (batch_size,):
+                raise ValueError(
+                    "episode_mask must have shape [batch] or "
+                    f"[batch, chunks], got {tuple(mask.shape)}"
+                )
+            chunk_masks[:, 0] = mask
+        elif mask.ndim == 2:
+            if tuple(mask.shape) == (batch_size, 1):
+                chunk_masks[:, 0] = mask[:, 0]
+            elif tuple(mask.shape) == (batch_size, chunk_count):
+                chunk_masks = mask
+            else:
+                raise ValueError(
+                    "episode_mask must have shape [batch] or "
+                    f"[batch, {chunk_count}], got {tuple(mask.shape)}"
+                )
+        else:
+            raise ValueError(
+                "episode_mask must have shape [batch] or "
+                f"[batch, {chunk_count}], got {tuple(mask.shape)}"
+            )
+        if not torch.isfinite(chunk_masks).all().item():
+            raise ValueError("episode_mask must contain only finite values")
+        return chunk_masks
+
+    @staticmethod
+    def _mask_state(state, mask):
+        mask = mask.view(1, -1, 1)
+        return WorldModelState(state.hidden * mask, state.cell * mask)
+
+    def _make_phases(self, seq_len, device, dtype=torch.float32):
         phases = []
         for t in range(seq_len):
             t_norm = t / seq_len
@@ -155,28 +237,56 @@ class WorldModel(nn.Module):
                 step_phases.append(math.sin(2 * math.pi * k * t_norm))
                 step_phases.append(math.cos(2 * math.pi * k * t_norm))
             phases.append(step_phases)
-        return torch.tensor(phases, dtype=torch.float, device=device)
+        return torch.tensor(phases, dtype=dtype, device=device)
 
-    def forward(self, state, action, w_context, b_context):
+    def forward(
+        self,
+        state,
+        action,
+        w_context,
+        b_context,
+        *,
+        initial_state=None,
+        episode_mask=None,
+        return_state=False,
+    ):
         batch_size = state.size(0)
         seq_len_c = state.size(1)
         device = state.device
+        dtype = state.dtype
+        chunk_count = (seq_len_c + self.ratio_bc - 1) // self.ratio_bc
 
-        phases = self._make_phases(seq_len_c, device).unsqueeze(0).expand(batch_size, -1, -1)
+        phases = (
+            self._make_phases(seq_len_c, device, dtype=dtype)
+            .unsqueeze(0)
+            .expand(batch_size, -1, -1)
+        )
         x = torch.stack([state, action, w_context, b_context], dim=-1)
         x = torch.cat([x, phases], dim=-1)
 
-        h = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
-        c = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        recurrent_state = self._coerce_state(initial_state, batch_size, device, dtype)
+        chunk_masks = self._normalize_episode_mask(
+            episode_mask, batch_size, chunk_count, device, dtype
+        )
 
         outputs = []
-        for ep_start in range(0, seq_len_c, self.ratio_bc):
+        for chunk_index, ep_start in enumerate(range(0, seq_len_c, self.ratio_bc)):
             ep_end = ep_start + self.ratio_bc
-            out, (h, c) = self.lstm(x[:, ep_start:ep_end, :], (h, c))
+            recurrent_state = self._mask_state(
+                recurrent_state, chunk_masks[:, chunk_index]
+            )
+            out, (hidden, cell) = self.lstm(
+                x[:, ep_start:ep_end, :],
+                (recurrent_state.hidden, recurrent_state.cell),
+            )
+            recurrent_state = WorldModelState(hidden, cell)
             outputs.append(out)
 
         all_out = torch.cat(outputs, dim=1)
-        return self.fc(all_out).squeeze(-1)
+        prediction = self.fc(all_out).squeeze(-1)
+        if return_state:
+            return prediction, recurrent_state
+        return prediction
 
 
 class Critic(nn.Module):
@@ -234,14 +344,48 @@ class AgentWorldModelCritic(nn.Module):
     def predict_value(self, state):
         return self.value_head(state).squeeze(-1)
 
-    def forward(self, src_A, src_B, src_C, tau=1.0):
+    def initial_world_model_state(self, batch_size, device, dtype=torch.float32):
+        return self.world_model.initial_state(batch_size, device, dtype=dtype)
+
+    def forward(
+        self,
+        src_A,
+        src_B,
+        src_C,
+        tau=1.0,
+        *,
+        world_model_state=None,
+        episode_mask=None,
+        return_world_model_state=False,
+    ):
         logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
 
         w_1_up = w_1.repeat_interleave(self.ratio_bc, dim=1)
         b_1_up = b_1.repeat_interleave(self.ratio_bc, dim=1)
-        next_state_pred = self.world_model(src_C, actions1, w_1_up, b_1_up)
+        if (
+            world_model_state is None
+            and episode_mask is None
+            and not return_world_model_state
+        ):
+            next_state_pred = self.world_model(src_C, actions1, w_1_up, b_1_up)
+            next_world_model_state = None
+        else:
+            next_state_pred, next_world_model_state = self.world_model(
+                src_C,
+                actions1,
+                w_1_up,
+                b_1_up,
+                initial_state=world_model_state,
+                episode_mask=episode_mask,
+                return_state=True,
+            )
 
         criticism = self.critic(next_state_pred)
-        logits_a2, actions2, w_2, b_2 = self.agent(src_A, src_B, src_C, criticism=criticism, tau=tau)
+        logits_a2, actions2, w_2, b_2 = self.agent(
+            src_A, src_B, src_C, criticism=criticism, tau=tau
+        )
 
-        return actions1, next_state_pred, criticism, actions2, logits_a2, w_2, b_2
+        outputs = (actions1, next_state_pred, criticism, actions2, logits_a2, w_2, b_2)
+        if return_world_model_state:
+            return (*outputs, next_world_model_state)
+        return outputs

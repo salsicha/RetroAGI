@@ -17,6 +17,7 @@ from retroagi.core import (
     AgentWorldModelCritic,
     StageBatch,
     VisionEncoder,
+    WorldModelState,
     build_checkpoint,
     load_checkpoint,
     save_checkpoint,
@@ -285,9 +286,31 @@ def _action_from_model(
     *,
     deterministic: bool,
     tau: float,
-) -> tuple[int, torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
-    actions1, next_state_pred, criticism, actions2, logits_a, _w, _b = model(
-        batch.src_a, batch.src_b, batch.src_c, tau=tau
+    world_model_state: WorldModelState | None = None,
+) -> tuple[int, torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...], WorldModelState]:
+    episode = (batch.metadata or {}).get("episode", {})
+    episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
+    if episode_mask is not None:
+        episode_mask = torch.as_tensor(
+            episode_mask, dtype=batch.src_c.dtype, device=batch.src_c.device
+        )
+    (
+        actions1,
+        next_state_pred,
+        criticism,
+        actions2,
+        logits_a,
+        _w,
+        _b,
+        next_world_model_state,
+    ) = model(
+        batch.src_a,
+        batch.src_b,
+        batch.src_c,
+        tau=tau,
+        world_model_state=world_model_state,
+        episode_mask=episode_mask,
+        return_world_model_state=True,
     )
     action_logits = logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT]
     finite_or_raise("action_logits", action_logits)
@@ -300,6 +323,7 @@ def _action_from_model(
         log_prob,
         entropy,
         (actions1, actions2, next_state_pred, criticism, logits_a),
+        next_world_model_state,
     )
 
 
@@ -318,14 +342,19 @@ def collect_trajectory(
     trajectory = BlockSMBTrajectory(scenario_name=scenario_name)
     if record_frames:
         trajectory.frames.append(np.asarray(observation).copy())
+    world_model_state: WorldModelState | None = None
 
     for _ in range(rollout_steps):
         batch = stage.encode_observation(observation)
         batch.src_a = batch.src_a.to(device)
         batch.src_b = batch.src_b.to(device)
         batch.src_c = batch.src_c.to(device)
-        action, log_prob, entropy, outputs = _action_from_model(
-            model, batch, deterministic=deterministic, tau=1.0
+        action, log_prob, entropy, outputs, next_world_model_state = _action_from_model(
+            model,
+            batch,
+            deterministic=deterministic,
+            tau=1.0,
+            world_model_state=world_model_state,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
@@ -360,7 +389,9 @@ def collect_trajectory(
         if record_frames:
             trajectory.frames.append(np.asarray(observation).copy())
         if done:
+            world_model_state = None
             break
+        world_model_state = next_world_model_state.detach()
     return trajectory
 
 

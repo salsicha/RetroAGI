@@ -5,7 +5,12 @@ import unittest
 import torch
 import torch.nn as nn
 
-from retroagi.core import AgentWorldModelCritic, HierarchicalAdaptiveModel
+from retroagi.core import (
+    AgentWorldModelCritic,
+    HierarchicalAdaptiveModel,
+    WorldModel,
+    WorldModelState,
+)
 
 
 class RecordingAgent(nn.Module):
@@ -129,6 +134,86 @@ class TestCriticFeedbackContract(unittest.TestCase):
         self.assertTrue(torch.isfinite(representation).all())
         self.assertTrue(torch.isfinite(reward).all())
         self.assertTrue(torch.isfinite(value).all())
+
+
+class TestWorldModelRecurrentBoundaries(unittest.TestCase):
+    def test_episode_mask_resets_initial_recurrent_state(self):
+        torch.manual_seed(123)
+        model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)
+        state = torch.zeros(1, 4)
+        action = torch.ones(1, 4)
+        w_context = torch.ones(1, 4)
+        b_context = torch.zeros(1, 4)
+        carried = WorldModelState(
+            hidden=torch.randn(1, 1, 4),
+            cell=torch.randn(1, 1, 4),
+        )
+
+        reset_prediction, reset_state = model(
+            state,
+            action,
+            w_context,
+            b_context,
+            initial_state=carried,
+            episode_mask=torch.tensor([0.0]),
+            return_state=True,
+        )
+        fresh_prediction, fresh_state = model(
+            state, action, w_context, b_context, return_state=True
+        )
+        kept_prediction = model(
+            state,
+            action,
+            w_context,
+            b_context,
+            initial_state=carried,
+            episode_mask=torch.tensor([1.0]),
+        )
+
+        torch.testing.assert_close(reset_prediction, fresh_prediction)
+        torch.testing.assert_close(reset_state.hidden, fresh_state.hidden)
+        torch.testing.assert_close(reset_state.cell, fresh_state.cell)
+        self.assertGreater(
+            torch.max(torch.abs(kept_prediction - fresh_prediction)).item(),
+            1e-6,
+        )
+
+    def test_chunk_episode_mask_resets_state_inside_sequence(self):
+        torch.manual_seed(456)
+        model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)
+        state = torch.arange(4, dtype=torch.float32).view(1, 4)
+        action = torch.ones(1, 4)
+        w_context = torch.ones(1, 4)
+        b_context = torch.zeros(1, 4)
+        carried = WorldModelState(
+            hidden=torch.randn(1, 1, 4),
+            cell=torch.randn(1, 1, 4),
+        )
+
+        chunk_reset_prediction = model(
+            state,
+            action,
+            w_context,
+            b_context,
+            initial_state=carried,
+            episode_mask=torch.tensor([[1.0, 0.0]]),
+        )
+        first_chunk = model(
+            state[:, :2],
+            action[:, :2],
+            w_context[:, :2],
+            b_context[:, :2],
+            initial_state=carried,
+        )
+        second_chunk = model(
+            state[:, 2:],
+            action[:, 2:],
+            w_context[:, 2:],
+            b_context[:, 2:],
+        )
+
+        torch.testing.assert_close(chunk_reset_prediction[:, :2], first_chunk)
+        torch.testing.assert_close(chunk_reset_prediction[:, 2:], second_chunk)
 
 
 if __name__ == "__main__":

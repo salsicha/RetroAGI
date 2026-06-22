@@ -49,6 +49,7 @@ from .models import (
     HierarchicalAdaptiveModel,
     PositionalEncoding,
     WorldModel,
+    WorldModelState,
 )
 from .vision import LinearVisionEncoder, PatchVisionTransformer
 
@@ -80,6 +81,7 @@ __all__ = [
     "VisionOutput",
     "VisionSpec",
     "WorldModel",
+    "WorldModelState",
     "block_smb_action",
     "build_checkpoint",
     "coerce_smb_action",
