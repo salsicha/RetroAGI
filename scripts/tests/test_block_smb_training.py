@@ -199,6 +199,48 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertTrue(torch.isfinite(losses[key]).item())
         self.assertTrue(torch.isfinite(losses["loss_total"]).item())
 
+    def test_world_model_ablation_bypasses_dynamics_and_imagination(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            rollout_steps=2,
+            imagined_rollout_horizon=2,
+            imagined_rollout_weight=0.5,
+            world_model_weight=10.0,
+            ablation=BlockSMBAblationConfig(world_model_enabled=False),
+        )
+        model = make_block_smb_model(config)
+        scenario_name, scenario = build_curriculum(config)[0]
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                scenario_name,
+                rollout_steps=2,
+                seed=6,
+                deterministic=True,
+                device=torch.device("cpu"),
+                ablation=config.ablation,
+            )
+        finally:
+            stage.env.close()
+
+        self.assertGreaterEqual(len(trajectory.transitions), 1)
+        for step in trajectory.transitions:
+            torch.testing.assert_close(step.next_state_pred, step.batch.src_c)
+        losses = compute_block_smb_losses(
+            model,
+            trajectory.transitions,
+            config,
+            torch.device("cpu"),
+            trajectories=[trajectory],
+        )
+
+        self.assertEqual(losses["imagined_rollout_steps"].item(), 0.0)
+        self.assertEqual(losses["loss_imagined_rollout"].item(), 0.0)
+        self.assertGreaterEqual(losses["loss_dynamics"].item(), 0.0)
+        self.assertTrue(torch.isfinite(losses["loss_total"]).item())
+
     def test_target_network_auto_activation_and_ema_update(self):
         config = tiny_config(
             generated_scenarios=0,
@@ -377,6 +419,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             generated_scenarios=0,
             ablation=BlockSMBAblationConfig(
                 vision_enabled=False,
+                world_model_enabled=False,
                 critic_feedback_enabled=False,
                 hierarchy_enabled=False,
                 recurrent_state_enabled=False,
@@ -393,6 +436,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             False,
         )
         self.assertFalse(config.ablation.vision_enabled)
+        self.assertFalse(config.ablation.world_model_enabled)
         self.assertFalse(config.ablation.critic_feedback_enabled)
         for key in ("loss_total", "eval_mean_return", "eval_success_rate"):
             self.assertTrue(torch.isfinite(torch.tensor(result["metrics"][key])).item())

@@ -41,6 +41,11 @@ class EchoWorldModel(nn.Module):
         return state + action
 
 
+class FailingWorldModel(nn.Module):
+    def forward(self, *args, **kwargs):
+        raise AssertionError("world model should not be called")
+
+
 class FixedCritic(nn.Module):
     def __init__(self, criticism):
         super().__init__()
@@ -280,6 +285,49 @@ class TestCriticFeedbackContract(unittest.TestCase):
             recording_world_model.b_context,
             torch.tensor([[0.0, 2.0, 4.0, 6.0, 6.0, 6.0]]),
         )
+
+    def test_world_model_can_be_disabled_for_ablation(self):
+        seq_len_a = 2
+        seq_len_b = 4
+        seq_len_c = 8
+        d_model = 4
+        vocab_size = 7
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+        )
+        fixed_criticism = torch.ones(1, seq_len_a, d_model)
+        model.agent = RecordingAgent(seq_len_a, seq_len_b, vocab_size)
+        model.world_model = FailingWorldModel()
+        model.critic = FixedCritic(fixed_criticism)
+
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, seq_len_b, dtype=torch.long)
+        src_c = torch.arange(seq_len_c, dtype=torch.float32).view(1, seq_len_c)
+
+        (
+            _actions1,
+            next_state_pred,
+            criticism,
+            _actions2,
+            _logits_a,
+            _w_b,
+            _b_b,
+            next_world_model_state,
+        ) = model(
+            src_a,
+            src_b,
+            src_c,
+            return_world_model_state=True,
+            world_model_enabled=False,
+        )
+
+        torch.testing.assert_close(next_state_pred, src_c)
+        torch.testing.assert_close(criticism, fixed_criticism)
+        self.assertIsNone(next_world_model_state)
 
     def test_auxiliary_objective_heads_produce_scalar_reward_value_and_representation(self):
         model = AgentWorldModelCritic(

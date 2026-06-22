@@ -252,6 +252,7 @@ overridden:
 | Pathway | Disable flag | Effect |
 | --- | --- | --- |
 | Vision | `--disable-vision` | Replaces A/B semantic streams with background tokens and zeros C position, semantic-probability, and patch-token slots while preserving symbolic environment state. |
+| World model | `--disable-world-model` | Bypasses learned dynamics, uses the current C-stream state as the next-state prediction, and disables dynamics and imagined-rollout loss contributions while retaining diagnostics. |
 | Critic feedback | `--disable-critic-feedback` | Still computes critic output for metrics, but does not inject it into the actor's second pass. |
 | Hierarchy levels | `--disable-hierarchy` | Replaces A/B semantic streams with background tokens while preserving C-stream inputs. |
 | Recurrent state | `--disable-recurrent-state` | Starts the world model from zero recurrent memory at each rollout step instead of carrying state between steps. |

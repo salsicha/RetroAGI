@@ -43,6 +43,7 @@ class BlockSMBAblationConfig:
     """Switches for measuring Block SMB architectural contributions."""
 
     vision_enabled: bool = True
+    world_model_enabled: bool = True
     critic_feedback_enabled: bool = True
     hierarchy_enabled: bool = True
     recurrent_state_enabled: bool = True
@@ -51,6 +52,7 @@ class BlockSMBAblationConfig:
     def __post_init__(self) -> None:
         for name in (
             "vision_enabled",
+            "world_model_enabled",
             "critic_feedback_enabled",
             "hierarchy_enabled",
             "recurrent_state_enabled",
@@ -479,6 +481,7 @@ def _action_from_model(
     tau: float,
     world_model_state: WorldModelState | None = None,
     critic_feedback_enabled: bool = True,
+    world_model_enabled: bool = True,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -510,6 +513,7 @@ def _action_from_model(
         episode_mask=episode_mask,
         return_world_model_state=True,
         critic_feedback_enabled=critic_feedback_enabled,
+        world_model_enabled=world_model_enabled,
     )
     action_logits = logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT]
     finite_or_raise("action_logits", action_logits)
@@ -562,6 +566,7 @@ def collect_trajectory(
             tau=1.0,
             world_model_state=carried_state,
             critic_feedback_enabled=ablation_config.critic_feedback_enabled,
+            world_model_enabled=ablation_config.world_model_enabled,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
@@ -618,7 +623,11 @@ def compute_imagined_rollout_losses(
     """Unroll learned dynamics from replay states and compare to real futures."""
 
     zero = torch.zeros((), dtype=torch.float32, device=device)
-    if config.imagined_rollout_horizon <= 0 or not trajectories:
+    if (
+        config.imagined_rollout_horizon <= 0
+        or not trajectories
+        or not config.ablation.world_model_enabled
+    ):
         return {
             "loss_imagined_dynamics": zero,
             "loss_imagined_reward": zero,
@@ -651,6 +660,7 @@ def compute_imagined_rollout_losses(
                     imagined_state,
                     tau=1.0,
                     critic_feedback_enabled=config.ablation.critic_feedback_enabled,
+                    world_model_enabled=config.ablation.world_model_enabled,
                 )
                 dynamics_terms.append(
                     F.mse_loss(next_state_pred, step.next_batch.src_c.detach().to(device))
@@ -778,15 +788,22 @@ def compute_block_smb_losses(
     imagined_losses = compute_imagined_rollout_losses(
         model, trajectories or [], config, device
     )
+    world_model_weight = (
+        config.world_model_weight if config.ablation.world_model_enabled else 0.0
+    )
+    imagined_rollout_weight = (
+        config.imagined_rollout_weight
+        if config.ablation.world_model_enabled
+        else 0.0
+    )
     loss_total = (
         config.representation_weight * loss_representation
-        + config.world_model_weight * loss_dynamics
+        + world_model_weight * loss_dynamics
         + config.reward_loss_weight * loss_reward
         + config.value_loss_weight * loss_value
         + config.policy_loss_weight * loss_policy
         + config.critic_loss_weight * loss_critic_feedback
-        + config.imagined_rollout_weight
-        * imagined_losses["loss_imagined_rollout"]
+        + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
     losses = {

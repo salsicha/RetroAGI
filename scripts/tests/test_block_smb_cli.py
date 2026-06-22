@@ -102,6 +102,7 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "--reward-frame-penalty",
                     "-0.02",
                     "--disable-vision",
+                    "--disable-world-model",
                     "--disable-critic-feedback",
                     "--disable-hierarchy",
                     "--disable-recurrent-state",
@@ -133,6 +134,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.reward_config.goal, 75.0)
         self.assertEqual(config.reward_config.frame_penalty, -0.02)
         self.assertFalse(config.ablation.vision_enabled)
+        self.assertFalse(config.ablation.world_model_enabled)
         self.assertFalse(config.ablation.critic_feedback_enabled)
         self.assertFalse(config.ablation.hierarchy_enabled)
         self.assertFalse(config.ablation.recurrent_state_enabled)
@@ -149,6 +151,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         )
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
+        self.assertFalse(payload["config"]["ablation"]["world_model_enabled"])
         self.assertFalse(payload["vision"]["checkpoint_transfer"])
 
     def test_train_command_loads_frozen_vision_checkpoint_and_writes_summary(self):
@@ -245,6 +248,7 @@ class TestBlockSMBCLI(unittest.TestCase):
                 "fixed_scenarios": ["level_2_gap.json"],
                 "ablation": {
                     "vision_enabled": False,
+                    "world_model_enabled": False,
                     "critic_feedback_enabled": False,
                     "hierarchy_enabled": False,
                     "recurrent_state_enabled": False,
@@ -297,6 +301,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.reward_config.frame_penalty, -0.02)
         self.assertTrue(config.ablation.vision_enabled)
         self.assertTrue(config.ablation.critic_feedback_enabled)
+        self.assertFalse(config.ablation.world_model_enabled)
         self.assertFalse(config.ablation.hierarchy_enabled)
         self.assertFalse(config.ablation.recurrent_state_enabled)
         self.assertFalse(config.ablation.checkpoint_transfer_enabled)

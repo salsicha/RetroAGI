@@ -82,8 +82,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    python -m retroagi.stages.full_smb.run --steps 500
    ```
    Block SMB ablations can be run with paired switches such as
-   `--disable-vision`, `--disable-critic-feedback`, `--disable-hierarchy`,
-   `--disable-recurrent-state`, and `--disable-checkpoint-transfer`. The
+   `--disable-vision`, `--disable-world-model`, `--disable-critic-feedback`,
+   `--disable-hierarchy`, `--disable-recurrent-state`, and
+   `--disable-checkpoint-transfer`. The
    resolved ablation config is written beside each run summary and checkpoint.
    Low-level controller gain schedules are selectable with
    `--controller-schedule constant|linear`.

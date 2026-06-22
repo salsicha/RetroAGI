@@ -84,6 +84,7 @@ REWARD_CONFIG_ARGS = {
 
 ABLATION_CONFIG_FIELDS = (
     "vision_enabled",
+    "world_model_enabled",
     "critic_feedback_enabled",
     "hierarchy_enabled",
     "recurrent_state_enabled",
@@ -143,6 +144,7 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--num-envs", type=_positive_int)
     parser.set_defaults(
         vision_enabled=None,
+        world_model_enabled=None,
         critic_feedback_enabled=None,
         hierarchy_enabled=None,
         recurrent_state_enabled=None,
@@ -159,6 +161,18 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         dest="vision_enabled",
         help="zero visual A/B streams and visual C slots, preserving symbolic state",
+    )
+    parser.add_argument(
+        "--enable-world-model",
+        action="store_true",
+        dest="world_model_enabled",
+        help="use learned dynamics for next-state prediction and imagined rollouts",
+    )
+    parser.add_argument(
+        "--disable-world-model",
+        action="store_false",
+        dest="world_model_enabled",
+        help="bypass learned dynamics and use the current C state as prediction",
     )
     parser.add_argument(
         "--enable-critic-feedback",

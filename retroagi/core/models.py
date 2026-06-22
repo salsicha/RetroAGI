@@ -432,11 +432,15 @@ class AgentWorldModelCritic(nn.Module):
         episode_mask=None,
         return_world_model_state=False,
         critic_feedback_enabled=True,
+        world_model_enabled=True,
     ):
         logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
 
         w_1_context, b_1_context = self.controller_context(src_C, w_1, b_1)
-        if (
+        if not world_model_enabled:
+            next_state_pred = src_C.detach()
+            next_world_model_state = None
+        elif (
             world_model_state is None
             and episode_mask is None
             and not return_world_model_state

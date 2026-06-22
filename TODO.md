@@ -148,7 +148,7 @@ Do this after Stage 1 and Block SMB expose concrete failure modes.
 - [x] Implement imagined rollouts through learned dynamics.
 - [x] Add target networks or other stabilization only where measurements show
       they are needed.
-- [ ] Add ablations for vision, world model, critic feedback, hierarchy levels,
+- [x] Add ablations for vision, world model, critic feedback, hierarchy levels,
       and checkpoint transfer.
 
 **Exit criteria:** each architectural component has a defined loss, tested
