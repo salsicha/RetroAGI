@@ -337,56 +337,62 @@ passing a seed to `MarioScenarioEnv.generate_scenario`.
 
 ## Stage 3: Full SMB
 
-**Status:** perception and a direct `stable-retro` random-action runner exist;
-`FullSMBStage` and its shared lifecycle adapter are not yet implemented.
+**Status:** perception and a `FullSMBStage` lifecycle adapter exist. The adapter
+wraps `stable-retro` lazily, maps the shared SMB action vocabulary to
+backend-specific button vectors, and normalizes both Gym-style four-value and
+Gymnasium-style five-value `step` results into the shared stage contract.
+Backend game-variable extraction, emulator save states, frame skipping, and
+frame stacking are not yet implemented.
 
-The rules below are the required contract for that adapter. Backend-specific
-values must be normalized at this boundary rather than leaking into shared
-training code.
+Backend-specific values must be normalized at this boundary rather than leaking
+into shared training code.
 
 ### Observation
 
 The stage-native observation is the RGB frame returned by `stable-retro` for
-`SuperMarioBros-Nes`. The adapter must expose a `uint8` HWC RGB array and place
-backend metadata, including game variables, in `info`. Frame resizing,
-normalization, skipping, and stacking are not yet part of the implemented
-contract.
+`SuperMarioBros-Nes`. The adapter exposes a contiguous `uint8` HWC RGB array
+and places backend metadata in `info`. RGBA inputs are truncated to RGB, and
+floating point RGB inputs in `[0,1]` are converted to `uint8`. Frame resizing,
+skipping, and stacking are not yet part of the implemented contract.
 
 ### Action
 
-The runner uses the shared `SMBAction` vocabulary defined in the Block SMB
+`FullSMBStage` uses the shared `SMBAction` vocabulary defined in the Block SMB
 section. `full_smb_action` translates each action to the `stable-retro` NES
 button vector by reading `env.buttons`; it does not assume fixed button indices.
-The future `FullSMBStage` must use this mapping at its adapter boundary.
+The adapter records the shared action ID, name, backend button names, and button
+vector in `info["action"]`.
 
 ### Reward
 
-Until a project-level reward contract is implemented, the adapter must pass
+Until a project-level reward contract is implemented, the adapter passes
 through the scalar reward emitted by the `stable-retro` game integration for
-each transition. It must not silently combine that reward with Block SMB reward
+each transition. It does not silently combine that reward with Block SMB reward
 terms. Any shaping must be explicit, configured, and reported separately in
 `info`.
 
 ### Termination
 
-The adapter must forward the backend's `terminated` value. Terminal game
-conditions such as death, game over, or level completion must be represented by
-the game integration and exposed with a reason in `info` when available.
+The adapter forwards the backend's `terminated` value when the backend returns a
+five-value Gymnasium step result. For legacy four-value Gym results, `done`
+maps to `terminated` unless `info["truncated"]` or
+`info["TimeLimit.truncated"]` is true. Terminal game conditions such as death,
+game over, or level completion must be represented by the game integration and
+exposed with a reason in `info` when available.
 
 ### Truncation
 
-The adapter must forward the backend's `truncated` value independently from
-termination. Project-imposed step or time limits must set `truncated`, never
-rewrite a timeout as `terminated`.
-
-The current random runner does not yet implement this correctly: it uses
-ambiguous `done`/`term` names and resets on only one boolean. It is not the
-shared stage contract.
+The adapter forwards the backend's `truncated` value independently from
+termination when available. Legacy four-value Gym backends can still express
+timeouts through `info["truncated"]` or `info["TimeLimit.truncated"]`.
+Project-imposed step or time limits must set `truncated`, never rewrite a
+timeout as `terminated`.
 
 ### Reset
 
-The future adapter must call the backend reset, return only its initial RGB
-observation, retain reset `info`, and pass a supplied seed through when the
-backend supports it. Reset must begin a new emulator episode and clear
-adapter-owned frame stacks, counters, recurrent episode state, and reward
-shaping state. Deterministic emulator save-state reset is not implemented yet.
+The adapter calls the backend reset, returns only its initial RGB observation,
+retains reset `info`, and passes a supplied seed through when the backend
+supports it. If the backend reset does not accept `seed`, the adapter calls
+`env.seed(seed)` when available before resetting. Reset begins a new emulator
+episode and clears adapter-owned episode mask state. Deterministic emulator
+save-state reset is not implemented yet.

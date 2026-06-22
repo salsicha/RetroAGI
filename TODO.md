@@ -160,13 +160,13 @@ The selected backend is `stable-retro`. The existing runner is only a random
 loop, and the DeepLab wrapper covers perception but not the stage adapter or
 environment semantics.
 
-- [ ] Implement `stable-retro` behind a Full SMB environment adapter.
-- [ ] Map emulator buttons to the P1 shared action vocabulary.
+- [x] Implement `stable-retro` behind a Full SMB environment adapter.
+- [x] Map emulator buttons to the P1 shared action vocabulary.
 - [ ] Extract and test position, score, coins, lives, completion, death,
       termination, and truncation signals.
 - [ ] Add frame skipping, resizing, normalization, stacking, and episode masks.
 - [ ] Add emulator state save/load for repeatable evaluation.
-- [ ] Implement `FullSMBStage` with the common stage contract.
+- [x] Implement `FullSMBStage` with the common stage contract.
 - [ ] Replace the existing CNN/DeepLab Full SMB semantic segmentation model
       with a Vision Transformer semantic segmentation model.
   - Get game assets by documenting the required SMB sprite sources, download or

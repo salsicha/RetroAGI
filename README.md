@@ -31,7 +31,7 @@ retroagi/
   stages/
     synthetic_1d/      # procedural one-dimensional validation
     block_smb/         # pygame-ce SMB-like scenarios and adapter
-    full_smb/          # stable-retro / emulator runner
+    full_smb/          # stable-retro adapter and emulator runner
 scripts/               # compatibility wrappers and older experiments
 ```
 

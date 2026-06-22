@@ -14,7 +14,7 @@ from retroagi.core import (
     validate_stage_spec,
 )
 from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockSMBStage, BlockVisionTransformer
-from retroagi.stages.full_smb import FullSMBSegmentationVision
+from retroagi.stages.full_smb import FULL_SMB_SPEC, FullSMBSegmentationVision, FullSMBStage
 
 
 class StaticVisionEncoder:
@@ -47,6 +47,56 @@ class StaticVisionEncoder:
         )
 
 
+class StaticFullSMBVision:
+    """Deterministic Full SMB vision output for adapter contract tests."""
+
+    spec = VisionSpec(
+        name="static_full_smb_contract",
+        semantic_classes=("background", "floor", "box", "enemy", "brick", "mario"),
+        token_dim=6,
+    )
+
+    def encode(self, observation):
+        logits = torch.full((1, self.spec.num_classes, 15, 16), -10.0)
+        logits[:, 0] = 5.0
+        logits[:, self.spec.semantic_classes.index("mario"), 8, 4] = 10.0
+        return VisionOutput(
+            position=torch.tensor([[0.25, 0.5]], dtype=torch.float32),
+            semantic_logits=logits,
+            semantic_ids=logits.argmax(dim=1),
+            tokens=torch.zeros(1, 240, self.spec.token_dim),
+            metadata={"source": "static_full_smb"},
+        )
+
+
+class FakeRetroEnv:
+    buttons = ("B", "A", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT")
+
+    def __init__(self):
+        self.closed = False
+        self.step_actions = []
+
+    def reset(self, seed=None):
+        self.seed = seed
+        return (
+            np.zeros((224, 256, 3), dtype=np.uint8),
+            {"state_vec": np.array([0.0, 0.25], dtype=np.float32)},
+        )
+
+    def step(self, action):
+        self.step_actions.append(np.asarray(action))
+        return (
+            np.full((224, 256, 3), 32, dtype=np.uint8),
+            1.5,
+            False,
+            False,
+            {"state_vec": np.array([0.1, 0.5], dtype=np.float32)},
+        )
+
+    def close(self):
+        self.closed = True
+
+
 class TestStageAdapterContracts(unittest.TestCase):
     def adapter_cases(self):
         return (
@@ -55,6 +105,12 @@ class TestStageAdapterContracts(unittest.TestCase):
                 lambda: BlockSMBStage(vision=StaticVisionEncoder()),
                 BLOCK_SMB_SPEC,
                 0,
+            ),
+            (
+                "full_smb",
+                lambda: FullSMBStage(env=FakeRetroEnv(), vision=StaticFullSMBVision()),
+                FULL_SMB_SPEC,
+                1,
             ),
         )
 

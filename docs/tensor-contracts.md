@@ -208,12 +208,13 @@ truncation; `terminated` and `truncated` retain the environment booleans.
 
 ### Full SMB
 
-`FullSMBStage` and its `StageBatch` do not exist yet. Their tensors must satisfy
-the generic batch contract and a future Full SMB `StageSpec`; no stage-specific
-shape or state range is currently defined. The adapter must use
-`VisionHierarchyProjector`; with the current DeepLab output its C prefix will
-contain two position values followed by six semantic probabilities, with state
-and patch-token offsets determined by the final adapter state contract.
+`FullSMBStage` uses `FULL_SMB_SPEC` with `seq_len_a=8`, `ratio_ab=2`,
+`ratio_bc=4`, `seq_len_b=16`, `seq_len_c=64`, and `vocab_size=20`. Its
+`StageBatch` is produced by `VisionHierarchyProjector`. With the current
+DeepLab output, the C prefix contains two normalized position values followed
+by six semantic probabilities. No emulator game-variable state vector is defined
+yet; if a test or backend supplies a pre-normalized `info["state_vec"]`, it is
+inserted after the semantic probabilities and before pooled patch-token slots.
 
 ## VisionOutput
 

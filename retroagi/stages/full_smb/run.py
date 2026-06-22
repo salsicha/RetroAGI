@@ -6,39 +6,37 @@ import os
 import random
 import sys
 
-import retro
-
 # Add the project root directory to the Python path
 # This allows package imports to work when this file is executed directly.
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from retroagi.core import SMB_ACTIONS, full_smb_action  # noqa: E402
+from retroagi.core import SMB_ACTIONS  # noqa: E402
+from retroagi.stages.full_smb import FullSMBStage  # noqa: E402
 
 
 def main(num_steps=200):
-    # Initialize the Super Mario Bros environment
-    env = retro.make(game='SuperMarioBros-Nes')
+    stage = FullSMBStage()
+    try:
+        stage.reset()
+        count = num_steps
+        while True:
+            count -= 1
+            if count < 0:
+                break
 
-    obs = env.reset()
+            action = random.choice(SMB_ACTIONS)
+            _obs, _reward, terminated, truncated, _info = stage.step(action)
 
-    count = num_steps
-    while True:
-        count -= 1
-        if count < 0:
-            break
+            render = getattr(stage.env, "render", None)
+            if render is not None:
+                render()
 
-        # Explore using the same named action vocabulary as Block SMB.
-        action = random.choice(SMB_ACTIONS)
-        obs, rew, done, term, info = env.step(full_smb_action(action, env.buttons))
-
-        env.render()
-
-        if done:
-            env.reset()
-
-    env.close()
+            if terminated or truncated:
+                stage.reset()
+    finally:
+        stage.close()
 
 
 if __name__ == "__main__":
