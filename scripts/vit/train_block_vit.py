@@ -41,7 +41,7 @@ from retroagi.core import (
 from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockVisionTransformer, MarioScenarioEnv
 
 
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "block_smb_vit" / "block_vit.pth"
+DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "block_vit" / "block_vit.pth"
 DEFAULT_EPOCHS = 20
 DEFAULT_SAMPLES_PER_EPOCH = 2048
 DEFAULT_VAL_SAMPLES = 512

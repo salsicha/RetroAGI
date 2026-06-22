@@ -1,27 +1,97 @@
 {
-  "epoch": 1,
+  "checkpoint_schema_version": 1,
+  "stage": "block_smb",
+  "model_name": "block_smb_vit",
+  "checkpoint_kind": "vision_encoder",
+  "epoch": 19,
+  "global_step": 0,
   "metrics": {
-    "loss": 0.8327246606349945,
-    "semantic_loss": 0.7219383716583252,
-    "position_loss": 0.05539314262568951,
-    "accuracy": 0.9350911458333333,
-    "foreground_accuracy": 0.7119329673504767,
-    "mean_iou": 0.38211783779170977
+    "loss": 0.020064413198269904,
+    "semantic_loss": 0.014905585325323045,
+    "position_loss": 0.00032242674387816805,
+    "accuracy": 0.9990397135416667,
+    "foreground_accuracy": 0.9956713132795304,
+    "mean_iou": 0.9827736473186103
   },
   "config": {
-    "epochs": 2,
-    "samples_per_epoch": 256,
-    "val_samples": 64,
-    "rollout_steps": 16,
-    "batch_size": 16,
-    "learning_rate": 0.0003,
-    "weight_decay": 0.05,
-    "position_weight": 2.0,
-    "dim": 64,
-    "depth": 2,
-    "heads": 4,
-    "patch_size": 16,
-    "dropout": 0.1,
-    "seed": 7
+    "environment": {
+      "stage": "block_smb",
+      "seed": 7,
+      "rollout_steps": 32,
+      "num_envs": 1,
+      "scenario": null,
+      "deterministic": true,
+      "metadata": {}
+    },
+    "model": {
+      "name": "block_smb_vit",
+      "hidden_dim": 64,
+      "depth": 2,
+      "heads": 4,
+      "dropout": 0.1,
+      "patch_size": 16,
+      "vocab_size": null,
+      "metadata": {}
+    },
+    "training": {
+      "epochs": 20,
+      "batch_size": 32,
+      "learning_rate": 0.0003,
+      "weight_decay": 0.05,
+      "seed": 7,
+      "samples_per_epoch": 1024,
+      "gradient_clip_norm": 1.0,
+      "device": "auto",
+      "metadata": {}
+    },
+    "evaluation": {
+      "interval_epochs": 1,
+      "samples": 256,
+      "episodes": null,
+      "seed": 1000007,
+      "deterministic": true,
+      "metrics": [
+        "loss",
+        "semantic_loss",
+        "position_loss",
+        "accuracy",
+        "foreground_accuracy",
+        "mean_iou"
+      ],
+      "metadata": {}
+    },
+    "checkpoints": {
+      "output_path": "data/block_vit/block_vit.pth",
+      "resume_path": null,
+      "save_interval_epochs": 1,
+      "best_metric": "mean_iou",
+      "best_mode": "max",
+      "metadata": {}
+    },
+    "name": "block_vit_training",
+    "metadata": {
+      "position_weight": 16.0
+    }
+  },
+  "specs": {
+    "vision": {
+      "name": "block_smb_vit",
+      "semantic_classes": [
+        "background",
+        "mario",
+        "platform",
+        "coin",
+        "goal",
+        "enemy",
+        "moving_platform"
+      ],
+      "token_dim": 64,
+      "position_dim": 2
+    }
+  },
+  "metadata": {
+    "trainer": "scripts.vit.train_block_vit",
+    "retrained_from_commit": "25c4ad5",
+    "retrain_notes": "Continued the prior Block ViT checkpoint to epoch 20 with position_weight=16.0; diagnostic clears semantic and position bottleneck thresholds."
   }
 }

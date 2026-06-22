@@ -128,8 +128,8 @@ uses it to complete scenarios.
       deterministic return and success-rate metrics.
 - [x] Add deterministic Block ViT perception diagnostics for semantic and
       position bottlenecks before blaming policy training failures.
-- [ ] Improve or retrain Block ViT perception; the diagnostic currently flags
-      semantic and position quality as policy-training bottlenecks.
+- [x] Improve or retrain Block ViT perception so the diagnostic no longer
+      flags semantic or position quality as policy-training bottlenecks.
 - [ ] Add Block SMB ablations for vision, critic feedback, hierarchy levels,
       recurrent state handling, and checkpoint transfer.
 

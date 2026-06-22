@@ -226,6 +226,12 @@ and `bottleneck_reasons`. If `perception.bottleneck` is true, improve or
 retrain the Block ViT checkpoint before interpreting low policy success as an
 actor/world-model/critic failure.
 
+The tracked `data/block_vit/block_vit.pth` checkpoint was retrained through
+epoch 20 with `position_weight=16.0`. On the standard 64-frame diagnostic sample
+it now reports `perception.bottleneck=false`, `mean_iou=0.9802`,
+`foreground_accuracy=0.9955`, `position_rmse=0.0185`, and
+`position_within_tolerance=0.9844`.
+
 The trainer applies finite-loss and finite-gradient checks before each optimizer
 step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
 Curriculum order starts with the four fixed scenario files and can append seeded
