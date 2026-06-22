@@ -50,6 +50,9 @@ dev = [
     "ruff==0.15.17",
 ]
 
+[project.scripts]
+retroagi-block-smb = "retroagi.stages.block_smb.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["retroagi*"]
 

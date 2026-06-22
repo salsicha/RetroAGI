@@ -111,7 +111,7 @@ uses it to complete scenarios.
 - [x] Record evaluation trajectories and videos.
 - [x] Add vectorized or parallel environments after the single-environment loop
       is correct and reproducible.
-- [ ] Add a real CLI command for Block SMB training, evaluation, checkpoint
+- [x] Add a real CLI command for Block SMB training, evaluation, checkpoint
       resume, and recording instead of requiring Python API calls.
 - [ ] Run real Block SMB policy training with the actual Block ViT checkpoint
       and record the resolved config, seed, metrics, checkpoint path, and

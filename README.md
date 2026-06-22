@@ -68,6 +68,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
 2. Run a curriculum stage:
    ```bash
    python -m retroagi.stages.synthetic_1d.train
+   retroagi-block-smb train --epochs 5 --checkpoint data/block_smb/policy.pth
+   retroagi-block-smb evaluate --checkpoint data/block_smb/policy.pth
+   retroagi-block-smb record --checkpoint data/block_smb/policy.pth --record-dir artifacts/block_smb/recordings
    python -m retroagi.stages.full_smb.run --steps 500
    ```
 3. Run the test suite:
