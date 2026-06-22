@@ -342,8 +342,8 @@ wraps `stable-retro` lazily, maps the shared SMB action vocabulary to
 backend-specific button vectors, and normalizes both Gym-style four-value and
 Gymnasium-style five-value `step` results into the shared stage contract.
 Backend game-variable extraction is normalized into `full_smb_signals` and
-`state_vec`. Emulator save states, frame skipping, and frame stacking are not
-yet implemented.
+`state_vec`. Frame skipping, resizing, normalization, stacking, and episode
+masks are implemented. Emulator save states are not yet implemented.
 
 Backend-specific values must be normalized at this boundary rather than leaking
 into shared training code.
@@ -353,8 +353,20 @@ into shared training code.
 The stage-native observation is the RGB frame returned by `stable-retro` for
 `SuperMarioBros-Nes`. The adapter exposes a contiguous `uint8` HWC RGB array
 and places backend metadata in `info`. RGBA inputs are truncated to RGB, and
-floating point RGB inputs in `[0,1]` are converted to `uint8`. Frame resizing,
-skipping, and stacking are not yet part of the implemented contract.
+floating point RGB inputs in `[0,1]` are converted to `uint8`.
+
+Policy observations are controlled by `FullSMBObservationConfig`:
+
+| Field | Default | Meaning |
+| --- | ---: | --- |
+| `frame_skip` | `1` | Number of backend frames to advance for one shared action. Rewards are summed across executed frames. |
+| `frame_stack` | `4` | Number of normalized frames retained in observation metadata. Reset padding is marked invalid in `frame_mask`. |
+| `resize_shape` | `(224, 256)` | Height/width used for normalized frame tensors and vision input. `None` preserves the backend frame size. |
+
+`encode_observation` sends the resized `[0,1]` HWC frame to the Full SMB vision
+encoder. It also records `frame_stack` as `[1, frame_stack, 3, H, W]`,
+`frame_mask`, `frame_skip`, `resize_shape`, and `normalized_range` in
+`batch.metadata["observation"]`.
 
 ### Action
 
@@ -362,7 +374,10 @@ skipping, and stacking are not yet part of the implemented contract.
 section. `full_smb_action` translates each action to the `stable-retro` NES
 button vector by reading `env.buttons`; it does not assume fixed button indices.
 The adapter records the shared action ID, name, backend button names, and button
-vector in `info["action"]`.
+vector in `info["action"]`. When `frame_skip > 1`, the same button vector is
+applied repeatedly until the configured count is reached or the backend reports
+termination or truncation. `info["action"]` records `frames_executed` and
+per-frame rewards.
 
 ### Info Signals
 
@@ -388,9 +403,9 @@ truncated values. Missing raw values are encoded as zero.
 
 Until a project-level reward contract is implemented, the adapter passes
 through the scalar reward emitted by the `stable-retro` game integration for
-each transition. It does not silently combine that reward with Block SMB reward
-terms. Any shaping must be explicit, configured, and reported separately in
-`info`.
+each executed backend frame and sums those rewards for the adapter transition.
+It does not silently combine that reward with Block SMB reward terms. Any
+shaping must be explicit, configured, and reported separately in `info`.
 
 ### Termination
 
@@ -408,7 +423,8 @@ The adapter forwards the backend's `truncated` value independently from
 termination when available. Legacy four-value Gym backends can still express
 timeouts through `info["truncated"]` or `info["TimeLimit.truncated"]`.
 Project-imposed step or time limits must set `truncated`, never rewrite a
-timeout as `terminated`.
+timeout as `terminated`. Frame skipping stops immediately when either flag is
+reported.
 
 ### Reset
 
@@ -416,5 +432,6 @@ The adapter calls the backend reset, returns only its initial RGB observation,
 retains reset `info`, and passes a supplied seed through when the backend
 supports it. If the backend reset does not accept `seed`, the adapter calls
 `env.seed(seed)` when available before resetting. Reset begins a new emulator
-episode and clears adapter-owned episode mask state. Deterministic emulator
-save-state reset is not implemented yet.
+episode, clears adapter-owned episode mask state, and repopulates the frame
+stack with invalid reset padding plus the first valid reset frame.
+Deterministic emulator save-state reset is not implemented yet.

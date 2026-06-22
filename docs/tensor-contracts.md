@@ -215,6 +215,12 @@ by six semantic probabilities, then the nine-value Full SMB signal vector:
 normalized x, y, score, coins, lives, completion, death, terminated, and
 truncated. The remaining C slots contain pooled patch-token features.
 
+Full SMB observation metadata includes normalized resized frame tensors:
+`frame_stack` has shape `[B, S, 3, H, W]`, where `S` is
+`FullSMBObservationConfig.frame_stack` and `(H, W)` is `resize_shape` when set.
+`frame_mask` has shape `[B, S]` and marks reset padding as invalid. The episode
+metadata mask has shape `[1]` and is `0.0` after termination or truncation.
+
 ## VisionOutput
 
 | Field | Shape | Dtype | Range and meaning |

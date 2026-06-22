@@ -164,7 +164,7 @@ environment semantics.
 - [x] Map emulator buttons to the P1 shared action vocabulary.
 - [x] Extract and test position, score, coins, lives, completion, death,
       termination, and truncation signals.
-- [ ] Add frame skipping, resizing, normalization, stacking, and episode masks.
+- [x] Add frame skipping, resizing, normalization, stacking, and episode masks.
 - [ ] Add emulator state save/load for repeatable evaluation.
 - [x] Implement `FullSMBStage` with the common stage contract.
 - [ ] Replace the existing CNN/DeepLab Full SMB semantic segmentation model

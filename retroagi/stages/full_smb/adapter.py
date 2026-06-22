@@ -1,11 +1,13 @@
 """Full-SMB stable-retro adapter for the shared stage contract."""
 
+from collections import deque
 from dataclasses import dataclass
 import inspect
 from typing import Any, Mapping, Optional
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from retroagi.core import (
     SMBAction,
@@ -60,6 +62,27 @@ class FullSMBSignalConfig:
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+
+
+@dataclass(frozen=True)
+class FullSMBObservationConfig:
+    """Preprocessing contract for Full SMB policy observations."""
+
+    frame_skip: int = 1
+    frame_stack: int = 4
+    resize_shape: Optional[tuple[int, int]] = (224, 256)
+
+    def __post_init__(self) -> None:
+        if self.frame_skip <= 0:
+            raise ValueError("frame_skip must be positive")
+        if self.frame_stack <= 0:
+            raise ValueError("frame_stack must be positive")
+        if self.resize_shape is not None:
+            if len(self.resize_shape) != 2:
+                raise ValueError("resize_shape must contain (height, width)")
+            height, width = self.resize_shape
+            if height <= 0 or width <= 0:
+                raise ValueError("resize_shape dimensions must be positive")
 
 
 @dataclass(frozen=True)
@@ -169,11 +192,13 @@ class FullSMBStage:
         env: Any = None,
         env_config: FullSMBEnvConfig = FullSMBEnvConfig(),
         signal_config: FullSMBSignalConfig = FullSMBSignalConfig(),
+        observation_config: FullSMBObservationConfig = FullSMBObservationConfig(),
         vision: Optional[VisionEncoder] = None,
         env_kwargs: Optional[Mapping[str, Any]] = None,
     ):
         self.env_config = env_config
         self.signal_config = signal_config
+        self.observation_config = observation_config
         self.env = (
             env
             if env is not None
@@ -187,6 +212,12 @@ class FullSMBStage:
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
+        self._frame_stack: deque[torch.Tensor] = deque(
+            maxlen=self.observation_config.frame_stack
+        )
+        self._frame_mask: deque[bool] = deque(
+            maxlen=self.observation_config.frame_stack
+        )
 
     @property
     def buttons(self) -> tuple[str, ...]:
@@ -205,6 +236,7 @@ class FullSMBStage:
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
+        self._reset_frame_stack(observation)
         return observation
 
     def step(
@@ -212,9 +244,23 @@ class FullSMBStage:
     ) -> tuple[np.ndarray, float, bool, bool, Mapping[str, Any]]:
         shared_action = coerce_smb_action(action)
         button_action = full_smb_action(shared_action, self.buttons)
-        result = self.env.step(button_action)
-        observation, reward, terminated, truncated, info = self._unpack_step(result)
-        observation = self._rgb_observation(observation)
+        total_reward = 0.0
+        frame_rewards: list[float] = []
+        observation = None
+        info: Mapping[str, Any] = {}
+        terminated = False
+        truncated = False
+        for _ in range(self.observation_config.frame_skip):
+            result = self.env.step(button_action)
+            observation, reward, terminated, truncated, info = self._unpack_step(result)
+            observation = self._rgb_observation(observation)
+            total_reward += reward
+            frame_rewards.append(float(reward))
+            self._append_frame(observation, valid=True)
+            if terminated or truncated:
+                break
+        if observation is None:
+            raise RuntimeError("Full SMB frame_skip must execute at least one frame")
         info = self._annotated_info(
             info, terminated=terminated, truncated=truncated
         )
@@ -223,27 +269,35 @@ class FullSMBStage:
             "shared_name": shared_action.name,
             "buttons": self.buttons,
             "button_vector": button_action.tolist(),
+            "frame_skip": self.observation_config.frame_skip,
+            "frames_executed": len(frame_rewards),
+            "frame_rewards": frame_rewards,
         }
         self.last_info = info
         self._last_episode_mask = 0.0 if terminated or truncated else 1.0
         self._last_terminal = terminated
         self._last_truncated = truncated
-        return observation, float(reward), terminated, truncated, info
+        return observation, total_reward, terminated, truncated, info
 
     def encode_observation(
         self, observation: np.ndarray, info: Optional[Mapping[str, Any]] = None
     ) -> StageBatch:
         info = info or self.last_info
         observation = self._rgb_observation(observation)
+        processed_observation = self._preprocess_observation(observation)
+        if not self._frame_stack:
+            self._reset_frame_stack(observation)
+        elif not torch.equal(self._frame_stack[-1], processed_observation):
+            self._append_frame(observation, valid=True)
         with torch.no_grad():
-            vision = self.vision.encode(observation)
+            vision = self.vision.encode(processed_observation)
 
         return self.vision_projector.project(
             vision,
             state=self._state_vec(info),
             metadata={
                 "raw_observation_shape": observation.shape,
-                "observation": {"normalized_range": (0.0, 1.0)},
+                "observation": self._observation_metadata(vision.position.device),
                 "episode": {
                     "mask": torch.tensor(
                         [self._last_episode_mask],
@@ -288,6 +342,54 @@ class FullSMBStage:
             array = np.nan_to_num(array, nan=0.0, posinf=255.0, neginf=0.0)
             array = np.clip(array, 0.0, 255.0).round().astype(np.uint8)
         return np.ascontiguousarray(array)
+
+    def _reset_frame_stack(self, observation: np.ndarray) -> None:
+        self._frame_stack.clear()
+        self._frame_mask.clear()
+        processed = self._preprocess_observation(observation)
+        padding = self.observation_config.frame_stack - 1
+        for _ in range(padding):
+            self._frame_stack.append(processed.clone())
+            self._frame_mask.append(False)
+        self._frame_stack.append(processed)
+        self._frame_mask.append(True)
+
+    def _append_frame(self, observation: np.ndarray, *, valid: bool) -> None:
+        self._frame_stack.append(self._preprocess_observation(observation))
+        self._frame_mask.append(valid)
+
+    def _preprocess_observation(self, observation: np.ndarray) -> torch.Tensor:
+        tensor = torch.as_tensor(observation, dtype=torch.float32)
+        if tensor.ndim != 3 or tensor.shape[-1] != 3:
+            raise ValueError("Full SMB RGB observations must have shape [H, W, 3]")
+        if bool(tensor.numel()) and float(tensor.max()) > 1.0:
+            tensor = tensor / 255.0
+        tensor = tensor.clamp(0.0, 1.0)
+        if self.observation_config.resize_shape is None:
+            return tensor.contiguous()
+        target_shape = self.observation_config.resize_shape
+        if tuple(tensor.shape[:2]) == target_shape:
+            return tensor.contiguous()
+        chw = tensor.permute(2, 0, 1).unsqueeze(0)
+        resized = F.interpolate(
+            chw, size=target_shape, mode="bilinear", align_corners=False
+        )
+        return resized.squeeze(0).permute(1, 2, 0).contiguous()
+
+    def _observation_metadata(self, device: torch.device) -> dict[str, Any]:
+        frame_stack = torch.stack(tuple(self._frame_stack), dim=0).permute(
+            0, 3, 1, 2
+        )
+        return {
+            "frame_stack": frame_stack.unsqueeze(0).to(device),
+            "frame_mask": torch.tensor(
+                tuple(self._frame_mask), dtype=torch.bool, device=device
+            ).unsqueeze(0),
+            "frame_stack_size": self.observation_config.frame_stack,
+            "frame_skip": self.observation_config.frame_skip,
+            "resize_shape": self.observation_config.resize_shape,
+            "normalized_range": (0.0, 1.0),
+        }
 
     @staticmethod
     def _unpack_reset(result: Any) -> tuple[Any, Mapping[str, Any]]:

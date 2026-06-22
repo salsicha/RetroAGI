@@ -14,6 +14,7 @@ from retroagi.core import (
 )
 from retroagi.stages.full_smb import (
     FULL_SMB_SPEC,
+    FullSMBObservationConfig,
     FullSMBStage,
     extract_full_smb_signals,
 )
@@ -26,7 +27,11 @@ class StaticFullSMBVision:
         token_dim=6,
     )
 
+    def __init__(self):
+        self.observations = []
+
     def encode(self, observation):
+        self.observations.append(torch.as_tensor(observation).detach().clone())
         logits = torch.full((1, self.spec.num_classes, 15, 16), -10.0)
         logits[:, 0] = 8.0
         logits[:, self.spec.semantic_classes.index("mario"), 7, 5] = 12.0
@@ -89,6 +94,36 @@ class LegacyRetroEnv(GymnasiumRetroEnv):
         )
 
 
+class FrameSkipRetroEnv(GymnasiumRetroEnv):
+    def __init__(self):
+        super().__init__()
+        self.step_count = 0
+
+    def reset(self, seed=None):
+        self.reset_seed = seed
+        return (
+            np.zeros((16, 20, 3), dtype=np.uint8),
+            {"x_pos": 0, "y_pos": 0, "score": 0, "coins": 0, "lives": 3},
+        )
+
+    def step(self, action):
+        self.actions.append(np.asarray(action))
+        self.step_count += 1
+        return (
+            np.full((16, 20, 3), self.step_count * 40, dtype=np.uint8),
+            float(self.step_count),
+            False,
+            False,
+            {
+                "x_pos": self.step_count * 10,
+                "y_pos": 100,
+                "score": self.step_count,
+                "coins": 0,
+                "lives": 3,
+            },
+        )
+
+
 class TestFullSMBStage(unittest.TestCase):
     def test_signal_extractor_accepts_nested_position_and_death_reason(self):
         signals = extract_full_smb_signals(
@@ -111,6 +146,47 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertTrue(signals.death)
         self.assertTrue(signals.terminated)
         self.assertFalse(signals.truncated)
+
+    def test_frame_skip_resize_stack_and_continuing_episode_mask(self):
+        env = FrameSkipRetroEnv()
+        vision = StaticFullSMBVision()
+        stage = FullSMBStage(
+            env=env,
+            vision=vision,
+            observation_config=FullSMBObservationConfig(
+                frame_skip=3,
+                frame_stack=3,
+                resize_shape=(12, 16),
+            ),
+        )
+        try:
+            stage.reset(seed=5)
+            observation, reward, terminated, truncated, info = stage.step(
+                SMBAction.RIGHT
+            )
+            batch = stage.encode_observation(observation, info)
+        finally:
+            stage.close()
+
+        self.assertEqual(env.step_count, 3)
+        self.assertEqual(reward, 6.0)
+        self.assertFalse(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual(info["action"]["frames_executed"], 3)
+        self.assertEqual(info["action"]["frame_rewards"], [1.0, 2.0, 3.0])
+        self.assertEqual(batch.metadata["episode"]["mask"].item(), 1.0)
+
+        observation_metadata = batch.metadata["observation"]
+        self.assertEqual(
+            observation_metadata["frame_stack"].shape,
+            (1, 3, 3, 12, 16),
+        )
+        self.assertTrue(observation_metadata["frame_mask"].all().item())
+        self.assertEqual(observation_metadata["frame_stack_size"], 3)
+        self.assertEqual(observation_metadata["frame_skip"], 3)
+        self.assertEqual(observation_metadata["resize_shape"], (12, 16))
+        self.assertEqual(tuple(vision.observations[-1].shape), (12, 16, 3))
+        self.assertLessEqual(float(vision.observations[-1].max()), 1.0)
 
     def test_stage_maps_shared_actions_and_projects_observations(self):
         env = GymnasiumRetroEnv()
