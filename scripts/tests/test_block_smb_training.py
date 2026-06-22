@@ -17,6 +17,7 @@ from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
     BLOCK_SMB_SPEC,
+    BlockSMBAblationConfig,
     BlockSMBRewardConfig,
     BlockSMBStage,
     BlockSMBTrainingConfig,
@@ -25,7 +26,11 @@ from retroagi.stages.block_smb import (
     restore_block_smb_checkpoint,
     train_and_evaluate_block_smb,
 )
-from retroagi.stages.block_smb.train import collect_trajectory, make_block_smb_model
+from retroagi.stages.block_smb.train import (
+    apply_block_smb_ablations,
+    collect_trajectory,
+    make_block_smb_model,
+)
 
 
 class StaticBlockVision:
@@ -126,6 +131,45 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertIn(step.episode_mask, (0.0, 1.0))
             self.assertEqual(step.batch.src_c.shape, (1, BLOCK_SMB_SPEC.seq_len_c))
 
+    def test_block_smb_ablations_mask_expected_hierarchy_slots(self):
+        config = tiny_config(generated_scenarios=0)
+        scenario_name, scenario = build_curriculum(config)[0]
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
+        try:
+            observation = stage.reset(seed=5)
+            batch = stage.encode_observation(observation)
+        finally:
+            stage.env.close()
+
+        fusion = batch.metadata["vision_fusion"]
+        state_start, state_end = fusion["c_state"]
+        visual = apply_block_smb_ablations(
+            batch,
+            BlockSMBAblationConfig(vision_enabled=False),
+        )
+        hierarchy = apply_block_smb_ablations(
+            batch,
+            BlockSMBAblationConfig(hierarchy_enabled=False),
+        )
+
+        self.assertTrue(torch.equal(visual.src_a, torch.zeros_like(batch.src_a)))
+        self.assertTrue(torch.equal(visual.src_b, torch.zeros_like(batch.src_b)))
+        for slot in ("c_position", "c_semantic_probabilities", "c_patch_tokens"):
+            start, end = fusion[slot]
+            torch.testing.assert_close(
+                visual.src_c[:, start:end],
+                torch.zeros_like(batch.src_c[:, start:end]),
+            )
+        torch.testing.assert_close(
+            visual.src_c[:, state_start:state_end],
+            batch.src_c[:, state_start:state_end],
+        )
+        self.assertTrue(torch.equal(hierarchy.src_a, torch.zeros_like(batch.src_a)))
+        self.assertTrue(torch.equal(hierarchy.src_b, torch.zeros_like(batch.src_b)))
+        torch.testing.assert_close(hierarchy.src_c, batch.src_c)
+        self.assertFalse(visual.metadata["ablation"]["vision_enabled"])
+        self.assertFalse(hierarchy.metadata["ablation"]["hierarchy_enabled"])
+
     def test_train_evaluate_checkpoint_and_recording_smoke(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -203,6 +247,31 @@ class TestBlockSMBTraining(unittest.TestCase):
             optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
             restored = restore_block_smb_checkpoint(checkpoint, model, optimizer)
             self.assertEqual(restored["epoch"], 2)
+
+    def test_train_evaluate_smoke_with_all_block_smb_ablations_disabled(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            ablation=BlockSMBAblationConfig(
+                vision_enabled=False,
+                critic_feedback_enabled=False,
+                hierarchy_enabled=False,
+                recurrent_state_enabled=False,
+                checkpoint_transfer_enabled=False,
+            ),
+        )
+
+        result = train_and_evaluate_block_smb(
+            config, vision_factory=static_vision_factory
+        )
+
+        self.assertEqual(
+            result["model"].training,
+            False,
+        )
+        self.assertFalse(config.ablation.vision_enabled)
+        self.assertFalse(config.ablation.critic_feedback_enabled)
+        for key in ("loss_total", "eval_mean_return", "eval_success_rate"):
+            self.assertTrue(torch.isfinite(torch.tensor(result["metrics"][key])).item())
 
     def test_restore_accepts_checkpoint_without_separated_objective_heads(self):
         with TemporaryDirectory() as tmpdir:

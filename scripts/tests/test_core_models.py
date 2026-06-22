@@ -114,6 +114,42 @@ class TestCriticFeedbackContract(unittest.TestCase):
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c + fixed_criticism.mean(dim=(1, 2)).unsqueeze(1))
 
+    def test_agent_second_pass_can_disable_critic_feedback(self):
+        seq_len_a = 2
+        seq_len_b = 4
+        seq_len_c = 8
+        d_model = 4
+        vocab_size = 7
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+        )
+        fixed_criticism = torch.ones(2, seq_len_a, d_model)
+        recording_agent = RecordingAgent(seq_len_a, seq_len_b, vocab_size)
+        model.agent = recording_agent
+        model.world_model = EchoWorldModel()
+        model.critic = FixedCritic(fixed_criticism)
+
+        src_a = torch.zeros(2, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(2, seq_len_b, dtype=torch.long)
+        src_c = torch.ones(2, seq_len_c)
+
+        _actions1, _next_state, criticism, actions2, _logits_a, _w_b, _b_b = model(
+            src_a,
+            src_b,
+            src_c,
+            critic_feedback_enabled=False,
+        )
+
+        self.assertEqual(len(recording_agent.criticisms), 2)
+        self.assertIsNone(recording_agent.criticisms[0])
+        self.assertIsNone(recording_agent.criticisms[1])
+        torch.testing.assert_close(criticism, fixed_criticism)
+        torch.testing.assert_close(actions2, src_c)
+
     def test_auxiliary_objective_heads_produce_scalar_reward_value_and_representation(self):
         model = AgentWorldModelCritic(
             vocab_size=7,

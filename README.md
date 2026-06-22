@@ -81,6 +81,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    retroagi-block-smb record --checkpoint data/block_smb/policy.pth --record-dir artifacts/block_smb/recordings
    python -m retroagi.stages.full_smb.run --steps 500
    ```
+   Block SMB ablations can be run with paired switches such as
+   `--disable-vision`, `--disable-critic-feedback`, `--disable-hierarchy`,
+   `--disable-recurrent-state`, and `--disable-checkpoint-transfer`. The
+   resolved ablation config is written beside each run summary and checkpoint.
 3. Run the test suite:
    ```bash
    python -m unittest discover -s scripts/tests -v

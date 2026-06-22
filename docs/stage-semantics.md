@@ -209,6 +209,19 @@ scenario results:
 Use these fields to compare reward and hyperparameter changes. A higher return
 without a higher threshold pass rate should not be treated as solving P3.
 
+Block SMB ablation runs are part of `BlockSMBTrainingConfig.ablation` and are
+recorded in checkpoint and run-summary configs. The CLI exposes each switch in
+both enable and disable form so saved checkpoint settings can be inherited or
+overridden:
+
+| Pathway | Disable flag | Effect |
+| --- | --- | --- |
+| Vision | `--disable-vision` | Replaces A/B semantic streams with background tokens and zeros C position, semantic-probability, and patch-token slots while preserving symbolic environment state. |
+| Critic feedback | `--disable-critic-feedback` | Still computes critic output for metrics, but does not inject it into the actor's second pass. |
+| Hierarchy levels | `--disable-hierarchy` | Replaces A/B semantic streams with background tokens while preserving C-stream inputs. |
+| Recurrent state | `--disable-recurrent-state` | Starts the world model from zero recurrent memory at each rollout step instead of carrying state between steps. |
+| Checkpoint transfer | `--disable-checkpoint-transfer` | Uses a fresh frozen Block ViT for policy observations instead of loading `data/block_vit/block_vit.pth` or a supplied vision checkpoint. |
+
 If deterministic policy training stalls, run the Block ViT perception
 diagnostic before changing policy losses:
 

@@ -130,7 +130,7 @@ uses it to complete scenarios.
       position bottlenecks before blaming policy training failures.
 - [x] Improve or retrain Block ViT perception so the diagnostic no longer
       flags semantic or position quality as policy-training bottlenecks.
-- [ ] Add Block SMB ablations for vision, critic feedback, hierarchy levels,
+- [x] Add Block SMB ablations for vision, critic feedback, hierarchy levels,
       recurrent state handling, and checkpoint transfer.
 
 **Exit criteria:** a seeded Block SMB checkpoint resumes correctly and completes

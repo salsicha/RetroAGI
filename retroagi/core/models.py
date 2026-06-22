@@ -357,6 +357,7 @@ class AgentWorldModelCritic(nn.Module):
         world_model_state=None,
         episode_mask=None,
         return_world_model_state=False,
+        critic_feedback_enabled=True,
     ):
         logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
 
@@ -381,8 +382,9 @@ class AgentWorldModelCritic(nn.Module):
             )
 
         criticism = self.critic(next_state_pred)
+        actor_criticism = criticism if critic_feedback_enabled else None
         logits_a2, actions2, w_2, b_2 = self.agent(
-            src_A, src_B, src_C, criticism=criticism, tau=tau
+            src_A, src_B, src_C, criticism=actor_criticism, tau=tau
         )
 
         outputs = (actions1, next_state_pred, criticism, actions2, logits_a2, w_2, b_2)

@@ -14,6 +14,25 @@ import torch
 from retroagi.stages.block_smb import cli
 
 
+class FreshVision:
+    def __init__(self):
+        self.device = None
+        self.frozen = None
+        self.eval_called = False
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def requires_grad_(self, value):
+        self.frozen = not value
+        return self
+
+    def eval(self):
+        self.eval_called = True
+        return self
+
+
 def fake_result():
     return {
         "history": [{"loss_total": 1.0}],
@@ -70,6 +89,11 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "75",
                     "--reward-frame-penalty",
                     "-0.02",
+                    "--disable-vision",
+                    "--disable-critic-feedback",
+                    "--disable-hierarchy",
+                    "--disable-recurrent-state",
+                    "--disable-checkpoint-transfer",
                 ]
             )
 
@@ -90,9 +114,16 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.reward_config.progress_per_pixel, 0.08)
         self.assertEqual(config.reward_config.goal, 75.0)
         self.assertEqual(config.reward_config.frame_penalty, -0.02)
+        self.assertFalse(config.ablation.vision_enabled)
+        self.assertFalse(config.ablation.critic_feedback_enabled)
+        self.assertFalse(config.ablation.hierarchy_enabled)
+        self.assertFalse(config.ablation.recurrent_state_enabled)
+        self.assertFalse(config.ablation.checkpoint_transfer_enabled)
         self.assertNotIn("model", payload)
         self.assertEqual(payload["config"]["epochs"], 3)
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
+        self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
+        self.assertFalse(payload["vision"]["checkpoint_transfer"])
 
     def test_train_command_loads_frozen_vision_checkpoint_and_writes_summary(self):
         loaded_model = object()
@@ -135,7 +166,48 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertTrue(load_vision.call_args.kwargs["freeze"])
         self.assertEqual(payload["vision"]["checkpoint_path"], "data/block_vit/block_vit.pth")
         self.assertTrue(payload["vision"]["frozen"])
+        self.assertTrue(payload["vision"]["checkpoint_transfer"])
         self.assertEqual(written["vision"], payload["vision"])
+
+    def test_train_command_can_disable_checkpoint_transfer(self):
+        fresh_vision = FreshVision()
+
+        def fake_train(_config, *, vision_factory):
+            self.assertIs(vision_factory(), fresh_vision)
+            self.assertIs(vision_factory(), fresh_vision)
+            return fake_result()
+
+        with patch(
+            "retroagi.stages.block_smb.cli.BlockVisionTransformer",
+            return_value=fresh_vision,
+        ) as fresh_factory:
+            with patch(
+                "retroagi.stages.block_smb.cli.load_block_vit_checkpoint"
+            ) as load_vision:
+                with patch(
+                    "retroagi.stages.block_smb.cli.train_and_evaluate_block_smb",
+                    side_effect=fake_train,
+                ):
+                    exit_code, payload = self.run_main(
+                        [
+                            "train",
+                            "--device",
+                            "cpu",
+                            "--vision-checkpoint",
+                            "data/block_vit/block_vit.pth",
+                            "--disable-checkpoint-transfer",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        fresh_factory.assert_called_once_with()
+        load_vision.assert_not_called()
+        self.assertEqual(str(fresh_vision.device), "cpu")
+        self.assertTrue(fresh_vision.frozen)
+        self.assertTrue(fresh_vision.eval_called)
+        self.assertIsNone(payload["vision"]["checkpoint_path"])
+        self.assertTrue(payload["vision"]["frozen"])
+        self.assertFalse(payload["vision"]["checkpoint_transfer"])
 
     def test_evaluate_command_reuses_checkpoint_config_without_training(self):
         checkpoint = {
@@ -145,6 +217,13 @@ class TestBlockSMBCLI(unittest.TestCase):
                 "epochs": 7,
                 "hidden_dim": 16,
                 "fixed_scenarios": ["level_2_gap.json"],
+                "ablation": {
+                    "vision_enabled": False,
+                    "critic_feedback_enabled": False,
+                    "hierarchy_enabled": False,
+                    "recurrent_state_enabled": False,
+                    "checkpoint_transfer_enabled": False,
+                },
                 "reward_config": {
                     "progress_per_pixel": 0.06,
                     "coin": 9.0,
@@ -174,6 +253,8 @@ class TestBlockSMBCLI(unittest.TestCase):
                         "2",
                         "--reward-goal",
                         "80",
+                        "--enable-vision",
+                        "--enable-critic-feedback",
                     ]
                 )
 
@@ -188,6 +269,11 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.reward_config.progress_per_pixel, 0.06)
         self.assertEqual(config.reward_config.goal, 80.0)
         self.assertEqual(config.reward_config.frame_penalty, -0.02)
+        self.assertTrue(config.ablation.vision_enabled)
+        self.assertTrue(config.ablation.critic_feedback_enabled)
+        self.assertFalse(config.ablation.hierarchy_enabled)
+        self.assertFalse(config.ablation.recurrent_state_enabled)
+        self.assertFalse(config.ablation.checkpoint_transfer_enabled)
         self.assertFalse(config.save_checkpoints)
         self.assertFalse(config.record_videos)
         self.assertIsNone(config.video_dir)

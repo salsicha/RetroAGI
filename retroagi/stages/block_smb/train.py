@@ -36,6 +36,28 @@ BLOCK_SMB_ACTION_COUNT = 6
 
 
 @dataclass(frozen=True)
+class BlockSMBAblationConfig:
+    """Switches for measuring Block SMB architectural contributions."""
+
+    vision_enabled: bool = True
+    critic_feedback_enabled: bool = True
+    hierarchy_enabled: bool = True
+    recurrent_state_enabled: bool = True
+    checkpoint_transfer_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        for name in (
+            "vision_enabled",
+            "critic_feedback_enabled",
+            "hierarchy_enabled",
+            "recurrent_state_enabled",
+            "checkpoint_transfer_enabled",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool")
+
+
+@dataclass(frozen=True)
 class BlockSMBTrainingConfig:
     seed: int = 0
     epochs: int = 1
@@ -44,6 +66,7 @@ class BlockSMBTrainingConfig:
     learning_rate: float = 3e-4
     gamma: float = 0.95
     reward_config: BlockSMBRewardConfig = field(default_factory=BlockSMBRewardConfig)
+    ablation: BlockSMBAblationConfig = field(default_factory=BlockSMBAblationConfig)
     entropy_weight: float = 0.01
     policy_loss_weight: float = 1.0
     representation_weight: float = 0.05
@@ -80,6 +103,12 @@ class BlockSMBTrainingConfig:
             )
         elif not isinstance(self.reward_config, BlockSMBRewardConfig):
             raise TypeError("reward_config must be a BlockSMBRewardConfig or mapping")
+        if isinstance(self.ablation, Mapping):
+            object.__setattr__(
+                self, "ablation", BlockSMBAblationConfig(**self.ablation)
+            )
+        elif not isinstance(self.ablation, BlockSMBAblationConfig):
+            raise TypeError("ablation must be a BlockSMBAblationConfig or mapping")
         positive_ints = (
             "epochs",
             "episodes_per_epoch",
@@ -294,6 +323,83 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
     return bool(mario_rect.colliderect(env.goal))
 
 
+def _ablation_config(
+    ablation: BlockSMBAblationConfig | Mapping[str, Any] | None,
+) -> BlockSMBAblationConfig:
+    if ablation is None:
+        return BlockSMBAblationConfig()
+    if isinstance(ablation, BlockSMBAblationConfig):
+        return ablation
+    if isinstance(ablation, Mapping):
+        return BlockSMBAblationConfig(**dict(ablation))
+    raise TypeError("ablation must be a BlockSMBAblationConfig, mapping, or None")
+
+
+def _zero_fusion_slots(
+    src_c: torch.Tensor,
+    fusion: Mapping[str, Any],
+    slots: tuple[str, ...],
+) -> torch.Tensor:
+    masked = src_c.clone()
+    saw_slot = False
+    for slot in slots:
+        value = fusion.get(slot)
+        if not isinstance(value, (tuple, list)) or len(value) != 2:
+            continue
+        start, end = int(value[0]), int(value[1])
+        masked[:, start:end] = 0.0
+        saw_slot = True
+    if not saw_slot:
+        return torch.zeros_like(src_c)
+    return masked
+
+
+def apply_block_smb_ablations(
+    batch: StageBatch,
+    ablation: BlockSMBAblationConfig | Mapping[str, Any] | None,
+) -> StageBatch:
+    """Return a batch with configured Block SMB observation pathways disabled."""
+
+    config = _ablation_config(ablation)
+    metadata = dict(batch.metadata or {})
+    metadata["ablation"] = to_plain_data(config)
+
+    src_a = batch.src_a
+    src_b = batch.src_b
+    src_c = batch.src_c
+
+    if not config.vision_enabled:
+        src_a = torch.zeros_like(src_a)
+        src_b = torch.zeros_like(src_b)
+        fusion = metadata.get("vision_fusion")
+        if isinstance(fusion, Mapping):
+            src_c = _zero_fusion_slots(
+                src_c,
+                fusion,
+                (
+                    "c_position",
+                    "c_semantic_probabilities",
+                    "c_patch_tokens",
+                ),
+            )
+        else:
+            src_c = torch.zeros_like(src_c)
+
+    if not config.hierarchy_enabled:
+        src_a = torch.zeros_like(src_a)
+        src_b = torch.zeros_like(src_b)
+
+    return StageBatch(
+        src_a=src_a,
+        target_a=batch.target_a,
+        src_b=src_b,
+        target_b=batch.target_b,
+        src_c=src_c,
+        target_c=batch.target_c,
+        metadata=metadata,
+    )
+
+
 def _action_from_model(
     model: AgentWorldModelCritic,
     batch: StageBatch,
@@ -301,7 +407,14 @@ def _action_from_model(
     deterministic: bool,
     tau: float,
     world_model_state: WorldModelState | None = None,
-) -> tuple[int, torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...], WorldModelState]:
+    critic_feedback_enabled: bool = True,
+) -> tuple[
+    int,
+    torch.Tensor,
+    torch.Tensor,
+    tuple[torch.Tensor, ...],
+    WorldModelState | None,
+]:
     episode = (batch.metadata or {}).get("episode", {})
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
     if episode_mask is not None:
@@ -325,6 +438,7 @@ def _action_from_model(
         world_model_state=world_model_state,
         episode_mask=episode_mask,
         return_world_model_state=True,
+        critic_feedback_enabled=critic_feedback_enabled,
     )
     action_logits = logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT]
     finite_or_raise("action_logits", action_logits)
@@ -351,7 +465,9 @@ def collect_trajectory(
     deterministic: bool,
     device: torch.device,
     record_frames: bool = False,
+    ablation: BlockSMBAblationConfig | Mapping[str, Any] | None = None,
 ) -> BlockSMBTrajectory:
+    ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
     trajectory = BlockSMBTrajectory(scenario_name=scenario_name)
     if record_frames:
@@ -359,21 +475,29 @@ def collect_trajectory(
     world_model_state: WorldModelState | None = None
 
     for _ in range(rollout_steps):
-        batch = stage.encode_observation(observation)
+        batch = apply_block_smb_ablations(
+            stage.encode_observation(observation), ablation_config
+        )
         batch.src_a = batch.src_a.to(device)
         batch.src_b = batch.src_b.to(device)
         batch.src_c = batch.src_c.to(device)
+        carried_state = (
+            world_model_state if ablation_config.recurrent_state_enabled else None
+        )
         action, log_prob, entropy, outputs, next_world_model_state = _action_from_model(
             model,
             batch,
             deterministic=deterministic,
             tau=1.0,
-            world_model_state=world_model_state,
+            world_model_state=carried_state,
+            critic_feedback_enabled=ablation_config.critic_feedback_enabled,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
-        next_batch = stage.encode_observation(next_observation, info)
+        next_batch = apply_block_smb_ablations(
+            stage.encode_observation(next_observation, info), ablation_config
+        )
         next_batch.src_a = next_batch.src_a.to(device)
         next_batch.src_b = next_batch.src_b.to(device)
         next_batch.src_c = next_batch.src_c.to(device)
@@ -405,7 +529,12 @@ def collect_trajectory(
         if done:
             world_model_state = None
             break
-        world_model_state = next_world_model_state.detach()
+        world_model_state = (
+            next_world_model_state.detach()
+            if ablation_config.recurrent_state_enabled
+            and next_world_model_state is not None
+            else None
+        )
     return trajectory
 
 
@@ -518,6 +647,7 @@ def train_block_smb_epoch(
                 seed=config.seed + epoch * 10_000 + episode,
                 deterministic=False,
                 device=device,
+                ablation=config.ablation,
             )
         finally:
             stage.env.close()
@@ -575,6 +705,7 @@ def evaluate_block_smb(
                         deterministic=True,
                         device=device,
                         record_frames=record_dir is not None,
+                        ablation=config.ablation,
                     )
                 finally:
                     stage.env.close()

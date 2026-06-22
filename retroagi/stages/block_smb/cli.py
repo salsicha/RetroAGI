@@ -15,8 +15,16 @@ import torch
 from retroagi.core import load_checkpoint, select_device, to_plain_data
 
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
-from .train import BlockSMBTrainingConfig, train_and_evaluate_block_smb
-from .vision import evaluate_block_vit_perception, load_block_vit_checkpoint
+from .train import (
+    BlockSMBAblationConfig,
+    BlockSMBTrainingConfig,
+    train_and_evaluate_block_smb,
+)
+from .vision import (
+    BlockVisionTransformer,
+    evaluate_block_vit_perception,
+    load_block_vit_checkpoint,
+)
 
 DEFAULT_RECORD_DIR = Path("artifacts/block_smb/recordings")
 DEFAULT_VISION_DIAGNOSTIC_SAMPLES = 64
@@ -68,6 +76,14 @@ REWARD_CONFIG_ARGS = {
     "reward_frame_penalty": "frame_penalty",
 }
 
+ABLATION_CONFIG_FIELDS = (
+    "vision_enabled",
+    "critic_feedback_enabled",
+    "hierarchy_enabled",
+    "recurrent_state_enabled",
+    "checkpoint_transfer_enabled",
+)
+
 
 def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", type=Path, help="write the resolved run summary JSON")
@@ -106,6 +122,73 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--evaluation-episodes", type=_positive_int)
     parser.add_argument("--evaluation-max-steps", type=_positive_int)
     parser.add_argument("--num-envs", type=_positive_int)
+    parser.set_defaults(
+        vision_enabled=None,
+        critic_feedback_enabled=None,
+        hierarchy_enabled=None,
+        recurrent_state_enabled=None,
+        checkpoint_transfer_enabled=None,
+    )
+    parser.add_argument(
+        "--enable-vision",
+        action="store_true",
+        dest="vision_enabled",
+        help="enable visual observation features in Block SMB policy input",
+    )
+    parser.add_argument(
+        "--disable-vision",
+        action="store_false",
+        dest="vision_enabled",
+        help="zero visual A/B streams and visual C slots, preserving symbolic state",
+    )
+    parser.add_argument(
+        "--enable-critic-feedback",
+        action="store_true",
+        dest="critic_feedback_enabled",
+        help="inject critic feedback into the actor's second pass",
+    )
+    parser.add_argument(
+        "--disable-critic-feedback",
+        action="store_false",
+        dest="critic_feedback_enabled",
+        help="run the actor's second pass without critic feedback injection",
+    )
+    parser.add_argument(
+        "--enable-hierarchy",
+        action="store_true",
+        dest="hierarchy_enabled",
+        help="use A/B semantic hierarchy streams",
+    )
+    parser.add_argument(
+        "--disable-hierarchy",
+        action="store_false",
+        dest="hierarchy_enabled",
+        help="collapse A/B hierarchy streams to background tokens",
+    )
+    parser.add_argument(
+        "--enable-recurrent-state",
+        action="store_true",
+        dest="recurrent_state_enabled",
+        help="carry world-model recurrent state across rollout steps",
+    )
+    parser.add_argument(
+        "--disable-recurrent-state",
+        action="store_false",
+        dest="recurrent_state_enabled",
+        help="reset world-model recurrent state for every rollout step",
+    )
+    parser.add_argument(
+        "--enable-checkpoint-transfer",
+        action="store_true",
+        dest="checkpoint_transfer_enabled",
+        help="load the Block ViT checkpoint for policy observations",
+    )
+    parser.add_argument(
+        "--disable-checkpoint-transfer",
+        action="store_false",
+        dest="checkpoint_transfer_enabled",
+        help="use a fresh randomly initialized Block ViT instead of loading a checkpoint",
+    )
     parser.set_defaults(deterministic=None)
     parser.add_argument(
         "--deterministic",
@@ -228,6 +311,27 @@ def _apply_reward_config_overrides(
     values["reward_config"] = BlockSMBRewardConfig(**reward_values)
 
 
+def _apply_ablation_config_overrides(
+    values: dict[str, Any], args: argparse.Namespace
+) -> None:
+    overrides = {
+        name: getattr(args, name)
+        for name in ABLATION_CONFIG_FIELDS
+        if hasattr(args, name) and getattr(args, name) is not None
+    }
+    if not overrides:
+        return
+    current = values.get("ablation", BlockSMBAblationConfig())
+    if isinstance(current, BlockSMBAblationConfig):
+        ablation_values = asdict(current)
+    elif isinstance(current, Mapping):
+        ablation_values = dict(current)
+    else:
+        raise TypeError("ablation must be a BlockSMBAblationConfig or mapping")
+    ablation_values.update(overrides)
+    values["ablation"] = BlockSMBAblationConfig(**ablation_values)
+
+
 def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
     for name in ("checkpoint_path", "resume_path", "video_dir"):
@@ -241,6 +345,10 @@ def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
             normalized["reward_config"] = BlockSMBRewardConfig(
                 **dict(reward_config)
             )
+    if normalized.get("ablation") is not None:
+        ablation = normalized["ablation"]
+        if not isinstance(ablation, BlockSMBAblationConfig):
+            normalized["ablation"] = BlockSMBAblationConfig(**dict(ablation))
     return normalized
 
 
@@ -263,6 +371,7 @@ def _checkpoint_config(path: Path) -> dict[str, Any]:
 def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
     values = _config_overrides(args)
     _apply_reward_config_overrides(values, args)
+    _apply_ablation_config_overrides(values, args)
     if args.checkpoint is not None:
         values["checkpoint_path"] = args.checkpoint
         values["save_checkpoints"] = True
@@ -283,6 +392,7 @@ def _make_checkpoint_config(
     values = _checkpoint_config(args.checkpoint)
     values.update(_config_overrides(args))
     _apply_reward_config_overrides(values, args)
+    _apply_ablation_config_overrides(values, args)
     values["resume_path"] = args.checkpoint
     values["save_checkpoints"] = False
     values["record_videos"] = record
@@ -300,20 +410,32 @@ def _make_vision_factory(
     device = select_device(config.device)
     cache: dict[str, Any] = {}
     vision_info: dict[str, Any] = {
-        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        "checkpoint_path": (
+            str(checkpoint_path)
+            if checkpoint_path is not None
+            and config.ablation.checkpoint_transfer_enabled
+            else None
+        ),
         "frozen": True,
+        "checkpoint_transfer": config.ablation.checkpoint_transfer_enabled,
     }
 
     def factory():
         if "model" not in cache:
-            loaded = load_block_vit_checkpoint(
-                checkpoint_path,
-                device=device,
-                freeze=True,
-            )
-            cache["model"] = loaded.model
-            vision_info["checkpoint_path"] = str(loaded.path)
-            vision_info["frozen"] = loaded.frozen
+            if config.ablation.checkpoint_transfer_enabled:
+                loaded = load_block_vit_checkpoint(
+                    checkpoint_path,
+                    device=device,
+                    freeze=True,
+                )
+                cache["model"] = loaded.model
+                vision_info["checkpoint_path"] = str(loaded.path)
+                vision_info["frozen"] = loaded.frozen
+            else:
+                model = BlockVisionTransformer().to(device)
+                model.requires_grad_(False)
+                model.eval()
+                cache["model"] = model
         return cache["model"]
 
     return factory, vision_info

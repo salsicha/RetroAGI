@@ -10,6 +10,7 @@ from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .train import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
+    BlockSMBAblationConfig,
     BlockSMBReplayBuffer,
     BlockSMBTrainingConfig,
     BlockSMBTrajectory,
@@ -57,6 +58,7 @@ from .vision import (
 __all__ = [
     "BLOCK_SMB_CHECKPOINT_KIND",
     "BLOCK_SMB_MODEL_NAME",
+    "BlockSMBAblationConfig",
     "BlockSMBReplayBuffer",
     "BlockSMBTrainingConfig",
     "BlockSMBTrajectory",
