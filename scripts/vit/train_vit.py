@@ -14,22 +14,30 @@ overall accuracy, foreground accuracy, per-class recall and mean IoU.
 Run:
     python scripts/vit/train_vit.py --epochs 20 --batch 64
 Outputs:
-    data/vit/vit_smb.pth          trained weights
+    data/vit/full_smb_vit.pth     versioned vision checkpoint
+    data/vit/vit_smb.pth          legacy raw weights
     data/vit/predictions.png      side-by-side scene / GT / prediction
 """
 import os
 import argparse
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-from retroagi.core import PatchVisionTransformer, select_device
+from retroagi.core import save_checkpoint as save_versioned_checkpoint, select_device
+from retroagi.stages.full_smb.vision import (
+    FullSMBVisionTransformer,
+    build_full_smb_vit_checkpoint,
+)
 
 
 HERE    = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(os.path.dirname(HERE))
 DATA    = os.path.join(PROJECT, "data", "vit")
+VERSIONED_CHECKPOINT = os.path.join(DATA, "full_smb_vit.pth")
+LEGACY_CHECKPOINT = os.path.join(DATA, "vit_smb.pth")
 
 CLASSES = ["sky", "ground", "brick", "question_block", "pipe", "coin",
            "goomba", "koopa", "mario", "mushroom", "hill", "cloud", "bush"]
@@ -40,28 +48,24 @@ GW, GH = W // PATCH, H // PATCH      # 16 x 15
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
-class ViTSegmenter(PatchVisionTransformer):
+class ViTSegmenter(FullSMBVisionTransformer):
     """Compatibility wrapper around the shared patch vision encoder."""
 
     def __init__(self, dim=192, depth=6, heads=6, mlp_ratio=4.0, drop=0.1):
         super().__init__(
-            semantic_classes=tuple(CLASSES),
-            image_size=(H, W),
-            patch_size=PATCH,
             dim=dim,
             depth=depth,
             heads=heads,
+            patch_size=PATCH,
             mlp_ratio=mlp_ratio,
             drop=drop,
-            position_class="mario",
-            name="smb_sprite_vit",
         )
 
     def forward(self, x):
         return super().forward(x).semantic_logits
 
     def encode(self, observation):
-        return PatchVisionTransformer.forward(self, observation)
+        return FullSMBVisionTransformer.forward(self, observation)
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -101,6 +105,59 @@ def evaluate(model, loader, device):
     }
 
 
+def scalar_metrics(metrics):
+    values = {
+        "accuracy": float(metrics["acc"]),
+        "foreground_accuracy": float(metrics["fg_acc"]),
+        "mean_iou": float(metrics["miou"]),
+    }
+    for index, name in enumerate(CLASSES):
+        iou = metrics["iou"][index]
+        recall = metrics["recall"][index]
+        if not np.isnan(iou):
+            values[f"iou/{name}"] = float(iou)
+        if not np.isnan(recall):
+            values[f"recall/{name}"] = float(recall)
+    return values
+
+
+def save_training_checkpoint(model, args, *, epoch, metrics):
+    checkpoint_path = Path(args.checkpoint)
+    legacy_checkpoint_path = Path(args.legacy_checkpoint)
+    checkpoint = build_full_smb_vit_checkpoint(
+        model,
+        epoch=epoch,
+        metrics=scalar_metrics(metrics),
+        config={
+            "model": {
+                "hidden_dim": args.dim,
+                "depth": args.depth,
+                "heads": args.heads,
+                "patch_size": PATCH,
+                "mlp_ratio": args.mlp_ratio,
+                "dropout": args.drop,
+            },
+            "training": {
+                "batch_size": args.batch,
+                "learning_rate": args.lr,
+                "epochs": args.epochs,
+            },
+            "data": {
+                "train": os.path.relpath(os.path.join(DATA, "train.npz"), PROJECT),
+                "val": os.path.relpath(os.path.join(DATA, "val.npz"), PROJECT),
+            },
+        },
+        metadata={
+            "training_script": "scripts/vit/train_vit.py",
+            "legacy_raw_checkpoint": os.path.relpath(
+                legacy_checkpoint_path.resolve(), PROJECT
+            ),
+        },
+    )
+    save_versioned_checkpoint(checkpoint_path, checkpoint)
+    torch.save(model.state_dict(), legacy_checkpoint_path)
+
+
 # ── Visualization ─────────────────────────────────────────────────────────────
 def save_predictions(model, ds, device, path, n=4):
     import colorsys
@@ -136,7 +193,12 @@ def main():
     ap.add_argument("--lr",     type=float, default=3e-4)
     ap.add_argument("--dim",    type=int, default=192)
     ap.add_argument("--depth",  type=int, default=6)
+    ap.add_argument("--heads",  type=int, default=6)
+    ap.add_argument("--mlp-ratio", type=float, default=4.0)
+    ap.add_argument("--drop", type=float, default=0.1)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--checkpoint", default=VERSIONED_CHECKPOINT)
+    ap.add_argument("--legacy-checkpoint", default=LEGACY_CHECKPOINT)
     args = ap.parse_args()
 
     device = select_device(args.device)
@@ -153,7 +215,13 @@ def main():
     w = torch.tensor(weights, dtype=torch.float32, device=device)
     criterion = nn.CrossEntropyLoss(weight=w)
 
-    model = ViTSegmenter(dim=args.dim, depth=args.depth).to(device)
+    model = ViTSegmenter(
+        dim=args.dim,
+        depth=args.depth,
+        heads=args.heads,
+        mlp_ratio=args.mlp_ratio,
+        drop=args.drop,
+    ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"ViT params: {n_params/1e6:.2f}M")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
@@ -174,10 +242,10 @@ def main():
               f"| acc {m['acc']*100:5.2f}% | fg_acc {m['fg_acc']*100:5.2f}% | mIoU {m['miou']*100:5.2f}%")
         if m["miou"] > best_miou:
             best_miou = m["miou"]
-            torch.save(model.state_dict(), os.path.join(DATA, "vit_smb.pth"))
+            save_training_checkpoint(model, args, epoch=epoch + 1, metrics=m)
 
     # final per-class report
-    model.load_state_dict(torch.load(os.path.join(DATA, "vit_smb.pth"), map_location=device))
+    model.load_state_dict(torch.load(args.legacy_checkpoint, map_location=device))
     m = evaluate(model, val_ld, device)
     print("\n── Final per-class metrics (val) ──")
     print(f"{'class':16s}{'recall':>9s}{'IoU':>9s}")
@@ -188,7 +256,8 @@ def main():
     print(f"\nOverall acc {m['acc']*100:.2f}% | foreground acc {m['fg_acc']*100:.2f}% | mIoU {m['miou']*100:.2f}%")
 
     save_predictions(model, val_ds, device, os.path.join(DATA, "predictions.png"))
-    print(f"Saved weights -> {os.path.join(DATA,'vit_smb.pth')}")
+    print(f"Saved checkpoint -> {args.checkpoint}")
+    print(f"Saved legacy weights -> {args.legacy_checkpoint}")
     print(f"Saved predictions -> {os.path.join(DATA,'predictions.png')}")
 
 

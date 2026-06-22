@@ -12,7 +12,21 @@ from .adapter import (
     extract_full_smb_signals,
     make_stable_retro_env,
 )
-from .vision import FULL_SMB_SEMANTIC_CLASSES, FullSMBSegmentationVision
+from .vision import (
+    DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+    FALLBACK_FULL_SMB_VIT_CHECKPOINT,
+    FULL_SMB_DEEPLAB_CLASSES,
+    FULL_SMB_SEMANTIC_CLASSES,
+    FULL_SMB_VIT_CHECKPOINT_KIND,
+    FULL_SMB_VIT_CLASSES,
+    FULL_SMB_VIT_MODEL_NAME,
+    FullSMBDeepLabSegmentationVision,
+    FullSMBSegmentationVision,
+    FullSMBVITLoadResult,
+    FullSMBVisionTransformer,
+    build_full_smb_vit_checkpoint,
+    load_full_smb_vit_checkpoint,
+)
 
 __all__ = [
     "FULL_SMB_GAME",
@@ -23,8 +37,19 @@ __all__ = [
     "FullSMBObservationConfig",
     "FullSMBSignalConfig",
     "FullSMBSignals",
+    "DEFAULT_FULL_SMB_VIT_CHECKPOINT",
+    "FALLBACK_FULL_SMB_VIT_CHECKPOINT",
+    "FULL_SMB_DEEPLAB_CLASSES",
+    "FULL_SMB_VIT_CHECKPOINT_KIND",
+    "FULL_SMB_VIT_CLASSES",
+    "FULL_SMB_VIT_MODEL_NAME",
+    "FullSMBDeepLabSegmentationVision",
     "FullSMBSegmentationVision",
+    "FullSMBVITLoadResult",
+    "FullSMBVisionTransformer",
     "FullSMBStage",
+    "build_full_smb_vit_checkpoint",
     "extract_full_smb_signals",
+    "load_full_smb_vit_checkpoint",
     "make_stable_retro_env",
 ]

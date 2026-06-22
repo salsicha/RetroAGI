@@ -313,14 +313,65 @@ class TestVisionInterface(unittest.TestCase):
 
 
 class TestFullSMBVision(unittest.TestCase):
-    def test_existing_deeplab_checkpoint_loads(self):
+    def test_full_smb_segmentation_defaults_to_vit_contract(self):
         from retroagi.stages.full_smb import FullSMBSegmentationVision
+
+        model = FullSMBSegmentationVision(
+            checkpoint=None,
+            dim=16,
+            depth=1,
+            heads=4,
+            drop=0.0,
+        )
+        output = model.encode(torch.zeros(1, 3, 64, 64))
+
+        self.assertEqual(model.spec.name, "full_smb_vit")
+        self.assertEqual(model.spec.num_classes, 13)
+        self.assertEqual(model.spec.semantic_classes[8], "mario")
+        self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
+        self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
+        self.assertEqual(output.position.shape, (1, 2))
+        self.assertEqual(output.tokens.shape, (1, 240, 16))
+
+    def test_existing_full_smb_vit_checkpoint_loads(self):
+        from retroagi.stages.full_smb import FullSMBSegmentationVision
+
+        checkpoint = Path("data/vit/full_smb_vit.pth")
+        if not checkpoint.exists():
+            self.skipTest("trained Full SMB ViT checkpoint is not available")
+
+        model = FullSMBSegmentationVision(checkpoint=checkpoint)
+        output = model.encode(torch.zeros(1, 3, 240, 256))
+
+        self.assertTrue(model.frozen)
+        self.assertEqual(model.checkpoint_path, checkpoint)
+        self.assertEqual(model.checkpoint["checkpoint_schema_version"], 1)
+        self.assertEqual(model.spec.name, "full_smb_vit")
+        self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
+        self.assertEqual(output.position.shape, (1, 2))
+
+    def test_legacy_full_smb_vit_state_dict_loads(self):
+        from retroagi.stages.full_smb import FullSMBSegmentationVision
+
+        checkpoint = Path("data/vit/vit_smb.pth")
+        if not checkpoint.exists():
+            self.skipTest("legacy Full SMB ViT checkpoint is not available")
+
+        model = FullSMBSegmentationVision(checkpoint=checkpoint)
+        output = model.encode(torch.zeros(1, 3, 240, 256))
+
+        self.assertTrue(model.checkpoint["metadata"]["legacy_checkpoint"])
+        self.assertEqual(model.spec.name, "full_smb_vit")
+        self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
+
+    def test_existing_deeplab_checkpoint_loads(self):
+        from retroagi.stages.full_smb import FullSMBDeepLabSegmentationVision
 
         checkpoint = Path("scripts/segmentation/MarioSegmentationModel.pth")
         if not checkpoint.exists():
             self.skipTest("trained DeepLab checkpoint is not available")
 
-        model = FullSMBSegmentationVision(checkpoint=checkpoint)
+        model = FullSMBDeepLabSegmentationVision(checkpoint=checkpoint)
         self.assertEqual(model.spec.num_classes, 6)
         self.assertEqual(model.spec.semantic_classes[-1], "mario")
 

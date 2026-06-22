@@ -14,7 +14,11 @@ from retroagi.core import (
     validate_stage_spec,
 )
 from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockSMBStage, BlockVisionTransformer
-from retroagi.stages.full_smb import FULL_SMB_SPEC, FullSMBSegmentationVision, FullSMBStage
+from retroagi.stages.full_smb import (
+    FULL_SMB_SPEC,
+    FullSMBSegmentationVision,
+    FullSMBStage,
+)
 
 
 class StaticVisionEncoder:
@@ -162,8 +166,10 @@ class TestVisionEncoderContracts(unittest.TestCase):
                 np.zeros((240, 256, 3), dtype=np.uint8),
             ),
             (
-                "full_smb_deeplab",
-                lambda: FullSMBSegmentationVision(checkpoint=None),
+                "full_smb_vit",
+                lambda: FullSMBSegmentationVision(
+                    checkpoint=None, dim=16, depth=1, heads=4, drop=0.0
+                ),
                 torch.zeros(1, 3, 64, 64),
             ),
         )

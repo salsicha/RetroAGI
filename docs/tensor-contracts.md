@@ -263,9 +263,27 @@ Input is resized to `240x256` and divided into 16x16 patches, giving
 The compatible sprite ViT uses the same grid with `K=13` and default `D=192`.
 Its position is normalized `(x,y)` for the Mario class.
 
-### Full SMB DeepLab
+### Full SMB ViT
 
-For normalized model input `[B,3,H,W]`:
+`FullSMBSegmentationVision` is backed by `FullSMBVisionTransformer` and accepts
+HWC/BHWC or CHW/BCHW RGB input. Input is resized to `240x256` and divided into
+16x16 patches, giving `G_H=15`, `G_W=16`, and `N=240`.
+
+| Field | Shape | Range |
+| --- | --- | --- |
+| `position` | `[B,2]` | `[0,1]`, `(x,y)`, probability-weighted Mario patch center. |
+| `semantic_logits` | `[B,13,15,16]` | Unbounded thirteen-class logits. |
+| `semantic_ids` | `[B,15,16]` | IDs `[0,12]`. |
+| `tokens` | `[B,240,D]` | Transformer tokens; unbounded. Default `D=192`. |
+
+The thirteen semantic classes are exactly
+`sky, ground, brick, question_block, pipe, coin, goomba, koopa, mario,
+mushroom, hill, cloud, bush`.
+
+### Full SMB Legacy DeepLab
+
+`FullSMBDeepLabSegmentationVision` preserves the previous checkpoint wrapper for
+inspection and migration. For normalized model input `[B,3,H,W]`:
 
 | Field | Shape | Range |
 | --- | --- | --- |
@@ -275,7 +293,8 @@ For normalized model input `[B,3,H,W]`:
 | `tokens` | `[B,240,6]` | Logits pooled to 15x16 and flattened row-major; unbounded. |
 
 DeepLab preserves input spatial size. Its token width is six class logits, not
-a learned embedding width comparable to ViT tokens.
+a learned embedding width comparable to ViT tokens. New Full SMB policy code
+should use the ViT-backed `FullSMBSegmentationVision`.
 
 ## Consumer Requirements
 

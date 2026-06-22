@@ -48,8 +48,14 @@ Trained with class-balanced cross-entropy (sky is ~75% of patches).
 
 ```bash
 python scripts/vit/train_vit.py --epochs 30 --batch 64 --dim 192 --depth 6
-# -> data/vit/vit_smb.pth, predictions.png
+# -> data/vit/full_smb_vit.pth, data/vit/vit_smb.pth, predictions.png
 ```
+
+`retroagi.stages.full_smb.FullSMBSegmentationVision` loads a versioned
+`data/vit/full_smb_vit.pth` checkpoint by default and can still load the legacy
+raw `data/vit/vit_smb.pth` state dict for migration. The previous DeepLab
+wrapper is available as `FullSMBDeepLabSegmentationVision` only for legacy
+checkpoint inspection.
 
 ## Results (1000 held-out scenes, 30 epochs, ~17 min on Apple MPS)
 

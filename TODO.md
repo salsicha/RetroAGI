@@ -167,19 +167,19 @@ environment semantics.
 - [x] Add frame skipping, resizing, normalization, stacking, and episode masks.
 - [x] Add emulator state save/load for repeatable evaluation.
 - [x] Implement `FullSMBStage` with the common stage contract.
-- [ ] Replace the existing CNN/DeepLab Full SMB semantic segmentation model
+- [x] Replace the existing CNN/DeepLab Full SMB semantic segmentation model
       with a Vision Transformer semantic segmentation model.
-  - Get game assets by documenting the required SMB sprite sources, download or
+  - [x] Get game assets by documenting the required SMB sprite sources, download or
     extraction commands, asset licenses/provenance, and local paths under
     `assets/`.
-  - Extract/crop sprites and build a class map for Mario, terrain, items,
+  - [x] Extract/crop sprites and build a class map for Mario, terrain, items,
     enemies, background, and HUD/unknown regions needed by Full SMB.
-  - Create a synthetic training-data generator that composes SMB scenes from
+  - [x] Create a synthetic training-data generator that composes SMB scenes from
     those assets, emits RGB frames plus pixel or patch semantic labels, and
     writes deterministic train/validation splits.
-  - Train a ViT segmentation model from the synthetic data, save a versioned
-    checkpoint with `VisionSpec` metadata, and add held-out synthetic metrics.
-  - Replace `FullSMBSegmentationVision`'s DeepLab implementation with the ViT
+  - [x] Train or convert a Full SMB ViT segmentation checkpoint to the versioned
+    schema with `VisionSpec` metadata and held-out synthetic metrics.
+  - [x] Replace `FullSMBSegmentationVision`'s DeepLab implementation with the ViT
     loader while preserving the shared `VisionOutput` contract and checkpoint
     compatibility checks.
 - [ ] Add headless random-agent and deterministic reset smoke tests.
