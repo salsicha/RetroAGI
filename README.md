@@ -82,6 +82,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    python -m retroagi.stages.full_smb.transfer \
      --block-policy-checkpoint data/block_smb/policy.pth \
      --output-checkpoint data/full_smb/transferred_policy.pth
+   python -m retroagi.stages.full_smb.compare \
+     --transfer-checkpoint data/full_smb/transferred_policy.pth \
+     --output artifacts/full_smb/transfer_vs_scratch.json
    python -m retroagi.stages.full_smb.run --steps 500 --seed 0
    ```
    Block SMB ablations can be run with paired switches such as
@@ -93,7 +96,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--controller-schedule constant|linear`. The Full SMB random-agent runner is
    headless by default; pass `--render` only for local visual inspection. Full
    SMB policy transfer reuses Block SMB actor/world-model/critic weights and
-   pairs them with the versioned Full SMB ViT checkpoint.
+   pairs them with the versioned Full SMB ViT checkpoint. Transfer comparisons
+   evaluate the transferred policy and a scratch Full SMB baseline on identical
+   seeded observation batches.
    Learned-dynamics imagination is selectable with
    `--imagined-rollout-horizon` and `--imagined-rollout-weight`.
    Target-network stabilization is selectable with `--target-network-mode`,

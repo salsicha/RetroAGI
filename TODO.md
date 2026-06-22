@@ -184,7 +184,7 @@ environment semantics.
     compatibility checks.
 - [x] Add headless random-agent and deterministic reset smoke tests.
 - [x] Transfer Block SMB perception and policy checkpoints into Full SMB.
-- [ ] Compare transferred checkpoints with training from scratch.
+- [x] Compare transferred checkpoints with training from scratch.
 
 **Exit criteria:** a clean installation can run deterministic headless
 evaluations and load a compatible Block SMB checkpoint.

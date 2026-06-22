@@ -484,6 +484,24 @@ python -m retroagi.stages.full_smb.transfer \
 and `select_transferred_full_smb_action(...)` runs deterministic or sampled
 action selection from a `FullSMBStage.encode_observation(...)` batch.
 
+`compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
+SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,
+when no scratch checkpoint exists yet, a same-architecture scratch-initialized
+baseline. The comparison trajectory is collected with seeded random actions so
+both policies see identical `FullSMBStage` batches. The report includes action
+agreement, action histograms, mean entropy, mean top-logit margin, reset counts,
+episode endings, and collection reward.
+
+```bash
+python -m retroagi.stages.full_smb.compare \
+  --transfer-checkpoint data/full_smb/transferred_policy.pth \
+  --scratch-checkpoint data/full_smb/scratch_policy.pth \
+  --output artifacts/full_smb/transfer_vs_scratch.json
+```
+
+Omit `--scratch-checkpoint` to compare against a deterministic scratch
+initialization controlled by `--scratch-seed`.
+
 ### Emulator State
 
 `FullSMBStage.save_emulator_state()` captures a `FullSMBEmulatorState` snapshot

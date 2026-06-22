@@ -1,6 +1,7 @@
 """Tests for transferring Block SMB checkpoints into Full SMB."""
 
 import unittest
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -29,6 +30,11 @@ from retroagi.stages.full_smb.transfer import (
     select_transferred_full_smb_action,
     transfer_block_smb_checkpoint_to_full_smb,
 )
+from retroagi.stages.full_smb.compare import (
+    FullSMBPolicyComparisonConfig,
+    compare_transferred_checkpoint_with_scratch,
+    save_full_smb_policy_comparison,
+)
 
 
 class TinyFullSMBEnv:
@@ -36,20 +42,14 @@ class TinyFullSMBEnv:
 
     def __init__(self):
         self.closed = False
+        self.seed = 0
+        self.step_count = 0
 
     def reset(self, seed=None):
-        seed = 0 if seed is None else int(seed)
-        base = np.arange(16 * 20, dtype=np.uint16).reshape(16, 20)
-        observation = np.stack(
-            (
-                (base + seed) % 256,
-                (base * 2 + seed) % 256,
-                (base * 3 + seed) % 256,
-            ),
-            axis=-1,
-        ).astype(np.uint8)
-        return observation, {
-            "x_pos": seed,
+        self.seed = 0 if seed is None else int(seed)
+        self.step_count = 0
+        return self._observation(0), {
+            "x_pos": self.seed,
             "y_pos": 96,
             "score": 0,
             "coins": 0,
@@ -57,10 +57,38 @@ class TinyFullSMBEnv:
         }
 
     def step(self, action):
-        raise NotImplementedError
+        button_vector = np.asarray(action, dtype=np.int8)
+        action_value = int(np.flatnonzero(button_vector).sum())
+        self.step_count += 1
+        terminated = self.step_count >= 8
+        return (
+            self._observation(action_value),
+            float(action_value + self.step_count),
+            terminated,
+            False,
+            {
+                "x_pos": self.seed + self.step_count,
+                "y_pos": 96,
+                "score": self.step_count * 10,
+                "coins": self.step_count % 3,
+                "lives": 3,
+                "level_complete": terminated,
+            },
+        )
 
     def close(self):
         self.closed = True
+
+    def _observation(self, action_value):
+        base = np.arange(16 * 20, dtype=np.uint16).reshape(16, 20)
+        return np.stack(
+            (
+                (base + self.seed + self.step_count + action_value) % 256,
+                (base * 2 + self.seed + self.step_count) % 256,
+                (base * 3 + self.seed + action_value) % 256,
+            ),
+            axis=-1,
+        ).astype(np.uint8)
 
 
 def tiny_block_config(**overrides):
@@ -224,6 +252,55 @@ class TestFullSMBTransfer(unittest.TestCase):
                     block_vision_checkpoint=None,
                     device="cpu",
                 )
+
+    def test_compares_transferred_policy_with_scratch_baseline(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            transfer_path = tmp / "full_smb_transfer.pth"
+            report_path = tmp / "comparison.json"
+            write_block_policy_checkpoint(source_policy_path)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            transfer_block_smb_checkpoint_to_full_smb(
+                source_policy_path,
+                output_checkpoint=transfer_path,
+                full_smb_vision_checkpoint=full_vision_path,
+                block_vision_checkpoint=None,
+                device="cpu",
+            )
+
+            result = compare_transferred_checkpoint_with_scratch(
+                transfer_path,
+                make_stage=lambda vision: FullSMBStage(
+                    env=TinyFullSMBEnv(),
+                    vision=vision,
+                    observation_config=FullSMBObservationConfig(
+                        frame_skip=1,
+                        frame_stack=2,
+                        resize_shape=(16, 20),
+                    ),
+                ),
+                full_smb_vision_checkpoint=full_vision_path,
+                config=FullSMBPolicyComparisonConfig(
+                    steps=4,
+                    seed=9,
+                    scratch_seed=99,
+                    device="cpu",
+                ),
+            )
+            save_full_smb_policy_comparison(report_path, result)
+            saved = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.requested_steps, 4)
+        self.assertEqual(result.evaluated_steps, 4)
+        self.assertEqual(sum(result.transfer_action_histogram.values()), 4)
+        self.assertEqual(sum(result.scratch_action_histogram.values()), 4)
+        self.assertGreaterEqual(result.action_agreement, 0.0)
+        self.assertLessEqual(result.action_agreement, 1.0)
+        self.assertEqual(result.scratch_source, "scratch_initialization")
+        self.assertEqual(saved["evaluated_steps"], 4)
+        self.assertEqual(saved["scratch_seed"], 99)
 
 
 if __name__ == "__main__":
