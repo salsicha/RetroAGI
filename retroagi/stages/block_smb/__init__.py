@@ -28,6 +28,7 @@ from .success import (
     evaluate_fixed_success_thresholds,
     evaluate_success_threshold,
     fixed_scenario_success_threshold,
+    summarize_fixed_success_metrics,
 )
 from .scripted_policy import (
     SCRIPTED_BLOCK_SMB_CHECKPOINT_KIND,
@@ -93,4 +94,5 @@ __all__ = [
     "load_block_vit_checkpoint",
     "save_scripted_block_smb_checkpoint",
     "set_block_vit_trainable",
+    "summarize_fixed_success_metrics",
 ]

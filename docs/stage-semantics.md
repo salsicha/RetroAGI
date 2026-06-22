@@ -193,6 +193,22 @@ Legacy aliases (`loss_actor_pass1`, `loss_actor_pass2`, `loss_world_model`, and
 `loss_critic`) remain in metrics for older run-summary consumers, but new
 analysis should use the separated terms above.
 
+Reward and objective tuning is part of the saved `BlockSMBTrainingConfig`.
+`reward_config` stores the exact `BlockSMBRewardConfig` used to build train and
+evaluation environments, and the Block SMB CLI exposes each reward term plus the
+separated objective weights. Evaluation adds `tuning_metrics` beside the fixed
+scenario results:
+
+- `threshold_pass_rate`: fraction of fixed scenarios passing the documented
+  deterministic success thresholds;
+- `mean_success_rate`: mean deterministic goal-completion rate;
+- `mean_return`: mean deterministic scenario return;
+- `score`: scalar ordering for tuning sweeps, with threshold coverage weighted
+  ahead of success rate and raw return.
+
+Use these fields to compare reward and hyperparameter changes. A higher return
+without a higher threshold pass rate should not be treated as solving P3.
+
 The trainer applies finite-loss and finite-gradient checks before each optimizer
 step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
 Curriculum order starts with the four fixed scenario files and can append seeded

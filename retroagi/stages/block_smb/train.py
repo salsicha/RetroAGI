@@ -26,8 +26,8 @@ from retroagi.core import (
 )
 
 from .adapter import BLOCK_SMB_SPEC, SCENARIOS_DIR, BlockSMBStage
-from .env import MarioScenarioEnv
-from .success import evaluate_fixed_success_thresholds
+from .env import BlockSMBRewardConfig, MarioScenarioEnv
+from .success import evaluate_fixed_success_thresholds, summarize_fixed_success_metrics
 from .vision import BlockVisionTransformer
 
 BLOCK_SMB_MODEL_NAME = "block_smb_actor_world_model_critic"
@@ -43,6 +43,7 @@ class BlockSMBTrainingConfig:
     rollout_steps: int = 32
     learning_rate: float = 3e-4
     gamma: float = 0.95
+    reward_config: BlockSMBRewardConfig = field(default_factory=BlockSMBRewardConfig)
     entropy_weight: float = 0.01
     policy_loss_weight: float = 1.0
     representation_weight: float = 0.05
@@ -73,6 +74,12 @@ class BlockSMBTrainingConfig:
     num_envs: int = 1
 
     def __post_init__(self) -> None:
+        if isinstance(self.reward_config, Mapping):
+            object.__setattr__(
+                self, "reward_config", BlockSMBRewardConfig(**self.reward_config)
+            )
+        elif not isinstance(self.reward_config, BlockSMBRewardConfig):
+            raise TypeError("reward_config must be a BlockSMBRewardConfig or mapping")
         positive_ints = (
             "epochs",
             "episodes_per_epoch",
@@ -170,13 +177,20 @@ class BlockSMBReplayBuffer:
 class SequentialBlockSMBVectorEnv:
     """Deterministic vector-env scaffold that steps independent envs sequentially."""
 
-    def __init__(self, scenarios: list[tuple[str, dict]], num_envs: int = 1):
+    def __init__(
+        self,
+        scenarios: list[tuple[str, dict]],
+        num_envs: int = 1,
+        reward_config: BlockSMBRewardConfig = BlockSMBRewardConfig(),
+    ):
         if num_envs <= 0:
             raise ValueError("num_envs must be positive")
         if not scenarios:
             raise ValueError("scenarios must be non-empty")
         self.scenarios = scenarios
-        self.envs = [MarioScenarioEnv() for _ in range(num_envs)]
+        self.envs = [
+            MarioScenarioEnv(reward_config=reward_config) for _ in range(num_envs)
+        ]
 
     def reset(self, seed: int = 0) -> list[tuple[np.ndarray, Mapping[str, Any]]]:
         outputs = []
@@ -490,7 +504,11 @@ def train_block_smb_epoch(
         scenario_name, scenario = curriculum[
             (epoch * config.episodes_per_epoch + episode) % len(curriculum)
         ]
-        stage = BlockSMBStage(scenario=scenario, vision=vision_factory())
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(reward_config=config.reward_config),
+            scenario=scenario,
+            vision=vision_factory(),
+        )
         try:
             trajectory = collect_trajectory(
                 model,
@@ -542,7 +560,11 @@ def evaluate_block_smb(
             scenario_returns = []
             scenario_successes = []
             for episode in range(config.evaluation_episodes):
-                stage = BlockSMBStage(scenario=scenario, vision=vision_factory())
+                stage = BlockSMBStage(
+                    env=MarioScenarioEnv(reward_config=config.reward_config),
+                    scenario=scenario,
+                    vision=vision_factory(),
+                )
                 try:
                     trajectory = collect_trajectory(
                         model,
@@ -589,6 +611,7 @@ def evaluate_block_smb(
         evaluation_episodes=config.evaluation_episodes,
         evaluation_max_steps=config.evaluation_max_steps,
     )
+    tuning_metrics = summarize_fixed_success_metrics(results, threshold_results)
     for scenario_name, threshold_result in threshold_results.items():
         results[scenario_name]["threshold"] = threshold_result["threshold"]
         results[scenario_name]["threshold_met"] = threshold_result["threshold_met"]
@@ -607,6 +630,7 @@ def evaluate_block_smb(
         )
         if threshold_results
         else False,
+        "tuning_metrics": tuning_metrics,
     }
 
 
@@ -716,7 +740,11 @@ def train_and_evaluate_block_smb(
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
     curriculum = build_curriculum(config)
-    vector_env = SequentialBlockSMBVectorEnv(curriculum, num_envs=config.num_envs)
+    vector_env = SequentialBlockSMBVectorEnv(
+        curriculum,
+        num_envs=config.num_envs,
+        reward_config=config.reward_config,
+    )
     vector_env.close()
     history: list[dict[str, float]] = []
     last_metrics: dict[str, float] = {}
@@ -742,6 +770,10 @@ def train_and_evaluate_block_smb(
             **losses,
             "eval_mean_return": float(evaluation["mean_return"]),
             "eval_success_rate": float(evaluation["success_rate"]),
+            "eval_threshold_pass_rate": float(
+                evaluation["tuning_metrics"]["threshold_pass_rate"]
+            ),
+            "eval_tuning_score": float(evaluation["tuning_metrics"]["score"]),
         }
         history.append(last_metrics)
         if config.save_checkpoints and config.checkpoint_path is not None:

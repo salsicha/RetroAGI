@@ -54,6 +54,20 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "artifacts/block_smb/videos",
                     "--fixed-scenario",
                     "level_1_flat.json",
+                    "--policy-loss-weight",
+                    "0.8",
+                    "--representation-weight",
+                    "0.07",
+                    "--reward-loss-weight",
+                    "0.03",
+                    "--value-loss-weight",
+                    "0.4",
+                    "--reward-progress-per-pixel",
+                    "0.08",
+                    "--reward-goal",
+                    "75",
+                    "--reward-frame-penalty",
+                    "-0.02",
                 ]
             )
 
@@ -67,8 +81,16 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertTrue(config.record_videos)
         self.assertEqual(config.video_dir, Path("artifacts/block_smb/videos"))
         self.assertEqual(config.fixed_scenarios, ("level_1_flat.json",))
+        self.assertEqual(config.policy_loss_weight, 0.8)
+        self.assertEqual(config.representation_weight, 0.07)
+        self.assertEqual(config.reward_loss_weight, 0.03)
+        self.assertEqual(config.value_loss_weight, 0.4)
+        self.assertEqual(config.reward_config.progress_per_pixel, 0.08)
+        self.assertEqual(config.reward_config.goal, 75.0)
+        self.assertEqual(config.reward_config.frame_penalty, -0.02)
         self.assertNotIn("model", payload)
         self.assertEqual(payload["config"]["epochs"], 3)
+        self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
 
     def test_train_command_loads_frozen_vision_checkpoint_and_writes_summary(self):
         loaded_model = object()
@@ -121,6 +143,15 @@ class TestBlockSMBCLI(unittest.TestCase):
                 "epochs": 7,
                 "hidden_dim": 16,
                 "fixed_scenarios": ["level_2_gap.json"],
+                "reward_config": {
+                    "progress_per_pixel": 0.06,
+                    "coin": 9.0,
+                    "enemy_stomp": 4.0,
+                    "goal": 60.0,
+                    "fall_death": -12.0,
+                    "enemy_hit": -12.0,
+                    "frame_penalty": -0.02,
+                },
                 "checkpoint_path": "data/block_smb/policy.pth",
                 "save_checkpoints": True,
                 "record_videos": True,
@@ -139,6 +170,8 @@ class TestBlockSMBCLI(unittest.TestCase):
                         "data/block_smb/policy.pth",
                         "--evaluation-episodes",
                         "2",
+                        "--reward-goal",
+                        "80",
                     ]
                 )
 
@@ -150,6 +183,9 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.fixed_scenarios, ("level_2_gap.json",))
         self.assertEqual(config.resume_path, Path("data/block_smb/policy.pth"))
         self.assertEqual(config.evaluation_episodes, 2)
+        self.assertEqual(config.reward_config.progress_per_pixel, 0.06)
+        self.assertEqual(config.reward_config.goal, 80.0)
+        self.assertEqual(config.reward_config.frame_penalty, -0.02)
         self.assertFalse(config.save_checkpoints)
         self.assertFalse(config.record_videos)
         self.assertIsNone(config.video_dir)

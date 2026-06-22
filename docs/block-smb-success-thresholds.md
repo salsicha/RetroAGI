@@ -67,6 +67,31 @@ Each fixed scenario result includes:
 The top-level evaluation result includes `success_thresholds_met`, which is
 true only when every fixed scenario passes its threshold.
 
+## Tuning Reward And Training Settings
+
+Block SMB training summaries include `evaluation.tuning_metrics`, a compact
+comparison target for reward and hyperparameter sweeps. The score orders
+threshold coverage before success rate and raw return, so a high-return policy
+that fails fixed-scenario thresholds ranks below one that solves them.
+
+The CLI records all tuning inputs in the resolved config. Reward terms can be
+changed with:
+
+```bash
+retroagi-block-smb train \
+  --reward-progress-per-pixel 0.05 \
+  --reward-coin 10 \
+  --reward-enemy-stomp 5 \
+  --reward-goal 50 \
+  --reward-fall-death -10 \
+  --reward-enemy-hit -10 \
+  --reward-frame-penalty -0.01
+```
+
+Separated objective weights can be tuned with `--policy-loss-weight`,
+`--representation-weight`, `--world-model-weight`, `--reward-loss-weight`,
+`--value-loss-weight`, `--entropy-weight`, and `--critic-loss-weight`.
+
 ## Known-Good Baseline
 
 The repository includes a deterministic scripted baseline that passes these

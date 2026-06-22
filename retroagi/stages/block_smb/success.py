@@ -124,3 +124,50 @@ def evaluate_fixed_success_thresholds(
         for scenario_name, result in fixed_scenario_results.items()
         if scenario_name in FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS
     }
+
+
+def summarize_fixed_success_metrics(
+    fixed_scenario_results: Mapping[str, Mapping[str, float]],
+    threshold_results: Mapping[str, Mapping[str, Any]],
+) -> dict[str, float]:
+    """Summarize deterministic fixed-scenario metrics for tuning comparisons.
+
+    The scalar score intentionally orders threshold coverage before raw return:
+    crossing a documented success threshold is more important than collecting a
+    higher reward in one unsolved scenario.
+    """
+    scenario_names = [
+        name
+        for name in FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS
+        if name in fixed_scenario_results
+    ]
+    if not scenario_names:
+        return {
+            "scenario_count": 0.0,
+            "threshold_pass_rate": 0.0,
+            "mean_success_rate": 0.0,
+            "mean_return": 0.0,
+            "score": 0.0,
+        }
+
+    threshold_pass_rate = sum(
+        1.0
+        for name in scenario_names
+        if bool(threshold_results.get(name, {}).get("threshold_met", False))
+    ) / len(scenario_names)
+    mean_success_rate = sum(
+        float(fixed_scenario_results[name].get("success_rate", 0.0))
+        for name in scenario_names
+    ) / len(scenario_names)
+    mean_return = sum(
+        float(fixed_scenario_results[name].get("return", 0.0))
+        for name in scenario_names
+    ) / len(scenario_names)
+    score = threshold_pass_rate * 1_000_000.0 + mean_success_rate * 1_000.0 + mean_return
+    return {
+        "scenario_count": float(len(scenario_names)),
+        "threshold_pass_rate": float(threshold_pass_rate),
+        "mean_success_rate": float(mean_success_rate),
+        "mean_return": float(mean_return),
+        "score": float(score),
+    }

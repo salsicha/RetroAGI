@@ -17,6 +17,7 @@ from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
     BLOCK_SMB_SPEC,
+    BlockSMBRewardConfig,
     BlockSMBStage,
     BlockSMBTrainingConfig,
     SequentialBlockSMBVectorEnv,
@@ -135,6 +136,15 @@ class TestBlockSMBTraining(unittest.TestCase):
                 save_checkpoints=True,
                 video_dir=video_dir,
                 record_videos=True,
+                reward_config=BlockSMBRewardConfig(
+                    progress_per_pixel=0.08,
+                    coin=8.0,
+                    enemy_stomp=4.0,
+                    goal=70.0,
+                    fall_death=-12.0,
+                    enemy_hit=-12.0,
+                    frame_penalty=-0.02,
+                ),
             )
 
             result = train_and_evaluate_block_smb(
@@ -147,8 +157,10 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertEqual(saved["checkpoint_kind"], BLOCK_SMB_CHECKPOINT_KIND)
             self.assertEqual(saved["epoch"], 1)
             self.assertEqual(saved["global_step"], 1)
+            self.assertEqual(saved["config"]["reward_config"]["goal"], 70.0)
             evaluation = result["evaluation"]
             self.assertIn("level_1_flat.json", evaluation["fixed_scenarios"])
+            self.assertIn("tuning_metrics", evaluation)
             self.assertFalse(evaluation["success_thresholds_met"])
             level_result = evaluation["fixed_scenarios"]["level_1_flat.json"]
             self.assertIn("threshold", level_result)
@@ -168,6 +180,8 @@ class TestBlockSMBTraining(unittest.TestCase):
                 "loss_critic",
                 "loss_total",
                 "gradient_norm",
+                "eval_threshold_pass_rate",
+                "eval_tuning_score",
             ):
                 self.assertTrue(torch.isfinite(torch.tensor(result["metrics"][key])).item())
 

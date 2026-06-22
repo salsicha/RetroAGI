@@ -124,7 +124,7 @@ uses it to complete scenarios.
       current return-as-controller-target objective is limiting learning.
 - [x] Handle recurrent world-model state boundaries inside the model, not only
       through replay metadata.
-- [ ] Tune Block SMB reward terms, training config, and hyperparameters against
+- [x] Tune Block SMB reward terms, training config, and hyperparameters against
       deterministic return and success-rate metrics.
 - [ ] Improve or retrain Block ViT perception if deterministic policy training
       is bottlenecked by semantic or position quality.
@@ -141,7 +141,7 @@ Do this after Stage 1 and Block SMB expose concrete failure modes.
 - [x] Specify exactly how critic output changes the actor's second pass.
 - [ ] Investigate whether the low-level adaptive controller parameters should
       be gain schedules.
-- [ ] Separate representation, dynamics, reward, value, and policy objectives.
+- [x] Separate representation, dynamics, reward, value, and policy objectives.
 - [x] Handle recurrent state and episode boundaries in the world model.
 - [ ] Implement imagined rollouts through learned dynamics.
 - [ ] Add target networks or other stabilization only where measurements show

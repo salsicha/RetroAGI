@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from retroagi.core import load_checkpoint, select_device, to_plain_data
 
+from .env import BlockSMBRewardConfig
 from .train import BlockSMBTrainingConfig, train_and_evaluate_block_smb
 from .vision import load_block_vit_checkpoint
 
@@ -43,6 +45,24 @@ def _non_negative_float(value: str) -> float:
     return parsed
 
 
+def _non_positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed > 0:
+        raise argparse.ArgumentTypeError("must be non-positive")
+    return parsed
+
+
+REWARD_CONFIG_ARGS = {
+    "reward_progress_per_pixel": "progress_per_pixel",
+    "reward_coin": "coin",
+    "reward_enemy_stomp": "enemy_stomp",
+    "reward_goal": "goal",
+    "reward_fall_death": "fall_death",
+    "reward_enemy_hit": "enemy_hit",
+    "reward_frame_penalty": "frame_penalty",
+}
+
+
 def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", type=Path, help="write the resolved run summary JSON")
     parser.add_argument(
@@ -57,9 +77,20 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--learning-rate", type=_positive_float)
     parser.add_argument("--gamma", type=_positive_float)
     parser.add_argument("--entropy-weight", type=_non_negative_float)
+    parser.add_argument("--policy-loss-weight", type=_non_negative_float)
+    parser.add_argument("--representation-weight", type=_non_negative_float)
     parser.add_argument("--world-model-weight", type=_non_negative_float)
+    parser.add_argument("--reward-loss-weight", type=_non_negative_float)
+    parser.add_argument("--value-loss-weight", type=_non_negative_float)
     parser.add_argument("--action-aux-weight", type=_non_negative_float)
     parser.add_argument("--critic-loss-weight", type=_non_negative_float)
+    parser.add_argument("--reward-progress-per-pixel", type=_non_negative_float)
+    parser.add_argument("--reward-coin", type=_non_negative_float)
+    parser.add_argument("--reward-enemy-stomp", type=_non_negative_float)
+    parser.add_argument("--reward-goal", type=_non_negative_float)
+    parser.add_argument("--reward-fall-death", type=_non_positive_float)
+    parser.add_argument("--reward-enemy-hit", type=_non_positive_float)
+    parser.add_argument("--reward-frame-penalty", type=_non_positive_float)
     parser.add_argument("--gradient-clip-norm", type=_positive_float)
     parser.add_argument("--hidden-dim", type=_positive_int)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"))
@@ -124,7 +155,11 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "learning_rate",
         "gamma",
         "entropy_weight",
+        "policy_loss_weight",
+        "representation_weight",
         "world_model_weight",
+        "reward_loss_weight",
+        "value_loss_weight",
         "action_aux_weight",
         "critic_loss_weight",
         "gradient_clip_norm",
@@ -148,6 +183,27 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
     return overrides
 
 
+def _apply_reward_config_overrides(
+    values: dict[str, Any], args: argparse.Namespace
+) -> None:
+    overrides = {
+        field_name: getattr(args, arg_name)
+        for arg_name, field_name in REWARD_CONFIG_ARGS.items()
+        if hasattr(args, arg_name) and getattr(args, arg_name) is not None
+    }
+    if not overrides:
+        return
+    current = values.get("reward_config", BlockSMBRewardConfig())
+    if isinstance(current, BlockSMBRewardConfig):
+        reward_values = asdict(current)
+    elif isinstance(current, Mapping):
+        reward_values = dict(current)
+    else:
+        raise TypeError("reward_config must be a BlockSMBRewardConfig or mapping")
+    reward_values.update(overrides)
+    values["reward_config"] = BlockSMBRewardConfig(**reward_values)
+
+
 def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
     for name in ("checkpoint_path", "resume_path", "video_dir"):
@@ -155,6 +211,12 @@ def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
             normalized[name] = Path(normalized[name])
     if normalized.get("fixed_scenarios") is not None:
         normalized["fixed_scenarios"] = tuple(normalized["fixed_scenarios"])
+    if normalized.get("reward_config") is not None:
+        reward_config = normalized["reward_config"]
+        if not isinstance(reward_config, BlockSMBRewardConfig):
+            normalized["reward_config"] = BlockSMBRewardConfig(
+                **dict(reward_config)
+            )
     return normalized
 
 
@@ -176,6 +238,7 @@ def _checkpoint_config(path: Path) -> dict[str, Any]:
 
 def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
     values = _config_overrides(args)
+    _apply_reward_config_overrides(values, args)
     if args.checkpoint is not None:
         values["checkpoint_path"] = args.checkpoint
         values["save_checkpoints"] = True
@@ -195,6 +258,7 @@ def _make_checkpoint_config(
 ) -> BlockSMBTrainingConfig:
     values = _checkpoint_config(args.checkpoint)
     values.update(_config_overrides(args))
+    _apply_reward_config_overrides(values, args)
     values["resume_path"] = args.checkpoint
     values["save_checkpoints"] = False
     values["record_videos"] = record

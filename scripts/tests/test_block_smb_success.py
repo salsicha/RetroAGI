@@ -6,6 +6,7 @@ from retroagi.stages.block_smb import (
     FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS,
     evaluate_fixed_success_thresholds,
     evaluate_success_threshold,
+    summarize_fixed_success_metrics,
 )
 
 
@@ -67,6 +68,37 @@ class TestBlockSMBSuccessThresholds(unittest.TestCase):
 
         self.assertTrue(results["level_1_flat.json"]["threshold_met"])
         self.assertFalse(results["level_2_gap.json"]["threshold_met"])
+
+    def test_tuning_summary_prioritizes_thresholds_before_raw_return(self):
+        passing_results = {
+            "level_1_flat.json": {"success_rate": 1.0, "return": 60.0},
+            "level_2_gap.json": {"success_rate": 1.0, "return": 60.0},
+        }
+        passing_thresholds = evaluate_fixed_success_thresholds(
+            passing_results,
+            evaluation_episodes=3,
+            evaluation_max_steps=200,
+        )
+        high_return_unsolved = {
+            "level_1_flat.json": {"success_rate": 0.0, "return": 500.0},
+            "level_2_gap.json": {"success_rate": 0.0, "return": 500.0},
+        }
+        unsolved_thresholds = evaluate_fixed_success_thresholds(
+            high_return_unsolved,
+            evaluation_episodes=3,
+            evaluation_max_steps=200,
+        )
+
+        passing = summarize_fixed_success_metrics(
+            passing_results, passing_thresholds
+        )
+        unsolved = summarize_fixed_success_metrics(
+            high_return_unsolved, unsolved_thresholds
+        )
+
+        self.assertEqual(passing["threshold_pass_rate"], 1.0)
+        self.assertEqual(unsolved["threshold_pass_rate"], 0.0)
+        self.assertGreater(passing["score"], unsolved["score"])
 
 
 if __name__ == "__main__":
