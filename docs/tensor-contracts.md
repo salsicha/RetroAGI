@@ -21,6 +21,23 @@ Shapes are batch-first. Unless stated otherwise, floating tensors use
 outputs are on the model device; an adapter keeps its batch tensors on the
 vision model device.
 
+## GameSpec
+
+`GameSpec` is immutable game-profile metadata. It sits above `StageSpec` and
+declares the game family, per-game action space, observation sources, semantic
+classes, signal and reward schemas, progressive stage ladder, emulator backend,
+asset requirements, and licensing/provenance rules. The current `smb` profile
+uses this ladder:
+
+```text
+synthetic -> block -> full_asset_mock -> full
+```
+
+Synthetic validates the architecture, Block SMB trains the simplified game
+models, `full_asset_mock` bootstraps the Full SMB ViT from full-game assets in
+synthetic scenarios, and Full SMB validates inference before continuing
+training in the emulator.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

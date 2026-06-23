@@ -106,8 +106,9 @@ with `state_vec`.
 
 ### Action
 
-Both game stages use the shared `SMBAction` vocabulary. One action advances one
-physics and rendering frame:
+Both SMB game stages use the action space declared by `SMB_GAME_SPEC`, currently
+the shared `SMBAction` vocabulary. One action advances one physics and rendering
+frame:
 
 | Name | Stable ID | Block SMB | Full SMB NES buttons |
 | --- | ---: | ---: | --- |

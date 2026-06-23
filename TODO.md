@@ -345,7 +345,7 @@ The current system is SMB-centered. This milestone makes the staged fidelity
 ladder reusable for other games while preserving the ability to test an
 architecture cheaply before spending high-fidelity emulator time.
 
-- [ ] Define a `GameSpec` that names a game family, declares its action space,
+- [x] Define a `GameSpec` that names a game family, declares its action space,
       observation sources, semantic classes, reward/signal schema, stage ladder,
       emulator backend, asset requirements, and licensing/provenance rules.
 - [ ] Split game-neutral stage contracts from SMB-specific assumptions so
