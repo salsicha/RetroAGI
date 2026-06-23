@@ -214,13 +214,13 @@ milestone turns it into a rapid architecture-evaluation system where new model
 concepts can start on cheap synthetic data and be promoted through increasingly
 high-fidelity evaluations.
 
-- [ ] Define an `ArchitectureSpec` that names an architecture, declares its
+- [x] Define an `ArchitectureSpec` that names an architecture, declares its
       model factory, supported stage specs, checkpoint compatibility policy,
       configurable hyperparameters, and expected output contract.
-- [ ] Define a model-factory protocol that can construct actor/world-model/critic
+- [x] Define a model-factory protocol that can construct actor/world-model/critic
       variants for any compatible `StageSpec` without trainers importing a
       concrete model class directly.
-- [ ] Register the current `AgentWorldModelCritic` as the baseline architecture
+- [x] Register the current `AgentWorldModelCritic` as the baseline architecture
       so existing behavior remains the first comparable entry.
 - [ ] Refactor Synthetic 1D training to consume an architecture factory instead
       of instantiating `AgentWorldModelCritic` directly.
