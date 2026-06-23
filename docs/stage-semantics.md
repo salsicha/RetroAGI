@@ -431,13 +431,16 @@ behavior by using the `stable-retro` emulator progress reward with weight
 | `enemy` | `0.0` | positive | enemy-defeat objective signals |
 | `damage` | `0.0` | negative | damage or unsafe-collision signals |
 | `death` | `0.0` | negative | `full_smb_signals.death` |
-| `frame_penalty` | `0.0` | negative | adapter step time cost |
+| `frame_penalty` | `0.0` | negative | executed backend frame count |
 
-`FullSMBStage` reports the resolved `reward_config` manifest in `info`. Until
-the reward-term breakdown task is implemented, the adapter still returns the
-sum of backend frame rewards for the scalar transition reward and does not
-silently combine those rewards with Block SMB progress, coin, enemy, goal,
-death, or time terms.
+`FullSMBStage` returns the sum of the Full SMB reward terms as the scalar
+transition reward. It reports `info["reward_terms"]` with each term above plus
+`total`, `info["reward_total"]` with the returned scalar reward, and the
+resolved `reward_config` manifest. With the default config, `emulator_progress`
+is the summed backend frame reward and every other shaping term is zero, so the
+adapter remains behavior-compatible with stable-retro smoke tests. Custom Full
+SMB reward configs must shape rewards through these adapter terms rather than
+reusing Block SMB progress, coin, enemy, goal, death, or time terms.
 
 ### Termination
 

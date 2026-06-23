@@ -160,7 +160,7 @@ FULL_SMB_REWARD_SCHEMA = RewardConfigSchema(
             default=0.0,
             direction="negative",
             signal="time",
-            description="Per-adapter-step time cost",
+            description="Per-executed-backend-frame time cost",
         ),
     ),
 )
@@ -395,6 +395,25 @@ COMPLETION_KEYS = (
 )
 DEATH_KEYS = ("death", "dead", "died", "player_dead", "is_dead")
 GAME_OVER_KEYS = ("game_over", "gameOver", "GameOver", "is_game_over")
+ENEMY_OBJECTIVE_KEYS = (
+    "enemy",
+    "enemy_defeat",
+    "enemy_defeated",
+    "enemy_stomp",
+    "enemies_defeated",
+    "kills",
+    "kill_count",
+)
+DAMAGE_OBJECTIVE_KEYS = (
+    "damage",
+    "damaged",
+    "damage_taken",
+    "enemy_hit",
+    "hit",
+    "hurt",
+    "power_down",
+    "powerdown",
+)
 TIMEOUT_KEYS = (
     "timeout",
     "time_up",
@@ -514,7 +533,8 @@ class FullSMBStage:
     ) -> tuple[np.ndarray, float, bool, bool, Mapping[str, Any]]:
         shared_action = coerce_smb_action(action)
         button_action = full_smb_action(shared_action, self.buttons)
-        total_reward = 0.0
+        previous_info = self.last_info
+        backend_reward = 0.0
         frame_rewards: list[float] = []
         observation = None
         info: Mapping[str, Any] = {}
@@ -526,7 +546,7 @@ class FullSMBStage:
             terminated = result.terminated
             truncated = result.truncated
             info = result.info
-            total_reward += result.reward
+            backend_reward += float(result.reward)
             frame_rewards.append(float(result.reward))
             self._append_frame(observation, valid=True)
             if terminated or truncated:
@@ -536,6 +556,15 @@ class FullSMBStage:
         info = self._annotated_info(
             info, terminated=terminated, truncated=truncated
         )
+        reward_terms = self._reward_terms(
+            backend_reward=backend_reward,
+            frame_count=len(frame_rewards),
+            previous_info=previous_info,
+            current_info=info,
+        )
+        reward = float(reward_terms["total"])
+        info["reward_terms"] = reward_terms
+        info["reward_total"] = reward
         info["action"] = {
             "shared_id": int(shared_action),
             "shared_name": shared_action.name,
@@ -550,7 +579,7 @@ class FullSMBStage:
         self._last_terminal = terminated
         self._last_truncated = truncated
         self._last_observation = observation.copy()
-        return observation, total_reward, terminated, truncated, info
+        return observation, reward, terminated, truncated, info
 
     def save_emulator_state(self) -> FullSMBEmulatorState:
         """Snapshot backend emulator state and adapter metadata."""
@@ -711,6 +740,34 @@ class FullSMBStage:
         annotated["reward_config"] = self.reward_config.to_manifest()
         return annotated
 
+    def _reward_terms(
+        self,
+        *,
+        backend_reward: float,
+        frame_count: int,
+        previous_info: Mapping[str, Any],
+        current_info: Mapping[str, Any],
+    ) -> dict[str, float]:
+        previous = _signal_mapping(previous_info)
+        current = _signal_mapping(current_info)
+        config = self.reward_config
+        terms = {
+            "emulator_progress": float(backend_reward) * config.emulator_progress,
+            "completion": _event_started(previous, current, "completion")
+            * config.completion,
+            "survival": _survival_indicator(current) * config.survival,
+            "score": _positive_signal_delta(previous, current, "score")
+            * config.score,
+            "coin": _positive_signal_delta(previous, current, "coins")
+            * config.coin,
+            "enemy": _objective_magnitude(current, "enemy") * config.enemy,
+            "damage": _objective_magnitude(current, "damage") * config.damage,
+            "death": _event_started(previous, current, "death") * config.death,
+            "frame_penalty": float(frame_count) * config.frame_penalty,
+        }
+        terms["total"] = float(sum(terms.values()))
+        return {name: float(value) for name, value in terms.items()}
+
     @staticmethod
     def _state_vec(info: Mapping[str, Any]) -> Optional[np.ndarray]:
         if "state_vec" not in info:
@@ -750,6 +807,7 @@ def extract_full_smb_signals(
         or _bool_value(info, TIMEOUT_KEYS, default=False)
         or _reason_matches(reason, ("timeout", "time up", "time_up", "out of time"))
     )
+    objectives = _objective_values(info)
     return FullSMBSignals(
         position=position,
         progress=position[0] if position is not None else None,
@@ -766,6 +824,7 @@ def extract_full_smb_signals(
         death=death,
         timeout=timeout,
         game_over=game_over,
+        objectives=objectives,
         terminated=bool(terminated),
         truncated=bool(truncated),
         termination_reason=reason,
@@ -873,14 +932,74 @@ def _int_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[int]:
     return int(round(value))
 
 
+def _objective_values(info: Mapping[str, Any]) -> dict[str, float]:
+    objectives: dict[str, float] = {}
+    enemy = _numeric_value(info, ENEMY_OBJECTIVE_KEYS)
+    if enemy is not None:
+        objectives["enemy"] = max(float(enemy), 0.0)
+    damage = _numeric_value(info, DAMAGE_OBJECTIVE_KEYS)
+    if damage is not None:
+        objectives["damage"] = max(float(damage), 0.0)
+    return objectives
+
+
+def _signal_mapping(info: Mapping[str, Any]) -> Mapping[str, Any]:
+    signals = info.get("full_smb_signals") if isinstance(info, Mapping) else None
+    if isinstance(signals, Mapping):
+        return signals
+    return {}
+
+
+def _event_started(
+    previous: Mapping[str, Any], current: Mapping[str, Any], name: str
+) -> float:
+    return 1.0 if bool(current.get(name)) and not bool(previous.get(name)) else 0.0
+
+
+def _survival_indicator(current: Mapping[str, Any]) -> float:
+    if bool(current.get("death")) or bool(current.get("game_over")):
+        return 0.0
+    return 1.0
+
+
+def _positive_signal_delta(
+    previous: Mapping[str, Any], current: Mapping[str, Any], name: str
+) -> float:
+    current_value = _numeric_from_value(current.get(name))
+    if current_value is None:
+        return 0.0
+    previous_value = _numeric_from_value(previous.get(name))
+    baseline = previous_value if previous_value is not None else 0.0
+    return max(current_value - baseline, 0.0)
+
+
+def _objective_magnitude(current: Mapping[str, Any], name: str) -> float:
+    objectives = current.get("objectives")
+    if not isinstance(objectives, Mapping):
+        return 0.0
+    value = _numeric_from_value(objectives.get(name))
+    if value is None:
+        return 0.0
+    return max(value, 0.0)
+
+
+def _numeric_from_value(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, Mapping):
+        return None
+    try:
+        array = np.asarray(value, dtype=np.float32).flatten()
+    except (TypeError, ValueError):
+        return None
+    if array.size == 1 and np.isfinite(array[0]):
+        return float(array[0])
+    return None
+
+
 def _numeric_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[float]:
     for value in _values_for_keys(info, keys):
-        try:
-            array = np.asarray(value, dtype=np.float32).flatten()
-        except (TypeError, ValueError):
-            continue
-        if array.size == 1 and np.isfinite(array[0]):
-            return float(array[0])
+        numeric = _numeric_from_value(value)
+        if numeric is not None:
+            return numeric
     return None
 
 

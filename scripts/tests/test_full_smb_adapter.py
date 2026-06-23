@@ -97,6 +97,35 @@ class GymnasiumRetroEnv:
         self.closed = True
 
 
+class RewardSignalRetroEnv(GymnasiumRetroEnv):
+    def reset(self, seed=None):
+        self.reset_seed = seed
+        return (
+            np.zeros((224, 256, 3), dtype=np.uint8),
+            {"x_pos": 10, "y_pos": 42, "score": 100, "coins": 1, "lives": 3},
+        )
+
+    def step(self, action):
+        self.actions.append(np.asarray(action))
+        return (
+            np.ones((224, 256, 3), dtype=np.uint8),
+            4.0,
+            True,
+            False,
+            {
+                "x_pos": 96,
+                "y_pos": 120,
+                "score": 250,
+                "coins": 3,
+                "lives": 3,
+                "level_complete": True,
+                "enemy_stomp": 2,
+                "damage_taken": 1,
+                "termination_reason": "level_complete",
+            },
+        )
+
+
 class LegacyRetroEnv(GymnasiumRetroEnv):
     def step(self, action):
         self.actions.append(np.asarray(action))
@@ -236,6 +265,15 @@ class TestFullSMBStage(unittest.TestCase):
             ),
         )
 
+    def assert_reward_total_matches_terms(self, reward, info):
+        terms = info["reward_terms"]
+        summed_terms = sum(
+            float(value) for name, value in terms.items() if name != "total"
+        )
+        self.assertAlmostEqual(float(reward), float(terms["total"]))
+        self.assertAlmostEqual(float(reward), summed_terms)
+        self.assertAlmostEqual(float(info["reward_total"]), float(reward))
+
     def test_content_spec_documents_supported_local_rom_setup(self):
         spec = DEFAULT_FULL_SMB_CONTENT
         manifest = spec.to_manifest()
@@ -341,7 +379,6 @@ class TestFullSMBStage(unittest.TestCase):
             stage.close()
 
         self.assertEqual(stage.reward_config, reward_config)
-        self.assertEqual(reward, 3.5)
         self.assertEqual(
             stage.last_info["reward_config"]["terms"],
             reward_config.as_dict(),
@@ -350,11 +387,62 @@ class TestFullSMBStage(unittest.TestCase):
             info["reward_config"]["terms"]["frame_penalty"],
             -0.01,
         )
+        self.assertAlmostEqual(reward, 12.615)
+        self.assertEqual(info["reward_terms"]["emulator_progress"], 2.625)
+        self.assertEqual(info["reward_terms"]["completion"], 10.0)
+        self.assertEqual(info["reward_terms"]["frame_penalty"], -0.01)
+        self.assert_reward_total_matches_terms(reward, info)
         self.assertEqual(
             info["reward_config"]["separated_from"],
             "BlockSMBRewardConfig",
         )
         self.assertEqual(reset_observation.shape, observation.shape)
+
+    def test_custom_reward_config_reports_terms_that_sum_to_scalar_reward(self):
+        reward_config = FullSMBRewardConfig(
+            emulator_progress=0.5,
+            completion=10.0,
+            survival=0.25,
+            score=0.01,
+            coin=3.0,
+            enemy=2.5,
+            damage=-4.0,
+            death=-20.0,
+            frame_penalty=-0.1,
+        )
+        stage = FullSMBStage(
+            env=RewardSignalRetroEnv(),
+            vision=StaticFullSMBVision(),
+            reward_config=reward_config,
+        )
+        try:
+            stage.reset(seed=8)
+            _observation, reward, terminated, truncated, info = stage.step(
+                SMBAction.RIGHT
+            )
+        finally:
+            stage.close()
+
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual(info["full_smb_signals"]["objectives"]["enemy"], 2.0)
+        self.assertEqual(info["full_smb_signals"]["objectives"]["damage"], 1.0)
+        expected_terms = {
+            "emulator_progress": 2.0,
+            "completion": 10.0,
+            "survival": 0.25,
+            "score": 1.5,
+            "coin": 6.0,
+            "enemy": 5.0,
+            "damage": -4.0,
+            "death": 0.0,
+            "frame_penalty": -0.1,
+            "total": 20.65,
+        }
+        for name, expected in expected_terms.items():
+            self.assertAlmostEqual(info["reward_terms"][name], expected)
+        self.assertAlmostEqual(reward, 20.65)
+        self.assert_reward_total_matches_terms(reward, info)
 
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):

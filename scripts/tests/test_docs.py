@@ -60,6 +60,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "python -m retroagi.stages.full_smb.save_states create",
             "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
             "FullSMBRewardConfig",
+            "reward_terms",
         ):
             self.assertIn(term, text)
 

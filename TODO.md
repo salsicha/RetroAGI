@@ -453,7 +453,7 @@ and playable end target.
 - [x] Define a Full SMB reward config owned by the Full SMB adapter, separating
       emulator progress, completion, survival, score/coin, enemy, damage, death,
       and frame-penalty terms from Block SMB rewards.
-- [ ] Add reward-term breakdowns to Full SMB step info and tests proving the
+- [x] Add reward-term breakdowns to Full SMB step info and tests proving the
       reported terms sum to the scalar reward.
 - [ ] Verify and tune Full SMB frame preprocessing: crop/resize policy,
       frame-skip, frame stacking, grayscale/RGB choice, normalization, HUD
