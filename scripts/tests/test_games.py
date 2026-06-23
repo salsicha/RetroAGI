@@ -6,14 +6,18 @@ import numpy as np
 
 from retroagi.core import (
     GAME_SPECS,
+    GAME_PLUGIN_REGISTRY,
     SMB_ACTIONS,
     SMB_BLOCK_GAME_SPEC,
     SMB_GAME_SPEC,
+    SMB_GAME_PLUGIN,
     SMB_REWARD_SCHEMA,
     SMB_SYNTHETIC_DATA_SPECS,
     SMB_TASK_SCHEMA,
     ActionSpec,
     BlockGameSpec,
+    GamePluginRegistry,
+    GamePluginSpec,
     GameSpec,
     GameTaskSchema,
     GameTaskSpec,
@@ -24,6 +28,8 @@ from retroagi.core import (
     TaskSuccessThreshold,
     assert_stage_ladder,
     game_names,
+    game_plugin_names,
+    get_game_plugin,
     get_game_spec,
     validate_game_spec,
 )
@@ -59,6 +65,45 @@ class TestGameSpec(unittest.TestCase):
         self.assertIs(spec.task_schema, SMB_TASK_SCHEMA)
         self.assertEqual(spec.synthetic_data, SMB_SYNTHETIC_DATA_SPECS)
         self.assertIs(spec.block_game, SMB_BLOCK_GAME_SPEC)
+
+    def test_smb_game_plugin_loads_profile_and_components_by_name(self):
+        plugin = get_game_plugin("smb")
+
+        self.assertIs(plugin, SMB_GAME_PLUGIN)
+        self.assertIs(GAME_PLUGIN_REGISTRY.get("smb"), plugin)
+        self.assertEqual(game_plugin_names(), ("smb",))
+        self.assertIs(plugin.game, SMB_GAME_SPEC)
+        self.assertIs(GAME_PLUGIN_REGISTRY.game("smb"), SMB_GAME_SPEC)
+        self.assertEqual(
+            plugin.stage_adapter("block"),
+            "retroagi.stages.block_smb.adapter.BlockSMBStage",
+        )
+        self.assertEqual(
+            GAME_PLUGIN_REGISTRY.stage_adapter("smb", "full"),
+            "retroagi.stages.full_smb.adapter.FullSMBStage",
+        )
+        self.assertEqual(
+            plugin.vision_encoder("block"),
+            "retroagi.stages.block_smb.vision.BlockVisionTransformer",
+        )
+        self.assertEqual(
+            GAME_PLUGIN_REGISTRY.vision_encoder("smb", "full_asset_mock"),
+            "retroagi.stages.full_smb.vision.FullSMBVisionTransformer",
+        )
+        self.assertEqual(
+            plugin.asset_pipeline("perception"),
+            "scripts.vit.generate_dataset",
+        )
+        self.assertEqual(
+            GAME_PLUGIN_REGISTRY.asset_pipeline("smb", "assets"),
+            "scripts.vit.extract_sprites",
+        )
+
+        reward_config = plugin.reward_config({"progress": 0.07})
+        self.assertEqual(reward_config["progress"], 0.07)
+        self.assertEqual(reward_config["goal"], 50.0)
+        threshold = GAME_PLUGIN_REGISTRY.success_threshold("smb", "level_1_flat.json")
+        self.assertIs(threshold, SMB_GAME_SPEC.task("level_1_flat.json").success_threshold)
 
     def test_smb_actions_preserve_stable_ids_and_button_metadata(self):
         spec = SMB_GAME_SPEC
@@ -469,6 +514,37 @@ class TestGameSpec(unittest.TestCase):
                     reset_modes=("fixed_scenario",),
                 ),
             )
+
+    def test_game_plugin_registry_rejects_invalid_plugins(self):
+        with self.assertRaisesRegex(ValueError, "must match game profile"):
+            GamePluginSpec(
+                name="other",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"block": "unit.Adapter"},
+                vision_encoders={"block": "unit.Vision"},
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown names"):
+            GamePluginSpec(
+                name="smb",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"missing": "unit.Adapter"},
+                vision_encoders={"block": "unit.Vision"},
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown fixed tasks"):
+            GamePluginSpec(
+                name="smb",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"block": "unit.Adapter"},
+                vision_encoders={"block": "unit.Vision"},
+                success_thresholds={
+                    "missing.json": TaskSuccessThreshold(1.0, 0.0, 1, 10, "unit")
+                },
+            )
+
+        with self.assertRaisesRegex(ValueError, "names must be unique"):
+            GamePluginRegistry((SMB_GAME_PLUGIN, SMB_GAME_PLUGIN))
 
     def test_game_spec_validation_rejects_sparse_action_ids(self):
         with self.assertRaisesRegex(ValueError, "contiguous"):

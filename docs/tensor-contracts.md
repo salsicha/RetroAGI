@@ -84,6 +84,13 @@ declares its current pygame-ce simulator as `SMB_GAME_SPEC.block_game`, which
 gives future games the same place to describe their simplified training rung
 without adding game assumptions to shared trainers.
 
+`GamePluginSpec` is the lookup contract that binds a `GameSpec` to component
+entrypoints by name. It registers stage adapters, vision encoders, reward
+schema, fixed-task success thresholds, and asset/perception pipelines. The
+default `GAME_PLUGIN_REGISTRY` exposes the current SMB plugin, so callers can
+resolve components with `get_game_plugin("smb")` instead of importing SMB-only
+modules in shared training or promotion code.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

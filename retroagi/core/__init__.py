@@ -83,6 +83,14 @@ from .games import (
     get_game_spec,
     validate_game_spec,
 )
+from .game_plugins import (
+    GAME_PLUGIN_REGISTRY,
+    SMB_GAME_PLUGIN,
+    GamePluginRegistry,
+    GamePluginSpec,
+    game_plugin_names,
+    get_game_plugin,
+)
 from .hierarchy import VisionHierarchyProjector
 from .interfaces import (
     AgentStep,
@@ -143,7 +151,10 @@ __all__ = [
     "ExperimentTrackerConfig",
     "ExperimentConfig",
     "GAME_SPECS",
+    "GAME_PLUGIN_REGISTRY",
     "GameSpec",
+    "GamePluginRegistry",
+    "GamePluginSpec",
     "GameSignalExtractor",
     "GameSignals",
     "GameTaskSchema",
@@ -160,6 +171,7 @@ __all__ = [
     "SMBAction",
     "SMB_BLOCK_GAME_SPEC",
     "SMB_GAME_SPEC",
+    "SMB_GAME_PLUGIN",
     "SMB_REWARD_SCHEMA",
     "SMB_SYNTHETIC_DATA_SPECS",
     "SMB_TASK_SCHEMA",
@@ -199,7 +211,9 @@ __all__ = [
     "flatten_numeric_metrics",
     "full_smb_action",
     "game_names",
+    "game_plugin_names",
     "get_architecture",
+    "get_game_plugin",
     "get_game_spec",
     "is_versioned_checkpoint",
     "is_mps_available",

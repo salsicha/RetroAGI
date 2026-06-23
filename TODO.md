@@ -369,7 +369,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Generalize the Block SMB-style mid-fidelity simulator pattern into
       "block game" adapters: simplified physics, symbolic state, exact semantic
       labels, fast reset, fixed scenarios, and procedural scenarios.
-- [ ] Add a game plugin registry that loads game profiles, stage adapters,
+- [x] Add a game plugin registry that loads game profiles, stage adapters,
       vision encoders, reward configs, success thresholds, and asset pipelines
       by name.
 - [ ] Extend the top-level CLI to accept `--game` independently from `--stage`,
