@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import json
 import random
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 import torch
 
-from retroagi.core import AgentWorldModelCritic, SMB_ACTIONS, StageBatch, load_checkpoint
+from retroagi.core import SMB_ACTIONS, StageBatch, load_checkpoint
 from retroagi.stages.full_smb.adapter import FullSMBStage
 from retroagi.stages.full_smb.transfer import (
     load_transferred_full_smb_policy,
     make_full_smb_policy_model,
+    policy_architecture_from_checkpoint,
 )
 from retroagi.stages.full_smb.vision import DEFAULT_FULL_SMB_VIT_CHECKPOINT
 
@@ -93,9 +94,7 @@ def compare_transferred_checkpoint_with_scratch(
             scratch_model,
             stage,
             transfer_checkpoint=Path(transfer_checkpoint),
-            scratch_checkpoint=Path(scratch_checkpoint)
-            if scratch_checkpoint is not None
-            else None,
+            scratch_checkpoint=Path(scratch_checkpoint) if scratch_checkpoint is not None else None,
             scratch_source=scratch_source,
             full_smb_vision_checkpoint=transfer.full_smb_vision_path,
             config=config,
@@ -105,8 +104,8 @@ def compare_transferred_checkpoint_with_scratch(
 
 
 def compare_full_smb_policies_on_stage(
-    transfer_model: AgentWorldModelCritic,
-    scratch_model: AgentWorldModelCritic,
+    transfer_model: torch.nn.Module,
+    scratch_model: torch.nn.Module,
     stage: FullSMBStage,
     *,
     transfer_checkpoint: Path,
@@ -173,9 +172,7 @@ def compare_full_smb_policies_on_stage(
     agreement = (
         sum(
             1
-            for transfer_action, scratch_action in zip(
-                transfer_actions, scratch_actions
-            )
+            for transfer_action, scratch_action in zip(transfer_actions, scratch_actions)
             if transfer_action == scratch_action
         )
         / evaluated_steps
@@ -202,15 +199,13 @@ def compare_full_smb_policies_on_stage(
         transfer_checkpoint=str(transfer_checkpoint),
         scratch_checkpoint=str(scratch_checkpoint) if scratch_checkpoint else None,
         scratch_source=scratch_source,
-        full_smb_vision_checkpoint=str(full_smb_vision_checkpoint)
-        if full_smb_vision_checkpoint
-        else None,
+        full_smb_vision_checkpoint=(
+            str(full_smb_vision_checkpoint) if full_smb_vision_checkpoint else None
+        ),
     )
 
 
-def save_full_smb_policy_comparison(
-    path: Path, result: FullSMBPolicyComparisonResult
-) -> None:
+def save_full_smb_policy_comparison(path: Path, result: FullSMBPolicyComparisonResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(result.as_dict(), indent=2, sort_keys=True),
@@ -224,15 +219,13 @@ def _scratch_model_for_transfer(
     scratch_checkpoint: Optional[Path],
     scratch_seed: int,
     device: str | torch.device,
-) -> tuple[AgentWorldModelCritic, str]:
+) -> tuple[torch.nn.Module, str]:
     if scratch_checkpoint is not None:
         checkpoint = load_checkpoint(Path(scratch_checkpoint), map_location=device)
-        model_config = checkpoint.get("config", {}).get("model", {})
+        architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
         model = make_full_smb_policy_model(
-            hidden_dim=int(model_config["hidden_dim"]),
-            controller_schedule=str(
-                model_config.get("controller_schedule", "constant")
-            ),
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
         ).to(device)
         load_result = model.load_state_dict(checkpoint["states"]["model"], strict=False)
         if load_result.unexpected_keys or load_result.missing_keys:
@@ -244,14 +237,14 @@ def _scratch_model_for_transfer(
         model.eval()
         return model, "checkpoint"
 
-    model_config = transfer_checkpoint["config"]["model"]
+    architecture_name, architecture_config = policy_architecture_from_checkpoint(
+        transfer_checkpoint
+    )
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(scratch_seed)
         model = make_full_smb_policy_model(
-            hidden_dim=int(model_config["hidden_dim"]),
-            controller_schedule=str(
-                model_config.get("controller_schedule", "constant")
-            ),
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
         ).to(device)
     model.eval()
     return model, "scratch_initialization"
@@ -259,7 +252,7 @@ def _scratch_model_for_transfer(
 
 @torch.no_grad()
 def _policy_action_logits(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     batch: StageBatch,
     *,
     device: str | torch.device,
@@ -271,9 +264,7 @@ def _policy_action_logits(
     episode = (batch.metadata or {}).get("episode", {})
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
     if episode_mask is not None:
-        episode_mask = torch.as_tensor(
-            episode_mask, dtype=src_c.dtype, device=src_c.device
-        )
+        episode_mask = torch.as_tensor(episode_mask, dtype=src_c.dtype, device=src_c.device)
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(torch_seed)
         outputs = model(

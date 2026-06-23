@@ -10,10 +10,13 @@ from typing import Any, Mapping, Optional
 import torch
 
 from retroagi.core import (
-    AgentWorldModelCritic,
+    BASELINE_ARCHITECTURE_NAME,
+    BASELINE_ARCHITECTURE_SPEC,
     SMB_ACTIONS,
     StageBatch,
+    build_architecture,
     build_checkpoint,
+    get_architecture,
     load_checkpoint,
     save_checkpoint,
 )
@@ -31,7 +34,6 @@ from retroagi.stages.full_smb.vision import (
     DEFAULT_FULL_SMB_VIT_CHECKPOINT,
     FullSMBSegmentationVision,
 )
-
 
 FULL_SMB_TRANSFER_MODEL_NAME = "full_smb_transferred_block_policy"
 FULL_SMB_TRANSFER_CHECKPOINT_KIND = "full_smb_transfer"
@@ -53,7 +55,7 @@ class FullSMBTransferConfig:
 class FullSMBTransferResult:
     """Loaded Full SMB policy, perception, and transfer checkpoint metadata."""
 
-    model: AgentWorldModelCritic
+    model: torch.nn.Module
     vision: FullSMBSegmentationVision
     checkpoint: dict[str, Any]
     source_checkpoint: dict[str, Any]
@@ -73,18 +75,29 @@ class FullSMBActionSelection:
 
 def make_full_smb_policy_model(
     *,
-    hidden_dim: int,
+    architecture_name: str = BASELINE_ARCHITECTURE_NAME,
+    architecture_config: Optional[Mapping[str, Any]] = None,
+    hidden_dim: Optional[int] = None,
     controller_schedule: str = "constant",
-) -> AgentWorldModelCritic:
-    """Build the shared actor/world-model/critic under the Full SMB spec."""
+) -> torch.nn.Module:
+    """Build a registered policy architecture under the Full SMB spec."""
 
-    return AgentWorldModelCritic(
-        FULL_SMB_SPEC.vocab_size,
-        FULL_SMB_SPEC.seq_len_a,
-        FULL_SMB_SPEC.seq_len_c,
-        FULL_SMB_SPEC.ratio_bc,
-        d_model=hidden_dim,
-        controller_schedule=controller_schedule,
+    values = dict(architecture_config or {})
+    if hidden_dim is not None:
+        values.setdefault("hidden_dim", hidden_dim)
+    if architecture_name == BASELINE_ARCHITECTURE_NAME or "controller_schedule" in values:
+        values.setdefault("controller_schedule", controller_schedule)
+    architecture = get_architecture(architecture_name)
+    expected_contract = BASELINE_ARCHITECTURE_SPEC.output_contract
+    if architecture.output_contract != expected_contract:
+        raise ValueError(
+            "Full SMB policy transfer requires architecture output contract "
+            f"{expected_contract!r}, got {architecture.output_contract!r}"
+        )
+    return build_architecture(
+        architecture_name,
+        FULL_SMB_SPEC,
+        values,
     )
 
 
@@ -108,15 +121,12 @@ def transfer_block_smb_checkpoint_to_full_smb(
 
     source_path = Path(block_policy_checkpoint)
     source_checkpoint = _load_block_policy_source(source_path, map_location=device)
-    hidden_dim = _source_hidden_dim(source_checkpoint)
-    controller_schedule = _source_controller_schedule(source_checkpoint)
+    architecture_name, architecture_config = policy_architecture_from_checkpoint(source_checkpoint)
     model = make_full_smb_policy_model(
-        hidden_dim=hidden_dim,
-        controller_schedule=controller_schedule,
+        architecture_name=architecture_name,
+        architecture_config=architecture_config,
     ).to(device)
-    load_result = model.load_state_dict(
-        source_checkpoint["states"]["model"], strict=False
-    )
+    load_result = model.load_state_dict(source_checkpoint["states"]["model"], strict=False)
     missing_keys = _validate_policy_load_result(load_result)
     model.eval()
 
@@ -141,8 +151,8 @@ def transfer_block_smb_checkpoint_to_full_smb(
         source_policy_path=source_path,
         source_vision_path=source_vision_path,
         full_smb_vision_path=vision.checkpoint_path,
-        hidden_dim=hidden_dim,
-        controller_schedule=controller_schedule,
+        architecture_name=architecture_name,
+        architecture_config=architecture_config,
         missing_keys=missing_keys,
     )
 
@@ -175,10 +185,10 @@ def load_transferred_full_smb_policy(
     path = Path(checkpoint_path)
     checkpoint = load_checkpoint(path, map_location=device)
     _validate_transfer_checkpoint(checkpoint, path)
-    model_config = checkpoint["config"]["model"]
+    architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
     model = make_full_smb_policy_model(
-        hidden_dim=int(model_config["hidden_dim"]),
-        controller_schedule=str(model_config.get("controller_schedule", "constant")),
+        architecture_name=architecture_name,
+        architecture_config=architecture_config,
     ).to(device)
     load_result = model.load_state_dict(checkpoint["states"]["model"], strict=False)
     missing_keys = _validate_policy_load_result(load_result)
@@ -205,7 +215,7 @@ def load_transferred_full_smb_policy(
 
 @torch.no_grad()
 def select_transferred_full_smb_action(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     batch: StageBatch,
     *,
     deterministic: bool = True,
@@ -220,9 +230,7 @@ def select_transferred_full_smb_action(
     episode = (batch.metadata or {}).get("episode", {})
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
     if episode_mask is not None:
-        episode_mask = torch.as_tensor(
-            episode_mask, dtype=src_c.dtype, device=src_c.device
-        )
+        episode_mask = torch.as_tensor(episode_mask, dtype=src_c.dtype, device=src_c.device)
     *_prefix, logits_a = model(
         src_a,
         src_b,
@@ -252,8 +260,7 @@ def _load_block_policy_source(
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
         raise ValueError(
-            f"source policy stage must be {BLOCK_SMB_SPEC.name!r}, "
-            f"got {checkpoint['stage']!r}"
+            f"source policy stage must be {BLOCK_SMB_SPEC.name!r}, " f"got {checkpoint['stage']!r}"
         )
     if checkpoint["model_name"] != BLOCK_SMB_MODEL_NAME:
         raise ValueError(
@@ -291,15 +298,73 @@ def _validate_transfer_dimensions(checkpoint: Mapping[str, Any]) -> None:
             )
 
 
+def policy_architecture_from_checkpoint(
+    checkpoint: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Resolve policy architecture identity from new or legacy checkpoint config."""
+
+    config = checkpoint.get("config", {})
+    if not isinstance(config, Mapping):
+        config = {}
+    architecture_name = str(config.get("architecture_name", BASELINE_ARCHITECTURE_NAME))
+    architecture_config = config.get("architecture_config")
+    if isinstance(architecture_config, Mapping):
+        resolved = dict(architecture_config)
+        if "hidden_dim" in resolved:
+            resolved["hidden_dim"] = int(resolved["hidden_dim"])
+            state = checkpoint.get("states", {}).get("model", {})
+            if isinstance(state, Mapping) and "agent.embedding.weight" in state:
+                state_hidden_dim = _source_hidden_dim(checkpoint)
+                if int(resolved["hidden_dim"]) != state_hidden_dim:
+                    raise ValueError(
+                        "source policy architecture hidden_dim does not match model state: "
+                        f"{resolved['hidden_dim']!r} != {state_hidden_dim!r}"
+                    )
+        elif architecture_name == BASELINE_ARCHITECTURE_NAME:
+            resolved["hidden_dim"] = _source_hidden_dim(checkpoint)
+        if "controller_schedule" in resolved:
+            resolved["controller_schedule"] = str(resolved["controller_schedule"])
+        elif architecture_name == BASELINE_ARCHITECTURE_NAME:
+            resolved["controller_schedule"] = _source_controller_schedule(checkpoint)
+    else:
+        model_config = config.get("model", {})
+        if not isinstance(model_config, Mapping):
+            model_config = {}
+        resolved = {}
+        if "hidden_dim" in model_config:
+            resolved["hidden_dim"] = int(model_config["hidden_dim"])
+        elif "hidden_dim" in config:
+            resolved["hidden_dim"] = int(config["hidden_dim"])
+        else:
+            resolved["hidden_dim"] = _source_hidden_dim(checkpoint)
+        resolved["controller_schedule"] = str(
+            model_config.get(
+                "controller_schedule",
+                config.get("controller_schedule", "constant"),
+            )
+        )
+    return architecture_name, resolved
+
+
+def policy_architecture_metadata(
+    architecture_name: str,
+    architecture_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    architecture = get_architecture(architecture_name)
+    return {
+        "name": architecture.name,
+        "config": dict(architecture_config),
+        "spec": architecture.metadata(),
+    }
+
+
 def _source_hidden_dim(checkpoint: Mapping[str, Any]) -> int:
     state = checkpoint["states"]["model"]
     if "agent.embedding.weight" not in state:
         raise ValueError("source policy state is missing agent.embedding.weight")
     state_hidden_dim = int(state["agent.embedding.weight"].shape[1])
     config = checkpoint.get("config", {})
-    config_hidden_dim = (
-        config.get("hidden_dim") if isinstance(config, Mapping) else None
-    )
+    config_hidden_dim = config.get("hidden_dim") if isinstance(config, Mapping) else None
     if config_hidden_dim is not None and int(config_hidden_dim) != state_hidden_dim:
         raise ValueError(
             "source policy hidden_dim does not match model state: "
@@ -323,9 +388,7 @@ def _validate_policy_load_result(load_result: Any) -> tuple[str, ...]:
     )
     unexpected = tuple(load_result.unexpected_keys)
     unsupported_missing = tuple(
-        key
-        for key in load_result.missing_keys
-        if not key.startswith(allowed_missing_prefixes)
+        key for key in load_result.missing_keys if not key.startswith(allowed_missing_prefixes)
     )
     if unexpected or unsupported_missing:
         raise ValueError(
@@ -336,17 +399,31 @@ def _validate_policy_load_result(load_result: Any) -> tuple[str, ...]:
 
 
 def _build_transfer_checkpoint(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     vision: FullSMBSegmentationVision,
     *,
     source_checkpoint: Mapping[str, Any],
     source_policy_path: Path,
     source_vision_path: Optional[Path],
     full_smb_vision_path: Optional[Path],
-    hidden_dim: int,
-    controller_schedule: str,
+    architecture_name: str,
+    architecture_config: Mapping[str, Any],
     missing_keys: tuple[str, ...],
 ) -> dict[str, Any]:
+    hidden_dim = architecture_config.get("hidden_dim")
+    controller_schedule = architecture_config.get("controller_schedule")
+    architecture = policy_architecture_metadata(architecture_name, architecture_config)
+    model_config = {
+        "seq_len_a": FULL_SMB_SPEC.seq_len_a,
+        "seq_len_b": FULL_SMB_SPEC.seq_len_b,
+        "seq_len_c": FULL_SMB_SPEC.seq_len_c,
+        "ratio_bc": FULL_SMB_SPEC.ratio_bc,
+        "vocab_size": FULL_SMB_SPEC.vocab_size,
+    }
+    if hidden_dim is not None:
+        model_config["hidden_dim"] = int(hidden_dim)
+    if controller_schedule is not None:
+        model_config["controller_schedule"] = str(controller_schedule)
     return build_checkpoint(
         stage=FULL_SMB_SPEC.name,
         model_name=FULL_SMB_TRANSFER_MODEL_NAME,
@@ -355,15 +432,9 @@ def _build_transfer_checkpoint(
         global_step=int(source_checkpoint.get("global_step", 0)),
         metrics={},
         config={
-            "model": {
-                "hidden_dim": hidden_dim,
-                "controller_schedule": controller_schedule,
-                "seq_len_a": FULL_SMB_SPEC.seq_len_a,
-                "seq_len_b": FULL_SMB_SPEC.seq_len_b,
-                "seq_len_c": FULL_SMB_SPEC.seq_len_c,
-                "ratio_bc": FULL_SMB_SPEC.ratio_bc,
-                "vocab_size": FULL_SMB_SPEC.vocab_size,
-            },
+            "architecture_name": architecture_name,
+            "architecture_config": dict(architecture_config),
+            "model": model_config,
             "source": source_checkpoint.get("config", {}),
         },
         specs={
@@ -376,20 +447,23 @@ def _build_transfer_checkpoint(
                 "vocab_size": FULL_SMB_SPEC.vocab_size,
             },
             "vision": asdict(vision.spec),
+            "architecture": architecture["spec"],
+            "architecture_config": architecture["config"],
         },
         states={"model": model.state_dict()},
         metadata={
+            "architecture": architecture,
             "source": {
                 "policy_checkpoint": str(source_policy_path),
                 "policy_stage": source_checkpoint["stage"],
                 "policy_model_name": source_checkpoint["model_name"],
                 "policy_checkpoint_kind": source_checkpoint["checkpoint_kind"],
-                "block_vision_checkpoint": str(source_vision_path)
-                if source_vision_path is not None
-                else None,
-                "full_smb_vision_checkpoint": str(full_smb_vision_path)
-                if full_smb_vision_path is not None
-                else None,
+                "block_vision_checkpoint": (
+                    str(source_vision_path) if source_vision_path is not None else None
+                ),
+                "full_smb_vision_checkpoint": (
+                    str(full_smb_vision_path) if full_smb_vision_path is not None else None
+                ),
             },
             "source_metrics": source_checkpoint.get("metrics", {}),
             "missing_model_keys": missing_keys,

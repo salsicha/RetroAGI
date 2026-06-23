@@ -227,7 +227,7 @@ high-fidelity evaluations.
 - [x] Refactor Block SMB policy training to consume an architecture factory and
       save the selected architecture name and config in every checkpoint and
       run summary.
-- [ ] Refactor Full SMB transfer and comparison to load architecture-specific
+- [x] Refactor Full SMB transfer and comparison to load architecture-specific
       checkpoints through the registry instead of assuming only
       `AgentWorldModelCritic`.
 - [ ] Add top-level CLI support for architecture selection, for example

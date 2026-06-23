@@ -1,14 +1,20 @@
 """Tests for transferring Block SMB checkpoints into Full SMB."""
 
-import unittest
 import json
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
-from retroagi.core import build_checkpoint, save_checkpoint
+from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
+    build_architecture,
+    build_checkpoint,
+    save_checkpoint,
+)
 from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
@@ -23,17 +29,18 @@ from retroagi.stages.full_smb import (
     FullSMBVisionTransformer,
     build_full_smb_vit_checkpoint,
 )
-from retroagi.stages.full_smb.transfer import (
-    FULL_SMB_TRANSFER_CHECKPOINT_KIND,
-    FULL_SMB_TRANSFER_MODEL_NAME,
-    load_transferred_full_smb_policy,
-    select_transferred_full_smb_action,
-    transfer_block_smb_checkpoint_to_full_smb,
-)
 from retroagi.stages.full_smb.compare import (
     FullSMBPolicyComparisonConfig,
     compare_transferred_checkpoint_with_scratch,
     save_full_smb_policy_comparison,
+)
+from retroagi.stages.full_smb.transfer import (
+    FULL_SMB_TRANSFER_CHECKPOINT_KIND,
+    FULL_SMB_TRANSFER_MODEL_NAME,
+    load_transferred_full_smb_policy,
+    make_full_smb_policy_model,
+    select_transferred_full_smb_action,
+    transfer_block_smb_checkpoint_to_full_smb,
 )
 
 
@@ -153,29 +160,29 @@ class TestFullSMBTransfer(unittest.TestCase):
             source_policy_path = tmp / "block_policy.pth"
             full_vision_path = tmp / "full_smb_vit.pth"
             output_path = tmp / "full_smb_transfer.pth"
-            source_model, source_config = write_block_policy_checkpoint(
-                source_policy_path
-            )
+            source_model, source_config = write_block_policy_checkpoint(source_policy_path)
             write_full_smb_vision_checkpoint(full_vision_path)
 
-            result = transfer_block_smb_checkpoint_to_full_smb(
-                source_policy_path,
-                output_checkpoint=output_path,
-                full_smb_vision_checkpoint=full_vision_path,
-                block_vision_checkpoint=None,
-                device="cpu",
-            )
-            loaded = load_transferred_full_smb_policy(
-                output_path,
-                full_smb_vision_checkpoint=full_vision_path,
-                device="cpu",
-            )
+            with patch(
+                "retroagi.stages.full_smb.transfer.build_architecture",
+                wraps=build_architecture,
+            ) as build_model:
+                result = transfer_block_smb_checkpoint_to_full_smb(
+                    source_policy_path,
+                    output_checkpoint=output_path,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    block_vision_checkpoint=None,
+                    device="cpu",
+                )
+                loaded = load_transferred_full_smb_policy(
+                    output_path,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    device="cpu",
+                )
 
             self.assertTrue(output_path.exists())
             self.assertEqual(result.checkpoint["stage"], FULL_SMB_SPEC.name)
-            self.assertEqual(
-                result.checkpoint["model_name"], FULL_SMB_TRANSFER_MODEL_NAME
-            )
+            self.assertEqual(result.checkpoint["model_name"], FULL_SMB_TRANSFER_MODEL_NAME)
             self.assertEqual(
                 result.checkpoint["checkpoint_kind"],
                 FULL_SMB_TRANSFER_CHECKPOINT_KIND,
@@ -186,8 +193,37 @@ class TestFullSMBTransfer(unittest.TestCase):
                 result.checkpoint["config"]["model"]["controller_schedule"],
                 source_config.controller_schedule,
             )
+            self.assertEqual(
+                result.checkpoint["config"]["architecture_name"],
+                BASELINE_ARCHITECTURE_NAME,
+            )
+            self.assertEqual(
+                result.checkpoint["config"]["architecture_config"],
+                source_config.architecture_config,
+            )
+            self.assertEqual(
+                result.checkpoint["specs"]["architecture"]["name"],
+                BASELINE_ARCHITECTURE_NAME,
+            )
+            self.assertEqual(
+                result.checkpoint["specs"]["architecture_config"],
+                source_config.architecture_config,
+            )
+            self.assertEqual(
+                result.checkpoint["metadata"]["architecture"]["name"],
+                BASELINE_ARCHITECTURE_NAME,
+            )
             self.assertEqual(result.full_smb_vision_path, full_vision_path)
             self.assertEqual(loaded.output_path, output_path)
+            self.assertGreaterEqual(build_model.call_count, 2)
+            self.assertEqual(
+                build_model.call_args_list[0].args,
+                (
+                    BASELINE_ARCHITECTURE_NAME,
+                    FULL_SMB_SPEC,
+                    source_config.architecture_config,
+                ),
+            )
 
             source_state = source_model.state_dict()
             transferred_state = result.model.state_dict()
@@ -270,25 +306,37 @@ class TestFullSMBTransfer(unittest.TestCase):
                 device="cpu",
             )
 
-            result = compare_transferred_checkpoint_with_scratch(
-                transfer_path,
-                make_stage=lambda vision: FullSMBStage(
-                    env=TinyFullSMBEnv(),
-                    vision=vision,
-                    observation_config=FullSMBObservationConfig(
-                        frame_skip=1,
-                        frame_stack=2,
-                        resize_shape=(16, 20),
+            with patch(
+                "retroagi.stages.full_smb.compare.make_full_smb_policy_model",
+                wraps=make_full_smb_policy_model,
+            ) as make_scratch_model:
+                result = compare_transferred_checkpoint_with_scratch(
+                    transfer_path,
+                    make_stage=lambda vision: FullSMBStage(
+                        env=TinyFullSMBEnv(),
+                        vision=vision,
+                        observation_config=FullSMBObservationConfig(
+                            frame_skip=1,
+                            frame_stack=2,
+                            resize_shape=(16, 20),
+                        ),
                     ),
-                ),
-                full_smb_vision_checkpoint=full_vision_path,
-                config=FullSMBPolicyComparisonConfig(
-                    steps=4,
-                    seed=9,
-                    scratch_seed=99,
-                    device="cpu",
-                ),
-            )
+                    full_smb_vision_checkpoint=full_vision_path,
+                    config=FullSMBPolicyComparisonConfig(
+                        steps=4,
+                        seed=9,
+                        scratch_seed=99,
+                        device="cpu",
+                    ),
+                )
+                self.assertEqual(
+                    make_scratch_model.call_args.kwargs["architecture_name"],
+                    BASELINE_ARCHITECTURE_NAME,
+                )
+                self.assertEqual(
+                    make_scratch_model.call_args.kwargs["architecture_config"],
+                    {"hidden_dim": 8, "controller_schedule": "linear"},
+                )
             save_full_smb_policy_comparison(report_path, result)
             saved = json.loads(report_path.read_text(encoding="utf-8"))
 
