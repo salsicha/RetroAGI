@@ -356,7 +356,7 @@ architecture cheaply before spending high-fidelity emulator time.
       continuous controls, no-op/release behavior, and stable integer IDs.
 - [x] Add action mapping tests proving each game profile maps abstract policy
       actions to backend-native controls without depending on button order.
-- [ ] Define a `GameSignalExtractor` protocol for score, progress, health,
+- [x] Define a `GameSignalExtractor` protocol for score, progress, health,
       lives, inventory, collectibles, completion, death, timeout, and any
       game-specific objectives.
 - [ ] Add a reward-term configuration schema that lets each game own its reward

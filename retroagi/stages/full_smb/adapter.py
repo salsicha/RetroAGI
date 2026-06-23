@@ -11,6 +11,8 @@ import torch
 import torch.nn.functional as F
 
 from retroagi.core import (
+    GameSignalExtractor,
+    GameSignals,
     SMB_GAME_SPEC,
     SMBAction,
     StageBatch,
@@ -105,18 +107,10 @@ class FullSMBEmulatorState:
 
 
 @dataclass(frozen=True)
-class FullSMBSignals:
+class FullSMBSignals(GameSignals):
     """Normalized view of game variables emitted by the Full SMB backend."""
 
-    position: Optional[tuple[float, float]]
-    score: Optional[int]
-    coins: Optional[int]
-    lives: Optional[int]
-    completion: bool
-    death: bool
-    terminated: bool
-    truncated: bool
-    termination_reason: Optional[str] = None
+    coins: Optional[int] = None
 
     def to_state_vec(
         self, config: FullSMBSignalConfig = FullSMBSignalConfig()
@@ -138,17 +132,26 @@ class FullSMBSignals:
         )
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "position": self.position,
-            "score": self.score,
-            "coins": self.coins,
-            "lives": self.lives,
-            "completion": self.completion,
-            "death": self.death,
-            "terminated": self.terminated,
-            "truncated": self.truncated,
-            "termination_reason": self.termination_reason,
-        }
+        data = super().as_dict()
+        data["coins"] = self.coins
+        return data
+
+
+class FullSMBSignalExtractor(GameSignalExtractor):
+    """Game-neutral signal extractor for Full SMB stable-retro info mappings."""
+
+    game_name = SMB_GAME_SPEC.name
+
+    def extract(
+        self,
+        info: Mapping[str, Any],
+        *,
+        terminated: bool,
+        truncated: bool,
+    ) -> FullSMBSignals:
+        return extract_full_smb_signals(
+            info, terminated=terminated, truncated=truncated
+        )
 
 
 POSITION_X_KEYS = (
@@ -534,6 +537,8 @@ def extract_full_smb_signals(
     """Extract common stable-retro SMB variables into a stable schema."""
 
     reason = _string_value(info, REASON_KEYS)
+    position = _position_value(info)
+    coins = _int_value(info, COIN_KEYS)
     completion = _bool_value(info, COMPLETION_KEYS, default=False) or _reason_matches(
         reason, ("complete", "completed", "clear", "cleared", "goal", "flag")
     )
@@ -541,12 +546,15 @@ def extract_full_smb_signals(
         reason, ("death", "dead", "died", "game_over", "game over")
     )
     return FullSMBSignals(
-        position=_position_value(info),
+        position=position,
+        progress=position[0] if position is not None else None,
         score=_int_value(info, SCORE_KEYS),
-        coins=_int_value(info, COIN_KEYS),
         lives=_int_value(info, LIFE_KEYS),
+        collectibles={} if coins is None else {"coins": coins},
+        coins=coins,
         completion=completion,
         death=death,
+        timeout=bool(truncated),
         terminated=bool(terminated),
         truncated=bool(truncated),
         termination_reason=reason,

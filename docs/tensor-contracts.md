@@ -49,6 +49,13 @@ stage-native discrete action, and `GameSpec.action_button_vector(...)` maps the
 same policy action to a backend button vector using button names rather than
 backend-specific button positions.
 
+`GameSignalExtractor` is the game-neutral backend-info extraction protocol. It
+returns `GameSignals` with common fields for position/progress, score, health,
+lives, inventory, collectibles, completion, death, timeout, termination,
+truncation, game-specific objectives, and termination reason. Stage adapters may
+extend that dataclass with legacy convenience fields, as Full SMB does with
+`coins`, but shared trainers should read the common `GameSignals` fields.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

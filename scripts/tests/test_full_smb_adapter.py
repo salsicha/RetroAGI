@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from retroagi.core import (
+    GameSignals,
     SMBAction,
     StageBatch,
     VisionOutput,
@@ -15,6 +16,7 @@ from retroagi.core import (
 from retroagi.stages.full_smb import (
     FULL_SMB_SPEC,
     FullSMBObservationConfig,
+    FullSMBSignalExtractor,
     FullSMBSmokeConfig,
     FullSMBStage,
     extract_full_smb_signals,
@@ -239,13 +241,50 @@ class TestFullSMBStage(unittest.TestCase):
         )
 
         self.assertEqual(signals.position, (144.0, 96.0))
+        self.assertIsInstance(signals, GameSignals)
+        self.assertEqual(signals.progress, 144.0)
         self.assertEqual(signals.score, 1234)
         self.assertEqual(signals.coins, 12)
+        self.assertEqual(signals.collectibles["coins"], 12)
         self.assertEqual(signals.lives, 1)
         self.assertFalse(signals.completion)
         self.assertTrue(signals.death)
         self.assertTrue(signals.terminated)
         self.assertFalse(signals.truncated)
+        self.assertFalse(signals.timeout)
+
+    def test_full_smb_signal_extractor_satisfies_game_signal_contract(self):
+        extractor = FullSMBSignalExtractor()
+        signals = extractor.extract(
+            {
+                "xscrollHi": 1,
+                "xscrollLo": 2,
+                "screen_x": 3,
+                "y_pos": 88,
+                "score": 500,
+                "coins": 4,
+                "lives": 2,
+                "goal_reached": True,
+            },
+            terminated=True,
+            truncated=False,
+        )
+
+        self.assertEqual(extractor.game_name, "smb")
+        self.assertIsInstance(signals, GameSignals)
+        self.assertEqual(signals.position, (261.0, 88.0))
+        self.assertEqual(signals.progress, 261.0)
+        self.assertEqual(signals.score, 500)
+        self.assertEqual(signals.collectibles, {"coins": 4})
+        self.assertEqual(signals.lives, 2)
+        self.assertTrue(signals.completion)
+        self.assertFalse(signals.death)
+        self.assertTrue(signals.terminated)
+        self.assertFalse(signals.timeout)
+
+        timeout = extractor.extract({}, terminated=False, truncated=True)
+        self.assertTrue(timeout.timeout)
+        self.assertTrue(timeout.truncated)
 
     def test_frame_skip_resize_stack_and_continuing_episode_mask(self):
         env = FrameSkipRetroEnv()
@@ -378,13 +417,19 @@ class TestFullSMBStage(unittest.TestCase):
                 info["full_smb_signals"],
                 {
                     "position": (306.0, 180.0),
+                    "progress": 306.0,
                     "score": 100,
+                    "health": None,
+                    "inventory": {},
+                    "collectibles": {"coins": 7},
                     "coins": 7,
                     "lives": 2,
                     "completion": True,
                     "death": False,
+                    "timeout": False,
                     "terminated": True,
                     "truncated": False,
+                    "objectives": {},
                     "termination_reason": "level_complete",
                 },
             )

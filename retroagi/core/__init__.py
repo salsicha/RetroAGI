@@ -97,6 +97,7 @@ from .models import (
     WorldModel,
     WorldModelState,
 )
+from .signals import GameSignalExtractor, GameSignals
 from .tracking import (
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
@@ -135,6 +136,8 @@ __all__ = [
     "ExperimentConfig",
     "GAME_SPECS",
     "GameSpec",
+    "GameSignalExtractor",
+    "GameSignals",
     "HierarchicalAdaptiveModel",
     "LinearVisionEncoder",
     "ModelConfig",
