@@ -11,7 +11,7 @@ from .game_promotion import (
     PromotionArtifactGateSpec,
     PromotionMetricGateSpec,
 )
-from .games import GameSpec, SMB_GAME_SPEC
+from .games import GameSpec, PONG_GAME_SPEC, SMB_GAME_SPEC
 from .perception import (
     PerceptionDatasetSourceSpec,
     PerceptionPipelineSpec,
@@ -556,7 +556,148 @@ SMB_GAME_PLUGIN = GamePluginSpec(
 )
 
 
-GAME_PLUGIN_REGISTRY = GamePluginRegistry((SMB_GAME_PLUGIN,))
+PONG_GAME_PLUGIN = GamePluginSpec(
+    name="pong",
+    game=PONG_GAME_SPEC,
+    stage_adapters={
+        "synthetic": "retroagi.stages.synthetic_1d.train",
+        "block": "retroagi.stages.pong_block.adapter.PongBlockStage",
+        "full": "retroagi.stages.pong_full.adapter.PongFullStage",
+    },
+    vision_encoders={
+        "synthetic": "retroagi.core.LinearVisionEncoder",
+        "block": "retroagi.stages.pong_block.vision.PongBlockVisionEncoder",
+        "full": "retroagi.stages.pong_full.vision.PongFullVisionEncoder",
+    },
+    perception_pipelines={
+        "block": PerceptionPipelineSpec(
+            game_name="pong",
+            name="block",
+            stage_name="block",
+            semantic_vocabulary=SemanticVocabularySpec(
+                name="pong_block_synthetic",
+                classes=PONG_GAME_SPEC.block_game_spec().semantic_classes,
+                background_class="background",
+                metadata={
+                    "label_source": "exact paddle-ball simulator state labels",
+                },
+            ),
+            vision_encoder="retroagi.stages.pong_block.vision.PongBlockVisionEncoder",
+            asset_extraction=None,
+            synthetic_frame_composition="retroagi.stages.pong_block.env.PongBlockEnv",
+            checkpoint_path="data/pong_block/pong_block_vit.pth",
+            diagnostic_thresholds={
+                "min_accuracy": 0.95,
+                "min_mean_iou": 0.75,
+                "max_position_rmse": 0.04,
+                "min_position_within_tolerance": 0.95,
+                "position_tolerance": 0.04,
+            },
+            dataset_artifacts=("procedural Pong block rollouts",),
+            dataset_sources=(
+                PerceptionDatasetSourceSpec(
+                    name="pong_block_exact_state_labels",
+                    source_kind="emulator_state",
+                    stage_names=("block",),
+                    observation_source="pong_block_raster_frames",
+                    label_source="PongBlockEnv symbolic state and semantic targets",
+                    entrypoint="retroagi.stages.pong_block.env.PongBlockEnv",
+                    dataset_artifacts=("procedural Pong block rollouts",),
+                    metadata={"requires_asset_pipeline": False},
+                ),
+            ),
+            metadata={
+                "checkpoint_kind": "vision_encoder",
+                "profile_status": "proof_of_concept",
+            },
+        ),
+        "full": PerceptionPipelineSpec(
+            game_name="pong",
+            name="full",
+            stage_name="full",
+            semantic_vocabulary=SemanticVocabularySpec(
+                name="pong_full_self_supervised",
+                classes=PONG_GAME_SPEC.semantic_classes,
+                background_class="background",
+                metadata={
+                    "label_source": "future self-supervised or manual frame labels",
+                },
+            ),
+            vision_encoder="retroagi.stages.pong_full.vision.PongFullVisionEncoder",
+            asset_extraction=None,
+            synthetic_frame_composition=None,
+            checkpoint_path="data/pong/full_vit.pth",
+            diagnostic_thresholds={
+                "min_temporal_consistency": 0.8,
+                "max_position_drift": 0.08,
+                "min_manual_label_accuracy": 0.90,
+            },
+            dataset_artifacts=("future Gymnasium Pong frame rollouts",),
+            dataset_sources=(
+                PerceptionDatasetSourceSpec(
+                    name="pong_full_contrastive_rollouts",
+                    source_kind="self_supervised",
+                    stage_names=("full",),
+                    observation_source="Gymnasium Pong RGB frame pairs",
+                    label_source="temporal contrastive objective",
+                    entrypoint="retroagi.stages.pong_full.vision",
+                    dataset_artifacts=("future Gymnasium Pong frame rollouts",),
+                    metadata={"requires_asset_pipeline": False},
+                ),
+            ),
+            metadata={
+                "checkpoint_kind": "vision_encoder",
+                "profile_status": "planned_full_rung",
+            },
+        ),
+    },
+    reward_schema=PONG_GAME_SPEC.reward_schema,
+    success_thresholds={
+        task.name: task.success_threshold
+        for task in PONG_GAME_SPEC.fixed_tasks
+        if task.success_threshold is not None
+    },
+    promotion_gates={
+        "synthetic-concept": GamePromotionGateSpec(
+            rung_name="synthetic-concept",
+            metric_gates=(
+                PromotionMetricGateSpec(
+                    metric="controller_mse",
+                    operator="<=",
+                    threshold_key="controller_mse_threshold",
+                    reason="Pong synthetic scalar control must meet the budgeted MSE",
+                ),
+            ),
+            artifact_gates=(
+                _artifact_gate("summary_path"),
+                _artifact_gate("checkpoint_path"),
+            ),
+            failure_reason="Pong synthetic concept gate failed",
+        ),
+        "block-smb-smoke": GamePromotionGateSpec(
+            rung_name="block-smb-smoke",
+            metric_gates=(
+                PromotionMetricGateSpec(
+                    metric="eval_success_rate",
+                    operator=">=",
+                    threshold_key="success_rate_threshold",
+                    reason=(
+                        "Pong block policy return rate must meet the selected "
+                        "promotion threshold"
+                    ),
+                ),
+            ),
+            artifact_gates=(
+                _artifact_gate("summary_path"),
+                _artifact_gate("checkpoint_path"),
+            ),
+            failure_reason="Pong block smoke gate failed",
+        ),
+    },
+)
+
+
+GAME_PLUGIN_REGISTRY = GamePluginRegistry((PONG_GAME_PLUGIN, SMB_GAME_PLUGIN))
 
 
 def game_plugin_names() -> tuple[str, ...]:

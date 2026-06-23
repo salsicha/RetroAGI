@@ -30,6 +30,12 @@ selection. Use `--game smb --stage synthetic|block|full` for the game-neutral
 path; legacy SMB-specific stage aliases such as `synthetic-1d`, `block-smb`,
 and `full-smb` remain accepted for existing scripts.
 
+The registry also includes a proof-of-concept `pong` profile with documented
+`synthetic -> block -> full` rungs, game-owned actions, rewards, tasks, backend
+metadata, and non-asset perception sources. Pong is currently a profile and
+planning contract; top-level runtime commands still dispatch only the SMB
+runners until Pong stage implementations are added.
+
 Each game profile declares a backend provider contract through
 `GameBackendSpec`. Experiment manifests write the backend name, installed
 version when available, provider kind, entrypoint, reset/step/state API notes,

@@ -887,7 +887,347 @@ SMB_GAME_SPEC = GameSpec(
 )
 
 
-GAME_SPECS: Mapping[str, GameSpec] = {SMB_GAME_SPEC.name: SMB_GAME_SPEC}
+PONG_ACTION_SPECS = (
+    ActionSpec(
+        name="noop",
+        stable_id=0,
+        release_all=True,
+        backend_action_id=0,
+        description="Hold the paddle steady",
+    ),
+    ActionSpec(
+        name="up",
+        stable_id=1,
+        buttons=("UP",),
+        backend_action_id=2,
+        description="Move the controlled paddle upward",
+    ),
+    ActionSpec(
+        name="down",
+        stable_id=2,
+        buttons=("DOWN",),
+        backend_action_id=5,
+        description="Move the controlled paddle downward",
+    ),
+)
+
+
+PONG_REWARD_SCHEMA = RewardConfigSchema(
+    game_name="pong",
+    terms=(
+        RewardTermSpec(
+            name="paddle_alignment",
+            default=0.02,
+            direction="positive",
+            signal="objectives.paddle_alignment",
+            description="Reward for reducing paddle-to-ball vertical error",
+        ),
+        RewardTermSpec(
+            name="rally_hit",
+            default=1.0,
+            direction="positive",
+            signal="objectives.rally_hit",
+            description="Reward for returning the ball",
+        ),
+        RewardTermSpec(
+            name="score_point",
+            default=5.0,
+            direction="positive",
+            signal="score_delta",
+            description="Reward for scoring a point",
+        ),
+        RewardTermSpec(
+            name="concede_point",
+            default=-5.0,
+            direction="negative",
+            signal="objectives.concede_point",
+            description="Penalty for missing the ball and conceding a point",
+        ),
+        RewardTermSpec(
+            name="frame_penalty",
+            default=-0.001,
+            direction="negative",
+            signal="time",
+            description="Small per-frame cost to prefer decisive returns",
+        ),
+    ),
+)
+
+
+PONG_TASK_SCHEMA = GameTaskSchema(
+    game_name="pong",
+    tasks=(
+        GameTaskSpec(
+            name="centered_return",
+            stage_name="pong_block",
+            task_type="fixed",
+            source="retroagi/stages/pong_block/scenarios/centered_return.json",
+            reset_seed=202_001,
+            curriculum_stage=1,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=0.9,
+                min_mean_return=1.0,
+                min_episodes=5,
+                max_steps=300,
+                rationale=(
+                    "Centered serve: return most rallies from a controlled "
+                    "neutral start before adding angles."
+                ),
+            ),
+            description="Block Pong fixed task with centered serves",
+        ),
+        GameTaskSpec(
+            name="angled_return",
+            stage_name="pong_block",
+            task_type="fixed",
+            source="retroagi/stages/pong_block/scenarios/angled_return.json",
+            reset_seed=202_002,
+            curriculum_stage=2,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=0.8,
+                min_mean_return=0.5,
+                min_episodes=5,
+                max_steps=360,
+                rationale=(
+                    "Angled serve: track vertical velocity changes and return "
+                    "a majority of harder rallies."
+                ),
+            ),
+            description="Block Pong fixed task with angled ball trajectories",
+        ),
+        GameTaskSpec(
+            name="generated_pong_rallies",
+            stage_name="pong_block",
+            task_type="procedural",
+            source="PongBlockEnv.generate_rally",
+            reset_seed=202_100,
+            curriculum_stage=3,
+            generation_seed=252_000,
+            generation_config={
+                "ball_speed_range": (0.5, 1.25),
+                "serve_angle_range": (-0.7, 0.7),
+                "opponent_policy": "scripted_tracking",
+            },
+            description="Procedural Block Pong rally generalization template",
+        ),
+    ),
+)
+
+
+PONG_SYNTHETIC_DATA_SPECS = (
+    SyntheticDataSpec(
+        game_name="pong",
+        name="pong_scalar_control",
+        stage_name="synthetic_1d",
+        observation_kind="scalar paddle, ball position, and velocity sequences",
+        target_kind="paddle action labels and next-state trajectory targets",
+        generator="retroagi.stages.synthetic_1d.train.generate_dataset_splits",
+        splits=(
+            SyntheticSplitSpec("train", 1_000, 212_001),
+            SyntheticSplitSpec("validation", 200, 222_001),
+            SyntheticSplitSpec("test", 200, 232_001),
+        ),
+        shape_contract={
+            "seq_len_a": 8,
+            "ratio_ab": 2,
+            "ratio_bc": 4,
+            "vocab_size": 20,
+            "features": (
+                "paddle_y",
+                "ball_x",
+                "ball_y",
+                "ball_vx",
+                "ball_vy",
+            ),
+            "targets": ("action_id", "next_paddle_y", "next_ball_y"),
+        },
+        description=(
+            "Cheap Pong control data for architecture validation before "
+            "raster observations or high-fidelity Gymnasium frames."
+        ),
+        metadata={
+            "purpose": "non-SMB architecture validation",
+            "pixel_free": True,
+            "emulator_free": True,
+        },
+    ),
+)
+
+
+PONG_BLOCK_GAME_SPEC = BlockGameSpec(
+    game_name="pong",
+    name="pong_block",
+    stage_name="pong_block",
+    adapter="retroagi.stages.pong_block.adapter.PongBlockStage",
+    environment="retroagi.stages.pong_block.env.PongBlockEnv",
+    physics="deterministic 2D paddle-ball physics with scripted opponent",
+    observation_kind="low-resolution paddle/ball raster plus symbolic state_vec",
+    symbolic_state=(
+        "paddle_y",
+        "opponent_y",
+        "ball_position",
+        "ball_velocity",
+        "rally_length",
+        "score_delta",
+        "serve_direction",
+    ),
+    semantic_classes=(
+        "background",
+        "agent_paddle",
+        "opponent_paddle",
+        "ball",
+        "wall",
+        "score_hud",
+    ),
+    exact_label_sources={
+        "semantics": "PongBlockEnv.semantic_targets",
+        "position": "PongBlockEnv.ball_and_paddle_targets",
+    },
+    fixed_scenarios={
+        "centered_return": (
+            "retroagi/stages/pong_block/scenarios/centered_return.json"
+        ),
+        "angled_return": (
+            "retroagi/stages/pong_block/scenarios/angled_return.json"
+        ),
+    },
+    procedural_scenario_generator="PongBlockEnv.generate_rally",
+    reset_modes=("fixed_scenario", "procedural_seed"),
+    metadata={
+        "fast_reset": True,
+        "exact_semantic_labels": True,
+        "procedural_scenarios": True,
+        "simplified_physics": True,
+        "profile_status": "proof_of_concept",
+    },
+)
+
+
+PONG_GAME_SPEC = GameSpec(
+    name="pong",
+    family="pong",
+    action_space=PONG_ACTION_SPECS,
+    observation_sources=(
+        "pong_scalar_control_sequences",
+        "pong_block_raster_frames",
+        "pong_full_gymnasium_rgb_frames",
+        "pong_backend_variables",
+    ),
+    semantic_classes=(
+        "background",
+        "agent_paddle",
+        "opponent_paddle",
+        "ball",
+        "wall",
+        "score_hud",
+    ),
+    signal_schema={
+        "progress": "rally length or normalized ball return progress",
+        "score_delta": "agent point differential for the current episode",
+        "paddle_y": "controlled paddle vertical position",
+        "ball_position": "ball x/y position",
+        "ball_velocity": "ball x/y velocity",
+        "completion": "task success or point scored",
+        "death": "point conceded or terminal miss",
+        "timeout": "max-step truncation",
+    },
+    reward_terms={
+        "paddle_alignment": "positive shaping for tracking the ball",
+        "rally_hit": "positive reward for returning the ball",
+        "score_point": "positive reward for scoring",
+        "concede_point": "negative reward for conceding",
+        "frame_penalty": "small per-frame cost",
+    },
+    reward_schema=PONG_REWARD_SCHEMA,
+    task_schema=PONG_TASK_SCHEMA,
+    synthetic_data=PONG_SYNTHETIC_DATA_SPECS,
+    block_game=PONG_BLOCK_GAME_SPEC,
+    stage_ladder=(
+        StageLadderEntry(
+            name="synthetic",
+            stage_spec_name="synthetic_1d",
+            role="scalar paddle-ball control concept validation",
+            required_artifacts=("data/pong/synthetic_policy.pth",),
+            promotion_gate_summary="controller prediction and action-label metrics",
+        ),
+        StageLadderEntry(
+            name="block",
+            stage_spec_name="pong_block",
+            role="simplified Pong paddle-ball training with exact labels",
+            required_artifacts=(
+                "data/pong_block/pong_block_vit.pth",
+                "data/pong_block/policy.pth",
+            ),
+            promotion_gate_summary="fixed-rally return thresholds",
+        ),
+        StageLadderEntry(
+            name="full",
+            stage_spec_name="pong_full",
+            role="Gymnasium Pong inference validation and continued training",
+            required_artifacts=("data/pong/full_policy.pth",),
+            promotion_gate_summary="full-frame inference and score differential",
+        ),
+    ),
+    emulator_backend="gymnasium-pong",
+    backend=GameBackendSpec(
+        name="gymnasium-pong",
+        provider_kind="gymnasium",
+        entrypoint="gymnasium.make",
+        observation_api="Gymnasium RGB frame or native observation",
+        action_api="Discrete action ID from ActionSpec.backend_action_id",
+        reset_api="reset(seed=None)",
+        step_api="step(action_id) -> obs, reward, terminated, truncated, info",
+        state_api="clone_state/restore_state when supplied by the environment",
+        capabilities=BackendCapabilitySpec(
+            reset_seed=True,
+            save_load_state=False,
+            frame_step=True,
+            action_repeat=True,
+            render=True,
+            headless=True,
+            gymnasium_step_api=True,
+            legacy_gym_step_api=False,
+        ),
+        metadata={
+            "env_id": "ALE/Pong-v5",
+            "full_rung_status": "planned",
+            "wrapper": "retroagi.core.backends.GymnasiumBackendAdapter",
+        },
+    ),
+    asset_checklist=(
+        AssetChecklistItem(
+            name="pong_generated_data_provenance",
+            target="generated_data",
+            stage_names=("synthetic", "block"),
+            evidence=(
+                "generator_entrypoint",
+                "resolved_config",
+                "split_seeds",
+                "simulator_version",
+                "dataset_metadata",
+            ),
+            policy=(
+                "Generated Pong datasets must record generator code, config, "
+                "seeds, simulator version, and dataset metadata before they "
+                "are committed or referenced by checkpoints."
+            ),
+        ),
+    ),
+    licensing={
+        "assets": "No repository-managed Pong art assets are required for this POC",
+        "generated_data": "Generated datasets must record simulator provenance",
+        "emulator": (
+            "Full Gymnasium/ALE Pong remains an optional local dependency and "
+            "is not required for the profile-only proof of concept"
+        ),
+    },
+)
+
+
+GAME_SPECS: Mapping[str, GameSpec] = {
+    PONG_GAME_SPEC.name: PONG_GAME_SPEC,
+    SMB_GAME_SPEC.name: SMB_GAME_SPEC,
+}
 
 
 def game_names() -> tuple[str, ...]:

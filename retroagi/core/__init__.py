@@ -81,6 +81,12 @@ from .config import (
 from .devices import is_mps_available, is_mps_built, select_device
 from .games import (
     GAME_SPECS,
+    PONG_ACTION_SPECS,
+    PONG_BLOCK_GAME_SPEC,
+    PONG_GAME_SPEC,
+    PONG_REWARD_SCHEMA,
+    PONG_SYNTHETIC_DATA_SPECS,
+    PONG_TASK_SCHEMA,
     SMB_BLOCK_GAME_SPEC,
     SMB_GAME_SPEC,
     SMB_REWARD_SCHEMA,
@@ -98,6 +104,7 @@ from .games import (
 )
 from .game_plugins import (
     GAME_PLUGIN_REGISTRY,
+    PONG_GAME_PLUGIN,
     SMB_GAME_PLUGIN,
     GamePluginRegistry,
     GamePluginSpec,
@@ -223,6 +230,13 @@ __all__ = [
     "ModelConfig",
     "OPTIONAL_STAGE_NAMES",
     "PERCEPTION_DATASET_SOURCE_KINDS",
+    "PONG_ACTION_SPECS",
+    "PONG_BLOCK_GAME_SPEC",
+    "PONG_GAME_SPEC",
+    "PONG_GAME_PLUGIN",
+    "PONG_REWARD_SCHEMA",
+    "PONG_SYNTHETIC_DATA_SPECS",
+    "PONG_TASK_SCHEMA",
     "PatchVisionTransformer",
     "PerceptionDatasetSourceSpec",
     "PerceptionPipelineSpec",

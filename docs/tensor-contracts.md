@@ -26,8 +26,8 @@ vision model device.
 `GameSpec` is immutable game-profile metadata. It sits above `StageSpec` and
 declares the game family, per-game action space, observation sources, semantic
 classes, signal and reward schemas, progressive stage ladder, emulator backend,
-asset requirements, and licensing/provenance rules. The current `smb` profile
-uses this ladder:
+asset requirements, and licensing/provenance rules. The `smb` profile uses
+this ladder:
 
 ```text
 synthetic -> block -> full_asset_mock -> full
@@ -37,6 +37,19 @@ Synthetic validates the architecture, Block SMB trains the simplified game
 models, `full_asset_mock` bootstraps the Full SMB ViT from full-game assets in
 synthetic scenarios, and Full SMB validates inference before continuing
 training in the emulator.
+
+The proof-of-concept `pong` profile uses the shorter three-rung ladder:
+
+```text
+synthetic -> block -> full
+```
+
+Its synthetic rung reuses the architecture-validation path with scalar
+paddle/ball control data, its block rung is documented as a deterministic
+paddle-ball simulator with exact labels and fixed rally tasks, and its full
+rung is planned around a Gymnasium-compatible Pong backend. The full rung is
+metadata-only for now; it records the intended backend, action mapping,
+perception source, and artifact contracts before full Pong runners exist.
 
 The action space is a tuple of `ActionSpec` entries owned by the game profile.
 Each entry declares a stable integer ID plus optional backend metadata:
@@ -118,9 +131,9 @@ without adding game assumptions to shared trainers.
 `GamePluginSpec` is the lookup contract that binds a `GameSpec` to component
 entrypoints by name. It registers stage adapters, vision encoders, reward
 schema, fixed-task success thresholds, and asset/perception pipelines. The
-default `GAME_PLUGIN_REGISTRY` exposes the current SMB plugin, so callers can
-resolve components with `get_game_plugin("smb")` instead of importing SMB-only
-modules in shared training or promotion code.
+default `GAME_PLUGIN_REGISTRY` exposes the SMB and Pong plugins, so callers can
+resolve components with `get_game_plugin(<name>)` instead of importing
+SMB-only modules in shared training or promotion code.
 
 `GamePromotionPlan` defines how architecture promotion composes with a game's
 fidelity ladder. The default phases are `architecture-smoke`, `game-synthetic`,
@@ -148,10 +161,11 @@ train perception from contrastive/self-supervised rollouts, backend state
 snapshots, or manually labeled frames without pretending they have a sprite
 pipeline. The SMB plugin currently declares a `block` pipeline from exact
 emulator-state labels in the simplified simulator and a `full_asset_mock`
-pipeline for full-game assets composed into synthetic scenes. Experiment stage
-manifests include the resolved pipeline so model runs record which vocabulary,
-checkpoint naming convention, dataset source, and perception thresholds were
-used.
+pipeline for full-game assets composed into synthetic scenes. The Pong plugin
+declares a non-asset block pipeline from simulator state labels plus a planned
+full-frame self-supervised source. Experiment stage manifests include the
+resolved pipeline so model runs record which vocabulary, checkpoint naming
+convention, dataset source, and perception thresholds were used.
 
 `retroagi experiment --game <name>` records the selected `GamePluginSpec` in
 the combined experiment manifest. The manifest includes backend version,

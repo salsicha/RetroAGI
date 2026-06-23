@@ -8,6 +8,13 @@ from retroagi.core import (
     BACKEND_PROVIDER_KINDS,
     GAME_SPECS,
     GAME_PLUGIN_REGISTRY,
+    PONG_ACTION_SPECS,
+    PONG_BLOCK_GAME_SPEC,
+    PONG_GAME_SPEC,
+    PONG_GAME_PLUGIN,
+    PONG_REWARD_SCHEMA,
+    PONG_SYNTHETIC_DATA_SPECS,
+    PONG_TASK_SCHEMA,
     SMB_ACTIONS,
     SMB_BLOCK_GAME_SPEC,
     SMB_GAME_SPEC,
@@ -104,6 +111,41 @@ class TestGameSpec(unittest.TestCase):
         self.assertTrue(backend.capabilities.legacy_gym_step_api)
         self.assertEqual(backend.metadata["game"], "SuperMarioBros-Nes")
 
+    def test_pong_game_spec_declares_non_smb_three_rung_profile(self):
+        spec = get_game_spec("pong")
+
+        self.assertIs(spec, PONG_GAME_SPEC)
+        self.assertIn("pong", game_names())
+        self.assertEqual(spec.family, "pong")
+        self.assertEqual(spec.action_space, PONG_ACTION_SPECS)
+        self.assertEqual(spec.action_count, 3)
+        self.assertEqual(spec.action("up").backend_id, 2)
+        self.assertEqual(spec.action("down").buttons, ("DOWN",))
+        self.assertEqual(spec.stage_names, ("synthetic", "block", "full"))
+        assert_stage_ladder(spec, ("synthetic", "block", "full"))
+
+        self.assertIn("pong_block_raster_frames", spec.observation_sources)
+        self.assertIn("ball", spec.semantic_classes)
+        self.assertIn("score_delta", spec.signal_schema)
+        self.assertIn("rally_hit", spec.reward_terms)
+        self.assertEqual(spec.emulator_backend, "gymnasium-pong")
+        backend = spec.backend_spec()
+        self.assertEqual(backend.provider_kind, "gymnasium")
+        self.assertEqual(backend.entrypoint, "gymnasium.make")
+        self.assertEqual(backend.metadata["env_id"], "ALE/Pong-v5")
+        self.assertIs(spec.reward_schema, PONG_REWARD_SCHEMA)
+        self.assertIs(spec.task_schema, PONG_TASK_SCHEMA)
+        self.assertEqual(spec.synthetic_data, PONG_SYNTHETIC_DATA_SPECS)
+        self.assertIs(spec.block_game, PONG_BLOCK_GAME_SPEC)
+        self.assertEqual(
+            tuple(task.name for task in spec.fixed_tasks),
+            ("centered_return", "angled_return"),
+        )
+        self.assertEqual(
+            spec.asset_checklist_item("pong_generated_data_provenance").target,
+            "generated_data",
+        )
+
     def test_stage_resolution_uses_game_neutral_names_and_legacy_aliases(self):
         self.assertEqual(
             STANDARD_STAGE_NAMES,
@@ -140,7 +182,7 @@ class TestGameSpec(unittest.TestCase):
 
         self.assertIs(plugin, SMB_GAME_PLUGIN)
         self.assertIs(GAME_PLUGIN_REGISTRY.get("smb"), plugin)
-        self.assertEqual(game_plugin_names(), ("smb",))
+        self.assertEqual(game_plugin_names(), ("pong", "smb"))
         self.assertIs(plugin.game, SMB_GAME_SPEC)
         self.assertIs(GAME_PLUGIN_REGISTRY.game("smb"), SMB_GAME_SPEC)
         self.assertEqual(
@@ -244,6 +286,47 @@ class TestGameSpec(unittest.TestCase):
             [gate.field for gate in block_gate.artifact_gates],
             ["summary_path", "checkpoint_path", "log_path"],
         )
+
+    def test_pong_game_plugin_registers_profile_components(self):
+        plugin = get_game_plugin("pong")
+
+        self.assertIs(plugin, PONG_GAME_PLUGIN)
+        self.assertIs(GAME_PLUGIN_REGISTRY.get("pong"), plugin)
+        self.assertIs(plugin.game, PONG_GAME_SPEC)
+        self.assertIs(GAME_PLUGIN_REGISTRY.game("pong"), PONG_GAME_SPEC)
+        self.assertEqual(
+            plugin.stage_adapter("synthetic"),
+            "retroagi.stages.synthetic_1d.train",
+        )
+        self.assertEqual(
+            GAME_PLUGIN_REGISTRY.stage_adapter("pong", "block"),
+            "retroagi.stages.pong_block.adapter.PongBlockStage",
+        )
+        self.assertEqual(
+            GAME_PLUGIN_REGISTRY.stage_adapter("pong", "full"),
+            "retroagi.stages.pong_full.adapter.PongFullStage",
+        )
+        self.assertEqual(
+            plugin.vision_encoder("full"),
+            "retroagi.stages.pong_full.vision.PongFullVisionEncoder",
+        )
+        block_perception = plugin.perception_pipeline("block")
+        self.assertEqual(block_perception.game_name, "pong")
+        self.assertEqual(block_perception.stage_name, "block")
+        self.assertEqual(block_perception.semantic_vocabulary.class_index("ball"), 3)
+        self.assertTrue(block_perception.supports_source_kind("emulator_state"))
+        self.assertFalse(block_perception.supports_source_kind("asset_synthetic"))
+        self.assertIsNone(block_perception.asset_extraction)
+        self.assertEqual(
+            block_perception.to_manifest()["dataset_sources"][0]["source_kind"],
+            "emulator_state",
+        )
+        full_perception = GAME_PLUGIN_REGISTRY.perception_pipeline("pong", "full")
+        self.assertEqual(full_perception.stage_name, "full")
+        self.assertTrue(full_perception.supports_source_kind("self_supervised"))
+        self.assertIsNone(full_perception.asset_extraction)
+        self.assertIsNotNone(plugin.success_threshold("centered_return"))
+        self.assertIsNotNone(plugin.promotion_gate("synthetic-concept"))
 
     def test_smb_actions_preserve_stable_ids_and_button_metadata(self):
         spec = SMB_GAME_SPEC

@@ -411,7 +411,7 @@ architecture cheaply before spending high-fidelity emulator time.
       native Python simulators, Gymnasium-compatible envs, or custom adapters.
 - [x] Add deterministic backend capability tests for reset seeding, save/load
       state, frame stepping, action repeat, rendering mode, and headless mode.
-- [ ] Add a first non-SMB proof-of-concept game profile with all three planned
+- [x] Add a first non-SMB proof-of-concept game profile with all three planned
       rungs documented, even if only the synthetic and block rungs are initially
       implemented.
 - [ ] Add a second-game smoke test that proves the architecture registry,
