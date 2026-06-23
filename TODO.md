@@ -238,7 +238,7 @@ high-fidelity evaluations.
       architecture through selected stages and write one combined result
       manifest with commands, configs, seeds, metrics, checkpoints, logs, and
       pass/fail gates.
-- [ ] Add a progressive-resolution promotion pipeline:
+- [x] Add a progressive-resolution promotion pipeline:
       1. **Interface smoke:** instantiate the architecture for each declared
          `StageSpec`, run one forward/backward pass, and verify finite gradients.
       2. **Synthetic concept check:** train on deterministic Synthetic 1D data
@@ -259,6 +259,9 @@ high-fidelity evaluations.
          entropy, margins, rewards, resets, terminations, and truncations.
       9. **Full SMB fine-tuning/training:** once available, continue training in
          the emulator and compare against transferred and scratch baselines.
+      The initial `retroagi promote` implementation runs interface, Synthetic
+      concept, and Block SMB smoke checks, writes one promotion manifest, and
+      records later high-fidelity rungs as skipped with prerequisite reasons.
 - [ ] Define small, medium, and full budgets for each promotion layer so model
       ideas can be rejected quickly before spending emulator time.
 - [ ] Add automatic promotion gates that stop an architecture when it fails

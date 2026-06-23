@@ -35,6 +35,32 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_promote_command_forwards_pipeline_arguments(self):
+        with patch("retroagi.promotion.main", return_value=0) as promotion_main:
+            exit_code = cli.main(
+                [
+                    "promote",
+                    "--rung",
+                    "interface-smoke",
+                    "--output",
+                    "artifacts/promotions/latest/manifest.json",
+                    "--architecture",
+                    "baseline",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        promotion_main.assert_called_once_with(
+            [
+                "--rung",
+                "interface-smoke",
+                "--output",
+                "artifacts/promotions/latest/manifest.json",
+                "--architecture",
+                "baseline",
+            ]
+        )
+
     def test_synthetic_1d_train_forwards_stage_arguments(self):
         with patch("retroagi.stages.synthetic_1d.cli.main", return_value=0) as synthetic_main:
             exit_code = cli.main(
