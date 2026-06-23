@@ -126,13 +126,33 @@ This fixture is intentionally cheaper than policy training. It is the minimum
 architecture-sweep gate before spending time on the synthetic, Block SMB, and
 Full SMB training rungs.
 
+## Progressive-Resolution Promotion Order
+
+Treat the stages as a fidelity ladder with distinct responsibilities, not as
+interchangeable training targets:
+
+1. **Synthetic 1D fully validates the architecture.** It should catch tensor
+   contract, hierarchy, objective, gradient, baseline, determinism, and
+   checkpoint issues before the concept reaches a game-like stage.
+2. **Block SMB trains the simplified game models.** Use this rung to train the
+   Block ViT and the hierarchical actor/world-model/critic policy on the fast
+   synthetic SMB environment, fixed scenarios, generated scenarios, and
+   deterministic success thresholds.
+3. **Full SMB asset-mock perception bootstraps the ViT.** Before any transferred
+   policy uses emulator observations, train or fine-tune the Full SMB ViT on
+   synthetic scenarios built from full-game assets and gate that checkpoint on
+   held-out semantic and position metrics.
+4. **Full SMB verifies inference and continues training.** First validate that
+   transferred checkpoints run against the full emulator contract, then continue
+   training the transferred models at full fidelity.
+
 ## 5. Run A Traceable Architecture Sweep
 
 Use `retroagi experiment` when comparing architecture concepts across runnable
-fidelity layers. The command below runs the baseline through Synthetic 1D and a
-tiny Block SMB smoke pass, then writes one combined manifest with the resolved
-architecture, per-stage commands, configs, metrics, checkpoints, logs, gates,
-and pass/fail status.
+fidelity layers. The command below runs the baseline through Synthetic 1D
+architecture validation and a tiny Block SMB simplified-game training smoke,
+then writes one combined manifest with the resolved architecture, per-stage
+commands, configs, metrics, checkpoints, logs, gates, and pass/fail status.
 
 ```bash
 retroagi experiment \
@@ -373,7 +393,9 @@ learned policy checkpoint.
 
 ## 10. Reproduce Full SMB Vision
 
-Generate assets and synthetic data, then train the Full SMB ViT segmenter:
+Generate full-game assets and synthetic scenarios, then train the Full SMB ViT
+segmenter. This is the required perception bootstrap between Block SMB training
+and Full SMB policy inference/training:
 
 ```bash
 python scripts/vit/extract_sprites.py
@@ -396,11 +418,14 @@ Expected artifacts:
 
 The reference target is about 99.94 percent overall accuracy, 99.89 percent
 foreground accuracy, and 99.14 percent mean IoU on 1,000 held-out synthetic
-scenes.
+scenes. Do not promote a Block SMB policy to Full SMB inference or continued
+training until the Full SMB ViT checkpoint has passed the selected held-out
+semantic and position gates.
 
-## 11. Reproduce Full SMB Adapter And Transfer
+## 11. Reproduce Full SMB Adapter, Inference, And Continued Training
 
-Run the headless emulator smoke path:
+Run the headless emulator smoke path to verify the full observation and action
+contract:
 
 ```bash
 retroagi evaluate --stage full-smb \
@@ -409,7 +434,8 @@ retroagi evaluate --stage full-smb \
   --encode-observations
 ```
 
-Transfer the Block SMB policy into the Full SMB contract:
+Transfer the Block SMB policy into the Full SMB contract only after the Full SMB
+ViT asset-synthetic checkpoint exists:
 
 ```bash
 retroagi transfer --stage full-smb \
@@ -420,7 +446,8 @@ retroagi transfer --stage full-smb \
 ```
 
 Compare the transferred policy against a scratch baseline on the same seeded
-observation stream:
+observation stream, then use the Full SMB training command to continue learning
+from the transferred checkpoint when the emulator setup is available:
 
 ```bash
 retroagi compare --stage full-smb \

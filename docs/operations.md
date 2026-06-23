@@ -25,10 +25,33 @@ Record the exact device, seed, resolved config, code revision, checkpoint path,
 and metric payload with every non-smoke experiment. Versioned checkpoints write
 a `.json` sidecar beside the `.pth` checkpoint with this trace metadata.
 
+## Progressive-Resolution Responsibilities
+
+Use the stages in this order when evaluating an architecture concept:
+
+1. **Synthetic 1D validates the architecture.** It is the proof stage for
+   tensor contracts, hierarchy behavior, objective terms, gradients,
+   deterministic baselines, checkpoint save/restore, and held-out metrics. Do
+   not use Block SMB to discover basic architecture-contract failures.
+2. **Block SMB trains all simplified game models.** It is the fast synthetic SMB
+   world where Block ViT perception and the hierarchical
+   actor/world-model/critic policy are trained, ablated, resumed, recorded, and
+   measured against fixed and generated scenarios.
+3. **Full SMB asset-mock perception bootstraps the ViT.** Before policy
+   inference depends on emulator frames, train or fine-tune the Full SMB ViT on
+   synthetic scenarios composed from full-game assets and gate the checkpoint on
+   held-out semantic and position metrics.
+4. **Full SMB verifies inference and continues training.** The emulator stage
+   first validates transferred-model inference against the full observation and
+   action contracts, then continues training the transferred policy/model stack
+   at full fidelity.
+
 ## Synthetic 1D
 
-Synthetic 1D validates the shared actor/world-model/critic stack without game
-physics or perception.
+Synthetic 1D is the full architecture-validation stage. It validates the shared
+actor/world-model/critic stack without game physics or perception and should
+catch architecture-contract, objective, gradient, baseline, and checkpoint
+failures before a concept reaches any game-like environment.
 
 | Area | Operational Target |
 | --- | --- |
@@ -46,9 +69,10 @@ python -m unittest -v scripts.tests.test_synthetic_1d
 
 ## Block SMB Perception
 
-Block SMB perception trains and validates `data/block_vit/block_vit.pth`,
-which is the frozen visual encoder used by Block SMB policy training unless a
-run explicitly opts into fine-tuning.
+Block SMB perception trains and validates `data/block_vit/block_vit.pth` from
+the simplified synthetic game. It is part of training all game-facing models in
+the Block SMB rung and is the frozen visual encoder used by Block SMB policy
+training unless a run explicitly opts into fine-tuning.
 
 | Area | Operational Target |
 | --- | --- |
@@ -61,9 +85,9 @@ run explicitly opts into fine-tuning.
 
 ## Block SMB Policy
 
-Block SMB policy training is the main trainable game stage. It uses the four
-fixed scenarios plus optional generated scenarios and reports deterministic
-evaluation against the fixed-scenario success thresholds.
+Block SMB policy training is the main trainable simplified-game stage. It uses
+the four fixed scenarios plus optional generated scenarios and reports
+deterministic evaluation against the fixed-scenario success thresholds.
 
 | Area | Operational Target |
 | --- | --- |
@@ -77,8 +101,11 @@ evaluation against the fixed-scenario success thresholds.
 
 ## Full SMB Vision
 
-Full SMB vision is a synthetic asset pipeline that trains the default
-patch-level ViT segmenter used by the Full SMB adapter.
+Full SMB vision is a required perception-adaptation step between Block SMB and
+Full SMB policy inference/training. It bootstraps the default patch-level ViT on
+synthetic scenarios composed from full-game assets so emulator observations have
+a Full SMB-native semantic vocabulary before transferred policies depend on
+them.
 
 | Area | Operational Target |
 | --- | --- |
@@ -92,19 +119,20 @@ patch-level ViT segmenter used by the Full SMB adapter.
 
 ## Full SMB Adapter And Transfer
 
-Full SMB connects the shared stage contract to the stable-retro emulator and
-supports deterministic smoke evaluation, Block SMB policy transfer, and
-transfer-vs-scratch comparisons.
+Full SMB connects the shared stage contract to the stable-retro emulator. Its
+first responsibility is to verify and validate transferred-model inference
+against full emulator observations and actions; after that, training continues
+from the transferred model checkpoints at full fidelity.
 
 | Area | Operational Target |
 | --- | --- |
 | Hardware | CPU is required for headless smoke tests and transfer checks. GPU acceleration is not required for the adapter; CUDA or MPS may be used for model inference comparisons. |
 | Runtime | Headless smoke checks should stay short at the default 200 steps. Comparison runtime scales linearly with `--steps` because transferred and scratch policies are evaluated on the same observation stream. |
 | Smoke Command | `retroagi evaluate --stage full-smb --steps 500 --seed 0 --encode-observations`. |
-| Transfer Command | `retroagi transfer --stage full-smb --block-policy-checkpoint data/block_smb/policy.pth --output-checkpoint data/full_smb/transferred_policy.pth`. |
+| Transfer Command | `retroagi transfer --stage full-smb --block-policy-checkpoint data/block_smb/policy.pth --full-smb-vision-checkpoint data/vit/full_smb_vit.pth --output-checkpoint data/full_smb/transferred_policy.pth`. |
 | Compare Command | `retroagi compare --stage full-smb --transfer-checkpoint data/full_smb/transferred_policy.pth --output artifacts/full_smb/transfer_vs_scratch.json`. |
 | Expected Metrics | Smoke output reports `steps`, `resets`, `episodes`, and total `reward`. Transfer checkpoints preserve source policy metrics and transfer provenance. Comparisons report `action_agreement`, transfer and scratch action histograms, mean entropies, mean margins, `collection_reward`, resets, completed episodes, terminated count, and truncated count. |
-| Artifact Locations | Transfer checkpoint: `data/full_smb/transferred_policy.pth` and sidecar `data/full_smb/transferred_policy.json`. Full SMB vision checkpoint: `data/vit/full_smb_vit.pth`. Comparison summary: `artifacts/full_smb/transfer_vs_scratch.json`. Smoke runs do not write artifacts unless wrapped by a caller; preserve terminal output or add an explicit comparison output for retained experiments. |
+| Artifact Locations | Transfer checkpoint: `data/full_smb/transferred_policy.pth` and sidecar `data/full_smb/transferred_policy.json`. Required Full SMB vision checkpoint: `data/vit/full_smb_vit.pth`. Comparison summary: `artifacts/full_smb/transfer_vs_scratch.json`. Smoke runs do not write artifacts unless wrapped by a caller; preserve terminal output or add an explicit comparison output for retained experiments. |
 
 ## Preservation Checklist
 

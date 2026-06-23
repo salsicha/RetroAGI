@@ -1,13 +1,20 @@
 # RetroAGI
 General purpose machine learning agent for retro games.
 
-RetroAGI is organized as a three-stage curriculum for training an architecture
-to play Super Mario Bros:
+RetroAGI is organized as a progressive-resolution curriculum for training and
+promoting an architecture toward full Super Mario Bros:
 
-1. **Synthetic 1D** validates the hierarchy on procedural sequence data.
-2. **Block SMB** uses a scriptable pygame-ce-backed platformer with
-   low-resolution, scenario-driven tasks.
-3. **Full SMB** connects the same architecture to the full emulator.
+1. **Synthetic 1D** fully validates the architecture on procedural sequence
+   data: tensor contracts, hierarchy behavior, losses, gradients, baselines,
+   checkpointing, and deterministic metrics.
+2. **Block SMB** trains all trainable game-facing models on a simplified
+   synthetic version of SMB: Block ViT perception plus the hierarchical
+   actor/world-model/critic policy in fast scenario-driven tasks.
+3. **Full SMB asset-mock perception** bootstraps the Full SMB ViT with full game
+   assets arranged into synthetic scenarios before any policy relies on full
+   emulator observations.
+4. **Full SMB** verifies and validates inference in the emulator, then
+   continues training the transferred models at full fidelity.
 
 The stage code is separated, but all stages share the same core contract:
 
@@ -42,14 +49,16 @@ actor/world-model/critic flow.
 
 ## Current Status
 
-- **Synthetic 1D** is reproducible from a clean checkout and has deterministic
-  datasets, baselines, checkpoint save/restore, and held-out metrics.
-- **Block SMB** has a pygame-ce environment, fixed success thresholds, frozen
-  Block ViT perception, policy training, evaluation, resume, recording,
-  ablations, structured logs, and optional TensorBoard or W&B tracking.
-- **Full SMB** has a stable-retro stage adapter, headless smoke evaluation,
-  ViT segmentation, Block SMB policy transfer, and transfer-vs-scratch
-  comparison tooling.
+- **Synthetic 1D** is the architecture validation stage and is reproducible from
+  a clean checkout with deterministic datasets, baselines, checkpoint
+  save/restore, and held-out metrics.
+- **Block SMB** is the simplified synthetic game-training stage. It has a
+  pygame-ce environment, fixed success thresholds, Block ViT perception, policy
+  training, evaluation, resume, recording, ablations, structured logs, and
+  optional TensorBoard or W&B tracking.
+- **Full SMB** has the asset-mock ViT bootstrapping rung, a stable-retro stage
+  adapter, headless smoke evaluation, Block SMB policy transfer, continued Full
+  SMB training, and transfer-vs-scratch comparison tooling.
 - **Operations** are covered by CI, native install instructions, stage
   operations guidance, and a clean-checkout reproducibility procedure.
 
@@ -103,6 +112,7 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    retroagi record --stage block-smb --checkpoint data/block_smb/policy.pth --record-dir artifacts/block_smb/recordings
    retroagi transfer --stage full-smb \
      --block-policy-checkpoint data/block_smb/policy.pth \
+     --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
      --output-checkpoint data/full_smb/transferred_policy.pth
    retroagi compare --stage full-smb \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
@@ -132,10 +142,12 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    Low-level controller gain schedules are selectable with
    `--controller-schedule constant|linear`. The Full SMB random-agent runner is
    headless by default; pass `--render` only for local visual inspection. Full
-   SMB policy transfer reuses Block SMB actor/world-model/critic weights and
-   pairs them with the versioned Full SMB ViT checkpoint. Transfer comparisons
-   evaluate the transferred policy and a scratch Full SMB baseline on identical
-   seeded observation batches.
+   SMB policy transfer reuses Block SMB actor/world-model/critic weights.
+   Before that transferred policy is used for Full SMB inference or continued
+   training, the Full SMB ViT must be bootstrapped on synthetic scenarios made
+   from full-game assets and loaded as the versioned Full SMB ViT checkpoint.
+   Transfer comparisons evaluate the transferred policy and a scratch Full SMB
+   baseline on identical seeded observation batches.
    Learned-dynamics imagination is selectable with
    `--imagined-rollout-horizon` and `--imagined-rollout-weight`.
    Target-network stabilization is selectable with `--target-network-mode`,

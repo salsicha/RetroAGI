@@ -469,8 +469,11 @@ weights, and writes a Full SMB transfer checkpoint with source provenance.
 
 Block ViT perception weights are validated and recorded as source provenance,
 but they are not loaded into Full SMB directly because the semantic vocabularies
-differ. Full SMB policy execution uses the versioned Full SMB ViT checkpoint
-through `FullSMBSegmentationVision`.
+differ. Before a transferred policy is used for Full SMB inference or continued
+training, the Full SMB ViT must be bootstrapped on full-game assets composed
+into synthetic scenarios and validated on held-out semantic and position
+metrics. Full SMB policy execution then uses that versioned Full SMB ViT
+checkpoint through `FullSMBSegmentationVision`.
 
 ```bash
 python -m retroagi.stages.full_smb.transfer \
@@ -483,6 +486,12 @@ python -m retroagi.stages.full_smb.transfer \
 `load_transferred_full_smb_policy(...)` restores a saved transfer checkpoint,
 and `select_transferred_full_smb_action(...)` runs deterministic or sampled
 action selection from a `FullSMBStage.encode_observation(...)` batch.
+
+The Full SMB stage is the full-fidelity validation and continuation rung. Its
+first job is to verify that transferred Block SMB policy checkpoints perform
+valid inference against emulator observations, shared actions, and Full SMB
+signals. After that contract is validated, direct Full SMB training resumes from
+the transferred checkpoint rather than treating transfer as the final result.
 
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,

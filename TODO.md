@@ -214,6 +214,20 @@ milestone turns it into a rapid architecture-evaluation system where new model
 concepts can start on cheap synthetic data and be promoted through increasingly
 high-fidelity evaluations.
 
+Progressive-resolution responsibilities:
+
+1. **Synthetic 1D:** fully validate the architecture in isolation, including
+   contracts, hierarchy behavior, objective terms, gradients, baselines,
+   deterministic metrics, and checkpoint compatibility.
+2. **Block SMB:** train all trainable game-facing models in the simplified
+   synthetic SMB world, including Block ViT perception and the hierarchical
+   actor/world-model/critic policy.
+3. **Full SMB asset-mock perception:** bootstrap the Full SMB ViT on synthetic
+   scenarios composed from full-game assets before any Full SMB policy
+   inference or training depends on emulator observations.
+4. **Full SMB:** verify and validate transferred-model inference in the full
+   emulator, then continue training the transferred models at full fidelity.
+
 - [x] Define an `ArchitectureSpec` that names an architecture, declares its
       model factory, supported stage specs, checkpoint compatibility policy,
       configurable hyperparameters, and expected output contract.
@@ -259,9 +273,10 @@ high-fidelity evaluations.
          entropy, margins, rewards, resets, terminations, and truncations.
       9. **Full SMB fine-tuning/training:** once available, continue training in
          the emulator and compare against transferred and scratch baselines.
-      The initial `retroagi promote` implementation runs interface, Synthetic
-      concept, and Block SMB smoke checks, writes one promotion manifest, and
-      records later high-fidelity rungs as skipped with prerequisite reasons.
+      `retroagi promote` now runs the supported interface, Synthetic concept,
+      Block SMB smoke, Full SMB asset-mock perception, and Full SMB transfer
+      smoke rungs, writes one promotion manifest, and records unsupported later
+      rungs as skipped with prerequisite reasons.
 - [x] Define small, medium, and full budgets for each promotion layer so model
       ideas can be rejected quickly before spending emulator time.
       `retroagi promote --budget small|medium|full` now records per-rung
@@ -312,11 +327,17 @@ high-fidelity evaluations.
       from the full game assets, fine-tune or train the Full SMB ViT on those
       synthetic scenes, validate held-out semantic/position metrics, and gate
       policy transfer on the resulting Full SMB ViT checkpoint.
+- [x] Document the progressive-resolution stage responsibilities so Synthetic
+      1D validates architecture concepts, Block SMB trains the simplified game
+      models, asset-mock Full SMB bootstraps the ViT, and Full SMB verifies
+      inference before continuing training.
 
 **Exit criteria:** a new architecture concept can be registered once, launched
 through a progressive-resolution experiment command, rejected or promoted by
 objective gates at each fidelity layer, and compared against the baseline with
-one traceable artifact manifest.
+one traceable artifact manifest. No model may be promoted to Full SMB policy
+inference or continued training until the Full SMB ViT has passed the
+asset-mock perception gate.
 
 ## P8: Multi-Game Generalization
 
