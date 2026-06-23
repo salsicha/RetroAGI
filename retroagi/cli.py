@@ -6,29 +6,14 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
-from retroagi.core import game_plugin_names, get_game_plugin
-
-STAGE_ALIASES = {
-    "synthetic-1d": "synthetic",
-    "synthetic_1d": "synthetic",
-    "synthetic": "synthetic",
-    "block-smb": "block",
-    "block_smb": "block",
-    "block": "block",
-    "full-smb": "full",
-    "full_smb": "full",
-    "full": "full",
-}
+from retroagi.core import game_plugin_names, get_game_plugin, normalize_stage_name
 
 
 def _stage_name(value: str) -> str:
     try:
-        return STAGE_ALIASES[value.lower()]
-    except KeyError as exc:
-        choices = ", ".join(sorted(STAGE_ALIASES))
-        raise argparse.ArgumentTypeError(
-            f"unknown stage {value!r}; expected one of: {choices}"
-        ) from exc
+        return normalize_stage_name(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _game_name(value: str) -> str:
@@ -138,7 +123,7 @@ def run(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
     if command == "report":
         return _run_report(stage_args)
     game_plugin = get_game_plugin(str(args.game))
-    stage = str(args.stage)
+    stage = game_plugin.resolve_stage(str(args.stage)).name
     game_plugin.stage_adapter(stage)
 
     if game_plugin.name != "smb":

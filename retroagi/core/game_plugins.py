@@ -7,6 +7,7 @@ from typing import Mapping
 
 from .games import GameSpec, SMB_GAME_SPEC
 from .rewards import RewardConfigSchema
+from .stage_resolution import StageResolution, resolve_game_stage
 from .tasks import TaskSuccessThreshold
 
 
@@ -74,20 +75,25 @@ class GamePluginSpec:
             )
 
     def stage_adapter(self, name: str) -> str:
+        stage = self.resolve_stage(name)
         try:
-            return self.stage_adapters[name]
+            return self.stage_adapters[stage.name]
         except KeyError as exc:
             raise KeyError(
-                f"unknown stage adapter {name!r} for game plugin {self.name!r}"
+                f"unknown stage adapter {stage.name!r} for game plugin {self.name!r}"
             ) from exc
 
     def vision_encoder(self, name: str) -> str:
+        stage = self.resolve_stage(name)
         try:
-            return self.vision_encoders[name]
+            return self.vision_encoders[stage.name]
         except KeyError as exc:
             raise KeyError(
-                f"unknown vision encoder {name!r} for game plugin {self.name!r}"
+                f"unknown vision encoder {stage.name!r} for game plugin {self.name!r}"
             ) from exc
+
+    def resolve_stage(self, name: str) -> StageResolution:
+        return resolve_game_stage(self.game, name)
 
     def asset_pipeline(self, name: str) -> str:
         try:

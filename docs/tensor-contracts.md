@@ -49,6 +49,14 @@ stage-native discrete action, and `GameSpec.action_button_vector(...)` maps the
 same policy action to a backend button vector using button names rather than
 backend-specific button positions.
 
+Stage ladder names use the game-neutral progressive-resolution convention
+defined by `STANDARD_STAGE_NAMES`. Every game starts with `synthetic`, ends with
+`full`, and may include standard intermediate rungs such as `block`,
+`symbolic`, `tile`, `sprite`, `emulator`, or `full_asset_mock`. Legacy user
+tokens such as `synthetic-1d`, `block-smb`, and `full-smb` are normalized to the
+game-neutral names before plugin lookup, so shared code should dispatch on the
+resolved rung name rather than a game-specific stage implementation name.
+
 `GameSignalExtractor` is the game-neutral backend-info extraction protocol. It
 returns `GameSignals` with common fields for position/progress, score, health,
 lives, inventory, collectibles, completion, death, timeout, termination,

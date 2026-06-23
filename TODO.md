@@ -375,7 +375,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Extend the top-level CLI to accept `--game` independently from `--stage`,
       for example `retroagi train --game smb --stage block` and later
       `retroagi train --game <new-game> --stage synthetic|block|full`.
-- [ ] Add a stage-resolution naming convention that is game-neutral:
+- [x] Add a stage-resolution naming convention that is game-neutral:
       `synthetic`, `block`, `full`, with optional intermediate rungs such as
       `symbolic`, `tile`, `sprite`, or `emulator` when a game needs them.
 - [ ] Define how progressive-resolution architecture promotion composes with

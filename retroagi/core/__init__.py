@@ -112,6 +112,17 @@ from .models import (
 )
 from .rewards import RewardConfigSchema, RewardTermSpec
 from .signals import GameSignalExtractor, GameSignals
+from .stage_resolution import (
+    CANONICAL_STAGE_NAMES,
+    OPTIONAL_STAGE_NAMES,
+    STANDARD_STAGE_NAMES,
+    STAGE_NAME_ALIASES,
+    StageResolution,
+    is_standard_stage_name,
+    normalize_stage_name,
+    resolve_game_stage,
+    stage_name_choices,
+)
 from .synthetic import SyntheticDataGenerator, SyntheticDataSpec, SyntheticSplitSpec
 from .tasks import GameTaskSchema, GameTaskSpec, TaskSuccessThreshold
 from .tracking import (
@@ -142,6 +153,7 @@ __all__ = [
     "CHECKPOINT_ARCHITECTURE_EXTENSION_VERSION",
     "CHECKPOINT_SCHEMA_KEY",
     "CHECKPOINT_SCHEMA_VERSION",
+    "CANONICAL_STAGE_NAMES",
     "Critic",
     "CheckpointConfig",
     "CheckpointPayload",
@@ -162,6 +174,7 @@ __all__ = [
     "HierarchicalAdaptiveModel",
     "LinearVisionEncoder",
     "ModelConfig",
+    "OPTIONAL_STAGE_NAMES",
     "PatchVisionTransformer",
     "PositionalEncoding",
     "RewardConfigSchema",
@@ -175,9 +188,12 @@ __all__ = [
     "SMB_REWARD_SCHEMA",
     "SMB_SYNTHETIC_DATA_SPECS",
     "SMB_TASK_SCHEMA",
+    "STANDARD_STAGE_NAMES",
+    "STAGE_NAME_ALIASES",
     "SUPPORTED_CONTROLLER_SCHEDULES",
     "TRACKING_BACKENDS",
     "StageLadderEntry",
+    "StageResolution",
     "StageBatch",
     "StageSpec",
     "BlockGameSpec",
@@ -216,16 +232,20 @@ __all__ = [
     "get_game_plugin",
     "get_game_spec",
     "is_versioned_checkpoint",
+    "is_standard_stage_name",
     "is_mps_available",
     "is_mps_built",
     "load_checkpoint",
     "make_experiment_tracker",
+    "normalize_stage_name",
     "NullExperimentTracker",
     "parse_architecture_ablation_item",
     "register_architecture",
+    "resolve_game_stage",
     "save_checkpoint",
     "select_device",
     "smb_action_spec",
+    "stage_name_choices",
     "to_plain_data",
     "validate_checkpoint_compatibility",
     "validate_game_spec",

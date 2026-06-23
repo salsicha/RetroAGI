@@ -21,8 +21,11 @@ from retroagi.core import (
     GameSpec,
     GameTaskSchema,
     GameTaskSpec,
+    OPTIONAL_STAGE_NAMES,
+    STANDARD_STAGE_NAMES,
     RewardConfigSchema,
     RewardTermSpec,
+    StageLadderEntry,
     SyntheticDataSpec,
     SyntheticSplitSpec,
     TaskSuccessThreshold,
@@ -31,6 +34,10 @@ from retroagi.core import (
     game_plugin_names,
     get_game_plugin,
     get_game_spec,
+    is_standard_stage_name,
+    normalize_stage_name,
+    resolve_game_stage,
+    stage_name_choices,
     validate_game_spec,
 )
 from retroagi.stages.synthetic_1d.train import (
@@ -65,6 +72,37 @@ class TestGameSpec(unittest.TestCase):
         self.assertIs(spec.task_schema, SMB_TASK_SCHEMA)
         self.assertEqual(spec.synthetic_data, SMB_SYNTHETIC_DATA_SPECS)
         self.assertIs(spec.block_game, SMB_BLOCK_GAME_SPEC)
+
+    def test_stage_resolution_uses_game_neutral_names_and_legacy_aliases(self):
+        self.assertEqual(
+            STANDARD_STAGE_NAMES,
+            (
+                "synthetic",
+                "block",
+                "full",
+                "symbolic",
+                "tile",
+                "sprite",
+                "emulator",
+                "full_asset_mock",
+            ),
+        )
+        self.assertIn("sprite", OPTIONAL_STAGE_NAMES)
+        self.assertIn("block-smb", stage_name_choices())
+        self.assertEqual(normalize_stage_name("synthetic_1d"), "synthetic")
+        self.assertEqual(normalize_stage_name("block-smb"), "block")
+        self.assertEqual(normalize_stage_name("full_asset_mock"), "full_asset_mock")
+        self.assertTrue(is_standard_stage_name("emulator"))
+        self.assertFalse(is_standard_stage_name("missing"))
+
+        resolved = resolve_game_stage(SMB_GAME_SPEC, "block_smb")
+        self.assertEqual(resolved.name, "block")
+        self.assertEqual(resolved.stage_spec_name, "block_smb")
+        self.assertEqual(SMB_GAME_PLUGIN.resolve_stage("full-smb").name, "full")
+        self.assertEqual(
+            SMB_GAME_PLUGIN.stage_adapter("full_smb"),
+            "retroagi.stages.full_smb.adapter.FullSMBStage",
+        )
 
     def test_smb_game_plugin_loads_profile_and_components_by_name(self):
         plugin = get_game_plugin("smb")
@@ -332,6 +370,25 @@ class TestGameSpec(unittest.TestCase):
                         ),
                     ),
                 ),
+            )
+
+    def test_game_spec_validation_rejects_non_standard_stage_names(self):
+        with self.assertRaisesRegex(ValueError, "non-standard names"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=(
+                    StageLadderEntry("synthetic", "synthetic_1d", "concept"),
+                    StageLadderEntry("weird", "weird_stage", "unsupported"),
+                    StageLadderEntry("full", "full_stage", "final"),
+                ),
+                emulator_backend="mock",
+                licensing={"assets": "none"},
             )
 
     def test_game_spec_validation_rejects_mismatched_task_schema(self):

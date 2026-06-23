@@ -12,6 +12,7 @@ from .actions import (
     action_button_vector as _action_button_vector,
 )
 from .rewards import RewardConfigSchema, RewardTermSpec
+from .stage_resolution import STANDARD_STAGE_NAMES
 from .synthetic import SyntheticDataSpec, SyntheticSplitSpec
 from .tasks import GameTaskSchema, GameTaskSpec, TaskSuccessThreshold
 
@@ -200,6 +201,11 @@ class GameSpec:
         names = [stage.name for stage in self.stage_ladder]
         if len(set(names)) != len(names):
             raise ValueError(f"game {self.name!r} stage ladder names must be unique")
+        unknown = sorted(set(names).difference(STANDARD_STAGE_NAMES))
+        if unknown:
+            raise ValueError(
+                f"game {self.name!r} stage ladder uses non-standard names: {unknown}"
+            )
         if self.stage_ladder[0].name != "synthetic":
             raise ValueError(f"game {self.name!r} stage ladder must start with synthetic")
         if self.stage_ladder[-1].name != "full":
