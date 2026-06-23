@@ -165,6 +165,12 @@ class FullSMBSignals(GameSignals):
     """Normalized view of game variables emitted by the Full SMB backend."""
 
     coins: Optional[int] = None
+    screen: Optional[tuple[int, int]] = None
+    level: Optional[str] = None
+    world: Optional[int] = None
+    stage: Optional[int] = None
+    power_state: Optional[str] = None
+    game_over: bool = False
 
     def to_state_vec(
         self, config: FullSMBSignalConfig = FullSMBSignalConfig()
@@ -188,6 +194,12 @@ class FullSMBSignals(GameSignals):
     def as_dict(self) -> dict[str, Any]:
         data = super().as_dict()
         data["coins"] = self.coins
+        data["screen"] = self.screen
+        data["level"] = self.level
+        data["world"] = self.world
+        data["stage"] = self.stage
+        data["power_state"] = self.power_state
+        data["game_over"] = self.game_over
         return data
 
 
@@ -224,16 +236,64 @@ POSITION_Y_KEYS = (
     "mario_y",
     "player_y",
 )
+INFO_CONTAINER_KEYS = (
+    "memory",
+    "ram",
+    "variables",
+    "game_variables",
+    "backend_info",
+)
+SCREEN_KEYS = ("screen", "screen_position", "screen_pos")
 SCREEN_X_KEYS = ("screen_x", "screenX", "x_screen")
+SCREEN_Y_KEYS = ("screen_y", "screenY", "y_screen")
 SCROLL_X_KEYS = ("xscroll", "x_scroll", "scroll_x", "camera_x")
 SCROLL_X_LO_KEYS = ("xscrollLo", "x_scroll_lo", "scroll_x_lo")
 SCROLL_X_HI_KEYS = ("xscrollHi", "x_scroll_hi", "scroll_x_hi")
 SCORE_KEYS = ("score", "Score")
 COIN_KEYS = ("coins", "coin", "coin_count", "coins_collected")
 LIFE_KEYS = ("lives", "life", "lives_left")
-COMPLETION_KEYS = ("completion", "complete", "level_complete", "flag_get", "goal_reached")
-DEATH_KEYS = ("death", "dead", "died", "player_dead", "is_dead", "game_over")
-REASON_KEYS = ("terminal_reason", "termination_reason", "done_reason", "end_reason", "reason")
+WORLD_KEYS = ("world", "world_number", "world_id")
+LEVEL_KEYS = ("level", "level_name", "level_id", "state", "area", "area_name")
+STAGE_KEYS = ("stage", "stage_number", "stage_id", "area_number")
+POWER_STATE_KEYS = (
+    "power_state",
+    "powerup",
+    "power_up",
+    "power",
+    "mario_power",
+    "player_power",
+    "status",
+    "mario_status",
+    "player_status",
+)
+COMPLETION_KEYS = (
+    "completion",
+    "complete",
+    "level_complete",
+    "level_clear",
+    "flag_get",
+    "flag",
+    "flagpole",
+    "goal_reached",
+)
+DEATH_KEYS = ("death", "dead", "died", "player_dead", "is_dead")
+GAME_OVER_KEYS = ("game_over", "gameOver", "GameOver", "is_game_over")
+TIMEOUT_KEYS = (
+    "timeout",
+    "time_up",
+    "timeUp",
+    "TimeLimit.truncated",
+    "timer_done",
+    "out_of_time",
+)
+REASON_KEYS = (
+    "terminal_reason",
+    "termination_reason",
+    "done_reason",
+    "end_reason",
+    "reason",
+)
+POWER_STATE_NAMES = {0: "small", 1: "big", 2: "fire"}
 
 
 def make_stable_retro_env(
@@ -451,7 +511,8 @@ class FullSMBStage:
         array = np.asarray(observation)
         if array.ndim != 3 or array.shape[-1] not in (3, 4):
             raise ValueError(
-                "Full SMB observations must have shape [H, W, C] with RGB or RGBA channels"
+                "Full SMB observations must have shape [H, W, C] with RGB or "
+                "RGBA channels"
             )
         array = array[..., :3]
         if array.dtype != np.uint8:
@@ -547,12 +608,27 @@ def extract_full_smb_signals(
 
     reason = _string_value(info, REASON_KEYS)
     position = _position_value(info)
+    screen = _screen_value(info)
+    world = _int_value(info, WORLD_KEYS)
+    stage = _int_value(info, STAGE_KEYS)
+    level = _level_value(info, world=world, stage=stage)
     coins = _int_value(info, COIN_KEYS)
+    power_state = _power_state_value(info)
+    game_over = _bool_value(info, GAME_OVER_KEYS, default=False) or _reason_matches(
+        reason, ("game_over", "game over")
+    )
     completion = _bool_value(info, COMPLETION_KEYS, default=False) or _reason_matches(
         reason, ("complete", "completed", "clear", "cleared", "goal", "flag")
     )
-    death = _bool_value(info, DEATH_KEYS, default=False) or _reason_matches(
-        reason, ("death", "dead", "died", "game_over", "game over")
+    death = (
+        game_over
+        or _bool_value(info, DEATH_KEYS, default=False)
+        or _reason_matches(reason, ("death", "dead", "died", "game_over", "game over"))
+    )
+    timeout = (
+        bool(truncated)
+        or _bool_value(info, TIMEOUT_KEYS, default=False)
+        or _reason_matches(reason, ("timeout", "time up", "time_up", "out of time"))
     )
     return FullSMBSignals(
         position=position,
@@ -561,9 +637,15 @@ def extract_full_smb_signals(
         lives=_int_value(info, LIFE_KEYS),
         collectibles={} if coins is None else {"coins": coins},
         coins=coins,
+        screen=screen,
+        level=level,
+        world=world,
+        stage=stage,
+        power_state=power_state,
         completion=completion,
         death=death,
-        timeout=bool(truncated),
+        timeout=timeout,
+        game_over=game_over,
         terminated=bool(terminated),
         truncated=bool(truncated),
         termination_reason=reason,
@@ -571,7 +653,7 @@ def extract_full_smb_signals(
 
 
 def _position_value(info: Mapping[str, Any]) -> Optional[tuple[float, float]]:
-    direct = info.get("position")
+    direct = _value_for_keys(info, ("position",))
     if isinstance(direct, Mapping):
         x = _numeric_value(direct, POSITION_X_KEYS)
         y = _numeric_value(direct, POSITION_Y_KEYS)
@@ -604,6 +686,66 @@ def _scroll_position_x(info: Mapping[str, Any]) -> Optional[float]:
     return scroll_x + (screen_x or 0.0)
 
 
+def _screen_value(info: Mapping[str, Any]) -> Optional[tuple[int, int]]:
+    direct = _value_for_keys(info, SCREEN_KEYS)
+    if isinstance(direct, Mapping):
+        x = _int_value(direct, SCREEN_X_KEYS + POSITION_X_KEYS)
+        y = _int_value(direct, SCREEN_Y_KEYS + POSITION_Y_KEYS)
+        if x is not None or y is not None:
+            return (x or 0, y or 0)
+    elif direct is not None:
+        try:
+            array = np.asarray(direct, dtype=np.float32).flatten()
+        except (TypeError, ValueError):
+            array = np.asarray([], dtype=np.float32)
+        if array.size >= 2 and np.isfinite(array[:2]).all():
+            return (int(round(float(array[0]))), int(round(float(array[1]))))
+        if array.size == 1 and np.isfinite(array[0]):
+            return (int(round(float(array[0]))), 0)
+
+    x = _int_value(info, SCREEN_X_KEYS)
+    y = _int_value(info, SCREEN_Y_KEYS)
+    if x is not None or y is not None:
+        return (x or 0, y or 0)
+    return None
+
+
+def _level_value(
+    info: Mapping[str, Any], *, world: Optional[int], stage: Optional[int]
+) -> Optional[str]:
+    value = _value_for_keys(info, LEVEL_KEYS)
+    if value is not None and not isinstance(value, Mapping):
+        text = str(value).strip()
+        if text:
+            return text
+    if world is not None and stage is not None:
+        return f"{world}-{stage}"
+    return None
+
+
+def _power_state_value(info: Mapping[str, Any]) -> Optional[str]:
+    value = _value_for_keys(info, POWER_STATE_KEYS)
+    if value is None or isinstance(value, Mapping):
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized in {"tall", "big"}:
+            return "big"
+        if normalized in {"fireball", "fire"}:
+            return "fire"
+        return normalized
+    try:
+        array = np.asarray(value, dtype=np.float32).flatten()
+    except (TypeError, ValueError):
+        return str(value)
+    if array.size != 1 or not np.isfinite(array[0]):
+        return None
+    numeric = int(round(float(array[0])))
+    return POWER_STATE_NAMES.get(numeric, str(numeric))
+
+
 def _int_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[int]:
     value = _numeric_value(info, keys)
     if value is None:
@@ -612,10 +754,7 @@ def _int_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[int]:
 
 
 def _numeric_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[float]:
-    for key in keys:
-        if key not in info:
-            continue
-        value = info[key]
+    for value in _values_for_keys(info, keys):
         try:
             array = np.asarray(value, dtype=np.float32).flatten()
         except (TypeError, ValueError):
@@ -628,13 +767,23 @@ def _numeric_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[f
 def _bool_value(
     info: Mapping[str, Any], keys: tuple[str, ...], *, default: bool
 ) -> bool:
-    for key in keys:
-        if key not in info:
-            continue
-        value = info[key]
+    for value in _values_for_keys(info, keys):
         if isinstance(value, str):
             normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "y", "complete", "dead"}:
+            if normalized in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "complete",
+                "clear",
+                "flag",
+                "dead",
+                "game_over",
+                "game over",
+                "timeout",
+                "time_up",
+            }:
                 return True
             if normalized in {"0", "false", "no", "n", ""}:
                 return False
@@ -648,11 +797,31 @@ def _bool_value(
 
 
 def _string_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[str]:
-    for key in keys:
-        value = info.get(key)
+    for value in _values_for_keys(info, keys):
         if value is not None:
             return str(value)
     return None
+
+
+def _values_for_keys(info: Mapping[str, Any], keys: tuple[str, ...]):
+    for mapping in _mapping_candidates(info):
+        for key in keys:
+            if key in mapping:
+                yield mapping[key]
+
+
+def _value_for_keys(info: Mapping[str, Any], keys: tuple[str, ...]) -> Any:
+    for value in _values_for_keys(info, keys):
+        return value
+    return None
+
+
+def _mapping_candidates(info: Mapping[str, Any]):
+    yield info
+    for key in INFO_CONTAINER_KEYS:
+        nested = info.get(key)
+        if isinstance(nested, Mapping):
+            yield nested
 
 
 def _reason_matches(reason: Optional[str], needles: tuple[str, ...]) -> bool:

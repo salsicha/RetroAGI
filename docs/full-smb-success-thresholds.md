@@ -90,11 +90,10 @@ score orders threshold coverage before completion, survival, progress, and raw
 return. A policy with impressive progress but failed fixed-task thresholds ranks
 below one that crosses the documented gates.
 
-## Relationship To Future Signal Extraction
+## Relationship To Signal Extraction
 
-These thresholds define the contract before the next P9 task expands Full SMB signal extraction
-with memory variables and backend info fields. Once x/y
-position, score, coins, lives, power state, death, timeout, completion, and
-game-over signals are extracted more completely, the evaluator should feed
-those fields into this threshold module rather than creating a separate success
-definition.
+Full SMB signal extraction now normalizes top-level backend info fields and
+nested memory/variable maps for x/y position, screen, level, world/stage, score,
+coins, lives, power state, death, timeout, completion, and game-over state.
+Fixed-task evaluators should feed those fields into this threshold module rather
+than creating a separate success definition.

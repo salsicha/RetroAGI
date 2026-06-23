@@ -254,7 +254,10 @@ class TestFullSMBStage(unittest.TestCase):
 
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):
-            with self.assertRaisesRegex(RuntimeError, "stable-retro is not installed") as cm:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "stable-retro is not installed",
+            ) as cm:
                 make_stable_retro_env()
 
         message = str(cm.exception)
@@ -299,11 +302,66 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(signals.coins, 12)
         self.assertEqual(signals.collectibles["coins"], 12)
         self.assertEqual(signals.lives, 1)
+        self.assertIsNone(signals.screen)
+        self.assertIsNone(signals.level)
+        self.assertIsNone(signals.power_state)
+        self.assertFalse(signals.game_over)
         self.assertFalse(signals.completion)
         self.assertTrue(signals.death)
         self.assertTrue(signals.terminated)
         self.assertFalse(signals.truncated)
         self.assertFalse(signals.timeout)
+
+    def test_signal_extractor_reads_nested_memory_variables(self):
+        signals = extract_full_smb_signals(
+            {
+                "memory": {
+                    "x_pos": 512,
+                    "y_pos": 88,
+                    "screen": (2, 1),
+                    "world": 2,
+                    "stage": 1,
+                    "score": 3210,
+                    "coins": 3,
+                    "lives": 2,
+                    "power_state": "fireball",
+                    "flag_get": True,
+                }
+            },
+            terminated=True,
+            truncated=False,
+        )
+
+        self.assertEqual(signals.position, (512.0, 88.0))
+        self.assertEqual(signals.screen, (2, 1))
+        self.assertEqual(signals.level, "2-1")
+        self.assertEqual(signals.world, 2)
+        self.assertEqual(signals.stage, 1)
+        self.assertEqual(signals.score, 3210)
+        self.assertEqual(signals.coins, 3)
+        self.assertEqual(signals.lives, 2)
+        self.assertEqual(signals.power_state, "fire")
+        self.assertTrue(signals.completion)
+        self.assertFalse(signals.game_over)
+
+    def test_signal_extractor_reads_timeout_power_and_game_over_state(self):
+        signals = extract_full_smb_signals(
+            {
+                "variables": {
+                    "game_over": 1,
+                    "time_up": "true",
+                    "status": 0,
+                },
+                "done_reason": "game over",
+            },
+            terminated=True,
+            truncated=False,
+        )
+
+        self.assertTrue(signals.game_over)
+        self.assertTrue(signals.death)
+        self.assertTrue(signals.timeout)
+        self.assertEqual(signals.power_state, "small")
 
     def test_full_smb_signal_extractor_satisfies_game_signal_contract(self):
         extractor = FullSMBSignalExtractor()
@@ -325,6 +383,7 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(extractor.game_name, "smb")
         self.assertIsInstance(signals, GameSignals)
         self.assertEqual(signals.position, (261.0, 88.0))
+        self.assertEqual(signals.screen, (3, 0))
         self.assertEqual(signals.progress, 261.0)
         self.assertEqual(signals.score, 500)
         self.assertEqual(signals.collectibles, {"coins": 4})
@@ -474,7 +533,6 @@ class TestFullSMBStage(unittest.TestCase):
                     "health": None,
                     "inventory": {},
                     "collectibles": {"coins": 7},
-                    "coins": 7,
                     "lives": 2,
                     "completion": True,
                     "death": False,
@@ -483,6 +541,13 @@ class TestFullSMBStage(unittest.TestCase):
                     "truncated": False,
                     "objectives": {},
                     "termination_reason": "level_complete",
+                    "coins": 7,
+                    "screen": (6, 0),
+                    "level": None,
+                    "world": None,
+                    "stage": None,
+                    "power_state": None,
+                    "game_over": False,
                 },
             )
             np.testing.assert_allclose(

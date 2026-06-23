@@ -388,22 +388,31 @@ configured count is reached or the backend reports termination or truncation.
 ### Info Signals
 
 `FullSMBStage` extracts common stable-retro game variables into
-`info["full_smb_signals"]`:
+`info["full_smb_signals"]`. Values can come from top-level backend `info`
+fields or nested `memory`, `ram`, `variables`, `game_variables`, or
+`backend_info` mappings:
 
 | Field | Meaning |
 | --- | --- |
 | `position` | Raw `(x, y)` player/world position when backend variables expose it. X may be derived from `xscrollHi`, `xscrollLo`, and `screen_x`. |
+| `screen` | Backend screen coordinate or screen tuple when exposed through `screen`, `screen_x`, or `screen_y`. |
+| `level`, `world`, `stage` | Level identity from explicit level fields or a world/stage pair such as `2-1`. |
 | `score` | Backend score counter, if present. |
 | `coins` | Coin counter, if present. |
 | `lives` | Lives counter, if present. |
+| `power_state` | Mario/player power state from status or power fields, normalized for common small/big/fire values. |
 | `completion` | True when a completion flag or terminal reason indicates level clear, goal, or flag completion. |
 | `death` | True when a death flag or terminal reason indicates death or game over. |
+| `game_over` | True when a backend game-over flag or terminal reason indicates game over. |
+| `timeout` | True when the transition is truncated or a backend timeout/time-up field is set. |
 | `terminated` | The adapter-level termination boolean for the transition. |
 | `truncated` | The adapter-level truncation boolean for the transition. |
 
 The adapter also writes `info["state_vec"]`, a nine-value `float32` vector with
 normalized x, y, score, coins, lives, completion, death, terminated, and
-truncated values. Missing raw values are encoded as zero.
+truncated values. Missing raw values are encoded as zero. This compact state
+vector remains stable for checkpoint compatibility; richer extracted fields are
+available through `full_smb_signals`.
 
 ### Reward
 
