@@ -197,7 +197,7 @@ evaluations and load a compatible Block SMB checkpoint.
 - [x] Store resolved configuration, code revision, metrics, and environment
       metadata beside every checkpoint.
 - [x] Add structured logging and periodic deterministic evaluation.
-- [ ] Add GitHub Actions for formatting, linting, unit tests, and CPU smoke
+- [x] Add GitHub Actions for formatting, linting, unit tests, and CPU smoke
       training.
 - [ ] Integrate TensorBoard or Weights & Biases behind an optional dependency.
 - [ ] Document hardware, runtime, expected metrics, and artifact locations for
