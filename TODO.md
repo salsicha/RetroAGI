@@ -234,7 +234,7 @@ high-fidelity evaluations.
       `--architecture baseline` plus architecture-specific config overrides.
 - [x] Give Synthetic 1D top-level CLI parity with Block SMB for seed, epochs,
       device, checkpoint, resume, output summary, and architecture selection.
-- [ ] Implement a stage-agnostic experiment runner that can execute one
+- [x] Implement a stage-agnostic experiment runner that can execute one
       architecture through selected stages and write one combined result
       manifest with commands, configs, seeds, metrics, checkpoints, logs, and
       pass/fail gates.

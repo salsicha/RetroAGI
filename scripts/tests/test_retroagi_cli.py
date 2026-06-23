@@ -9,6 +9,32 @@ from retroagi import cli
 
 
 class TestRetroAGICLI(unittest.TestCase):
+    def test_experiment_command_forwards_runner_arguments(self):
+        with patch("retroagi.experiments.main", return_value=0) as experiment_main:
+            exit_code = cli.main(
+                [
+                    "experiment",
+                    "--stage",
+                    "synthetic",
+                    "--output",
+                    "artifacts/experiments/latest/manifest.json",
+                    "--architecture",
+                    "baseline",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        experiment_main.assert_called_once_with(
+            [
+                "--stage",
+                "synthetic",
+                "--output",
+                "artifacts/experiments/latest/manifest.json",
+                "--architecture",
+                "baseline",
+            ]
+        )
+
     def test_synthetic_1d_train_forwards_stage_arguments(self):
         with patch("retroagi.stages.synthetic_1d.cli.main", return_value=0) as synthetic_main:
             exit_code = cli.main(

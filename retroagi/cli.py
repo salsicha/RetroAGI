@@ -87,11 +87,18 @@ def build_parser() -> argparse.ArgumentParser:
     compare = subparsers.add_parser("compare", help="compare checkpoints for a stage")
     _add_stage_arg(compare)
 
+    subparsers.add_parser(
+        "experiment",
+        help="run one architecture through selected stages and write a combined manifest",
+    )
+
     return parser
 
 
 def run(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
     command = str(args.command)
+    if command == "experiment":
+        return _run_experiment(stage_args)
     stage = str(args.stage)
 
     if stage == "block-smb":
@@ -170,6 +177,12 @@ def _run_synthetic_1d(args: argparse.Namespace, stage_args: Sequence[str]) -> in
             "Synthetic 1D currently supports train and resume through the top-level CLI"
         )
     return int(synthetic_cli.main(synthetic_args))
+
+
+def _run_experiment(stage_args: Sequence[str]) -> int:
+    from retroagi import experiments
+
+    return int(experiments.main(list(stage_args)))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
