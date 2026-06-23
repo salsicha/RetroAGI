@@ -267,8 +267,11 @@ high-fidelity evaluations.
       `retroagi promote --budget small|medium|full` now records per-rung
       budgets in the manifest, applies them to runnable rungs, and lets
       explicit CLI overrides replace individual budget values.
-- [ ] Add automatic promotion gates that stop an architecture when it fails
+- [x] Add automatic promotion gates that stop an architecture when it fails
       required metrics, numerical checks, runtime limits, or artifact checks.
+      Promotion rungs now record automatic runtime, finite-number,
+      required-metric, and artifact-existence gates; later selected rungs are
+      marked stopped after the first gate failure.
 - [ ] Produce a comparison report for architecture sweeps with per-stage metrics,
       artifact links, pass/fail gates, runtime, selected device, and regression
       deltas against the baseline architecture.

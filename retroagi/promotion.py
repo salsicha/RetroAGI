@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -92,19 +94,21 @@ PROMOTION_RUNGS: tuple[PromotionRung, ...] = (
 
 PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
     "small": {
-        "interface-smoke": {"batch_size": 2},
+        "interface-smoke": {"batch_size": 2, "runtime_seconds": 10.0},
         "synthetic-concept": {
             "epochs": 1,
             "train_samples": 16,
             "validation_samples": 8,
             "test_samples": 8,
             "controller_mse_threshold": 10.0,
+            "runtime_seconds": 60.0,
         },
         "synthetic-stress": {
             "epochs": 2,
             "train_samples": 64,
             "validation_samples": 32,
             "test_samples": 32,
+            "runtime_seconds": 120.0,
         },
         "block-smb-smoke": {
             "epochs": 1,
@@ -113,6 +117,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "evaluation_episodes": 1,
             "evaluation_max_steps": 2,
             "success_rate_threshold": 0.0,
+            "runtime_seconds": 60.0,
         },
         "block-smb-fixed-scenario-training": {
             "epochs": 2,
@@ -120,6 +125,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "rollout_steps": 16,
             "evaluation_episodes": 3,
             "evaluation_max_steps": 200,
+            "runtime_seconds": 300.0,
         },
         "block-smb-generated-generalization": {
             "epochs": 3,
@@ -128,29 +134,33 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "generated_scenarios": 2,
             "evaluation_episodes": 3,
             "evaluation_max_steps": 200,
+            "runtime_seconds": 600.0,
         },
-        "full-smb-transfer-smoke": {"steps": 32, "seeds": 1},
-        "full-smb-transfer-vs-scratch": {"steps": 128, "seeds": 2},
+        "full-smb-transfer-smoke": {"steps": 32, "seeds": 1, "runtime_seconds": 120.0},
+        "full-smb-transfer-vs-scratch": {"steps": 128, "seeds": 2, "runtime_seconds": 300.0},
         "full-smb-fine-tuning": {
             "epochs": 1,
             "rollout_steps": 128,
             "evaluation_episodes": 2,
+            "runtime_seconds": 600.0,
         },
     },
     "medium": {
-        "interface-smoke": {"batch_size": 4},
+        "interface-smoke": {"batch_size": 4, "runtime_seconds": 20.0},
         "synthetic-concept": {
             "epochs": 3,
             "train_samples": 128,
             "validation_samples": 64,
             "test_samples": 64,
             "controller_mse_threshold": 5.0,
+            "runtime_seconds": 180.0,
         },
         "synthetic-stress": {
             "epochs": 5,
             "train_samples": 512,
             "validation_samples": 128,
             "test_samples": 128,
+            "runtime_seconds": 600.0,
         },
         "block-smb-smoke": {
             "epochs": 2,
@@ -159,6 +169,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "evaluation_episodes": 2,
             "evaluation_max_steps": 64,
             "success_rate_threshold": 0.0,
+            "runtime_seconds": 180.0,
         },
         "block-smb-fixed-scenario-training": {
             "epochs": 5,
@@ -166,6 +177,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "rollout_steps": 64,
             "evaluation_episodes": 5,
             "evaluation_max_steps": 200,
+            "runtime_seconds": 1200.0,
         },
         "block-smb-generated-generalization": {
             "epochs": 8,
@@ -174,29 +186,33 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "generated_scenarios": 8,
             "evaluation_episodes": 5,
             "evaluation_max_steps": 200,
+            "runtime_seconds": 2400.0,
         },
-        "full-smb-transfer-smoke": {"steps": 128, "seeds": 2},
-        "full-smb-transfer-vs-scratch": {"steps": 512, "seeds": 3},
+        "full-smb-transfer-smoke": {"steps": 128, "seeds": 2, "runtime_seconds": 300.0},
+        "full-smb-transfer-vs-scratch": {"steps": 512, "seeds": 3, "runtime_seconds": 900.0},
         "full-smb-fine-tuning": {
             "epochs": 3,
             "rollout_steps": 512,
             "evaluation_episodes": 5,
+            "runtime_seconds": 3600.0,
         },
     },
     "full": {
-        "interface-smoke": {"batch_size": 8},
+        "interface-smoke": {"batch_size": 8, "runtime_seconds": 30.0},
         "synthetic-concept": {
             "epochs": 10,
             "train_samples": 1024,
             "validation_samples": 256,
             "test_samples": 256,
             "controller_mse_threshold": 2.0,
+            "runtime_seconds": 900.0,
         },
         "synthetic-stress": {
             "epochs": 20,
             "train_samples": 4096,
             "validation_samples": 1024,
             "test_samples": 1024,
+            "runtime_seconds": 3600.0,
         },
         "block-smb-smoke": {
             "epochs": 3,
@@ -205,6 +221,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "evaluation_episodes": 3,
             "evaluation_max_steps": 128,
             "success_rate_threshold": 0.0,
+            "runtime_seconds": 300.0,
         },
         "block-smb-fixed-scenario-training": {
             "epochs": 20,
@@ -212,6 +229,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "rollout_steps": 128,
             "evaluation_episodes": 10,
             "evaluation_max_steps": 200,
+            "runtime_seconds": 7200.0,
         },
         "block-smb-generated-generalization": {
             "epochs": 30,
@@ -220,15 +238,22 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "generated_scenarios": 32,
             "evaluation_episodes": 10,
             "evaluation_max_steps": 200,
+            "runtime_seconds": 14400.0,
         },
-        "full-smb-transfer-smoke": {"steps": 512, "seeds": 3},
-        "full-smb-transfer-vs-scratch": {"steps": 2048, "seeds": 5},
+        "full-smb-transfer-smoke": {"steps": 512, "seeds": 3, "runtime_seconds": 900.0},
+        "full-smb-transfer-vs-scratch": {"steps": 2048, "seeds": 5, "runtime_seconds": 3600.0},
         "full-smb-fine-tuning": {
             "epochs": 10,
             "rollout_steps": 2048,
             "evaluation_episodes": 10,
+            "runtime_seconds": 14400.0,
         },
     },
+}
+
+REQUIRED_RUNG_METRICS = {
+    "synthetic-concept": ("controller_mse",),
+    "block-smb-smoke": ("eval_success_rate", "gradient_norm"),
 }
 
 RUNG_ALIASES = {rung.name: rung.name for rung in PROMOTION_RUNGS}
@@ -321,6 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="promotion budget preset to use before explicit per-rung overrides",
     )
     parser.add_argument("--interface-batch-size", type=int, default=None)
+    parser.add_argument("--interface-runtime-seconds", type=float, default=None)
     parser.add_argument(
         "--architecture",
         dest="architecture_name",
@@ -340,12 +366,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--synthetic-concept-validation-samples", type=int, default=None)
     parser.add_argument("--synthetic-concept-test-samples", type=int, default=None)
     parser.add_argument("--synthetic-concept-controller-mse", type=float, default=None)
+    parser.add_argument("--synthetic-concept-runtime-seconds", type=float, default=None)
     parser.add_argument("--block-smoke-epochs", type=int, default=None)
     parser.add_argument("--block-smoke-episodes-per-epoch", type=int, default=None)
     parser.add_argument("--block-smoke-rollout-steps", type=int, default=None)
     parser.add_argument("--block-smoke-evaluation-episodes", type=int, default=None)
     parser.add_argument("--block-smoke-evaluation-max-steps", type=int, default=None)
     parser.add_argument("--block-smoke-success-rate", type=float, default=None)
+    parser.add_argument("--block-smoke-runtime-seconds", type=float, default=None)
     return parser
 
 
@@ -354,8 +382,12 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
     budgets = _resolve_budgets(args)
     architecture_config = dict(args.architecture_config or ())
     results = []
+    stopping_reason = None
     for rung in PROMOTION_RUNGS:
         if rung.name not in selected:
+            continue
+        if stopping_reason is not None:
+            results.append(_stopped_rung(rung, budgets[rung.name], stopping_reason))
             continue
         if rung.status == UNSUPPORTED_RUNG_STATUS:
             results.append(_skipped_rung(rung, budgets[rung.name]))
@@ -367,6 +399,8 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
             results.append(_run_block_smb_smoke(args, architecture_config, budgets[rung.name]))
         else:
             raise ValueError(f"unsupported promotion rung {rung.name!r}")
+        if results[-1]["status"] == "failed":
+            stopping_reason = f"{rung.name} failed automatic promotion gates"
 
     failed = [rung for rung in results if rung["status"] == "failed"]
     return {
@@ -418,6 +452,16 @@ def _resolve_budgets(args: argparse.Namespace) -> dict[str, dict[str, int | floa
         "controller_mse_threshold",
         args.synthetic_concept_controller_mse,
     )
+    _apply_budget_override(
+        budgets["synthetic-concept"],
+        "runtime_seconds",
+        args.synthetic_concept_runtime_seconds,
+    )
+    _apply_budget_override(
+        budgets["interface-smoke"],
+        "runtime_seconds",
+        args.interface_runtime_seconds,
+    )
     _apply_budget_override(budgets["block-smb-smoke"], "epochs", args.block_smoke_epochs)
     _apply_budget_override(
         budgets["block-smb-smoke"],
@@ -442,6 +486,11 @@ def _resolve_budgets(args: argparse.Namespace) -> dict[str, dict[str, int | floa
         "success_rate_threshold",
         args.block_smoke_success_rate,
     )
+    _apply_budget_override(
+        budgets["block-smb-smoke"],
+        "runtime_seconds",
+        args.block_smoke_runtime_seconds,
+    )
     return budgets
 
 
@@ -463,6 +512,19 @@ def _skipped_rung(rung: PromotionRung, budget: Mapping[str, int | float]) -> dic
     }
 
 
+def _stopped_rung(
+    rung: PromotionRung, budget: Mapping[str, int | float], reason: str
+) -> dict[str, Any]:
+    return {
+        "name": rung.name,
+        "description": rung.description,
+        "status": "stopped",
+        "passed": None,
+        "reason": reason,
+        "budget": dict(budget),
+    }
+
+
 def _run_interface_smoke(
     args: argparse.Namespace,
     architecture_config: Mapping[str, Any],
@@ -472,6 +534,7 @@ def _run_interface_smoke(
     device = select_device(args.device)
     architecture = get_architecture(args.architecture_name)
     stage_results = []
+    start_time = time.perf_counter()
     for spec in STAGE_SPECS:
         if not architecture.supports_stage(spec):
             stage_results.append(
@@ -488,13 +551,21 @@ def _run_interface_smoke(
         )
 
     runnable = [stage for stage in stage_results if stage["status"] != "skipped"]
-    passed = bool(runnable) and all(stage["passed"] for stage in runnable)
+    elapsed_seconds = time.perf_counter() - start_time
+    automatic_gates = _interface_automatic_gates(stage_results, budget, elapsed_seconds)
+    passed = (
+        bool(runnable)
+        and all(stage["passed"] for stage in runnable)
+        and all(gate["passed"] for gate in automatic_gates)
+    )
     return {
         "name": "interface-smoke",
         "description": "Instantiate compatible StageSpecs and verify finite gradients.",
         "status": "passed" if passed else "failed",
         "passed": passed,
         "budget": dict(budget),
+        "runtime_seconds": elapsed_seconds,
+        "automatic_gates": automatic_gates,
         "device": str(device),
         "stages": stage_results,
     }
@@ -625,18 +696,190 @@ def _run_experiment_rung(
     experiment_args: argparse.Namespace,
     budget: Mapping[str, int | float],
 ) -> dict[str, Any]:
+    start_time = time.perf_counter()
     manifest = experiments.run_experiment(experiment_args)
+    elapsed_seconds = time.perf_counter() - start_time
     output = json.dumps(to_plain_data(manifest), indent=2, sort_keys=True)
     experiment_args.output.parent.mkdir(parents=True, exist_ok=True)
     experiment_args.output.write_text(output + "\n", encoding="utf-8")
+    automatic_gates = _experiment_automatic_gates(name, manifest, budget, elapsed_seconds)
+    passed = bool(manifest["passed"]) and all(gate["passed"] for gate in automatic_gates)
     return {
         "name": name,
-        "status": "passed" if manifest["passed"] else "failed",
-        "passed": bool(manifest["passed"]),
+        "status": "passed" if passed else "failed",
+        "passed": passed,
         "budget": dict(budget),
+        "runtime_seconds": elapsed_seconds,
+        "automatic_gates": automatic_gates,
         "experiment_manifest_path": str(experiment_args.output),
         "experiment": manifest,
     }
+
+
+def _interface_automatic_gates(
+    stage_results: Sequence[Mapping[str, Any]],
+    budget: Mapping[str, int | float],
+    elapsed_seconds: float,
+) -> list[dict[str, Any]]:
+    gates = [_runtime_gate(budget, elapsed_seconds)]
+    for stage in stage_results:
+        if stage.get("status") == "skipped":
+            continue
+        gates.append(
+            {
+                "name": f"{stage['stage']}:finite-loss",
+                "kind": "numerical",
+                "passed": _is_finite_number(stage.get("loss")),
+                "actual": stage.get("loss"),
+                "threshold": "finite",
+                "reason": (
+                    None
+                    if _is_finite_number(stage.get("loss"))
+                    else "loss is missing or non-finite"
+                ),
+            }
+        )
+        gates.append(
+            {
+                "name": f"{stage['stage']}:finite-gradients",
+                "kind": "numerical",
+                "passed": bool(stage.get("passed")),
+                "actual": stage.get("passed"),
+                "threshold": True,
+                "reason": None if stage.get("passed") else stage.get("reason", "stage failed"),
+            }
+        )
+    return gates
+
+
+def _experiment_automatic_gates(
+    name: str,
+    manifest: Mapping[str, Any],
+    budget: Mapping[str, int | float],
+    elapsed_seconds: float,
+) -> list[dict[str, Any]]:
+    gates = [_runtime_gate(budget, elapsed_seconds)]
+    stages = manifest.get("stages", [])
+    if not isinstance(stages, Sequence):
+        stages = []
+    gates.extend(_required_metric_gates(name, stages))
+    gates.extend(_finite_metric_gates(stages))
+    gates.extend(_artifact_gates(stages))
+    return gates
+
+
+def _runtime_gate(
+    budget: Mapping[str, int | float],
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    threshold = float(budget["runtime_seconds"])
+    passed = elapsed_seconds <= threshold
+    return {
+        "name": "runtime-seconds",
+        "kind": "runtime",
+        "passed": passed,
+        "actual": elapsed_seconds,
+        "threshold": threshold,
+        "reason": None if passed else "runtime exceeded promotion budget",
+    }
+
+
+def _required_metric_gates(name: str, stages: Sequence[Any]) -> list[dict[str, Any]]:
+    required_metrics = REQUIRED_RUNG_METRICS.get(name, ())
+    gates = []
+    for metric in required_metrics:
+        stage_metric = _find_metric(stages, metric)
+        gates.append(
+            {
+                "name": f"required-metric:{metric}",
+                "kind": "metric",
+                "passed": stage_metric is not None,
+                "actual": stage_metric,
+                "threshold": "present",
+                "reason": None if stage_metric is not None else "required metric is missing",
+            }
+        )
+    return gates
+
+
+def _finite_metric_gates(stages: Sequence[Any]) -> list[dict[str, Any]]:
+    gates = []
+    for stage in stages:
+        if not isinstance(stage, Mapping):
+            continue
+        stage_name = stage.get("stage", "unknown-stage")
+        metrics = stage.get("metrics", {})
+        if not isinstance(metrics, Mapping):
+            gates.append(
+                {
+                    "name": f"{stage_name}:metrics-finite",
+                    "kind": "numerical",
+                    "passed": False,
+                    "actual": None,
+                    "threshold": "finite numeric metrics",
+                    "reason": "metrics payload is not a mapping",
+                }
+            )
+            continue
+        non_finite = [
+            key
+            for key, value in metrics.items()
+            if isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and not math.isfinite(value)
+        ]
+        gates.append(
+            {
+                "name": f"{stage_name}:metrics-finite",
+                "kind": "numerical",
+                "passed": not non_finite,
+                "actual": non_finite,
+                "threshold": "finite numeric metrics",
+                "reason": None if not non_finite else "one or more numeric metrics are non-finite",
+            }
+        )
+    return gates
+
+
+def _artifact_gates(stages: Sequence[Any]) -> list[dict[str, Any]]:
+    gates = []
+    for stage in stages:
+        if not isinstance(stage, Mapping):
+            continue
+        stage_name = stage.get("stage", "unknown-stage")
+        for field in ("summary_path", "checkpoint_path", "log_path"):
+            artifact_path = stage.get(field)
+            if artifact_path is None:
+                continue
+            exists = Path(str(artifact_path)).exists()
+            gates.append(
+                {
+                    "name": f"{stage_name}:artifact:{field}",
+                    "kind": "artifact",
+                    "passed": exists,
+                    "actual": str(artifact_path),
+                    "threshold": "exists",
+                    "reason": None if exists else "artifact path does not exist",
+                }
+            )
+    return gates
+
+
+def _find_metric(stages: Sequence[Any], metric: str) -> float | None:
+    for stage in stages:
+        if not isinstance(stage, Mapping):
+            continue
+        metrics = stage.get("metrics", {})
+        if not isinstance(metrics, Mapping):
+            continue
+        value = metrics.get(metric)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

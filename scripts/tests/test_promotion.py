@@ -13,10 +13,29 @@ from retroagi import promotion
 from retroagi.core import BASELINE_ARCHITECTURE_NAME
 
 
-def _fake_experiment_manifest(args: Namespace, *, passed: bool = True):
+def _fake_experiment_manifest(
+    args: Namespace,
+    *,
+    passed: bool = True,
+    metrics: dict[str, float] | None = None,
+    write_artifacts: bool = True,
+):
     stage = args.stage[0]
-    metric_name = "controller_mse" if stage == "synthetic-1d" else "eval_success_rate"
-    metric_value = 0.5 if stage == "synthetic-1d" else 0.0
+    if metrics is None:
+        metrics = (
+            {"controller_mse": 0.5}
+            if stage == "synthetic-1d"
+            else {"eval_success_rate": 0.0, "gradient_norm": 1.0}
+        )
+    summary_path = args.artifacts_dir / "run_summary.json"
+    checkpoint_path = args.artifacts_dir / "checkpoint.pth"
+    log_path = args.artifacts_dir / "events.jsonl" if stage == "block-smb" else None
+    if write_artifacts:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text("{}", encoding="utf-8")
+        checkpoint_path.write_text("checkpoint", encoding="utf-8")
+        if log_path is not None:
+            log_path.write_text("", encoding="utf-8")
     return {
         "architecture": {
             "name": args.architecture_name,
@@ -29,13 +48,13 @@ def _fake_experiment_manifest(args: Namespace, *, passed: bool = True):
             {
                 "stage": stage,
                 "command": ["retroagi", "train", "--stage", stage],
-                "summary_path": str(args.artifacts_dir / "run_summary.json"),
-                "checkpoint_path": str(args.artifacts_dir / "checkpoint.pth"),
-                "log_path": None,
+                "summary_path": str(summary_path),
+                "checkpoint_path": str(checkpoint_path),
+                "log_path": str(log_path) if log_path is not None else None,
                 "exit_code": 0 if passed else 1,
                 "config": {},
-                "metrics": {metric_name: metric_value},
-                "gates": [{"metric": metric_name, "passed": passed}],
+                "metrics": metrics,
+                "gates": [{"metric": next(iter(metrics), "metric"), "passed": passed}],
                 "passed": passed,
             }
         ],
@@ -77,7 +96,8 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(manifest["budget"]["name"], "small")
         self.assertEqual(manifest["rungs"][0]["name"], "interface-smoke")
         self.assertEqual(manifest["rungs"][0]["status"], "passed")
-        self.assertEqual(manifest["rungs"][0]["budget"], {"batch_size": 2})
+        self.assertEqual(manifest["rungs"][0]["budget"], {"batch_size": 2, "runtime_seconds": 10.0})
+        self.assertTrue(all(gate["passed"] for gate in manifest["rungs"][0]["automatic_gates"]))
         self.assertEqual(
             [stage["stage"] for stage in manifest["rungs"][0]["stages"]],
             ["synthetic_1d", "block_smb", "full_smb"],
@@ -120,8 +140,16 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(manifest["budget"]["rungs"]["block-smb-smoke"]["rollout_steps"], 2)
         self.assertEqual(
             manifest["rungs"][-1]["budget"],
-            {"epochs": 1, "rollout_steps": 128, "evaluation_episodes": 2},
+            {
+                "epochs": 1,
+                "rollout_steps": 128,
+                "evaluation_episodes": 2,
+                "runtime_seconds": 600.0,
+            },
         )
+        for rung in manifest["rungs"]:
+            if rung["status"] == "passed":
+                self.assertTrue(all(gate["passed"] for gate in rung["automatic_gates"]))
 
     def test_medium_budget_changes_experiment_arguments(self):
         calls = []
@@ -187,6 +215,7 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(calls[0].gate[0].threshold, 0.25)
         self.assertEqual(manifest["rungs"][0]["budget"]["rollout_steps"], 3)
         self.assertEqual(manifest["rungs"][0]["budget"]["success_rate_threshold"], 0.25)
+        self.assertEqual(manifest["rungs"][0]["budget"]["runtime_seconds"], 180.0)
 
     def test_failed_experiment_rung_fails_promotion(self):
         with TemporaryDirectory() as tmpdir:
@@ -210,6 +239,64 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertFalse(manifest["passed"])
         self.assertEqual(manifest["rungs"][0]["status"], "failed")
+
+    def test_missing_required_metric_stops_following_rungs(self):
+        with TemporaryDirectory() as tmpdir:
+            with patch(
+                "retroagi.experiments.run_experiment",
+                side_effect=lambda args: _fake_experiment_manifest(args, metrics={}),
+            ):
+                exit_code, manifest = self.run_main(
+                    [
+                        "--rung",
+                        "synthetic-concept",
+                        "--rung",
+                        "block-smb-smoke",
+                        "--output",
+                        str(Path(tmpdir) / "promotion.json"),
+                        "--artifacts-dir",
+                        str(Path(tmpdir) / "artifacts"),
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(manifest["passed"])
+        self.assertEqual([rung["status"] for rung in manifest["rungs"]], ["failed", "stopped"])
+        required_gate = next(
+            gate
+            for gate in manifest["rungs"][0]["automatic_gates"]
+            if gate["name"] == "required-metric:controller_mse"
+        )
+        self.assertFalse(required_gate["passed"])
+        self.assertIn("synthetic-concept failed", manifest["rungs"][1]["reason"])
+
+    def test_missing_artifact_fails_automatic_gate(self):
+        with TemporaryDirectory() as tmpdir:
+            with patch(
+                "retroagi.experiments.run_experiment",
+                side_effect=lambda args: _fake_experiment_manifest(args, write_artifacts=False),
+            ):
+                exit_code, manifest = self.run_main(
+                    [
+                        "--rung",
+                        "synthetic-concept",
+                        "--output",
+                        str(Path(tmpdir) / "promotion.json"),
+                        "--artifacts-dir",
+                        str(Path(tmpdir) / "artifacts"),
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        artifact_gates = [
+            gate for gate in manifest["rungs"][0]["automatic_gates"] if gate["kind"] == "artifact"
+        ]
+        self.assertTrue(artifact_gates)
+        self.assertTrue(any(not gate["passed"] for gate in artifact_gates))
 
 
 if __name__ == "__main__":
