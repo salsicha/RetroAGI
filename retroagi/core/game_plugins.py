@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping
 
+from .actions import SMB_ACTIONS
+from .game_promotion import (
+    GamePromotionGateSpec,
+    PromotionArtifactGateSpec,
+    PromotionMetricGateSpec,
+)
 from .games import GameSpec, SMB_GAME_SPEC
 from .rewards import RewardConfigSchema
 from .stage_resolution import StageResolution, resolve_game_stage
@@ -22,6 +28,7 @@ class GamePluginSpec:
     asset_pipelines: Mapping[str, str] = field(default_factory=dict)
     reward_schema: RewardConfigSchema | None = None
     success_thresholds: Mapping[str, TaskSuccessThreshold] = field(default_factory=dict)
+    promotion_gates: Mapping[str, GamePromotionGateSpec] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -55,6 +62,16 @@ class GamePluginSpec:
                 "asset pipeline",
                 self.asset_pipelines,
                 stage_names.union({"assets", "perception"}),
+            )
+        unknown_gate_names = sorted(
+            name
+            for name, gate in self.promotion_gates.items()
+            if name != gate.rung_name
+        )
+        if unknown_gate_names:
+            raise ValueError(
+                f"game plugin {self.name!r} promotion gate keys must match "
+                f"rung names: {unknown_gate_names}"
             )
 
     def _validate_named_components(
@@ -116,6 +133,9 @@ class GamePluginSpec:
                 f"unknown success threshold {name!r} for game plugin {self.name!r}"
             ) from exc
 
+    def promotion_gate(self, rung_name: str) -> GamePromotionGateSpec | None:
+        return self.promotion_gates.get(rung_name)
+
 
 class GamePluginRegistry:
     """Lookup table for game profiles and their component entrypoints."""
@@ -162,6 +182,20 @@ class GamePluginRegistry:
     def success_threshold(self, game_name: str, task_name: str) -> TaskSuccessThreshold:
         return self.get(game_name).success_threshold(task_name)
 
+    def promotion_gate(
+        self,
+        game_name: str,
+        rung_name: str,
+    ) -> GamePromotionGateSpec | None:
+        return self.get(game_name).promotion_gate(rung_name)
+
+
+def _artifact_gate(field: str) -> PromotionArtifactGateSpec:
+    return PromotionArtifactGateSpec(
+        field=field,
+        reason=f"{field} must be written before this rung can promote",
+    )
+
 
 SMB_GAME_PLUGIN = GamePluginSpec(
     name="smb",
@@ -187,6 +221,163 @@ SMB_GAME_PLUGIN = GamePluginSpec(
         task.name: task.success_threshold
         for task in SMB_GAME_SPEC.fixed_tasks
         if task.success_threshold is not None
+    },
+    promotion_gates={
+        "interface-smoke": GamePromotionGateSpec(
+            rung_name="interface-smoke",
+            failure_reason="SMB interface smoke exceeded the promotion budget",
+        ),
+        "synthetic-concept": GamePromotionGateSpec(
+            rung_name="synthetic-concept",
+            metric_gates=(
+                PromotionMetricGateSpec(
+                    metric="controller_mse",
+                    operator="<=",
+                    threshold_key="controller_mse_threshold",
+                    reason=(
+                        "Synthetic concept controller MSE must stay within the "
+                        "selected SMB promotion budget"
+                    ),
+                ),
+            ),
+            artifact_gates=(
+                _artifact_gate("summary_path"),
+                _artifact_gate("checkpoint_path"),
+            ),
+            failure_reason="SMB synthetic concept gate failed",
+        ),
+        "block-smb-smoke": GamePromotionGateSpec(
+            rung_name="block-smb-smoke",
+            metric_gates=(
+                PromotionMetricGateSpec(
+                    metric="eval_success_rate",
+                    operator=">=",
+                    threshold_key="success_rate_threshold",
+                    reason=(
+                        "Block SMB policy success rate must meet the selected "
+                        "promotion threshold"
+                    ),
+                ),
+                PromotionMetricGateSpec(
+                    metric="gradient_norm",
+                    operator="finite",
+                    reason="Block SMB training must report a finite gradient norm",
+                ),
+            ),
+            artifact_gates=(
+                _artifact_gate("summary_path"),
+                _artifact_gate("checkpoint_path"),
+                _artifact_gate("log_path"),
+            ),
+            failure_reason="SMB block smoke gate failed",
+        ),
+        "full-smb-asset-mock-perception": GamePromotionGateSpec(
+            rung_name="full-smb-asset-mock-perception",
+            metric_gates=(
+                PromotionMetricGateSpec(
+                    metric="accuracy",
+                    operator=">=",
+                    threshold_key="semantic_accuracy_threshold",
+                    reason="Full SMB asset-mock semantic accuracy is below threshold",
+                ),
+                PromotionMetricGateSpec(
+                    metric="foreground_accuracy",
+                    operator=">=",
+                    threshold_key="foreground_accuracy_threshold",
+                    reason="Full SMB foreground accuracy is below threshold",
+                ),
+                PromotionMetricGateSpec(
+                    metric="mean_iou",
+                    operator=">=",
+                    threshold_key="mean_iou_threshold",
+                    reason="Full SMB asset-mock mean IoU is below threshold",
+                ),
+                PromotionMetricGateSpec(
+                    metric="position_within_tolerance",
+                    operator=">=",
+                    threshold_key="position_within_tolerance_threshold",
+                    reason="Full SMB position predictions are below threshold",
+                ),
+                PromotionMetricGateSpec(
+                    metric="class_coverage",
+                    operator=">=",
+                    threshold=13.0,
+                    reason="Full SMB asset-mock validation must cover every class",
+                ),
+                PromotionMetricGateSpec(
+                    metric="position_rmse",
+                    operator="finite",
+                    reason="Full SMB position RMSE must be finite",
+                ),
+                PromotionMetricGateSpec(
+                    metric="position_tolerance",
+                    operator="finite",
+                    reason="Full SMB position tolerance must be finite",
+                ),
+            ),
+            artifact_gates=(
+                _artifact_gate("full_smb_vision_checkpoint_path"),
+                _artifact_gate("summary_path"),
+            ),
+            failure_reason="SMB Full SMB asset-mock perception gate failed",
+        ),
+        "full-smb-transfer-smoke": GamePromotionGateSpec(
+            rung_name="full-smb-transfer-smoke",
+            metric_gates=(
+                PromotionMetricGateSpec(
+                    metric="deterministic_action",
+                    operator=">=",
+                    threshold=0.0,
+                    reason="Full SMB inference action must be non-negative",
+                    name="deterministic_action_min",
+                ),
+                PromotionMetricGateSpec(
+                    metric="deterministic_action",
+                    operator="<=",
+                    threshold=float(len(SMB_ACTIONS) - 1),
+                    reason="Full SMB inference action must fit the SMB action space",
+                    name="deterministic_action_max",
+                ),
+                PromotionMetricGateSpec(
+                    metric="continued_global_step",
+                    operator=">",
+                    threshold=0.0,
+                    reason="Full SMB continued training must advance global_step",
+                ),
+                PromotionMetricGateSpec(
+                    metric="controller_transfer_key_count",
+                    operator=">",
+                    threshold=0.0,
+                    reason="Controller transfer must copy at least one tensor",
+                ),
+                PromotionMetricGateSpec(
+                    metric="controller_transfer_max_abs_delta",
+                    operator="==",
+                    threshold=0.0,
+                    reason="Controller transfer must preserve copied tensors exactly",
+                ),
+                PromotionMetricGateSpec(
+                    metric="controller_adaptation_key_count",
+                    operator=">",
+                    threshold=0.0,
+                    reason="Continued Full SMB training must expose controller tensors",
+                ),
+                PromotionMetricGateSpec(
+                    metric="controller_adaptation_changed_tensors",
+                    operator=">",
+                    threshold=0.0,
+                    reason="Continued Full SMB training must update controller tensors",
+                ),
+            ),
+            artifact_gates=(
+                _artifact_gate("source_block_checkpoint_path"),
+                _artifact_gate("full_smb_vision_checkpoint_path"),
+                _artifact_gate("transfer_checkpoint_path"),
+                _artifact_gate("continued_checkpoint_path"),
+                _artifact_gate("summary_path"),
+            ),
+            failure_reason="SMB Full SMB transfer smoke gate failed",
+        ),
     },
 )
 

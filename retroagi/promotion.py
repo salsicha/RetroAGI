@@ -20,7 +20,9 @@ import torch.nn.functional as F
 from retroagi import experiments
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
-    SMB_ACTIONS,
+    COMPARISON_OPERATORS,
+    GamePromotionGateSpec,
+    PromotionMetricGateSpec,
     StageSpec,
     architecture_names,
     build_game_promotion_plan,
@@ -319,11 +321,6 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
     },
 }
 
-REQUIRED_RUNG_METRICS = {
-    "synthetic-concept": ("controller_mse",),
-    "block-smb-smoke": ("eval_success_rate", "gradient_norm"),
-}
-
 RUNG_ALIASES = {rung.name: (rung.name,) for rung in PROMOTION_RUNGS}
 RUNG_ALIASES.update(
     {
@@ -497,15 +494,49 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
         if rung.status == UNSUPPORTED_RUNG_STATUS:
             results.append(_skipped_rung(rung, budgets[rung.name]))
         elif rung.name == "interface-smoke":
-            results.append(_run_interface_smoke(args, variant, budgets[rung.name]))
+            results.append(
+                _run_interface_smoke(
+                    args,
+                    variant,
+                    budgets[rung.name],
+                    game_plugin.promotion_gate(rung.name),
+                )
+            )
         elif rung.name == "synthetic-concept":
-            results.append(_run_synthetic_concept(args, variant, budgets[rung.name]))
+            results.append(
+                _run_synthetic_concept(
+                    args,
+                    variant,
+                    budgets[rung.name],
+                    game_plugin.promotion_gate(rung.name),
+                )
+            )
         elif rung.name == "block-smb-smoke":
-            results.append(_run_block_smb_smoke(args, variant, budgets[rung.name]))
+            results.append(
+                _run_block_smb_smoke(
+                    args,
+                    variant,
+                    budgets[rung.name],
+                    game_plugin.promotion_gate(rung.name),
+                )
+            )
         elif rung.name == "full-smb-asset-mock-perception":
-            results.append(_run_full_smb_asset_mock_perception(args, budgets[rung.name]))
+            results.append(
+                _run_full_smb_asset_mock_perception(
+                    args,
+                    budgets[rung.name],
+                    game_plugin.promotion_gate(rung.name),
+                )
+            )
         elif rung.name == "full-smb-transfer-smoke":
-            results.append(_run_full_smb_transfer_smoke(args, variant, budgets[rung.name]))
+            results.append(
+                _run_full_smb_transfer_smoke(
+                    args,
+                    variant,
+                    budgets[rung.name],
+                    game_plugin.promotion_gate(rung.name),
+                )
+            )
         else:
             raise ValueError(f"unsupported promotion rung {rung.name!r}")
         if results[-1]["status"] == "failed":
@@ -533,7 +564,8 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
             ],
         },
         "game_promotion": game_promotion_plan.to_manifest(
-            {rung["name"]: rung["status"] for rung in results}
+            {rung["name"]: rung["status"] for rung in results},
+            game_plugin.promotion_gates,
         ),
         "budget": {
             "name": args.budget,
@@ -660,6 +692,7 @@ def _run_interface_smoke(
     args: argparse.Namespace,
     variant: Any,
     budget: Mapping[str, int | float],
+    gate_spec: GamePromotionGateSpec | None,
 ) -> dict[str, Any]:
     torch.manual_seed(args.seed)
     device = select_device(args.device)
@@ -683,7 +716,12 @@ def _run_interface_smoke(
 
     runnable = [stage for stage in stage_results if stage["status"] != "skipped"]
     elapsed_seconds = time.perf_counter() - start_time
-    automatic_gates = _interface_automatic_gates(stage_results, budget, elapsed_seconds)
+    automatic_gates = _interface_automatic_gates(
+        stage_results,
+        budget,
+        elapsed_seconds,
+        gate_spec,
+    )
     passed = (
         bool(runnable)
         and all(stage["passed"] for stage in runnable)
@@ -754,6 +792,7 @@ def _run_synthetic_concept(
     args: argparse.Namespace,
     variant: Any,
     budget: Mapping[str, int | float],
+    gate_spec: GamePromotionGateSpec | None,
 ) -> dict[str, Any]:
     experiment_args = argparse.Namespace(
         stage=["synthetic-1d"],
@@ -764,14 +803,11 @@ def _run_synthetic_concept(
         architecture_name=args.architecture_name,
         architecture_config=list(variant.architecture_config.items()),
         ablation=list(variant.ablation_items),
-        gate=[
-            experiments.MetricGate(
-                stage="synthetic-1d",
-                metric="controller_mse",
-                operator="<=",
-                threshold=float(budget["controller_mse_threshold"]),
-            )
-        ],
+        gate=_experiment_metric_gates_from_game_spec(
+            "synthetic-1d",
+            gate_spec,
+            budget,
+        ),
         synthetic_epochs=int(budget["epochs"]),
         synthetic_train_samples=int(budget["train_samples"]),
         synthetic_validation_samples=int(budget["validation_samples"]),
@@ -784,13 +820,19 @@ def _run_synthetic_concept(
         block_fixed_scenario=None,
         enable_block_checkpoint_transfer=False,
     )
-    return _run_experiment_rung("synthetic-concept", experiment_args, budget)
+    return _run_experiment_rung(
+        "synthetic-concept",
+        experiment_args,
+        budget,
+        gate_spec,
+    )
 
 
 def _run_block_smb_smoke(
     args: argparse.Namespace,
     variant: Any,
     budget: Mapping[str, int | float],
+    gate_spec: GamePromotionGateSpec | None,
 ) -> dict[str, Any]:
     experiment_args = argparse.Namespace(
         stage=["block-smb"],
@@ -801,14 +843,11 @@ def _run_block_smb_smoke(
         architecture_name=args.architecture_name,
         architecture_config=list(variant.architecture_config.items()),
         ablation=list(variant.ablation_items),
-        gate=[
-            experiments.MetricGate(
-                stage="block-smb",
-                metric="eval_success_rate",
-                operator=">=",
-                threshold=float(budget["success_rate_threshold"]),
-            )
-        ],
+        gate=_experiment_metric_gates_from_game_spec(
+            "block-smb",
+            gate_spec,
+            budget,
+        ),
         synthetic_epochs=1,
         synthetic_train_samples=16,
         synthetic_validation_samples=8,
@@ -821,12 +860,18 @@ def _run_block_smb_smoke(
         block_fixed_scenario=None,
         enable_block_checkpoint_transfer=False,
     )
-    return _run_experiment_rung("block-smb-smoke", experiment_args, budget)
+    return _run_experiment_rung(
+        "block-smb-smoke",
+        experiment_args,
+        budget,
+        gate_spec,
+    )
 
 
 def _run_full_smb_asset_mock_perception(
     args: argparse.Namespace,
     budget: Mapping[str, int | float],
+    gate_spec: GamePromotionGateSpec | None,
 ) -> dict[str, Any]:
     start_time = time.perf_counter()
     device = select_device(args.device)
@@ -870,6 +915,7 @@ def _run_full_smb_asset_mock_perception(
         artifacts=artifacts,
         budget=budget,
         elapsed_seconds=elapsed_seconds,
+        gate_spec=gate_spec,
     )
     passed = all(gate["passed"] for gate in automatic_gates)
     return {
@@ -1166,6 +1212,7 @@ def _run_full_smb_transfer_smoke(
     args: argparse.Namespace,
     variant: Any,
     budget: Mapping[str, int | float],
+    gate_spec: GamePromotionGateSpec | None,
 ) -> dict[str, Any]:
     start_time = time.perf_counter()
     device = select_device(args.device)
@@ -1278,6 +1325,7 @@ def _run_full_smb_transfer_smoke(
         artifacts=artifacts,
         budget=budget,
         elapsed_seconds=elapsed_seconds,
+        gate_spec=gate_spec,
     )
     passed = all(gate["passed"] for gate in automatic_gates)
     return {
@@ -1353,7 +1401,8 @@ def _ensure_asset_mock_perception_checkpoint(args: argparse.Namespace) -> Path:
     if checkpoint_path.exists():
         return checkpoint_path
     budget = PROMOTION_BUDGETS[args.budget]["full-smb-asset-mock-perception"]
-    rung = _run_full_smb_asset_mock_perception(args, budget)
+    gate_spec = get_game_plugin(args.game).promotion_gate("full-smb-asset-mock-perception")
+    rung = _run_full_smb_asset_mock_perception(args, budget, gate_spec)
     if not rung["passed"]:
         raise RuntimeError(
             "Full SMB transfer requires a passing asset-mock perception rung: "
@@ -1556,6 +1605,7 @@ def _run_experiment_rung(
     name: str,
     experiment_args: argparse.Namespace,
     budget: Mapping[str, int | float],
+    gate_spec: GamePromotionGateSpec | None,
 ) -> dict[str, Any]:
     start_time = time.perf_counter()
     manifest = experiments.run_experiment(experiment_args)
@@ -1563,7 +1613,12 @@ def _run_experiment_rung(
     output = json.dumps(to_plain_data(manifest), indent=2, sort_keys=True)
     experiment_args.output.parent.mkdir(parents=True, exist_ok=True)
     experiment_args.output.write_text(output + "\n", encoding="utf-8")
-    automatic_gates = _experiment_automatic_gates(name, manifest, budget, elapsed_seconds)
+    automatic_gates = _experiment_automatic_gates(
+        manifest,
+        budget,
+        elapsed_seconds,
+        gate_spec,
+    )
     passed = bool(manifest["passed"]) and all(gate["passed"] for gate in automatic_gates)
     return {
         "name": name,
@@ -1581,8 +1636,9 @@ def _interface_automatic_gates(
     stage_results: Sequence[Mapping[str, Any]],
     budget: Mapping[str, int | float],
     elapsed_seconds: float,
+    gate_spec: GamePromotionGateSpec | None,
 ) -> list[dict[str, Any]]:
-    gates = [_runtime_gate(budget, elapsed_seconds)]
+    gates = _runtime_gates(gate_spec, budget, elapsed_seconds)
     for stage in stage_results:
         if stage.get("status") == "skipped":
             continue
@@ -1614,18 +1670,24 @@ def _interface_automatic_gates(
 
 
 def _experiment_automatic_gates(
-    name: str,
     manifest: Mapping[str, Any],
     budget: Mapping[str, int | float],
     elapsed_seconds: float,
+    gate_spec: GamePromotionGateSpec | None,
 ) -> list[dict[str, Any]]:
-    gates = [_runtime_gate(budget, elapsed_seconds)]
+    gates = _runtime_gates(gate_spec, budget, elapsed_seconds)
     stages = manifest.get("stages", [])
     if not isinstance(stages, Sequence):
         stages = []
-    gates.extend(_required_metric_gates(name, stages))
+    gates.extend(
+        _game_metric_gates(
+            gate_spec,
+            _collect_stage_metrics(stages),
+            budget,
+        )
+    )
     gates.extend(_finite_metric_gates(stages))
-    gates.extend(_artifact_gates(stages))
+    gates.extend(_game_artifact_gates(gate_spec, _collect_stage_artifacts(stages)))
     return gates
 
 
@@ -1635,53 +1697,11 @@ def _asset_mock_automatic_gates(
     artifacts: Mapping[str, str],
     budget: Mapping[str, int | float],
     elapsed_seconds: float,
+    gate_spec: GamePromotionGateSpec | None,
 ) -> list[dict[str, Any]]:
-    gates = [_runtime_gate(budget, elapsed_seconds)]
-    metric_thresholds = {
-        "accuracy": float(budget["semantic_accuracy_threshold"]),
-        "foreground_accuracy": float(budget["foreground_accuracy_threshold"]),
-        "mean_iou": float(budget["mean_iou_threshold"]),
-        "position_within_tolerance": float(budget["position_within_tolerance_threshold"]),
-        "class_coverage": float(len(FULL_SMB_ASSET_MOCK_CLASSES)),
-    }
-    for metric, threshold in metric_thresholds.items():
-        actual = metrics.get(metric)
-        passed = _is_finite_number(actual) and float(actual) >= threshold
-        gates.append(
-            {
-                "name": f"asset-mock:{metric}",
-                "kind": "metric",
-                "passed": passed,
-                "actual": actual,
-                "threshold": f">={threshold}",
-                "reason": None if passed else f"{metric} is below the asset-mock gate",
-            }
-        )
-    for metric in ("position_rmse", "position_tolerance"):
-        actual = metrics.get(metric)
-        passed = _is_finite_number(actual)
-        gates.append(
-            {
-                "name": f"asset-mock:{metric}:finite",
-                "kind": "numerical",
-                "passed": passed,
-                "actual": actual,
-                "threshold": "finite",
-                "reason": None if passed else f"{metric} is missing or non-finite",
-            }
-        )
-    for field, artifact_path in artifacts.items():
-        exists = Path(artifact_path).exists()
-        gates.append(
-            {
-                "name": f"artifact:{field}",
-                "kind": "artifact",
-                "passed": exists,
-                "actual": artifact_path,
-                "threshold": "exists",
-                "reason": None if exists else "artifact path does not exist",
-            }
-        )
+    gates = _runtime_gates(gate_spec, budget, elapsed_seconds)
+    gates.extend(_game_metric_gates(gate_spec, metrics, budget))
+    gates.extend(_game_artifact_gates(gate_spec, artifacts))
     return gates
 
 
@@ -1691,83 +1711,10 @@ def _handoff_automatic_gates(
     artifacts: Mapping[str, str],
     budget: Mapping[str, int | float],
     elapsed_seconds: float,
+    gate_spec: GamePromotionGateSpec | None,
 ) -> list[dict[str, Any]]:
-    gates = [_runtime_gate(budget, elapsed_seconds)]
-    gates.append(
-        {
-            "name": "deterministic-action-in-vocabulary",
-            "kind": "contract",
-            "passed": 0 <= int(metrics["deterministic_action"]) < len(SMB_ACTIONS),
-            "actual": int(metrics["deterministic_action"]),
-            "threshold": f"0..{len(SMB_ACTIONS) - 1}",
-            "reason": (
-                None
-                if 0 <= int(metrics["deterministic_action"]) < len(SMB_ACTIONS)
-                else "selected action is outside the shared SMB action vocabulary"
-            ),
-        }
-    )
-    gates.append(
-        {
-            "name": "continued-training-advanced",
-            "kind": "metric",
-            "passed": metrics["continued_global_step"] > 0,
-            "actual": metrics["continued_global_step"],
-            "threshold": ">0",
-            "reason": (
-                None
-                if metrics["continued_global_step"] > 0
-                else "continued Full SMB training did not advance global_step"
-            ),
-        }
-    )
-    gates.append(
-        {
-            "name": "controller-transfer-exact",
-            "kind": "contract",
-            "passed": (
-                metrics["controller_transfer_key_count"] > 0
-                and metrics["controller_transfer_max_abs_delta"] == 0.0
-            ),
-            "actual": {
-                "key_count": metrics["controller_transfer_key_count"],
-                "max_abs_delta": metrics["controller_transfer_max_abs_delta"],
-            },
-            "threshold": "key_count>0 and max_abs_delta==0",
-            "reason": (
-                None
-                if (
-                    metrics["controller_transfer_key_count"] > 0
-                    and metrics["controller_transfer_max_abs_delta"] == 0.0
-                )
-                else "Block SMB controller weights were not copied exactly into Full SMB"
-            ),
-        }
-    )
-    gates.append(
-        {
-            "name": "controller-adapted-during-full-smb-training",
-            "kind": "metric",
-            "passed": (
-                metrics["controller_adaptation_key_count"] > 0
-                and metrics["controller_adaptation_changed_tensors"] > 0
-            ),
-            "actual": {
-                "key_count": metrics["controller_adaptation_key_count"],
-                "changed_tensors": metrics["controller_adaptation_changed_tensors"],
-                "max_abs_delta": metrics["controller_adaptation_max_abs_delta"],
-            },
-            "threshold": "key_count>0 and changed_tensors>0",
-            "reason": (
-                None
-                if (
-                    metrics["controller_adaptation_key_count"] > 0
-                    and metrics["controller_adaptation_changed_tensors"] > 0
-                )
-                else "continued Full SMB training did not update controller weights"
-            ),
-        }
-    )
+    gates = _runtime_gates(gate_spec, budget, elapsed_seconds)
+    gates.extend(_game_metric_gates(gate_spec, metrics, budget))
     for metric, value in metrics.items():
         gates.append(
             {
@@ -1779,26 +1726,43 @@ def _handoff_automatic_gates(
                 "reason": None if _is_finite_number(value) else "metric is non-finite",
             }
         )
-    for field, artifact_path in artifacts.items():
-        exists = Path(artifact_path).exists()
-        gates.append(
-            {
-                "name": f"artifact:{field}",
-                "kind": "artifact",
-                "passed": exists,
-                "actual": artifact_path,
-                "threshold": "exists",
-                "reason": None if exists else "artifact path does not exist",
-            }
-        )
+    gates.extend(_game_artifact_gates(gate_spec, artifacts))
     return gates
+
+
+def _runtime_gates(
+    gate_spec: GamePromotionGateSpec | None,
+    budget: Mapping[str, int | float],
+    elapsed_seconds: float,
+) -> list[dict[str, Any]]:
+    if gate_spec is not None and gate_spec.runtime is None:
+        return []
+    budget_key = gate_spec.runtime.budget_key if gate_spec is not None else "runtime_seconds"
+    reason = (
+        gate_spec.runtime.reason
+        if gate_spec is not None
+        else "runtime exceeded promotion budget"
+    )
+    return [_runtime_gate(budget, elapsed_seconds, budget_key, reason)]
 
 
 def _runtime_gate(
     budget: Mapping[str, int | float],
     elapsed_seconds: float,
+    budget_key: str = "runtime_seconds",
+    failure_reason: str = "runtime exceeded promotion budget",
 ) -> dict[str, Any]:
-    threshold = float(budget["runtime_seconds"])
+    if budget_key not in budget:
+        return {
+            "name": "runtime-seconds",
+            "kind": "runtime",
+            "passed": False,
+            "actual": elapsed_seconds,
+            "threshold": None,
+            "reason": f"runtime budget key {budget_key!r} is missing",
+            "source": "game-promotion",
+        }
+    threshold = float(budget[budget_key])
     passed = elapsed_seconds <= threshold
     return {
         "name": "runtime-seconds",
@@ -1806,26 +1770,134 @@ def _runtime_gate(
         "passed": passed,
         "actual": elapsed_seconds,
         "threshold": threshold,
-        "reason": None if passed else "runtime exceeded promotion budget",
+        "reason": None if passed else failure_reason,
+        "source": "game-promotion",
     }
 
 
-def _required_metric_gates(name: str, stages: Sequence[Any]) -> list[dict[str, Any]]:
-    required_metrics = REQUIRED_RUNG_METRICS.get(name, ())
+def _game_metric_gates(
+    gate_spec: GamePromotionGateSpec | None,
+    metrics: Mapping[str, Any],
+    budget: Mapping[str, int | float],
+) -> list[dict[str, Any]]:
+    if gate_spec is None:
+        return []
     gates = []
-    for metric in required_metrics:
-        stage_metric = _find_metric(stages, metric)
+    for metric_gate in gate_spec.metric_gates:
+        gates.append(_evaluate_game_metric_gate(metric_gate, metrics, budget, gate_spec))
+    return gates
+
+
+def _evaluate_game_metric_gate(
+    metric_gate: PromotionMetricGateSpec,
+    metrics: Mapping[str, Any],
+    budget: Mapping[str, int | float],
+    gate_spec: GamePromotionGateSpec,
+) -> dict[str, Any]:
+    actual = metrics.get(metric_gate.metric)
+    threshold: float | str
+    if metric_gate.operator == "present":
+        passed = actual is not None
+        threshold = "present"
+        kind = "metric"
+    elif metric_gate.operator == "finite":
+        passed = _is_finite_number(actual)
+        threshold = "finite"
+        kind = "numerical"
+    else:
+        threshold = _metric_gate_threshold(metric_gate, budget)
+        passed = (
+            _is_finite_number(actual)
+            and isinstance(threshold, (int, float))
+            and _compare_metric(float(actual), metric_gate.operator, float(threshold))
+        )
+        kind = "metric"
+    gate_name = metric_gate.name or f"game-metric:{metric_gate.metric}"
+    return {
+        "name": gate_name,
+        "kind": kind,
+        "passed": passed,
+        "actual": actual,
+        "threshold": (
+            threshold
+            if metric_gate.operator in {"present", "finite"}
+            else f"{metric_gate.operator}{threshold}"
+        ),
+        "reason": None if passed else metric_gate.reason,
+        "source": "game-promotion",
+        "failure_reason": gate_spec.failure_reason,
+    }
+
+
+def _metric_gate_threshold(
+    metric_gate: PromotionMetricGateSpec,
+    budget: Mapping[str, int | float],
+) -> float:
+    if metric_gate.threshold is not None:
+        return float(metric_gate.threshold)
+    assert metric_gate.threshold_key is not None
+    return float(budget[metric_gate.threshold_key])
+
+
+def _experiment_metric_gates_from_game_spec(
+    stage: str,
+    gate_spec: GamePromotionGateSpec | None,
+    budget: Mapping[str, int | float],
+) -> list[experiments.MetricGate]:
+    if gate_spec is None:
+        return []
+    gates = []
+    for metric_gate in gate_spec.metric_gates:
+        if metric_gate.operator not in COMPARISON_OPERATORS:
+            continue
+        gates.append(
+            experiments.MetricGate(
+                stage=stage,
+                metric=metric_gate.metric,
+                operator=metric_gate.operator,
+                threshold=_metric_gate_threshold(metric_gate, budget),
+            )
+        )
+    return gates
+
+
+def _game_artifact_gates(
+    gate_spec: GamePromotionGateSpec | None,
+    artifacts: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    if gate_spec is None:
+        return []
+    gates = []
+    for artifact_gate in gate_spec.artifact_gates:
+        artifact_path = artifacts.get(artifact_gate.field)
+        exists = artifact_path is not None and Path(str(artifact_path)).exists()
         gates.append(
             {
-                "name": f"required-metric:{metric}",
-                "kind": "metric",
-                "passed": stage_metric is not None,
-                "actual": stage_metric,
-                "threshold": "present",
-                "reason": None if stage_metric is not None else "required metric is missing",
+                "name": artifact_gate.name or f"artifact:{artifact_gate.field}",
+                "kind": "artifact",
+                "passed": exists,
+                "actual": str(artifact_path) if artifact_path is not None else None,
+                "threshold": "exists",
+                "reason": None if exists else artifact_gate.reason,
+                "source": "game-promotion",
+                "failure_reason": gate_spec.failure_reason,
             }
         )
     return gates
+
+
+def _compare_metric(actual: float, operator: str, threshold: float) -> bool:
+    if operator == ">=":
+        return actual >= threshold
+    if operator == "<=":
+        return actual <= threshold
+    if operator == ">":
+        return actual > threshold
+    if operator == "<":
+        return actual < threshold
+    if operator == "==":
+        return actual == threshold
+    raise ValueError(f"unknown metric gate operator {operator!r}")
 
 
 def _finite_metric_gates(stages: Sequence[Any]) -> list[dict[str, Any]]:
@@ -1867,41 +1939,27 @@ def _finite_metric_gates(stages: Sequence[Any]) -> list[dict[str, Any]]:
     return gates
 
 
-def _artifact_gates(stages: Sequence[Any]) -> list[dict[str, Any]]:
-    gates = []
-    for stage in stages:
-        if not isinstance(stage, Mapping):
-            continue
-        stage_name = stage.get("stage", "unknown-stage")
-        for field in ("summary_path", "checkpoint_path", "log_path"):
-            artifact_path = stage.get(field)
-            if artifact_path is None:
-                continue
-            exists = Path(str(artifact_path)).exists()
-            gates.append(
-                {
-                    "name": f"{stage_name}:artifact:{field}",
-                    "kind": "artifact",
-                    "passed": exists,
-                    "actual": str(artifact_path),
-                    "threshold": "exists",
-                    "reason": None if exists else "artifact path does not exist",
-                }
-            )
-    return gates
-
-
-def _find_metric(stages: Sequence[Any], metric: str) -> float | None:
+def _collect_stage_metrics(stages: Sequence[Any]) -> dict[str, Any]:
+    collected = {}
     for stage in stages:
         if not isinstance(stage, Mapping):
             continue
         metrics = stage.get("metrics", {})
-        if not isinstance(metrics, Mapping):
+        if isinstance(metrics, Mapping):
+            collected.update(metrics)
+    return collected
+
+
+def _collect_stage_artifacts(stages: Sequence[Any]) -> dict[str, str]:
+    artifacts = {}
+    for stage in stages:
+        if not isinstance(stage, Mapping):
             continue
-        value = metrics.get(metric)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
-    return None
+        for field in ("summary_path", "checkpoint_path", "log_path"):
+            artifact_path = stage.get(field)
+            if artifact_path is not None:
+                artifacts[field] = str(artifact_path)
+    return artifacts
 
 
 def _is_finite_number(value: Any) -> bool:

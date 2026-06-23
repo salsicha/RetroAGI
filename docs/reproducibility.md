@@ -113,6 +113,7 @@ assert manifest["architecture"]["name"] == "agent_world_model_critic"
 assert manifest["architecture"]["config"] == {"hidden_dim": 8}
 assert manifest["game"]["name"] == "smb"
 assert manifest["game_promotion"]["phases"][0]["name"] == "architecture-smoke"
+assert manifest["game_promotion"]["phases"][0]["rung_gates"]["interface-smoke"]["runtime"]
 assert [rung["name"] for rung in manifest["rungs"]] == ["interface-smoke"]
 assert manifest["rungs"][0]["status"] == "passed"
 assert {stage["stage"] for stage in manifest["rungs"][0]["stages"]} == {

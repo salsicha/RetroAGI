@@ -18,6 +18,7 @@ from retroagi.core import (
     BlockGameSpec,
     GamePluginRegistry,
     GamePluginSpec,
+    GamePromotionGateSpec,
     GameSpec,
     GameTaskSchema,
     GameTaskSpec,
@@ -142,6 +143,16 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(reward_config["goal"], 50.0)
         threshold = GAME_PLUGIN_REGISTRY.success_threshold("smb", "level_1_flat.json")
         self.assertIs(threshold, SMB_GAME_SPEC.task("level_1_flat.json").success_threshold)
+        block_gate = plugin.promotion_gate("block-smb-smoke")
+        self.assertIs(GAME_PLUGIN_REGISTRY.promotion_gate("smb", "block-smb-smoke"), block_gate)
+        assert block_gate is not None
+        self.assertEqual(block_gate.failure_reason, "SMB block smoke gate failed")
+        self.assertEqual(block_gate.metric_gates[0].metric, "eval_success_rate")
+        self.assertEqual(block_gate.metric_gates[0].threshold_key, "success_rate_threshold")
+        self.assertEqual(
+            [gate.field for gate in block_gate.artifact_gates],
+            ["summary_path", "checkpoint_path", "log_path"],
+        )
 
     def test_smb_actions_preserve_stable_ids_and_button_metadata(self):
         spec = SMB_GAME_SPEC
@@ -597,6 +608,17 @@ class TestGameSpec(unittest.TestCase):
                 vision_encoders={"block": "unit.Vision"},
                 success_thresholds={
                     "missing.json": TaskSuccessThreshold(1.0, 0.0, 1, 10, "unit")
+                },
+            )
+
+        with self.assertRaisesRegex(ValueError, "promotion gate keys"):
+            GamePluginSpec(
+                name="smb",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"block": "unit.Adapter"},
+                vision_encoders={"block": "unit.Vision"},
+                promotion_gates={
+                    "block-smb-smoke": GamePromotionGateSpec("synthetic-concept")
                 },
             )
 

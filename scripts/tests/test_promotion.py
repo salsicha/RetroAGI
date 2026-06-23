@@ -110,6 +110,14 @@ class TestPromotionPipeline(unittest.TestCase):
                 "game-full-training",
             ],
         )
+        synthetic_gate = manifest["game_promotion"]["phases"][1]["rung_gates"][
+            "synthetic-concept"
+        ]
+        self.assertEqual(
+            synthetic_gate["metrics"][0]["threshold_key"],
+            "controller_mse_threshold",
+        )
+        self.assertEqual(synthetic_gate["artifacts"][0]["field"], "summary_path")
         self.assertEqual(manifest["budget"]["name"], "small")
         self.assertEqual(manifest["rungs"][0]["name"], "interface-smoke")
         self.assertEqual(manifest["rungs"][0]["status"], "passed")
@@ -344,7 +352,10 @@ class TestPromotionPipeline(unittest.TestCase):
 
         def fake_run_experiment(args):
             calls.append(args)
-            return _fake_experiment_manifest(args)
+            return _fake_experiment_manifest(
+                args,
+                metrics={"eval_success_rate": 0.25, "gradient_norm": 1.0},
+            )
 
         with TemporaryDirectory() as tmpdir:
             with patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment):
@@ -547,9 +558,11 @@ class TestPromotionPipeline(unittest.TestCase):
         required_gate = next(
             gate
             for gate in manifest["rungs"][0]["automatic_gates"]
-            if gate["name"] == "required-metric:controller_mse"
+            if gate["name"] == "game-metric:controller_mse"
         )
         self.assertFalse(required_gate["passed"])
+        self.assertEqual(required_gate["source"], "game-promotion")
+        self.assertEqual(required_gate["failure_reason"], "SMB synthetic concept gate failed")
         self.assertIn("synthetic-concept failed", manifest["rungs"][1]["reason"])
 
     def test_missing_artifact_fails_automatic_gate(self):

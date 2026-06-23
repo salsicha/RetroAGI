@@ -107,6 +107,14 @@ its manifest and maps each phase to the current architecture-promotion rungs,
 so future games can preserve the same promotion order while substituting their
 own stage adapters, assets, and thresholds.
 
+`GamePromotionGateSpec` defines the gates for one game/rung pair. Each gate
+spec can declare a runtime budget key, metric presence or threshold checks,
+artifact fields that must exist, and a failure reason. The SMB plugin owns the
+current gate table for `synthetic-concept`, `block-smb-smoke`,
+`full-smb-asset-mock-perception`, and `full-smb-transfer-smoke`, so adding a
+new game requires declaring its promotion expectations in the game profile
+rather than adding game-specific checks to `retroagi promote`.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

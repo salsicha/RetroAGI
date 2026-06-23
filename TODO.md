@@ -284,9 +284,9 @@ Progressive-resolution responsibilities:
       explicit CLI overrides replace individual budget values.
 - [x] Add automatic promotion gates that stop an architecture when it fails
       required metrics, numerical checks, runtime limits, or artifact checks.
-      Promotion rungs now record automatic runtime, finite-number,
-      required-metric, and artifact-existence gates; later selected rungs are
-      marked stopped after the first gate failure.
+      Promotion rungs now record game-owned runtime, finite-number, metric,
+      threshold, and artifact-existence gates; later selected rungs are marked
+      stopped after the first gate failure.
 - [x] Produce a comparison report for architecture sweeps with per-stage metrics,
       artifact links, pass/fail gates, runtime, selected device, and regression
       deltas against the baseline architecture.
@@ -392,7 +392,7 @@ architecture cheaply before spending high-fidelity emulator time.
          known-good policies on seeded observation streams.
       7. **Game full training:** once supported, fine-tune or train directly in
          the emulator and report threshold metrics.
-- [ ] Add game-level promotion gates so each game can define required metrics,
+- [x] Add game-level promotion gates so each game can define required metrics,
       success thresholds, runtime budgets, artifact checks, and failure reasons
       at each fidelity rung.
 - [ ] Add game-level experiment manifests that include architecture, game,
