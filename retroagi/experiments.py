@@ -551,7 +551,13 @@ def _game_manifest(plugin) -> dict[str, Any]:
 
 def _stage_game_manifest(plugin, experiment_stage: str) -> dict[str, Any]:
     resolution = _resolve_experiment_game_stage(plugin, experiment_stage)
-    stage = next(stage for stage in plugin.game.stage_ladder if stage.name == resolution.name)
+    stage = next(
+        stage for stage in plugin.game.stage_ladder if stage.name == resolution.name
+    )
+    try:
+        perception_pipeline = plugin.perception_pipeline(resolution.name)
+    except KeyError:
+        perception_pipeline = None
     return {
         "name": resolution.name,
         "stage_spec_name": resolution.stage_spec_name,
@@ -560,6 +566,11 @@ def _stage_game_manifest(plugin, experiment_stage: str) -> dict[str, Any]:
         "promotion_gate_summary": stage.promotion_gate_summary,
         "stage_adapter": plugin.stage_adapters.get(resolution.name),
         "vision_encoder": plugin.vision_encoders.get(resolution.name),
+        "perception_pipeline": (
+            perception_pipeline.to_manifest()
+            if perception_pipeline is not None
+            else None
+        ),
     }
 
 

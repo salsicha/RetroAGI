@@ -399,7 +399,7 @@ architecture cheaply before spending high-fidelity emulator time.
       stage, seed, device, config, backend version, ROM/content identifiers,
       asset provenance, metrics, checkpoints, logs, recordings, and promotion
       decisions.
-- [ ] Separate visual perception pipelines by game profile, including semantic
+- [x] Separate visual perception pipelines by game profile, including semantic
       vocabularies, sprite/asset extraction, synthetic frame composition,
       checkpoint naming, and diagnostic thresholds.
 - [ ] Add an asset and licensing checklist for each game profile before assets

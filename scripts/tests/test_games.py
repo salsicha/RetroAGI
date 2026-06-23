@@ -23,9 +23,11 @@ from retroagi.core import (
     GameTaskSchema,
     GameTaskSpec,
     OPTIONAL_STAGE_NAMES,
+    PerceptionPipelineSpec,
     STANDARD_STAGE_NAMES,
     RewardConfigSchema,
     RewardTermSpec,
+    SemanticVocabularySpec,
     StageLadderEntry,
     SyntheticDataSpec,
     SyntheticSplitSpec,
@@ -136,6 +138,53 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(
             GAME_PLUGIN_REGISTRY.asset_pipeline("smb", "assets"),
             "scripts.vit.extract_sprites",
+        )
+        block_perception = plugin.perception_pipeline("block")
+        full_asset_perception = GAME_PLUGIN_REGISTRY.perception_pipeline(
+            "smb", "full_asset_mock"
+        )
+        self.assertEqual(block_perception.stage_name, "block")
+        self.assertEqual(
+            block_perception.checkpoint_path,
+            "data/block_vit/block_vit.pth",
+        )
+        self.assertEqual(block_perception.semantic_vocabulary.class_index("mario"), 1)
+        self.assertEqual(
+            block_perception.asset_extraction,
+            (
+                "retroagi.stages.block_smb.vision.BlockVisionTransformer."
+                "semantic_targets"
+            ),
+        )
+        self.assertEqual(
+            block_perception.synthetic_frame_composition,
+            "retroagi.stages.block_smb.env.MarioScenarioEnv",
+        )
+        self.assertEqual(block_perception.diagnostic_thresholds["min_accuracy"], 0.95)
+        self.assertEqual(full_asset_perception.stage_name, "full_asset_mock")
+        self.assertEqual(
+            full_asset_perception.semantic_classes,
+            SMB_GAME_SPEC.semantic_classes,
+        )
+        self.assertEqual(
+            full_asset_perception.asset_extraction,
+            "scripts.vit.extract_sprites",
+        )
+        self.assertEqual(
+            full_asset_perception.synthetic_frame_composition,
+            "scripts.vit.generate_dataset",
+        )
+        self.assertEqual(
+            full_asset_perception.checkpoint_path,
+            "data/vit/full_smb_vit.pth",
+        )
+        self.assertEqual(
+            full_asset_perception.diagnostic_thresholds["min_class_coverage"],
+            13.0,
+        )
+        self.assertIn(
+            "data/vit/val.npz",
+            full_asset_perception.to_manifest()["dataset_artifacts"],
         )
 
         reward_config = plugin.reward_config({"progress": 0.07})
@@ -584,6 +633,12 @@ class TestGameSpec(unittest.TestCase):
             )
 
     def test_game_plugin_registry_rejects_invalid_plugins(self):
+        unit_vocab = SemanticVocabularySpec(
+            name="unit",
+            classes=("background",),
+            background_class="background",
+        )
+
         with self.assertRaisesRegex(ValueError, "must match game profile"):
             GamePluginSpec(
                 name="other",
@@ -620,6 +675,82 @@ class TestGameSpec(unittest.TestCase):
                 promotion_gates={
                     "block-smb-smoke": GamePromotionGateSpec("synthetic-concept")
                 },
+            )
+
+        with self.assertRaisesRegex(ValueError, "perception pipeline keys"):
+            GamePluginSpec(
+                name="smb",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"block": "unit.Adapter"},
+                vision_encoders={"block": "unit.Vision"},
+                perception_pipelines={
+                    "other": PerceptionPipelineSpec(
+                        game_name="smb",
+                        name="block",
+                        stage_name="block",
+                        semantic_vocabulary=unit_vocab,
+                        vision_encoder="unit.Vision",
+                        asset_extraction="unit.assets",
+                        synthetic_frame_composition="unit.compose",
+                        checkpoint_path="data/unit.pth",
+                        diagnostic_thresholds={"accuracy": 1.0},
+                    )
+                },
+            )
+
+        with self.assertRaisesRegex(ValueError, "is for"):
+            GamePluginSpec(
+                name="smb",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"block": "unit.Adapter"},
+                vision_encoders={"block": "unit.Vision"},
+                perception_pipelines={
+                    "block": PerceptionPipelineSpec(
+                        game_name="other",
+                        name="block",
+                        stage_name="block",
+                        semantic_vocabulary=unit_vocab,
+                        vision_encoder="unit.Vision",
+                        asset_extraction="unit.assets",
+                        synthetic_frame_composition="unit.compose",
+                        checkpoint_path="data/unit.pth",
+                        diagnostic_thresholds={"accuracy": 1.0},
+                    )
+                },
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown stage"):
+            GamePluginSpec(
+                name="smb",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"block": "unit.Adapter"},
+                vision_encoders={"block": "unit.Vision"},
+                perception_pipelines={
+                    "block": PerceptionPipelineSpec(
+                        game_name="smb",
+                        name="block",
+                        stage_name="missing",
+                        semantic_vocabulary=unit_vocab,
+                        vision_encoder="unit.Vision",
+                        asset_extraction="unit.assets",
+                        synthetic_frame_composition="unit.compose",
+                        checkpoint_path="data/unit.pth",
+                        diagnostic_thresholds={"accuracy": 1.0},
+                    )
+                },
+            )
+
+        with self.assertRaisesRegex(ValueError, "finite numbers"):
+            PerceptionPipelineSpec(
+                game_name="smb",
+                name="block",
+                stage_name="block",
+                semantic_vocabulary=unit_vocab,
+                vision_encoder="unit.Vision",
+                asset_extraction="unit.assets",
+                synthetic_frame_composition="unit.compose",
+                checkpoint_path="data/unit.pth",
+                diagnostic_thresholds={"accuracy": float("inf")},
             )
 
         with self.assertRaisesRegex(ValueError, "names must be unique"):

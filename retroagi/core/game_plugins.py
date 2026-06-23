@@ -12,6 +12,7 @@ from .game_promotion import (
     PromotionMetricGateSpec,
 )
 from .games import GameSpec, SMB_GAME_SPEC
+from .perception import PerceptionPipelineSpec, SemanticVocabularySpec
 from .rewards import RewardConfigSchema
 from .stage_resolution import StageResolution, resolve_game_stage
 from .tasks import TaskSuccessThreshold
@@ -26,6 +27,9 @@ class GamePluginSpec:
     stage_adapters: Mapping[str, str]
     vision_encoders: Mapping[str, str]
     asset_pipelines: Mapping[str, str] = field(default_factory=dict)
+    perception_pipelines: Mapping[str, PerceptionPipelineSpec] = field(
+        default_factory=dict
+    )
     reward_schema: RewardConfigSchema | None = None
     success_thresholds: Mapping[str, TaskSuccessThreshold] = field(default_factory=dict)
     promotion_gates: Mapping[str, GamePromotionGateSpec] = field(default_factory=dict)
@@ -63,6 +67,7 @@ class GamePluginSpec:
                 self.asset_pipelines,
                 stage_names.union({"assets", "perception"}),
             )
+        self._validate_perception_pipelines()
         unknown_gate_names = sorted(
             name
             for name, gate in self.promotion_gates.items()
@@ -90,6 +95,26 @@ class GamePluginSpec:
             raise ValueError(
                 f"game plugin {self.name!r} {kind}s must define entrypoints: {empty}"
             )
+
+    def _validate_perception_pipelines(self) -> None:
+        for name, pipeline in self.perception_pipelines.items():
+            if name != pipeline.name:
+                raise ValueError(
+                    f"game plugin {self.name!r} perception pipeline keys must "
+                    f"match pipeline names: {name!r} != {pipeline.name!r}"
+                )
+            if pipeline.game_name != self.name:
+                raise ValueError(
+                    f"game plugin {self.name!r} perception pipeline {name!r} "
+                    f"is for {pipeline.game_name!r}"
+                )
+            try:
+                self.resolve_stage(pipeline.stage_name)
+            except KeyError as exc:
+                raise ValueError(
+                    f"game plugin {self.name!r} perception pipeline {name!r} "
+                    f"references unknown stage {pipeline.stage_name!r}"
+                ) from exc
 
     def stage_adapter(self, name: str) -> str:
         stage = self.resolve_stage(name)
@@ -119,6 +144,22 @@ class GamePluginSpec:
             raise KeyError(
                 f"unknown asset pipeline {name!r} for game plugin {self.name!r}"
             ) from exc
+
+    def perception_pipeline(self, name: str) -> PerceptionPipelineSpec:
+        if name in self.perception_pipelines:
+            return self.perception_pipelines[name]
+        try:
+            stage = self.resolve_stage(name)
+        except KeyError as exc:
+            raise KeyError(
+                f"unknown perception pipeline {name!r} for game plugin {self.name!r}"
+            ) from exc
+        for pipeline in self.perception_pipelines.values():
+            if pipeline.stage_name == stage.name:
+                return pipeline
+        raise KeyError(
+            f"unknown perception pipeline {name!r} for game plugin {self.name!r}"
+        )
 
     def reward_config(self, values: Mapping[str, float] | None = None) -> dict[str, float]:
         if self.reward_schema is None:
@@ -172,6 +213,13 @@ class GamePluginRegistry:
     def asset_pipeline(self, game_name: str, name: str) -> str:
         return self.get(game_name).asset_pipeline(name)
 
+    def perception_pipeline(
+        self,
+        game_name: str,
+        name: str,
+    ) -> PerceptionPipelineSpec:
+        return self.get(game_name).perception_pipeline(name)
+
     def reward_config(
         self,
         game_name: str,
@@ -215,6 +263,86 @@ SMB_GAME_PLUGIN = GamePluginSpec(
         "assets": "scripts.vit.extract_sprites",
         "perception": "scripts.vit.generate_dataset",
         "full_asset_mock": "retroagi.stages.full_smb.vision",
+    },
+    perception_pipelines={
+        "block": PerceptionPipelineSpec(
+            game_name="smb",
+            name="block",
+            stage_name="block",
+            semantic_vocabulary=SemanticVocabularySpec(
+                name="smb_block_synthetic",
+                classes=(
+                    "background",
+                    "mario",
+                    "platform",
+                    "coin",
+                    "goal",
+                    "enemy",
+                    "moving_platform",
+                ),
+                background_class="background",
+                metadata={
+                    "label_source": "exact simulator palette and symbolic state labels",
+                },
+            ),
+            vision_encoder="retroagi.stages.block_smb.vision.BlockVisionTransformer",
+            asset_extraction=(
+                "retroagi.stages.block_smb.vision.BlockVisionTransformer."
+                "semantic_targets"
+            ),
+            synthetic_frame_composition=(
+                "retroagi.stages.block_smb.env.MarioScenarioEnv"
+            ),
+            checkpoint_path="data/block_vit/block_vit.pth",
+            diagnostic_thresholds={
+                "min_accuracy": 0.95,
+                "min_foreground_accuracy": 0.90,
+                "min_mean_iou": 0.70,
+                "max_position_rmse": 0.06,
+                "min_position_within_tolerance": 0.90,
+                "position_tolerance": 0.05,
+            },
+            dataset_artifacts=("procedural Block SMB rollouts",),
+            metadata={
+                "checkpoint_kind": "vision_encoder",
+                "training_entrypoint": "scripts.vit.train_block_vit",
+            },
+        ),
+        "full_asset_mock": PerceptionPipelineSpec(
+            game_name="smb",
+            name="full_asset_mock",
+            stage_name="full_asset_mock",
+            semantic_vocabulary=SemanticVocabularySpec(
+                name="smb_full_asset_mock",
+                classes=SMB_GAME_SPEC.semantic_classes,
+                background_class="sky",
+                metadata={
+                    "label_source": "synthetic masks composed from full-game assets",
+                },
+            ),
+            vision_encoder="retroagi.stages.full_smb.vision.FullSMBVisionTransformer",
+            asset_extraction="scripts.vit.extract_sprites",
+            synthetic_frame_composition="scripts.vit.generate_dataset",
+            checkpoint_path="data/vit/full_smb_vit.pth",
+            diagnostic_thresholds={
+                "semantic_accuracy_threshold": 0.25,
+                "foreground_accuracy_threshold": 0.10,
+                "mean_iou_threshold": 0.05,
+                "position_within_tolerance_threshold": 0.10,
+                "position_tolerance": 0.25,
+                "min_class_coverage": 13.0,
+            },
+            dataset_artifacts=(
+                "assets/spritesheets/",
+                "assets/sprites/",
+                "data/vit/train.npz",
+                "data/vit/val.npz",
+            ),
+            metadata={
+                "checkpoint_kind": "vision_encoder",
+                "training_entrypoint": "scripts.vit.train_vit",
+            },
+        ),
     },
     reward_schema=SMB_GAME_SPEC.reward_schema,
     success_thresholds={

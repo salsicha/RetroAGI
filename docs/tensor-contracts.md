@@ -115,6 +115,16 @@ current gate table for `synthetic-concept`, `block-smb-smoke`,
 new game requires declaring its promotion expectations in the game profile
 rather than adding game-specific checks to `retroagi promote`.
 
+`PerceptionPipelineSpec` separates visual perception by game profile. Each
+pipeline owns its semantic vocabulary, vision encoder entrypoint, asset or label
+extraction source, synthetic-frame composition source, checkpoint path, dataset
+artifacts, and diagnostic thresholds. The SMB plugin currently declares a
+`block` pipeline for exact labels from the simplified simulator and a
+`full_asset_mock` pipeline for full-game assets composed into synthetic scenes.
+Experiment stage manifests include the resolved pipeline so model runs record
+which vocabulary, checkpoint naming convention, and perception thresholds were
+used.
+
 `retroagi experiment --game <name>` records the selected `GamePluginSpec` in
 the combined experiment manifest. The manifest includes backend version,
 content identifiers, asset provenance, per-stage game ladder metadata,

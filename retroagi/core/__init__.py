@@ -122,6 +122,7 @@ from .models import (
     WorldModel,
     WorldModelState,
 )
+from .perception import PerceptionPipelineSpec, SemanticVocabularySpec
 from .rewards import RewardConfigSchema, RewardTermSpec
 from .signals import GameSignalExtractor, GameSignals
 from .stage_resolution import (
@@ -194,6 +195,7 @@ __all__ = [
     "ModelConfig",
     "OPTIONAL_STAGE_NAMES",
     "PatchVisionTransformer",
+    "PerceptionPipelineSpec",
     "PositionalEncoding",
     "PromotionArtifactGateSpec",
     "PromotionMetricGateSpec",
@@ -212,6 +214,7 @@ __all__ = [
     "STANDARD_STAGE_NAMES",
     "STAGE_NAME_ALIASES",
     "SUPPORTED_CONTROLLER_SCHEDULES",
+    "SemanticVocabularySpec",
     "TRACKING_BACKENDS",
     "StageLadderEntry",
     "StageResolution",

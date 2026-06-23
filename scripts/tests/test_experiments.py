@@ -120,6 +120,20 @@ class TestExperimentRunner(unittest.TestCase):
             block["game_stage"]["stage_adapter"],
             "retroagi.stages.block_smb.adapter.BlockSMBStage",
         )
+        self.assertEqual(
+            block["game_stage"]["perception_pipeline"]["checkpoint_path"],
+            "data/block_vit/block_vit.pth",
+        )
+        self.assertEqual(
+            block["game_stage"]["perception_pipeline"]["semantic_vocabulary"]["classes"][
+                1
+            ],
+            "mario",
+        )
+        self.assertIn(
+            "min_accuracy",
+            block["game_stage"]["perception_pipeline"]["diagnostic_thresholds"],
+        )
         self.assertEqual(synthetic["metrics"]["controller_mse"], 0.4)
         self.assertEqual(block["metrics"]["eval_success_rate"], 0.5)
         self.assertEqual(
