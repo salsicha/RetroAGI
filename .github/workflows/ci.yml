@@ -91,6 +91,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Install CPU PyTorch
+        run: >
+          python -m pip install
+          torch==2.9.1
+          torchvision==0.24.1
+          --index-url https://download.pytorch.org/whl/cpu
+
       - name: Install test dependencies
         run: python -m pip install ".[test,vision]"
 
@@ -109,6 +116,13 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
+
+      - name: Install CPU PyTorch
+        run: >
+          python -m pip install
+          torch==2.9.1
+          torchvision==0.24.1
+          --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install smoke dependencies
         run: python -m pip install ".[test,vision]"

@@ -15,13 +15,13 @@ from retroagi.core import (
 )
 from retroagi.stages.block_smb import (
     BLOCK_SMB_SPEC,
-    BlockVITPerceptionThresholds,
     BlockSMBStage,
     BlockVisionTransformer,
+    BlockVITPerceptionThresholds,
     evaluate_block_vit_perception,
     load_block_vit_checkpoint,
 )
-from scripts.vit.train_vit import ViTSegmenter
+from retroagi.stages.full_smb import load_full_smb_vit_checkpoint
 from scripts.vit.train_block_vit import (
     build_ground_truth,
     class_weights,
@@ -215,9 +215,7 @@ class TestVisionInterface(unittest.TestCase):
         finally:
             stage.env.close()
 
-    def make_block_vit_checkpoint(
-        self, path: Path, model: BlockVisionTransformer
-    ) -> None:
+    def make_block_vit_checkpoint(self, path: Path, model: BlockVisionTransformer) -> None:
         checkpoint = build_checkpoint(
             stage=BLOCK_SMB_SPEC.name,
             model_name=model.spec.name,
@@ -247,9 +245,7 @@ class TestVisionInterface(unittest.TestCase):
 
         self.assertTrue(result.frozen)
         self.assertEqual(result.checkpoint["checkpoint_kind"], "vision_encoder")
-        self.assertFalse(
-            any(parameter.requires_grad for parameter in result.model.parameters())
-        )
+        self.assertFalse(any(parameter.requires_grad for parameter in result.model.parameters()))
         self.assertFalse(result.model.training)
         for name, value in result.model.state_dict().items():
             torch.testing.assert_close(value, source.state_dict()[name])
@@ -293,9 +289,7 @@ class TestVisionInterface(unittest.TestCase):
             result = load_block_vit_checkpoint(path, freeze=False)
 
         self.assertFalse(result.frozen)
-        self.assertTrue(
-            all(parameter.requires_grad for parameter in result.model.parameters())
-        )
+        self.assertTrue(all(parameter.requires_grad for parameter in result.model.parameters()))
         self.assertTrue(result.model.training)
 
     def test_existing_vit_checkpoint_loads_into_shared_architecture(self):
@@ -303,11 +297,12 @@ class TestVisionInterface(unittest.TestCase):
         if not checkpoint.exists():
             self.skipTest("trained ViT checkpoint is not available")
 
-        model = ViTSegmenter()
-        state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        model.load_state_dict(state)
+        result = load_full_smb_vit_checkpoint(checkpoint)
 
-        output = model.encode(torch.zeros(1, 3, 240, 256))
+        self.assertTrue(result.checkpoint["metadata"]["legacy_checkpoint"])
+        self.assertEqual(result.path, checkpoint)
+
+        output = result.model.encode(torch.zeros(1, 3, 240, 256))
         self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
         self.assertEqual(output.position.shape, (1, 2))
 
