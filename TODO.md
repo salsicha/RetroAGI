@@ -222,7 +222,7 @@ high-fidelity evaluations.
       concrete model class directly.
 - [x] Register the current `AgentWorldModelCritic` as the baseline architecture
       so existing behavior remains the first comparable entry.
-- [ ] Refactor Synthetic 1D training to consume an architecture factory instead
+- [x] Refactor Synthetic 1D training to consume an architecture factory instead
       of instantiating `AgentWorldModelCritic` directly.
 - [ ] Refactor Block SMB policy training to consume an architecture factory and
       save the selected architecture name and config in every checkpoint and

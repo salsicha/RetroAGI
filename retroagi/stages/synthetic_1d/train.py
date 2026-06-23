@@ -12,13 +12,18 @@ import torch.optim as optim
 from tqdm import tqdm
 
 from retroagi.core import (
-    AgentWorldModelCritic,
+    BASELINE_ARCHITECTURE_NAME,
+    BASELINE_ARCHITECTURE_SPEC,
     StageSpec,
+    build_architecture,
     build_checkpoint,
+    get_architecture,
     load_checkpoint,
-    save_checkpoint as save_versioned_checkpoint,
     select_device,
     to_plain_data,
+)
+from retroagi.core import (
+    save_checkpoint as save_versioned_checkpoint,
 )
 
 SYNTHETIC_1D_SPEC = StageSpec(
@@ -104,6 +109,8 @@ class SyntheticBaselinePredictions:
 @dataclass(frozen=True)
 class SyntheticTrainingConfig:
     seed: int = 0
+    architecture_name: str = BASELINE_ARCHITECTURE_NAME
+    architecture_config: Mapping[str, Any] = field(default_factory=dict)
     split_sizes: SyntheticSplitSizes = field(default_factory=SyntheticSplitSizes)
     split_seeds: Optional[SyntheticSplitSeeds] = None
     batch_size: int = 32
@@ -119,6 +126,10 @@ class SyntheticTrainingConfig:
     save_checkpoints: bool = False
 
     def __post_init__(self) -> None:
+        if not self.architecture_name:
+            raise ValueError("architecture_name must be non-empty")
+        if any(not str(key) for key in self.architecture_config):
+            raise ValueError("architecture_config keys must be non-empty")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
         if self.epochs <= 0:
@@ -201,10 +212,7 @@ def compute_synthetic_training_losses(
     loss_actor_pass2 = criterion(actions2, batch_yc_target)
     loss_critic = criticism.pow(2).mean()
     loss_total = (
-        loss_actor_pass1
-        + loss_actor_pass2
-        + loss_world_model
-        + critic_loss_weight * loss_critic
+        loss_actor_pass1 + loss_actor_pass2 + loss_world_model + critic_loss_weight * loss_critic
     )
     return {
         "loss_actor_pass1": loss_actor_pass1,
@@ -245,12 +253,14 @@ def compute_synthetic_evaluation_metrics(
 
     w_true = torch.sin(yb.float())
     b_true = torch.cos(yb.float())
-    error_b = ((F.mse_loss(predictions.w_b, w_true) + F.mse_loss(predictions.b_b, b_true)) / 2).item()
+    error_b = (
+        (F.mse_loss(predictions.w_b, w_true) + F.mse_loss(predictions.b_b, b_true)) / 2
+    ).item()
 
     return {
         "controller_mse": controller_mse,
         "controller_mae": controller_mae,
-        "controller_rmse": controller_mse ** 0.5,
+        "controller_rmse": controller_mse**0.5,
         "error_B": error_b,
         "accuracy_A": accuracy_a,
     }
@@ -338,9 +348,36 @@ def synthetic_spec_metadata(spec: StageSpec = SYNTHETIC_1D_SPEC) -> dict[str, An
     }
 
 
+def synthetic_architecture_metadata(
+    config: Optional[SyntheticTrainingConfig],
+) -> dict[str, Any]:
+    if config is None:
+        return {}
+    architecture = get_architecture(config.architecture_name)
+    return {
+        "architecture": architecture.metadata(),
+        "architecture_config": dict(config.architecture_config),
+    }
+
+
+def build_synthetic_model(config: SyntheticTrainingConfig) -> nn.Module:
+    architecture = get_architecture(config.architecture_name)
+    expected_contract = BASELINE_ARCHITECTURE_SPEC.output_contract
+    if architecture.output_contract != expected_contract:
+        raise ValueError(
+            "Synthetic 1D training requires architecture output contract "
+            f"{expected_contract!r}, got {architecture.output_contract!r}"
+        )
+    return build_architecture(
+        config.architecture_name,
+        SYNTHETIC_1D_SPEC,
+        dict(config.architecture_config),
+    )
+
+
 def save_synthetic_checkpoint(
     path: Path,
-    model: AgentWorldModelCritic,
+    model: nn.Module,
     optimizer: optim.Optimizer,
     *,
     epoch: int,
@@ -357,7 +394,10 @@ def save_synthetic_checkpoint(
         global_step=global_step,
         metrics=metrics or {},
         config=to_plain_data(config) if config is not None else {},
-        specs=synthetic_spec_metadata(),
+        specs={
+            **synthetic_spec_metadata(),
+            **synthetic_architecture_metadata(config),
+        },
         states={
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
@@ -373,10 +413,12 @@ def save_synthetic_checkpoint(
 
 def restore_synthetic_checkpoint(
     path: Path,
-    model: AgentWorldModelCritic,
+    model: nn.Module,
     optimizer: Optional[optim.Optimizer] = None,
     *,
     map_location: Any = "cpu",
+    architecture_name: Optional[str] = None,
+    architecture_config: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != SYNTHETIC_1D_SPEC.name:
@@ -392,6 +434,20 @@ def restore_synthetic_checkpoint(
             f"checkpoint kind {checkpoint['checkpoint_kind']!r} does not match "
             f"{SYNTHETIC_CHECKPOINT_KIND!r}"
         )
+    checkpoint_architecture_name = checkpoint.get("config", {}).get("architecture_name")
+    if architecture_name is not None and checkpoint_architecture_name is not None:
+        if str(checkpoint_architecture_name) != architecture_name:
+            raise ValueError(
+                "checkpoint architecture "
+                f"{checkpoint_architecture_name!r} does not match {architecture_name!r}"
+            )
+    checkpoint_architecture_config = checkpoint.get("config", {}).get("architecture_config")
+    if architecture_config is not None and checkpoint_architecture_config is not None:
+        if dict(checkpoint_architecture_config) != dict(architecture_config):
+            raise ValueError(
+                "checkpoint architecture config "
+                f"{checkpoint_architecture_config!r} does not match {dict(architecture_config)!r}"
+            )
 
     states = checkpoint["states"]
     if "torch_rng" in states:
@@ -407,8 +463,9 @@ def restore_synthetic_checkpoint(
         optimizer.load_state_dict(states["optimizer"])
     return checkpoint
 
+
 def train_synthetic_epoch(
-    model: AgentWorldModelCritic,
+    model: nn.Module,
     optimizer: optim.Optimizer,
     train_dataset: SyntheticDataset,
     config: SyntheticTrainingConfig,
@@ -461,7 +518,7 @@ def train_synthetic_epoch(
 
 
 def evaluate_synthetic_model(
-    model: AgentWorldModelCritic,
+    model: nn.Module,
     dataset: SyntheticDataset,
     *,
     tau: float,
@@ -481,6 +538,7 @@ def evaluate_synthetic_model(
         ),
         (eval_xa, eval_ya, eval_xb, eval_yb, eval_xc, eval_yc),
     )
+
 
 # --------------------------------------------------------
 # 1. Synthetic Data Generator
@@ -503,47 +561,52 @@ def generate_hierarchical_data(
     X_A, Y_A = [], []
     X_B, Y_B = [], []
     X_C_in, Y_C_target = [], []
-    
+
     for _ in range(num_samples):
         # Sequence A: standard progression
         start_a = rng.integers(0, vocab_size)
         seq_a = [(start_a + i) % vocab_size for i in range(seq_len_a + 1)]
         X_A.append(seq_a[:-1])
         Y_A.append(seq_a[1:])
-        
+
         # Sequence B: faster timescale progression
         start_b = rng.integers(0, vocab_size)
         seq_b = [(start_b + i) % vocab_size for i in range(seq_len_b + 1)]
         X_B.append(seq_b[:-1])
-        
+
         # Target B (implicit, not directly trained, used to generate C's parameters)
         y_b = []
         c_in_seq = []
         c_target_seq = []
         for j in range(seq_len_b):
-            i = j // ratio_ab # Index of latest A token
+            i = j // ratio_ab  # Index of latest A token
             # Combine A and B to get a target concept
-            concept = (seq_b[j+1] + seq_a[i+1]) % vocab_size
+            concept = (seq_b[j + 1] + seq_a[i + 1]) % vocab_size
             y_b.append(concept)
-            
+
             # The concept defines the true parameters for the controller
             w_true = np.sin(concept)
             b_true = np.cos(concept)
-            
+
             # Sequence C: Generate fast inputs and targets for the controller
             for k in range(ratio_bc):
                 x_val = rng.standard_normal()
                 y_val = w_true * x_val + b_true
                 c_in_seq.append(x_val)
                 c_target_seq.append(y_val)
-                
+
         Y_B.append(y_b)
         X_C_in.append(c_in_seq)
         Y_C_target.append(c_target_seq)
-        
-    return (torch.tensor(X_A, dtype=torch.long), torch.tensor(Y_A, dtype=torch.long),
-            torch.tensor(X_B, dtype=torch.long), torch.tensor(Y_B, dtype=torch.long),
-            torch.tensor(X_C_in, dtype=torch.float), torch.tensor(Y_C_target, dtype=torch.float))
+
+    return (
+        torch.tensor(X_A, dtype=torch.long),
+        torch.tensor(Y_A, dtype=torch.long),
+        torch.tensor(X_B, dtype=torch.long),
+        torch.tensor(Y_B, dtype=torch.long),
+        torch.tensor(X_C_in, dtype=torch.float),
+        torch.tensor(Y_C_target, dtype=torch.float),
+    )
 
 
 def generate_dataset_splits(
@@ -584,6 +647,7 @@ def generate_dataset_splits(
         sizes=sizes,
     )
 
+
 # --------------------------------------------------------
 # 2. Testing and Visualization System
 # --------------------------------------------------------
@@ -591,11 +655,6 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
     config = config or SyntheticTrainingConfig()
     seed_everything(config.seed, deterministic=config.deterministic)
 
-    # Hyperparameters
-    vocab_size = SYNTHETIC_1D_SPEC.vocab_size
-    seq_len_A = SYNTHETIC_1D_SPEC.seq_len_a
-    ratio_AB = SYNTHETIC_1D_SPEC.ratio_ab
-    ratio_BC = SYNTHETIC_1D_SPEC.ratio_bc
     batch_size = config.batch_size
     epochs = config.epochs
     tau_start = config.tau_start
@@ -604,7 +663,7 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
     device = select_device(config.device)
 
     print(f"Using device: {device}")
-    
+
     # Create deterministic datasets
     splits = generate_dataset_splits(
         sizes=config.split_sizes,
@@ -631,21 +690,22 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
     val_XB, val_YB = val_XB.to(device), val_YB.to(device)
     val_XC, val_YC = val_XC.to(device), val_YC.to(device)
 
-    seq_len_C = seq_len_A * ratio_AB * ratio_BC
-    
     # Initialize model, loss, optimizer
-    model = AgentWorldModelCritic(
-        vocab_size=vocab_size, seq_len_a=seq_len_A, seq_len_c=seq_len_C, ratio_bc=ratio_BC
-    ).to(device)
+    model = build_synthetic_model(config).to(device)
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
-    
+
     history = make_empty_history()
     start_epoch = 0
     global_step = 0
     if config.resume_path is not None:
         checkpoint = restore_synthetic_checkpoint(
-            config.resume_path, model, optimizer, map_location=device
+            config.resume_path,
+            model,
+            optimizer,
+            map_location=device,
+            architecture_name=config.architecture_name,
+            architecture_config=config.architecture_config,
         )
         start_epoch = checkpoint["epoch"]
         global_step = checkpoint["global_step"]
@@ -708,53 +768,54 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
     import matplotlib.pyplot as plt
 
     plt.figure(figsize=(24, 8))
-    
+
     plt.subplot(2, 3, 1)
-    plt.plot(history['loss_actor_pass1'], label='Pass 1 (No Critic)', color='red', alpha=0.6)
-    plt.plot(history['loss_actor_pass2'], label='Pass 2 (With Critic)', color='blue')
-    plt.title('Layer C: Controller Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('MSE Loss')
+    plt.plot(history["loss_actor_pass1"], label="Pass 1 (No Critic)", color="red", alpha=0.6)
+    plt.plot(history["loss_actor_pass2"], label="Pass 2 (With Critic)", color="blue")
+    plt.title("Layer C: Controller Loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("MSE Loss")
     plt.legend()
-    
+
     plt.subplot(2, 3, 2)
-    plt.plot(history['loss_world_model'], label='World Model Loss', color='purple')
-    plt.title('World Model Dynamics Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('MSE')
+    plt.plot(history["loss_world_model"], label="World Model Loss", color="purple")
+    plt.title("World Model Dynamics Loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("MSE")
     plt.legend()
-    
+
     plt.subplot(2, 3, 3)
-    plt.plot(history['loss_critic'], label='Critic Signal Loss', color='orange')
-    plt.title('Critic Feedback Magnitude')
-    plt.xlabel('Epochs')
-    plt.ylabel('Mean Squared Criticism')
+    plt.plot(history["loss_critic"], label="Critic Signal Loss", color="orange")
+    plt.title("Critic Feedback Magnitude")
+    plt.xlabel("Epochs")
+    plt.ylabel("Mean Squared Criticism")
     plt.legend()
 
     plt.subplot(2, 3, 4)
-    plt.plot(history['loss_total'], label='Total Loss', color='black')
-    plt.title('Optimized Total Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
+    plt.plot(history["loss_total"], label="Total Loss", color="black")
+    plt.title("Optimized Total Loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
     plt.legend()
 
     plt.subplot(2, 3, 5)
-    plt.plot(history['error_B'], label='Parameter Error B', color='orange')
-    plt.title('Layer B: Param Prediction Error')
-    plt.xlabel('Epochs')
-    plt.ylabel('MSE (w, b)')
+    plt.plot(history["error_B"], label="Parameter Error B", color="orange")
+    plt.title("Layer B: Param Prediction Error")
+    plt.xlabel("Epochs")
+    plt.ylabel("MSE (w, b)")
     plt.legend()
-    
+
     plt.subplot(2, 3, 6)
-    plt.plot(history['accuracy_A'], label='Accuracy A', color='green', linestyle='--')
-    plt.title('Layer A: Concept Accuracy')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy (%)')
+    plt.plot(history["accuracy_A"], label="Accuracy A", color="green", linestyle="--")
+    plt.title("Layer A: Concept Accuracy")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy (%)")
     plt.legend()
-    
+
     plt.tight_layout()
     plt.show()
     return history
+
 
 if __name__ == "__main__":
     train_and_evaluate()

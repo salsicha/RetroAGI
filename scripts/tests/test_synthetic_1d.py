@@ -12,7 +12,9 @@ import torch
 import torch.nn as nn
 
 from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
     AgentWorldModelCritic,
+    build_architecture,
     build_checkpoint,
     checkpoint_summary_path,
     load_checkpoint,
@@ -20,8 +22,8 @@ from retroagi.core import (
 )
 from retroagi.stages.synthetic_1d.train import (
     SYNTHETIC_1D_SPEC,
-    SYNTHETIC_LOSS_KEYS,
     SYNTHETIC_CHECKPOINT_KIND,
+    SYNTHETIC_LOSS_KEYS,
     SYNTHETIC_METRIC_KEYS,
     SYNTHETIC_MODEL_NAME,
     MeanSyntheticBaseline,
@@ -30,6 +32,7 @@ from retroagi.stages.synthetic_1d.train import (
     SyntheticSplitSeeds,
     SyntheticSplitSizes,
     SyntheticTrainingConfig,
+    build_synthetic_model,
     compute_synthetic_evaluation_metrics,
     compute_synthetic_training_losses,
     evaluate_synthetic_baselines,
@@ -167,6 +170,10 @@ class TestSynthetic1DTrainingReproducibility(unittest.TestCase):
         self.assertFalse(torch.equal(first, next_epoch))
 
     def test_training_config_rejects_invalid_values(self):
+        with self.assertRaisesRegex(ValueError, "architecture_name"):
+            SyntheticTrainingConfig(architecture_name="")
+        with self.assertRaisesRegex(ValueError, "architecture_config"):
+            SyntheticTrainingConfig(architecture_config={"": 8})
         with self.assertRaisesRegex(ValueError, "batch_size"):
             SyntheticTrainingConfig(batch_size=0)
         with self.assertRaisesRegex(ValueError, "epochs"):
@@ -183,13 +190,16 @@ class TestSynthetic1DLossTracking(unittest.TestCase):
     def test_empty_history_contains_all_loss_and_metric_keys(self):
         history = make_empty_history()
 
-        self.assertEqual(set(SYNTHETIC_LOSS_KEYS), {
-            "loss_actor_pass1",
-            "loss_actor_pass2",
-            "loss_world_model",
-            "loss_critic",
-            "loss_total",
-        })
+        self.assertEqual(
+            set(SYNTHETIC_LOSS_KEYS),
+            {
+                "loss_actor_pass1",
+                "loss_actor_pass2",
+                "loss_world_model",
+                "loss_critic",
+                "loss_total",
+            },
+        )
         self.assertEqual(set(history), {*SYNTHETIC_LOSS_KEYS, *SYNTHETIC_METRIC_KEYS})
         self.assertTrue(all(values == [] for values in history.values()))
 
@@ -308,7 +318,9 @@ class TestSynthetic1DEvaluationMetricsAndBaselines(unittest.TestCase):
         self.assertEqual(predictions.actions_c.shape, val_yc.shape)
         self.assertEqual(predictions.logits_a.shape, (*val_ya.shape, SYNTHETIC_1D_SPEC.vocab_size))
         self.assertEqual(predictions.w_b.shape, val_yb.shape)
-        self.assertTrue(torch.equal(predictions.logits_a.argmax(dim=-1)[0], torch.mode(train_ya, dim=0).values))
+        self.assertTrue(
+            torch.equal(predictions.logits_a.argmax(dim=-1)[0], torch.mode(train_ya, dim=0).values)
+        )
 
     def test_baseline_evaluation_returns_random_and_simple_metrics(self):
         train = generate_hierarchical_data(5, 3, 2, 2, 7, seed=5)
@@ -325,6 +337,24 @@ class TestSynthetic1DEvaluationMetricsAndBaselines(unittest.TestCase):
 
 
 class TestSynthetic1DCPUSmoke(unittest.TestCase):
+    def test_build_synthetic_model_uses_registered_architecture_factory(self):
+        config = SyntheticTrainingConfig(
+            architecture_config={"hidden_dim": 8, "controller_schedule": "linear"}
+        )
+
+        with patch(
+            "retroagi.stages.synthetic_1d.train.build_architecture",
+            wraps=build_architecture,
+        ) as build_model:
+            model = build_synthetic_model(config)
+
+        self.assertIsInstance(model, AgentWorldModelCritic)
+        build_model.assert_called_once_with(
+            BASELINE_ARCHITECTURE_NAME,
+            SYNTHETIC_1D_SPEC,
+            {"hidden_dim": 8, "controller_schedule": "linear"},
+        )
+
     def test_tiny_cpu_training_step_has_finite_gradients_and_decreasing_loss(self):
         seed_everything(2_024, deterministic=True)
         xa, _ya, xb, _yb, xc, yc = generate_hierarchical_data(
@@ -373,7 +403,9 @@ class TestSynthetic1DCPUSmoke(unittest.TestCase):
             self.assertTrue(gradients)
             for gradient in gradients:
                 self.assertTrue(torch.isfinite(gradient).all().item())
-                saw_nonzero_gradient = saw_nonzero_gradient or bool(torch.count_nonzero(gradient).item())
+                saw_nonzero_gradient = saw_nonzero_gradient or bool(
+                    torch.count_nonzero(gradient).item()
+                )
             optimizer.step()
 
         final_loss = total_loss().item()
@@ -440,13 +472,22 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
         self.assertEqual(loaded["global_step"], 8)
         self.assertEqual(loaded["metrics"]["controller_mse"], 0.75)
         self.assertEqual(loaded["config"]["seed"], 17)
+        self.assertEqual(loaded["config"]["architecture_name"], BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(loaded["config"]["architecture_config"], {})
         self.assertEqual(loaded["specs"]["stage"]["seq_len_c"], SYNTHETIC_1D_SPEC.seq_len_c)
+        self.assertEqual(loaded["specs"]["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(
+            loaded["specs"]["architecture_config"],
+            {},
+        )
         self.assertTrue(loaded["metadata"]["unit"])
         self.assertIn("code_revision", loaded["metadata"])
         self.assertIn("runtime_environment", loaded["metadata"])
         self.assertEqual(summary["stage"], SYNTHETIC_1D_SPEC.name)
         self.assertEqual(summary["metrics"]["controller_mse"], 0.75)
         self.assertEqual(summary["config"]["seed"], 17)
+        self.assertEqual(summary["config"]["architecture_name"], BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(summary["specs"]["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
         self.assertIn("optimizer", summary["state_keys"])
         self.assertIn("model", loaded["states"])
         self.assertIn("optimizer", loaded["states"])
@@ -455,7 +496,9 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
         seed_everything(909, deterministic=True)
         model, optimizer = self.make_model_and_optimizer()
         self.step_optimizer_once(model, optimizer)
-        expected_params = {name: value.detach().clone() for name, value in model.state_dict().items()}
+        expected_params = {
+            name: value.detach().clone() for name, value in model.state_dict().items()
+        }
 
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "synthetic.pth"
@@ -469,7 +512,6 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
         for name, value in restored_model.state_dict().items():
             torch.testing.assert_close(value, expected_params[name])
         self.assertTrue(restored_optimizer.state_dict()["state"])
-
 
     def test_resume_continuation_matches_uninterrupted_training(self):
         config = SyntheticTrainingConfig(
@@ -550,10 +592,18 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
         )
 
     def test_train_and_evaluate_saves_and_resumes_from_checkpoint(self):
-        with TemporaryDirectory() as tmpdir, patch("matplotlib.pyplot.show"):
+        with (
+            TemporaryDirectory() as tmpdir,
+            patch("matplotlib.pyplot.show"),
+            patch(
+                "retroagi.stages.synthetic_1d.train.build_synthetic_model",
+                wraps=build_synthetic_model,
+            ) as build_model,
+        ):
             path = Path(tmpdir) / "synthetic_resume.pth"
             first_config = SyntheticTrainingConfig(
                 seed=919,
+                architecture_config={"hidden_dim": 8},
                 split_sizes=SyntheticSplitSizes(train=4, validation=2, test=2),
                 split_seeds=SyntheticSplitSeeds(train=920, validation=921, test=922),
                 batch_size=2,
@@ -568,6 +618,7 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
 
             resumed_config = SyntheticTrainingConfig(
                 seed=919,
+                architecture_config={"hidden_dim": 8},
                 split_sizes=SyntheticSplitSizes(train=4, validation=2, test=2),
                 split_seeds=SyntheticSplitSeeds(train=920, validation=921, test=922),
                 batch_size=2,
@@ -587,6 +638,12 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
         self.assertEqual(resumed_checkpoint["epoch"], 2)
         self.assertEqual(first_checkpoint["global_step"], 2)
         self.assertEqual(resumed_checkpoint["global_step"], 4)
+        self.assertGreaterEqual(build_model.call_count, 2)
+        self.assertEqual(
+            resumed_checkpoint["config"]["architecture_name"],
+            BASELINE_ARCHITECTURE_NAME,
+        )
+        self.assertEqual(resumed_checkpoint["config"]["architecture_config"], {"hidden_dim": 8})
 
     def test_restore_rejects_incompatible_stage_checkpoint(self):
         model, optimizer = self.make_model_and_optimizer()
@@ -602,6 +659,52 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
             save_checkpoint(path, bad_checkpoint)
             with self.assertRaisesRegex(ValueError, "checkpoint stage"):
                 restore_synthetic_checkpoint(path, model, optimizer)
+
+    def test_restore_rejects_incompatible_architecture_checkpoint(self):
+        model, optimizer = self.make_model_and_optimizer()
+        bad_checkpoint = build_checkpoint(
+            stage=SYNTHETIC_1D_SPEC.name,
+            model_name=SYNTHETIC_MODEL_NAME,
+            checkpoint_kind=SYNTHETIC_CHECKPOINT_KIND,
+            config={"architecture_name": "other_architecture"},
+            states={"model": model.state_dict(), "optimizer": optimizer.state_dict()},
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_architecture.pth"
+            save_checkpoint(path, bad_checkpoint)
+            with self.assertRaisesRegex(ValueError, "checkpoint architecture"):
+                restore_synthetic_checkpoint(
+                    path,
+                    model,
+                    optimizer,
+                    architecture_name=BASELINE_ARCHITECTURE_NAME,
+                )
+
+    def test_restore_rejects_incompatible_architecture_config_checkpoint(self):
+        model, optimizer = self.make_model_and_optimizer()
+        bad_checkpoint = build_checkpoint(
+            stage=SYNTHETIC_1D_SPEC.name,
+            model_name=SYNTHETIC_MODEL_NAME,
+            checkpoint_kind=SYNTHETIC_CHECKPOINT_KIND,
+            config={
+                "architecture_name": BASELINE_ARCHITECTURE_NAME,
+                "architecture_config": {"hidden_dim": 8},
+            },
+            states={"model": model.state_dict(), "optimizer": optimizer.state_dict()},
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_architecture_config.pth"
+            save_checkpoint(path, bad_checkpoint)
+            with self.assertRaisesRegex(ValueError, "checkpoint architecture config"):
+                restore_synthetic_checkpoint(
+                    path,
+                    model,
+                    optimizer,
+                    architecture_name=BASELINE_ARCHITECTURE_NAME,
+                    architecture_config={"hidden_dim": 16},
+                )
 
 
 class TestSynthetic1DBaselineComparison(unittest.TestCase):
