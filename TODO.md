@@ -207,6 +207,175 @@ evaluations and load a compatible Block SMB checkpoint.
 **Exit criteria:** experiments are launchable through one interface, resumable,
 traceable to code/configuration, and checked automatically in CI.
 
+## P7: Progressive Architecture Evaluation
+
+The project now has a working staged implementation of one architecture. This
+milestone turns it into a rapid architecture-evaluation system where new model
+concepts can start on cheap synthetic data and be promoted through increasingly
+high-fidelity evaluations.
+
+- [ ] Define an `ArchitectureSpec` that names an architecture, declares its
+      model factory, supported stage specs, checkpoint compatibility policy,
+      configurable hyperparameters, and expected output contract.
+- [ ] Define a model-factory protocol that can construct actor/world-model/critic
+      variants for any compatible `StageSpec` without trainers importing a
+      concrete model class directly.
+- [ ] Register the current `AgentWorldModelCritic` as the baseline architecture
+      so existing behavior remains the first comparable entry.
+- [ ] Refactor Synthetic 1D training to consume an architecture factory instead
+      of instantiating `AgentWorldModelCritic` directly.
+- [ ] Refactor Block SMB policy training to consume an architecture factory and
+      save the selected architecture name and config in every checkpoint and
+      run summary.
+- [ ] Refactor Full SMB transfer and comparison to load architecture-specific
+      checkpoints through the registry instead of assuming only
+      `AgentWorldModelCritic`.
+- [ ] Add top-level CLI support for architecture selection, for example
+      `--architecture baseline` plus architecture-specific config overrides.
+- [ ] Give Synthetic 1D top-level CLI parity with Block SMB for seed, epochs,
+      device, checkpoint, resume, output summary, and architecture selection.
+- [ ] Implement a stage-agnostic experiment runner that can execute one
+      architecture through selected stages and write one combined result
+      manifest with commands, configs, seeds, metrics, checkpoints, logs, and
+      pass/fail gates.
+- [ ] Add a progressive-resolution promotion pipeline:
+      1. **Interface smoke:** instantiate the architecture for each declared
+         `StageSpec`, run one forward/backward pass, and verify finite gradients.
+      2. **Synthetic concept check:** train on deterministic Synthetic 1D data
+         and require improvement over random and simple baselines.
+      3. **Synthetic stress check:** increase sequence length, noise,
+         controller schedule difficulty, and held-out split size before
+         promotion.
+      4. **Block SMB perception-gated smoke:** run tiny CPU policy training with
+         checkpoint transfer disabled to verify trainer compatibility.
+      5. **Block SMB fixed-scenario training:** run frozen-perception training,
+         deterministic evaluation, and threshold diagnostics on all fixed
+         scenarios.
+      6. **Block SMB generated-scenario generalization:** add generated
+         scenarios and report fixed-vs-generated performance separately.
+      7. **Full SMB transfer smoke:** transfer the policy into Full SMB and run
+         headless seeded observation checks.
+      8. **Full SMB transfer-vs-scratch comparison:** compare action agreement,
+         entropy, margins, rewards, resets, terminations, and truncations.
+      9. **Full SMB fine-tuning/training:** once available, continue training in
+         the emulator and compare against transferred and scratch baselines.
+- [ ] Define small, medium, and full budgets for each promotion layer so model
+      ideas can be rejected quickly before spending emulator time.
+- [ ] Add automatic promotion gates that stop an architecture when it fails
+      required metrics, numerical checks, runtime limits, or artifact checks.
+- [ ] Produce a comparison report for architecture sweeps with per-stage metrics,
+      artifact links, pass/fail gates, runtime, selected device, and regression
+      deltas against the baseline architecture.
+- [ ] Add architecture-level ablation support so variants can disable or replace
+      vision, hierarchy, world model, critic feedback, recurrent state, target
+      networks, controller schedules, and auxiliary objectives consistently
+      across stages.
+- [ ] Define architecture-specific checkpoint schema extensions and migration
+      rules so multiple model families can coexist without ambiguous state
+      loading.
+- [ ] Add tests proving incompatible architecture checkpoints fail before state
+      loading and compatible checkpoints can transfer across Block SMB and Full
+      SMB when their declared contracts match.
+- [ ] Implement direct Full SMB policy fine-tuning, resume, evaluation, and
+      checkpointing so the highest-fidelity rung can measure learning instead
+      of only transfer and inference comparison.
+- [ ] Add a known-good architecture sweep fixture that runs the baseline through
+      the smallest promotion pipeline in CI or a documented local command.
+- [ ] Update the reproducibility procedure with architecture-sweep commands and
+      the expected combined manifest.
+
+**Exit criteria:** a new architecture concept can be registered once, launched
+through a progressive-resolution experiment command, rejected or promoted by
+objective gates at each fidelity layer, and compared against the baseline with
+one traceable artifact manifest.
+
+## P8: Multi-Game Generalization
+
+The current system is SMB-centered. This milestone makes the staged fidelity
+ladder reusable for other games while preserving the ability to test an
+architecture cheaply before spending high-fidelity emulator time.
+
+- [ ] Define a `GameSpec` that names a game family, declares its action space,
+      observation sources, semantic classes, reward/signal schema, stage ladder,
+      emulator backend, asset requirements, and licensing/provenance rules.
+- [ ] Split game-neutral stage contracts from SMB-specific assumptions so
+      `StageSpec` no longer depends on `SMBAction` naming or SMB vocabulary
+      size checks.
+- [ ] Replace the global SMB action vocabulary with per-game `ActionSpec`
+      definitions that support discrete buttons, multi-button combos,
+      continuous controls, no-op/release behavior, and stable integer IDs.
+- [ ] Add action mapping tests proving each game profile maps abstract policy
+      actions to backend-native controls without depending on button order.
+- [ ] Define a `GameSignalExtractor` protocol for score, progress, health,
+      lives, inventory, collectibles, completion, death, timeout, and any
+      game-specific objectives.
+- [ ] Add a reward-term configuration schema that lets each game own its reward
+      terms without leaking SMB reward logic into shared trainers.
+- [ ] Define a per-game scenario/task schema for fixed tasks, procedural task
+      generation, curriculum progression, success thresholds, and deterministic
+      reset seeds.
+- [ ] Generalize synthetic low-fidelity data generation so each game can define
+      cheap concept data before any pixels or emulator frames are involved.
+- [ ] Generalize the Block SMB-style mid-fidelity simulator pattern into
+      "block game" adapters: simplified physics, symbolic state, exact semantic
+      labels, fast reset, fixed scenarios, and procedural scenarios.
+- [ ] Add a game plugin registry that loads game profiles, stage adapters,
+      vision encoders, reward configs, success thresholds, and asset pipelines
+      by name.
+- [ ] Extend the top-level CLI to accept `--game` independently from `--stage`,
+      for example `retroagi train --game smb --stage block` and later
+      `retroagi train --game <new-game> --stage synthetic|block|full`.
+- [ ] Add a stage-resolution naming convention that is game-neutral:
+      `synthetic`, `block`, `full`, with optional intermediate rungs such as
+      `symbolic`, `tile`, `sprite`, or `emulator` when a game needs them.
+- [ ] Define how progressive-resolution architecture promotion composes with
+      game promotion:
+      1. **Architecture smoke:** validate the model against game-neutral tensor
+         contracts.
+      2. **Game synthetic:** train on the game's cheap synthetic control task.
+      3. **Game block:** train in the game's simplified simulator with exact
+         labels and fast deterministic scenarios.
+      4. **Game full smoke:** run headless emulator resets, observations, and
+         action mappings.
+      5. **Game transfer:** transfer the policy from block to full fidelity.
+      6. **Game full comparison:** compare transferred, scratch, and prior
+         known-good policies on seeded observation streams.
+      7. **Game full training:** once supported, fine-tune or train directly in
+         the emulator and report threshold metrics.
+- [ ] Add game-level promotion gates so each game can define required metrics,
+      success thresholds, runtime budgets, artifact checks, and failure reasons
+      at each fidelity rung.
+- [ ] Add game-level experiment manifests that include architecture, game,
+      stage, seed, device, config, backend version, ROM/content identifiers,
+      asset provenance, metrics, checkpoints, logs, recordings, and promotion
+      decisions.
+- [ ] Separate visual perception pipelines by game profile, including semantic
+      vocabularies, sprite/asset extraction, synthetic frame composition,
+      checkpoint naming, and diagnostic thresholds.
+- [ ] Add an asset and licensing checklist for each game profile before assets
+      or generated datasets are committed or referenced.
+- [ ] Add support for games with no reliable asset pipeline by allowing
+      self-supervised, emulator-state, or manually labeled perception datasets
+      as alternative vision sources.
+- [ ] Add backend abstraction for emulator providers such as `stable-retro`,
+      native Python simulators, Gymnasium-compatible envs, or custom adapters.
+- [ ] Add deterministic backend capability tests for reset seeding, save/load
+      state, frame stepping, action repeat, rendering mode, and headless mode.
+- [ ] Add a first non-SMB proof-of-concept game profile with all three planned
+      rungs documented, even if only the synthetic and block rungs are initially
+      implemented.
+- [ ] Add a second-game smoke test that proves the architecture registry,
+      action mapping, signal extraction, and experiment manifest are not
+      hard-coded to SMB.
+- [ ] Update operations and reproducibility docs with multi-game commands,
+      artifact layouts, and per-game promotion reports.
+
+**Exit criteria:** adding a new game requires a game profile, action spec,
+signal extractor, stage adapters, perception pipeline, and success thresholds,
+not trainer rewrites. At least one non-SMB game can run through the synthetic
+and block rungs, produce a traceable experiment manifest, and exercise the same
+architecture promotion machinery as SMB.
+
 ## Definition of Done
 
 The full system is working when a clean checkout can:
