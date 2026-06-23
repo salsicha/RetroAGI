@@ -58,6 +58,12 @@ action repeat, and Gym/Gymnasium step compatibility. SMB declares
 `GymnasiumBackendAdapter`, which normalizes reset and step return values before
 they reach stage code.
 
+`probe_backend_capabilities(...)` runs deterministic backend lifecycle checks
+against a `BackendAdapter` and returns a manifest-friendly
+`BackendCapabilityReport`. The probe covers seeded reset determinism,
+save/load-state replay, a single frame step, repeated same-action replay,
+render availability, and headless reset/step operation.
+
 Stage ladder names use the game-neutral progressive-resolution convention
 defined by `STANDARD_STAGE_NAMES`. Every game starts with `synthetic`, ends with
 `full`, and may include standard intermediate rungs such as `block`,

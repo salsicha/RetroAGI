@@ -409,7 +409,7 @@ architecture cheaply before spending high-fidelity emulator time.
       as alternative vision sources.
 - [x] Add backend abstraction for emulator providers such as `stable-retro`,
       native Python simulators, Gymnasium-compatible envs, or custom adapters.
-- [ ] Add deterministic backend capability tests for reset seeding, save/load
+- [x] Add deterministic backend capability tests for reset seeding, save/load
       state, frame stepping, action repeat, rendering mode, and headless mode.
 - [ ] Add a first non-SMB proof-of-concept game profile with all three planned
       rungs documented, even if only the synthetic and block rungs are initially

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
+import hashlib
 import inspect
 from typing import Any, Mapping, Protocol
+
+import numpy as np
 
 BACKEND_PROVIDER_KINDS = (
     "stable_retro",
@@ -112,6 +116,57 @@ class BackendStepResult:
     terminated: bool
     truncated: bool
     info: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class BackendCapabilityProbeConfig:
+    """Inputs for deterministic backend capability probes."""
+
+    seed: int = 123
+    action: Any = 0
+    action_repeat: int = 2
+
+    def __post_init__(self) -> None:
+        if self.action_repeat <= 0:
+            raise ValueError("action_repeat must be positive")
+
+
+@dataclass(frozen=True)
+class BackendCapabilityReport:
+    """Pass/fail result for backend lifecycle capabilities."""
+
+    reset_seed: bool
+    save_load_state: bool
+    frame_step: bool
+    action_repeat: bool
+    render: bool
+    headless: bool
+    failures: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def passed(self) -> bool:
+        return all(
+            (
+                self.reset_seed,
+                self.save_load_state,
+                self.frame_step,
+                self.action_repeat,
+                self.render,
+                self.headless,
+            )
+        )
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "reset_seed": self.reset_seed,
+            "save_load_state": self.save_load_state,
+            "frame_step": self.frame_step,
+            "action_repeat": self.action_repeat,
+            "render": self.render,
+            "headless": self.headless,
+            "passed": self.passed,
+            "failures": dict(self.failures),
+        }
 
 
 class BackendAdapter(Protocol):
@@ -244,6 +299,124 @@ class GymnasiumBackendAdapter:
         return BackendResetResult(result, {})
 
 
+def probe_backend_capabilities(
+    backend: BackendAdapter,
+    config: BackendCapabilityProbeConfig = BackendCapabilityProbeConfig(),
+) -> BackendCapabilityReport:
+    """Run deterministic lifecycle probes against a backend adapter."""
+
+    failures: dict[str, str] = {}
+
+    def run(name: str, check) -> bool:
+        try:
+            return bool(check())
+        except Exception as exc:
+            failures[name] = f"{type(exc).__name__}: {exc}"
+            return False
+
+    reset_seed = run(
+        "reset_seed",
+        lambda: _fingerprint(backend.reset(config.seed))
+        == _fingerprint(backend.reset(config.seed)),
+    )
+    frame_step = run(
+        "frame_step",
+        lambda: _valid_step_result(
+            _step_from_seed(backend, seed=config.seed, action=config.action)
+        ),
+    )
+    save_load_state = run(
+        "save_load_state",
+        lambda: _save_load_replays_step(
+            backend, seed=config.seed, action=config.action
+        ),
+    )
+    action_repeat = run(
+        "action_repeat",
+        lambda: _action_repeat_replays(
+            backend,
+            seed=config.seed,
+            action=config.action,
+            action_repeat=config.action_repeat,
+        ),
+    )
+    render = run("render", lambda: _render_available(backend))
+    headless = run(
+        "headless",
+        lambda: _valid_step_result(
+            _step_from_seed(
+                backend,
+                seed=config.seed + 1,
+                action=config.action,
+            )
+        ),
+    )
+
+    return BackendCapabilityReport(
+        reset_seed=reset_seed,
+        save_load_state=save_load_state,
+        frame_step=frame_step,
+        action_repeat=action_repeat,
+        render=render,
+        headless=headless,
+        failures=failures,
+    )
+
+
+def _step_from_seed(
+    backend: BackendAdapter,
+    *,
+    seed: int,
+    action: Any,
+) -> BackendStepResult:
+    backend.reset(seed)
+    return backend.step(action)
+
+
+def _save_load_replays_step(
+    backend: BackendAdapter,
+    *,
+    seed: int,
+    action: Any,
+) -> bool:
+    backend.reset(seed)
+    state = copy.deepcopy(backend.get_state())
+    first = backend.step(action)
+    backend.set_state(copy.deepcopy(state))
+    replay = backend.step(action)
+    return _fingerprint(first) == _fingerprint(replay)
+
+
+def _action_repeat_replays(
+    backend: BackendAdapter,
+    *,
+    seed: int,
+    action: Any,
+    action_repeat: int,
+) -> bool:
+    backend.reset(seed)
+    state = copy.deepcopy(backend.get_state())
+    first = tuple(_fingerprint(backend.step(action)) for _ in range(action_repeat))
+    backend.set_state(copy.deepcopy(state))
+    replay = tuple(_fingerprint(backend.step(action)) for _ in range(action_repeat))
+    return first == replay
+
+
+def _valid_step_result(result: BackendStepResult) -> bool:
+    return (
+        isinstance(result, BackendStepResult)
+        and isinstance(result.reward, float)
+        and isinstance(result.terminated, bool)
+        and isinstance(result.truncated, bool)
+        and isinstance(result.info, Mapping)
+    )
+
+
+def _render_available(backend: BackendAdapter) -> bool:
+    backend.render()
+    return True
+
+
 def _info(info: Any, *, context: str) -> dict[str, Any]:
     if info is None:
         return {}
@@ -272,3 +445,43 @@ def _call_accepts_keyword(callable_obj: Any, keyword: str) -> bool:
         ):
             return True
     return False
+
+
+def _fingerprint(value: Any) -> Any:
+    if isinstance(value, BackendResetResult):
+        return (
+            "reset",
+            _fingerprint(value.observation),
+            _fingerprint(dict(value.info)),
+        )
+    if isinstance(value, BackendStepResult):
+        return (
+            "step",
+            _fingerprint(value.observation),
+            float(value.reward),
+            bool(value.terminated),
+            bool(value.truncated),
+            _fingerprint(dict(value.info)),
+        )
+    if isinstance(value, Mapping):
+        return tuple(
+            (repr(key), _fingerprint(item))
+            for key, item in sorted(value.items(), key=lambda pair: repr(pair[0]))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_fingerprint(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted(_fingerprint(item) for item in value))
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (str, bytes, int, float, bool, type(None))):
+        return value
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError):
+        return repr(value)
+    if array.dtype == object:
+        return repr(value)
+    contiguous = np.ascontiguousarray(array)
+    digest = hashlib.sha256(contiguous.tobytes()).hexdigest()
+    return ("array", tuple(contiguous.shape), str(contiguous.dtype), digest)

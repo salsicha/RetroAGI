@@ -2,11 +2,15 @@
 
 import unittest
 
+import numpy as np
+
 from retroagi.core import (
     BACKEND_PROVIDER_KINDS,
+    BackendCapabilityProbeConfig,
     BackendCapabilitySpec,
     GameBackendSpec,
     GymnasiumBackendAdapter,
+    probe_backend_capabilities,
 )
 
 
@@ -87,6 +91,66 @@ class EnvWithEmulatorState:
 
     def step(self, action):
         return "obs", 0.0, False, False, {}
+
+
+class DeterministicCapabilityEnv:
+    buttons = ("LEFT", "RIGHT")
+
+    def __init__(self):
+        self.seed_value = 0
+        self.position = 0
+        self.step_count = 0
+        self.render_calls = 0
+
+    def reset(self, seed=None):
+        self.seed_value = 0 if seed is None else int(seed)
+        self.position = self.seed_value % 11
+        self.step_count = 0
+        return self._observation(), {"seed": self.seed_value}
+
+    def step(self, action):
+        action_value = int(np.asarray(action).sum())
+        self.step_count += 1
+        self.position = (self.position * 3 + action_value + 1) % 257
+        return (
+            self._observation(),
+            float(self.position) / 10.0,
+            False,
+            False,
+            {"position": self.position, "step_count": self.step_count},
+        )
+
+    def render(self):
+        self.render_calls += 1
+        return self._observation().reshape(1, 3)
+
+    def get_state(self):
+        return {
+            "seed_value": self.seed_value,
+            "position": self.position,
+            "step_count": self.step_count,
+        }
+
+    def set_state(self, state):
+        self.seed_value = int(state["seed_value"])
+        self.position = int(state["position"])
+        self.step_count = int(state["step_count"])
+
+    def _observation(self):
+        return np.asarray(
+            [self.seed_value, self.position, self.step_count],
+            dtype=np.int64,
+        )
+
+
+class MissingCapabilityEnv:
+    buttons = ("A",)
+
+    def reset(self, seed=None):
+        return "obs", {"seed": seed}
+
+    def step(self, action):
+        return "next", 0.0, False, False, {}
 
 
 class TestBackendContracts(unittest.TestCase):
@@ -174,6 +238,58 @@ class TestBackendContracts(unittest.TestCase):
 
         self.assertEqual(env_adapter.get_state(), {"tick": 4})
         self.assertEqual(em_adapter.get_state(), {"em_tick": 9})
+
+    def test_capability_probe_covers_deterministic_backend_matrix(self):
+        env = DeterministicCapabilityEnv()
+        adapter = GymnasiumBackendAdapter(env, context="deterministic backend")
+
+        report = probe_backend_capabilities(
+            adapter,
+            BackendCapabilityProbeConfig(seed=42, action=2, action_repeat=3),
+        )
+        manifest = report.to_manifest()
+
+        self.assertTrue(report.passed)
+        self.assertEqual(manifest["failures"], {})
+        self.assertEqual(
+            {
+                key: manifest[key]
+                for key in (
+                    "reset_seed",
+                    "save_load_state",
+                    "frame_step",
+                    "action_repeat",
+                    "render",
+                    "headless",
+                )
+            },
+            {
+                "reset_seed": True,
+                "save_load_state": True,
+                "frame_step": True,
+                "action_repeat": True,
+                "render": True,
+                "headless": True,
+            },
+        )
+        self.assertEqual(env.render_calls, 1)
+
+    def test_capability_probe_reports_missing_backend_features(self):
+        report = probe_backend_capabilities(
+            GymnasiumBackendAdapter(MissingCapabilityEnv(), context="limited backend"),
+            BackendCapabilityProbeConfig(seed=1, action=0),
+        )
+
+        self.assertFalse(report.passed)
+        self.assertTrue(report.reset_seed)
+        self.assertTrue(report.frame_step)
+        self.assertTrue(report.headless)
+        self.assertFalse(report.save_load_state)
+        self.assertFalse(report.action_repeat)
+        self.assertFalse(report.render)
+        self.assertIn("save_load_state", report.failures)
+        self.assertIn("action_repeat", report.failures)
+        self.assertIn("render", report.failures)
 
 
 if __name__ == "__main__":

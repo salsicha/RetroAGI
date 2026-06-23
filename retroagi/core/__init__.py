@@ -35,11 +35,14 @@ from .architectures import (
 from .backends import (
     BACKEND_PROVIDER_KINDS,
     BackendAdapter,
+    BackendCapabilityProbeConfig,
+    BackendCapabilityReport,
     BackendCapabilitySpec,
     BackendResetResult,
     BackendStepResult,
     GameBackendSpec,
     GymnasiumBackendAdapter,
+    probe_backend_capabilities,
 )
 from .checkpoint import (
     CHECKPOINT_ARCHITECTURE_EXTENSION_KEY,
@@ -180,6 +183,8 @@ __all__ = [
     "BASELINE_ARCHITECTURE_NAME",
     "BASELINE_ARCHITECTURE_SPEC",
     "BackendAdapter",
+    "BackendCapabilityProbeConfig",
+    "BackendCapabilityReport",
     "BackendCapabilitySpec",
     "BackendResetResult",
     "BackendStepResult",
@@ -281,6 +286,7 @@ __all__ = [
     "get_architecture",
     "get_game_plugin",
     "get_game_spec",
+    "probe_backend_capabilities",
     "is_versioned_checkpoint",
     "is_standard_stage_name",
     "is_mps_available",

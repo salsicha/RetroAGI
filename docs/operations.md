@@ -37,6 +37,11 @@ and capability flags. Use that manifest contract when comparing runs across
 `stable-retro`, Gymnasium-compatible wrappers, native Python simulators, or
 custom game adapters.
 
+Use `probe_backend_capabilities(...)` from `retroagi.core` when bringing up a
+new backend adapter. It exercises deterministic seeded reset, save/load-state
+replay, single-step advancement, repeated action replay, rendering, and
+headless reset/step behavior against the adapter's normalized API.
+
 Before committing or preserving asset-backed artifacts, check the selected
 game's `asset_checklist` in the experiment manifest. For SMB this means sprite
 source/license evidence before committing extracted sprites or asset-mock
