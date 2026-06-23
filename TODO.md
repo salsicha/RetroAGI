@@ -359,7 +359,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Define a `GameSignalExtractor` protocol for score, progress, health,
       lives, inventory, collectibles, completion, death, timeout, and any
       game-specific objectives.
-- [ ] Add a reward-term configuration schema that lets each game own its reward
+- [x] Add a reward-term configuration schema that lets each game own its reward
       terms without leaking SMB reward logic into shared trainers.
 - [ ] Define a per-game scenario/task schema for fixed tasks, procedural task
       generation, curriculum progression, success thresholds, and deterministic

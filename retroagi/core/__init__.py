@@ -70,6 +70,7 @@ from .devices import is_mps_available, is_mps_built, select_device
 from .games import (
     GAME_SPECS,
     SMB_GAME_SPEC,
+    SMB_REWARD_SCHEMA,
     AssetRequirement,
     GameSpec,
     StageLadderEntry,
@@ -97,6 +98,7 @@ from .models import (
     WorldModel,
     WorldModelState,
 )
+from .rewards import RewardConfigSchema, RewardTermSpec
 from .signals import GameSignalExtractor, GameSignals
 from .tracking import (
     TRACKING_BACKENDS,
@@ -143,10 +145,13 @@ __all__ = [
     "ModelConfig",
     "PatchVisionTransformer",
     "PositionalEncoding",
+    "RewardConfigSchema",
+    "RewardTermSpec",
     "SMB_ACTIONS",
     "SMB_ACTION_SPECS",
     "SMBAction",
     "SMB_GAME_SPEC",
+    "SMB_REWARD_SCHEMA",
     "SUPPORTED_CONTROLLER_SCHEDULES",
     "TRACKING_BACKENDS",
     "StageLadderEntry",

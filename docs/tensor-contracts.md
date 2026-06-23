@@ -56,6 +56,12 @@ truncation, game-specific objectives, and termination reason. Stage adapters may
 extend that dataclass with legacy convenience fields, as Full SMB does with
 `coins`, but shared trainers should read the common `GameSignals` fields.
 
+`RewardConfigSchema` is the game-owned reward configuration contract. It
+declares each tunable reward term, default value, expected sign direction,
+source signal, and description. Shared trainers should ask the selected
+`GameSpec` to validate reward overrides instead of carrying game-specific
+reward names such as `coin`, `enemy_hit`, or `fall_death` in trainer code.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

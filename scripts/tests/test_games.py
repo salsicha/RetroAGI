@@ -8,8 +8,11 @@ from retroagi.core import (
     GAME_SPECS,
     SMB_ACTIONS,
     SMB_GAME_SPEC,
+    SMB_REWARD_SCHEMA,
     ActionSpec,
     GameSpec,
+    RewardConfigSchema,
+    RewardTermSpec,
     assert_stage_ladder,
     game_names,
     get_game_spec,
@@ -38,6 +41,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(spec.emulator_backend, "stable-retro")
         self.assertTrue(any(asset.name == "smb_sprites" for asset in spec.asset_requirements))
         self.assertIn("rom", spec.licensing)
+        self.assertIs(spec.reward_schema, SMB_REWARD_SCHEMA)
 
     def test_smb_actions_preserve_stable_ids_and_button_metadata(self):
         spec = SMB_GAME_SPEC
@@ -78,6 +82,81 @@ class TestGameSpec(unittest.TestCase):
             spec.action_button_vector("noop", permuted_buttons),
             np.zeros(len(permuted_buttons), dtype=np.int8),
         )
+
+    def test_smb_reward_schema_owns_reward_defaults_and_validation(self):
+        defaults = SMB_GAME_SPEC.reward_config()
+
+        self.assertEqual(defaults["progress"], 0.05)
+        self.assertEqual(defaults["coin"], 10.0)
+        self.assertEqual(defaults["goal"], 50.0)
+        self.assertEqual(defaults["fall_death"], -10.0)
+        self.assertEqual(set(defaults), set(SMB_GAME_SPEC.reward_terms))
+        self.assertEqual(SMB_REWARD_SCHEMA.term("coin").signal, "collectibles.coins")
+
+        tuned = SMB_GAME_SPEC.reward_config({"progress": 0.08, "fall_death": -12.0})
+        self.assertEqual(tuned["progress"], 0.08)
+        self.assertEqual(tuned["fall_death"], -12.0)
+        self.assertEqual(tuned["coin"], defaults["coin"])
+
+        with self.assertRaisesRegex(ValueError, "does not define terms"):
+            SMB_GAME_SPEC.reward_config({"trainer_bonus": 1.0})
+        with self.assertRaisesRegex(ValueError, "positive reward term"):
+            SMB_GAME_SPEC.reward_config({"coin": -1.0})
+        with self.assertRaisesRegex(ValueError, "negative reward term"):
+            SMB_GAME_SPEC.reward_config({"enemy_hit": 1.0})
+
+    def test_game_spec_validation_rejects_mismatched_reward_schema(self):
+        with self.assertRaisesRegex(ValueError, "reward schema is for"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                reward_schema=RewardConfigSchema(
+                    game_name="other",
+                    terms=(
+                        RewardTermSpec(
+                            "progress",
+                            1.0,
+                            "positive",
+                            "progress",
+                            "unit progress reward",
+                        ),
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "missing described terms"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward", "goal": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                reward_schema=RewardConfigSchema(
+                    game_name="bad",
+                    terms=(
+                        RewardTermSpec(
+                            "progress",
+                            1.0,
+                            "positive",
+                            "progress",
+                            "unit progress reward",
+                        ),
+                    ),
+                ),
+            )
 
     def test_game_spec_validation_rejects_sparse_action_ids(self):
         with self.assertRaisesRegex(ValueError, "contiguous"):

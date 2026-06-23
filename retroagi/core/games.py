@@ -11,6 +11,7 @@ from .actions import (
     action_backend_id as _action_backend_id,
     action_button_vector as _action_button_vector,
 )
+from .rewards import RewardConfigSchema, RewardTermSpec
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class GameSpec:
     emulator_backend: str
     asset_requirements: tuple[AssetRequirement, ...] = ()
     licensing: Mapping[str, str] = field(default_factory=dict)
+    reward_schema: RewardConfigSchema | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -90,6 +92,7 @@ class GameSpec:
             raise ValueError(f"game {self.name!r} must define emulator_backend")
         self._validate_actions()
         self._validate_stage_ladder()
+        self._validate_reward_schema()
         if not self.licensing:
             raise ValueError(f"game {self.name!r} must define licensing metadata")
 
@@ -113,6 +116,22 @@ class GameSpec:
             raise ValueError(f"game {self.name!r} stage ladder must start with synthetic")
         if self.stage_ladder[-1].name != "full":
             raise ValueError(f"game {self.name!r} stage ladder must end with full")
+
+    def _validate_reward_schema(self) -> None:
+        if self.reward_schema is None:
+            return
+        if self.reward_schema.game_name != self.name:
+            raise ValueError(
+                f"game {self.name!r} reward schema is for "
+                f"{self.reward_schema.game_name!r}"
+            )
+        schema_terms = set(self.reward_schema.term_names)
+        described_terms = set(self.reward_terms)
+        missing = sorted(described_terms.difference(schema_terms))
+        if missing:
+            raise ValueError(
+                f"game {self.name!r} reward schema is missing described terms: {missing}"
+            )
 
     @property
     def action_count(self) -> int:
@@ -139,6 +158,71 @@ class GameSpec:
         """Return a backend button vector for a policy action and button layout."""
 
         return _action_button_vector(self.action(value), buttons)
+
+    def reward_config(self, values: Mapping[str, float] | None = None) -> dict[str, float]:
+        """Return a validated reward-term config owned by this game profile."""
+
+        if self.reward_schema is None:
+            if values:
+                raise ValueError(f"game {self.name!r} does not define a reward schema")
+            return {}
+        return self.reward_schema.validate(values)
+
+
+SMB_REWARD_SCHEMA = RewardConfigSchema(
+    game_name="smb",
+    terms=(
+        RewardTermSpec(
+            name="progress",
+            default=0.05,
+            direction="positive",
+            signal="progress",
+            description="Forward progress reward per pixel",
+        ),
+        RewardTermSpec(
+            name="coin",
+            default=10.0,
+            direction="positive",
+            signal="collectibles.coins",
+            description="Reward for collecting one coin",
+        ),
+        RewardTermSpec(
+            name="enemy_stomp",
+            default=5.0,
+            direction="positive",
+            signal="objectives.enemy_stomp",
+            description="Reward for defeating an enemy safely",
+        ),
+        RewardTermSpec(
+            name="goal",
+            default=50.0,
+            direction="positive",
+            signal="completion",
+            description="Terminal reward for reaching the goal",
+        ),
+        RewardTermSpec(
+            name="fall_death",
+            default=-10.0,
+            direction="negative",
+            signal="death",
+            description="Penalty for falling below the viewport",
+        ),
+        RewardTermSpec(
+            name="enemy_hit",
+            default=-10.0,
+            direction="negative",
+            signal="objectives.enemy_hit",
+            description="Penalty for unsafe enemy contact",
+        ),
+        RewardTermSpec(
+            name="frame_penalty",
+            default=-0.01,
+            direction="negative",
+            signal="time",
+            description="Per-step time cost",
+        ),
+    ),
+)
 
 
 SMB_GAME_SPEC = GameSpec(
@@ -184,6 +268,7 @@ SMB_GAME_SPEC = GameSpec(
         "goal": "positive terminal reward for completion",
         "frame_penalty": "small per-step cost",
     },
+    reward_schema=SMB_REWARD_SCHEMA,
     stage_ladder=(
         StageLadderEntry(
             name="synthetic",
@@ -271,6 +356,7 @@ def validate_game_spec(game: GameSpec) -> GameSpec:
         semantic_classes=tuple(game.semantic_classes),
         signal_schema=dict(game.signal_schema),
         reward_terms=dict(game.reward_terms),
+        reward_schema=game.reward_schema,
         stage_ladder=tuple(game.stage_ladder),
         emulator_backend=game.emulator_backend,
         asset_requirements=tuple(game.asset_requirements),
