@@ -295,7 +295,7 @@ high-fidelity evaluations.
 - [x] Implement direct Full SMB policy fine-tuning, resume, evaluation, and
       checkpointing so the highest-fidelity rung can measure learning instead
       of only transfer and inference comparison.
-- [ ] Add a known-good architecture sweep fixture that runs the baseline through
+- [x] Add a known-good architecture sweep fixture that runs the baseline through
       the smallest promotion pipeline in CI or a documented local command.
 - [ ] Update the reproducibility procedure with architecture-sweep commands and
       the expected combined manifest.

@@ -81,7 +81,52 @@ python -m unittest -v scripts.tests.test_devices scripts.tests.test_docs scripts
 Do not compare training results from a checkout that cannot pass the full
 suite.
 
-## 4. Run A Traceable CPU Smoke Training
+## 4. Run The Baseline Architecture Promotion Fixture
+
+CI runs the smallest known-good architecture sweep fixture against the baseline
+architecture. It verifies the promotion pipeline can instantiate the baseline
+model across the Synthetic 1D, Block SMB, and Full SMB `StageSpec` contracts,
+run a forward/backward smoke pass, and write a traceable manifest.
+
+```bash
+retroagi promote \
+  --rung interface-smoke \
+  --output artifacts/repro/promotion_baseline_interface.json \
+  --artifacts-dir artifacts/repro/promotion_baseline \
+  --device cpu \
+  --architecture baseline \
+  --architecture-config hidden_dim=8 \
+  --interface-batch-size 1
+```
+
+Verify the promotion fixture:
+
+```bash
+test -s artifacts/repro/promotion_baseline_interface.json
+python - <<'PY'
+import json
+from pathlib import Path
+
+manifest = json.loads(Path("artifacts/repro/promotion_baseline_interface.json").read_text())
+assert manifest["passed"] is True
+assert manifest["architecture"]["name"] == "agent_world_model_critic"
+assert manifest["architecture"]["config"] == {"hidden_dim": 8}
+assert [rung["name"] for rung in manifest["rungs"]] == ["interface-smoke"]
+assert manifest["rungs"][0]["status"] == "passed"
+assert {stage["stage"] for stage in manifest["rungs"][0]["stages"]} == {
+    "synthetic_1d",
+    "block_smb",
+    "full_smb",
+}
+print("Promotion fixture verified")
+PY
+```
+
+This fixture is intentionally cheaper than policy training. It is the minimum
+architecture-sweep gate before spending time on the synthetic, Block SMB, and
+Full SMB training rungs.
+
+## 5. Run A Traceable CPU Smoke Training
 
 Use the same smoke shape as CI. It is intentionally tiny; the purpose is to
 prove the CLI, configuration capture, structured logs, and deterministic
@@ -129,7 +174,7 @@ print("Smoke artifacts verified")
 PY
 ```
 
-## 5. Reproduce Synthetic 1D
+## 6. Reproduce Synthetic 1D
 
 ```bash
 python -m retroagi.stages.synthetic_1d.train
@@ -144,7 +189,7 @@ Expected evidence:
 - deterministic split seeds and train permutations are covered by tests,
 - checkpoint save, restore, and resume behavior are covered by tests.
 
-## 6. Reproduce Block SMB Perception
+## 7. Reproduce Block SMB Perception
 
 First verify the tracked or supplied Block ViT checkpoint:
 
@@ -174,7 +219,7 @@ python scripts/vit/train_block_vit.py \
 Preserve `data/block_vit/block_vit.pth`,
 `data/block_vit/block_vit.json`, and the diagnostic JSON.
 
-## 7. Reproduce Block SMB Policy
+## 8. Reproduce Block SMB Policy
 
 Run a traceable policy training job with an explicit seed, checkpoint,
 structured log, and run summary:
@@ -238,7 +283,7 @@ The scripted known-good baseline at
 baseline for environment and threshold behavior. It is not a substitute for a
 learned policy checkpoint.
 
-## 8. Reproduce Full SMB Vision
+## 9. Reproduce Full SMB Vision
 
 Generate assets and synthetic data, then train the Full SMB ViT segmenter:
 
@@ -265,7 +310,7 @@ The reference target is about 99.94 percent overall accuracy, 99.89 percent
 foreground accuracy, and 99.14 percent mean IoU on 1,000 held-out synthetic
 scenes.
 
-## 9. Reproduce Full SMB Adapter And Transfer
+## 10. Reproduce Full SMB Adapter And Transfer
 
 Run the headless emulator smoke path:
 
@@ -308,7 +353,7 @@ Expected evidence:
   mean entropies, mean margins, collection reward, resets, terminations, and
   truncations.
 
-## 10. Preserve The Run
+## 11. Preserve The Run
 
 Before publishing or comparing results, preserve:
 
