@@ -82,6 +82,16 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "2",
                     "--log-path",
                     "artifacts/block_smb/train.jsonl",
+                    "--tracking-backend",
+                    "wandb",
+                    "--tracking-log-dir",
+                    "artifacts/block_smb/wandb",
+                    "--tracking-project",
+                    "retroagi-test",
+                    "--tracking-run-name",
+                    "smoke",
+                    "--tracking-mode",
+                    "offline",
                     "--checkpoint",
                     "data/block_smb/policy.pth",
                     "--resume",
@@ -126,6 +136,11 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.target_network_instability_threshold, 0.4)
         self.assertEqual(config.evaluation_interval_epochs, 2)
         self.assertEqual(config.log_path, Path("artifacts/block_smb/train.jsonl"))
+        self.assertEqual(config.tracking_backend, "wandb")
+        self.assertEqual(config.tracking_log_dir, Path("artifacts/block_smb/wandb"))
+        self.assertEqual(config.tracking_project, "retroagi-test")
+        self.assertEqual(config.tracking_run_name, "smoke")
+        self.assertEqual(config.tracking_mode, "offline")
         self.assertEqual(config.checkpoint_path, Path("data/block_smb/policy.pth"))
         self.assertEqual(config.resume_path, Path("data/block_smb/old_policy.pth"))
         self.assertTrue(config.save_checkpoints)
@@ -152,13 +167,14 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["config"]["imagined_rollout_weight"], 0.2)
         self.assertEqual(payload["config"]["target_network_mode"], "auto")
         self.assertEqual(payload["config"]["target_network_tau"], 0.25)
-        self.assertEqual(
-            payload["config"]["target_network_instability_threshold"], 0.4
-        )
+        self.assertEqual(payload["config"]["target_network_instability_threshold"], 0.4)
         self.assertEqual(payload["config"]["evaluation_interval_epochs"], 2)
-        self.assertEqual(
-            payload["config"]["log_path"], "artifacts/block_smb/train.jsonl"
-        )
+        self.assertEqual(payload["config"]["log_path"], "artifacts/block_smb/train.jsonl")
+        self.assertEqual(payload["config"]["tracking_backend"], "wandb")
+        self.assertEqual(payload["config"]["tracking_log_dir"], "artifacts/block_smb/wandb")
+        self.assertEqual(payload["config"]["tracking_project"], "retroagi-test")
+        self.assertEqual(payload["config"]["tracking_run_name"], "smoke")
+        self.assertEqual(payload["config"]["tracking_mode"], "offline")
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
         self.assertFalse(payload["config"]["ablation"]["world_model_enabled"])
@@ -220,9 +236,7 @@ class TestBlockSMBCLI(unittest.TestCase):
             "retroagi.stages.block_smb.cli.BlockVisionTransformer",
             return_value=fresh_vision,
         ) as fresh_factory:
-            with patch(
-                "retroagi.stages.block_smb.cli.load_block_vit_checkpoint"
-            ) as load_vision:
+            with patch("retroagi.stages.block_smb.cli.load_block_vit_checkpoint") as load_vision:
                 with patch(
                     "retroagi.stages.block_smb.cli.train_and_evaluate_block_smb",
                     side_effect=fake_train,

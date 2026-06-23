@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import torch
 
@@ -30,11 +31,11 @@ from retroagi.stages.block_smb import (
 )
 from retroagi.stages.block_smb.train import (
     apply_block_smb_ablations,
+    collect_trajectory,
     compute_block_smb_losses,
     compute_imagined_rollout_losses,
-    collect_trajectory,
-    make_target_network,
     make_block_smb_model,
+    make_target_network,
     save_block_smb_checkpoint,
     target_network_parameter_delta,
     update_target_network,
@@ -283,9 +284,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             for parameter in model.parameters():
                 parameter.add_(1.0)
                 break
-        before = target_network_parameter_delta(
-            model, target_model, torch.device("cpu")
-        )
+        before = target_network_parameter_delta(model, target_model, torch.device("cpu"))
         update_target_network(target_model, model, tau=0.5)
         after = target_network_parameter_delta(model, target_model, torch.device("cpu"))
 
@@ -351,9 +350,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                 ),
             )
 
-            result = train_and_evaluate_block_smb(
-                config, vision_factory=static_vision_factory
-            )
+            result = train_and_evaluate_block_smb(config, vision_factory=static_vision_factory)
 
             saved = load_checkpoint(checkpoint)
             self.assertEqual(saved["stage"], BLOCK_SMB_SPEC.name)
@@ -426,12 +423,9 @@ class TestBlockSMBTraining(unittest.TestCase):
                 log_path=log_path,
             )
 
-            result = train_and_evaluate_block_smb(
-                config, vision_factory=static_vision_factory
-            )
+            result = train_and_evaluate_block_smb(config, vision_factory=static_vision_factory)
             events = [
-                json.loads(line)
-                for line in log_path.read_text(encoding="utf-8").splitlines()
+                json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
 
         self.assertEqual(len(result["history"]), 3)
@@ -447,15 +441,51 @@ class TestBlockSMBTraining(unittest.TestCase):
             [1, 2, 3],
         )
         self.assertEqual(
-            [
-                event["epoch"]
-                for event in events
-                if event["event"] == "deterministic_evaluation"
-            ],
+            [event["epoch"] for event in events if event["event"] == "deterministic_evaluation"],
             [2, 3],
         )
         for event in events:
             self.assertEqual(event["stage"], BLOCK_SMB_SPEC.name)
+
+    def test_optional_tracker_receives_training_and_evaluation_metrics(self):
+        class RecordingTracker:
+            def __init__(self):
+                self.configs = []
+                self.metrics = []
+                self.closed = False
+
+            def log_config(self, config):
+                self.configs.append(config)
+
+            def log_metrics(self, metrics, *, step, prefix=None):
+                self.metrics.append((prefix, step, dict(metrics)))
+
+            def close(self):
+                self.closed = True
+
+        tracker = RecordingTracker()
+        with TemporaryDirectory() as tmpdir:
+            config = tiny_config(
+                generated_scenarios=0,
+                tracking_backend="tensorboard",
+                tracking_log_dir=Path(tmpdir) / "tb",
+                tracking_project="retroagi-test",
+                tracking_run_name="unit",
+            )
+            with patch(
+                "retroagi.stages.block_smb.train.make_experiment_tracker",
+                return_value=tracker,
+            ) as make_tracker:
+                train_and_evaluate_block_smb(config, vision_factory=static_vision_factory)
+
+        tracker_config = make_tracker.call_args.args[0]
+        self.assertEqual(tracker_config.backend, "tensorboard")
+        self.assertEqual(tracker_config.project, "retroagi-test")
+        self.assertEqual(tracker_config.run_name, "unit")
+        self.assertEqual(tracker.configs[0]["tracking_backend"], "tensorboard")
+        self.assertTrue(any(prefix == "train" for prefix, _step, _metrics in tracker.metrics))
+        self.assertTrue(any(prefix == "eval" for prefix, _step, _metrics in tracker.metrics))
+        self.assertTrue(tracker.closed)
 
     def test_train_evaluate_smoke_with_all_block_smb_ablations_disabled(self):
         config = tiny_config(
@@ -470,9 +500,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             ),
         )
 
-        result = train_and_evaluate_block_smb(
-            config, vision_factory=static_vision_factory
-        )
+        result = train_and_evaluate_block_smb(config, vision_factory=static_vision_factory)
 
         self.assertEqual(
             result["model"].training,
@@ -489,9 +517,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             checkpoint_path = Path(tmpdir) / "legacy_block_smb.pth"
             config = tiny_config()
             source_model = make_block_smb_model(config)
-            source_optimizer = torch.optim.AdamW(
-                source_model.parameters(), lr=config.learning_rate
-            )
+            source_optimizer = torch.optim.AdamW(source_model.parameters(), lr=config.learning_rate)
             legacy_state = {
                 key: value
                 for key, value in source_model.state_dict().items()

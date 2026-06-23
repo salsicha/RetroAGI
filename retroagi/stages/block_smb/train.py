@@ -15,13 +15,16 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from retroagi.core import (
-    AgentWorldModelCritic,
-    StageBatch,
     SUPPORTED_CONTROLLER_SCHEDULES,
+    TRACKING_BACKENDS,
+    AgentWorldModelCritic,
+    ExperimentTrackerConfig,
+    StageBatch,
     VisionEncoder,
     WorldModelState,
     build_checkpoint,
     load_checkpoint,
+    make_experiment_tracker,
     save_checkpoint,
     select_device,
     to_plain_data,
@@ -108,18 +111,19 @@ class BlockSMBTrainingConfig:
     num_envs: int = 1
     evaluation_interval_epochs: int = 1
     log_path: Optional[Path] = None
+    tracking_backend: str = "none"
+    tracking_log_dir: Optional[Path] = None
+    tracking_project: str = "retroagi"
+    tracking_run_name: Optional[str] = None
+    tracking_mode: Optional[str] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.reward_config, Mapping):
-            object.__setattr__(
-                self, "reward_config", BlockSMBRewardConfig(**self.reward_config)
-            )
+            object.__setattr__(self, "reward_config", BlockSMBRewardConfig(**self.reward_config))
         elif not isinstance(self.reward_config, BlockSMBRewardConfig):
             raise TypeError("reward_config must be a BlockSMBRewardConfig or mapping")
         if isinstance(self.ablation, Mapping):
-            object.__setattr__(
-                self, "ablation", BlockSMBAblationConfig(**self.ablation)
-            )
+            object.__setattr__(self, "ablation", BlockSMBAblationConfig(**self.ablation))
         elif not isinstance(self.ablation, BlockSMBAblationConfig):
             raise TypeError("ablation must be a BlockSMBAblationConfig or mapping")
         positive_ints = (
@@ -143,20 +147,20 @@ class BlockSMBTrainingConfig:
         if self.imagined_rollout_horizon < 0:
             raise ValueError("imagined_rollout_horizon must be non-negative")
         if self.target_network_mode not in TARGET_NETWORK_MODES:
-            raise ValueError(
-                f"target_network_mode must be one of {TARGET_NETWORK_MODES}"
-            )
+            raise ValueError(f"target_network_mode must be one of {TARGET_NETWORK_MODES}")
         if not 0 < self.target_network_tau <= 1:
             raise ValueError("target_network_tau must be in (0, 1]")
         if self.target_network_instability_threshold < 0:
-            raise ValueError(
-                "target_network_instability_threshold must be non-negative"
-            )
+            raise ValueError("target_network_instability_threshold must be non-negative")
         if self.controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
             raise ValueError(
-                "controller_schedule must be one of "
-                f"{SUPPORTED_CONTROLLER_SCHEDULES}"
+                "controller_schedule must be one of " f"{SUPPORTED_CONTROLLER_SCHEDULES}"
             )
+        object.__setattr__(self, "tracking_backend", self.tracking_backend.lower())
+        if self.tracking_backend not in TRACKING_BACKENDS:
+            raise ValueError(f"tracking_backend must be one of {TRACKING_BACKENDS}")
+        if not self.tracking_project:
+            raise ValueError("tracking_project must be non-empty")
         loss_weights = (
             self.entropy_weight,
             self.policy_loss_weight,
@@ -170,7 +174,13 @@ class BlockSMBTrainingConfig:
         )
         if any(weight < 0 for weight in loss_weights):
             raise ValueError("loss weights must be non-negative")
-        for path_name in ("checkpoint_path", "resume_path", "video_dir", "log_path"):
+        for path_name in (
+            "checkpoint_path",
+            "resume_path",
+            "video_dir",
+            "log_path",
+            "tracking_log_dir",
+        ):
             path_value = getattr(self, path_name)
             if path_value is not None and not isinstance(path_value, Path):
                 object.__setattr__(self, path_name, Path(path_value))
@@ -228,11 +238,7 @@ class BlockSMBReplayBuffer:
         self.trajectories.clear()
 
     def transitions(self) -> list[BlockSMBTransition]:
-        return [
-            step
-            for trajectory in self.trajectories
-            for step in trajectory.transitions
-        ]
+        return [step for trajectory in self.trajectories for step in trajectory.transitions]
 
     def episode_masks(self) -> torch.Tensor:
         values = [step.episode_mask for step in self.transitions()]
@@ -253,9 +259,7 @@ class SequentialBlockSMBVectorEnv:
         if not scenarios:
             raise ValueError("scenarios must be non-empty")
         self.scenarios = scenarios
-        self.envs = [
-            MarioScenarioEnv(reward_config=reward_config) for _ in range(num_envs)
-        ]
+        self.envs = [MarioScenarioEnv(reward_config=reward_config) for _ in range(num_envs)]
 
     def reset(self, seed: int = 0) -> list[tuple[np.ndarray, Mapping[str, Any]]]:
         outputs = []
@@ -301,9 +305,7 @@ def build_curriculum(config: BlockSMBTrainingConfig) -> list[tuple[str, dict]]:
     scenarios = load_fixed_scenarios(config.fixed_scenarios)
     for index in range(config.generated_scenarios):
         seed = config.generated_seed + index
-        scenarios.append(
-            (f"generated_{index:03d}", MarioScenarioEnv.generate_scenario(seed=seed))
-        )
+        scenarios.append((f"generated_{index:03d}", MarioScenarioEnv.generate_scenario(seed=seed)))
     return scenarios
 
 
@@ -338,9 +340,7 @@ def update_target_network(
         target_model.parameters(), source_model.parameters()
     ):
         target_parameter.mul_(1.0 - tau).add_(source_parameter, alpha=tau)
-    for target_buffer, source_buffer in zip(
-        target_model.buffers(), source_model.buffers()
-    ):
+    for target_buffer, source_buffer in zip(target_model.buffers(), source_model.buffers()):
         target_buffer.copy_(source_buffer)
     target_model.eval()
 
@@ -397,9 +397,7 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
         return False
     import pygame
 
-    mario_rect = pygame.Rect(
-        env.mario["x"], env.mario["y"], env.mario["w"], env.mario["h"]
-    )
+    mario_rect = pygame.Rect(env.mario["x"], env.mario["y"], env.mario["w"], env.mario["h"])
     return bool(mario_rect.colliderect(env.goal))
 
 
@@ -557,15 +555,11 @@ def collect_trajectory(
     world_model_state: WorldModelState | None = None
 
     for _ in range(rollout_steps):
-        batch = apply_block_smb_ablations(
-            stage.encode_observation(observation), ablation_config
-        )
+        batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
         batch.src_a = batch.src_a.to(device)
         batch.src_b = batch.src_b.to(device)
         batch.src_c = batch.src_c.to(device)
-        carried_state = (
-            world_model_state if ablation_config.recurrent_state_enabled else None
-        )
+        carried_state = world_model_state if ablation_config.recurrent_state_enabled else None
         action, log_prob, entropy, outputs, next_world_model_state = _action_from_model(
             model,
             batch,
@@ -614,8 +608,7 @@ def collect_trajectory(
             break
         world_model_state = (
             next_world_model_state.detach()
-            if ablation_config.recurrent_state_enabled
-            and next_world_model_state is not None
+            if ablation_config.recurrent_state_enabled and next_world_model_state is not None
             else None
         )
     return trajectory
@@ -730,10 +723,7 @@ def target_network_is_active(
         return False
     if config.target_network_mode == "on":
         return True
-    return (
-        float(instability.detach().cpu())
-        >= config.target_network_instability_threshold
-    )
+    return float(instability.detach().cpu()) >= config.target_network_instability_threshold
 
 
 def compute_block_smb_losses(
@@ -776,12 +766,8 @@ def compute_block_smb_losses(
 
         policy_terms.append(-step.log_prob * advantage.squeeze(0))
         entropy_terms.append(step.entropy)
-        representation_terms.append(
-            F.mse_loss(predicted_representation, target_representation)
-        )
-        dynamics_terms.append(
-            F.mse_loss(step.next_state_pred, step.next_batch.src_c.detach())
-        )
+        representation_terms.append(F.mse_loss(predicted_representation, target_representation))
+        dynamics_terms.append(F.mse_loss(step.next_state_pred, step.next_batch.src_c.detach()))
         reward_terms.append(F.mse_loss(reward_pred, reward_target))
         value_terms.append(F.mse_loss(value_pred, return_target.detach()))
         critic_terms.append(step.criticism.pow(2).mean())
@@ -792,16 +778,10 @@ def compute_block_smb_losses(
     loss_policy = torch.stack(policy_terms).mean()
     loss_critic_feedback = torch.stack(critic_terms).mean()
     entropy_bonus = torch.stack(entropy_terms).mean()
-    imagined_losses = compute_imagined_rollout_losses(
-        model, trajectories or [], config, device
-    )
-    world_model_weight = (
-        config.world_model_weight if config.ablation.world_model_enabled else 0.0
-    )
+    imagined_losses = compute_imagined_rollout_losses(model, trajectories or [], config, device)
+    world_model_weight = config.world_model_weight if config.ablation.world_model_enabled else 0.0
     imagined_rollout_weight = (
-        config.imagined_rollout_weight
-        if config.ablation.world_model_enabled
-        else 0.0
+        config.imagined_rollout_weight if config.ablation.world_model_enabled else 0.0
     )
     loss_total = (
         config.representation_weight * loss_representation
@@ -825,9 +805,7 @@ def compute_block_smb_losses(
             float(target_active), dtype=torch.float32, device=device
         ),
         "target_network_instability": target_instability,
-        "target_network_drift": target_network_parameter_delta(
-            model, target_model, device
-        ),
+        "target_network_drift": target_network_parameter_delta(model, target_model, device),
         "target_network_tau": torch.tensor(
             config.target_network_tau, dtype=torch.float32, device=device
         ),
@@ -894,9 +872,7 @@ def train_block_smb_epoch(
     optimizer.zero_grad(set_to_none=True)
     losses["loss_total"].backward()
     check_model_gradients(model)
-    grad_norm = torch.nn.utils.clip_grad_norm_(
-        model.parameters(), config.gradient_clip_norm
-    )
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
     if not torch.isfinite(grad_norm).item():
         raise FloatingPointError("gradient norm is NaN or infinite")
     optimizer.step()
@@ -904,9 +880,7 @@ def train_block_smb_epoch(
         update_target_network(target_model, model, config.target_network_tau)
     epoch_losses = {key: float(value.detach().cpu()) for key, value in losses.items()}
     epoch_losses["gradient_norm"] = float(grad_norm.detach().cpu())
-    epoch_losses["mean_return"] = float(
-        np.mean([t.total_return for t in replay.trajectories])
-    )
+    epoch_losses["mean_return"] = float(np.mean([t.total_return for t in replay.trajectories]))
     epoch_losses["episodes"] = float(len(replay.trajectories))
     return epoch_losses, replay
 
@@ -952,11 +926,7 @@ def evaluate_block_smb(
                 scenario_successes.append(float(trajectory.success))
                 if record_dir is not None:
                     record_dir.mkdir(parents=True, exist_ok=True)
-                    frames = (
-                        np.stack(trajectory.frames)
-                        if trajectory.frames
-                        else np.empty((0,))
-                    )
+                    frames = np.stack(trajectory.frames) if trajectory.frames else np.empty((0,))
                     np.savez_compressed(
                         record_dir / f"{scenario_name}_episode{episode}.npz",
                         frames=frames,
@@ -994,12 +964,13 @@ def evaluate_block_smb(
         "fixed_scenarios": results,
         "mean_return": float(np.mean(returns)) if returns else 0.0,
         "success_rate": float(np.mean(successes)) if successes else 0.0,
-        "success_thresholds_met": all(
-            threshold_result["threshold_met"]
-            for threshold_result in threshold_results.values()
-        )
-        if threshold_results
-        else False,
+        "success_thresholds_met": (
+            all(
+                threshold_result["threshold_met"] for threshold_result in threshold_results.values()
+            )
+            if threshold_results
+            else False
+        ),
         "tuning_metrics": tuning_metrics,
     }
 
@@ -1077,8 +1048,7 @@ def _log_block_smb_event(
 
 def _should_evaluate_epoch(config: BlockSMBTrainingConfig, completed_epoch: int) -> bool:
     return (
-        completed_epoch == config.epochs
-        or completed_epoch % config.evaluation_interval_epochs == 0
+        completed_epoch == config.epochs or completed_epoch % config.evaluation_interval_epochs == 0
     )
 
 
@@ -1106,9 +1076,7 @@ def restore_block_smb_checkpoint(
     )
     unexpected = list(load_result.unexpected_keys)
     unsupported_missing = [
-        key
-        for key in load_result.missing_keys
-        if not key.startswith(allowed_missing_prefixes)
+        key for key in load_result.missing_keys if not key.startswith(allowed_missing_prefixes)
     ]
     if unexpected or unsupported_missing:
         raise ValueError(
@@ -1145,9 +1113,7 @@ def train_and_evaluate_block_smb(
     model = make_block_smb_model(config).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
     target_model = (
-        make_target_network(model).to(device)
-        if config.target_network_mode != "off"
-        else None
+        make_target_network(model).to(device) if config.target_network_mode != "off" else None
     )
     start_epoch = 0
     global_step = 0
@@ -1171,6 +1137,17 @@ def train_and_evaluate_block_smb(
         reward_config=config.reward_config,
     )
     vector_env.close()
+    tracker = make_experiment_tracker(
+        ExperimentTrackerConfig(
+            backend=config.tracking_backend,
+            log_dir=config.tracking_log_dir,
+            project=config.tracking_project,
+            run_name=config.tracking_run_name,
+            mode=config.tracking_mode,
+        ),
+        default_log_dir=Path("artifacts/block_smb/tracking"),
+    )
+    tracker.log_config(to_plain_data(config))
     _log_block_smb_event(
         config,
         "run_started",
@@ -1205,6 +1182,7 @@ def train_and_evaluate_block_smb(
             global_step=global_step,
             metrics=last_metrics,
         )
+        tracker.log_metrics(last_metrics, step=global_step, prefix="train")
         if _should_evaluate_epoch(config, completed_epoch):
             evaluation = evaluate_block_smb(
                 model,
@@ -1235,11 +1213,14 @@ def train_and_evaluate_block_smb(
                 epoch=completed_epoch,
                 global_step=global_step,
                 metrics={
-                    key: value
-                    for key, value in last_metrics.items()
-                    if key.startswith("eval_")
+                    key: value for key, value in last_metrics.items() if key.startswith("eval_")
                 },
                 evaluation=evaluation,
+            )
+            tracker.log_metrics(
+                {key: value for key, value in last_metrics.items() if key.startswith("eval_")},
+                step=global_step,
+                prefix="eval",
             )
         history.append(last_metrics)
         if config.save_checkpoints and config.checkpoint_path is not None:
@@ -1286,6 +1267,7 @@ def train_and_evaluate_block_smb(
         metrics=last_metrics,
         evaluation=evaluation,
     )
+    tracker.close()
     return {
         "history": history,
         "evaluations": evaluations,

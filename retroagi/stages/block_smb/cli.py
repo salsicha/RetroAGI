@@ -14,6 +14,7 @@ import torch
 
 from retroagi.core import (
     SUPPORTED_CONTROLLER_SCHEDULES,
+    TRACKING_BACKENDS,
     load_checkpoint,
     select_device,
     to_plain_data,
@@ -21,9 +22,9 @@ from retroagi.core import (
 
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .train import (
+    TARGET_NETWORK_MODES,
     BlockSMBAblationConfig,
     BlockSMBTrainingConfig,
-    TARGET_NETWORK_MODES,
     train_and_evaluate_block_smb,
 )
 from .vision import (
@@ -143,6 +144,11 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--evaluation-max-steps", type=_positive_int)
     parser.add_argument("--evaluation-interval-epochs", type=_positive_int)
     parser.add_argument("--log-path", type=Path)
+    parser.add_argument("--tracking-backend", choices=TRACKING_BACKENDS)
+    parser.add_argument("--tracking-log-dir", type=Path)
+    parser.add_argument("--tracking-project")
+    parser.add_argument("--tracking-run-name")
+    parser.add_argument("--tracking-mode")
     parser.add_argument("--num-envs", type=_positive_int)
     parser.set_defaults(
         vision_enabled=None,
@@ -320,6 +326,11 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "evaluation_max_steps",
         "evaluation_interval_epochs",
         "log_path",
+        "tracking_backend",
+        "tracking_log_dir",
+        "tracking_project",
+        "tracking_run_name",
+        "tracking_mode",
         "num_envs",
         "deterministic",
     )
@@ -333,9 +344,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
     return overrides
 
 
-def _apply_reward_config_overrides(
-    values: dict[str, Any], args: argparse.Namespace
-) -> None:
+def _apply_reward_config_overrides(values: dict[str, Any], args: argparse.Namespace) -> None:
     overrides = {
         field_name: getattr(args, arg_name)
         for arg_name, field_name in REWARD_CONFIG_ARGS.items()
@@ -354,9 +363,7 @@ def _apply_reward_config_overrides(
     values["reward_config"] = BlockSMBRewardConfig(**reward_values)
 
 
-def _apply_ablation_config_overrides(
-    values: dict[str, Any], args: argparse.Namespace
-) -> None:
+def _apply_ablation_config_overrides(values: dict[str, Any], args: argparse.Namespace) -> None:
     overrides = {
         name: getattr(args, name)
         for name in ABLATION_CONFIG_FIELDS
@@ -377,7 +384,13 @@ def _apply_ablation_config_overrides(
 
 def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
-    for name in ("checkpoint_path", "resume_path", "video_dir", "log_path"):
+    for name in (
+        "checkpoint_path",
+        "resume_path",
+        "video_dir",
+        "log_path",
+        "tracking_log_dir",
+    ):
         if normalized.get(name) is not None:
             normalized[name] = Path(normalized[name])
     if normalized.get("fixed_scenarios") is not None:
@@ -385,9 +398,7 @@ def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
     if normalized.get("reward_config") is not None:
         reward_config = normalized["reward_config"]
         if not isinstance(reward_config, BlockSMBRewardConfig):
-            normalized["reward_config"] = BlockSMBRewardConfig(
-                **dict(reward_config)
-            )
+            normalized["reward_config"] = BlockSMBRewardConfig(**dict(reward_config))
     if normalized.get("ablation") is not None:
         ablation = normalized["ablation"]
         if not isinstance(ablation, BlockSMBAblationConfig):
@@ -429,9 +440,7 @@ def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
     return BlockSMBTrainingConfig(**values)
 
 
-def _make_checkpoint_config(
-    args: argparse.Namespace, *, record: bool
-) -> BlockSMBTrainingConfig:
+def _make_checkpoint_config(args: argparse.Namespace, *, record: bool) -> BlockSMBTrainingConfig:
     values = _checkpoint_config(args.checkpoint)
     overrides = _config_overrides(args)
     values.update(overrides)
@@ -442,6 +451,11 @@ def _make_checkpoint_config(
     values["record_videos"] = record
     if "log_path" not in overrides:
         values["log_path"] = None
+    if "tracking_backend" not in overrides:
+        values["tracking_backend"] = "none"
+        values["tracking_log_dir"] = None
+        values["tracking_run_name"] = None
+        values["tracking_mode"] = None
     if record:
         values["video_dir"] = args.record_dir
     else:
@@ -458,8 +472,7 @@ def _make_vision_factory(
     vision_info: dict[str, Any] = {
         "checkpoint_path": (
             str(checkpoint_path)
-            if checkpoint_path is not None
-            and config.ablation.checkpoint_transfer_enabled
+            if checkpoint_path is not None and config.ablation.checkpoint_transfer_enabled
             else None
         ),
         "frozen": True,

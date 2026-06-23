@@ -102,6 +102,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    resolved ablation config is written beside each run summary and checkpoint.
    Training can write structured JSONL events with `--log-path`; deterministic
    evaluation cadence is controlled with `--evaluation-interval-epochs`.
+   Optional TensorBoard and Weights & Biases tracking can be installed with
+   `pip install ".[tracking]"` and enabled with
+   `--tracking-backend tensorboard|wandb`.
    Low-level controller gain schedules are selectable with
    `--controller-schedule constant|linear`. The Full SMB random-agent runner is
    headless by default; pass `--render` only for local visual inspection. Full

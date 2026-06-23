@@ -49,14 +49,21 @@ from .interfaces import (
     VisionSpec,
 )
 from .models import (
+    SUPPORTED_CONTROLLER_SCHEDULES,
     AdaptiveController,
     AgentWorldModelCritic,
     Critic,
     HierarchicalAdaptiveModel,
     PositionalEncoding,
-    SUPPORTED_CONTROLLER_SCHEDULES,
     WorldModel,
     WorldModelState,
+)
+from .tracking import (
+    TRACKING_BACKENDS,
+    ExperimentTrackerConfig,
+    NullExperimentTracker,
+    flatten_numeric_metrics,
+    make_experiment_tracker,
 )
 from .vision import LinearVisionEncoder, PatchVisionTransformer
 
@@ -72,6 +79,7 @@ __all__ = [
     "CompatibilityError",
     "EnvironmentConfig",
     "EvaluationConfig",
+    "ExperimentTrackerConfig",
     "ExperimentConfig",
     "HierarchicalAdaptiveModel",
     "LinearVisionEncoder",
@@ -81,6 +89,7 @@ __all__ = [
     "SMB_ACTIONS",
     "SMBAction",
     "SUPPORTED_CONTROLLER_SCHEDULES",
+    "TRACKING_BACKENDS",
     "StageBatch",
     "StageSpec",
     "TrainingConfig",
@@ -98,11 +107,14 @@ __all__ = [
     "collect_code_revision_metadata",
     "collect_runtime_environment_metadata",
     "coerce_smb_action",
+    "flatten_numeric_metrics",
     "full_smb_action",
     "is_versioned_checkpoint",
     "is_mps_available",
     "is_mps_built",
     "load_checkpoint",
+    "make_experiment_tracker",
+    "NullExperimentTracker",
     "save_checkpoint",
     "select_device",
     "to_plain_data",
