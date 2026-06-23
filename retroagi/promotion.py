@@ -751,6 +751,10 @@ def _run_full_smb_transfer_smoke(
         block_vision_checkpoint=None,
         device=device,
     )
+    transfer_controller_metrics = _controller_transfer_metrics(
+        transfer_result.source_checkpoint["states"]["model"],
+        transfer_result.checkpoint["states"]["model"],
+    )
     loaded = load_transferred_full_smb_policy(
         transfer_path,
         full_smb_vision_checkpoint=full_smb_vision_path,
@@ -778,11 +782,19 @@ def _run_full_smb_transfer_smoke(
         ),
         make_stage=_make_promotion_full_smb_stage,
     )
+    continued_controller_metrics = _controller_adaptation_metrics(
+        transfer_result.checkpoint["states"]["model"],
+        training_result.checkpoint["states"]["model"],
+    )
     elapsed_seconds = time.perf_counter() - start_time
     metrics = {
         "deterministic_action": float(inference["action"]),
         "deterministic_entropy": float(inference["entropy"]),
         "deterministic_margin": float(inference["margin"]),
+        **{
+            f"controller_inference_{key}": float(value)
+            for key, value in inference["controller"].items()
+        },
         "continued_global_step": float(training_result.checkpoint["global_step"]),
         "continued_mean_train_return": float(
             training_result.checkpoint["metrics"]["mean_train_return"]
@@ -793,6 +805,8 @@ def _run_full_smb_transfer_smoke(
         "continued_evaluation_success_rate": float(
             training_result.checkpoint["metrics"]["evaluation_success_rate"]
         ),
+        **transfer_controller_metrics,
+        **continued_controller_metrics,
     }
     artifacts = {
         "source_block_checkpoint_path": str(source_checkpoint_path),
@@ -813,6 +827,11 @@ def _run_full_smb_transfer_smoke(
         "budget": dict(budget),
         "metrics": metrics,
         "inference": inference,
+        "controller_transfer": {
+            "state_prefixes": list(_CONTROLLER_STATE_PREFIXES),
+            "transfer_metrics": transfer_controller_metrics,
+            "adaptation_metrics": continued_controller_metrics,
+        },
         "training": training_result.as_dict(),
         "artifacts": artifacts,
     }
@@ -949,6 +968,94 @@ def _run_deterministic_full_smb_inference(
         "entropy": float(entropy.mean().item()),
         "margin": margin,
         "logits_shape": list(selection.logits.shape),
+        "controller": _controller_output_metrics(model, batch, device=device),
+    }
+
+
+_CONTROLLER_STATE_PREFIXES = ("agent.transformer_B.", "agent.fc_controller_params.")
+
+
+def _controller_state_items(
+    state: Mapping[str, Any],
+) -> dict[str, torch.Tensor]:
+    return {
+        key: value.detach().cpu().float()
+        for key, value in state.items()
+        if key.startswith(_CONTROLLER_STATE_PREFIXES) and torch.is_tensor(value)
+    }
+
+
+def _controller_transfer_metrics(
+    source_state: Mapping[str, Any],
+    transferred_state: Mapping[str, Any],
+) -> dict[str, float]:
+    source = _controller_state_items(source_state)
+    transferred = _controller_state_items(transferred_state)
+    keys = sorted(set(source) & set(transferred))
+    if not keys:
+        return {
+            "controller_transfer_key_count": 0.0,
+            "controller_transfer_max_abs_delta": math.inf,
+            "controller_transfer_mean_abs_delta": math.inf,
+        }
+    deltas = [(source[key] - transferred[key]).abs().reshape(-1) for key in keys]
+    concatenated = torch.cat(deltas)
+    return {
+        "controller_transfer_key_count": float(len(keys)),
+        "controller_transfer_max_abs_delta": float(concatenated.max().item()),
+        "controller_transfer_mean_abs_delta": float(concatenated.mean().item()),
+    }
+
+
+def _controller_adaptation_metrics(
+    transferred_state: Mapping[str, Any],
+    continued_state: Mapping[str, Any],
+) -> dict[str, float]:
+    transferred = _controller_state_items(transferred_state)
+    continued = _controller_state_items(continued_state)
+    keys = sorted(set(transferred) & set(continued))
+    if not keys:
+        return {
+            "controller_adaptation_key_count": 0.0,
+            "controller_adaptation_changed_tensors": 0.0,
+            "controller_adaptation_max_abs_delta": math.inf,
+            "controller_adaptation_mean_abs_delta": math.inf,
+        }
+    deltas = [(transferred[key] - continued[key]).abs().reshape(-1) for key in keys]
+    concatenated = torch.cat(deltas)
+    changed_tensors = sum(
+        1 for key in keys if not torch.equal(transferred[key], continued[key])
+    )
+    return {
+        "controller_adaptation_key_count": float(len(keys)),
+        "controller_adaptation_changed_tensors": float(changed_tensors),
+        "controller_adaptation_max_abs_delta": float(concatenated.max().item()),
+        "controller_adaptation_mean_abs_delta": float(concatenated.mean().item()),
+    }
+
+
+@torch.no_grad()
+def _controller_output_metrics(
+    model: torch.nn.Module,
+    batch: Any,
+    *,
+    device: torch.device,
+) -> dict[str, float]:
+    src_a = batch.src_a.to(device)
+    src_b = batch.src_b.to(device)
+    src_c = batch.src_c.to(device)
+    episode = (batch.metadata or {}).get("episode", {})
+    episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
+    if episode_mask is not None:
+        episode_mask = torch.as_tensor(episode_mask, dtype=src_c.dtype, device=src_c.device)
+    outputs = model(src_a, src_b, src_c, tau=1.0, episode_mask=episode_mask)
+    w = outputs[5].detach().cpu().float()
+    b = outputs[6].detach().cpu().float()
+    return {
+        "w_mean": float(w.mean().item()),
+        "w_std": float(w.std(unbiased=False).item()),
+        "b_mean": float(b.mean().item()),
+        "b_std": float(b.std(unbiased=False).item()),
     }
 
 
@@ -1127,6 +1234,53 @@ def _handoff_automatic_gates(
                 None
                 if metrics["continued_global_step"] > 0
                 else "continued Full SMB training did not advance global_step"
+            ),
+        }
+    )
+    gates.append(
+        {
+            "name": "controller-transfer-exact",
+            "kind": "contract",
+            "passed": (
+                metrics["controller_transfer_key_count"] > 0
+                and metrics["controller_transfer_max_abs_delta"] == 0.0
+            ),
+            "actual": {
+                "key_count": metrics["controller_transfer_key_count"],
+                "max_abs_delta": metrics["controller_transfer_max_abs_delta"],
+            },
+            "threshold": "key_count>0 and max_abs_delta==0",
+            "reason": (
+                None
+                if (
+                    metrics["controller_transfer_key_count"] > 0
+                    and metrics["controller_transfer_max_abs_delta"] == 0.0
+                )
+                else "Block SMB controller weights were not copied exactly into Full SMB"
+            ),
+        }
+    )
+    gates.append(
+        {
+            "name": "controller-adapted-during-full-smb-training",
+            "kind": "metric",
+            "passed": (
+                metrics["controller_adaptation_key_count"] > 0
+                and metrics["controller_adaptation_changed_tensors"] > 0
+            ),
+            "actual": {
+                "key_count": metrics["controller_adaptation_key_count"],
+                "changed_tensors": metrics["controller_adaptation_changed_tensors"],
+                "max_abs_delta": metrics["controller_adaptation_max_abs_delta"],
+            },
+            "threshold": "key_count>0 and changed_tensors>0",
+            "reason": (
+                None
+                if (
+                    metrics["controller_adaptation_key_count"] > 0
+                    and metrics["controller_adaptation_changed_tensors"] > 0
+                )
+                else "continued Full SMB training did not update controller weights"
             ),
         }
     )

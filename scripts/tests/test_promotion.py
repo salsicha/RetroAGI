@@ -198,6 +198,9 @@ class TestPromotionPipeline(unittest.TestCase):
                 manifest["rungs"][0]["artifacts"]["continued_checkpoint_path"]
             ).exists()
             summary_exists = Path(manifest["rungs"][0]["summary_path"]).exists()
+            summary_payload = json.loads(
+                Path(manifest["rungs"][0]["summary_path"]).read_text()
+            )
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(manifest["passed"])
@@ -206,6 +209,12 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(rung["status"], "passed")
         self.assertGreater(rung["metrics"]["continued_global_step"], 0)
         self.assertGreaterEqual(rung["metrics"]["deterministic_action"], 0)
+        self.assertGreater(rung["metrics"]["controller_transfer_key_count"], 0)
+        self.assertEqual(rung["metrics"]["controller_transfer_max_abs_delta"], 0.0)
+        self.assertIn("controller_inference_w_mean", rung["metrics"])
+        self.assertGreater(rung["metrics"]["controller_adaptation_key_count"], 0)
+        self.assertGreater(rung["metrics"]["controller_adaptation_changed_tensors"], 0)
+        self.assertIn("controller", summary_payload["inference"])
         self.assertTrue(all(gate["passed"] for gate in rung["automatic_gates"]))
         self.assertTrue(transfer_exists)
         self.assertTrue(continued_exists)
