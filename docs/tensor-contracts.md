@@ -62,6 +62,12 @@ source signal, and description. Shared trainers should ask the selected
 `GameSpec` to validate reward overrides instead of carrying game-specific
 reward names such as `coin`, `enemy_hit`, or `fall_death` in trainer code.
 
+`GameTaskSchema` is the game-owned task and curriculum contract. It declares
+fixed benchmark tasks, procedural task templates, deterministic reset seeds,
+curriculum order, task sources, and `TaskSuccessThreshold` gates. Block SMB's
+fixed-scenario success thresholds now derive from `SMB_GAME_SPEC.task_schema`
+so future games can expose the same shape without trainer rewrites.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

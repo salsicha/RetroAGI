@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
+from retroagi.core import SMB_GAME_SPEC
+
 
 @dataclass(frozen=True)
 class BlockSMBSuccessThreshold:
@@ -31,40 +33,24 @@ class BlockSMBSuccessThreshold:
         return asdict(self)
 
 
-FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS: dict[str, BlockSMBSuccessThreshold] = {
-    "level_1_flat.json": BlockSMBSuccessThreshold(
-        scenario_name="level_1_flat.json",
-        min_success_rate=1.0,
-        min_mean_return=55.0,
-        min_episodes=3,
-        max_steps=200,
-        rationale="Flat run: reach the goal reliably without relying on one lucky rollout.",
-    ),
-    "level_2_gap.json": BlockSMBSuccessThreshold(
-        scenario_name="level_2_gap.json",
-        min_success_rate=1.0,
-        min_mean_return=55.0,
-        min_episodes=3,
-        max_steps=200,
-        rationale="Gap run: cross the gap and reach the goal reliably within the time budget.",
-    ),
-    "level_3_stairs.json": BlockSMBSuccessThreshold(
-        scenario_name="level_3_stairs.json",
-        min_success_rate=1.0,
-        min_mean_return=55.0,
-        min_episodes=3,
-        max_steps=200,
-        rationale="Stair run: climb the stepped platforms and reach the elevated goal.",
-    ),
-    "level_4_platforms.json": BlockSMBSuccessThreshold(
-        scenario_name="level_4_platforms.json",
-        min_success_rate=1.0,
-        min_mean_return=55.0,
-        min_episodes=3,
-        max_steps=200,
-        rationale="Platform run: traverse separated platforms and reach the final goal.",
-    ),
-}
+def _fixed_block_smb_success_thresholds() -> dict[str, BlockSMBSuccessThreshold]:
+    thresholds: dict[str, BlockSMBSuccessThreshold] = {}
+    for task in SMB_GAME_SPEC.fixed_tasks:
+        if task.stage_name != "block_smb" or task.success_threshold is None:
+            continue
+        threshold = task.success_threshold
+        thresholds[task.name] = BlockSMBSuccessThreshold(
+            scenario_name=task.name,
+            min_success_rate=threshold.min_success_rate,
+            min_mean_return=threshold.min_mean_return,
+            min_episodes=threshold.min_episodes,
+            max_steps=threshold.max_steps,
+            rationale=threshold.rationale,
+        )
+    return thresholds
+
+
+FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS = _fixed_block_smb_success_thresholds()
 
 
 def fixed_scenario_success_threshold(name: str) -> BlockSMBSuccessThreshold:

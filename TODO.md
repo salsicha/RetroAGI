@@ -361,7 +361,7 @@ architecture cheaply before spending high-fidelity emulator time.
       game-specific objectives.
 - [x] Add a reward-term configuration schema that lets each game own its reward
       terms without leaking SMB reward logic into shared trainers.
-- [ ] Define a per-game scenario/task schema for fixed tasks, procedural task
+- [x] Define a per-game scenario/task schema for fixed tasks, procedural task
       generation, curriculum progression, success thresholds, and deterministic
       reset seeds.
 - [ ] Generalize synthetic low-fidelity data generation so each game can define

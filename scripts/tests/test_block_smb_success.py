@@ -2,6 +2,7 @@
 
 import unittest
 
+from retroagi.core import SMB_GAME_SPEC
 from retroagi.stages.block_smb import (
     FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS,
     evaluate_fixed_success_thresholds,
@@ -26,6 +27,12 @@ class TestBlockSMBSuccessThresholds(unittest.TestCase):
             self.assertEqual(threshold.min_episodes, 3)
             self.assertEqual(threshold.max_steps, 200)
             self.assertGreaterEqual(threshold.min_mean_return, 55.0)
+            task = SMB_GAME_SPEC.task(threshold.scenario_name)
+            self.assertIsNotNone(task.success_threshold)
+            self.assertEqual(
+                threshold.min_mean_return,
+                task.success_threshold.min_mean_return,
+            )
 
     def test_threshold_diagnostics_explain_pass_and_fail_reasons(self):
         passing = evaluate_success_threshold(

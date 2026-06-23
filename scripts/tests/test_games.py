@@ -9,10 +9,14 @@ from retroagi.core import (
     SMB_ACTIONS,
     SMB_GAME_SPEC,
     SMB_REWARD_SCHEMA,
+    SMB_TASK_SCHEMA,
     ActionSpec,
     GameSpec,
+    GameTaskSchema,
+    GameTaskSpec,
     RewardConfigSchema,
     RewardTermSpec,
+    TaskSuccessThreshold,
     assert_stage_ladder,
     game_names,
     get_game_spec,
@@ -42,6 +46,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertTrue(any(asset.name == "smb_sprites" for asset in spec.asset_requirements))
         self.assertIn("rom", spec.licensing)
         self.assertIs(spec.reward_schema, SMB_REWARD_SCHEMA)
+        self.assertIs(spec.task_schema, SMB_TASK_SCHEMA)
 
     def test_smb_actions_preserve_stable_ids_and_button_metadata(self):
         spec = SMB_GAME_SPEC
@@ -105,6 +110,47 @@ class TestGameSpec(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "negative reward term"):
             SMB_GAME_SPEC.reward_config({"enemy_hit": 1.0})
 
+    def test_smb_task_schema_declares_fixed_generated_and_curriculum_tasks(self):
+        schema = SMB_GAME_SPEC.task_schema
+        self.assertIs(schema, SMB_TASK_SCHEMA)
+        self.assertIsNotNone(schema)
+        assert schema is not None
+
+        fixed_names = tuple(task.name for task in schema.fixed_tasks)
+        self.assertEqual(
+            fixed_names,
+            (
+                "level_1_flat.json",
+                "level_2_gap.json",
+                "level_3_stairs.json",
+                "level_4_platforms.json",
+            ),
+        )
+        self.assertEqual(tuple(task.name for task in SMB_GAME_SPEC.fixed_tasks), fixed_names)
+        self.assertEqual(
+            tuple(task.name for task in schema.curriculum),
+            fixed_names + ("generated_block_smb",),
+        )
+        self.assertEqual(
+            schema.reset_seeds()["level_1_flat.json"],
+            SMB_GAME_SPEC.task("level_1_flat.json").reset_seed,
+        )
+
+        gap = SMB_GAME_SPEC.task("level_2_gap.json")
+        self.assertEqual(gap.stage_name, "block_smb")
+        self.assertEqual(gap.task_type, "fixed")
+        self.assertTrue(gap.source.endswith("level_2_gap.json"))
+        self.assertEqual(gap.curriculum_stage, 2)
+        self.assertIsNotNone(gap.success_threshold)
+        assert gap.success_threshold is not None
+        self.assertEqual(gap.success_threshold.min_success_rate, 1.0)
+        self.assertEqual(gap.success_threshold.max_steps, 200)
+
+        generated = schema.task("generated_block_smb")
+        self.assertEqual(generated.task_type, "procedural")
+        self.assertEqual(generated.generation_seed, 50_000)
+        self.assertIn("enemy_density", generated.generation_config)
+
     def test_game_spec_validation_rejects_mismatched_reward_schema(self):
         with self.assertRaisesRegex(ValueError, "reward schema is for"):
             GameSpec(
@@ -153,6 +199,75 @@ class TestGameSpec(unittest.TestCase):
                             "positive",
                             "progress",
                             "unit progress reward",
+                        ),
+                    ),
+                ),
+            )
+
+    def test_game_spec_validation_rejects_mismatched_task_schema(self):
+        with self.assertRaisesRegex(ValueError, "task schema is for"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                task_schema=GameTaskSchema(
+                    game_name="other",
+                    tasks=(
+                        GameTaskSpec(
+                            name="fixed",
+                            stage_name="block_smb",
+                            task_type="fixed",
+                            source="fixed.json",
+                            reset_seed=1,
+                            curriculum_stage=1,
+                            success_threshold=TaskSuccessThreshold(
+                                1.0,
+                                0.0,
+                                1,
+                                10,
+                                "unit threshold",
+                            ),
+                        ),
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown stages"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                task_schema=GameTaskSchema(
+                    game_name="bad",
+                    tasks=(
+                        GameTaskSpec(
+                            name="fixed",
+                            stage_name="missing_stage",
+                            task_type="fixed",
+                            source="fixed.json",
+                            reset_seed=1,
+                            curriculum_stage=1,
+                            success_threshold=TaskSuccessThreshold(
+                                1.0,
+                                0.0,
+                                1,
+                                10,
+                                "unit threshold",
+                            ),
                         ),
                     ),
                 ),

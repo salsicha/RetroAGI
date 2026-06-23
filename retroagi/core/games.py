@@ -12,6 +12,7 @@ from .actions import (
     action_button_vector as _action_button_vector,
 )
 from .rewards import RewardConfigSchema, RewardTermSpec
+from .tasks import GameTaskSchema, GameTaskSpec, TaskSuccessThreshold
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ class GameSpec:
     asset_requirements: tuple[AssetRequirement, ...] = ()
     licensing: Mapping[str, str] = field(default_factory=dict)
     reward_schema: RewardConfigSchema | None = None
+    task_schema: GameTaskSchema | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -93,6 +95,7 @@ class GameSpec:
         self._validate_actions()
         self._validate_stage_ladder()
         self._validate_reward_schema()
+        self._validate_task_schema()
         if not self.licensing:
             raise ValueError(f"game {self.name!r} must define licensing metadata")
 
@@ -133,6 +136,22 @@ class GameSpec:
                 f"game {self.name!r} reward schema is missing described terms: {missing}"
             )
 
+    def _validate_task_schema(self) -> None:
+        if self.task_schema is None:
+            return
+        if self.task_schema.game_name != self.name:
+            raise ValueError(
+                f"game {self.name!r} task schema is for {self.task_schema.game_name!r}"
+            )
+        stage_names = {stage.stage_spec_name for stage in self.stage_ladder}
+        unsupported = sorted(
+            {task.stage_name for task in self.task_schema.tasks}.difference(stage_names)
+        )
+        if unsupported:
+            raise ValueError(
+                f"game {self.name!r} task schema references unknown stages: {unsupported}"
+            )
+
     @property
     def action_count(self) -> int:
         return len(self.action_space)
@@ -167,6 +186,17 @@ class GameSpec:
                 raise ValueError(f"game {self.name!r} does not define a reward schema")
             return {}
         return self.reward_schema.validate(values)
+
+    def task(self, name: str) -> GameTaskSpec:
+        if self.task_schema is None:
+            raise KeyError(f"game {self.name!r} does not define tasks")
+        return self.task_schema.task(name)
+
+    @property
+    def fixed_tasks(self) -> tuple[GameTaskSpec, ...]:
+        if self.task_schema is None:
+            return ()
+        return self.task_schema.fixed_tasks
 
 
 SMB_REWARD_SCHEMA = RewardConfigSchema(
@@ -225,6 +255,104 @@ SMB_REWARD_SCHEMA = RewardConfigSchema(
 )
 
 
+SMB_TASK_SCHEMA = GameTaskSchema(
+    game_name="smb",
+    tasks=(
+        GameTaskSpec(
+            name="level_1_flat.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_1_flat.json",
+            reset_seed=101_001,
+            curriculum_stage=1,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Flat run: reach the goal reliably without relying on one "
+                    "lucky rollout."
+                ),
+            ),
+            description="Flat fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_2_gap.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_2_gap.json",
+            reset_seed=101_002,
+            curriculum_stage=2,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Gap run: cross the gap and reach the goal reliably within "
+                    "the time budget."
+                ),
+            ),
+            description="Gap fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_3_stairs.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_3_stairs.json",
+            reset_seed=101_003,
+            curriculum_stage=3,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Stair run: climb the stepped platforms and reach the "
+                    "elevated goal."
+                ),
+            ),
+            description="Stairs fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_4_platforms.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_4_platforms.json",
+            reset_seed=101_004,
+            curriculum_stage=4,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Platform run: traverse separated platforms and reach the "
+                    "final goal."
+                ),
+            ),
+            description="Moving-platform fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="generated_block_smb",
+            stage_name="block_smb",
+            task_type="procedural",
+            source="MarioScenarioEnv.generate_scenario",
+            reset_seed=150_000,
+            curriculum_stage=5,
+            generation_seed=50_000,
+            generation_config={
+                "width_range": (256, 512),
+                "gap_density": "curriculum",
+                "enemy_density": "curriculum",
+            },
+            description="Procedural Block SMB generalization task template",
+        ),
+    ),
+)
+
+
 SMB_GAME_SPEC = GameSpec(
     name="smb",
     family="super_mario_bros",
@@ -269,6 +397,7 @@ SMB_GAME_SPEC = GameSpec(
         "frame_penalty": "small per-step cost",
     },
     reward_schema=SMB_REWARD_SCHEMA,
+    task_schema=SMB_TASK_SCHEMA,
     stage_ladder=(
         StageLadderEntry(
             name="synthetic",
@@ -357,6 +486,7 @@ def validate_game_spec(game: GameSpec) -> GameSpec:
         signal_schema=dict(game.signal_schema),
         reward_terms=dict(game.reward_terms),
         reward_schema=game.reward_schema,
+        task_schema=game.task_schema,
         stage_ladder=tuple(game.stage_ladder),
         emulator_backend=game.emulator_backend,
         asset_requirements=tuple(game.asset_requirements),
