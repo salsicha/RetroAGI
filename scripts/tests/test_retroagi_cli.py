@@ -9,6 +9,68 @@ from retroagi import cli
 
 
 class TestRetroAGICLI(unittest.TestCase):
+    def test_synthetic_1d_train_forwards_stage_arguments(self):
+        with patch("retroagi.stages.synthetic_1d.cli.main", return_value=0) as synthetic_main:
+            exit_code = cli.main(
+                [
+                    "train",
+                    "--stage",
+                    "synthetic-1d",
+                    "--epochs",
+                    "3",
+                    "--architecture",
+                    "baseline",
+                    "--architecture-config",
+                    "hidden_dim=12",
+                    "--checkpoint",
+                    "data/synthetic_1d/policy.pth",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        synthetic_main.assert_called_once_with(
+            [
+                "train",
+                "--epochs",
+                "3",
+                "--architecture",
+                "baseline",
+                "--architecture-config",
+                "hidden_dim=12",
+                "--checkpoint",
+                "data/synthetic_1d/policy.pth",
+            ]
+        )
+
+    def test_synthetic_1d_resume_rewrites_to_train_resume(self):
+        with patch("retroagi.stages.synthetic_1d.cli.main", return_value=0) as synthetic_main:
+            exit_code = cli.main(
+                [
+                    "resume",
+                    "--stage",
+                    "synthetic",
+                    "--checkpoint",
+                    "data/synthetic_1d/old.pth",
+                    "--save-checkpoint",
+                    "data/synthetic_1d/new.pth",
+                    "--epochs",
+                    "10",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        synthetic_main.assert_called_once_with(
+            [
+                "train",
+                "--resume",
+                "data/synthetic_1d/old.pth",
+                "--checkpoint",
+                "data/synthetic_1d/new.pth",
+                "--epochs",
+                "10",
+            ]
+        )
+
     def test_block_smb_train_forwards_stage_arguments(self):
         with patch("retroagi.stages.block_smb.cli.main", return_value=0) as block_main:
             exit_code = cli.main(

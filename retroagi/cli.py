@@ -6,7 +6,6 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
-
 STAGE_ALIASES = {
     "synthetic-1d": "synthetic-1d",
     "synthetic_1d": "synthetic-1d",
@@ -100,7 +99,7 @@ def run(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
     if stage == "full-smb":
         return _run_full_smb(command, stage_args)
     if stage == "synthetic-1d":
-        return _run_synthetic_1d(command, stage_args)
+        return _run_synthetic_1d(args, stage_args)
     raise ValueError(f"unsupported stage {stage!r}")
 
 
@@ -156,15 +155,21 @@ def _run_full_smb_evaluate(stage_args: Sequence[str]) -> int:
     return 0
 
 
-def _run_synthetic_1d(command: str, stage_args: Sequence[str]) -> int:
-    if command != "train":
-        raise ValueError("Synthetic 1D currently supports only train through the top-level CLI")
-    if stage_args:
-        raise ValueError("Synthetic 1D train does not accept top-level forwarded arguments yet")
-    from retroagi.stages.synthetic_1d.train import train_and_evaluate
+def _run_synthetic_1d(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
+    from retroagi.stages.synthetic_1d import cli as synthetic_cli
 
-    train_and_evaluate()
-    return 0
+    if args.command == "train":
+        synthetic_args = ["train", *stage_args]
+    elif args.command == "resume":
+        synthetic_args = ["train", "--resume", str(args.checkpoint)]
+        if args.save_checkpoint is not None:
+            synthetic_args.extend(["--checkpoint", str(args.save_checkpoint)])
+        synthetic_args.extend(stage_args)
+    else:
+        raise ValueError(
+            "Synthetic 1D currently supports train and resume through the top-level CLI"
+        )
+    return int(synthetic_cli.main(synthetic_args))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
