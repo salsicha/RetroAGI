@@ -23,7 +23,10 @@ from retroagi.core import (
     SMB_ACTIONS,
     StageSpec,
     architecture_names,
+    build_game_promotion_plan,
     build_architecture_variant,
+    game_plugin_names,
+    get_game_plugin,
     get_architecture,
     parse_architecture_ablation_item,
     save_checkpoint,
@@ -321,15 +324,25 @@ REQUIRED_RUNG_METRICS = {
     "block-smb-smoke": ("eval_success_rate", "gradient_norm"),
 }
 
-RUNG_ALIASES = {rung.name: rung.name for rung in PROMOTION_RUNGS}
+RUNG_ALIASES = {rung.name: (rung.name,) for rung in PROMOTION_RUNGS}
 RUNG_ALIASES.update(
     {
-        "interface": "interface-smoke",
-        "synthetic": "synthetic-concept",
-        "synthetic-1d": "synthetic-concept",
-        "block": "block-smb-smoke",
-        "block-smb": "block-smb-smoke",
-        "full-smb": "full-smb-transfer-smoke",
+        "architecture-smoke": ("interface-smoke",),
+        "game-synthetic": ("synthetic-concept",),
+        "game-block": ("block-smb-smoke",),
+        "game-full-smoke": (
+            "full-smb-asset-mock-perception",
+            "full-smb-transfer-smoke",
+        ),
+        "game-transfer": ("full-smb-transfer-smoke",),
+        "game-full-comparison": ("full-smb-transfer-vs-scratch",),
+        "game-full-training": ("full-smb-fine-tuning",),
+        "interface": ("interface-smoke",),
+        "synthetic": ("synthetic-concept",),
+        "synthetic-1d": ("synthetic-concept",),
+        "block": ("block-smb-smoke",),
+        "block-smb": ("block-smb-smoke",),
+        "full-smb": ("full-smb-transfer-smoke",),
     }
 )
 STAGE_SPECS = (SYNTHETIC_1D_SPEC, BLOCK_SMB_SPEC, FULL_SMB_SPEC)
@@ -374,7 +387,7 @@ def _parse_config_value(value: str) -> Any:
         return value
 
 
-def _rung_name(value: str) -> str:
+def _rung_name(value: str) -> tuple[str, ...]:
     try:
         return RUNG_ALIASES[value.lower()]
     except KeyError as exc:
@@ -382,6 +395,16 @@ def _rung_name(value: str) -> str:
         raise argparse.ArgumentTypeError(
             f"unknown promotion rung {value!r}; expected one of: {choices}"
         ) from exc
+
+
+def _game_name(value: str) -> str:
+    name = value.lower()
+    if name in game_plugin_names():
+        return name
+    available = ", ".join(game_plugin_names())
+    raise argparse.ArgumentTypeError(
+        f"unknown game {value!r}; available game plugins: {available}"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -396,6 +419,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="promotion rung to include; repeat to run a subset",
     )
     parser.add_argument("--output", required=True, type=Path, help="promotion manifest JSON path")
+    parser.add_argument(
+        "--game",
+        default="smb",
+        type=_game_name,
+        help="game plugin to promote through; default: smb",
+    )
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
@@ -451,10 +480,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
-    selected = set(args.rung or [rung.name for rung in PROMOTION_RUNGS])
+    selected = _selected_rung_names(args)
     budgets = _resolve_budgets(args)
     variant = build_architecture_variant(args.architecture_config or (), args.ablation or ())
     architecture_config = dict(variant.architecture_config)
+    game_plugin = get_game_plugin(args.game)
+    game_promotion_plan = build_game_promotion_plan(game_plugin)
     results = []
     stopping_reason = None
     for rung in PROMOTION_RUNGS:
@@ -489,6 +520,21 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
         "architecture_variant": variant.metadata(),
         "seed": args.seed,
         "device": args.device,
+        "game": {
+            "name": game_plugin.name,
+            "family": game_plugin.game.family,
+            "stage_ladder": [
+                {
+                    "name": stage.name,
+                    "stage_spec_name": stage.stage_spec_name,
+                    "role": stage.role,
+                }
+                for stage in game_plugin.game.stage_ladder
+            ],
+        },
+        "game_promotion": game_promotion_plan.to_manifest(
+            {rung["name"]: rung["status"] for rung in results}
+        ),
         "budget": {
             "name": args.budget,
             "rungs": budgets,
@@ -497,6 +543,12 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
         "rungs": results,
         "passed": not failed,
     }
+
+
+def _selected_rung_names(args: argparse.Namespace) -> set[str]:
+    if args.rung is None:
+        return {rung.name for rung in PROMOTION_RUNGS}
+    return {rung for selection in args.rung for rung in selection}
 
 
 def _resolve_budgets(args: argparse.Namespace) -> dict[str, dict[str, int | float]]:

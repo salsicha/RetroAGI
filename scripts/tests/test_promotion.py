@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from retroagi import promotion
-from retroagi.core import BASELINE_ARCHITECTURE_NAME
+from retroagi.core import BASELINE_ARCHITECTURE_NAME, build_game_promotion_plan, get_game_plugin
 from scripts.tests.test_full_smb_transfer import write_block_policy_checkpoint
 
 
@@ -77,6 +77,8 @@ class TestPromotionPipeline(unittest.TestCase):
                 [
                     "--rung",
                     "interface-smoke",
+                    "--game",
+                    "smb",
                     "--output",
                     str(Path(tmpdir) / "promotion.json"),
                     "--artifacts-dir",
@@ -94,6 +96,20 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertTrue(manifest["passed"])
         self.assertEqual(manifest["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
         self.assertEqual(manifest["architecture"]["config"], {"hidden_dim": 8})
+        self.assertEqual(manifest["game"]["name"], "smb")
+        self.assertEqual(manifest["game"]["family"], "super_mario_bros")
+        self.assertEqual(
+            [phase["name"] for phase in manifest["game_promotion"]["phases"]],
+            [
+                "architecture-smoke",
+                "game-synthetic",
+                "game-block",
+                "game-full-smoke",
+                "game-transfer",
+                "game-full-comparison",
+                "game-full-training",
+            ],
+        )
         self.assertEqual(manifest["budget"]["name"], "small")
         self.assertEqual(manifest["rungs"][0]["name"], "interface-smoke")
         self.assertEqual(manifest["rungs"][0]["status"], "passed")
@@ -104,6 +120,24 @@ class TestPromotionPipeline(unittest.TestCase):
             ["synthetic_1d", "block_smb", "full_smb"],
         )
         self.assertTrue(all(stage["passed"] for stage in manifest["rungs"][0]["stages"]))
+
+    def test_smb_game_promotion_plan_maps_phases_to_architecture_rungs(self):
+        plan = build_game_promotion_plan(get_game_plugin("smb"))
+
+        self.assertEqual(plan.game_name, "smb")
+        self.assertEqual(plan.phase("architecture-smoke").architecture_rungs, ("interface-smoke",))
+        self.assertEqual(plan.phase("game-synthetic").stage_name, "synthetic")
+        self.assertEqual(plan.phase("game-synthetic").architecture_rungs, ("synthetic-concept",))
+        self.assertEqual(plan.phase("game-block").stage_name, "block")
+        self.assertEqual(plan.phase("game-block").architecture_rungs, ("block-smb-smoke",))
+        self.assertEqual(
+            plan.phase("game-full-smoke").architecture_rungs,
+            ("full-smb-asset-mock-perception", "full-smb-transfer-smoke"),
+        )
+        self.assertEqual(
+            plan.phase("game-full-comparison").architecture_rungs,
+            ("full-smb-transfer-vs-scratch",),
+        )
 
     def test_default_pipeline_records_supported_and_future_rungs(self):
         with TemporaryDirectory() as tmpdir:
@@ -339,6 +373,89 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(manifest["rungs"][0]["budget"]["rollout_steps"], 3)
         self.assertEqual(manifest["rungs"][0]["budget"]["success_rate_threshold"], 0.25)
         self.assertEqual(manifest["rungs"][0]["budget"]["runtime_seconds"], 180.0)
+
+    def test_game_phase_rung_alias_selects_underlying_architecture_rung(self):
+        calls = []
+
+        def fake_run_experiment(args):
+            calls.append(args)
+            return _fake_experiment_manifest(args)
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment):
+                exit_code, manifest = self.run_main(
+                    [
+                        "--rung",
+                        "game-synthetic",
+                        "--output",
+                        str(Path(tmpdir) / "promotion.json"),
+                        "--artifacts-dir",
+                        str(Path(tmpdir) / "artifacts"),
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([rung["name"] for rung in manifest["rungs"]], ["synthetic-concept"])
+        self.assertEqual(calls[0].stage, ["synthetic-1d"])
+
+    def test_game_full_smoke_phase_alias_runs_perception_and_transfer(self):
+        with TemporaryDirectory() as tmpdir:
+            with (
+                patch(
+                    "retroagi.promotion._run_full_smb_asset_mock_perception",
+                    return_value={
+                        "name": "full-smb-asset-mock-perception",
+                        "status": "passed",
+                        "passed": True,
+                        "budget": {},
+                        "automatic_gates": [],
+                    },
+                ) as perception,
+                patch(
+                    "retroagi.promotion._run_full_smb_transfer_smoke",
+                    return_value={
+                        "name": "full-smb-transfer-smoke",
+                        "status": "passed",
+                        "passed": True,
+                        "budget": {},
+                        "automatic_gates": [],
+                    },
+                ) as transfer,
+            ):
+                exit_code, manifest = self.run_main(
+                    [
+                        "--rung",
+                        "game-full-smoke",
+                        "--output",
+                        str(Path(tmpdir) / "promotion.json"),
+                        "--artifacts-dir",
+                        str(Path(tmpdir) / "artifacts"),
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            [rung["name"] for rung in manifest["rungs"]],
+            ["full-smb-asset-mock-perception", "full-smb-transfer-smoke"],
+        )
+        full_smoke = next(
+            phase
+            for phase in manifest["game_promotion"]["phases"]
+            if phase["name"] == "game-full-smoke"
+        )
+        self.assertEqual(
+            full_smoke["rung_statuses"],
+            {
+                "full-smb-asset-mock-perception": "passed",
+                "full-smb-transfer-smoke": "passed",
+            },
+        )
+        perception.assert_called_once()
+        transfer.assert_called_once()
 
     def test_promotion_passes_architecture_ablations_to_experiment_runner(self):
         calls = []

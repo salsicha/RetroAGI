@@ -378,7 +378,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Add a stage-resolution naming convention that is game-neutral:
       `synthetic`, `block`, `full`, with optional intermediate rungs such as
       `symbolic`, `tile`, `sprite`, or `emulator` when a game needs them.
-- [ ] Define how progressive-resolution architecture promotion composes with
+- [x] Define how progressive-resolution architecture promotion composes with
       game promotion:
       1. **Architecture smoke:** validate the model against game-neutral tensor
          contracts.

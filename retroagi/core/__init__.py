@@ -91,6 +91,12 @@ from .game_plugins import (
     game_plugin_names,
     get_game_plugin,
 )
+from .game_promotion import (
+    GAME_PROMOTION_PHASES,
+    GamePromotionPhase,
+    GamePromotionPlan,
+    build_game_promotion_plan,
+)
 from .hierarchy import VisionHierarchyProjector
 from .interfaces import (
     AgentStep,
@@ -164,9 +170,12 @@ __all__ = [
     "ExperimentConfig",
     "GAME_SPECS",
     "GAME_PLUGIN_REGISTRY",
+    "GAME_PROMOTION_PHASES",
     "GameSpec",
     "GamePluginRegistry",
     "GamePluginSpec",
+    "GamePromotionPhase",
+    "GamePromotionPlan",
     "GameSignalExtractor",
     "GameSignals",
     "GameTaskSchema",
@@ -217,6 +226,7 @@ __all__ = [
     "build_checkpoint",
     "build_architecture",
     "build_architecture_variant",
+    "build_game_promotion_plan",
     "checkpoint_summary",
     "checkpoint_summary_path",
     "checkpoint_trace_metadata",

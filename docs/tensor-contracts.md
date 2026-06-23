@@ -99,6 +99,14 @@ default `GAME_PLUGIN_REGISTRY` exposes the current SMB plugin, so callers can
 resolve components with `get_game_plugin("smb")` instead of importing SMB-only
 modules in shared training or promotion code.
 
+`GamePromotionPlan` defines how architecture promotion composes with a game's
+fidelity ladder. The default phases are `architecture-smoke`, `game-synthetic`,
+`game-block`, `game-full-smoke`, `game-transfer`, `game-full-comparison`, and
+`game-full-training`. `retroagi promote --game smb` records this phase plan in
+its manifest and maps each phase to the current architecture-promotion rungs,
+so future games can preserve the same promotion order while substituting their
+own stage adapters, assets, and thresholds.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.
