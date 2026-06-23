@@ -416,11 +416,28 @@ available through `full_smb_signals`.
 
 ### Reward
 
-Until a project-level reward contract is implemented, the adapter passes
-through the scalar reward emitted by the `stable-retro` game integration for
-each executed backend frame and sums those rewards for the adapter transition.
-It does not silently combine that reward with Block SMB reward terms. Any
-shaping must be explicit, configured, and reported separately in `info`.
+Full SMB reward tuning is owned by `FullSMBRewardConfig`, not
+`BlockSMBRewardConfig`. The default config preserves the current backend reward
+behavior by using the `stable-retro` emulator progress reward with weight
+`1.0` and setting all additional shaping terms to `0.0`.
+
+| Term | Default | Direction | Source |
+| --- | ---: | --- | --- |
+| `emulator_progress` | `1.0` | positive | `stable-retro` backend reward |
+| `completion` | `0.0` | positive | `full_smb_signals.completion` |
+| `survival` | `0.0` | positive | alive/episode state |
+| `score` | `0.0` | positive | `full_smb_signals.score` deltas |
+| `coin` | `0.0` | positive | `full_smb_signals.coins` deltas |
+| `enemy` | `0.0` | positive | enemy-defeat objective signals |
+| `damage` | `0.0` | negative | damage or unsafe-collision signals |
+| `death` | `0.0` | negative | `full_smb_signals.death` |
+| `frame_penalty` | `0.0` | negative | adapter step time cost |
+
+`FullSMBStage` reports the resolved `reward_config` manifest in `info`. Until
+the reward-term breakdown task is implemented, the adapter still returns the
+sum of backend frame rewards for the scalar transition reward and does not
+silently combine those rewards with Block SMB progress, coin, enemy, goal,
+death, or time terms.
 
 ### Termination
 

@@ -450,7 +450,7 @@ and playable end target.
 - [x] Expand Full SMB signal extraction with tested memory variables or backend
       info fields for x/y position, screen/level, score, coins, lives, power
       state, death, timeout, flag/level completion, and game-over state.
-- [ ] Define a Full SMB reward config owned by the Full SMB adapter, separating
+- [x] Define a Full SMB reward config owned by the Full SMB adapter, separating
       emulator progress, completion, survival, score/coin, enemy, damage, death,
       and frame-penalty terms from Block SMB rewards.
 - [ ] Add reward-term breakdowns to Full SMB step info and tests proving the

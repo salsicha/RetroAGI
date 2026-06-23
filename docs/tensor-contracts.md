@@ -97,6 +97,10 @@ declares each tunable reward term, default value, expected sign direction,
 source signal, and description. Shared trainers should ask the selected
 `GameSpec` to validate reward overrides instead of carrying game-specific
 reward names such as `coin`, `enemy_hit`, or `fall_death` in trainer code.
+Full SMB additionally exposes an adapter-owned `FullSMBRewardConfig` for the
+real emulator rung so its emulator progress, completion, survival, score, coin,
+enemy, damage, death, and frame-penalty terms do not reuse the simplified Block
+SMB reward names or scales.
 
 `GameTaskSchema` is the game-owned task and curriculum contract. It declares
 fixed benchmark tasks, procedural task templates, deterministic reset seeds,

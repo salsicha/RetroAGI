@@ -18,9 +18,12 @@ from retroagi.core import (
 )
 from retroagi.stages.full_smb import (
     DEFAULT_FULL_SMB_CONTENT,
+    DEFAULT_FULL_SMB_REWARD_CONFIG,
     FULL_SMB_SPEC,
+    FULL_SMB_REWARD_SCHEMA,
     FullSMBContentSpec,
     FullSMBObservationConfig,
+    FullSMBRewardConfig,
     FullSMBSignalExtractor,
     FullSMBSmokeConfig,
     FullSMBStage,
@@ -251,6 +254,107 @@ class TestFullSMBStage(unittest.TestCase):
         )
         self.assertIn("legally obtained", manifest["legal_notice"])
         self.assertIn("Do not commit", manifest["legal_notice"])
+
+    def test_reward_config_declares_adapter_owned_full_smb_terms(self):
+        config = DEFAULT_FULL_SMB_REWARD_CONFIG
+        manifest = config.to_manifest()
+
+        self.assertIsInstance(config, FullSMBRewardConfig)
+        self.assertEqual(FULL_SMB_REWARD_SCHEMA.game_name, "full_smb_adapter")
+        self.assertEqual(manifest["owner"], "full_smb_adapter")
+        self.assertEqual(manifest["schema"], "full_smb_adapter")
+        self.assertEqual(manifest["separated_from"], "BlockSMBRewardConfig")
+        self.assertTrue(manifest["defaults_preserve_backend_reward"])
+        self.assertEqual(
+            tuple(manifest["terms"]),
+            (
+                "emulator_progress",
+                "completion",
+                "survival",
+                "score",
+                "coin",
+                "enemy",
+                "damage",
+                "death",
+                "frame_penalty",
+            ),
+        )
+        self.assertEqual(manifest["terms"]["emulator_progress"], 1.0)
+        for name in (
+            "completion",
+            "survival",
+            "score",
+            "coin",
+            "enemy",
+            "damage",
+            "death",
+            "frame_penalty",
+        ):
+            self.assertEqual(manifest["terms"][name], 0.0)
+        self.assertEqual(
+            manifest["term_signals"]["damage"]["direction"],
+            "negative",
+        )
+        self.assertEqual(
+            manifest["term_signals"]["coin"]["signal"],
+            "full_smb_signals.coins",
+        )
+
+    def test_reward_config_validates_term_signs(self):
+        config = FullSMBRewardConfig(
+            emulator_progress=0.5,
+            completion=25.0,
+            survival=0.01,
+            score=0.001,
+            coin=1.0,
+            enemy=2.0,
+            damage=-4.0,
+            death=-20.0,
+            frame_penalty=-0.001,
+        )
+
+        self.assertEqual(config.as_dict()["death"], -20.0)
+        with self.assertRaisesRegex(ValueError, "positive reward term"):
+            FullSMBRewardConfig(emulator_progress=-1.0)
+        with self.assertRaisesRegex(ValueError, "negative reward term"):
+            FullSMBRewardConfig(death=1.0)
+
+    def test_stage_reports_resolved_full_smb_reward_config(self):
+        reward_config = FullSMBRewardConfig(
+            emulator_progress=0.75,
+            completion=10.0,
+            death=-5.0,
+            frame_penalty=-0.01,
+        )
+        env = GymnasiumRetroEnv()
+        stage = FullSMBStage(
+            env=env,
+            vision=StaticFullSMBVision(),
+            reward_config=reward_config,
+        )
+        try:
+            reset_observation = stage.reset(seed=123)
+            observation, reward, _terminated, _truncated, info = stage.step(
+                SMBAction.RIGHT
+            )
+        finally:
+            stage.close()
+
+        self.assertEqual(stage.reward_config, reward_config)
+        self.assertEqual(reward, 3.5)
+        self.assertEqual(
+            stage.last_info["reward_config"]["terms"],
+            reward_config.as_dict(),
+        )
+        self.assertEqual(
+            info["reward_config"]["terms"]["frame_penalty"],
+            -0.01,
+        )
+        self.assertEqual(
+            info["reward_config"]["separated_from"],
+            "BlockSMBRewardConfig",
+        )
+        self.assertEqual(reset_observation.shape, observation.shape)
 
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):

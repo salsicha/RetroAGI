@@ -59,6 +59,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "heldout_generalization",
             "python -m retroagi.stages.full_smb.save_states create",
             "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
+            "FullSMBRewardConfig",
         ):
             self.assertIn(term, text)
 

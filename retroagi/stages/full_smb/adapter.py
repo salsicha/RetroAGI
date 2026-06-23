@@ -13,6 +13,8 @@ from retroagi.core import (
     GameSignalExtractor,
     GameSignals,
     GymnasiumBackendAdapter,
+    RewardConfigSchema,
+    RewardTermSpec,
     SMB_GAME_SPEC,
     SMBAction,
     StageBatch,
@@ -92,6 +94,121 @@ class FullSMBContentSpec:
 
 
 DEFAULT_FULL_SMB_CONTENT = FullSMBContentSpec()
+
+
+FULL_SMB_REWARD_SCHEMA = RewardConfigSchema(
+    game_name="full_smb_adapter",
+    terms=(
+        RewardTermSpec(
+            name="emulator_progress",
+            default=1.0,
+            direction="positive",
+            signal="stable_retro_reward",
+            description="Scale applied to the stable-retro emulator progress reward",
+        ),
+        RewardTermSpec(
+            name="completion",
+            default=0.0,
+            direction="positive",
+            signal="full_smb_signals.completion",
+            description="Bonus for clearing a Full SMB task or level section",
+        ),
+        RewardTermSpec(
+            name="survival",
+            default=0.0,
+            direction="positive",
+            signal="full_smb_signals.terminated",
+            description="Per-transition or terminal bonus for staying alive",
+        ),
+        RewardTermSpec(
+            name="score",
+            default=0.0,
+            direction="positive",
+            signal="full_smb_signals.score",
+            description="Reward weight for score deltas exposed by the emulator",
+        ),
+        RewardTermSpec(
+            name="coin",
+            default=0.0,
+            direction="positive",
+            signal="full_smb_signals.coins",
+            description="Reward weight for coin-count deltas",
+        ),
+        RewardTermSpec(
+            name="enemy",
+            default=0.0,
+            direction="positive",
+            signal="full_smb_signals.objectives.enemy",
+            description="Reward for defeating enemies when the backend exposes it",
+        ),
+        RewardTermSpec(
+            name="damage",
+            default=0.0,
+            direction="negative",
+            signal="full_smb_signals.objectives.damage",
+            description="Penalty for damage or unsafe collisions",
+        ),
+        RewardTermSpec(
+            name="death",
+            default=0.0,
+            direction="negative",
+            signal="full_smb_signals.death",
+            description="Terminal penalty for death or game over",
+        ),
+        RewardTermSpec(
+            name="frame_penalty",
+            default=0.0,
+            direction="negative",
+            signal="time",
+            description="Per-adapter-step time cost",
+        ),
+    ),
+)
+
+
+@dataclass(frozen=True)
+class FullSMBRewardConfig:
+    """Adapter-owned reward-term config for Full SMB training and play."""
+
+    emulator_progress: float = 1.0
+    completion: float = 0.0
+    survival: float = 0.0
+    score: float = 0.0
+    coin: float = 0.0
+    enemy: float = 0.0
+    damage: float = 0.0
+    death: float = 0.0
+    frame_penalty: float = 0.0
+
+    def __post_init__(self) -> None:
+        FULL_SMB_REWARD_SCHEMA.validate(self.as_dict())
+
+    @property
+    def term_names(self) -> tuple[str, ...]:
+        return FULL_SMB_REWARD_SCHEMA.term_names
+
+    def as_dict(self) -> dict[str, float]:
+        return {name: float(getattr(self, name)) for name in self.term_names}
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "owner": "full_smb_adapter",
+            "schema": FULL_SMB_REWARD_SCHEMA.game_name,
+            "defaults_preserve_backend_reward": True,
+            "terms": self.as_dict(),
+            "term_signals": {
+                term.name: {
+                    "direction": term.direction,
+                    "signal": term.signal,
+                    "description": term.description,
+                }
+                for term in FULL_SMB_REWARD_SCHEMA.terms
+            },
+            "separated_from": "BlockSMBRewardConfig",
+        }
+
+
+DEFAULT_FULL_SMB_REWARD_CONFIG = FullSMBRewardConfig()
 
 
 @dataclass(frozen=True)
@@ -338,12 +455,14 @@ class FullSMBStage:
         content_spec: FullSMBContentSpec = DEFAULT_FULL_SMB_CONTENT,
         signal_config: FullSMBSignalConfig = FullSMBSignalConfig(),
         observation_config: FullSMBObservationConfig = FullSMBObservationConfig(),
+        reward_config: FullSMBRewardConfig = DEFAULT_FULL_SMB_REWARD_CONFIG,
         vision: Optional[VisionEncoder] = None,
         env_kwargs: Optional[Mapping[str, Any]] = None,
     ):
         self.env_config = env_config
         self.signal_config = signal_config
         self.observation_config = observation_config
+        self.reward_config = reward_config
         self.env = (
             env
             if env is not None
@@ -589,6 +708,7 @@ class FullSMBStage:
         state_vec = signals.to_state_vec(self.signal_config)
         annotated["full_smb_signals"] = signals.as_dict()
         annotated["state_vec"] = state_vec
+        annotated["reward_config"] = self.reward_config.to_manifest()
         return annotated
 
     @staticmethod
