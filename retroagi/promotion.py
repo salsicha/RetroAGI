@@ -18,7 +18,9 @@ from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     StageSpec,
     architecture_names,
+    build_architecture_variant,
     get_architecture,
+    parse_architecture_ablation_item,
     select_device,
     to_plain_data,
 )
@@ -361,6 +363,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help="architecture-specific config override; may be repeated",
     )
+    parser.add_argument(
+        "--ablation",
+        action="append",
+        default=None,
+        type=parse_architecture_ablation_item,
+        metavar="KEY=VALUE",
+        help="architecture-level ablation override; may be repeated",
+    )
     parser.add_argument("--synthetic-concept-epochs", type=int, default=None)
     parser.add_argument("--synthetic-concept-train-samples", type=int, default=None)
     parser.add_argument("--synthetic-concept-validation-samples", type=int, default=None)
@@ -380,7 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
 def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
     selected = set(args.rung or [rung.name for rung in PROMOTION_RUNGS])
     budgets = _resolve_budgets(args)
-    architecture_config = dict(args.architecture_config or ())
+    variant = build_architecture_variant(args.architecture_config or (), args.ablation or ())
+    architecture_config = dict(variant.architecture_config)
     results = []
     stopping_reason = None
     for rung in PROMOTION_RUNGS:
@@ -392,11 +403,11 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
         if rung.status == UNSUPPORTED_RUNG_STATUS:
             results.append(_skipped_rung(rung, budgets[rung.name]))
         elif rung.name == "interface-smoke":
-            results.append(_run_interface_smoke(args, architecture_config, budgets[rung.name]))
+            results.append(_run_interface_smoke(args, variant, budgets[rung.name]))
         elif rung.name == "synthetic-concept":
-            results.append(_run_synthetic_concept(args, architecture_config, budgets[rung.name]))
+            results.append(_run_synthetic_concept(args, variant, budgets[rung.name]))
         elif rung.name == "block-smb-smoke":
-            results.append(_run_block_smb_smoke(args, architecture_config, budgets[rung.name]))
+            results.append(_run_block_smb_smoke(args, variant, budgets[rung.name]))
         else:
             raise ValueError(f"unsupported promotion rung {rung.name!r}")
         if results[-1]["status"] == "failed":
@@ -408,6 +419,7 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
             "name": args.architecture_name,
             "config": architecture_config,
         },
+        "architecture_variant": variant.metadata(),
         "seed": args.seed,
         "device": args.device,
         "budget": {
@@ -527,7 +539,7 @@ def _stopped_rung(
 
 def _run_interface_smoke(
     args: argparse.Namespace,
-    architecture_config: Mapping[str, Any],
+    variant: Any,
     budget: Mapping[str, int | float],
 ) -> dict[str, Any]:
     torch.manual_seed(args.seed)
@@ -547,7 +559,7 @@ def _run_interface_smoke(
             )
             continue
         stage_results.append(
-            _run_stage_interface_smoke(architecture, spec, architecture_config, budget, device)
+            _run_stage_interface_smoke(architecture, spec, variant, budget, device)
         )
 
     runnable = [stage for stage in stage_results if stage["status"] != "skipped"]
@@ -574,18 +586,18 @@ def _run_interface_smoke(
 def _run_stage_interface_smoke(
     architecture: Any,
     spec: StageSpec,
-    architecture_config: Mapping[str, Any],
+    variant: Any,
     budget: Mapping[str, int | float],
     device: torch.device,
 ) -> dict[str, Any]:
     try:
-        model = architecture.build(spec, architecture_config).to(device)
+        model = architecture.build(spec, variant.architecture_config).to(device)
         model.train()
         batch_size = int(budget["batch_size"])
         src_a = torch.randint(0, spec.vocab_size, (batch_size, spec.seq_len_a), device=device)
         src_b = torch.randint(0, spec.vocab_size, (batch_size, spec.seq_len_b), device=device)
         src_c = torch.randn(batch_size, spec.seq_len_c, device=device)
-        outputs = model(src_a, src_b, src_c, tau=1.0)
+        outputs = model(src_a, src_b, src_c, tau=1.0, **variant.forward_kwargs)
         tensors = [
             output for output in outputs if torch.is_tensor(output) and output.is_floating_point()
         ]
@@ -621,7 +633,7 @@ def _run_stage_interface_smoke(
 
 def _run_synthetic_concept(
     args: argparse.Namespace,
-    architecture_config: Mapping[str, Any],
+    variant: Any,
     budget: Mapping[str, int | float],
 ) -> dict[str, Any]:
     experiment_args = argparse.Namespace(
@@ -631,7 +643,8 @@ def _run_synthetic_concept(
         seed=args.seed,
         device=args.device,
         architecture_name=args.architecture_name,
-        architecture_config=list(architecture_config.items()),
+        architecture_config=list(variant.architecture_config.items()),
+        ablation=list(variant.ablation_items),
         gate=[
             experiments.MetricGate(
                 stage="synthetic-1d",
@@ -657,7 +670,7 @@ def _run_synthetic_concept(
 
 def _run_block_smb_smoke(
     args: argparse.Namespace,
-    architecture_config: Mapping[str, Any],
+    variant: Any,
     budget: Mapping[str, int | float],
 ) -> dict[str, Any]:
     experiment_args = argparse.Namespace(
@@ -667,7 +680,8 @@ def _run_block_smb_smoke(
         seed=args.seed,
         device=args.device,
         architecture_name=args.architecture_name,
-        architecture_config=list(architecture_config.items()),
+        architecture_config=list(variant.architecture_config.items()),
+        ablation=list(variant.ablation_items),
         gate=[
             experiments.MetricGate(
                 stage="block-smb",

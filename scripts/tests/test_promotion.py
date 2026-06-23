@@ -217,6 +217,46 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(manifest["rungs"][0]["budget"]["success_rate_threshold"], 0.25)
         self.assertEqual(manifest["rungs"][0]["budget"]["runtime_seconds"], 180.0)
 
+    def test_promotion_passes_architecture_ablations_to_experiment_runner(self):
+        calls = []
+
+        def fake_run_experiment(args):
+            calls.append(args)
+            return _fake_experiment_manifest(args)
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment):
+                exit_code, manifest = self.run_main(
+                    [
+                        "--rung",
+                        "block-smb-smoke",
+                        "--output",
+                        str(Path(tmpdir) / "promotion.json"),
+                        "--artifacts-dir",
+                        str(Path(tmpdir) / "artifacts"),
+                        "--device",
+                        "cpu",
+                        "--architecture-config",
+                        "hidden_dim=8",
+                        "--ablation",
+                        "controller_schedule=linear",
+                        "--ablation",
+                        "world_model=off",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            manifest["architecture"]["config"],
+            {"hidden_dim": 8, "controller_schedule": "linear"},
+        )
+        self.assertFalse(manifest["architecture_variant"]["ablation"]["world_model_enabled"])
+        self.assertEqual(
+            calls[0].architecture_config,
+            [("hidden_dim", 8), ("controller_schedule", "linear")],
+        )
+        self.assertIn(("world_model_enabled", False), calls[0].ablation)
+
     def test_failed_experiment_rung_fails_promotion(self):
         with TemporaryDirectory() as tmpdir:
             with patch(

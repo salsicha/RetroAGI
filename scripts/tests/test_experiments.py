@@ -110,6 +110,62 @@ class TestExperimentRunner(unittest.TestCase):
             all(gate["passed"] for stage in manifest["stages"] for gate in stage["gates"])
         )
 
+    def test_experiment_runner_applies_architecture_ablations(self):
+        with TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "manifest.json"
+            artifacts_dir = Path(tmpdir) / "artifacts"
+            calls = {}
+
+            def synthetic_main(argv):
+                calls["synthetic"] = list(argv)
+                return _write_summary(argv, metrics={"controller_mse": 0.4})
+
+            def block_main(argv):
+                calls["block"] = list(argv)
+                return _write_summary(argv, metrics={"eval_success_rate": 0.5})
+
+            with patch("retroagi.stages.synthetic_1d.cli.main", side_effect=synthetic_main):
+                with patch("retroagi.stages.block_smb.cli.main", side_effect=block_main):
+                    exit_code, manifest = self.run_main(
+                        [
+                            "--stage",
+                            "synthetic",
+                            "--stage",
+                            "block-smb",
+                            "--output",
+                            str(output),
+                            "--artifacts-dir",
+                            str(artifacts_dir),
+                            "--architecture-config",
+                            "hidden_dim=8",
+                            "--ablation",
+                            "controller_schedule=linear",
+                            "--ablation",
+                            "world_model=off",
+                            "--ablation",
+                            "critic_feedback=off",
+                            "--ablation",
+                            "auxiliary_objectives=off",
+                            "--ablation",
+                            "target_network=off",
+                            "--ablation",
+                            "checkpoint_transfer=on",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            manifest["architecture"]["config"],
+            {"hidden_dim": 8, "controller_schedule": "linear"},
+        )
+        self.assertFalse(manifest["architecture_variant"]["ablation"]["world_model_enabled"])
+        self.assertIn("--critic-loss-weight", calls["synthetic"])
+        self.assertIn("--disable-world-model", calls["block"])
+        self.assertIn("--disable-critic-feedback", calls["block"])
+        self.assertIn("--target-network-mode", calls["block"])
+        self.assertIn("--enable-checkpoint-transfer", calls["block"])
+        self.assertNotIn("--disable-checkpoint-transfer", calls["block"])
+
     def test_failed_gate_returns_nonzero_exit(self):
         with TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "manifest.json"

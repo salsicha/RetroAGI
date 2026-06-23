@@ -1,5 +1,11 @@
 """Shared interfaces and model components for all training stages."""
 
+from .ablations import (
+    ArchitectureAblationConfig,
+    ArchitectureVariant,
+    build_architecture_variant,
+    parse_architecture_ablation_item,
+)
 from .actions import (
     SMB_ACTIONS,
     SMBAction,
@@ -84,9 +90,11 @@ __all__ = [
     "AgentStep",
     "AgentWorldModelCritic",
     "ARCHITECTURE_REGISTRY",
+    "ArchitectureAblationConfig",
     "ArchitectureFactory",
     "ArchitectureRegistry",
     "ArchitectureSpec",
+    "ArchitectureVariant",
     "BASELINE_ARCHITECTURE_NAME",
     "BASELINE_ARCHITECTURE_SPEC",
     "CHECKPOINT_SCHEMA_KEY",
@@ -121,6 +129,7 @@ __all__ = [
     "block_smb_action",
     "build_checkpoint",
     "build_architecture",
+    "build_architecture_variant",
     "checkpoint_summary",
     "checkpoint_summary_path",
     "checkpoint_trace_metadata",
@@ -136,6 +145,7 @@ __all__ = [
     "load_checkpoint",
     "make_experiment_tracker",
     "NullExperimentTracker",
+    "parse_architecture_ablation_item",
     "register_architecture",
     "save_checkpoint",
     "select_device",

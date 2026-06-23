@@ -278,10 +278,14 @@ high-fidelity evaluations.
       `retroagi report` now reads experiment or promotion manifests, flattens
       per-stage/rung rows, carries metrics/gates/artifacts/runtime/device, and
       computes numeric deltas against a selected baseline architecture/config.
-- [ ] Add architecture-level ablation support so variants can disable or replace
+- [x] Add architecture-level ablation support so variants can disable or replace
       vision, hierarchy, world model, critic feedback, recurrent state, target
       networks, controller schedules, and auxiliary objectives consistently
       across stages.
+      `--ablation KEY=VALUE` now normalizes architecture variants for
+      experiments and promotions, routes controller schedules through
+      architecture config, maps trainer-owned switches to stage CLI flags, and
+      records the resolved variant in manifests.
 - [ ] Define architecture-specific checkpoint schema extensions and migration
       rules so multiple model families can coexist without ambiguous state
       loading.

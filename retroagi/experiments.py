@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from retroagi.core import BASELINE_ARCHITECTURE_NAME, architecture_names, to_plain_data
+from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
+    architecture_names,
+    build_architecture_variant,
+    parse_architecture_ablation_item,
+    to_plain_data,
+)
 
 STAGE_ALIASES = {
     "synthetic-1d": "synthetic-1d",
@@ -185,6 +191,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="architecture-specific config override; may be repeated",
     )
     parser.add_argument(
+        "--ablation",
+        action="append",
+        default=None,
+        type=parse_architecture_ablation_item,
+        metavar="KEY=VALUE",
+        help="architecture-level ablation override; may be repeated",
+    )
+    parser.add_argument(
         "--gate",
         action="append",
         default=None,
@@ -211,13 +225,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_experiment_plans(args: argparse.Namespace) -> list[StageRunPlan]:
-    architecture_config = dict(args.architecture_config or ())
+    variant = build_architecture_variant(args.architecture_config or (), args.ablation or ())
+    architecture_config = dict(variant.architecture_config)
     plans = []
     for stage in args.stage:
         if stage == "synthetic-1d":
-            plans.append(_synthetic_plan(args, architecture_config))
+            plans.append(_synthetic_plan(args, architecture_config, variant.args_for_stage(stage)))
         elif stage == "block-smb":
-            plans.append(_block_smb_plan(args, architecture_config))
+            plans.append(
+                _block_smb_plan(
+                    args,
+                    architecture_config,
+                    variant.args_for_stage(stage),
+                    disable_checkpoint_transfer=(
+                        not args.enable_block_checkpoint_transfer
+                        and variant.ablation.checkpoint_transfer_enabled is None
+                    ),
+                )
+            )
         else:
             raise ValueError(f"unsupported experiment stage {stage!r}")
     return plans
@@ -233,7 +258,9 @@ def _architecture_args(
 
 
 def _synthetic_plan(
-    args: argparse.Namespace, architecture_config: Mapping[str, Any]
+    args: argparse.Namespace,
+    architecture_config: Mapping[str, Any],
+    stage_variant_args: Sequence[str] = (),
 ) -> StageRunPlan:
     stage_dir = args.artifacts_dir / "synthetic_1d"
     summary_path = stage_dir / "run_summary.json"
@@ -256,6 +283,7 @@ def _synthetic_plan(
         "--test-samples",
         str(args.synthetic_test_samples),
         *_architecture_args(args, architecture_config),
+        *stage_variant_args,
     ]
     return StageRunPlan(
         stage="synthetic-1d",
@@ -267,7 +295,11 @@ def _synthetic_plan(
 
 
 def _block_smb_plan(
-    args: argparse.Namespace, architecture_config: Mapping[str, Any]
+    args: argparse.Namespace,
+    architecture_config: Mapping[str, Any],
+    stage_variant_args: Sequence[str] = (),
+    *,
+    disable_checkpoint_transfer: bool = True,
 ) -> StageRunPlan:
     stage_dir = args.artifacts_dir / "block_smb"
     summary_path = stage_dir / "run_summary.json"
@@ -300,10 +332,11 @@ def _block_smb_plan(
         "--evaluation-interval-epochs",
         "1",
         *_architecture_args(args, architecture_config),
+        *stage_variant_args,
     ]
     for scenario in fixed_scenarios:
         stage_args.extend(["--fixed-scenario", scenario])
-    if not args.enable_block_checkpoint_transfer:
+    if disable_checkpoint_transfer:
         stage_args.append("--disable-checkpoint-transfer")
     return StageRunPlan(
         stage="block-smb",
@@ -372,11 +405,13 @@ def _manifest(
     stage_results: list[dict[str, Any]],
     gates: Sequence[MetricGate],
 ) -> dict[str, Any]:
+    variant = build_architecture_variant(args.architecture_config or (), args.ablation or ())
     return {
         "architecture": {
             "name": args.architecture_name,
-            "config": dict(args.architecture_config or ()),
+            "config": dict(variant.architecture_config),
         },
+        "architecture_variant": variant.metadata(),
         "seed": args.seed,
         "device": args.device,
         "artifacts_dir": str(args.artifacts_dir),
