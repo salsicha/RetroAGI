@@ -1,5 +1,5 @@
 # RetroAGI
-General purpose machine learning agent for retro games  
+General purpose machine learning agent for retro games.
 
 RetroAGI is organized as a three-stage curriculum for training an architecture
 to play Super Mario Bros:
@@ -40,6 +40,18 @@ scripts/               # compatibility wrappers and older experiments
 See the [architecture diagram](docs/architecture.html) for the hierarchical
 actor/world-model/critic flow.
 
+## Current Status
+
+- **Synthetic 1D** is reproducible from a clean checkout and has deterministic
+  datasets, baselines, checkpoint save/restore, and held-out metrics.
+- **Block SMB** has a pygame-ce environment, fixed success thresholds, frozen
+  Block ViT perception, policy training, evaluation, resume, recording,
+  ablations, structured logs, and optional TensorBoard or W&B tracking.
+- **Full SMB** has a stable-retro stage adapter, headless smoke evaluation,
+  ViT segmentation, Block SMB policy transfer, and transfer-vs-scratch
+  comparison tooling.
+- **Operations** are covered by CI, native install instructions, stage
+  operations guidance, and a clean-checkout reproducibility procedure.
 
 ## Supported Platforms
 
@@ -76,7 +88,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
 
 ## Usage
 1. Create and activate a supported Python environment using the commands in
-   [docs/compatibility.md](docs/compatibility.md).
+   [docs/compatibility.md](docs/compatibility.md). For a fully traceable run
+   from a fresh clone, follow
+   [docs/reproducibility.md](docs/reproducibility.md).
 2. Run a curriculum stage:
    ```bash
    python -m retroagi.stages.synthetic_1d.train
@@ -174,7 +188,7 @@ decreasing total loss, deterministic data/permutation seeding, shared-schema
 checkpoint save/restore, and these evaluation metrics: `controller_mse`,
 `controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`.
 
-Stage 2 has the scriptable environment and adapter in place; training loops can
-now reuse `retroagi.core.models.AgentWorldModelCritic` and consume
-`BlockSMBStage.encode_observation(...)`. Stage 3 keeps the full emulator runner
-isolated behind `retroagi/stages/full_smb`.
+Block SMB policy training uses `AgentWorldModelCritic` through the shared stage
+contract and can be run, resumed, evaluated, and recorded from the CLI. Full SMB
+keeps emulator interaction isolated behind `retroagi/stages/full_smb` and
+supports deterministic smoke evaluation plus transferred-policy comparison.
