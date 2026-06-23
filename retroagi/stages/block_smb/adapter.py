@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from retroagi.core import (
+    SMB_GAME_SPEC,
     SMBAction,
     StageBatch,
     StageSpec,
@@ -27,6 +28,9 @@ BLOCK_SMB_SPEC = StageSpec(
     ratio_ab=2,
     ratio_bc=4,
     vocab_size=20,
+    action_space_name=SMB_GAME_SPEC.name,
+    action_count=SMB_GAME_SPEC.action_count,
+    action_names=tuple(action.name for action in SMB_GAME_SPEC.action_space),
 )
 
 SCENARIOS_DIR = Path(__file__).with_name("scenarios")
@@ -187,4 +191,3 @@ class BlockSMBStage:
                 self.observation_config.state_max,
             ),
         }
-

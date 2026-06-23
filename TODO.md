@@ -348,7 +348,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Define a `GameSpec` that names a game family, declares its action space,
       observation sources, semantic classes, reward/signal schema, stage ladder,
       emulator backend, asset requirements, and licensing/provenance rules.
-- [ ] Split game-neutral stage contracts from SMB-specific assumptions so
+- [x] Split game-neutral stage contracts from SMB-specific assumptions so
       `StageSpec` no longer depends on `SMBAction` naming or SMB vocabulary
       size checks.
 - [ ] Replace the global SMB action vocabulary with per-game `ActionSpec`

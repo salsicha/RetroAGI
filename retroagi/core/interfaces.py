@@ -17,6 +17,9 @@ class StageSpec:
     ratio_ab: int
     ratio_bc: int
     vocab_size: int
+    action_space_name: str = ""
+    action_count: Optional[int] = None
+    action_names: tuple[str, ...] = ()
 
     @property
     def seq_len_b(self) -> int:
@@ -100,4 +103,3 @@ class StageAdapter(Protocol):
 
     def encode_observation(self, observation: Any, info: Mapping[str, Any]) -> StageBatch:
         """Convert a stage-native observation into the shared hierarchical batch."""
-

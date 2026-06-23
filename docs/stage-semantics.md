@@ -375,14 +375,14 @@ encoder. It also records `frame_stack` as `[1, frame_stack, 3, H, W]`,
 
 ### Action
 
-`FullSMBStage` uses the shared `SMBAction` vocabulary defined in the Block SMB
-section. `full_smb_action` translates each action to the `stable-retro` NES
-button vector by reading `env.buttons`; it does not assume fixed button indices.
-The adapter records the shared action ID, name, backend button names, and button
-vector in `info["action"]`. When `frame_skip > 1`, the same button vector is
-applied repeatedly until the configured count is reached or the backend reports
-termination or truncation. `info["action"]` records `frames_executed` and
-per-frame rewards.
+`FullSMBStage` uses the action space declared by `SMB_GAME_SPEC`, currently the
+same `SMBAction` vocabulary used by Block SMB. `full_smb_action` translates
+each action to the `stable-retro` NES button vector by reading `env.buttons`;
+it does not assume fixed button indices. The adapter records the shared action
+ID, name, backend button names, and button vector in `info["action"]`. When
+`frame_skip > 1`, the same button vector is applied repeatedly until the
+configured count is reached or the backend reports termination or truncation.
+`info["action"]` records `frames_executed` and per-frame rewards.
 
 ### Info Signals
 
@@ -465,8 +465,9 @@ Pass `--render` only for local visual inspection.
 
 `transfer_block_smb_checkpoint_to_full_smb(...)` loads a schema-v1 Block SMB
 trainer checkpoint, validates that its A/B/C hierarchy dimensions and
-`SMBAction` vocabulary match `FULL_SMB_SPEC`, reuses the actor/world-model/critic
-weights, and writes a Full SMB transfer checkpoint with source provenance.
+declared action metadata match `FULL_SMB_SPEC`, reuses the
+actor/world-model/critic weights, and writes a Full SMB transfer checkpoint
+with source provenance.
 
 Block ViT perception weights are validated and recorded as source provenance,
 but they are not loaded into Full SMB directly because the semantic vocabularies

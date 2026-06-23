@@ -51,6 +51,9 @@ training in the emulator.
 | `ratio_ab` | positive `int` | `R_AB`, B steps represented per A step. |
 | `ratio_bc` | positive `int` | `R_BC`, C steps represented per B step. |
 | `vocab_size` | positive `int` | Exclusive upper bound for A/B token IDs. |
+| `action_space_name` | `str` | Optional game-neutral action-space identifier. |
+| `action_count` | positive `int` or `None` | Optional discrete policy-action count. |
+| `action_names` | tuple of `str` | Optional stable action names matching `action_count`. |
 
 Derived lengths are:
 
@@ -62,6 +65,12 @@ L_C = L_B * R_BC
 Synthetic 1D, Block SMB, and Full SMB currently use `L_A=8`, `R_AB=2`,
 `R_BC=4`, and `vocab_size=20`, producing `L_B=16` and `L_C=64`. These are
 representation lengths, not wall-clock durations.
+
+`StageSpec` does not know about any concrete game's enum type. A discrete game
+stage declares `action_count` and optional `action_names`; compatibility checks
+only verify that the vocabulary can represent the declared action count. The
+game profile owns button combos, no-op/release behavior, stable IDs, and
+backend-native mappings.
 
 Timescale ordering is slow A, medium B, fast C. One A slot spans two B slots
 and eight C slots; one B slot spans four C slots. C-stream recurrent

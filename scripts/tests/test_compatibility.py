@@ -12,6 +12,7 @@ from retroagi.core import (
     BASELINE_ARCHITECTURE_SPEC,
     CompatibilityError,
     ModelConfig,
+    StageSpec,
     build_checkpoint,
     get_architecture,
     register_architecture,
@@ -48,8 +49,32 @@ class TestCompatibilityValidation(unittest.TestCase):
     def test_rejects_stage_action_vocab_mismatch(self):
         bad_stage = replace(BLOCK_SMB_SPEC, vocab_size=2)
 
-        with self.assertRaisesRegex(CompatibilityError, "SMB actions"):
+        with self.assertRaisesRegex(CompatibilityError, "6 declared actions"):
             validate_stage_spec(bad_stage)
+
+    def test_accepts_non_smb_discrete_stage_action_metadata(self):
+        stage = StageSpec(
+            name="other_game_block",
+            observation_kind="other-game synthetic frames",
+            action_kind="discrete buttons",
+            seq_len_a=2,
+            ratio_ab=2,
+            ratio_bc=2,
+            vocab_size=8,
+            action_space_name="other_game",
+            action_count=4,
+            action_names=("noop", "right", "left", "jump"),
+        )
+
+        validate_stage_spec(stage)
+
+        with self.assertRaisesRegex(CompatibilityError, "4 declared actions"):
+            validate_stage_spec(replace(stage, vocab_size=3))
+
+        with self.assertRaisesRegex(CompatibilityError, "action_names must be unique"):
+            validate_stage_spec(
+                replace(stage, action_names=("noop", "right", "right", "jump"))
+            )
 
     def test_rejects_model_vision_mismatch(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)

@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 
 from retroagi.core import (
+    SMB_GAME_SPEC,
     SMBAction,
     StageBatch,
     StageSpec,
@@ -31,6 +32,9 @@ FULL_SMB_SPEC = StageSpec(
     ratio_ab=2,
     ratio_bc=4,
     vocab_size=20,
+    action_space_name=SMB_GAME_SPEC.name,
+    action_count=SMB_GAME_SPEC.action_count,
+    action_names=tuple(action.name for action in SMB_GAME_SPEC.action_space),
 )
 
 

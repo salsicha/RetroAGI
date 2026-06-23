@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, Iterable, Mapping, Optional
 
-from .actions import SMB_ACTIONS
 from .architectures import ArchitectureSpec
 from .checkpoint import validate_checkpoint
 from .config import ModelConfig
@@ -33,7 +32,7 @@ def _fail(context: str, message: str) -> None:
 
 
 def validate_stage_spec(stage: StageSpec, *, context: str = "stage") -> None:
-    """Validate stage dimensions and action vocabulary assumptions."""
+    """Validate stage dimensions and declared action-space metadata."""
     if not stage.name:
         _fail(context, "name must be non-empty")
     if not stage.observation_kind:
@@ -44,15 +43,26 @@ def validate_stage_spec(stage: StageSpec, *, context: str = "stage") -> None:
         if getattr(stage, field_name) <= 0:
             _fail(context, f"{field_name} must be positive")
 
-    if "SMBAction" in stage.action_kind or "SMB" in stage.action_kind:
-        expected_ids = list(range(len(SMB_ACTIONS)))
-        actual_ids = [int(action) for action in SMB_ACTIONS]
-        if actual_ids != expected_ids:
-            _fail(context, f"SMB action IDs must be contiguous from zero; got {actual_ids}")
-        if stage.vocab_size < len(SMB_ACTIONS):
+    if stage.action_count is not None:
+        if stage.action_count <= 0:
+            _fail(context, "action_count must be positive when declared")
+        if stage.vocab_size < stage.action_count:
             _fail(
                 context,
-                f"vocab_size {stage.vocab_size} cannot represent {len(SMB_ACTIONS)} SMB actions",
+                f"vocab_size {stage.vocab_size} cannot represent "
+                f"{stage.action_count} declared actions",
+            )
+
+    if stage.action_names:
+        if len(set(stage.action_names)) != len(stage.action_names):
+            _fail(context, "action_names must be unique")
+        if stage.action_count is None:
+            _fail(context, "action_count must be declared when action_names are declared")
+        if len(stage.action_names) != stage.action_count:
+            _fail(
+                context,
+                f"action_names length {len(stage.action_names)} does not match "
+                f"action_count {stage.action_count}",
             )
 
 
