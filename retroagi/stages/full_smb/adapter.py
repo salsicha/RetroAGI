@@ -683,7 +683,10 @@ class FullSMBStage:
             self._reset_frame_stack(observation)
         elif not torch.equal(self._frame_stack[-1], processed_observation):
             self._append_frame(observation, valid=True)
-        with torch.no_grad():
+        vision_allows_grad = isinstance(self.vision, torch.nn.Module) and any(
+            parameter.requires_grad for parameter in self.vision.parameters()
+        )
+        with torch.set_grad_enabled(torch.is_grad_enabled() and vision_allows_grad):
             vision = self.vision.encode(processed_observation)
 
         return self.vision_projector.project(

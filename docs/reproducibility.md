@@ -696,10 +696,24 @@ retroagi compare --game smb --stage full \
   --output artifacts/full_smb/transfer_vs_scratch.json
 ```
 
+Continue training with an explicit perception mode so the checkpoint records
+whether the Full SMB ViT was frozen, fine-tuned, or replaced:
+
+```bash
+retroagi train --game smb --stage full \
+  --init-checkpoint data/full_smb/transferred_policy.pth \
+  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --perception-mode freeze \
+  --epochs 1 \
+  --episodes-per-epoch 1 \
+  --checkpoint data/full_smb/policy.pth
+```
+
 Expected evidence:
 
 - `data/full_smb/transferred_policy.pth`,
 - `data/full_smb/transferred_policy.json`,
+- `data/full_smb/policy.pth` with `config.perception.mode`,
 - `artifacts/full_smb/transfer_vs_scratch.json`,
 - comparison fields including `action_agreement`, action histograms,
   mean entropies, mean margins, collection reward, resets, terminations, and

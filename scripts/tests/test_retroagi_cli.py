@@ -288,6 +288,8 @@ class TestRetroAGICLI(unittest.TestCase):
                     "full-smb",
                     "--epochs",
                     "2",
+                    "--perception-mode",
+                    "fine_tune",
                     "--checkpoint",
                     "data/full_smb/policy.pth",
                 ]
@@ -299,6 +301,8 @@ class TestRetroAGICLI(unittest.TestCase):
                 "train",
                 "--epochs",
                 "2",
+                "--perception-mode",
+                "fine_tune",
                 "--checkpoint",
                 "data/full_smb/policy.pth",
             ]

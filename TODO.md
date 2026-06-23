@@ -461,7 +461,7 @@ and playable end target.
 - [x] Add Full SMB perception diagnostics on real emulator frames using the
       Full SMB ViT checkpoint: semantic confidence, class coverage, temporal
       stability, position consistency, and bottleneck flags.
-- [ ] Decide whether Full SMB policy training freezes, fine-tunes, or replaces
+- [x] Decide whether Full SMB policy training freezes, fine-tunes, or replaces
       Full SMB ViT perception; expose that choice in config and checkpoints.
 - [ ] Implement `FullSMBTrainingConfig` with seed, device, rollout length,
       epochs/updates, vector env count, learning rate, loss weights, reward

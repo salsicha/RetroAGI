@@ -543,6 +543,12 @@ first job is to verify that transferred Block SMB policy checkpoints perform
 valid inference against emulator observations, shared actions, and Full SMB
 signals. After that contract is validated, direct Full SMB training resumes from
 the transferred checkpoint rather than treating transfer as the final result.
+That continuation step must declare its perception mode: `freeze` keeps the
+asset-mock Full SMB ViT fixed, `fine_tune` loads that checkpoint and includes
+trainable ViT parameters in the optimizer, and `replace` starts from a fresh
+trainable Full SMB ViT. The selected mode, checkpoint path, trainable/frozen
+status, optimizer participation, and saved perception state are written into the
+Full SMB policy checkpoint config and metadata.
 
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,

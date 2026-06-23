@@ -118,6 +118,11 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --block-policy-checkpoint data/block_smb/policy.pth \
      --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
      --output-checkpoint data/full_smb/transferred_policy.pth
+   retroagi train --game smb --stage full \
+     --init-checkpoint data/full_smb/transferred_policy.pth \
+     --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+     --perception-mode freeze \
+     --checkpoint data/full_smb/policy.pth
    retroagi compare --game smb --stage full \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
      --output artifacts/full_smb/transfer_vs_scratch.json
@@ -128,6 +133,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    aliases such as `block-smb` and `full-smb` remain accepted. Stage-specific
    options are forwarded to the selected implementation; the legacy
    `retroagi-block-smb` command remains available for Block SMB-only workflows.
+   Full SMB policy training records its perception choice in every checkpoint:
+   `--perception-mode freeze` reuses a frozen Full SMB ViT checkpoint,
+   `fine_tune` includes trainable ViT parameters in the optimizer, and `replace`
+   starts from a fresh trainable Full SMB ViT.
    Real Full SMB emulator runs require the optional stable-retro backend:
    `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
    training do not install or build that native emulator dependency.

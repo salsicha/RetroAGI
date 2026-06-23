@@ -8,6 +8,9 @@ import torch
 
 from retroagi.core import load_checkpoint
 from retroagi.stages.full_smb import (
+    FULL_SMB_PERCEPTION_FINE_TUNE,
+    FULL_SMB_PERCEPTION_FREEZE,
+    FULL_SMB_PERCEPTION_REPLACE,
     FULL_SMB_POLICY_CHECKPOINT_KIND,
     FULL_SMB_POLICY_MODEL_NAME,
     FullSMBObservationConfig,
@@ -90,6 +93,19 @@ class TestFullSMBTraining(unittest.TestCase):
             self.assertGreater(checkpoint["global_step"], 0)
             self.assertGreaterEqual(evaluation.steps, 1)
             self.assertIn("optimizer", checkpoint["states"])
+            self.assertNotIn("perception", checkpoint["states"])
+            self.assertEqual(
+                checkpoint["config"]["perception"]["mode"],
+                FULL_SMB_PERCEPTION_FREEZE,
+            )
+            self.assertEqual(
+                checkpoint["config"]["perception"]["checkpoint_path"],
+                str(full_vision_path),
+            )
+            self.assertTrue(checkpoint["metadata"]["perception"]["frozen"])
+            self.assertFalse(
+                checkpoint["metadata"]["perception"]["optimizer_updates_enabled"]
+            )
 
             resume_config = FullSMBTrainingConfig(
                 seed=7,
@@ -142,6 +158,78 @@ class TestFullSMBTraining(unittest.TestCase):
             not torch.equal(value, after_state[name]) for name, value in before.state_dict().items()
         )
         self.assertTrue(changed)
+
+    def test_perception_modes_resolve_and_record_trainable_state(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+
+            frozen = FullSMBTrainingConfig(full_smb_vision_checkpoint=full_vision_path)
+            fine_tune = FullSMBTrainingConfig(
+                full_smb_vision_checkpoint=full_vision_path,
+                perception_mode="fine-tune",
+            )
+            legacy_fine_tune = FullSMBTrainingConfig(
+                full_smb_vision_checkpoint=full_vision_path,
+                freeze_vision=False,
+            )
+            replacement = FullSMBTrainingConfig(
+                full_smb_vision_checkpoint=None,
+                perception_mode=FULL_SMB_PERCEPTION_REPLACE,
+            )
+
+            self.assertEqual(frozen.perception_mode, FULL_SMB_PERCEPTION_FREEZE)
+            self.assertTrue(frozen.freeze_vision)
+            self.assertEqual(fine_tune.perception_mode, FULL_SMB_PERCEPTION_FINE_TUNE)
+            self.assertFalse(fine_tune.freeze_vision)
+            self.assertEqual(
+                legacy_fine_tune.perception_mode,
+                FULL_SMB_PERCEPTION_FINE_TUNE,
+            )
+            self.assertEqual(replacement.perception_mode, FULL_SMB_PERCEPTION_REPLACE)
+            self.assertFalse(replacement.freeze_vision)
+
+            config = FullSMBTrainingConfig(
+                seed=13,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=0,
+                episodes_per_epoch=0,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                perception_mode=FULL_SMB_PERCEPTION_FINE_TUNE,
+            )
+            result = train_full_smb_policy(config, make_stage=tiny_stage)
+
+        perception = result.checkpoint["config"]["perception"]
+        self.assertEqual(perception["mode"], FULL_SMB_PERCEPTION_FINE_TUNE)
+        self.assertEqual(perception["checkpoint_path"], str(full_vision_path))
+        self.assertFalse(perception["frozen"])
+        self.assertTrue(perception["trainable"])
+        self.assertTrue(perception["optimizer_updates_enabled"])
+        self.assertTrue(perception["state_saved"])
+        self.assertIn("perception", result.checkpoint["states"])
+        self.assertIn(
+            "perception",
+            {
+                group.get("name")
+                for group in result.checkpoint["states"]["optimizer"]["param_groups"]
+            },
+        )
+
+    def test_perception_mode_rejects_ambiguous_checkpointless_freeze(self):
+        with self.assertRaisesRegex(ValueError, "full_smb_vision_checkpoint"):
+            FullSMBTrainingConfig(
+                full_smb_vision_checkpoint=None,
+                perception_mode=FULL_SMB_PERCEPTION_FREEZE,
+            )
+        with self.assertRaisesRegex(ValueError, "perception_mode"):
+            FullSMBTrainingConfig(
+                full_smb_vision_checkpoint=Path("vision.pth"),
+                perception_mode="mystery",
+            )
 
 
 def _write_checkpoint_for_comparison(path: Path, config: FullSMBTrainingConfig) -> Path:

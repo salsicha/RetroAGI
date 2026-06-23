@@ -39,6 +39,37 @@ from retroagi.stages.full_smb.vision import (
 FULL_SMB_POLICY_MODEL_NAME = "full_smb_policy"
 FULL_SMB_POLICY_CHECKPOINT_KIND = "full_smb_policy_trainer"
 FULL_SMB_ACTION_COUNT = len(SMB_ACTIONS)
+FULL_SMB_PERCEPTION_FREEZE = "freeze"
+FULL_SMB_PERCEPTION_FINE_TUNE = "fine_tune"
+FULL_SMB_PERCEPTION_REPLACE = "replace"
+FULL_SMB_PERCEPTION_MODES = (
+    FULL_SMB_PERCEPTION_FREEZE,
+    FULL_SMB_PERCEPTION_FINE_TUNE,
+    FULL_SMB_PERCEPTION_REPLACE,
+)
+_FULL_SMB_PERCEPTION_ALIASES = {
+    FULL_SMB_PERCEPTION_FREEZE: FULL_SMB_PERCEPTION_FREEZE,
+    "frozen": FULL_SMB_PERCEPTION_FREEZE,
+    "fine-tune": FULL_SMB_PERCEPTION_FINE_TUNE,
+    FULL_SMB_PERCEPTION_FINE_TUNE: FULL_SMB_PERCEPTION_FINE_TUNE,
+    "finetune": FULL_SMB_PERCEPTION_FINE_TUNE,
+    FULL_SMB_PERCEPTION_REPLACE: FULL_SMB_PERCEPTION_REPLACE,
+    "scratch": FULL_SMB_PERCEPTION_REPLACE,
+}
+
+
+def _resolve_perception_mode(
+    mode: Optional[str],
+    *,
+    freeze_vision: bool,
+) -> str:
+    if mode is None:
+        return FULL_SMB_PERCEPTION_FREEZE if freeze_vision else FULL_SMB_PERCEPTION_FINE_TUNE
+    normalized = _FULL_SMB_PERCEPTION_ALIASES.get(str(mode).strip().lower())
+    if normalized is None:
+        choices = ", ".join(FULL_SMB_PERCEPTION_MODES)
+        raise ValueError(f"perception_mode must be one of {choices}")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -63,6 +94,7 @@ class FullSMBTrainingConfig:
     resume_path: Optional[Path] = None
     init_checkpoint: Optional[Path] = None
     full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT
+    perception_mode: Optional[str] = None
     freeze_vision: bool = True
     save_checkpoints: bool = False
     output_summary: Optional[Path] = None
@@ -88,6 +120,24 @@ class FullSMBTrainingConfig:
             raise ValueError("entropy_weight must be non-negative")
         if self.resume_path is not None and self.init_checkpoint is not None:
             raise ValueError("resume_path and init_checkpoint are mutually exclusive")
+        perception_mode = _resolve_perception_mode(
+            self.perception_mode,
+            freeze_vision=self.freeze_vision,
+        )
+        object.__setattr__(self, "perception_mode", perception_mode)
+        object.__setattr__(
+            self,
+            "freeze_vision",
+            perception_mode == FULL_SMB_PERCEPTION_FREEZE,
+        )
+        if (
+            perception_mode != FULL_SMB_PERCEPTION_REPLACE
+            and self.full_smb_vision_checkpoint is None
+        ):
+            raise ValueError(
+                "full_smb_vision_checkpoint is required unless "
+                "perception_mode='replace'"
+            )
 
 
 @dataclass(frozen=True)
@@ -127,6 +177,7 @@ class FullSMBTrainingResult:
                 "metrics": to_plain_data(self.checkpoint.get("metrics", {})),
                 "config": to_plain_data(self.checkpoint.get("config", {})),
                 "architecture": to_plain_data(self.checkpoint.get("architecture", {})),
+                "metadata": to_plain_data(self.checkpoint.get("metadata", {})),
             },
             "history": to_plain_data(self.history),
             "evaluation": self.evaluation.as_dict(),
@@ -154,18 +205,20 @@ def train_full_smb_policy(
 
     seed_everything(config.seed)
     device = select_device(config.device)
-    model, optimizer, start_epoch, global_step, architecture_name, architecture_config = (
+    model, start_epoch, global_step, architecture_name, architecture_config, checkpoint, vision = (
         _load_training_state(config, device)
     )
+    if vision is None:
+        vision = _build_full_smb_perception(config, device)
+    _restore_perception_state(vision, checkpoint)
+    optimizer = _make_training_optimizer(model, vision, config)
+    _restore_optimizer_state(optimizer, checkpoint, strict=True)
     history: dict[str, list[float]] = {"episode_return": [], "policy_loss": []}
-    vision = FullSMBSegmentationVision(
-        checkpoint=config.full_smb_vision_checkpoint,
-        device=device,
-        freeze=config.freeze_vision,
-    )
     stage = _make_stage(make_stage, vision)
     try:
         model.train()
+        _set_perception_training_mode(vision, config)
+        gradient_parameters = _gradient_parameters(model, vision, config)
         for epoch in range(start_epoch, config.epochs):
             for episode_index in range(config.episodes_per_epoch):
                 episode_seed = config.seed + epoch * config.episodes_per_epoch + episode_index
@@ -180,6 +233,7 @@ def train_full_smb_policy(
                     entropy_weight=config.entropy_weight,
                     gradient_clip_norm=config.gradient_clip_norm,
                     deterministic_actions=config.deterministic_actions,
+                    gradient_parameters=gradient_parameters,
                 )
                 global_step += int(metrics["steps"])
                 history["episode_return"].append(float(metrics["return"]))
@@ -208,6 +262,7 @@ def train_full_smb_policy(
         },
         architecture_name=architecture_name,
         architecture_config=architecture_config,
+        vision=vision,
     )
     checkpoint_path = config.checkpoint_path
     if checkpoint_path is not None and config.save_checkpoints:
@@ -238,11 +293,9 @@ def evaluate_full_smb_policy(
     model.eval()
     owns_vision = vision is None
     if vision is None:
-        vision = FullSMBSegmentationVision(
-            checkpoint=config.full_smb_vision_checkpoint,
-            device=resolved_device,
-            freeze=config.freeze_vision,
-        )
+        vision = _build_full_smb_perception(config, resolved_device)
+    if isinstance(vision, torch.nn.Module):
+        vision.eval()
     stage = _make_stage(make_stage, vision)
     returns: list[float] = []
     steps = 0
@@ -302,7 +355,7 @@ def load_full_smb_policy_checkpoint(
     model.load_state_dict(checkpoint["states"]["model"])
     optimizer = optim.AdamW(model.parameters())
     if "optimizer" in checkpoint["states"]:
-        optimizer.load_state_dict(checkpoint["states"]["optimizer"])
+        _restore_optimizer_state(optimizer, checkpoint, strict=False)
     return model, optimizer, checkpoint
 
 
@@ -316,7 +369,18 @@ def build_full_smb_policy_checkpoint(
     metrics: Mapping[str, float],
     architecture_name: str,
     architecture_config: Mapping[str, Any],
+    vision: Optional[FullSMBSegmentationVision] = None,
 ) -> dict[str, Any]:
+    perception = _perception_checkpoint_metadata(config, vision)
+    states: dict[str, Any] = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "torch_rng": torch.get_rng_state(),
+        "python_rng": random.getstate(),
+        "numpy_rng": np.random.get_state(),
+    }
+    if _perception_optimizer_enabled(config) and vision is not None:
+        states["perception"] = vision.state_dict()
     return build_checkpoint(
         stage=FULL_SMB_SPEC.name,
         model_name=FULL_SMB_POLICY_MODEL_NAME,
@@ -326,6 +390,7 @@ def build_full_smb_policy_checkpoint(
         metrics=metrics,
         config={
             **to_plain_data(config),
+            "perception": perception,
             "architecture_name": architecture_name,
             "architecture_config": dict(architecture_config),
         },
@@ -339,13 +404,8 @@ def build_full_smb_policy_checkpoint(
                 "vocab_size": FULL_SMB_SPEC.vocab_size,
             }
         },
-        states={
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "torch_rng": torch.get_rng_state(),
-            "python_rng": random.getstate(),
-            "numpy_rng": np.random.get_state(),
-        },
+        states=states,
+        metadata={"perception": perception},
     )
 
 
@@ -360,33 +420,47 @@ def save_full_smb_training_summary(path: Path, result: FullSMBTrainingResult) ->
 def _load_training_state(
     config: FullSMBTrainingConfig,
     device: torch.device,
-) -> tuple[torch.nn.Module, optim.Optimizer, int, int, str, dict[str, Any]]:
+) -> tuple[
+    torch.nn.Module,
+    int,
+    int,
+    str,
+    dict[str, Any],
+    Optional[Mapping[str, Any]],
+    Optional[FullSMBSegmentationVision],
+]:
     if config.resume_path is not None:
-        model, optimizer, checkpoint = load_full_smb_policy_checkpoint(
-            config.resume_path,
-            device=device,
-        )
+        checkpoint = load_checkpoint(config.resume_path, map_location=device)
+        _validate_full_smb_policy_checkpoint(checkpoint)
         architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
+        model = make_full_smb_policy_model(
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+        ).to(device)
+        model.load_state_dict(checkpoint["states"]["model"])
         return (
             model,
-            optimizer,
             int(checkpoint.get("epoch", 0)),
             int(checkpoint.get("global_step", 0)),
             architecture_name,
             architecture_config,
+            checkpoint,
+            None,
         )
 
     if config.init_checkpoint is not None:
         transferred = load_transferred_full_smb_policy(
             config.init_checkpoint,
-            full_smb_vision_checkpoint=config.full_smb_vision_checkpoint,
+            full_smb_vision_checkpoint=_perception_checkpoint_path(config),
             device=device,
             freeze_vision=config.freeze_vision,
         )
         model = transferred.model
+        vision = transferred.vision
         architecture_name, architecture_config = policy_architecture_from_checkpoint(
             transferred.checkpoint
         )
+        checkpoint = transferred.checkpoint
     else:
         architecture_name = config.architecture_name
         architecture_config = dict(config.architecture_config)
@@ -394,8 +468,9 @@ def _load_training_state(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         ).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
-    return model, optimizer, 0, 0, architecture_name, dict(architecture_config)
+        vision = None
+        checkpoint = None
+    return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision
 
 
 def _train_episode(
@@ -410,6 +485,7 @@ def _train_episode(
     entropy_weight: float,
     gradient_clip_norm: float,
     deterministic_actions: bool,
+    gradient_parameters: tuple[torch.nn.Parameter, ...],
 ) -> dict[str, float]:
     observation = stage.reset(seed=seed)
     total_return = 0.0
@@ -433,7 +509,7 @@ def _train_episode(
         loss = -(log_prob.mean() * scaled_reward.detach()) - entropy_weight * entropy
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
+        torch.nn.utils.clip_grad_norm_(gradient_parameters, gradient_clip_norm)
         optimizer.step()
         losses.append(float(loss.detach().cpu().item()))
         total_return += float(reward)
@@ -467,6 +543,131 @@ def _make_stage(
     if make_stage is not None:
         return make_stage(vision)
     return FullSMBStage(vision=vision)
+
+
+def _perception_checkpoint_path(config: FullSMBTrainingConfig) -> Optional[Path]:
+    if config.perception_mode == FULL_SMB_PERCEPTION_REPLACE:
+        return None
+    return config.full_smb_vision_checkpoint
+
+
+def _build_full_smb_perception(
+    config: FullSMBTrainingConfig,
+    device: torch.device,
+) -> FullSMBSegmentationVision:
+    return FullSMBSegmentationVision(
+        checkpoint=_perception_checkpoint_path(config),
+        device=device,
+        freeze=config.freeze_vision,
+    )
+
+
+def _perception_optimizer_enabled(config: FullSMBTrainingConfig) -> bool:
+    return config.perception_mode in {
+        FULL_SMB_PERCEPTION_FINE_TUNE,
+        FULL_SMB_PERCEPTION_REPLACE,
+    }
+
+
+def _make_training_optimizer(
+    model: torch.nn.Module,
+    vision: FullSMBSegmentationVision,
+    config: FullSMBTrainingConfig,
+) -> optim.Optimizer:
+    param_groups: list[dict[str, Any]] = [{"params": list(model.parameters()), "name": "policy"}]
+    if _perception_optimizer_enabled(config):
+        perception_parameters = [param for param in vision.parameters() if param.requires_grad]
+        if perception_parameters:
+            param_groups.append({"params": perception_parameters, "name": "perception"})
+    return optim.AdamW(param_groups, lr=config.learning_rate)
+
+
+def _gradient_parameters(
+    model: torch.nn.Module,
+    vision: FullSMBSegmentationVision,
+    config: FullSMBTrainingConfig,
+) -> tuple[torch.nn.Parameter, ...]:
+    parameters = list(model.parameters())
+    if _perception_optimizer_enabled(config):
+        parameters.extend(param for param in vision.parameters() if param.requires_grad)
+    return tuple(parameters)
+
+
+def _set_perception_training_mode(
+    vision: FullSMBSegmentationVision,
+    config: FullSMBTrainingConfig,
+) -> None:
+    if not isinstance(vision, torch.nn.Module):
+        return
+    if _perception_optimizer_enabled(config):
+        vision.train()
+    else:
+        vision.eval()
+
+
+def _restore_perception_state(
+    vision: FullSMBSegmentationVision,
+    checkpoint: Optional[Mapping[str, Any]],
+) -> None:
+    if checkpoint is None:
+        return
+    perception_state = checkpoint.get("states", {}).get("perception")
+    if perception_state is None:
+        return
+    load_result = vision.load_state_dict(perception_state, strict=False)
+    missing = tuple(load_result.missing_keys)
+    unexpected = tuple(load_result.unexpected_keys)
+    if missing or unexpected:
+        raise ValueError(
+            "checkpoint perception state is incompatible with Full SMB perception: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+
+def _restore_optimizer_state(
+    optimizer: optim.Optimizer,
+    checkpoint: Optional[Mapping[str, Any]],
+    *,
+    strict: bool,
+) -> None:
+    if checkpoint is None:
+        return
+    optimizer_state = checkpoint.get("states", {}).get("optimizer")
+    if optimizer_state is None:
+        return
+    try:
+        optimizer.load_state_dict(optimizer_state)
+    except ValueError as exc:
+        if strict:
+            raise ValueError(
+                "checkpoint optimizer state is incompatible with the selected "
+                "Full SMB perception mode"
+            ) from exc
+
+
+def _perception_checkpoint_metadata(
+    config: FullSMBTrainingConfig,
+    vision: Optional[FullSMBSegmentationVision] = None,
+) -> dict[str, Any]:
+    requested_checkpoint = config.full_smb_vision_checkpoint
+    resolved_checkpoint = None
+    if vision is not None:
+        resolved_checkpoint = vision.checkpoint_path
+    elif config.perception_mode != FULL_SMB_PERCEPTION_REPLACE:
+        resolved_checkpoint = requested_checkpoint
+    return {
+        "mode": config.perception_mode,
+        "encoder": "full_smb_vit",
+        "requested_checkpoint_path": (
+            str(requested_checkpoint) if requested_checkpoint is not None else None
+        ),
+        "checkpoint_path": str(resolved_checkpoint) if resolved_checkpoint is not None else None,
+        "checkpoint_loaded": resolved_checkpoint is not None,
+        "frozen": bool(config.freeze_vision),
+        "trainable": not bool(config.freeze_vision),
+        "optimizer_updates_enabled": _perception_optimizer_enabled(config),
+        "state_saved": bool(_perception_optimizer_enabled(config) and vision is not None),
+    }
 
 
 def _validate_full_smb_policy_checkpoint(checkpoint: Mapping[str, Any]) -> None:
@@ -581,7 +782,20 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=DEFAULT_FULL_SMB_VIT_CHECKPOINT,
     )
-    parser.add_argument("--fine-tune-vision", action="store_true")
+    parser.add_argument(
+        "--perception-mode",
+        choices=(
+            FULL_SMB_PERCEPTION_FREEZE,
+            "fine-tune",
+            FULL_SMB_PERCEPTION_FINE_TUNE,
+            FULL_SMB_PERCEPTION_REPLACE,
+        ),
+    )
+    parser.add_argument(
+        "--fine-tune-vision",
+        action="store_true",
+        help="legacy alias for --perception-mode fine_tune",
+    )
     parser.add_argument("--evaluation-episodes", type=int, default=1)
     parser.add_argument("--evaluation-max-steps", type=int, default=64)
     parser.add_argument("--output-summary", type=Path)
@@ -589,6 +803,14 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
     architecture_config = dict(args.architecture_config or ())
+    perception_mode = getattr(args, "perception_mode", None)
+    if args.fine_tune_vision:
+        if perception_mode is not None and _resolve_perception_mode(
+            perception_mode,
+            freeze_vision=False,
+        ) != FULL_SMB_PERCEPTION_FINE_TUNE:
+            raise ValueError("--fine-tune-vision conflicts with --perception-mode")
+        perception_mode = FULL_SMB_PERCEPTION_FINE_TUNE
     return FullSMBTrainingConfig(
         seed=args.seed,
         architecture_name=args.architecture,
@@ -608,6 +830,7 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         resume_path=getattr(args, "resume", None),
         init_checkpoint=getattr(args, "init_checkpoint", None),
         full_smb_vision_checkpoint=args.full_smb_vision_checkpoint,
+        perception_mode=perception_mode,
         freeze_vision=not args.fine_tune_vision,
         save_checkpoints=getattr(args, "save_checkpoints", False)
         or getattr(args, "checkpoint", None) is not None,
