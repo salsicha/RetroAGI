@@ -23,6 +23,8 @@ class TestCIWorkflow(unittest.TestCase):
         self.assertIn("--index-url https://download.pytorch.org/whl/cpu", workflow)
         self.assertIn("torch==2.9.1", workflow)
         self.assertIn("torchvision==0.24.1", workflow)
+        self.assertIn('python -m pip install ".[test,vision]"', workflow)
+        self.assertNotIn(".[full-smb]", workflow)
         self.assertIn("retroagi train --stage block-smb", workflow)
         self.assertIn("--device cpu", workflow)
         self.assertIn("--disable-checkpoint-transfer", workflow)

@@ -12,7 +12,7 @@ runs use a reproducible tensor ABI.
 | PyTorch | 2.9.1 | Pinned runtime dependency |
 | torchvision | 0.24.1 | Pinned to the matching PyTorch release |
 | pygame provider | `pygame-ce==2.5.7` | Provides the `pygame` import used by Block SMB |
-| stable-retro | `stable-retro==1.0.0` on Python <3.13, pinned upstream source on Python 3.13+ | Source pin is used until a PyPI release carries Python 3.13/3.14 metadata |
+| stable-retro | Optional `full-smb` extra: `stable-retro==1.0.0` on Python <3.13, pinned upstream source on Python 3.13+ | Required only for real Full SMB emulator runs |
 | CPU | PyTorch 2.9.1 CPU wheel | Supported baseline for tests, environments, and training |
 | CUDA 12.8 | PyTorch `cu128` wheel | Primary GPU target; wheel selection is verified, GPU execution is pending |
 | CUDA 13.0 | PyTorch `cu130` wheel | Secondary Linux GPU target; GPU execution verification is pending |
@@ -22,10 +22,11 @@ Python 3.11 and earlier, Python 3.15 and later, ROCm, and CUDA versions other
 than those listed above are not currently supported. They may work, but are
 outside the tested project matrix.
 
-CUDA is optional. The synthetic, Block SMB, Full SMB, vision, and test code must
-remain functional with the CPU-only PyTorch wheel. GPU acceleration is selected
-with `retroagi.core.select_device`: `auto` prefers CUDA, then Apple MPS, then
-CPU. Explicit `cuda` or `mps` requests fail early if the backend is unavailable.
+CUDA is optional. The synthetic, Block SMB, Full SMB adapter tests, vision, and
+test code must remain functional with the CPU-only PyTorch wheel. GPU
+acceleration is selected with `retroagi.core.select_device`: `auto` prefers
+CUDA, then Apple MPS, then CPU. Explicit `cuda` or `mps` requests fail early if
+the backend is unavailable.
 
 ## Installation
 
@@ -83,10 +84,19 @@ only required when compiling CUDA extensions; an NVIDIA driver compatible with
 the selected wheel is still required.
 
 For Python 3.13 and 3.14, RetroAGI installs `stable-retro` from pinned upstream
-source commit `778186c71e003f7c8a5682187832ba430b8e34b3` because the latest
-PyPI release metadata still excludes those Python versions. macOS source builds
-may require the Homebrew dependencies listed by the upstream stable-retro macOS
-installation guide.
+source commit `778186c71e003f7c8a5682187832ba430b8e34b3` only when the
+`full-smb` extra is requested, because the latest PyPI release metadata still
+excludes those Python versions. Keep this extra out of Block SMB CI smoke
+environments; it builds native emulator components that are unrelated to Block
+SMB training. macOS source builds may require the Homebrew dependencies listed
+by the upstream stable-retro macOS installation guide.
+
+Install the Full SMB emulator extra only on machines that need real
+stable-retro execution:
+
+```bash
+python -m pip install -e '.[full-smb]'
+```
 
 Use `pygame-ce` as the only pygame provider in a virtual environment. If
 `pygame` was installed previously, uninstall it before reinstalling RetroAGI so

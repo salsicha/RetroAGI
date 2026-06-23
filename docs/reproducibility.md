@@ -47,6 +47,14 @@ python -m pip install -e '.[test,vision]'
 CUDA users should use the CUDA 12.8 or CUDA 13.0 install commands in
 [compatibility.md](compatibility.md), then install `.[test,vision]`.
 
+The `full-smb` extra installs stable-retro for real emulator runs and is not
+required for unit tests, Block SMB training, or CI smoke training. Install it
+only before running Full SMB against a local ROM setup:
+
+```bash
+python -m pip install -e '.[full-smb]'
+```
+
 Verify the selected runtime:
 
 ```bash

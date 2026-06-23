@@ -113,6 +113,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    Stage-specific options are forwarded to the selected implementation; the
    legacy `retroagi-block-smb` command remains available for Block SMB-only
    workflows.
+   Real Full SMB emulator runs require the optional stable-retro backend:
+   `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
+   training do not install or build that native emulator dependency.
    Each versioned checkpoint also writes a JSON sidecar beside the `.pth` file
    containing the resolved config, metrics, code revision, runtime environment,
    specs, metadata, and state keys.
