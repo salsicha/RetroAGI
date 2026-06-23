@@ -71,6 +71,7 @@ from .games import (
     GAME_SPECS,
     SMB_GAME_SPEC,
     SMB_REWARD_SCHEMA,
+    SMB_SYNTHETIC_DATA_SPECS,
     SMB_TASK_SCHEMA,
     AssetRequirement,
     GameSpec,
@@ -101,6 +102,7 @@ from .models import (
 )
 from .rewards import RewardConfigSchema, RewardTermSpec
 from .signals import GameSignalExtractor, GameSignals
+from .synthetic import SyntheticDataGenerator, SyntheticDataSpec, SyntheticSplitSpec
 from .tasks import GameTaskSchema, GameTaskSpec, TaskSuccessThreshold
 from .tracking import (
     TRACKING_BACKENDS,
@@ -156,12 +158,16 @@ __all__ = [
     "SMBAction",
     "SMB_GAME_SPEC",
     "SMB_REWARD_SCHEMA",
+    "SMB_SYNTHETIC_DATA_SPECS",
     "SMB_TASK_SCHEMA",
     "SUPPORTED_CONTROLLER_SCHEDULES",
     "TRACKING_BACKENDS",
     "StageLadderEntry",
     "StageBatch",
     "StageSpec",
+    "SyntheticDataGenerator",
+    "SyntheticDataSpec",
+    "SyntheticSplitSpec",
     "TaskSuccessThreshold",
     "TrainingConfig",
     "VisionEncoder",

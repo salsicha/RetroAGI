@@ -364,7 +364,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Define a per-game scenario/task schema for fixed tasks, procedural task
       generation, curriculum progression, success thresholds, and deterministic
       reset seeds.
-- [ ] Generalize synthetic low-fidelity data generation so each game can define
+- [x] Generalize synthetic low-fidelity data generation so each game can define
       cheap concept data before any pixels or emulator frames are involved.
 - [ ] Generalize the Block SMB-style mid-fidelity simulator pattern into
       "block game" adapters: simplified physics, symbolic state, exact semantic

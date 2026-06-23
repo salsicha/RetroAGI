@@ -9,6 +9,7 @@ from retroagi.core import (
     SMB_ACTIONS,
     SMB_GAME_SPEC,
     SMB_REWARD_SCHEMA,
+    SMB_SYNTHETIC_DATA_SPECS,
     SMB_TASK_SCHEMA,
     ActionSpec,
     GameSpec,
@@ -16,11 +17,18 @@ from retroagi.core import (
     GameTaskSpec,
     RewardConfigSchema,
     RewardTermSpec,
+    SyntheticDataSpec,
+    SyntheticSplitSpec,
     TaskSuccessThreshold,
     assert_stage_ladder,
     game_names,
     get_game_spec,
     validate_game_spec,
+)
+from retroagi.stages.synthetic_1d.train import (
+    SyntheticSplitSeeds,
+    SyntheticSplitSizes,
+    generate_dataset_splits,
 )
 
 
@@ -47,6 +55,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertIn("rom", spec.licensing)
         self.assertIs(spec.reward_schema, SMB_REWARD_SCHEMA)
         self.assertIs(spec.task_schema, SMB_TASK_SCHEMA)
+        self.assertEqual(spec.synthetic_data, SMB_SYNTHETIC_DATA_SPECS)
 
     def test_smb_actions_preserve_stable_ids_and_button_metadata(self):
         spec = SMB_GAME_SPEC
@@ -150,6 +159,41 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(generated.task_type, "procedural")
         self.assertEqual(generated.generation_seed, 50_000)
         self.assertIn("enemy_density", generated.generation_config)
+
+    def test_smb_synthetic_data_spec_drives_pixel_free_concept_splits(self):
+        spec = SMB_GAME_SPEC.synthetic_data_spec("synthetic_1d_concept")
+
+        self.assertIs(spec, SMB_SYNTHETIC_DATA_SPECS[0])
+        self.assertEqual(spec.stage_name, "synthetic_1d")
+        self.assertTrue(spec.metadata["pixel_free"])
+        self.assertTrue(spec.metadata["emulator_free"])
+        self.assertEqual(
+            spec.split_sizes(),
+            {"train": 1_000, "validation": 200, "test": 200},
+        )
+        self.assertEqual(
+            spec.split_seeds(),
+            {"train": 10_001, "validation": 20_001, "test": 30_001},
+        )
+        self.assertEqual(spec.split("train").seed, 10_001)
+        self.assertEqual(spec.shape_contract["tensors"], ("xa", "ya", "xb", "yb", "xc", "yc"))
+
+        splits = generate_dataset_splits(
+            sizes=SyntheticSplitSizes(
+                train=spec.split("train").size,
+                validation=spec.split("validation").size,
+                test=spec.split("test").size,
+            ),
+            seeds=SyntheticSplitSeeds(
+                train=spec.split("train").seed,
+                validation=spec.split("validation").seed,
+                test=spec.split("test").seed,
+            ),
+        )
+
+        self.assertEqual(splits.train[0].shape[0], 1_000)
+        self.assertEqual(splits.validation[0].shape[0], 200)
+        self.assertEqual(splits.test[0].shape[0], 200)
 
     def test_game_spec_validation_rejects_mismatched_reward_schema(self):
         with self.assertRaisesRegex(ValueError, "reward schema is for"):
@@ -269,6 +313,59 @@ class TestGameSpec(unittest.TestCase):
                                 "unit threshold",
                             ),
                         ),
+                    ),
+                ),
+            )
+
+    def test_game_spec_validation_rejects_invalid_synthetic_data_specs(self):
+        with self.assertRaisesRegex(ValueError, "synthetic data .* is for"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                synthetic_data=(
+                    SyntheticDataSpec(
+                        game_name="other",
+                        name="concept",
+                        stage_name="synthetic_1d",
+                        observation_kind="state",
+                        target_kind="target",
+                        generator="unit.generate",
+                        splits=(SyntheticSplitSpec("train", 1, 1),),
+                        shape_contract={"x": (1,)},
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown stage"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                synthetic_data=(
+                    SyntheticDataSpec(
+                        game_name="bad",
+                        name="concept",
+                        stage_name="missing_stage",
+                        observation_kind="state",
+                        target_kind="target",
+                        generator="unit.generate",
+                        splits=(SyntheticSplitSpec("train", 1, 1),),
+                        shape_contract={"x": (1,)},
                     ),
                 ),
             )

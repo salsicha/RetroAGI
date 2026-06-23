@@ -68,6 +68,13 @@ curriculum order, task sources, and `TaskSuccessThreshold` gates. Block SMB's
 fixed-scenario success thresholds now derive from `SMB_GAME_SPEC.task_schema`
 so future games can expose the same shape without trainer rewrites.
 
+`SyntheticDataSpec` is the game-owned low-fidelity data contract for concept
+checks that run before pixels, physics, or emulator frames. It declares the
+stage, observation and target kinds, generator entrypoint, deterministic split
+sizes/seeds, shape contract, and metadata such as `pixel_free` and
+`emulator_free`. SMB declares its existing Synthetic 1D generator as
+`synthetic_1d_concept` under `SMB_GAME_SPEC.synthetic_data`.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

@@ -12,6 +12,7 @@ from .actions import (
     action_button_vector as _action_button_vector,
 )
 from .rewards import RewardConfigSchema, RewardTermSpec
+from .synthetic import SyntheticDataSpec, SyntheticSplitSpec
 from .tasks import GameTaskSchema, GameTaskSpec, TaskSuccessThreshold
 
 
@@ -72,6 +73,7 @@ class GameSpec:
     licensing: Mapping[str, str] = field(default_factory=dict)
     reward_schema: RewardConfigSchema | None = None
     task_schema: GameTaskSchema | None = None
+    synthetic_data: tuple[SyntheticDataSpec, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -96,6 +98,7 @@ class GameSpec:
         self._validate_stage_ladder()
         self._validate_reward_schema()
         self._validate_task_schema()
+        self._validate_synthetic_data()
         if not self.licensing:
             raise ValueError(f"game {self.name!r} must define licensing metadata")
 
@@ -152,6 +155,23 @@ class GameSpec:
                 f"game {self.name!r} task schema references unknown stages: {unsupported}"
             )
 
+    def _validate_synthetic_data(self) -> None:
+        names = [spec.name for spec in self.synthetic_data]
+        if len(set(names)) != len(names):
+            raise ValueError(f"game {self.name!r} synthetic data names must be unique")
+        stage_names = {stage.stage_spec_name for stage in self.stage_ladder}
+        for spec in self.synthetic_data:
+            if spec.game_name != self.name:
+                raise ValueError(
+                    f"game {self.name!r} synthetic data {spec.name!r} is for "
+                    f"{spec.game_name!r}"
+                )
+            if spec.stage_name not in stage_names:
+                raise ValueError(
+                    f"game {self.name!r} synthetic data {spec.name!r} references "
+                    f"unknown stage {spec.stage_name!r}"
+                )
+
     @property
     def action_count(self) -> int:
         return len(self.action_space)
@@ -197,6 +217,12 @@ class GameSpec:
         if self.task_schema is None:
             return ()
         return self.task_schema.fixed_tasks
+
+    def synthetic_data_spec(self, name: str) -> SyntheticDataSpec:
+        for spec in self.synthetic_data:
+            if spec.name == name:
+                return spec
+        raise KeyError(f"unknown synthetic data spec {name!r} for game {self.name!r}")
 
 
 SMB_REWARD_SCHEMA = RewardConfigSchema(
@@ -353,6 +379,39 @@ SMB_TASK_SCHEMA = GameTaskSchema(
 )
 
 
+SMB_SYNTHETIC_DATA_SPECS = (
+    SyntheticDataSpec(
+        game_name="smb",
+        name="synthetic_1d_concept",
+        stage_name="synthetic_1d",
+        observation_kind="procedural one-dimensional hierarchy tokens",
+        target_kind="continuous controller targets and next-token hierarchy labels",
+        generator="retroagi.stages.synthetic_1d.train.generate_dataset_splits",
+        splits=(
+            SyntheticSplitSpec("train", 1_000, 10_001),
+            SyntheticSplitSpec("validation", 200, 20_001),
+            SyntheticSplitSpec("test", 200, 30_001),
+        ),
+        shape_contract={
+            "seq_len_a": 8,
+            "ratio_ab": 2,
+            "ratio_bc": 4,
+            "vocab_size": 20,
+            "tensors": ("xa", "ya", "xb", "yb", "xc", "yc"),
+        },
+        description=(
+            "Cheap architecture-concept data used before SMB pixels, symbolic "
+            "physics, or emulator frames."
+        ),
+        metadata={
+            "purpose": "architecture validation",
+            "pixel_free": True,
+            "emulator_free": True,
+        },
+    ),
+)
+
+
 SMB_GAME_SPEC = GameSpec(
     name="smb",
     family="super_mario_bros",
@@ -398,6 +457,7 @@ SMB_GAME_SPEC = GameSpec(
     },
     reward_schema=SMB_REWARD_SCHEMA,
     task_schema=SMB_TASK_SCHEMA,
+    synthetic_data=SMB_SYNTHETIC_DATA_SPECS,
     stage_ladder=(
         StageLadderEntry(
             name="synthetic",
@@ -487,6 +547,7 @@ def validate_game_spec(game: GameSpec) -> GameSpec:
         reward_terms=dict(game.reward_terms),
         reward_schema=game.reward_schema,
         task_schema=game.task_schema,
+        synthetic_data=tuple(game.synthetic_data),
         stage_ladder=tuple(game.stage_ladder),
         emulator_backend=game.emulator_backend,
         asset_requirements=tuple(game.asset_requirements),
