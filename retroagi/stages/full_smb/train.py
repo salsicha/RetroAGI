@@ -15,15 +15,22 @@ import torch.optim as optim
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
+    ExperimentTrackerConfig,
     SMB_ACTIONS,
     StageBatch,
+    TRACKING_BACKENDS,
     build_checkpoint,
     load_checkpoint,
+    make_experiment_tracker,
     save_checkpoint,
     select_device,
     to_plain_data,
 )
-from retroagi.stages.full_smb.adapter import FULL_SMB_SPEC, FullSMBStage
+from retroagi.stages.full_smb.adapter import (
+    FULL_SMB_SPEC,
+    FullSMBRewardConfig,
+    FullSMBStage,
+)
 from retroagi.stages.full_smb.transfer import (
     FULL_SMB_TRANSFER_CHECKPOINT_KIND,
     FULL_SMB_TRANSFER_MODEL_NAME,
@@ -72,6 +79,19 @@ def _resolve_perception_mode(
     return normalized
 
 
+def _loss_weight_metadata(config: Any) -> dict[str, float]:
+    return {
+        "policy": float(config.policy_loss_weight),
+        "entropy": float(config.entropy_weight),
+        "representation": float(config.representation_weight),
+        "world_model": float(config.world_model_weight),
+        "reward": float(config.reward_loss_weight),
+        "value": float(config.value_loss_weight),
+        "action_aux": float(config.action_aux_weight),
+        "critic": float(config.critic_loss_weight),
+    }
+
+
 @dataclass(frozen=True)
 class FullSMBTrainingConfig:
     """Configuration for direct emulator-level Full SMB policy updates."""
@@ -82,10 +102,24 @@ class FullSMBTrainingConfig:
     epochs: int = 1
     episodes_per_epoch: int = 1
     max_steps_per_episode: int = 64
+    updates_per_epoch: Optional[int] = None
+    rollout_length: Optional[int] = None
+    vector_env_count: int = 1
     learning_rate: float = 1e-4
     entropy_weight: float = 0.01
+    policy_loss_weight: float = 1.0
+    representation_weight: float = 0.0
+    world_model_weight: float = 0.0
+    reward_loss_weight: float = 0.0
+    value_loss_weight: float = 0.0
+    action_aux_weight: float = 0.0
+    critic_loss_weight: float = 0.0
     reward_scale: float = 1.0
+    reward_config: FullSMBRewardConfig | Mapping[str, float] = field(
+        default_factory=FullSMBRewardConfig
+    )
     gradient_clip_norm: float = 1.0
+    deterministic: bool = True
     deterministic_actions: bool = False
     device: str = "auto"
     evaluation_episodes: int = 1
@@ -98,26 +132,80 @@ class FullSMBTrainingConfig:
     freeze_vision: bool = True
     save_checkpoints: bool = False
     output_summary: Optional[Path] = None
+    log_path: Optional[Path] = None
+    recording_dir: Optional[Path] = None
+    recording_path: Optional[Path] = None
+    tracking_backend: str = "none"
+    tracking_log_dir: Optional[Path] = None
+    tracking_project: str = "retroagi"
+    tracking_run_name: Optional[str] = None
+    tracking_mode: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.architecture_name:
             raise ValueError("architecture_name must be non-empty")
         if any(not str(key) for key in self.architecture_config):
             raise ValueError("architecture_config keys must be non-empty")
+        if isinstance(self.reward_config, Mapping):
+            object.__setattr__(
+                self,
+                "reward_config",
+                FullSMBRewardConfig(**dict(self.reward_config)),
+            )
+        elif not isinstance(self.reward_config, FullSMBRewardConfig):
+            raise TypeError("reward_config must be a FullSMBRewardConfig or mapping")
+        rollout_length = (
+            self.max_steps_per_episode
+            if self.rollout_length is None
+            else self.rollout_length
+        )
+        updates_per_epoch = (
+            self.episodes_per_epoch
+            if self.updates_per_epoch is None
+            else self.updates_per_epoch
+        )
+        object.__setattr__(self, "rollout_length", int(rollout_length))
+        object.__setattr__(self, "max_steps_per_episode", int(rollout_length))
+        object.__setattr__(self, "updates_per_epoch", int(updates_per_epoch))
+        object.__setattr__(self, "episodes_per_epoch", int(updates_per_epoch))
         for name in (
             "epochs",
             "episodes_per_epoch",
+            "updates_per_epoch",
             "max_steps_per_episode",
+            "rollout_length",
             "evaluation_episodes",
             "evaluation_max_steps",
         ):
             if int(getattr(self, name)) < 0:
                 raise ValueError(f"{name} must be non-negative")
+        if self.vector_env_count <= 0:
+            raise ValueError("vector_env_count must be positive")
         for name in ("learning_rate", "reward_scale", "gradient_clip_norm"):
             if float(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} must be positive")
-        if self.entropy_weight < 0:
-            raise ValueError("entropy_weight must be non-negative")
+        loss_weights = _loss_weight_metadata(self).values()
+        if any(weight < 0 for weight in loss_weights):
+            raise ValueError("loss weights must be non-negative")
+        object.__setattr__(self, "tracking_backend", self.tracking_backend.lower())
+        if self.tracking_backend not in TRACKING_BACKENDS:
+            raise ValueError(f"tracking_backend must be one of {TRACKING_BACKENDS}")
+        if not self.tracking_project:
+            raise ValueError("tracking_project must be non-empty")
+        for path_name in (
+            "checkpoint_path",
+            "resume_path",
+            "init_checkpoint",
+            "full_smb_vision_checkpoint",
+            "output_summary",
+            "log_path",
+            "recording_dir",
+            "recording_path",
+            "tracking_log_dir",
+        ):
+            path_value = getattr(self, path_name)
+            if path_value is not None and not isinstance(path_value, Path):
+                object.__setattr__(self, path_name, Path(path_value))
         if self.resume_path is not None and self.init_checkpoint is not None:
             raise ValueError("resume_path and init_checkpoint are mutually exclusive")
         perception_mode = _resolve_perception_mode(
@@ -188,12 +276,16 @@ class FullSMBTrainingResult:
 StageFactory = Callable[[FullSMBSegmentationVision], FullSMBStage]
 
 
-def seed_everything(seed: int) -> None:
+def seed_everything(seed: int, deterministic: bool = True) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.use_deterministic_algorithms(deterministic)
+    torch.backends.cudnn.deterministic = deterministic
+    if deterministic:
+        torch.backends.cudnn.benchmark = False
 
 
 def train_full_smb_policy(
@@ -203,7 +295,7 @@ def train_full_smb_policy(
 ) -> FullSMBTrainingResult:
     """Run online policy-gradient updates directly against the Full SMB stage."""
 
-    seed_everything(config.seed)
+    seed_everything(config.seed, deterministic=config.deterministic)
     device = select_device(config.device)
     model, start_epoch, global_step, architecture_name, architecture_config, checkpoint, vision = (
         _load_training_state(config, device)
@@ -214,68 +306,123 @@ def train_full_smb_policy(
     optimizer = _make_training_optimizer(model, vision, config)
     _restore_optimizer_state(optimizer, checkpoint, strict=True)
     history: dict[str, list[float]] = {"episode_return": [], "policy_loss": []}
-    stage = _make_stage(make_stage, vision)
+    _initialize_full_smb_log(config)
+    tracker = make_experiment_tracker(
+        ExperimentTrackerConfig(
+            backend=config.tracking_backend,
+            log_dir=config.tracking_log_dir,
+            project=config.tracking_project,
+            run_name=config.tracking_run_name,
+            mode=config.tracking_mode,
+        ),
+        default_log_dir=Path("artifacts/full_smb/tracking"),
+    )
     try:
-        model.train()
-        _set_perception_training_mode(vision, config)
-        gradient_parameters = _gradient_parameters(model, vision, config)
-        for epoch in range(start_epoch, config.epochs):
-            for episode_index in range(config.episodes_per_epoch):
-                episode_seed = config.seed + epoch * config.episodes_per_epoch + episode_index
-                metrics = _train_episode(
-                    model,
-                    optimizer,
-                    stage,
-                    seed=episode_seed,
-                    max_steps=config.max_steps_per_episode,
-                    device=device,
-                    reward_scale=config.reward_scale,
-                    entropy_weight=config.entropy_weight,
-                    gradient_clip_norm=config.gradient_clip_norm,
-                    deterministic_actions=config.deterministic_actions,
-                    gradient_parameters=gradient_parameters,
-                )
-                global_step += int(metrics["steps"])
-                history["episode_return"].append(float(metrics["return"]))
-                history["policy_loss"].append(float(metrics["loss"]))
-        evaluation = evaluate_full_smb_policy(
-            model,
-            config=config,
-            make_stage=make_stage,
-            vision=vision,
-            device=device,
+        tracker.log_config(to_plain_data(config))
+        _log_full_smb_event(
+            config,
+            "run_started",
+            config=to_plain_data(config),
+            device=str(device),
+            start_epoch=start_epoch,
+            global_step=global_step,
+            resumed_from=str(config.resume_path) if config.resume_path is not None else None,
+            initialized_from=(
+                str(config.init_checkpoint) if config.init_checkpoint is not None else None
+            ),
         )
-    finally:
-        stage.close()
+        stage = _make_stage(make_stage, vision, config)
+        try:
+            model.train()
+            _set_perception_training_mode(vision, config)
+            gradient_parameters = _gradient_parameters(model, vision, config)
+            for epoch in range(start_epoch, config.epochs):
+                for update_index in range(config.updates_per_epoch):
+                    episode_seed = config.seed + epoch * config.updates_per_epoch + update_index
+                    metrics = _train_episode(
+                        model,
+                        optimizer,
+                        stage,
+                        seed=episode_seed,
+                        max_steps=config.rollout_length,
+                        device=device,
+                        reward_scale=config.reward_scale,
+                        entropy_weight=config.entropy_weight,
+                        policy_loss_weight=config.policy_loss_weight,
+                        gradient_clip_norm=config.gradient_clip_norm,
+                        deterministic_actions=config.deterministic_actions,
+                        gradient_parameters=gradient_parameters,
+                    )
+                    global_step += int(metrics["steps"])
+                    history["episode_return"].append(float(metrics["return"]))
+                    history["policy_loss"].append(float(metrics["loss"]))
+                    tracker.log_metrics(metrics, step=global_step, prefix="train")
+                    _log_full_smb_event(
+                        config,
+                        "train_rollout",
+                        epoch=epoch + 1,
+                        update=update_index + 1,
+                        global_step=global_step,
+                        metrics=metrics,
+                    )
+            evaluation = evaluate_full_smb_policy(
+                model,
+                config=config,
+                make_stage=make_stage,
+                vision=vision,
+                device=device,
+            )
+        finally:
+            stage.close()
 
-    checkpoint = build_full_smb_policy_checkpoint(
-        model,
-        optimizer,
-        epoch=config.epochs,
-        global_step=global_step,
-        config=config,
-        metrics={
-            "mean_train_return": _mean(history["episode_return"]),
-            "mean_policy_loss": _mean(history["policy_loss"]),
-            "evaluation_mean_return": evaluation.mean_return,
-            "evaluation_success_rate": evaluation.success_rate,
-        },
-        architecture_name=architecture_name,
-        architecture_config=architecture_config,
-        vision=vision,
-    )
-    checkpoint_path = config.checkpoint_path
-    if checkpoint_path is not None and config.save_checkpoints:
-        save_checkpoint(checkpoint_path, checkpoint)
-    result = FullSMBTrainingResult(
-        checkpoint=checkpoint,
-        history=history,
-        evaluation=evaluation,
-        checkpoint_path=checkpoint_path if config.save_checkpoints else None,
-    )
-    if config.output_summary is not None:
-        save_full_smb_training_summary(config.output_summary, result)
-    return result
+        checkpoint = build_full_smb_policy_checkpoint(
+            model,
+            optimizer,
+            epoch=config.epochs,
+            global_step=global_step,
+            config=config,
+            metrics={
+                "mean_train_return": _mean(history["episode_return"]),
+                "mean_policy_loss": _mean(history["policy_loss"]),
+                "evaluation_mean_return": evaluation.mean_return,
+                "evaluation_success_rate": evaluation.success_rate,
+            },
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+            vision=vision,
+        )
+        tracker.log_metrics(
+            checkpoint["metrics"],
+            step=global_step,
+            prefix="final",
+        )
+        _log_full_smb_event(
+            config,
+            "run_finished",
+            epoch=config.epochs,
+            global_step=global_step,
+            metrics=checkpoint["metrics"],
+            evaluation=evaluation.as_dict(),
+            checkpoint_path=(
+                str(config.checkpoint_path)
+                if config.save_checkpoints and config.checkpoint_path is not None
+                else None
+            ),
+        )
+        checkpoint_path = config.checkpoint_path
+        if checkpoint_path is not None and config.save_checkpoints:
+            save_checkpoint(checkpoint_path, checkpoint)
+        result = FullSMBTrainingResult(
+            checkpoint=checkpoint,
+            history=history,
+            evaluation=evaluation,
+            checkpoint_path=checkpoint_path if config.save_checkpoints else None,
+        )
+        if config.output_summary is not None:
+            save_full_smb_training_summary(config.output_summary, result)
+        return result
+    finally:
+        tracker.close()
 
 
 @torch.no_grad()
@@ -296,7 +443,7 @@ def evaluate_full_smb_policy(
         vision = _build_full_smb_perception(config, resolved_device)
     if isinstance(vision, torch.nn.Module):
         vision.eval()
-    stage = _make_stage(make_stage, vision)
+    stage = _make_stage(make_stage, vision, config)
     returns: list[float] = []
     steps = 0
     terminated_count = 0
@@ -372,6 +519,10 @@ def build_full_smb_policy_checkpoint(
     vision: Optional[FullSMBSegmentationVision] = None,
 ) -> dict[str, Any]:
     perception = _perception_checkpoint_metadata(config, vision)
+    rollout = _rollout_metadata(config)
+    loss_weights = _loss_weight_metadata(config)
+    recording = _recording_metadata(config)
+    tracking = _tracking_metadata(config)
     states: dict[str, Any] = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -391,6 +542,11 @@ def build_full_smb_policy_checkpoint(
         config={
             **to_plain_data(config),
             "perception": perception,
+            "rollout": rollout,
+            "loss_weights": loss_weights,
+            "reward": config.reward_config.to_manifest(),
+            "recording": recording,
+            "tracking": tracking,
             "architecture_name": architecture_name,
             "architecture_config": dict(architecture_config),
         },
@@ -405,7 +561,18 @@ def build_full_smb_policy_checkpoint(
             }
         },
         states=states,
-        metadata={"perception": perception},
+        metadata={
+            "perception": perception,
+            "training": {
+                "deterministic": config.deterministic,
+                "deterministic_actions": config.deterministic_actions,
+                "rollout": rollout,
+                "loss_weights": loss_weights,
+                "reward": config.reward_config.to_manifest(),
+                "recording": recording,
+                "tracking": tracking,
+            },
+        },
     )
 
 
@@ -483,6 +650,7 @@ def _train_episode(
     device: torch.device,
     reward_scale: float,
     entropy_weight: float,
+    policy_loss_weight: float,
     gradient_clip_norm: float,
     deterministic_actions: bool,
     gradient_parameters: tuple[torch.nn.Parameter, ...],
@@ -506,7 +674,8 @@ def _train_episode(
             device=log_prob.device,
         )
         entropy = distribution.entropy().mean()
-        loss = -(log_prob.mean() * scaled_reward.detach()) - entropy_weight * entropy
+        policy_loss = -(log_prob.mean() * scaled_reward.detach())
+        loss = policy_loss_weight * policy_loss - entropy_weight * entropy
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(gradient_parameters, gradient_clip_norm)
@@ -539,10 +708,11 @@ def _policy_action_logits(
 def _make_stage(
     make_stage: Optional[StageFactory],
     vision: FullSMBSegmentationVision,
+    config: FullSMBTrainingConfig,
 ) -> FullSMBStage:
     if make_stage is not None:
         return make_stage(vision)
-    return FullSMBStage(vision=vision)
+    return FullSMBStage(vision=vision, reward_config=config.reward_config)
 
 
 def _perception_checkpoint_path(config: FullSMBTrainingConfig) -> Optional[Path]:
@@ -670,6 +840,62 @@ def _perception_checkpoint_metadata(
     }
 
 
+def _rollout_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
+    return {
+        "rollout_length": int(config.rollout_length),
+        "updates_per_epoch": int(config.updates_per_epoch),
+        "epochs": int(config.epochs),
+        "vector_env_count": int(config.vector_env_count),
+        "active_vector_env_count": 1,
+        "vectorized_training_enabled": False,
+    }
+
+
+def _recording_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
+    return {
+        "recording_dir": str(config.recording_dir) if config.recording_dir else None,
+        "recording_path": str(config.recording_path) if config.recording_path else None,
+    }
+
+
+def _tracking_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
+    return {
+        "backend": config.tracking_backend,
+        "log_dir": str(config.tracking_log_dir) if config.tracking_log_dir else None,
+        "project": config.tracking_project,
+        "run_name": config.tracking_run_name,
+        "mode": config.tracking_mode,
+        "structured_log_path": str(config.log_path) if config.log_path else None,
+    }
+
+
+def append_full_smb_log_event(path: Path, event: Mapping[str, Any]) -> None:
+    """Append one structured JSONL event for Full SMB training operations."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"stage": FULL_SMB_SPEC.name, **dict(event)}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(to_plain_data(record), sort_keys=True) + "\n")
+
+
+def _initialize_full_smb_log(config: FullSMBTrainingConfig) -> None:
+    if config.log_path is None:
+        return
+    config.log_path.parent.mkdir(parents=True, exist_ok=True)
+    if config.resume_path is None:
+        config.log_path.write_text("", encoding="utf-8")
+
+
+def _log_full_smb_event(
+    training_config: FullSMBTrainingConfig,
+    event: str,
+    **payload: Any,
+) -> None:
+    if training_config.log_path is None:
+        return
+    append_full_smb_log_event(training_config.log_path, {"event": event, **payload})
+
+
 def _validate_full_smb_policy_checkpoint(checkpoint: Mapping[str, Any]) -> None:
     if checkpoint["stage"] != FULL_SMB_SPEC.name:
         raise ValueError("checkpoint stage does not match Full SMB")
@@ -724,8 +950,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     train.add_argument("--epochs", type=int, default=1)
     train.add_argument("--episodes-per-epoch", type=int, default=1)
     train.add_argument("--max-steps-per-episode", type=int, default=64)
+    train.add_argument("--updates-per-epoch", type=int)
+    train.add_argument("--rollout-length", "--rollout-steps", dest="rollout_length", type=int)
+    train.add_argument("--vector-env-count", type=int, default=1)
     train.add_argument("--learning-rate", type=float, default=1e-4)
     train.add_argument("--entropy-weight", type=float, default=0.01)
+    train.add_argument("--policy-loss-weight", type=float, default=1.0)
+    train.add_argument("--representation-weight", type=float, default=0.0)
+    train.add_argument("--world-model-weight", type=float, default=0.0)
+    train.add_argument("--reward-loss-weight", type=float, default=0.0)
+    train.add_argument("--value-loss-weight", type=float, default=0.0)
+    train.add_argument("--action-aux-weight", type=float, default=0.0)
+    train.add_argument("--critic-loss-weight", type=float, default=0.0)
     train.add_argument("--reward-scale", type=float, default=1.0)
     train.add_argument("--gradient-clip-norm", type=float, default=1.0)
     train.add_argument("--deterministic-actions", action="store_true")
@@ -733,6 +969,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     train.add_argument("--resume", type=Path)
     train.add_argument("--init-checkpoint", type=Path)
     train.add_argument("--save-checkpoints", action="store_true")
+    train.add_argument("--recording-dir", type=Path)
+    train.add_argument("--recording-path", type=Path)
 
     evaluate = subparsers.add_parser("evaluate")
     _add_common_args(evaluate)
@@ -796,9 +1034,47 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="legacy alias for --perception-mode fine_tune",
     )
+    _add_reward_args(parser)
+    parser.set_defaults(deterministic=None)
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        dest="deterministic",
+        help="enable deterministic Torch algorithms",
+    )
+    parser.add_argument(
+        "--nondeterministic",
+        action="store_false",
+        dest="deterministic",
+        help="disable deterministic Torch algorithms",
+    )
     parser.add_argument("--evaluation-episodes", type=int, default=1)
     parser.add_argument("--evaluation-max-steps", type=int, default=64)
     parser.add_argument("--output-summary", type=Path)
+    parser.add_argument("--log-path", type=Path)
+    parser.add_argument("--tracking-backend", choices=TRACKING_BACKENDS, default="none")
+    parser.add_argument("--tracking-log-dir", type=Path)
+    parser.add_argument("--tracking-project", default="retroagi")
+    parser.add_argument("--tracking-run-name")
+    parser.add_argument("--tracking-mode")
+
+
+def _add_reward_args(parser: argparse.ArgumentParser) -> None:
+    for term_name in FullSMBRewardConfig().term_names:
+        parser.add_argument(
+            f"--reward-{term_name.replace('_', '-')}",
+            dest=f"reward_{term_name}",
+            type=float,
+        )
+
+
+def _reward_config_from_args(args: argparse.Namespace) -> FullSMBRewardConfig:
+    values = FullSMBRewardConfig().as_dict()
+    for term_name in FullSMBRewardConfig().term_names:
+        override = getattr(args, f"reward_{term_name}", None)
+        if override is not None:
+            values[term_name] = float(override)
+    return FullSMBRewardConfig(**values)
 
 
 def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
@@ -818,10 +1094,22 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         epochs=getattr(args, "epochs", 0),
         episodes_per_epoch=getattr(args, "episodes_per_epoch", 0),
         max_steps_per_episode=getattr(args, "max_steps_per_episode", 0),
+        updates_per_epoch=getattr(args, "updates_per_epoch", None),
+        rollout_length=getattr(args, "rollout_length", None),
+        vector_env_count=getattr(args, "vector_env_count", 1),
         learning_rate=getattr(args, "learning_rate", 1e-4),
         entropy_weight=getattr(args, "entropy_weight", 0.01),
+        policy_loss_weight=getattr(args, "policy_loss_weight", 1.0),
+        representation_weight=getattr(args, "representation_weight", 0.0),
+        world_model_weight=getattr(args, "world_model_weight", 0.0),
+        reward_loss_weight=getattr(args, "reward_loss_weight", 0.0),
+        value_loss_weight=getattr(args, "value_loss_weight", 0.0),
+        action_aux_weight=getattr(args, "action_aux_weight", 0.0),
+        critic_loss_weight=getattr(args, "critic_loss_weight", 0.0),
         reward_scale=getattr(args, "reward_scale", 1.0),
+        reward_config=_reward_config_from_args(args),
         gradient_clip_norm=getattr(args, "gradient_clip_norm", 1.0),
+        deterministic=True if args.deterministic is None else bool(args.deterministic),
         deterministic_actions=getattr(args, "deterministic_actions", False),
         device=args.device,
         evaluation_episodes=args.evaluation_episodes,
@@ -835,6 +1123,14 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         save_checkpoints=getattr(args, "save_checkpoints", False)
         or getattr(args, "checkpoint", None) is not None,
         output_summary=args.output_summary,
+        log_path=args.log_path,
+        recording_dir=getattr(args, "recording_dir", None),
+        recording_path=getattr(args, "recording_path", None),
+        tracking_backend=args.tracking_backend,
+        tracking_log_dir=args.tracking_log_dir,
+        tracking_project=args.tracking_project,
+        tracking_run_name=args.tracking_run_name,
+        tracking_mode=args.tracking_mode,
     )
 
 

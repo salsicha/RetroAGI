@@ -705,15 +705,25 @@ retroagi train --game smb --stage full \
   --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
   --perception-mode freeze \
   --epochs 1 \
-  --episodes-per-epoch 1 \
+  --updates-per-epoch 1 \
+  --rollout-steps 64 \
+  --reward-emulator-progress 1.0 \
+  --log-path artifacts/full_smb/train.jsonl \
   --checkpoint data/full_smb/policy.pth
 ```
+
+The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
+`config.reward`, `config.recording`, `config.tracking`, and
+`metadata.training`. `config.rollout.vector_env_count` records the requested
+vectorization contract; `active_vector_env_count` remains `1` until the later
+vector rollout implementation lands.
 
 Expected evidence:
 
 - `data/full_smb/transferred_policy.pth`,
 - `data/full_smb/transferred_policy.json`,
 - `data/full_smb/policy.pth` with `config.perception.mode`,
+- `artifacts/full_smb/train.jsonl`,
 - `artifacts/full_smb/transfer_vs_scratch.json`,
 - comparison fields including `action_agreement`, action histograms,
   mean entropies, mean margins, collection reward, resets, terminations, and

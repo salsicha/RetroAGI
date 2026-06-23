@@ -550,6 +550,15 @@ trainable Full SMB ViT. The selected mode, checkpoint path, trainable/frozen
 status, optimizer participation, and saved perception state are written into the
 Full SMB policy checkpoint config and metadata.
 
+`FullSMBTrainingConfig` now owns the Full SMB trainer contract: seed, selected
+device, deterministic Torch mode, rollout length, updates per epoch, requested
+vector environment count, learning rate, loss weights, adapter-owned
+`FullSMBRewardConfig`, checkpoint/resume/init paths, recording paths, structured
+log path, and optional tracking backend settings. The current online trainer is
+single-env, so checkpoints record both the requested `vector_env_count` and
+`active_vector_env_count=1`; the later vector rollout task is responsible for
+turning that request into parallel emulator execution.
+
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,
 when no scratch checkpoint exists yet, a same-architecture scratch-initialized

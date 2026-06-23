@@ -122,6 +122,8 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --init-checkpoint data/full_smb/transferred_policy.pth \
      --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
      --perception-mode freeze \
+     --updates-per-epoch 1 \
+     --rollout-steps 64 \
      --checkpoint data/full_smb/policy.pth
    retroagi compare --game smb --stage full \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
@@ -137,6 +139,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--perception-mode freeze` reuses a frozen Full SMB ViT checkpoint,
    `fine_tune` includes trainable ViT parameters in the optimizer, and `replace`
    starts from a fresh trainable Full SMB ViT.
+   Full SMB trainer checkpoints also capture the resolved rollout/update shape,
+   vector environment request, reward config, loss weights, recording paths,
+   tracking config, and deterministic mode.
    Real Full SMB emulator runs require the optional stable-retro backend:
    `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
    training do not install or build that native emulator dependency.

@@ -463,7 +463,7 @@ and playable end target.
       stability, position consistency, and bottleneck flags.
 - [x] Decide whether Full SMB policy training freezes, fine-tunes, or replaces
       Full SMB ViT perception; expose that choice in config and checkpoints.
-- [ ] Implement `FullSMBTrainingConfig` with seed, device, rollout length,
+- [x] Implement `FullSMBTrainingConfig` with seed, device, rollout length,
       epochs/updates, vector env count, learning rate, loss weights, reward
       config, checkpoint paths, resume paths, recording paths, tracking config,
       and deterministic mode.
