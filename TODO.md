@@ -441,7 +441,7 @@ and playable end target.
 - [x] Define Full SMB train/eval task sets using emulator states or level starts,
       including short smoke tasks, fixed benchmark tasks, curriculum tasks, and
       held-out generalization tasks.
-- [ ] Create and document deterministic Full SMB save-state artifacts for
+- [x] Create and document deterministic Full SMB save-state artifacts for
       starting positions, level sections, death/retry states, and benchmark
       tasks without committing copyrighted content.
 - [ ] Define Full SMB success thresholds for each fixed task: progress,

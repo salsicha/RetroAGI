@@ -293,9 +293,23 @@ The supported headless train/eval task sets are defined in
 | `fixed_benchmark` | Repeatable evaluation tasks for tuning and regression reports. |
 | `heldout_generalization` | Withheld tasks for promotion-only generalization checks. |
 
-The catalog uses stable-retro level starts such as `Level1-1` and planned
-local save-state artifacts under `local/full_smb/states/`. Those save-state
-files remain local-only and are defined by the following P9 save-state task.
+The catalog uses stable-retro level starts such as `Level1-1` and local
+save-state artifact paths under `local/full_smb/states/`. The deterministic
+recipes are defined in [full-smb-save-states.md](full-smb-save-states.md) and
+exposed by `retroagi.stages.full_smb.full_smb_save_state_plan()`. Generate the
+ignored local files only after `check-env` passes:
+
+```bash
+python -m retroagi.stages.full_smb.save_states plan \
+  --output local/full_smb/states/save_state_plan.json
+
+python -m retroagi.stages.full_smb.save_states create \
+  --output-manifest local/full_smb/states/save_state_manifest.json \
+  --overwrite
+```
+
+The generated `.state` files are local-only ROM-derived artifacts and must not
+be committed.
 
 ## Full SMB Adapter And Transfer
 

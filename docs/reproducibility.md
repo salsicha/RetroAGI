@@ -598,6 +598,43 @@ The catalog is documented in [full-smb-tasks.md](full-smb-tasks.md). Use
 on `fixed_benchmark`, and reserve `heldout_generalization` for promotion and
 regression reports.
 
+Generate the local save-state recipe manifest and local-only `.state` files:
+
+```bash
+python -m retroagi.stages.full_smb.save_states plan \
+  --output local/full_smb/states/save_state_plan.json
+
+python -m retroagi.stages.full_smb.save_states create \
+  --output-manifest local/full_smb/states/save_state_manifest.json \
+  --overwrite
+```
+
+Verify that the plan is recipe-only and that generated artifacts stay in the
+ignored local content tree:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+
+plan = json.loads(Path("local/full_smb/states/save_state_plan.json").read_text())
+manifest = json.loads(
+    Path("local/full_smb/states/save_state_manifest.json").read_text()
+)
+assert plan["copyrighted_content_committed"] is False
+assert all(
+    item["path"].startswith("local/full_smb/states/")
+    for item in plan["artifacts"]
+)
+assert all(result["bytes_written"] > 0 for result in manifest["results"])
+print("Full SMB local save-state artifacts verified")
+PY
+```
+
+The save-state workflow is documented in
+[full-smb-save-states.md](full-smb-save-states.md). Do not commit the generated
+`.state` files or ROM-derived screenshots.
+
 ## 12. Reproduce Full SMB Adapter, Inference, And Continued Training
 
 Run the headless emulator smoke path to verify the full observation and action

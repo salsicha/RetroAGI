@@ -529,3 +529,10 @@ containing:
 state and returns the restored RGB observation. Replaying the same action after
 load must produce the same next backend transition when the underlying emulator
 state API is deterministic.
+
+Deterministic local save-state recipes live in
+`retroagi.stages.full_smb.save_states` and are documented in
+[full-smb-save-states.md](full-smb-save-states.md). They define reset seeds,
+stable-retro source states, scripted actions, local output paths, and linked
+task names. The generated `.state` files are local-only ROM-derived artifacts
+under `local/full_smb/states/` and must not be committed.

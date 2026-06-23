@@ -7,6 +7,7 @@ OPERATIONS_DOC = Path("docs/operations.md")
 REPRODUCIBILITY_DOC = Path("docs/reproducibility.md")
 FULL_SMB_CONTENT_DOC = Path("docs/full-smb-content.md")
 FULL_SMB_TASKS_DOC = Path("docs/full-smb-tasks.md")
+FULL_SMB_SAVE_STATES_DOC = Path("docs/full-smb-save-states.md")
 README = Path("README.md")
 
 
@@ -52,7 +53,9 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi check-env --game smb --stage full",
             "artifacts/full_smb/env_check.json",
             "[full-smb-tasks.md](full-smb-tasks.md)",
+            "[full-smb-save-states.md](full-smb-save-states.md)",
             "heldout_generalization",
+            "python -m retroagi.stages.full_smb.save_states create",
         ):
             self.assertIn(term, text)
 
@@ -102,6 +105,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi compare --game smb --stage full",
             "python -m retro.import local/full_smb/roms",
             "retroagi check-env --game smb --stage full",
+            "python -m retroagi.stages.full_smb.save_states plan",
+            "python -m retroagi.stages.full_smb.save_states create",
             "from retroagi.stages.full_smb import full_smb_task_catalog",
         ):
             self.assertIn(command, text)
@@ -120,6 +125,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "artifacts/full_smb/transfer_vs_scratch.json",
             "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
             "artifacts/full_smb/env_check.json",
+            "local/full_smb/states/save_state_plan.json",
+            "local/full_smb/states/save_state_manifest.json",
         ):
             self.assertIn(artifact, text)
 
@@ -155,11 +162,32 @@ class TestOperationsDocumentation(unittest.TestCase):
             "`heldout_generalization`",
             "`Level1-1`",
             "`local/full_smb/states/`",
+            "[full-smb-save-states.md](full-smb-save-states.md)",
             "`smoke_1_1_spawn`",
             "`benchmark_1_1_start`",
             "`curriculum_1_1_midpipe`",
             "`heldout_8_1_long`",
             "Success thresholds are intentionally not defined",
+        ):
+            self.assertIn(term, text)
+
+    def test_full_smb_save_states_document_local_artifact_workflow(self):
+        text = FULL_SMB_SAVE_STATES_DOC.read_text(encoding="utf-8")
+
+        for term in (
+            "# Full SMB Save-State Artifacts",
+            "full_smb_save_state_plan",
+            "`starting_position`",
+            "`benchmark`",
+            "`level_section`",
+            "`death_retry`",
+            "python -m retroagi.stages.full_smb.save_states plan",
+            "python -m retroagi.stages.full_smb.save_states create",
+            "local/full_smb/states/save_state_plan.json",
+            "local/full_smb/states/save_state_manifest.json",
+            "`section_1_1_midpipe`",
+            "`death_retry_1_1_first_gap`",
+            "must not be committed",
         ):
             self.assertIn(term, text)
 

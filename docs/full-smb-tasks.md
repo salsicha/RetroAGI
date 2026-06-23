@@ -39,11 +39,12 @@ PY
 environment. These tasks can run after the ROM is imported and
 `retroagi check-env --game smb --stage full` passes.
 
-`save_state_artifact` tasks name a future local save-state artifact under
+`save_state_artifact` tasks name a local save-state artifact under
 `local/full_smb/states/`. They also declare a stable-retro base state so the
-emulator can be created before the local save state is loaded. The next P9
-task defines how those deterministic save-state artifacts are created and
-verified without committing copyrighted content.
+emulator can be created before the local save state is loaded. The deterministic
+local save-state recipes are documented in
+[full-smb-save-states.md](full-smb-save-states.md). The repository commits the
+recipes and expected paths, not ROM-derived emulator state bytes.
 
 ## Catalog Summary
 
@@ -66,11 +67,11 @@ verified without committing copyrighted content.
 Use the sets in this order:
 
 1. Run `smoke` after content setup and `check-env`.
-2. Train with the ordered `curriculum` tasks.
-3. Evaluate repeatedly on `fixed_benchmark` tasks.
-4. Touch `heldout_generalization` only for promotion or regression reports.
+2. Generate and review the local save-state artifacts.
+3. Train with the ordered `curriculum` tasks.
+4. Evaluate repeatedly on `fixed_benchmark` tasks.
+5. Touch `heldout_generalization` only for promotion or regression reports.
 
 Success thresholds are intentionally not defined in this document. The next
 threshold task sets the required progress, completion, survival, score/coins,
 time budget, death count, and return gates for the fixed benchmark tasks.
-
