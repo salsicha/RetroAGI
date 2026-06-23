@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from retroagi import promotion
 from retroagi.core import BASELINE_ARCHITECTURE_NAME
+from scripts.tests.test_full_smb_transfer import write_block_policy_checkpoint
 
 
 def _fake_experiment_manifest(
@@ -111,7 +112,24 @@ class TestPromotionPipeline(unittest.TestCase):
             def fake_run_experiment(args):
                 return _fake_experiment_manifest(args)
 
-            with patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment):
+            with (
+                patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment),
+                patch(
+                    "retroagi.promotion._run_full_smb_transfer_smoke",
+                    return_value={
+                        "name": "full-smb-transfer-smoke",
+                        "status": "passed",
+                        "passed": True,
+                        "budget": {
+                            "steps": 32,
+                            "seeds": 1,
+                            "runtime_seconds": 120.0,
+                        },
+                        "runtime_seconds": 0.01,
+                        "automatic_gates": [{"name": "mock", "passed": True}],
+                    },
+                ),
+            ):
                 exit_code, manifest = self.run_main(
                     [
                         "--output",
@@ -134,6 +152,7 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(rung_statuses["interface-smoke"], "passed")
         self.assertEqual(rung_statuses["synthetic-concept"], "passed")
         self.assertEqual(rung_statuses["block-smb-smoke"], "passed")
+        self.assertEqual(rung_statuses["full-smb-transfer-smoke"], "passed")
         self.assertEqual(rung_statuses["full-smb-fine-tuning"], "skipped")
         self.assertIn("reason", manifest["rungs"][-1])
         self.assertEqual(manifest["budget"]["name"], "small")
@@ -150,6 +169,47 @@ class TestPromotionPipeline(unittest.TestCase):
         for rung in manifest["rungs"]:
             if rung["status"] == "passed":
                 self.assertTrue(all(gate["passed"] for gate in rung["automatic_gates"]))
+
+    def test_full_smb_transfer_smoke_runs_handoff_and_continued_training(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_checkpoint = root / "artifacts" / "block_smb_smoke" / "checkpoint.pth"
+            source_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            write_block_policy_checkpoint(source_checkpoint)
+
+            exit_code, manifest = self.run_main(
+                [
+                    "--rung",
+                    "full-smb-transfer-smoke",
+                    "--output",
+                    str(root / "promotion.json"),
+                    "--artifacts-dir",
+                    str(root / "artifacts"),
+                    "--device",
+                    "cpu",
+                    "--architecture-config",
+                    "hidden_dim=8",
+                ]
+            )
+            transfer_exists = Path(
+                manifest["rungs"][0]["artifacts"]["transfer_checkpoint_path"]
+            ).exists()
+            continued_exists = Path(
+                manifest["rungs"][0]["artifacts"]["continued_checkpoint_path"]
+            ).exists()
+            summary_exists = Path(manifest["rungs"][0]["summary_path"]).exists()
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(manifest["passed"])
+        rung = manifest["rungs"][0]
+        self.assertEqual(rung["name"], "full-smb-transfer-smoke")
+        self.assertEqual(rung["status"], "passed")
+        self.assertGreater(rung["metrics"]["continued_global_step"], 0)
+        self.assertGreaterEqual(rung["metrics"]["deterministic_action"], 0)
+        self.assertTrue(all(gate["passed"] for gate in rung["automatic_gates"]))
+        self.assertTrue(transfer_exists)
+        self.assertTrue(continued_exists)
+        self.assertTrue(summary_exists)
 
     def test_medium_budget_changes_experiment_arguments(self):
         calls = []

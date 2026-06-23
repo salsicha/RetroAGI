@@ -3,29 +3,48 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import time
+from contextlib import redirect_stdout
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import numpy as np
 import torch
 
 from retroagi import experiments
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
+    SMB_ACTIONS,
     StageSpec,
     architecture_names,
     build_architecture_variant,
     get_architecture,
     parse_architecture_ablation_item,
+    save_checkpoint,
     select_device,
     to_plain_data,
 )
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
-from retroagi.stages.full_smb.adapter import FULL_SMB_SPEC
+from retroagi.stages.full_smb.adapter import (
+    FULL_SMB_SPEC,
+    FullSMBObservationConfig,
+    FullSMBStage,
+)
+from retroagi.stages.full_smb.train import FullSMBTrainingConfig, train_full_smb_policy
+from retroagi.stages.full_smb.transfer import (
+    load_transferred_full_smb_policy,
+    select_transferred_full_smb_action,
+    transfer_block_smb_checkpoint_to_full_smb,
+)
+from retroagi.stages.full_smb.vision import (
+    FullSMBVisionTransformer,
+    build_full_smb_vit_checkpoint,
+)
 from retroagi.stages.synthetic_1d.train import SYNTHETIC_1D_SPEC
 
 SUPPORTED_RUNG_STATUS = "supported"
@@ -76,9 +95,11 @@ PROMOTION_RUNGS: tuple[PromotionRung, ...] = (
     ),
     PromotionRung(
         name="full-smb-transfer-smoke",
-        description="Transfer into Full SMB and run headless seeded observation checks.",
-        status=UNSUPPORTED_RUNG_STATUS,
-        reason="Full SMB promotion smoke requires emulator artifact plumbing",
+        description=(
+            "Transfer a Block SMB policy into Full SMB, run deterministic inference, "
+            "and continue direct Full SMB training."
+        ),
+        status=SUPPORTED_RUNG_STATUS,
     ),
     PromotionRung(
         name="full-smb-transfer-vs-scratch",
@@ -408,6 +429,8 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
             results.append(_run_synthetic_concept(args, variant, budgets[rung.name]))
         elif rung.name == "block-smb-smoke":
             results.append(_run_block_smb_smoke(args, variant, budgets[rung.name]))
+        elif rung.name == "full-smb-transfer-smoke":
+            results.append(_run_full_smb_transfer_smoke(args, variant, budgets[rung.name]))
         else:
             raise ValueError(f"unsupported promotion rung {rung.name!r}")
         if results[-1]["status"] == "failed":
@@ -705,6 +728,295 @@ def _run_block_smb_smoke(
     return _run_experiment_rung("block-smb-smoke", experiment_args, budget)
 
 
+def _run_full_smb_transfer_smoke(
+    args: argparse.Namespace,
+    variant: Any,
+    budget: Mapping[str, int | float],
+) -> dict[str, Any]:
+    start_time = time.perf_counter()
+    device = select_device(args.device)
+    rung_dir = args.artifacts_dir / "full_smb_transfer_smoke"
+    summary_path = rung_dir / "handoff_summary.json"
+    full_smb_vision_path = rung_dir / "full_smb_vit.pth"
+    transfer_path = rung_dir / "transferred_policy.pth"
+    continued_checkpoint_path = rung_dir / "continued_policy.pth"
+    rung_dir.mkdir(parents=True, exist_ok=True)
+
+    source_checkpoint_path = _ensure_handoff_source_checkpoint(args, variant, rung_dir)
+    _write_promotion_full_smb_vit_checkpoint(full_smb_vision_path)
+    transfer_result = transfer_block_smb_checkpoint_to_full_smb(
+        source_checkpoint_path,
+        output_checkpoint=transfer_path,
+        full_smb_vision_checkpoint=full_smb_vision_path,
+        block_vision_checkpoint=None,
+        device=device,
+    )
+    loaded = load_transferred_full_smb_policy(
+        transfer_path,
+        full_smb_vision_checkpoint=full_smb_vision_path,
+        device=device,
+    )
+    inference = _run_deterministic_full_smb_inference(
+        loaded.model,
+        loaded.vision,
+        seed=args.seed,
+        device=device,
+    )
+    training_result = train_full_smb_policy(
+        FullSMBTrainingConfig(
+            seed=args.seed,
+            epochs=1,
+            episodes_per_epoch=max(1, int(budget["seeds"])),
+            max_steps_per_episode=max(1, int(budget["steps"])),
+            evaluation_episodes=max(1, int(budget["seeds"])),
+            evaluation_max_steps=max(1, int(budget["steps"])),
+            device=str(device),
+            init_checkpoint=transfer_path,
+            full_smb_vision_checkpoint=full_smb_vision_path,
+            checkpoint_path=continued_checkpoint_path,
+            save_checkpoints=True,
+        ),
+        make_stage=_make_promotion_full_smb_stage,
+    )
+    elapsed_seconds = time.perf_counter() - start_time
+    metrics = {
+        "deterministic_action": float(inference["action"]),
+        "deterministic_entropy": float(inference["entropy"]),
+        "deterministic_margin": float(inference["margin"]),
+        "continued_global_step": float(training_result.checkpoint["global_step"]),
+        "continued_mean_train_return": float(
+            training_result.checkpoint["metrics"]["mean_train_return"]
+        ),
+        "continued_evaluation_mean_return": float(
+            training_result.checkpoint["metrics"]["evaluation_mean_return"]
+        ),
+        "continued_evaluation_success_rate": float(
+            training_result.checkpoint["metrics"]["evaluation_success_rate"]
+        ),
+    }
+    artifacts = {
+        "source_block_checkpoint_path": str(source_checkpoint_path),
+        "full_smb_vision_checkpoint_path": str(full_smb_vision_path),
+        "transfer_checkpoint_path": str(transfer_path),
+        "continued_checkpoint_path": str(continued_checkpoint_path),
+        "summary_path": str(summary_path),
+    }
+    summary = {
+        "stage": "full-smb",
+        "source_stage": "block-smb",
+        "seed": args.seed,
+        "device": str(device),
+        "architecture": {
+            "name": transfer_result.checkpoint["architecture"]["name"],
+            "config": transfer_result.checkpoint["architecture"]["config"],
+        },
+        "budget": dict(budget),
+        "metrics": metrics,
+        "inference": inference,
+        "training": training_result.as_dict(),
+        "artifacts": artifacts,
+    }
+    summary_path.write_text(
+        json.dumps(to_plain_data(summary), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    automatic_gates = _handoff_automatic_gates(
+        metrics=metrics,
+        artifacts=artifacts,
+        budget=budget,
+        elapsed_seconds=elapsed_seconds,
+    )
+    passed = all(gate["passed"] for gate in automatic_gates)
+    return {
+        "name": "full-smb-transfer-smoke",
+        "description": (
+            "Transfer Block SMB policy weights into Full SMB, run deterministic "
+            "inference, and continue direct Full SMB training."
+        ),
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "budget": dict(budget),
+        "runtime_seconds": elapsed_seconds,
+        "automatic_gates": automatic_gates,
+        "device": str(device),
+        "metrics": metrics,
+        "artifacts": artifacts,
+        "summary_path": str(summary_path),
+    }
+
+
+def _ensure_handoff_source_checkpoint(
+    args: argparse.Namespace,
+    variant: Any,
+    rung_dir: Path,
+) -> Path:
+    previous_checkpoint = args.artifacts_dir / "block_smb_smoke" / "checkpoint.pth"
+    if previous_checkpoint.exists():
+        return previous_checkpoint
+
+    block_budget = PROMOTION_BUDGETS[args.budget]["block-smb-smoke"]
+    experiment_args = argparse.Namespace(
+        stage=["block-smb"],
+        output=rung_dir / "source_block_smb" / "manifest.json",
+        artifacts_dir=rung_dir / "source_block_smb",
+        seed=args.seed,
+        device=args.device,
+        architecture_name=args.architecture_name,
+        architecture_config=list(variant.architecture_config.items()),
+        ablation=list(variant.ablation_items),
+        gate=[],
+        synthetic_epochs=1,
+        synthetic_train_samples=16,
+        synthetic_validation_samples=8,
+        synthetic_test_samples=8,
+        block_epochs=int(block_budget["epochs"]),
+        block_episodes_per_epoch=int(block_budget["episodes_per_epoch"]),
+        block_rollout_steps=int(block_budget["rollout_steps"]),
+        block_evaluation_episodes=int(block_budget["evaluation_episodes"]),
+        block_evaluation_max_steps=int(block_budget["evaluation_max_steps"]),
+        block_fixed_scenario=None,
+        enable_block_checkpoint_transfer=False,
+    )
+    with redirect_stdout(io.StringIO()):
+        manifest = experiments.run_experiment(experiment_args)
+    experiment_args.output.parent.mkdir(parents=True, exist_ok=True)
+    experiment_args.output.write_text(
+        json.dumps(to_plain_data(manifest), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    source_checkpoint = experiment_args.artifacts_dir / "block_smb" / "checkpoint.pth"
+    if not source_checkpoint.exists():
+        raise FileNotFoundError(
+            "Full SMB handoff source Block SMB checkpoint was not created at "
+            f"{source_checkpoint}"
+        )
+    return source_checkpoint
+
+
+def _write_promotion_full_smb_vit_checkpoint(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    model = FullSMBVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+    checkpoint = build_full_smb_vit_checkpoint(
+        model,
+        epoch=1,
+        metrics={"mean_iou": 1.0, "pixel_accuracy": 1.0},
+        config={
+            "model": {
+                "hidden_dim": 16,
+                "depth": 1,
+                "heads": 4,
+                "patch_size": 16,
+                "dropout": 0.0,
+            },
+            "source": "promotion_full_smb_transfer_smoke",
+        },
+    )
+    save_checkpoint(path, checkpoint)
+
+
+def _run_deterministic_full_smb_inference(
+    model: torch.nn.Module,
+    vision: Any,
+    *,
+    seed: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    stage = _make_promotion_full_smb_stage(vision)
+    try:
+        observation = stage.reset(seed=seed)
+        batch = stage.encode_observation(observation)
+        selection = select_transferred_full_smb_action(
+            model,
+            batch,
+            deterministic=True,
+            device=device,
+        )
+    finally:
+        stage.close()
+    logits = selection.logits.float()
+    probabilities = torch.softmax(logits, dim=-1)
+    entropy = torch.distributions.Categorical(probs=probabilities).entropy()
+    top_values = torch.topk(logits, k=min(2, logits.shape[-1]), dim=-1).values
+    margin = (
+        float((top_values[:, 0] - top_values[:, 1]).mean().item())
+        if top_values.shape[-1] > 1
+        else 0.0
+    )
+    return {
+        "action": selection.action,
+        "action_name": selection.action_name,
+        "entropy": float(entropy.mean().item()),
+        "margin": margin,
+        "logits_shape": list(selection.logits.shape),
+    }
+
+
+def _make_promotion_full_smb_stage(vision: Any) -> FullSMBStage:
+    return FullSMBStage(
+        env=_PromotionTinyFullSMBEnv(),
+        vision=vision,
+        observation_config=FullSMBObservationConfig(
+            frame_skip=1,
+            frame_stack=2,
+            resize_shape=(16, 20),
+        ),
+    )
+
+
+class _PromotionTinyFullSMBEnv:
+    buttons = ("B", "A", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT")
+
+    def __init__(self) -> None:
+        self.seed = 0
+        self.step_count = 0
+
+    def reset(self, seed: int | None = None) -> tuple[np.ndarray, dict[str, Any]]:
+        self.seed = 0 if seed is None else int(seed)
+        self.step_count = 0
+        return self._observation(0), {
+            "x_pos": self.seed,
+            "y_pos": 96,
+            "score": 0,
+            "coins": 0,
+            "lives": 3,
+        }
+
+    def step(self, action: Any) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        button_vector = np.asarray(action, dtype=np.int8)
+        action_value = int(np.flatnonzero(button_vector).sum())
+        self.step_count += 1
+        terminated = self.step_count >= 8
+        return (
+            self._observation(action_value),
+            float(action_value + self.step_count),
+            terminated,
+            False,
+            {
+                "x_pos": self.seed + self.step_count,
+                "y_pos": 96,
+                "score": self.step_count * 10,
+                "coins": self.step_count % 3,
+                "lives": 3,
+                "level_complete": terminated,
+            },
+        )
+
+    def close(self) -> None:
+        pass
+
+    def _observation(self, action_value: int) -> np.ndarray:
+        base = np.arange(16 * 20, dtype=np.uint16).reshape(16, 20)
+        return np.stack(
+            (
+                (base + self.seed + self.step_count + action_value) % 256,
+                (base * 2 + self.seed + self.step_count) % 256,
+                (base * 3 + self.seed + action_value) % 256,
+            ),
+            axis=-1,
+        ).astype(np.uint8)
+
+
 def _run_experiment_rung(
     name: str,
     experiment_args: argparse.Namespace,
@@ -779,6 +1091,68 @@ def _experiment_automatic_gates(
     gates.extend(_required_metric_gates(name, stages))
     gates.extend(_finite_metric_gates(stages))
     gates.extend(_artifact_gates(stages))
+    return gates
+
+
+def _handoff_automatic_gates(
+    *,
+    metrics: Mapping[str, float],
+    artifacts: Mapping[str, str],
+    budget: Mapping[str, int | float],
+    elapsed_seconds: float,
+) -> list[dict[str, Any]]:
+    gates = [_runtime_gate(budget, elapsed_seconds)]
+    gates.append(
+        {
+            "name": "deterministic-action-in-vocabulary",
+            "kind": "contract",
+            "passed": 0 <= int(metrics["deterministic_action"]) < len(SMB_ACTIONS),
+            "actual": int(metrics["deterministic_action"]),
+            "threshold": f"0..{len(SMB_ACTIONS) - 1}",
+            "reason": (
+                None
+                if 0 <= int(metrics["deterministic_action"]) < len(SMB_ACTIONS)
+                else "selected action is outside the shared SMB action vocabulary"
+            ),
+        }
+    )
+    gates.append(
+        {
+            "name": "continued-training-advanced",
+            "kind": "metric",
+            "passed": metrics["continued_global_step"] > 0,
+            "actual": metrics["continued_global_step"],
+            "threshold": ">0",
+            "reason": (
+                None
+                if metrics["continued_global_step"] > 0
+                else "continued Full SMB training did not advance global_step"
+            ),
+        }
+    )
+    for metric, value in metrics.items():
+        gates.append(
+            {
+                "name": f"metric-finite:{metric}",
+                "kind": "numerical",
+                "passed": _is_finite_number(value),
+                "actual": value,
+                "threshold": "finite",
+                "reason": None if _is_finite_number(value) else "metric is non-finite",
+            }
+        )
+    for field, artifact_path in artifacts.items():
+        exists = Path(artifact_path).exists()
+        gates.append(
+            {
+                "name": f"artifact:{field}",
+                "kind": "artifact",
+                "passed": exists,
+                "actual": artifact_path,
+                "threshold": "exists",
+                "reason": None if exists else "artifact path does not exist",
+            }
+        )
     return gates
 
 

@@ -299,7 +299,7 @@ high-fidelity evaluations.
       the smallest promotion pipeline in CI or a documented local command.
 - [x] Update the reproducibility procedure with architecture-sweep commands and
       the expected combined manifest.
-- [ ] Add a Block SMB to Full SMB handoff rung where a policy trained on Block
+- [x] Add a Block SMB to Full SMB handoff rung where a policy trained on Block
       SMB can load into Full SMB, run deterministic inference, and continue
       direct Full SMB training from the transferred checkpoint while preserving
       architecture-specific checkpoint contracts.
