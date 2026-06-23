@@ -25,6 +25,11 @@ Record the exact device, seed, resolved config, code revision, checkpoint path,
 and metric payload with every non-smoke experiment. Versioned checkpoints write
 a `.json` sidecar beside the `.pth` checkpoint with this trace metadata.
 
+The top-level `retroagi` CLI separates game selection from fidelity-rung
+selection. Use `--game smb --stage synthetic|block|full` for the game-neutral
+path; legacy SMB-specific stage aliases such as `synthetic-1d`, `block-smb`,
+and `full-smb` remain accepted for existing scripts.
+
 ## Progressive-Resolution Responsibilities
 
 Use the stages in this order when evaluating an architecture concept:
@@ -57,7 +62,7 @@ failures before a concept reaches any game-like environment.
 | --- | --- |
 | Hardware | CPU is sufficient and required. CUDA or MPS may be used through `SyntheticTrainingConfig.device`, but GPU is not required for acceptance. |
 | Runtime | The focused Synthetic 1D test suite is expected to finish in under 20 seconds on the current development machine. The baseline held-out training demonstration is expected to run in about 7 seconds. |
-| Command | `python -m retroagi.stages.synthetic_1d.train` or `retroagi train --stage synthetic-1d`. |
+| Command | `python -m retroagi.stages.synthetic_1d.train` or `retroagi train --game smb --stage synthetic`. |
 | Expected Metrics | `controller_mse`, `controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`. A passing learned policy beats both the seeded random and train-marginal simple baselines, with the tested margin at least 25 percent below the simple baseline on `controller_mse`. |
 | Artifact Locations | No artifact is written by the default CLI path. Programmatic runs that set `SyntheticTrainingConfig(save_checkpoints=True, checkpoint_path=...)` write the versioned checkpoint and sidecar at that checkpoint path. Use `artifacts/synthetic_1d/<run>/` for local run summaries when preserving experiments. |
 
@@ -79,7 +84,7 @@ training unless a run explicitly opts into fine-tuning.
 | Hardware | CPU works for diagnostics and small training runs. CUDA or Apple MPS is recommended for full default training. |
 | Runtime | Perception diagnostics are intended as short preflight checks. Full default training collects procedural rollouts every epoch, so runtime scales with `--epochs`, `--samples-per-epoch`, and backend speed. |
 | Train Command | `python scripts/vit/train_block_vit.py --epochs 20 --samples-per-epoch 2048 --val-samples 512 --device auto`. |
-| Diagnostic Command | `retroagi diagnose-vision --stage block-smb --vision-checkpoint data/block_vit/block_vit.pth --samples 64 --rollout-steps 32`. |
+| Diagnostic Command | `retroagi diagnose-vision --game smb --stage block --vision-checkpoint data/block_vit/block_vit.pth --samples 64 --rollout-steps 32`. |
 | Expected Metrics | Training writes `loss`, `semantic_loss`, `position_loss`, `accuracy`, `foreground_accuracy`, and `mean_iou`. Diagnostics add `position_rmse`, `position_within_tolerance`, `thresholds`, `bottleneck`, and `bottleneck_reasons`. The default diagnostic thresholds are at least 0.95 accuracy, 0.90 foreground accuracy, 0.70 mean IoU, at most 0.06 position RMSE, and at least 0.90 position within tolerance. |
 | Artifact Locations | Default checkpoint: `data/block_vit/block_vit.pth`. Its sidecar is `data/block_vit/block_vit.json`. Diagnostic summaries should be written with `--output artifacts/block_smb/vision_diagnostic.json` when preserving a run. |
 
@@ -93,9 +98,9 @@ deterministic evaluation against the fixed-scenario success thresholds.
 | --- | --- |
 | Hardware | CPU is valid for smoke training and deterministic evaluation. CUDA or Apple MPS is recommended for real policy sweeps. |
 | Runtime | CI smoke training uses tiny CPU settings. Real runs scale with `--epochs`, `--episodes-per-epoch`, `--rollout-steps`, generated scenarios, evaluation cadence, and whether recording is enabled. |
-| Train Command | `retroagi train --stage block-smb --epochs 5 --vision-checkpoint data/block_vit/block_vit.pth --checkpoint data/block_smb/policy.pth --output artifacts/block_smb/latest/run_summary.json --log-path artifacts/block_smb/latest/events.jsonl`. |
-| Resume Command | `retroagi resume --stage block-smb --checkpoint data/block_smb/policy.pth --epochs 10`. |
-| Evaluation Command | `retroagi evaluate --stage block-smb --checkpoint data/block_smb/policy.pth --evaluation-episodes 3 --evaluation-max-steps 200`. |
+| Train Command | `retroagi train --game smb --stage block --epochs 5 --vision-checkpoint data/block_vit/block_vit.pth --checkpoint data/block_smb/policy.pth --output artifacts/block_smb/latest/run_summary.json --log-path artifacts/block_smb/latest/events.jsonl`. |
+| Resume Command | `retroagi resume --game smb --stage block --checkpoint data/block_smb/policy.pth --epochs 10`. |
+| Evaluation Command | `retroagi evaluate --game smb --stage block --checkpoint data/block_smb/policy.pth --evaluation-episodes 3 --evaluation-max-steps 200`. |
 | Expected Metrics | Training logs separated objective terms: `loss_representation`, `loss_dynamics`, `loss_reward`, `loss_value`, `loss_policy`, `loss_critic_feedback`, `loss_imagined_rollout`, `loss_total`, `gradient_norm`, and `mean_return`. Evaluation logs `eval_mean_return`, `eval_success_rate`, `eval_threshold_pass_rate`, `eval_tuning_score`, `success_thresholds_met`, and per-scenario `threshold_met` diagnostics. A known-good Block SMB policy must pass every threshold in [block-smb-success-thresholds.md](block-smb-success-thresholds.md). |
 | Artifact Locations | Policy checkpoint: `data/block_smb/policy.pth`. Sidecar: `data/block_smb/policy.json`. Run summary: `artifacts/block_smb/latest/run_summary.json`. Structured events: `artifacts/block_smb/latest/events.jsonl`. Optional TensorBoard or W&B local files: `artifacts/block_smb/tracking/` unless `--tracking-log-dir` is set. Evaluation recordings: `artifacts/block_smb/recordings/` or the explicit `--record-dir`. Known-good scripted baseline: `artifacts/block_smb/known_good_scripted_seed20260622/`. |
 
@@ -128,9 +133,9 @@ from the transferred model checkpoints at full fidelity.
 | --- | --- |
 | Hardware | CPU is required for headless smoke tests and transfer checks. GPU acceleration is not required for the adapter; CUDA or MPS may be used for model inference comparisons. |
 | Runtime | Headless smoke checks should stay short at the default 200 steps. Comparison runtime scales linearly with `--steps` because transferred and scratch policies are evaluated on the same observation stream. |
-| Smoke Command | `retroagi evaluate --stage full-smb --steps 500 --seed 0 --encode-observations`. |
-| Transfer Command | `retroagi transfer --stage full-smb --block-policy-checkpoint data/block_smb/policy.pth --full-smb-vision-checkpoint data/vit/full_smb_vit.pth --output-checkpoint data/full_smb/transferred_policy.pth`. |
-| Compare Command | `retroagi compare --stage full-smb --transfer-checkpoint data/full_smb/transferred_policy.pth --output artifacts/full_smb/transfer_vs_scratch.json`. |
+| Smoke Command | `retroagi evaluate --game smb --stage full --steps 500 --seed 0 --encode-observations`. |
+| Transfer Command | `retroagi transfer --game smb --stage full --block-policy-checkpoint data/block_smb/policy.pth --full-smb-vision-checkpoint data/vit/full_smb_vit.pth --output-checkpoint data/full_smb/transferred_policy.pth`. |
+| Compare Command | `retroagi compare --game smb --stage full --transfer-checkpoint data/full_smb/transferred_policy.pth --output artifacts/full_smb/transfer_vs_scratch.json`. |
 | Expected Metrics | Smoke output reports `steps`, `resets`, `episodes`, and total `reward`. Transfer checkpoints preserve source policy metrics and transfer provenance. Comparisons report `action_agreement`, transfer and scratch action histograms, mean entropies, mean margins, `collection_reward`, resets, completed episodes, terminated count, and truncated count. |
 | Artifact Locations | Transfer checkpoint: `data/full_smb/transferred_policy.pth` and sidecar `data/full_smb/transferred_policy.json`. Required Full SMB vision checkpoint: `data/vit/full_smb_vit.pth`. Comparison summary: `artifacts/full_smb/transfer_vs_scratch.json`. Smoke runs do not write artifacts unless wrapped by a caller; preserve terminal output or add an explicit comparison output for retained experiments. |
 

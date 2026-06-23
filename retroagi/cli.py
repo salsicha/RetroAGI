@@ -6,16 +6,18 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
+from retroagi.core import game_plugin_names, get_game_plugin
+
 STAGE_ALIASES = {
-    "synthetic-1d": "synthetic-1d",
-    "synthetic_1d": "synthetic-1d",
-    "synthetic": "synthetic-1d",
-    "block-smb": "block-smb",
-    "block_smb": "block-smb",
-    "block": "block-smb",
-    "full-smb": "full-smb",
-    "full_smb": "full-smb",
-    "full": "full-smb",
+    "synthetic-1d": "synthetic",
+    "synthetic_1d": "synthetic",
+    "synthetic": "synthetic",
+    "block-smb": "block",
+    "block_smb": "block",
+    "block": "block",
+    "full-smb": "full",
+    "full_smb": "full",
+    "full": "full",
 }
 
 
@@ -23,20 +25,43 @@ def _stage_name(value: str) -> str:
     try:
         return STAGE_ALIASES[value.lower()]
     except KeyError as exc:
-        choices = ", ".join(sorted({"synthetic-1d", "block-smb", "full-smb"}))
+        choices = ", ".join(sorted(STAGE_ALIASES))
         raise argparse.ArgumentTypeError(
             f"unknown stage {value!r}; expected one of: {choices}"
         ) from exc
 
 
+def _game_name(value: str) -> str:
+    name = value.lower()
+    if name in game_plugin_names():
+        return name
+    available = ", ".join(game_plugin_names())
+    raise argparse.ArgumentTypeError(
+        f"unknown game {value!r}; available game plugins: {available}"
+    )
+
+
+def _add_game_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--game",
+        default="smb",
+        type=_game_name,
+        help="game profile to run; default: smb",
+    )
+
+
 def _add_stage_arg(parser: argparse.ArgumentParser) -> None:
+    _add_game_arg(parser)
     parser.add_argument(
         "--stage",
         "--env",
         dest="stage",
         required=True,
         type=_stage_name,
-        help="stage/environment to run: synthetic-1d, block-smb, or full-smb",
+        help=(
+            "game-neutral stage to run: synthetic, block, or full; legacy "
+            "synthetic-1d, block-smb, and full-smb aliases are accepted"
+        ),
     )
 
 
@@ -45,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="retroagi",
         description="Run RetroAGI training, evaluation, resume, and stage utilities.",
         epilog=(
+            "Select the game with --game and the fidelity rung with --stage. "
             "Stage-specific options after --stage/--env are forwarded to the "
             "selected implementation. Use retroagi-block-smb for the legacy "
             "Block SMB-only entry point."
@@ -111,15 +137,19 @@ def run(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         return _run_promotion(stage_args)
     if command == "report":
         return _run_report(stage_args)
+    game_plugin = get_game_plugin(str(args.game))
     stage = str(args.stage)
+    game_plugin.stage_adapter(stage)
 
-    if stage == "block-smb":
+    if game_plugin.name != "smb":
+        raise ValueError(f"game {game_plugin.name!r} does not have CLI runners yet")
+    if stage == "block":
         return _run_block_smb(args, stage_args)
-    if stage == "full-smb":
+    if stage == "full":
         return _run_full_smb(args, stage_args)
-    if stage == "synthetic-1d":
+    if stage == "synthetic":
         return _run_synthetic_1d(args, stage_args)
-    raise ValueError(f"unsupported stage {stage!r}")
+    raise ValueError(f"unsupported stage {stage!r} for game {game_plugin.name!r}")
 
 
 def _run_block_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:

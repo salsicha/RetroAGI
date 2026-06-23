@@ -241,7 +241,7 @@ prove the CLI, configuration capture, structured logs, and deterministic
 evaluation path are wired correctly.
 
 ```bash
-retroagi train --stage block-smb \
+retroagi train --game smb --stage block \
   --epochs 1 \
   --episodes-per-epoch 1 \
   --rollout-steps 2 \
@@ -302,7 +302,7 @@ Expected evidence:
 First verify the tracked or supplied Block ViT checkpoint:
 
 ```bash
-retroagi diagnose-vision --stage block-smb \
+retroagi diagnose-vision --game smb --stage block \
   --vision-checkpoint data/block_vit/block_vit.pth \
   --samples 64 \
   --rollout-steps 32 \
@@ -333,7 +333,7 @@ Run a traceable policy training job with an explicit seed, checkpoint,
 structured log, and run summary:
 
 ```bash
-retroagi train --stage block-smb \
+retroagi train --game smb --stage block \
   --seed 0 \
   --epochs 5 \
   --episodes-per-epoch 2 \
@@ -347,7 +347,7 @@ retroagi train --stage block-smb \
 Resume from the same checkpoint to verify continuity:
 
 ```bash
-retroagi resume --stage block-smb \
+retroagi resume --game smb --stage block \
   --checkpoint data/block_smb/policy.pth \
   --save-checkpoint data/block_smb/policy.pth \
   --epochs 10 \
@@ -358,7 +358,7 @@ retroagi resume --stage block-smb \
 Evaluate against the fixed-scenario threshold protocol:
 
 ```bash
-retroagi evaluate --stage block-smb \
+retroagi evaluate --game smb --stage block \
   --checkpoint data/block_smb/policy.pth \
   --evaluation-episodes 3 \
   --evaluation-max-steps 200 \
@@ -368,7 +368,7 @@ retroagi evaluate --stage block-smb \
 Record deterministic evaluation artifacts:
 
 ```bash
-retroagi record --stage block-smb \
+retroagi record --game smb --stage block \
   --checkpoint data/block_smb/policy.pth \
   --evaluation-episodes 3 \
   --evaluation-max-steps 200 \
@@ -428,7 +428,7 @@ Run the headless emulator smoke path to verify the full observation and action
 contract:
 
 ```bash
-retroagi evaluate --stage full-smb \
+retroagi evaluate --game smb --stage full \
   --steps 500 \
   --seed 0 \
   --encode-observations
@@ -438,7 +438,7 @@ Transfer the Block SMB policy into the Full SMB contract only after the Full SMB
 ViT asset-synthetic checkpoint exists:
 
 ```bash
-retroagi transfer --stage full-smb \
+retroagi transfer --game smb --stage full \
   --block-policy-checkpoint data/block_smb/policy.pth \
   --block-vision-checkpoint data/block_vit/block_vit.pth \
   --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
@@ -450,7 +450,7 @@ observation stream, then use the Full SMB training command to continue learning
 from the transferred checkpoint when the emulator setup is available:
 
 ```bash
-retroagi compare --stage full-smb \
+retroagi compare --game smb --stage full \
   --transfer-checkpoint data/full_smb/transferred_policy.pth \
   --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
   --steps 128 \

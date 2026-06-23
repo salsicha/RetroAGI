@@ -178,6 +178,55 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_game_and_stage_are_independent_top_level_options(self):
+        with patch("retroagi.stages.block_smb.cli.main", return_value=0) as block_main:
+            block_exit = cli.main(
+                [
+                    "train",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "block",
+                    "--epochs",
+                    "2",
+                ]
+            )
+
+        self.assertEqual(block_exit, 0)
+        block_main.assert_called_once_with(["train", "--epochs", "2"])
+
+        with patch("retroagi.stages.full_smb.run.main") as run_full_smb:
+            full_exit = cli.main(
+                [
+                    "evaluate",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "full",
+                    "--steps",
+                    "3",
+                    "--seed",
+                    "9",
+                ]
+            )
+
+        self.assertEqual(full_exit, 0)
+        run_full_smb.assert_called_once_with(
+            num_steps=3,
+            seed=9,
+            render=False,
+            encode_observations=False,
+        )
+
+    def test_unknown_game_fails_before_stage_dispatch(self):
+        stream = io.StringIO()
+        with redirect_stderr(stream):
+            with self.assertRaises(SystemExit) as raised:
+                cli.main(["train", "--game", "missing", "--stage", "block"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("unknown game 'missing'", stream.getvalue())
+
     def test_block_smb_resume_rewrites_to_train_resume(self):
         with patch("retroagi.stages.block_smb.cli.main", return_value=0) as block_main:
             exit_code = cli.main(

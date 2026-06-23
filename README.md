@@ -103,26 +103,31 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
 2. Run a curriculum stage:
    ```bash
    python -m retroagi.stages.synthetic_1d.train
-   retroagi train --stage block-smb --epochs 5 \
+   retroagi train --game smb --stage block --epochs 5 \
      --vision-checkpoint data/block_vit/block_vit.pth \
      --checkpoint data/block_smb/policy.pth \
      --output artifacts/block_smb/latest/run_summary.json
-   retroagi resume --stage block-smb --checkpoint data/block_smb/policy.pth --epochs 10
-   retroagi evaluate --stage block-smb --checkpoint data/block_smb/policy.pth
-   retroagi record --stage block-smb --checkpoint data/block_smb/policy.pth --record-dir artifacts/block_smb/recordings
-   retroagi transfer --stage full-smb \
+   retroagi resume --game smb --stage block \
+     --checkpoint data/block_smb/policy.pth --epochs 10
+   retroagi evaluate --game smb --stage block \
+     --checkpoint data/block_smb/policy.pth
+   retroagi record --game smb --stage block \
+     --checkpoint data/block_smb/policy.pth \
+     --record-dir artifacts/block_smb/recordings
+   retroagi transfer --game smb --stage full \
      --block-policy-checkpoint data/block_smb/policy.pth \
      --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
      --output-checkpoint data/full_smb/transferred_policy.pth
-   retroagi compare --stage full-smb \
+   retroagi compare --game smb --stage full \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
      --output artifacts/full_smb/transfer_vs_scratch.json
-   retroagi evaluate --stage full-smb --steps 500 --seed 0
+   retroagi evaluate --game smb --stage full --steps 500 --seed 0
    ```
-   The `retroagi` command is the preferred entry point for stage selection.
-   Stage-specific options are forwarded to the selected implementation; the
-   legacy `retroagi-block-smb` command remains available for Block SMB-only
-   workflows.
+   The `retroagi` command is the preferred entry point for selecting a game and
+   fidelity rung. Use `--game smb --stage synthetic|block|full`; legacy stage
+   aliases such as `block-smb` and `full-smb` remain accepted. Stage-specific
+   options are forwarded to the selected implementation; the legacy
+   `retroagi-block-smb` command remains available for Block SMB-only workflows.
    Real Full SMB emulator runs require the optional stable-retro backend:
    `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
    training do not install or build that native emulator dependency.

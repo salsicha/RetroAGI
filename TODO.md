@@ -372,7 +372,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Add a game plugin registry that loads game profiles, stage adapters,
       vision encoders, reward configs, success thresholds, and asset pipelines
       by name.
-- [ ] Extend the top-level CLI to accept `--game` independently from `--stage`,
+- [x] Extend the top-level CLI to accept `--game` independently from `--stage`,
       for example `retroagi train --game smb --stage block` and later
       `retroagi train --game <new-game> --stage synthetic|block|full`.
 - [ ] Add a stage-resolution naming convention that is game-neutral:

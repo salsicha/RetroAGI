@@ -72,11 +72,11 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi promote",
             "retroagi experiment",
             "retroagi report",
-            "retroagi train --stage block-smb",
-            "retroagi diagnose-vision --stage block-smb",
-            "retroagi evaluate --stage full-smb",
-            "retroagi transfer --stage full-smb",
-            "retroagi compare --stage full-smb",
+            "retroagi train --game smb --stage block",
+            "retroagi diagnose-vision --game smb --stage block",
+            "retroagi evaluate --game smb --stage full",
+            "retroagi transfer --game smb --stage full",
+            "retroagi compare --game smb --stage full",
         ):
             self.assertIn(command, text)
 
