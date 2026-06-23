@@ -95,6 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
         "promote",
         help="run progressive-resolution promotion checks for an architecture",
     )
+    subparsers.add_parser(
+        "report",
+        help="build an architecture sweep comparison report from saved manifests",
+    )
 
     return parser
 
@@ -105,6 +109,8 @@ def run(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         return _run_experiment(stage_args)
     if command == "promote":
         return _run_promotion(stage_args)
+    if command == "report":
+        return _run_report(stage_args)
     stage = str(args.stage)
 
     if stage == "block-smb":
@@ -195,6 +201,12 @@ def _run_promotion(stage_args: Sequence[str]) -> int:
     from retroagi import promotion
 
     return int(promotion.main(list(stage_args)))
+
+
+def _run_report(stage_args: Sequence[str]) -> int:
+    from retroagi import reports
+
+    return int(reports.main(list(stage_args)))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -61,6 +61,28 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_report_command_forwards_report_arguments(self):
+        with patch("retroagi.reports.main", return_value=0) as reports_main:
+            exit_code = cli.main(
+                [
+                    "report",
+                    "--input",
+                    "artifacts/promotions/baseline.json",
+                    "--output",
+                    "artifacts/promotions/report.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        reports_main.assert_called_once_with(
+            [
+                "--input",
+                "artifacts/promotions/baseline.json",
+                "--output",
+                "artifacts/promotions/report.json",
+            ]
+        )
+
     def test_synthetic_1d_train_forwards_stage_arguments(self):
         with patch("retroagi.stages.synthetic_1d.cli.main", return_value=0) as synthetic_main:
             exit_code = cli.main(

@@ -272,9 +272,12 @@ high-fidelity evaluations.
       Promotion rungs now record automatic runtime, finite-number,
       required-metric, and artifact-existence gates; later selected rungs are
       marked stopped after the first gate failure.
-- [ ] Produce a comparison report for architecture sweeps with per-stage metrics,
+- [x] Produce a comparison report for architecture sweeps with per-stage metrics,
       artifact links, pass/fail gates, runtime, selected device, and regression
       deltas against the baseline architecture.
+      `retroagi report` now reads experiment or promotion manifests, flattens
+      per-stage/rung rows, carries metrics/gates/artifacts/runtime/device, and
+      computes numeric deltas against a selected baseline architecture/config.
 - [ ] Add architecture-level ablation support so variants can disable or replace
       vision, hierarchy, world model, critic feedback, recurrent state, target
       networks, controller schedules, and auxiliary objectives consistently
