@@ -19,6 +19,7 @@ from retroagi.core import (
     get_architecture,
     load_checkpoint,
     save_checkpoint,
+    validate_checkpoint_compatibility,
 )
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
 from retroagi.stages.block_smb.train import (
@@ -272,10 +273,54 @@ def _load_block_policy_source(
             f"source policy checkpoint kind must be {BLOCK_SMB_CHECKPOINT_KIND!r}, "
             f"got {checkpoint['checkpoint_kind']!r}"
         )
-    if "model" not in checkpoint["states"]:
-        raise ValueError("source policy checkpoint is missing states.model")
+    architecture = _validate_policy_checkpoint_architecture(
+        checkpoint,
+        expected_stage=BLOCK_SMB_SPEC,
+        checkpoint_kind=BLOCK_SMB_CHECKPOINT_KIND,
+        context="source policy checkpoint",
+    )
+    if not architecture.supports_stage(FULL_SMB_SPEC):
+        raise ValueError(
+            "source policy checkpoint architecture "
+            f"{architecture.name!r} does not support transfer to {FULL_SMB_SPEC.name!r}"
+        )
     _validate_transfer_dimensions(checkpoint)
     return checkpoint
+
+
+def _validate_policy_checkpoint_architecture(
+    checkpoint: Mapping[str, Any],
+    *,
+    expected_stage: Any,
+    checkpoint_kind: str,
+    context: str,
+) -> Any:
+    architecture = _checkpoint_architecture_spec(checkpoint)
+    validate_checkpoint_compatibility(
+        checkpoint,
+        stage=expected_stage,
+        architecture=architecture,
+        checkpoint_kind=checkpoint_kind,
+        required_states=("model",),
+        context=context,
+    )
+    expected_contract = BASELINE_ARCHITECTURE_SPEC.output_contract
+    if architecture.output_contract != expected_contract:
+        raise ValueError(
+            f"{context} requires architecture output contract "
+            f"{expected_contract!r}, got {architecture.output_contract!r}"
+        )
+    return architecture
+
+
+def _checkpoint_architecture_spec(checkpoint: Mapping[str, Any]) -> Any:
+    architecture = checkpoint.get("architecture", {})
+    if isinstance(architecture, Mapping) and architecture.get("name"):
+        return get_architecture(str(architecture["name"]))
+    config = checkpoint.get("config", {})
+    if isinstance(config, Mapping) and config.get("architecture_name"):
+        return get_architecture(str(config["architecture_name"]))
+    return BASELINE_ARCHITECTURE_SPEC
 
 
 def _validate_transfer_dimensions(checkpoint: Mapping[str, Any]) -> None:
@@ -303,11 +348,16 @@ def policy_architecture_from_checkpoint(
 ) -> tuple[str, dict[str, Any]]:
     """Resolve policy architecture identity from new or legacy checkpoint config."""
 
+    architecture = checkpoint.get("architecture", {})
     config = checkpoint.get("config", {})
     if not isinstance(config, Mapping):
         config = {}
-    architecture_name = str(config.get("architecture_name", BASELINE_ARCHITECTURE_NAME))
-    architecture_config = config.get("architecture_config")
+    if isinstance(architecture, Mapping) and architecture.get("name"):
+        architecture_name = str(architecture["name"])
+        architecture_config = architecture.get("config", config.get("architecture_config"))
+    else:
+        architecture_name = str(config.get("architecture_name", BASELINE_ARCHITECTURE_NAME))
+        architecture_config = config.get("architecture_config")
     if isinstance(architecture_config, Mapping):
         resolved = dict(architecture_config)
         if "hidden_dim" in resolved:
@@ -483,8 +533,12 @@ def _validate_transfer_checkpoint(checkpoint: Mapping[str, Any], path: Path) -> 
         raise ValueError(f"{path} is not a transferred Full SMB policy checkpoint")
     if checkpoint["checkpoint_kind"] != FULL_SMB_TRANSFER_CHECKPOINT_KIND:
         raise ValueError(f"{path} has unsupported checkpoint kind")
-    if "model" not in checkpoint["states"]:
-        raise ValueError(f"{path} is missing states.model")
+    _validate_policy_checkpoint_architecture(
+        checkpoint,
+        expected_stage=FULL_SMB_SPEC,
+        checkpoint_kind=FULL_SMB_TRANSFER_CHECKPOINT_KIND,
+        context=str(path),
+    )
 
 
 def _optional_path(value: Any) -> Optional[Path]:

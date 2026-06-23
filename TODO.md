@@ -289,7 +289,7 @@ high-fidelity evaluations.
 - [x] Define architecture-specific checkpoint schema extensions and migration
       rules so multiple model families can coexist without ambiguous state
       loading.
-- [ ] Add tests proving incompatible architecture checkpoints fail before state
+- [x] Add tests proving incompatible architecture checkpoints fail before state
       loading and compatible checkpoints can transfer across Block SMB and Full
       SMB when their declared contracts match.
 - [ ] Implement direct Full SMB policy fine-tuning, resume, evaluation, and

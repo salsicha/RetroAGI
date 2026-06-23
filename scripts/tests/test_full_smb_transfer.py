@@ -11,8 +11,12 @@ import torch
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
+    BASELINE_ARCHITECTURE_SPEC,
+    ArchitectureSpec,
     build_architecture,
     build_checkpoint,
+    get_architecture,
+    register_architecture,
     save_checkpoint,
 )
 from retroagi.stages.block_smb import (
@@ -153,6 +157,26 @@ def write_block_policy_checkpoint(path: Path):
     return model, config
 
 
+def incompatible_transfer_architecture() -> ArchitectureSpec:
+    name = "unit_test_incompatible_full_smb_transfer_architecture"
+    try:
+        return get_architecture(name)
+    except KeyError:
+        spec = ArchitectureSpec(
+            name=name,
+            factory=BASELINE_ARCHITECTURE_SPEC.factory,
+            supported_stage_names=("block_smb", "full_smb"),
+            checkpoint_model_name=name,
+            checkpoint_compatibility_policy=(
+                BASELINE_ARCHITECTURE_SPEC.checkpoint_compatibility_policy
+            ),
+            output_contract=f"{name}.forward.v1",
+            configurable_hyperparameters=BASELINE_ARCHITECTURE_SPEC.configurable_hyperparameters,
+        )
+        register_architecture(spec)
+        return spec
+
+
 class TestFullSMBTransfer(unittest.TestCase):
     def test_block_policy_transfers_to_full_smb_checkpoint_and_stage_batch(self):
         with TemporaryDirectory() as tmpdir:
@@ -212,6 +236,18 @@ class TestFullSMBTransfer(unittest.TestCase):
             self.assertEqual(
                 result.checkpoint["metadata"]["architecture"]["name"],
                 BASELINE_ARCHITECTURE_NAME,
+            )
+            self.assertEqual(
+                result.source_checkpoint["architecture"]["name"],
+                BASELINE_ARCHITECTURE_NAME,
+            )
+            self.assertEqual(
+                result.checkpoint["architecture"]["name"],
+                BASELINE_ARCHITECTURE_NAME,
+            )
+            self.assertEqual(
+                loaded.checkpoint["architecture"]["output_contract"],
+                BASELINE_ARCHITECTURE_SPEC.output_contract,
             )
             self.assertEqual(result.full_smb_vision_path, full_vision_path)
             self.assertEqual(loaded.output_path, output_path)
@@ -282,6 +318,46 @@ class TestFullSMBTransfer(unittest.TestCase):
             save_checkpoint(source_policy_path, checkpoint)
 
             with self.assertRaisesRegex(ValueError, "source policy stage"):
+                transfer_block_smb_checkpoint_to_full_smb(
+                    source_policy_path,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    block_vision_checkpoint=None,
+                    device="cpu",
+                )
+
+    def test_transfer_rejects_incompatible_architecture_contract_before_state_load(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "bad_architecture_contract.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            architecture = incompatible_transfer_architecture()
+            write_full_smb_vision_checkpoint(full_vision_path)
+            checkpoint = build_checkpoint(
+                stage=BLOCK_SMB_SPEC.name,
+                model_name=BLOCK_SMB_MODEL_NAME,
+                checkpoint_kind=BLOCK_SMB_CHECKPOINT_KIND,
+                config={
+                    "architecture_name": architecture.name,
+                    "architecture_config": {
+                        "hidden_dim": 8,
+                        "controller_schedule": "linear",
+                    },
+                },
+                states={"model": {"not_a_policy_weight": torch.tensor([1.0])}},
+                specs={
+                    "stage": {
+                        "name": BLOCK_SMB_SPEC.name,
+                        "seq_len_a": BLOCK_SMB_SPEC.seq_len_a,
+                        "seq_len_b": BLOCK_SMB_SPEC.seq_len_b,
+                        "seq_len_c": BLOCK_SMB_SPEC.seq_len_c,
+                        "ratio_bc": BLOCK_SMB_SPEC.ratio_bc,
+                        "vocab_size": BLOCK_SMB_SPEC.vocab_size,
+                    }
+                },
+            )
+            save_checkpoint(source_policy_path, checkpoint)
+
+            with self.assertRaisesRegex(ValueError, "architecture output contract"):
                 transfer_block_smb_checkpoint_to_full_smb(
                     source_policy_path,
                     full_smb_vision_checkpoint=full_vision_path,
