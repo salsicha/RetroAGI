@@ -75,6 +75,15 @@ sizes/seeds, shape contract, and metadata such as `pixel_free` and
 `emulator_free`. SMB declares its existing Synthetic 1D generator as
 `synthetic_1d_concept` under `SMB_GAME_SPEC.synthetic_data`.
 
+`BlockGameSpec` is the game-owned mid-fidelity simulator contract. It declares
+the block-stage adapter, environment implementation, simplified physics model,
+native observation kind, symbolic state fields, exact semantic/position label
+sources, fixed scenario files, procedural scenario generator, reset modes, and
+capability metadata such as `fast_reset` and `exact_semantic_labels`. SMB
+declares its current pygame-ce simulator as `SMB_GAME_SPEC.block_game`, which
+gives future games the same place to describe their simplified training rung
+without adding game assumptions to shared trainers.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

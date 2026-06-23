@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .actions import (
     SMB_ACTION_SPECS,
@@ -57,6 +57,86 @@ class StageLadderEntry:
 
 
 @dataclass(frozen=True)
+class BlockGameSpec:
+    """Game-owned contract for a fast symbolic mid-fidelity simulator."""
+
+    game_name: str
+    name: str
+    stage_name: str
+    adapter: str
+    environment: str
+    physics: str
+    observation_kind: str
+    symbolic_state: tuple[str, ...]
+    semantic_classes: tuple[str, ...]
+    exact_label_sources: Mapping[str, str]
+    fixed_scenarios: Mapping[str, str]
+    procedural_scenario_generator: str
+    reset_modes: tuple[str, ...]
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.game_name:
+            raise ValueError("block game spec game_name must be non-empty")
+        if not self.name:
+            raise ValueError("block game spec name must be non-empty")
+        if not self.stage_name:
+            raise ValueError(f"block game spec {self.name!r} must define stage_name")
+        if not self.adapter:
+            raise ValueError(f"block game spec {self.name!r} must define adapter")
+        if not self.environment:
+            raise ValueError(f"block game spec {self.name!r} must define environment")
+        if not self.physics:
+            raise ValueError(f"block game spec {self.name!r} must define physics")
+        if not self.observation_kind:
+            raise ValueError(
+                f"block game spec {self.name!r} must define observation_kind"
+            )
+        if not self.symbolic_state:
+            raise ValueError(
+                f"block game spec {self.name!r} must define symbolic_state"
+            )
+        if not self.semantic_classes:
+            raise ValueError(
+                f"block game spec {self.name!r} must define semantic_classes"
+            )
+        if not self.exact_label_sources:
+            raise ValueError(
+                f"block game spec {self.name!r} must define exact_label_sources"
+            )
+        if not self.fixed_scenarios:
+            raise ValueError(
+                f"block game spec {self.name!r} must define fixed_scenarios"
+            )
+        if not self.procedural_scenario_generator:
+            raise ValueError(
+                f"block game spec {self.name!r} must define procedural_scenario_generator"
+            )
+        if not self.reset_modes:
+            raise ValueError(f"block game spec {self.name!r} must define reset_modes")
+
+    @property
+    def fixed_scenario_names(self) -> tuple[str, ...]:
+        return tuple(self.fixed_scenarios)
+
+    def fixed_scenario_source(self, name: str) -> str:
+        try:
+            return self.fixed_scenarios[name]
+        except KeyError as exc:
+            raise KeyError(
+                f"unknown fixed block scenario {name!r} for {self.name!r}"
+            ) from exc
+
+    def exact_label_source(self, name: str) -> str:
+        try:
+            return self.exact_label_sources[name]
+        except KeyError as exc:
+            raise KeyError(
+                f"unknown exact label source {name!r} for {self.name!r}"
+            ) from exc
+
+
+@dataclass(frozen=True)
 class GameSpec:
     """Declarative game profile used by future multi-game stage registries."""
 
@@ -74,6 +154,7 @@ class GameSpec:
     reward_schema: RewardConfigSchema | None = None
     task_schema: GameTaskSchema | None = None
     synthetic_data: tuple[SyntheticDataSpec, ...] = ()
+    block_game: BlockGameSpec | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -99,6 +180,7 @@ class GameSpec:
         self._validate_reward_schema()
         self._validate_task_schema()
         self._validate_synthetic_data()
+        self._validate_block_game()
         if not self.licensing:
             raise ValueError(f"game {self.name!r} must define licensing metadata")
 
@@ -172,6 +254,21 @@ class GameSpec:
                     f"unknown stage {spec.stage_name!r}"
                 )
 
+    def _validate_block_game(self) -> None:
+        if self.block_game is None:
+            return
+        if self.block_game.game_name != self.name:
+            raise ValueError(
+                f"game {self.name!r} block game spec {self.block_game.name!r} is for "
+                f"{self.block_game.game_name!r}"
+            )
+        stage_names = {stage.stage_spec_name for stage in self.stage_ladder}
+        if self.block_game.stage_name not in stage_names:
+            raise ValueError(
+                f"game {self.name!r} block game spec {self.block_game.name!r} "
+                f"references unknown stage {self.block_game.stage_name!r}"
+            )
+
     @property
     def action_count(self) -> int:
         return len(self.action_space)
@@ -223,6 +320,11 @@ class GameSpec:
             if spec.name == name:
                 return spec
         raise KeyError(f"unknown synthetic data spec {name!r} for game {self.name!r}")
+
+    def block_game_spec(self) -> BlockGameSpec:
+        if self.block_game is None:
+            raise KeyError(f"game {self.name!r} does not define a block game spec")
+        return self.block_game
 
 
 SMB_REWARD_SCHEMA = RewardConfigSchema(
@@ -412,6 +514,57 @@ SMB_SYNTHETIC_DATA_SPECS = (
 )
 
 
+SMB_BLOCK_GAME_SPEC = BlockGameSpec(
+    game_name="smb",
+    name="block_smb",
+    stage_name="block_smb",
+    adapter="retroagi.stages.block_smb.adapter.BlockSMBStage",
+    environment="retroagi.stages.block_smb.env.MarioScenarioEnv",
+    physics="deterministic pygame-ce platformer physics",
+    observation_kind="low-resolution RGB frame plus symbolic state_vec",
+    symbolic_state=(
+        "mario_position",
+        "mario_velocity",
+        "grounded",
+        "facing",
+        "camera_x",
+        "max_x_reached",
+        "nearest_coin",
+        "nearest_enemy",
+        "platform_below",
+    ),
+    semantic_classes=(
+        "background",
+        "mario",
+        "platform",
+        "coin",
+        "goal",
+        "enemy",
+        "moving_platform",
+    ),
+    exact_label_sources={
+        "semantics": "BlockVisionTransformer.semantic_targets",
+        "position": "BlockVisionTransformer.position_target",
+    },
+    fixed_scenarios={
+        "level_1_flat.json": "retroagi/stages/block_smb/scenarios/level_1_flat.json",
+        "level_2_gap.json": "retroagi/stages/block_smb/scenarios/level_2_gap.json",
+        "level_3_stairs.json": "retroagi/stages/block_smb/scenarios/level_3_stairs.json",
+        "level_4_platforms.json": (
+            "retroagi/stages/block_smb/scenarios/level_4_platforms.json"
+        ),
+    },
+    procedural_scenario_generator="MarioScenarioEnv.generate_scenario",
+    reset_modes=("fixed_scenario", "procedural_seed"),
+    metadata={
+        "fast_reset": True,
+        "exact_semantic_labels": True,
+        "procedural_scenarios": True,
+        "simplified_physics": True,
+    },
+)
+
+
 SMB_GAME_SPEC = GameSpec(
     name="smb",
     family="super_mario_bros",
@@ -458,6 +611,7 @@ SMB_GAME_SPEC = GameSpec(
     reward_schema=SMB_REWARD_SCHEMA,
     task_schema=SMB_TASK_SCHEMA,
     synthetic_data=SMB_SYNTHETIC_DATA_SPECS,
+    block_game=SMB_BLOCK_GAME_SPEC,
     stage_ladder=(
         StageLadderEntry(
             name="synthetic",
@@ -548,6 +702,7 @@ def validate_game_spec(game: GameSpec) -> GameSpec:
         reward_schema=game.reward_schema,
         task_schema=game.task_schema,
         synthetic_data=tuple(game.synthetic_data),
+        block_game=game.block_game,
         stage_ladder=tuple(game.stage_ladder),
         emulator_backend=game.emulator_backend,
         asset_requirements=tuple(game.asset_requirements),

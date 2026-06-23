@@ -366,7 +366,7 @@ architecture cheaply before spending high-fidelity emulator time.
       reset seeds.
 - [x] Generalize synthetic low-fidelity data generation so each game can define
       cheap concept data before any pixels or emulator frames are involved.
-- [ ] Generalize the Block SMB-style mid-fidelity simulator pattern into
+- [x] Generalize the Block SMB-style mid-fidelity simulator pattern into
       "block game" adapters: simplified physics, symbolic state, exact semantic
       labels, fast reset, fixed scenarios, and procedural scenarios.
 - [ ] Add a game plugin registry that loads game profiles, stage adapters,

@@ -7,11 +7,13 @@ import numpy as np
 from retroagi.core import (
     GAME_SPECS,
     SMB_ACTIONS,
+    SMB_BLOCK_GAME_SPEC,
     SMB_GAME_SPEC,
     SMB_REWARD_SCHEMA,
     SMB_SYNTHETIC_DATA_SPECS,
     SMB_TASK_SCHEMA,
     ActionSpec,
+    BlockGameSpec,
     GameSpec,
     GameTaskSchema,
     GameTaskSpec,
@@ -56,6 +58,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertIs(spec.reward_schema, SMB_REWARD_SCHEMA)
         self.assertIs(spec.task_schema, SMB_TASK_SCHEMA)
         self.assertEqual(spec.synthetic_data, SMB_SYNTHETIC_DATA_SPECS)
+        self.assertIs(spec.block_game, SMB_BLOCK_GAME_SPEC)
 
     def test_smb_actions_preserve_stable_ids_and_button_metadata(self):
         spec = SMB_GAME_SPEC
@@ -194,6 +197,44 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(splits.train[0].shape[0], 1_000)
         self.assertEqual(splits.validation[0].shape[0], 200)
         self.assertEqual(splits.test[0].shape[0], 200)
+
+    def test_smb_block_game_spec_declares_reusable_mid_fidelity_simulator(self):
+        spec = SMB_GAME_SPEC.block_game_spec()
+
+        self.assertIs(spec, SMB_BLOCK_GAME_SPEC)
+        self.assertEqual(spec.stage_name, "block_smb")
+        self.assertTrue(spec.metadata["fast_reset"])
+        self.assertTrue(spec.metadata["exact_semantic_labels"])
+        self.assertTrue(spec.metadata["procedural_scenarios"])
+        self.assertIn("state_vec", spec.observation_kind)
+        self.assertIn("mario_position", spec.symbolic_state)
+        self.assertIn("moving_platform", spec.semantic_classes)
+        self.assertEqual(
+            spec.exact_label_source("semantics"),
+            "BlockVisionTransformer.semantic_targets",
+        )
+        self.assertEqual(
+            spec.fixed_scenario_names,
+            (
+                "level_1_flat.json",
+                "level_2_gap.json",
+                "level_3_stairs.json",
+                "level_4_platforms.json",
+            ),
+        )
+        self.assertTrue(
+            spec.fixed_scenario_source("level_2_gap.json").endswith(
+                "level_2_gap.json"
+            )
+        )
+        self.assertEqual(
+            tuple(task.name for task in SMB_GAME_SPEC.fixed_tasks),
+            spec.fixed_scenario_names,
+        )
+        self.assertEqual(
+            spec.procedural_scenario_generator,
+            SMB_GAME_SPEC.task("generated_block_smb").source,
+        )
 
     def test_game_spec_validation_rejects_mismatched_reward_schema(self):
         with self.assertRaisesRegex(ValueError, "reward schema is for"):
@@ -367,6 +408,65 @@ class TestGameSpec(unittest.TestCase):
                         splits=(SyntheticSplitSpec("train", 1, 1),),
                         shape_contract={"x": (1,)},
                     ),
+                ),
+            )
+
+    def test_game_spec_validation_rejects_invalid_block_game_specs(self):
+        with self.assertRaisesRegex(ValueError, "block game spec .* is for"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                block_game=BlockGameSpec(
+                    game_name="other",
+                    name="block",
+                    stage_name="block_smb",
+                    adapter="unit.Adapter",
+                    environment="unit.Env",
+                    physics="unit physics",
+                    observation_kind="rgb plus state",
+                    symbolic_state=("position",),
+                    semantic_classes=("background",),
+                    exact_label_sources={"semantics": "unit.labels"},
+                    fixed_scenarios={"fixed.json": "fixed.json"},
+                    procedural_scenario_generator="unit.generate",
+                    reset_modes=("fixed_scenario",),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown stage"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                licensing={"assets": "none"},
+                block_game=BlockGameSpec(
+                    game_name="bad",
+                    name="block",
+                    stage_name="missing_stage",
+                    adapter="unit.Adapter",
+                    environment="unit.Env",
+                    physics="unit physics",
+                    observation_kind="rgb plus state",
+                    symbolic_state=("position",),
+                    semantic_classes=("background",),
+                    exact_label_sources={"semantics": "unit.labels"},
+                    fixed_scenarios={"fixed.json": "fixed.json"},
+                    procedural_scenario_generator="unit.generate",
+                    reset_modes=("fixed_scenario",),
                 ),
             )
 
