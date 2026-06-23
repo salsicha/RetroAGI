@@ -141,6 +141,8 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--generated-seed", type=int)
     parser.add_argument("--evaluation-episodes", type=_positive_int)
     parser.add_argument("--evaluation-max-steps", type=_positive_int)
+    parser.add_argument("--evaluation-interval-epochs", type=_positive_int)
+    parser.add_argument("--log-path", type=Path)
     parser.add_argument("--num-envs", type=_positive_int)
     parser.set_defaults(
         vision_enabled=None,
@@ -316,6 +318,8 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "generated_seed",
         "evaluation_episodes",
         "evaluation_max_steps",
+        "evaluation_interval_epochs",
+        "log_path",
         "num_envs",
         "deterministic",
     )
@@ -373,7 +377,7 @@ def _apply_ablation_config_overrides(
 
 def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
-    for name in ("checkpoint_path", "resume_path", "video_dir"):
+    for name in ("checkpoint_path", "resume_path", "video_dir", "log_path"):
         if normalized.get(name) is not None:
             normalized[name] = Path(normalized[name])
     if normalized.get("fixed_scenarios") is not None:
@@ -429,12 +433,15 @@ def _make_checkpoint_config(
     args: argparse.Namespace, *, record: bool
 ) -> BlockSMBTrainingConfig:
     values = _checkpoint_config(args.checkpoint)
-    values.update(_config_overrides(args))
+    overrides = _config_overrides(args)
+    values.update(overrides)
     _apply_reward_config_overrides(values, args)
     _apply_ablation_config_overrides(values, args)
     values["resume_path"] = args.checkpoint
     values["save_checkpoints"] = False
     values["record_videos"] = record
+    if "log_path" not in overrides:
+        values["log_path"] = None
     if record:
         values["video_dir"] = args.record_dir
     else:
@@ -566,6 +573,7 @@ def _public_result(
         "config": to_plain_data(config),
         "vision": dict(vision),
         "history": result.get("history", []),
+        "evaluations": result.get("evaluations", []),
         "metrics": result.get("metrics", {}),
         "evaluation": result.get("evaluation", {}),
         "curriculum": result.get("curriculum", []),

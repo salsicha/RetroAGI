@@ -416,6 +416,47 @@ class TestBlockSMBTraining(unittest.TestCase):
             restored = restore_block_smb_checkpoint(checkpoint, model, optimizer)
             self.assertEqual(restored["epoch"], 2)
 
+    def test_periodic_evaluation_writes_structured_log(self):
+        with TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "block_smb.jsonl"
+            config = tiny_config(
+                epochs=3,
+                generated_scenarios=0,
+                evaluation_interval_epochs=2,
+                log_path=log_path,
+            )
+
+            result = train_and_evaluate_block_smb(
+                config, vision_factory=static_vision_factory
+            )
+            events = [
+                json.loads(line)
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(len(result["history"]), 3)
+        self.assertNotIn("eval_mean_return", result["history"][0])
+        self.assertIn("eval_mean_return", result["history"][1])
+        self.assertIn("eval_mean_return", result["history"][2])
+        self.assertEqual([record["epoch"] for record in result["evaluations"]], [2, 3])
+        self.assertEqual(events[0]["event"], "run_started")
+        self.assertEqual(events[-1]["event"], "run_finished")
+        self.assertEqual(events[0]["config"]["evaluation_interval_epochs"], 2)
+        self.assertEqual(
+            [event["epoch"] for event in events if event["event"] == "train_epoch"],
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            [
+                event["epoch"]
+                for event in events
+                if event["event"] == "deterministic_evaluation"
+            ],
+            [2, 3],
+        )
+        for event in events:
+            self.assertEqual(event["stage"], BLOCK_SMB_SPEC.name)
+
     def test_train_evaluate_smoke_with_all_block_smb_ablations_disabled(self):
         config = tiny_config(
             generated_scenarios=0,

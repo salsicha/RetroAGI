@@ -106,6 +106,8 @@ class BlockSMBTrainingConfig:
     video_dir: Optional[Path] = None
     record_videos: bool = False
     num_envs: int = 1
+    evaluation_interval_epochs: int = 1
+    log_path: Optional[Path] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.reward_config, Mapping):
@@ -128,6 +130,7 @@ class BlockSMBTrainingConfig:
             "evaluation_episodes",
             "evaluation_max_steps",
             "num_envs",
+            "evaluation_interval_epochs",
         )
         for name in positive_ints:
             if getattr(self, name) <= 0:
@@ -167,6 +170,10 @@ class BlockSMBTrainingConfig:
         )
         if any(weight < 0 for weight in loss_weights):
             raise ValueError("loss weights must be non-negative")
+        for path_name in ("checkpoint_path", "resume_path", "video_dir", "log_path"):
+            path_value = getattr(self, path_name)
+            if path_value is not None and not isinstance(path_value, Path):
+                object.__setattr__(self, path_name, Path(path_value))
         if self.save_checkpoints and self.checkpoint_path is None:
             raise ValueError("checkpoint_path is required when save_checkpoints is true")
 
@@ -1041,6 +1048,40 @@ def save_block_smb_checkpoint(
     return checkpoint
 
 
+def append_block_smb_log_event(path: Path, event: Mapping[str, Any]) -> None:
+    """Append one structured JSONL event for Block SMB operations."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"stage": BLOCK_SMB_SPEC.name, **dict(event)}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(to_plain_data(record), sort_keys=True) + "\n")
+
+
+def _initialize_block_smb_log(config: BlockSMBTrainingConfig) -> None:
+    if config.log_path is None:
+        return
+    config.log_path.parent.mkdir(parents=True, exist_ok=True)
+    if config.resume_path is None:
+        config.log_path.write_text("", encoding="utf-8")
+
+
+def _log_block_smb_event(
+    training_config: BlockSMBTrainingConfig,
+    event: str,
+    **payload: Any,
+) -> None:
+    if training_config.log_path is None:
+        return
+    append_block_smb_log_event(training_config.log_path, {"event": event, **payload})
+
+
+def _should_evaluate_epoch(config: BlockSMBTrainingConfig, completed_epoch: int) -> bool:
+    return (
+        completed_epoch == config.epochs
+        or completed_epoch % config.evaluation_interval_epochs == 0
+    )
+
+
 def restore_block_smb_checkpoint(
     path: Path,
     model: AgentWorldModelCritic,
@@ -1110,6 +1151,7 @@ def train_and_evaluate_block_smb(
     )
     start_epoch = 0
     global_step = 0
+    _initialize_block_smb_log(config)
     if config.resume_path is not None:
         checkpoint = restore_block_smb_checkpoint(
             config.resume_path,
@@ -1129,7 +1171,18 @@ def train_and_evaluate_block_smb(
         reward_config=config.reward_config,
     )
     vector_env.close()
+    _log_block_smb_event(
+        config,
+        "run_started",
+        config=to_plain_data(config),
+        device=str(device),
+        start_epoch=start_epoch,
+        global_step=global_step,
+        resumed_from=str(config.resume_path) if config.resume_path is not None else None,
+        curriculum=[name for name, _scenario in curriculum],
+    )
     history: list[dict[str, float]] = []
+    evaluations: list[dict[str, Any]] = []
     last_metrics: dict[str, float] = {}
     for epoch in range(start_epoch, config.epochs):
         losses, _replay = train_block_smb_epoch(
@@ -1143,22 +1196,51 @@ def train_and_evaluate_block_smb(
             target_model=target_model,
         )
         global_step += int(losses["episodes"])
-        evaluation = evaluate_block_smb(
-            model,
+        completed_epoch = epoch + 1
+        last_metrics = dict(losses)
+        _log_block_smb_event(
             config,
-            device=device,
-            vision_factory=vision_factory,
-            record_dir=config.video_dir if config.record_videos else None,
+            "train_epoch",
+            epoch=completed_epoch,
+            global_step=global_step,
+            metrics=last_metrics,
         )
-        last_metrics = {
-            **losses,
-            "eval_mean_return": float(evaluation["mean_return"]),
-            "eval_success_rate": float(evaluation["success_rate"]),
-            "eval_threshold_pass_rate": float(
-                evaluation["tuning_metrics"]["threshold_pass_rate"]
-            ),
-            "eval_tuning_score": float(evaluation["tuning_metrics"]["score"]),
-        }
+        if _should_evaluate_epoch(config, completed_epoch):
+            evaluation = evaluate_block_smb(
+                model,
+                config,
+                device=device,
+                vision_factory=vision_factory,
+                record_dir=config.video_dir if config.record_videos else None,
+            )
+            evaluations.append(
+                {
+                    "epoch": completed_epoch,
+                    "global_step": global_step,
+                    "evaluation": evaluation,
+                }
+            )
+            last_metrics = {
+                **last_metrics,
+                "eval_mean_return": float(evaluation["mean_return"]),
+                "eval_success_rate": float(evaluation["success_rate"]),
+                "eval_threshold_pass_rate": float(
+                    evaluation["tuning_metrics"]["threshold_pass_rate"]
+                ),
+                "eval_tuning_score": float(evaluation["tuning_metrics"]["score"]),
+            }
+            _log_block_smb_event(
+                config,
+                "deterministic_evaluation",
+                epoch=completed_epoch,
+                global_step=global_step,
+                metrics={
+                    key: value
+                    for key, value in last_metrics.items()
+                    if key.startswith("eval_")
+                },
+                evaluation=evaluation,
+            )
         history.append(last_metrics)
         if config.save_checkpoints and config.checkpoint_path is not None:
             save_block_smb_checkpoint(
@@ -1171,15 +1253,42 @@ def train_and_evaluate_block_smb(
                 metrics=last_metrics,
                 target_model=target_model,
             )
-    evaluation = evaluate_block_smb(
-        model,
+            _log_block_smb_event(
+                config,
+                "checkpoint_saved",
+                epoch=completed_epoch,
+                global_step=global_step,
+                checkpoint_path=str(config.checkpoint_path),
+                metrics=last_metrics,
+            )
+    if evaluations and evaluations[-1]["epoch"] == config.epochs:
+        evaluation = evaluations[-1]["evaluation"]
+    else:
+        evaluation = evaluate_block_smb(
+            model,
+            config,
+            device=device,
+            vision_factory=vision_factory,
+            record_dir=config.video_dir if config.record_videos else None,
+        )
+        evaluations.append(
+            {
+                "epoch": config.epochs,
+                "global_step": global_step,
+                "evaluation": evaluation,
+            }
+        )
+    _log_block_smb_event(
         config,
-        device=device,
-        vision_factory=vision_factory,
-        record_dir=config.video_dir if config.record_videos else None,
+        "run_finished",
+        epoch=config.epochs,
+        global_step=global_step,
+        metrics=last_metrics,
+        evaluation=evaluation,
     )
     return {
         "history": history,
+        "evaluations": evaluations,
         "metrics": last_metrics,
         "evaluation": evaluation,
         "curriculum": [name for name, _scenario in curriculum],

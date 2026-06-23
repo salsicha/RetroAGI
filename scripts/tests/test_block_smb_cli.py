@@ -78,6 +78,10 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "0.25",
                     "--target-network-instability-threshold",
                     "0.4",
+                    "--evaluation-interval-epochs",
+                    "2",
+                    "--log-path",
+                    "artifacts/block_smb/train.jsonl",
                     "--checkpoint",
                     "data/block_smb/policy.pth",
                     "--resume",
@@ -120,6 +124,8 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.target_network_mode, "auto")
         self.assertEqual(config.target_network_tau, 0.25)
         self.assertEqual(config.target_network_instability_threshold, 0.4)
+        self.assertEqual(config.evaluation_interval_epochs, 2)
+        self.assertEqual(config.log_path, Path("artifacts/block_smb/train.jsonl"))
         self.assertEqual(config.checkpoint_path, Path("data/block_smb/policy.pth"))
         self.assertEqual(config.resume_path, Path("data/block_smb/old_policy.pth"))
         self.assertTrue(config.save_checkpoints)
@@ -148,6 +154,10 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["config"]["target_network_tau"], 0.25)
         self.assertEqual(
             payload["config"]["target_network_instability_threshold"], 0.4
+        )
+        self.assertEqual(payload["config"]["evaluation_interval_epochs"], 2)
+        self.assertEqual(
+            payload["config"]["log_path"], "artifacts/block_smb/train.jsonl"
         )
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])

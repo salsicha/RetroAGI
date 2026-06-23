@@ -196,7 +196,7 @@ evaluations and load a compatible Block SMB checkpoint.
 - [x] Add one CLI for training, evaluation, resume, and environment selection.
 - [x] Store resolved configuration, code revision, metrics, and environment
       metadata beside every checkpoint.
-- [ ] Add structured logging and periodic deterministic evaluation.
+- [x] Add structured logging and periodic deterministic evaluation.
 - [ ] Add GitHub Actions for formatting, linting, unit tests, and CPU smoke
       training.
 - [ ] Integrate TensorBoard or Weights & Biases behind an optional dependency.
