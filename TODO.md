@@ -299,6 +299,15 @@ high-fidelity evaluations.
       the smallest promotion pipeline in CI or a documented local command.
 - [x] Update the reproducibility procedure with architecture-sweep commands and
       the expected combined manifest.
+- [ ] Add a Block SMB to Full SMB handoff rung where a policy trained on Block
+      SMB can load into Full SMB, run deterministic inference, and continue
+      direct Full SMB training from the transferred checkpoint while preserving
+      architecture-specific checkpoint contracts.
+- [ ] Add a required Full SMB asset-mock perception adaptation rung between
+      Block SMB and Full SMB policy inference/training: compose mock scenarios
+      from the full game assets, fine-tune or train the Full SMB ViT on those
+      synthetic scenes, validate held-out semantic/position metrics, and gate
+      policy transfer on the resulting Full SMB ViT checkpoint.
 
 **Exit criteria:** a new architecture concept can be registered once, launched
 through a progressive-resolution experiment command, rejected or promoted by
