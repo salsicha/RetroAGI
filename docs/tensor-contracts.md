@@ -83,6 +83,14 @@ sizes/seeds, shape contract, and metadata such as `pixel_free` and
 `emulator_free`. SMB declares its existing Synthetic 1D generator as
 `synthetic_1d_concept` under `SMB_GAME_SPEC.synthetic_data`.
 
+`AssetChecklistItem` defines the evidence that must exist before a game's
+assets or generated datasets are committed or referenced by checkpoints. Each
+item targets an asset requirement, a synthetic data spec, or a licensing
+category such as `generated_data`; names the affected stage rungs; lists the
+required evidence; and records the commit/reference policy. SMB currently
+requires checklist entries for sprite source/license evidence, local-only ROM
+handling, and generated-data provenance.
+
 `BlockGameSpec` is the game-owned mid-fidelity simulator contract. It declares
 the block-stage adapter, environment implementation, simplified physics model,
 native observation kind, symbolic state fields, exact semantic/position label

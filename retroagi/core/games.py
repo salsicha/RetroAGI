@@ -39,6 +39,60 @@ class AssetRequirement:
 
 
 @dataclass(frozen=True)
+class AssetChecklistItem:
+    """One required provenance or licensing check for game assets and datasets."""
+
+    name: str
+    target: str
+    stage_names: tuple[str, ...]
+    evidence: tuple[str, ...]
+    policy: str
+    required: bool = True
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("asset checklist item name must be non-empty")
+        if not self.target:
+            raise ValueError(
+                f"asset checklist item {self.name!r} must define target"
+            )
+        if not self.stage_names:
+            raise ValueError(
+                f"asset checklist item {self.name!r} must define stage_names"
+            )
+        empty_stages = [stage for stage in self.stage_names if not stage]
+        if empty_stages:
+            raise ValueError(
+                f"asset checklist item {self.name!r} stage_names must be non-empty"
+            )
+        if not self.evidence:
+            raise ValueError(
+                f"asset checklist item {self.name!r} must define evidence"
+            )
+        empty_evidence = [item for item in self.evidence if not item]
+        if empty_evidence:
+            raise ValueError(
+                f"asset checklist item {self.name!r} evidence must be non-empty"
+            )
+        if not self.policy:
+            raise ValueError(
+                f"asset checklist item {self.name!r} must define policy"
+            )
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "target": self.target,
+            "stage_names": list(self.stage_names),
+            "evidence": list(self.evidence),
+            "policy": self.policy,
+            "required": self.required,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
 class StageLadderEntry:
     """One fidelity rung in a game's progressive-resolution ladder."""
 
@@ -151,6 +205,7 @@ class GameSpec:
     stage_ladder: tuple[StageLadderEntry, ...]
     emulator_backend: str
     asset_requirements: tuple[AssetRequirement, ...] = ()
+    asset_checklist: tuple[AssetChecklistItem, ...] = ()
     licensing: Mapping[str, str] = field(default_factory=dict)
     reward_schema: RewardConfigSchema | None = None
     task_schema: GameTaskSchema | None = None
@@ -176,14 +231,15 @@ class GameSpec:
             raise ValueError(f"game {self.name!r} must define stage_ladder")
         if not self.emulator_backend:
             raise ValueError(f"game {self.name!r} must define emulator_backend")
+        if not self.licensing:
+            raise ValueError(f"game {self.name!r} must define licensing metadata")
         self._validate_actions()
         self._validate_stage_ladder()
         self._validate_reward_schema()
         self._validate_task_schema()
         self._validate_synthetic_data()
         self._validate_block_game()
-        if not self.licensing:
-            raise ValueError(f"game {self.name!r} must define licensing metadata")
+        self._validate_asset_checklist()
 
     def _validate_actions(self) -> None:
         ids = [action.stable_id for action in self.action_space]
@@ -275,6 +331,58 @@ class GameSpec:
                 f"references unknown stage {self.block_game.stage_name!r}"
             )
 
+    def _validate_asset_checklist(self) -> None:
+        needs_checklist = bool(self.asset_requirements or self.synthetic_data)
+        if needs_checklist and not self.asset_checklist:
+            raise ValueError(
+                f"game {self.name!r} must define asset_checklist when assets "
+                "or generated data are used"
+            )
+
+        names = [item.name for item in self.asset_checklist]
+        if len(set(names)) != len(names):
+            raise ValueError(
+                f"game {self.name!r} asset checklist item names must be unique"
+            )
+
+        asset_names = {asset.name for asset in self.asset_requirements}
+        synthetic_names = {spec.name for spec in self.synthetic_data}
+        allowed_targets = asset_names.union(synthetic_names).union(self.licensing)
+        stage_names = set(self.stage_names)
+        for item in self.asset_checklist:
+            if item.target not in allowed_targets:
+                raise ValueError(
+                    f"game {self.name!r} asset checklist item {item.name!r} "
+                    f"references unknown target {item.target!r}"
+                )
+            unknown_stages = sorted(set(item.stage_names).difference(stage_names))
+            if unknown_stages:
+                raise ValueError(
+                    f"game {self.name!r} asset checklist item {item.name!r} "
+                    f"references unknown stages: {unknown_stages}"
+                )
+
+        required_targets = {
+            item.target for item in self.asset_checklist if item.required
+        }
+        missing_assets = sorted(
+            asset.name
+            for asset in self.asset_requirements
+            if asset.required and asset.name not in required_targets
+        )
+        if missing_assets:
+            raise ValueError(
+                f"game {self.name!r} asset checklist must cover required "
+                f"assets: {missing_assets}"
+            )
+        if self.synthetic_data and not (
+            "generated_data" in required_targets
+            or required_targets.intersection(synthetic_names)
+        ):
+            raise ValueError(
+                f"game {self.name!r} asset checklist must cover generated data"
+            )
+
     @property
     def action_count(self) -> int:
         return len(self.action_space)
@@ -326,6 +434,12 @@ class GameSpec:
             if spec.name == name:
                 return spec
         raise KeyError(f"unknown synthetic data spec {name!r} for game {self.name!r}")
+
+    def asset_checklist_item(self, name: str) -> AssetChecklistItem:
+        for item in self.asset_checklist:
+            if item.name == name:
+                return item
+        raise KeyError(f"unknown asset checklist item {name!r} for game {self.name!r}")
 
     def block_game_spec(self) -> BlockGameSpec:
         if self.block_game is None:
@@ -671,6 +785,57 @@ SMB_GAME_SPEC = GameSpec(
             ),
         ),
     ),
+    asset_checklist=(
+        AssetChecklistItem(
+            name="smb_sprites_source_license",
+            target="smb_sprites",
+            stage_names=("full_asset_mock",),
+            evidence=(
+                "source_url_or_repository",
+                "license_or_terms_summary",
+                "redistribution_decision",
+                "crop_coordinates_or_extraction_manifest",
+                "local_path_manifest",
+            ),
+            policy=(
+                "Record sprite source, license terms, redistribution decision, "
+                "and extraction details before committing sprites or generated "
+                "asset-mock datasets."
+            ),
+        ),
+        AssetChecklistItem(
+            name="smb_rom_local_only",
+            target="smb_rom",
+            stage_names=("full",),
+            evidence=(
+                "user_owned_rom_confirmation",
+                "stable_retro_import_name",
+                "local_checksum_record",
+                "gitignore_or_artifact_exclusion",
+            ),
+            policy=(
+                "ROM content must remain user-provided local content and must "
+                "not be committed or bundled with generated artifacts."
+            ),
+        ),
+        AssetChecklistItem(
+            name="smb_generated_data_provenance",
+            target="generated_data",
+            stage_names=("synthetic", "block", "full_asset_mock"),
+            evidence=(
+                "generator_entrypoint",
+                "resolved_config",
+                "split_seeds",
+                "source_asset_versions",
+                "dataset_metadata",
+            ),
+            policy=(
+                "Generated datasets must record generator code, config, seeds, "
+                "source asset provenance, and redistribution status before they "
+                "are committed or referenced by checkpoints."
+            ),
+        ),
+    ),
     licensing={
         "assets": "Document source, license, and redistribution status for each sprite source",
         "rom": "User-owned local content; never committed to the repository",
@@ -712,6 +877,7 @@ def validate_game_spec(game: GameSpec) -> GameSpec:
         stage_ladder=tuple(game.stage_ladder),
         emulator_backend=game.emulator_backend,
         asset_requirements=tuple(game.asset_requirements),
+        asset_checklist=tuple(game.asset_checklist),
         licensing=dict(game.licensing),
     )
 

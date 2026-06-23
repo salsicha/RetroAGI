@@ -15,6 +15,8 @@ from retroagi.core import (
     SMB_SYNTHETIC_DATA_SPECS,
     SMB_TASK_SCHEMA,
     ActionSpec,
+    AssetChecklistItem,
+    AssetRequirement,
     BlockGameSpec,
     GamePluginRegistry,
     GamePluginSpec,
@@ -70,6 +72,18 @@ class TestGameSpec(unittest.TestCase):
         self.assertIn("goal", spec.reward_terms)
         self.assertEqual(spec.emulator_backend, "stable-retro")
         self.assertTrue(any(asset.name == "smb_sprites" for asset in spec.asset_requirements))
+        self.assertEqual(
+            tuple(item.name for item in spec.asset_checklist),
+            (
+                "smb_sprites_source_license",
+                "smb_rom_local_only",
+                "smb_generated_data_provenance",
+            ),
+        )
+        self.assertEqual(
+            spec.asset_checklist_item("smb_generated_data_provenance").target,
+            "generated_data",
+        )
         self.assertIn("rom", spec.licensing)
         self.assertIs(spec.reward_schema, SMB_REWARD_SCHEMA)
         self.assertIs(spec.task_schema, SMB_TASK_SCHEMA)
@@ -378,6 +392,33 @@ class TestGameSpec(unittest.TestCase):
             spec.procedural_scenario_generator,
             SMB_GAME_SPEC.task("generated_block_smb").source,
         )
+
+    def test_smb_asset_checklist_covers_assets_and_generated_data(self):
+        spec = SMB_GAME_SPEC
+        required_targets = {
+            item.target for item in spec.asset_checklist if item.required
+        }
+
+        self.assertIn("smb_sprites", required_targets)
+        self.assertIn("smb_rom", required_targets)
+        self.assertIn("generated_data", required_targets)
+        sprites = spec.asset_checklist_item("smb_sprites_source_license")
+        self.assertEqual(sprites.stage_names, ("full_asset_mock",))
+        self.assertIn("license_or_terms_summary", sprites.evidence)
+        self.assertIn("redistribution", sprites.policy)
+        rom = spec.asset_checklist_item("smb_rom_local_only")
+        self.assertEqual(rom.stage_names, ("full",))
+        self.assertIn("gitignore_or_artifact_exclusion", rom.evidence)
+        self.assertIn("not be committed", rom.policy)
+        generated = spec.asset_checklist_item("smb_generated_data_provenance")
+        self.assertEqual(
+            generated.stage_names,
+            ("synthetic", "block", "full_asset_mock"),
+        )
+        self.assertIn("split_seeds", generated.evidence)
+        self.assertIn("source asset provenance", generated.policy)
+        with self.assertRaisesRegex(KeyError, "unknown asset checklist item"):
+            spec.asset_checklist_item("missing")
 
     def test_game_spec_validation_rejects_mismatched_reward_schema(self):
         with self.assertRaisesRegex(ValueError, "reward schema is for"):
@@ -772,6 +813,138 @@ class TestGameSpec(unittest.TestCase):
                 stage_ladder=SMB_GAME_SPEC.stage_ladder,
                 emulator_backend="mock",
                 licensing={"assets": "none"},
+            )
+
+    def test_game_spec_validation_rejects_invalid_asset_checklists(self):
+        base = dict(
+            name="bad",
+            family="unit",
+            action_space=(ActionSpec("noop", 0),),
+            observation_sources=("state",),
+            semantic_classes=("background",),
+            signal_schema={"progress": "progress"},
+            reward_terms={"progress": "reward"},
+            stage_ladder=SMB_GAME_SPEC.stage_ladder,
+            emulator_backend="mock",
+            licensing={
+                "assets": "unit assets",
+                "generated_data": "unit generated data",
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "must define asset_checklist"):
+            GameSpec(
+                **base,
+                synthetic_data=(
+                    SyntheticDataSpec(
+                        game_name="bad",
+                        name="concept",
+                        stage_name="synthetic_1d",
+                        observation_kind="state",
+                        target_kind="target",
+                        generator="unit.generate",
+                        splits=(SyntheticSplitSpec("train", 1, 1),),
+                        shape_contract={"x": (1,)},
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown target"):
+            GameSpec(
+                **base,
+                asset_checklist=(
+                    AssetChecklistItem(
+                        name="missing",
+                        target="missing",
+                        stage_names=("synthetic",),
+                        evidence=("source",),
+                        policy="unit policy",
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "unknown stages"):
+            GameSpec(
+                **base,
+                asset_checklist=(
+                    AssetChecklistItem(
+                        name="bad_stage",
+                        target="assets",
+                        stage_names=("missing",),
+                        evidence=("source",),
+                        policy="unit policy",
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "must cover generated data"):
+            GameSpec(
+                **base,
+                synthetic_data=(
+                    SyntheticDataSpec(
+                        game_name="bad",
+                        name="concept",
+                        stage_name="synthetic_1d",
+                        observation_kind="state",
+                        target_kind="target",
+                        generator="unit.generate",
+                        splits=(SyntheticSplitSpec("train", 1, 1),),
+                        shape_contract={"x": (1,)},
+                    ),
+                ),
+                asset_checklist=(
+                    AssetChecklistItem(
+                        name="assets_only",
+                        target="assets",
+                        stage_names=("synthetic",),
+                        evidence=("source",),
+                        policy="unit policy",
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "must cover required assets"):
+            GameSpec(
+                **base,
+                asset_requirements=(
+                    AssetRequirement(
+                        name="unit_asset",
+                        required=True,
+                        local_path="assets/unit",
+                        provenance="unit source",
+                        license_notes="unit license",
+                    ),
+                ),
+                asset_checklist=(
+                    AssetChecklistItem(
+                        name="generic_assets",
+                        target="assets",
+                        stage_names=("synthetic",),
+                        evidence=("source",),
+                        policy="unit policy",
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "item names must be unique"):
+            GameSpec(
+                **base,
+                asset_checklist=(
+                    AssetChecklistItem(
+                        name="dup",
+                        target="assets",
+                        stage_names=("synthetic",),
+                        evidence=("source",),
+                        policy="unit policy",
+                    ),
+                    AssetChecklistItem(
+                        name="dup",
+                        target="assets",
+                        stage_names=("synthetic",),
+                        evidence=("source",),
+                        policy="unit policy",
+                    ),
+                ),
             )
 
     def test_validate_game_spec_round_trips_profile(self):

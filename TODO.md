@@ -402,7 +402,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Separate visual perception pipelines by game profile, including semantic
       vocabularies, sprite/asset extraction, synthetic frame composition,
       checkpoint naming, and diagnostic thresholds.
-- [ ] Add an asset and licensing checklist for each game profile before assets
+- [x] Add an asset and licensing checklist for each game profile before assets
       or generated datasets are committed or referenced.
 - [ ] Add support for games with no reliable asset pipeline by allowing
       self-supervised, emulator-state, or manually labeled perception datasets

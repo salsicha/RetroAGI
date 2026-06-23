@@ -545,6 +545,10 @@ def _game_manifest(plugin) -> dict[str, Any]:
             }
             for asset in game.asset_requirements
         ],
+        "asset_checklist": [
+            item.to_manifest()
+            for item in game.asset_checklist
+        ],
         "licensing": dict(game.licensing),
     }
 

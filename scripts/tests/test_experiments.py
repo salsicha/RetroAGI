@@ -110,6 +110,13 @@ class TestExperimentRunner(unittest.TestCase):
                 for asset in manifest["game"]["asset_provenance"]
             )
         )
+        checklist = manifest["game"]["asset_checklist"]
+        self.assertTrue(
+            any(item["target"] == "smb_rom" for item in checklist)
+        )
+        self.assertTrue(
+            any(item["target"] == "generated_data" for item in checklist)
+        )
         self.assertEqual(
             [stage["stage"] for stage in manifest["stages"]], ["synthetic-1d", "block-smb"]
         )

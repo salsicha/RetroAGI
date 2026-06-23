@@ -30,6 +30,13 @@ selection. Use `--game smb --stage synthetic|block|full` for the game-neutral
 path; legacy SMB-specific stage aliases such as `synthetic-1d`, `block-smb`,
 and `full-smb` remain accepted for existing scripts.
 
+Before committing or preserving asset-backed artifacts, check the selected
+game's `asset_checklist` in the experiment manifest. For SMB this means sprite
+source/license evidence before committing extracted sprites or asset-mock
+datasets, local-only ROM handling before Full SMB emulator runs, and generator
+config/seed/source-asset provenance before referencing generated datasets from
+checkpoints.
+
 ## Progressive-Resolution Responsibilities
 
 Use the stages in this order when evaluating an architecture concept:
