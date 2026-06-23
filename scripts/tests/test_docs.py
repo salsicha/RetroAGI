@@ -6,6 +6,7 @@ from pathlib import Path
 OPERATIONS_DOC = Path("docs/operations.md")
 REPRODUCIBILITY_DOC = Path("docs/reproducibility.md")
 FULL_SMB_CONTENT_DOC = Path("docs/full-smb-content.md")
+FULL_SMB_TASKS_DOC = Path("docs/full-smb-tasks.md")
 README = Path("README.md")
 
 
@@ -22,6 +23,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "## Block SMB Policy",
             "## Full SMB Vision",
             "## Full SMB Content Setup",
+            "## Full SMB Task Sets",
             "## Full SMB Adapter And Transfer",
         ):
             self.assertIn(section, text)
@@ -49,6 +51,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
             "retroagi check-env --game smb --stage full",
             "artifacts/full_smb/env_check.json",
+            "[full-smb-tasks.md](full-smb-tasks.md)",
+            "heldout_generalization",
         ):
             self.assertIn(term, text)
 
@@ -98,6 +102,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi compare --game smb --stage full",
             "python -m retro.import local/full_smb/roms",
             "retroagi check-env --game smb --stage full",
+            "from retroagi.stages.full_smb import full_smb_task_catalog",
         ):
             self.assertIn(command, text)
 
@@ -135,6 +140,26 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi check-env --game smb --stage full",
             "verifies backend import",
             "registration, ROM availability",
+        ):
+            self.assertIn(term, text)
+
+    def test_full_smb_task_sets_document_train_eval_catalog(self):
+        text = FULL_SMB_TASKS_DOC.read_text(encoding="utf-8")
+
+        for term in (
+            "# Full SMB Task Sets",
+            "full_smb_task_catalog",
+            "`smoke`",
+            "`fixed_benchmark`",
+            "`curriculum`",
+            "`heldout_generalization`",
+            "`Level1-1`",
+            "`local/full_smb/states/`",
+            "`smoke_1_1_spawn`",
+            "`benchmark_1_1_start`",
+            "`curriculum_1_1_midpipe`",
+            "`heldout_8_1_long`",
+            "Success thresholds are intentionally not defined",
         ):
             self.assertIn(term, text)
 

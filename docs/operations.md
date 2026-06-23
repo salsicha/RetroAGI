@@ -280,6 +280,23 @@ headless reset, render reset, save/load state, action stepping, frame-skip
 metadata, and deterministic seeding. Treat a nonzero exit as a setup failure,
 not a training failure.
 
+## Full SMB Task Sets
+
+The supported headless train/eval task sets are defined in
+[full-smb-tasks.md](full-smb-tasks.md) and exposed by
+`retroagi.stages.full_smb.full_smb_task_catalog()`.
+
+| Task Set | Use |
+| --- | --- |
+| `smoke` | Short reset/step validation after `check-env`. |
+| `curriculum` | Ordered training tasks from level starts and local save-state segments. |
+| `fixed_benchmark` | Repeatable evaluation tasks for tuning and regression reports. |
+| `heldout_generalization` | Withheld tasks for promotion-only generalization checks. |
+
+The catalog uses stable-retro level starts such as `Level1-1` and planned
+local save-state artifacts under `local/full_smb/states/`. Those save-state
+files remain local-only and are defined by the following P9 save-state task.
+
 ## Full SMB Adapter And Transfer
 
 Full SMB connects the shared stage contract to the stable-retro emulator. Its

@@ -438,7 +438,7 @@ and playable end target.
 - [x] Add a Full SMB environment capability check command that verifies backend
       import, game registration, ROM availability, headless reset, render reset,
       save/load state, action stepping, frame skip, and deterministic seeding.
-- [ ] Define Full SMB train/eval task sets using emulator states or level starts,
+- [x] Define Full SMB train/eval task sets using emulator states or level starts,
       including short smoke tasks, fixed benchmark tasks, curriculum tasks, and
       held-out generalization tasks.
 - [ ] Create and document deterministic Full SMB save-state artifacts for

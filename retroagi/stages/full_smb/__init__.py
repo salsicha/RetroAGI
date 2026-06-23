@@ -28,6 +28,14 @@ from .smoke import (
     run_deterministic_reset_smoke,
     run_headless_random_agent_smoke,
 )
+from .tasks import (
+    FULL_SMB_TASK_CATALOG,
+    FULL_SMB_TASK_SET_NAMES,
+    FullSMBTaskCatalog,
+    FullSMBTaskSpec,
+    FullSMBTaskStart,
+    full_smb_task_catalog,
+)
 from .train import (
     FULL_SMB_POLICY_CHECKPOINT_KIND,
     FULL_SMB_POLICY_MODEL_NAME,
@@ -61,6 +69,8 @@ __all__ = [
     "FULL_SMB_POLICY_MODEL_NAME",
     "FULL_SMB_SEMANTIC_CLASSES",
     "FULL_SMB_SPEC",
+    "FULL_SMB_TASK_CATALOG",
+    "FULL_SMB_TASK_SET_NAMES",
     "FullSMBEmulatorState",
     "FullSMBEnvConfig",
     "FullSMBEnvironmentCapabilityResult",
@@ -74,6 +84,9 @@ __all__ = [
     "FullSMBSignalExtractor",
     "FullSMBSignals",
     "FullSMBSmokeConfig",
+    "FullSMBTaskCatalog",
+    "FullSMBTaskSpec",
+    "FullSMBTaskStart",
     "FullSMBTrainingConfig",
     "FullSMBTrainingResult",
     "DEFAULT_FULL_SMB_VIT_CHECKPOINT",
@@ -93,6 +106,7 @@ __all__ = [
     "build_full_smb_policy_checkpoint",
     "evaluate_full_smb_policy",
     "extract_full_smb_signals",
+    "full_smb_task_catalog",
     "load_full_smb_policy_checkpoint",
     "load_full_smb_vit_checkpoint",
     "make_stable_retro_env",

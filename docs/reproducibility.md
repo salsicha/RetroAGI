@@ -575,6 +575,29 @@ print("Full SMB environment capability check verified")
 PY
 ```
 
+Inspect the Full SMB task catalog before choosing training or evaluation tasks:
+
+```bash
+python - <<'PY'
+from retroagi.stages.full_smb import full_smb_task_catalog
+
+catalog = full_smb_task_catalog()
+assert [task.name for task in catalog.tasks_for_set("smoke")] == ["smoke_1_1_spawn"]
+assert all(task.split == "train" for task in catalog.curriculum)
+assert all(
+    task.split == "heldout"
+    for task in catalog.tasks_for_set("heldout_generalization")
+)
+assert catalog.save_state_artifact_paths
+print(catalog.to_manifest()["task_sets"].keys())
+PY
+```
+
+The catalog is documented in [full-smb-tasks.md](full-smb-tasks.md). Use
+`smoke` after `check-env`, train on the ordered `curriculum` tasks, evaluate
+on `fixed_benchmark`, and reserve `heldout_generalization` for promotion and
+regression reports.
+
 ## 12. Reproduce Full SMB Adapter, Inference, And Continued Training
 
 Run the headless emulator smoke path to verify the full observation and action
