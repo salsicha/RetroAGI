@@ -200,7 +200,7 @@ evaluations and load a compatible Block SMB checkpoint.
 - [x] Add GitHub Actions for formatting, linting, unit tests, and CPU smoke
       training.
 - [x] Integrate TensorBoard or Weights & Biases behind an optional dependency.
-- [ ] Document hardware, runtime, expected metrics, and artifact locations for
+- [x] Document hardware, runtime, expected metrics, and artifact locations for
       every stage.
 - [ ] Publish a reproducibility procedure that starts from a clean checkout.
 
