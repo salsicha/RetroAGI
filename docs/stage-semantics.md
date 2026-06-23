@@ -368,11 +368,19 @@ Policy observations are controlled by `FullSMBObservationConfig`:
 | `frame_skip` | `1` | Number of backend frames to advance for one shared action. Rewards are summed across executed frames. |
 | `frame_stack` | `4` | Number of normalized frames retained in observation metadata. Reset padding is marked invalid in `frame_mask`. |
 | `resize_shape` | `(224, 256)` | Height/width used for normalized frame tensors and vision input. `None` preserves the backend frame size. |
+| `crop_margins` | `(0, 0, 0, 0)` | Top/right/bottom/left pixels cropped before resizing. |
+| `hud_policy` | `preserve` | `preserve` keeps the SMB HUD; `crop` adds `hud_crop_top` to the top crop margin. |
+| `hud_crop_top` | `24` | Extra top pixels removed only when `hud_policy="crop"`. |
+| `color_mode` | `rgb` | `rgb` preserves color; `grayscale` converts luminance and repeats it across three channels for ViT compatibility. |
+| `normalization_mean` | `(0.0, 0.0, 0.0)` | Per-channel mean subtracted after conversion to `[0,1]`, crop, optional grayscale, and resize. |
+| `normalization_std` | `(1.0, 1.0, 1.0)` | Per-channel positive scale applied after mean subtraction. |
+| `include_camera_state` | `False` | When true, appends the four-value `camera_vec` to the C-stream state after the stable nine-value `state_vec`. |
 
-`encode_observation` sends the resized `[0,1]` HWC frame to the Full SMB vision
-encoder. It also records `frame_stack` as `[1, frame_stack, 3, H, W]`,
-`frame_mask`, `frame_skip`, `resize_shape`, and `normalized_range` in
-`batch.metadata["observation"]`.
+`encode_observation` sends the preprocessed HWC frame to the Full SMB vision
+encoder. It records `frame_stack` as `[1, frame_stack, 3, H, W]`,
+`frame_mask`, `frame_skip`, `resize_shape`, `effective_crop_margins`,
+`hud_policy`, `color_mode`, normalization settings, `camera_vec`, and
+`camera_state_enabled` in `batch.metadata["observation"]`.
 
 ### Action
 
@@ -411,8 +419,11 @@ fields or nested `memory`, `ram`, `variables`, `game_variables`, or
 The adapter also writes `info["state_vec"]`, a nine-value `float32` vector with
 normalized x, y, score, coins, lives, completion, death, terminated, and
 truncated values. Missing raw values are encoded as zero. This compact state
-vector remains stable for checkpoint compatibility; richer extracted fields are
-available through `full_smb_signals`.
+vector remains stable for checkpoint compatibility. `info["camera_vec"]`
+separately encodes normalized raw scroll x, screen x, screen y, and player
+x-offset within the camera viewport. New experiments can opt into appending
+that vector to the C-stream with `include_camera_state=True`; richer extracted
+fields remain available through `full_smb_signals`.
 
 ### Reward
 

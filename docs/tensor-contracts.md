@@ -384,13 +384,19 @@ Full SMB ViT output, the C prefix contains two normalized position values
 followed by thirteen semantic probabilities, then the nine-value Full SMB
 signal vector: normalized x, y, score, coins, lives, completion, death,
 terminated, and truncated. The remaining C slots contain pooled patch-token
-features.
+features. When `FullSMBObservationConfig.include_camera_state=True`, four
+additional camera values are appended after the nine signal values: normalized
+raw scroll x, screen x, screen y, and player x-offset within the camera
+viewport.
 
 Full SMB observation metadata includes normalized resized frame tensors:
 `frame_stack` has shape `[B, S, 3, H, W]`, where `S` is
 `FullSMBObservationConfig.frame_stack` and `(H, W)` is `resize_shape` when set.
-`frame_mask` has shape `[B, S]` and marks reset padding as invalid. The episode
-metadata mask has shape `[1]` and is `0.0` after termination or truncation.
+The preprocessing manifest records crop margins, effective HUD crop, RGB or
+grayscale mode, normalization mean/std, and whether camera state is fused into
+the C stream. `camera_vec` has shape `[B, 4]`. `frame_mask` has shape `[B, S]`
+and marks reset padding as invalid. The episode metadata mask has shape `[1]`
+and is `0.0` after termination or truncation.
 
 ## VisionOutput
 

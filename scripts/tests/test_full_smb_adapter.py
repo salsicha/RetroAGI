@@ -126,6 +126,59 @@ class RewardSignalRetroEnv(GymnasiumRetroEnv):
         )
 
 
+class PreprocessingRetroEnv(GymnasiumRetroEnv):
+    def reset(self, seed=None):
+        self.reset_seed = seed
+        return (
+            self._observation(0),
+            {
+                "xscrollHi": 1,
+                "xscrollLo": 20,
+                "screen_x": 2,
+                "screen_y": 3,
+                "y_pos": 90,
+                "score": 0,
+                "coins": 0,
+                "lives": 3,
+            },
+        )
+
+    def step(self, action):
+        self.actions.append(np.asarray(action))
+        return (
+            self._observation(17),
+            1.0,
+            False,
+            False,
+            {
+                "xscrollHi": 1,
+                "xscrollLo": 40,
+                "screen_x": 4,
+                "screen_y": 5,
+                "y_pos": 96,
+                "score": 10,
+                "coins": 1,
+                "lives": 3,
+            },
+        )
+
+    @staticmethod
+    def _observation(offset):
+        y = np.arange(10, dtype=np.int16).reshape(10, 1)
+        x = np.arange(12, dtype=np.int16).reshape(1, 12)
+        red = np.broadcast_to((y * 23 + offset) % 256, (10, 12))
+        green = np.broadcast_to((x * 19 + offset) % 256, (10, 12))
+        blue = ((y + x) * 11 + offset) % 256
+        return np.stack(
+            (
+                red,
+                green,
+                blue,
+            ),
+            axis=-1,
+        ).astype(np.uint8)
+
+
 class LegacyRetroEnv(GymnasiumRetroEnv):
     def step(self, action):
         self.actions.append(np.asarray(action))
@@ -629,6 +682,84 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(observation_metadata["resize_shape"], (12, 16))
         self.assertEqual(tuple(vision.observations[-1].shape), (12, 16, 3))
         self.assertLessEqual(float(vision.observations[-1].max()), 1.0)
+
+    def test_preprocessing_contract_crops_hud_grayscales_and_encodes_camera(self):
+        env = PreprocessingRetroEnv()
+        vision = StaticFullSMBVision()
+        stage = FullSMBStage(
+            env=env,
+            vision=vision,
+            observation_config=FullSMBObservationConfig(
+                frame_skip=1,
+                frame_stack=2,
+                resize_shape=(4, 5),
+                crop_margins=(1, 2, 1, 1),
+                hud_policy="crop",
+                hud_crop_top=1,
+                color_mode="grayscale",
+                normalization_mean=(0.5, 0.5, 0.5),
+                normalization_std=(0.5, 0.5, 0.5),
+                include_camera_state=True,
+            ),
+        )
+        try:
+            stage.reset(seed=3)
+            observation, _reward, _terminated, _truncated, info = stage.step(
+                SMBAction.RIGHT
+            )
+            batch = stage.encode_observation(observation, info)
+        finally:
+            stage.close()
+
+        vision_frame = vision.observations[-1]
+        self.assertEqual(tuple(vision_frame.shape), (4, 5, 3))
+        torch.testing.assert_close(vision_frame[..., 0], vision_frame[..., 1])
+        torch.testing.assert_close(vision_frame[..., 0], vision_frame[..., 2])
+        self.assertGreaterEqual(float(vision_frame.min()), -1.0)
+        self.assertLessEqual(float(vision_frame.max()), 1.0)
+
+        observation_metadata = batch.metadata["observation"]
+        self.assertEqual(observation_metadata["resize_shape"], (4, 5))
+        self.assertEqual(observation_metadata["crop_margins"], (1, 2, 1, 1))
+        self.assertEqual(observation_metadata["effective_crop_margins"], (2, 2, 1, 1))
+        self.assertEqual(observation_metadata["hud_policy"], "crop")
+        self.assertEqual(observation_metadata["color_mode"], "grayscale")
+        self.assertEqual(
+            observation_metadata["normalization"],
+            {
+                "input_range": (0.0, 1.0),
+                "mean": (0.5, 0.5, 0.5),
+                "std": (0.5, 0.5, 0.5),
+            },
+        )
+        self.assertTrue(observation_metadata["camera_state_enabled"])
+        self.assertEqual(
+            observation_metadata["frame_stack"].shape,
+            (1, 2, 3, 4, 5),
+        )
+        self.assertTrue(observation_metadata["frame_mask"].all().item())
+
+        expected_camera = torch.tensor(
+            [[296.0 / 4096.0, 4.0 / 256.0, 5.0 / 240.0, 4.0 / 256.0]],
+            dtype=torch.float32,
+        )
+        torch.testing.assert_close(
+            observation_metadata["camera_vec"],
+            expected_camera,
+        )
+        np.testing.assert_allclose(info["camera_vec"], expected_camera.numpy()[0])
+        self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (8, 21))
+        torch.testing.assert_close(batch.src_c[:, 17:21], expected_camera)
+
+    def test_observation_config_rejects_invalid_preprocessing_values(self):
+        with self.assertRaisesRegex(ValueError, "crop_margins"):
+            FullSMBObservationConfig(crop_margins=(0, 0, 0))
+        with self.assertRaisesRegex(ValueError, "hud_policy"):
+            FullSMBObservationConfig(hud_policy="mask")
+        with self.assertRaisesRegex(ValueError, "color_mode"):
+            FullSMBObservationConfig(color_mode="hsv")
+        with self.assertRaisesRegex(ValueError, "normalization_std"):
+            FullSMBObservationConfig(normalization_std=(1.0, 0.0, 1.0))
 
     def test_emulator_state_round_trips_backend_and_adapter_state(self):
         env = SaveStateRetroEnv()

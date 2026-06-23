@@ -226,6 +226,8 @@ class FullSMBSignalConfig:
 
     position_x_max: float = 4096.0
     position_y_max: float = 240.0
+    screen_x_max: float = 256.0
+    screen_y_max: float = 240.0
     score_max: float = 999_999.0
     coins_max: float = 99.0
     lives_max: float = 99.0
@@ -234,12 +236,18 @@ class FullSMBSignalConfig:
         for name in (
             "position_x_max",
             "position_y_max",
+            "screen_x_max",
+            "screen_y_max",
             "score_max",
             "coins_max",
             "lives_max",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+
+
+FULL_SMB_COLOR_MODES = ("rgb", "grayscale")
+FULL_SMB_HUD_POLICIES = ("preserve", "crop")
 
 
 @dataclass(frozen=True)
@@ -249,6 +257,13 @@ class FullSMBObservationConfig:
     frame_skip: int = 1
     frame_stack: int = 4
     resize_shape: Optional[tuple[int, int]] = (224, 256)
+    crop_margins: tuple[int, int, int, int] = (0, 0, 0, 0)
+    hud_policy: str = "preserve"
+    hud_crop_top: int = 24
+    color_mode: str = "rgb"
+    normalization_mean: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    normalization_std: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    include_camera_state: bool = False
 
     def __post_init__(self) -> None:
         if self.frame_skip <= 0:
@@ -261,6 +276,45 @@ class FullSMBObservationConfig:
             height, width = self.resize_shape
             if height <= 0 or width <= 0:
                 raise ValueError("resize_shape dimensions must be positive")
+        if len(self.crop_margins) != 4:
+            raise ValueError("crop_margins must contain (top, right, bottom, left)")
+        if any(int(value) < 0 for value in self.crop_margins):
+            raise ValueError("crop_margins values must be non-negative")
+        if self.hud_policy not in FULL_SMB_HUD_POLICIES:
+            raise ValueError(
+                f"hud_policy must be one of {', '.join(FULL_SMB_HUD_POLICIES)}"
+            )
+        if self.hud_crop_top < 0:
+            raise ValueError("hud_crop_top must be non-negative")
+        if self.color_mode not in FULL_SMB_COLOR_MODES:
+            raise ValueError(
+                f"color_mode must be one of {', '.join(FULL_SMB_COLOR_MODES)}"
+            )
+        if len(self.normalization_mean) != 3 or len(self.normalization_std) != 3:
+            raise ValueError("normalization_mean/std must contain three RGB values")
+        if any(float(value) <= 0.0 for value in self.normalization_std):
+            raise ValueError("normalization_std values must be positive")
+
+    def effective_crop_margins(self) -> tuple[int, int, int, int]:
+        top, right, bottom, left = (int(value) for value in self.crop_margins)
+        if self.hud_policy == "crop":
+            top += int(self.hud_crop_top)
+        return top, right, bottom, left
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "frame_skip": self.frame_skip,
+            "frame_stack": self.frame_stack,
+            "resize_shape": self.resize_shape,
+            "crop_margins": self.crop_margins,
+            "effective_crop_margins": self.effective_crop_margins(),
+            "hud_policy": self.hud_policy,
+            "hud_crop_top": self.hud_crop_top,
+            "color_mode": self.color_mode,
+            "normalization_mean": self.normalization_mean,
+            "normalization_std": self.normalization_std,
+            "include_camera_state": self.include_camera_state,
+        }
 
 
 @dataclass(frozen=True)
@@ -634,10 +688,13 @@ class FullSMBStage:
 
         return self.vision_projector.project(
             vision,
-            state=self._state_vec(info),
+            state=self._encoded_state_vec(info),
             metadata={
                 "raw_observation_shape": observation.shape,
-                "observation": self._observation_metadata(vision.position.device),
+                "observation": self._observation_metadata(
+                    vision.position.device,
+                    info,
+                ),
                 "episode": {
                     "mask": torch.tensor(
                         [self._last_episode_mask],
@@ -693,21 +750,63 @@ class FullSMBStage:
         if bool(tensor.numel()) and float(tensor.max()) > 1.0:
             tensor = tensor / 255.0
         tensor = tensor.clamp(0.0, 1.0)
+        tensor = self._crop_observation(tensor)
+        if self.observation_config.color_mode == "grayscale":
+            weights = torch.tensor(
+                [0.299, 0.587, 0.114],
+                dtype=tensor.dtype,
+                device=tensor.device,
+            )
+            tensor = (tensor * weights.view(1, 1, 3)).sum(dim=-1, keepdim=True)
+            tensor = tensor.repeat(1, 1, 3)
         if self.observation_config.resize_shape is None:
-            return tensor.contiguous()
+            return self._normalize_observation(tensor).contiguous()
         target_shape = self.observation_config.resize_shape
-        if tuple(tensor.shape[:2]) == target_shape:
-            return tensor.contiguous()
-        chw = tensor.permute(2, 0, 1).unsqueeze(0)
-        resized = F.interpolate(
-            chw, size=target_shape, mode="bilinear", align_corners=False
-        )
-        return resized.squeeze(0).permute(1, 2, 0).contiguous()
+        if tuple(tensor.shape[:2]) != target_shape:
+            chw = tensor.permute(2, 0, 1).unsqueeze(0)
+            tensor = (
+                F.interpolate(
+                    chw,
+                    size=target_shape,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                .squeeze(0)
+                .permute(1, 2, 0)
+            )
+        return self._normalize_observation(tensor).contiguous()
 
-    def _observation_metadata(self, device: torch.device) -> dict[str, Any]:
+    def _crop_observation(self, tensor: torch.Tensor) -> torch.Tensor:
+        top, right, bottom, left = self.observation_config.effective_crop_margins()
+        height, width = tensor.shape[:2]
+        if top + bottom >= height or left + right >= width:
+            raise ValueError(
+                "Full SMB crop margins must leave at least one pixel in both axes"
+            )
+        y_end = height - bottom if bottom else height
+        x_end = width - right if right else width
+        return tensor[top:y_end, left:x_end]
+
+    def _normalize_observation(self, tensor: torch.Tensor) -> torch.Tensor:
+        mean = torch.tensor(
+            self.observation_config.normalization_mean,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        ).view(1, 1, 3)
+        std = torch.tensor(
+            self.observation_config.normalization_std,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        ).view(1, 1, 3)
+        return (tensor - mean) / std
+
+    def _observation_metadata(
+        self, device: torch.device, info: Mapping[str, Any]
+    ) -> dict[str, Any]:
         frame_stack = torch.stack(tuple(self._frame_stack), dim=0).permute(
             0, 3, 1, 2
         )
+        camera_vec = np.asarray(info.get("camera_vec", np.zeros(4)), dtype=np.float32)
         return {
             "frame_stack": frame_stack.unsqueeze(0).to(device),
             "frame_mask": torch.tensor(
@@ -717,6 +816,21 @@ class FullSMBStage:
             "frame_skip": self.observation_config.frame_skip,
             "resize_shape": self.observation_config.resize_shape,
             "normalized_range": (0.0, 1.0),
+            "preprocessing": self.observation_config.to_manifest(),
+            "crop_margins": self.observation_config.crop_margins,
+            "effective_crop_margins": self.observation_config.effective_crop_margins(),
+            "hud_policy": self.observation_config.hud_policy,
+            "color_mode": self.observation_config.color_mode,
+            "normalization": {
+                "input_range": (0.0, 1.0),
+                "mean": self.observation_config.normalization_mean,
+                "std": self.observation_config.normalization_std,
+            },
+            "camera_vec": torch.as_tensor(
+                camera_vec, dtype=torch.float32, device=device
+            ).unsqueeze(0),
+            "camera_state_enabled": self.observation_config.include_camera_state,
+            "output_channels": 3,
         }
 
     @staticmethod
@@ -735,8 +849,10 @@ class FullSMBStage:
             annotated, terminated=terminated, truncated=truncated
         )
         state_vec = signals.to_state_vec(self.signal_config)
+        camera_vec = _camera_vec(annotated, signals, self.signal_config)
         annotated["full_smb_signals"] = signals.as_dict()
         annotated["state_vec"] = state_vec
+        annotated["camera_vec"] = camera_vec
         annotated["reward_config"] = self.reward_config.to_manifest()
         return annotated
 
@@ -767,6 +883,15 @@ class FullSMBStage:
         }
         terms["total"] = float(sum(terms.values()))
         return {name: float(value) for name, value in terms.items()}
+
+    def _encoded_state_vec(self, info: Mapping[str, Any]) -> Optional[np.ndarray]:
+        state = self._state_vec(info)
+        if state is None or not self.observation_config.include_camera_state:
+            return state
+        camera = np.asarray(info.get("camera_vec", np.zeros(4)), dtype=np.float32)
+        if camera.ndim != 1:
+            raise ValueError("Full SMB info['camera_vec'] must be a 1D vector")
+        return np.concatenate((state, np.nan_to_num(camera))).astype(np.float32)
 
     @staticmethod
     def _state_vec(info: Mapping[str, Any]) -> Optional[np.ndarray]:
@@ -853,16 +978,50 @@ def _position_value(info: Mapping[str, Any]) -> Optional[tuple[float, float]]:
 
 
 def _scroll_position_x(info: Mapping[str, Any]) -> Optional[float]:
+    scroll_x = _raw_scroll_x(info)
+    if scroll_x is None:
+        return None
+    screen_x = _numeric_value(info, SCREEN_X_KEYS)
+    return scroll_x + (screen_x or 0.0)
+
+
+def _raw_scroll_x(info: Mapping[str, Any]) -> Optional[float]:
     scroll_x = _numeric_value(info, SCROLL_X_KEYS)
     if scroll_x is None:
         scroll_lo = _numeric_value(info, SCROLL_X_LO_KEYS)
         scroll_hi = _numeric_value(info, SCROLL_X_HI_KEYS)
         if scroll_lo is not None and scroll_hi is not None:
             scroll_x = scroll_hi * 256.0 + scroll_lo
-    if scroll_x is None:
-        return None
+    return scroll_x
+
+
+def _camera_vec(
+    info: Mapping[str, Any],
+    signals: FullSMBSignals,
+    config: FullSMBSignalConfig,
+) -> np.ndarray:
+    scroll_x = _raw_scroll_x(info)
+    screen = signals.screen
     screen_x = _numeric_value(info, SCREEN_X_KEYS)
-    return scroll_x + (screen_x or 0.0)
+    screen_y = _numeric_value(info, SCREEN_Y_KEYS)
+    if screen is not None:
+        if screen_x is None:
+            screen_x = float(screen[0])
+        if screen_y is None:
+            screen_y = float(screen[1])
+    player_x = signals.position[0] if signals.position is not None else None
+    player_camera_x = (
+        player_x - scroll_x if player_x is not None and scroll_x is not None else None
+    )
+    return np.asarray(
+        [
+            _normalize_feature(scroll_x, config.position_x_max),
+            _normalize_feature(screen_x, config.screen_x_max),
+            _normalize_feature(screen_y, config.screen_y_max),
+            _normalize_feature(player_camera_x, config.screen_x_max),
+        ],
+        dtype=np.float32,
+    )
 
 
 def _screen_value(info: Mapping[str, Any]) -> Optional[tuple[int, int]]:

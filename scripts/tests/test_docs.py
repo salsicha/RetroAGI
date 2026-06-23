@@ -61,6 +61,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
             "FullSMBRewardConfig",
             "reward_terms",
+            "FullSMBObservationConfig",
+            "camera_vec",
         ):
             self.assertIn(term, text)
 

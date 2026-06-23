@@ -455,7 +455,7 @@ and playable end target.
       and frame-penalty terms from Block SMB rewards.
 - [x] Add reward-term breakdowns to Full SMB step info and tests proving the
       reported terms sum to the scalar reward.
-- [ ] Verify and tune Full SMB frame preprocessing: crop/resize policy,
+- [x] Verify and tune Full SMB frame preprocessing: crop/resize policy,
       frame-skip, frame stacking, grayscale/RGB choice, normalization, HUD
       handling, episode masks, and camera/scroll position encoding.
 - [ ] Add Full SMB perception diagnostics on real emulator frames using the
