@@ -75,7 +75,7 @@ class TestCheckpointSchema(unittest.TestCase):
         )
         self.assertEqual(
             architecture["supported_stage_names"],
-            ["synthetic_1d", "block_smb", "full_smb"],
+            ["synthetic_1d", "block_smb", "full_smb", "pong_block"],
         )
         self.assertEqual(
             architecture["config"],

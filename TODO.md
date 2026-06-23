@@ -414,7 +414,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Add a first non-SMB proof-of-concept game profile with all three planned
       rungs documented, even if only the synthetic and block rungs are initially
       implemented.
-- [ ] Add a second-game smoke test that proves the architecture registry,
+- [x] Add a second-game smoke test that proves the architecture registry,
       action mapping, signal extraction, and experiment manifest are not
       hard-coded to SMB.
 - [ ] Update operations and reproducibility docs with multi-game commands,

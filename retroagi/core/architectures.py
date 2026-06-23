@@ -145,7 +145,7 @@ def make_agent_world_model_critic(
 BASELINE_ARCHITECTURE_SPEC = ArchitectureSpec(
     name=BASELINE_ARCHITECTURE_NAME,
     factory=make_agent_world_model_critic,
-    supported_stage_names=("synthetic_1d", "block_smb", "full_smb"),
+    supported_stage_names=("synthetic_1d", "block_smb", "full_smb", "pong_block"),
     checkpoint_model_name=BASELINE_ARCHITECTURE_NAME,
     checkpoint_compatibility_policy=BASELINE_CHECKPOINT_POLICY,
     configurable_hyperparameters={

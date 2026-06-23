@@ -130,10 +130,13 @@ without adding game assumptions to shared trainers.
 
 `GamePluginSpec` is the lookup contract that binds a `GameSpec` to component
 entrypoints by name. It registers stage adapters, vision encoders, reward
-schema, fixed-task success thresholds, and asset/perception pipelines. The
-default `GAME_PLUGIN_REGISTRY` exposes the SMB and Pong plugins, so callers can
-resolve components with `get_game_plugin(<name>)` instead of importing
-SMB-only modules in shared training or promotion code.
+schema, signal extractors, fixed-task success thresholds, and asset/perception
+pipelines. The default `GAME_PLUGIN_REGISTRY` exposes the SMB and Pong plugins,
+so callers can resolve components with `get_game_plugin(<name>)` instead of
+importing SMB-only modules in shared training or promotion code. The
+second-game smoke test builds the baseline architecture for the Pong block
+stage, maps Pong actions, extracts Pong signals, and writes a Pong experiment
+manifest to guard this contract.
 
 `GamePromotionPlan` defines how architecture promotion composes with a game's
 fidelity ladder. The default phases are `architecture-smoke`, `game-synthetic`,

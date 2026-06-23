@@ -34,6 +34,7 @@ class GamePluginSpec:
     perception_pipelines: Mapping[str, PerceptionPipelineSpec] = field(
         default_factory=dict
     )
+    signal_extractors: Mapping[str, str] = field(default_factory=dict)
     reward_schema: RewardConfigSchema | None = None
     success_thresholds: Mapping[str, TaskSuccessThreshold] = field(default_factory=dict)
     promotion_gates: Mapping[str, GamePromotionGateSpec] = field(default_factory=dict)
@@ -70,6 +71,12 @@ class GamePluginSpec:
                 "asset pipeline",
                 self.asset_pipelines,
                 stage_names.union({"assets", "perception"}),
+            )
+        if self.signal_extractors:
+            self._validate_named_components(
+                "signal extractor",
+                self.signal_extractors,
+                stage_names,
             )
         self._validate_perception_pipelines()
         unknown_gate_names = sorted(
@@ -175,6 +182,15 @@ class GamePluginSpec:
             f"unknown perception pipeline {name!r} for game plugin {self.name!r}"
         )
 
+    def signal_extractor(self, name: str) -> str:
+        stage = self.resolve_stage(name)
+        try:
+            return self.signal_extractors[stage.name]
+        except KeyError as exc:
+            raise KeyError(
+                f"unknown signal extractor {stage.name!r} for game plugin {self.name!r}"
+            ) from exc
+
     def reward_config(self, values: Mapping[str, float] | None = None) -> dict[str, float]:
         if self.reward_schema is None:
             return self.game.reward_config(values)
@@ -243,6 +259,9 @@ class GamePluginRegistry:
 
     def success_threshold(self, game_name: str, task_name: str) -> TaskSuccessThreshold:
         return self.get(game_name).success_threshold(task_name)
+
+    def signal_extractor(self, game_name: str, stage_name: str) -> str:
+        return self.get(game_name).signal_extractor(stage_name)
 
     def promotion_gate(
         self,
@@ -389,6 +408,9 @@ SMB_GAME_PLUGIN = GamePluginSpec(
                 "training_entrypoint": "scripts.vit.train_vit",
             },
         ),
+    },
+    signal_extractors={
+        "full": "retroagi.stages.full_smb.adapter.FullSMBSignalExtractor",
     },
     reward_schema=SMB_GAME_SPEC.reward_schema,
     success_thresholds={
@@ -650,6 +672,10 @@ PONG_GAME_PLUGIN = GamePluginSpec(
                 "profile_status": "planned_full_rung",
             },
         ),
+    },
+    signal_extractors={
+        "block": "retroagi.core.PongSignalExtractor",
+        "full": "retroagi.core.PongSignalExtractor",
     },
     reward_schema=PONG_GAME_SPEC.reward_schema,
     success_thresholds={

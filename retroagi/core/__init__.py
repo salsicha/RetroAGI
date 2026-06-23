@@ -149,7 +149,13 @@ from .perception import (
     SemanticVocabularySpec,
 )
 from .rewards import RewardConfigSchema, RewardTermSpec
-from .signals import GameSignalExtractor, GameSignals
+from .signals import (
+    GameSignalExtractor,
+    GameSignals,
+    PongSignalExtractor,
+    PongSignals,
+    extract_pong_signals,
+)
 from .stage_resolution import (
     CANONICAL_STAGE_NAMES,
     OPTIONAL_STAGE_NAMES,
@@ -235,6 +241,8 @@ __all__ = [
     "PONG_GAME_SPEC",
     "PONG_GAME_PLUGIN",
     "PONG_REWARD_SCHEMA",
+    "PongSignalExtractor",
+    "PongSignals",
     "PONG_SYNTHETIC_DATA_SPECS",
     "PONG_TASK_SCHEMA",
     "PatchVisionTransformer",
@@ -300,6 +308,7 @@ __all__ = [
     "get_architecture",
     "get_game_plugin",
     "get_game_spec",
+    "extract_pong_signals",
     "probe_backend_capabilities",
     "is_versioned_checkpoint",
     "is_standard_stage_name",
