@@ -115,6 +115,27 @@ class TestPromotionPipeline(unittest.TestCase):
             with (
                 patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment),
                 patch(
+                    "retroagi.promotion._run_full_smb_asset_mock_perception",
+                    return_value={
+                        "name": "full-smb-asset-mock-perception",
+                        "status": "passed",
+                        "passed": True,
+                        "budget": {
+                            "train_scenes": 8,
+                            "validation_scenes": 4,
+                            "epochs": 8,
+                            "semantic_accuracy_threshold": 0.05,
+                            "foreground_accuracy_threshold": 0.01,
+                            "mean_iou_threshold": 0.01,
+                            "position_within_tolerance_threshold": 0.0,
+                            "position_tolerance": 0.35,
+                            "runtime_seconds": 120.0,
+                        },
+                        "runtime_seconds": 0.01,
+                        "automatic_gates": [{"name": "mock", "passed": True}],
+                    },
+                ),
+                patch(
                     "retroagi.promotion._run_full_smb_transfer_smoke",
                     return_value={
                         "name": "full-smb-transfer-smoke",
@@ -152,6 +173,7 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(rung_statuses["interface-smoke"], "passed")
         self.assertEqual(rung_statuses["synthetic-concept"], "passed")
         self.assertEqual(rung_statuses["block-smb-smoke"], "passed")
+        self.assertEqual(rung_statuses["full-smb-asset-mock-perception"], "passed")
         self.assertEqual(rung_statuses["full-smb-transfer-smoke"], "passed")
         self.assertEqual(rung_statuses["full-smb-fine-tuning"], "skipped")
         self.assertIn("reason", manifest["rungs"][-1])
@@ -169,6 +191,38 @@ class TestPromotionPipeline(unittest.TestCase):
         for rung in manifest["rungs"]:
             if rung["status"] == "passed":
                 self.assertTrue(all(gate["passed"] for gate in rung["automatic_gates"]))
+
+    def test_full_smb_asset_mock_perception_trains_and_gates_vit_checkpoint(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            exit_code, manifest = self.run_main(
+                [
+                    "--rung",
+                    "full-smb-asset-mock-perception",
+                    "--output",
+                    str(root / "promotion.json"),
+                    "--artifacts-dir",
+                    str(root / "artifacts"),
+                    "--device",
+                    "cpu",
+                ]
+            )
+            checkpoint_exists = Path(
+                manifest["rungs"][0]["artifacts"]["full_smb_vision_checkpoint_path"]
+            ).exists()
+            summary_payload = json.loads(Path(manifest["rungs"][0]["summary_path"]).read_text())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(manifest["passed"])
+        rung = manifest["rungs"][0]
+        self.assertEqual(rung["name"], "full-smb-asset-mock-perception")
+        self.assertEqual(rung["status"], "passed")
+        self.assertGreaterEqual(rung["metrics"]["accuracy"], 0.05)
+        self.assertGreaterEqual(rung["metrics"]["foreground_accuracy"], 0.01)
+        self.assertGreaterEqual(rung["metrics"]["class_coverage"], 13.0)
+        self.assertIn("mock_assets", summary_payload)
+        self.assertTrue(all(gate["passed"] for gate in rung["automatic_gates"]))
+        self.assertTrue(checkpoint_exists)
 
     def test_full_smb_transfer_smoke_runs_handoff_and_continued_training(self):
         with TemporaryDirectory() as tmpdir:

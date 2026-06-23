@@ -307,7 +307,7 @@ high-fidelity evaluations.
       control policy trains on Block SMB, runs inference unchanged on Full SMB,
       and continues learning on Full SMB from the transferred controller
       checkpoint with explicit metrics for transfer quality and adaptation.
-- [ ] Add a required Full SMB asset-mock perception adaptation rung between
+- [x] Add a required Full SMB asset-mock perception adaptation rung between
       Block SMB and Full SMB policy inference/training: compose mock scenarios
       from the full game assets, fine-tune or train the Full SMB ViT on those
       synthetic scenes, validate held-out semantic/position metrics, and gate
