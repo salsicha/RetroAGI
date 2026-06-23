@@ -202,7 +202,7 @@ evaluations and load a compatible Block SMB checkpoint.
 - [x] Integrate TensorBoard or Weights & Biases behind an optional dependency.
 - [x] Document hardware, runtime, expected metrics, and artifact locations for
       every stage.
-- [ ] Publish a reproducibility procedure that starts from a clean checkout.
+- [x] Publish a reproducibility procedure that starts from a clean checkout.
 
 **Exit criteria:** experiments are launchable through one interface, resumable,
 traceable to code/configuration, and checked automatically in CI.

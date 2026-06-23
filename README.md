@@ -63,6 +63,10 @@ The current known-good baseline is a scripted policy artifact at
 The [operations reference](docs/operations.md) lists hardware expectations,
 runtime targets, metrics, and artifact locations for each stage.
 
+The [reproducibility procedure](docs/reproducibility.md) starts from a clean
+checkout and walks through installation, tests, smoke training, and artifact
+verification.
+
 The [tensor contracts](docs/tensor-contracts.md) define hierarchy and vision
 shapes, dtypes, normalization ranges, and timescales.
 
