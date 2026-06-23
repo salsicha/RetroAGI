@@ -297,7 +297,7 @@ high-fidelity evaluations.
       of only transfer and inference comparison.
 - [x] Add a known-good architecture sweep fixture that runs the baseline through
       the smallest promotion pipeline in CI or a documented local command.
-- [ ] Update the reproducibility procedure with architecture-sweep commands and
+- [x] Update the reproducibility procedure with architecture-sweep commands and
       the expected combined manifest.
 
 **Exit criteria:** a new architecture concept can be registered once, launched

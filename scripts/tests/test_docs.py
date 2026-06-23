@@ -59,8 +59,9 @@ class TestOperationsDocumentation(unittest.TestCase):
             "## 2. Create A Supported Environment",
             "## 3. Run The Baseline Test Suite",
             "## 4. Run The Baseline Architecture Promotion Fixture",
-            "## 5. Run A Traceable CPU Smoke Training",
-            "## 11. Preserve The Run",
+            "## 5. Run A Traceable Architecture Sweep",
+            "## 6. Run A Traceable CPU Smoke Training",
+            "## 12. Preserve The Run",
         ):
             self.assertIn(section, text)
 
@@ -69,6 +70,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "git status --short",
             "python -m unittest discover -s scripts/tests -v",
             "retroagi promote",
+            "retroagi experiment",
+            "retroagi report",
             "retroagi train --stage block-smb",
             "retroagi diagnose-vision --stage block-smb",
             "retroagi evaluate --stage full-smb",
@@ -79,6 +82,8 @@ class TestOperationsDocumentation(unittest.TestCase):
 
         for artifact in (
             "artifacts/repro/promotion_baseline_interface.json",
+            "artifacts/repro/architecture_sweeps/baseline/manifest.json",
+            "artifacts/repro/architecture_sweeps/report.json",
             "artifacts/repro/block_smb_smoke/run_summary.json",
             "artifacts/repro/block_smb_smoke/events.jsonl",
             "data/block_smb/policy.pth",

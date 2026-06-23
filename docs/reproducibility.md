@@ -126,7 +126,95 @@ This fixture is intentionally cheaper than policy training. It is the minimum
 architecture-sweep gate before spending time on the synthetic, Block SMB, and
 Full SMB training rungs.
 
-## 5. Run A Traceable CPU Smoke Training
+## 5. Run A Traceable Architecture Sweep
+
+Use `retroagi experiment` when comparing architecture concepts across runnable
+fidelity layers. The command below runs the baseline through Synthetic 1D and a
+tiny Block SMB smoke pass, then writes one combined manifest with the resolved
+architecture, per-stage commands, configs, metrics, checkpoints, logs, gates,
+and pass/fail status.
+
+```bash
+retroagi experiment \
+  --stage synthetic-1d \
+  --stage block-smb \
+  --output artifacts/repro/architecture_sweeps/baseline/manifest.json \
+  --artifacts-dir artifacts/repro/architecture_sweeps/baseline \
+  --seed 0 \
+  --device cpu \
+  --architecture baseline \
+  --architecture-config hidden_dim=8 \
+  --synthetic-epochs 1 \
+  --synthetic-train-samples 16 \
+  --synthetic-validation-samples 8 \
+  --synthetic-test-samples 8 \
+  --block-epochs 1 \
+  --block-episodes-per-epoch 1 \
+  --block-rollout-steps 2 \
+  --block-evaluation-episodes 1 \
+  --block-evaluation-max-steps 2 \
+  --block-fixed-scenario level_1_flat.json \
+  --gate 'synthetic-1d:controller_mse<100' \
+  --gate 'block-smb:eval_success_rate>=0'
+```
+
+Verify the combined manifest before comparing it:
+
+```bash
+test -s artifacts/repro/architecture_sweeps/baseline/manifest.json
+python - <<'PY'
+import json
+from pathlib import Path
+
+manifest = json.loads(Path("artifacts/repro/architecture_sweeps/baseline/manifest.json").read_text())
+assert manifest["architecture"] == {
+    "name": "agent_world_model_critic",
+    "config": {"hidden_dim": 8},
+}
+assert manifest["seed"] == 0
+assert manifest["device"] == "cpu"
+assert manifest["passed"] is True
+assert {stage["stage"] for stage in manifest["stages"]} == {
+    "synthetic-1d",
+    "block-smb",
+}
+for stage in manifest["stages"]:
+    assert stage["command"]
+    assert Path(stage["summary_path"]).name == "run_summary.json"
+    assert Path(stage["checkpoint_path"]).name == "checkpoint.pth"
+    assert isinstance(stage["config"], dict)
+    assert isinstance(stage["metrics"], dict)
+    assert all(gate["passed"] for gate in stage["gates"])
+assert manifest["gates"]
+print("Architecture sweep manifest verified")
+PY
+```
+
+Run the same command into a different artifacts directory for each architecture
+or ablation variant. For example, add `--ablation critic=false` and use
+`artifacts/repro/architecture_sweeps/no_critic/manifest.json` for a comparable
+variant.
+
+After two or more manifests exist, build a comparison report:
+
+```bash
+retroagi report \
+  --input artifacts/repro/architecture_sweeps/baseline/manifest.json \
+  --input artifacts/repro/architecture_sweeps/no_critic/manifest.json \
+  --baseline-architecture agent_world_model_critic \
+  --baseline-config hidden_dim=8 \
+  --output artifacts/repro/architecture_sweeps/report.json
+```
+
+Expected report evidence:
+
+- one row per stage for every input manifest,
+- numeric metric deltas against the selected baseline when matching metrics are
+  present,
+- artifact links back to each stage summary, checkpoint, and log,
+- pass/fail gates carried through from the combined manifests.
+
+## 6. Run A Traceable CPU Smoke Training
 
 Use the same smoke shape as CI. It is intentionally tiny; the purpose is to
 prove the CLI, configuration capture, structured logs, and deterministic
@@ -174,7 +262,7 @@ print("Smoke artifacts verified")
 PY
 ```
 
-## 6. Reproduce Synthetic 1D
+## 7. Reproduce Synthetic 1D
 
 ```bash
 python -m retroagi.stages.synthetic_1d.train
@@ -189,7 +277,7 @@ Expected evidence:
 - deterministic split seeds and train permutations are covered by tests,
 - checkpoint save, restore, and resume behavior are covered by tests.
 
-## 7. Reproduce Block SMB Perception
+## 8. Reproduce Block SMB Perception
 
 First verify the tracked or supplied Block ViT checkpoint:
 
@@ -219,7 +307,7 @@ python scripts/vit/train_block_vit.py \
 Preserve `data/block_vit/block_vit.pth`,
 `data/block_vit/block_vit.json`, and the diagnostic JSON.
 
-## 8. Reproduce Block SMB Policy
+## 9. Reproduce Block SMB Policy
 
 Run a traceable policy training job with an explicit seed, checkpoint,
 structured log, and run summary:
@@ -283,7 +371,7 @@ The scripted known-good baseline at
 baseline for environment and threshold behavior. It is not a substitute for a
 learned policy checkpoint.
 
-## 9. Reproduce Full SMB Vision
+## 10. Reproduce Full SMB Vision
 
 Generate assets and synthetic data, then train the Full SMB ViT segmenter:
 
@@ -310,7 +398,7 @@ The reference target is about 99.94 percent overall accuracy, 99.89 percent
 foreground accuracy, and 99.14 percent mean IoU on 1,000 held-out synthetic
 scenes.
 
-## 10. Reproduce Full SMB Adapter And Transfer
+## 11. Reproduce Full SMB Adapter And Transfer
 
 Run the headless emulator smoke path:
 
@@ -353,7 +441,7 @@ Expected evidence:
   mean entropies, mean margins, collection reward, resets, terminations, and
   truncations.
 
-## 11. Preserve The Run
+## 12. Preserve The Run
 
 Before publishing or comparing results, preserve:
 
