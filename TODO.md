@@ -458,7 +458,7 @@ and playable end target.
 - [x] Verify and tune Full SMB frame preprocessing: crop/resize policy,
       frame-skip, frame stacking, grayscale/RGB choice, normalization, HUD
       handling, episode masks, and camera/scroll position encoding.
-- [ ] Add Full SMB perception diagnostics on real emulator frames using the
+- [x] Add Full SMB perception diagnostics on real emulator frames using the
       Full SMB ViT checkpoint: semantic confidence, class coverage, temporal
       stability, position consistency, and bottleneck flags.
 - [ ] Decide whether Full SMB policy training freezes, fine-tunes, or replaces

@@ -433,6 +433,40 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_full_smb_diagnose_vision_forwards_arguments(self):
+        with patch("retroagi.stages.full_smb.diagnostics.main", return_value=0) as diagnostics_main:
+            exit_code = cli.main(
+                [
+                    "diagnose-vision",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "full",
+                    "--vision-checkpoint",
+                    "data/vit/full_smb_vit.pth",
+                    "--samples",
+                    "4",
+                    "--rollout-steps",
+                    "8",
+                    "--output",
+                    "artifacts/full_smb/perception_diagnostic.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        diagnostics_main.assert_called_once_with(
+            [
+                "--vision-checkpoint",
+                "data/vit/full_smb_vit.pth",
+                "--samples",
+                "4",
+                "--rollout-steps",
+                "8",
+                "--output",
+                "artifacts/full_smb/perception_diagnostic.json",
+            ]
+        )
+
     def test_full_smb_record_reports_unsupported_command(self):
         stream = io.StringIO()
         with redirect_stderr(stream):
@@ -441,7 +475,7 @@ class TestRetroAGICLI(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 2)
         self.assertIn(
-            "train, resume, evaluate, transfer, compare, and check-env",
+            "train, resume, evaluate, diagnose-vision, transfer, compare, and check-env",
             stream.getvalue(),
         )
 

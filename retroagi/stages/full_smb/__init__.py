@@ -23,6 +23,13 @@ from .capabilities import (
     FullSMBEnvironmentCheckConfig,
     run_full_smb_environment_check,
 )
+from .diagnostics import (
+    FullSMBPerceptionDiagnosticThresholds,
+    FullSMBPerceptionDiagnosticTrace,
+    collect_full_smb_perception_diagnostic_frames,
+    evaluate_full_smb_perception,
+    run_full_smb_perception_diagnostic,
+)
 from .save_states import (
     FULL_SMB_SAVE_STATE_CATEGORIES,
     FULL_SMB_SAVE_STATE_LOCAL_ROOT,
@@ -107,6 +114,8 @@ __all__ = [
     "FullSMBEnvironmentCheckConfig",
     "FullSMBEvaluationResult",
     "FullSMBObservationConfig",
+    "FullSMBPerceptionDiagnosticThresholds",
+    "FullSMBPerceptionDiagnosticTrace",
     "FullSMBDeterministicResetSmokeResult",
     "FullSMBRandomAgentSmokeResult",
     "FullSMBRewardConfig",
@@ -143,9 +152,11 @@ __all__ = [
     "build_full_smb_policy_checkpoint",
     "create_full_smb_save_state_artifact",
     "create_full_smb_save_state_artifacts",
+    "collect_full_smb_perception_diagnostic_frames",
     "evaluate_fixed_full_smb_success_thresholds",
     "evaluate_full_smb_success_threshold",
     "evaluate_full_smb_policy",
+    "evaluate_full_smb_perception",
     "extract_full_smb_signals",
     "fixed_full_smb_success_threshold",
     "full_smb_save_state_plan",
@@ -155,6 +166,7 @@ __all__ = [
     "load_full_smb_vit_checkpoint",
     "make_stable_retro_env",
     "run_deterministic_reset_smoke",
+    "run_full_smb_perception_diagnostic",
     "run_full_smb_environment_check",
     "run_headless_random_agent_smoke",
     "summarize_fixed_full_smb_success_metrics",

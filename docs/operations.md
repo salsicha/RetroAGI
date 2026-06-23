@@ -242,8 +242,9 @@ them.
 | Asset Command | `python scripts/vit/extract_sprites.py`. |
 | Dataset Command | `python scripts/vit/generate_dataset.py --train 5000 --val 1000`. |
 | Train Command | `python scripts/vit/train_vit.py --epochs 30 --batch 64 --dim 192 --depth 6 --device auto`. |
-| Expected Metrics | `accuracy`, `foreground_accuracy`, `mean_iou`, plus per-class `iou/<class>` and `recall/<class>` in the versioned checkpoint. The documented reference checkpoint reports about 99.94 percent overall accuracy, 99.89 percent foreground accuracy, and 99.14 percent mean IoU on 1,000 held-out synthetic scenes. |
-| Artifact Locations | Sprites: `assets/spritesheets/` and `assets/sprites/`. Synthetic data: `data/vit/train.npz` and `data/vit/val.npz`. Default versioned checkpoint: `data/vit/full_smb_vit.pth`. Legacy raw weights: `data/vit/vit_smb.pth`. Preview image: `data/vit/predictions.png`. |
+| Diagnostic Command | `retroagi diagnose-vision --game smb --stage full --vision-checkpoint data/vit/full_smb_vit.pth --samples 64 --rollout-steps 128 --output artifacts/full_smb/perception_diagnostic.json`. |
+| Expected Metrics | Synthetic training writes `accuracy`, `foreground_accuracy`, `mean_iou`, plus per-class `iou/<class>` and `recall/<class>` in the versioned checkpoint. Real-emulator diagnostics add unlabeled `semantic_confidence`, `class_coverage`, `covered_classes`, `temporal_stability`, `position_rmse`, `position_within_tolerance`, `bottleneck`, and `bottleneck_reasons`. The documented reference checkpoint reports about 99.94 percent overall accuracy, 99.89 percent foreground accuracy, and 99.14 percent mean IoU on 1,000 held-out synthetic scenes. |
+| Artifact Locations | Sprites: `assets/spritesheets/` and `assets/sprites/`. Synthetic data: `data/vit/train.npz` and `data/vit/val.npz`. Default versioned checkpoint: `data/vit/full_smb_vit.pth`. Legacy raw weights: `data/vit/vit_smb.pth`. Preview image: `data/vit/predictions.png`. Real-emulator diagnostic summaries: `artifacts/full_smb/perception_diagnostic.json`. |
 
 ## Full SMB Content Setup
 

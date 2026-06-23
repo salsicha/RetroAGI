@@ -63,6 +63,10 @@ class TestOperationsDocumentation(unittest.TestCase):
             "reward_terms",
             "FullSMBObservationConfig",
             "camera_vec",
+            "retroagi diagnose-vision --game smb --stage full",
+            "semantic_confidence",
+            "class_coverage",
+            "temporal_stability",
         ):
             self.assertIn(term, text)
 

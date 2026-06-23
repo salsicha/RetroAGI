@@ -382,6 +382,14 @@ encoder. It records `frame_stack` as `[1, frame_stack, 3, H, W]`,
 `hud_policy`, `color_mode`, normalization settings, `camera_vec`, and
 `camera_state_enabled` in `batch.metadata["observation"]`.
 
+`retroagi diagnose-vision --game smb --stage full` runs the Full SMB ViT on
+real emulator frames and reports unlabeled perception diagnostics:
+`semantic_confidence`, `class_coverage`, `covered_classes`,
+`temporal_stability`, position consistency against `camera_vec`/`state_vec`,
+and `bottleneck_reasons`. These metrics do not replace synthetic asset-mock
+IoU; they catch real-frame confidence, coverage, temporal, and localization
+failures before policy-training issues are blamed on the controller.
+
 ### Action
 
 `FullSMBStage` uses the action space declared by `SMB_GAME_SPEC`, currently the
