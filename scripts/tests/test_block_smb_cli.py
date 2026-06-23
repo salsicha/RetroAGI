@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import torch
 
+from retroagi.core import BASELINE_ARCHITECTURE_NAME
 from retroagi.stages.block_smb import cli
 
 
@@ -43,6 +44,11 @@ def fake_result():
             "fixed_scenarios": {"level_1_flat.json": {"return": 2.0}},
         },
         "curriculum": ["level_1_flat.json"],
+        "architecture": {
+            "name": BASELINE_ARCHITECTURE_NAME,
+            "config": {"hidden_dim": 32, "controller_schedule": "constant"},
+            "spec": {"name": BASELINE_ARCHITECTURE_NAME},
+        },
         "model": object(),
     }
 
@@ -129,6 +135,11 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.epochs, 3)
         self.assertEqual(config.episodes_per_epoch, 4)
         self.assertEqual(config.controller_schedule, "linear")
+        self.assertEqual(config.architecture_name, BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(
+            config.architecture_config,
+            {"hidden_dim": 32, "controller_schedule": "linear"},
+        )
         self.assertEqual(config.imagined_rollout_horizon, 2)
         self.assertEqual(config.imagined_rollout_weight, 0.2)
         self.assertEqual(config.target_network_mode, "auto")
@@ -163,6 +174,11 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertNotIn("model", payload)
         self.assertEqual(payload["config"]["epochs"], 3)
         self.assertEqual(payload["config"]["controller_schedule"], "linear")
+        self.assertEqual(payload["config"]["architecture_name"], BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(
+            payload["config"]["architecture_config"],
+            {"hidden_dim": 32, "controller_schedule": "linear"},
+        )
         self.assertEqual(payload["config"]["imagined_rollout_horizon"], 2)
         self.assertEqual(payload["config"]["imagined_rollout_weight"], 0.2)
         self.assertEqual(payload["config"]["target_network_mode"], "auto")
@@ -179,6 +195,11 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
         self.assertFalse(payload["config"]["ablation"]["world_model_enabled"])
         self.assertFalse(payload["vision"]["checkpoint_transfer"])
+        self.assertEqual(payload["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(
+            payload["architecture"]["config"],
+            {"hidden_dim": 32, "controller_schedule": "constant"},
+        )
 
     def test_train_command_loads_frozen_vision_checkpoint_and_writes_summary(self):
         loaded_model = object()
@@ -222,7 +243,9 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["vision"]["checkpoint_path"], "data/block_vit/block_vit.pth")
         self.assertTrue(payload["vision"]["frozen"])
         self.assertTrue(payload["vision"]["checkpoint_transfer"])
+        self.assertEqual(payload["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
         self.assertEqual(written["vision"], payload["vision"])
+        self.assertEqual(written["architecture"], payload["architecture"])
 
     def test_train_command_can_disable_checkpoint_transfer(self):
         fresh_vision = FreshVision()

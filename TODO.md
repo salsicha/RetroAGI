@@ -224,7 +224,7 @@ high-fidelity evaluations.
       so existing behavior remains the first comparable entry.
 - [x] Refactor Synthetic 1D training to consume an architecture factory instead
       of instantiating `AgentWorldModelCritic` directly.
-- [ ] Refactor Block SMB policy training to consume an architecture factory and
+- [x] Refactor Block SMB policy training to consume an architecture factory and
       save the selected architecture name and config in every checkpoint and
       run summary.
 - [ ] Refactor Full SMB transfer and comparison to load architecture-specific

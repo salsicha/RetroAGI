@@ -590,6 +590,7 @@ def _public_result(
         "metrics": result.get("metrics", {}),
         "evaluation": result.get("evaluation", {}),
         "curriculum": result.get("curriculum", []),
+        "architecture": result.get("architecture", {}),
     }
 
 

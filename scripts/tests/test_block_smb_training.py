@@ -9,8 +9,10 @@ from unittest.mock import patch
 import torch
 
 from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
     VisionOutput,
     VisionSpec,
+    build_architecture,
     build_checkpoint,
     checkpoint_summary_path,
     load_checkpoint,
@@ -117,12 +119,30 @@ class TestBlockSMBTraining(unittest.TestCase):
 
     def test_controller_schedule_configures_block_smb_model(self):
         config = tiny_config(controller_schedule="linear")
-        model = make_block_smb_model(config)
+        with patch(
+            "retroagi.stages.block_smb.train.build_architecture",
+            wraps=build_architecture,
+        ) as build_model:
+            model = make_block_smb_model(config)
 
         self.assertEqual(model.agent.controller.schedule, "linear")
+        self.assertEqual(config.architecture_name, BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(
+            config.architecture_config,
+            {"hidden_dim": 8, "controller_schedule": "linear"},
+        )
+        build_model.assert_called_once_with(
+            BASELINE_ARCHITECTURE_NAME,
+            BLOCK_SMB_SPEC,
+            {"hidden_dim": 8, "controller_schedule": "linear"},
+        )
 
         with self.assertRaisesRegex(ValueError, "controller_schedule"):
             tiny_config(controller_schedule="quadratic")
+        with self.assertRaisesRegex(ValueError, "architecture_name"):
+            tiny_config(architecture_name="")
+        with self.assertRaisesRegex(ValueError, "architecture_config"):
+            tiny_config(architecture_config={"": 8})
 
         with self.assertRaisesRegex(ValueError, "target_network_mode"):
             tiny_config(target_network_mode="sometimes")
@@ -359,6 +379,21 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertEqual(saved["epoch"], 1)
             self.assertEqual(saved["global_step"], 1)
             self.assertEqual(saved["config"]["reward_config"]["goal"], 70.0)
+            self.assertEqual(saved["config"]["architecture_name"], BASELINE_ARCHITECTURE_NAME)
+            self.assertEqual(
+                saved["config"]["architecture_config"],
+                {"hidden_dim": 8, "controller_schedule": "constant"},
+            )
+            self.assertEqual(saved["specs"]["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
+            self.assertEqual(
+                saved["specs"]["architecture_config"],
+                {"hidden_dim": 8, "controller_schedule": "constant"},
+            )
+            self.assertEqual(result["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
+            self.assertEqual(
+                result["architecture"]["config"],
+                {"hidden_dim": 8, "controller_schedule": "constant"},
+            )
             evaluation = result["evaluation"]
             self.assertIn("level_1_flat.json", evaluation["fixed_scenarios"])
             self.assertIn("tuning_metrics", evaluation)
@@ -551,6 +586,69 @@ class TestBlockSMBTraining(unittest.TestCase):
 
         self.assertEqual(restored["model_name"], BLOCK_SMB_MODEL_NAME)
 
+    def test_restore_rejects_incompatible_architecture_checkpoint(self):
+        with TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "bad_architecture_block_smb.pth"
+            config = tiny_config()
+            model = make_block_smb_model(config)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            checkpoint = build_checkpoint(
+                stage=BLOCK_SMB_SPEC.name,
+                model_name=BLOCK_SMB_MODEL_NAME,
+                checkpoint_kind=BLOCK_SMB_CHECKPOINT_KIND,
+                config={
+                    "architecture_name": "other_architecture",
+                    "architecture_config": config.architecture_config,
+                },
+                states={
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                },
+            )
+            save_checkpoint(checkpoint_path, checkpoint)
+
+            with self.assertRaisesRegex(ValueError, "checkpoint architecture"):
+                restore_block_smb_checkpoint(
+                    checkpoint_path,
+                    model,
+                    optimizer,
+                    architecture_name=config.architecture_name,
+                    architecture_config=config.architecture_config,
+                )
+
+    def test_restore_rejects_incompatible_architecture_config_checkpoint(self):
+        with TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "bad_architecture_config_block_smb.pth"
+            config = tiny_config()
+            model = make_block_smb_model(config)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            checkpoint = build_checkpoint(
+                stage=BLOCK_SMB_SPEC.name,
+                model_name=BLOCK_SMB_MODEL_NAME,
+                checkpoint_kind=BLOCK_SMB_CHECKPOINT_KIND,
+                config={
+                    "architecture_name": config.architecture_name,
+                    "architecture_config": {
+                        "hidden_dim": 16,
+                        "controller_schedule": "constant",
+                    },
+                },
+                states={
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                },
+            )
+            save_checkpoint(checkpoint_path, checkpoint)
+
+            with self.assertRaisesRegex(ValueError, "checkpoint architecture config"):
+                restore_block_smb_checkpoint(
+                    checkpoint_path,
+                    model,
+                    optimizer,
+                    architecture_name=config.architecture_name,
+                    architecture_config=config.architecture_config,
+                )
+
     def test_checkpoint_round_trips_target_network_state(self):
         with TemporaryDirectory() as tmpdir:
             checkpoint_path = Path(tmpdir) / "target_block_smb.pth"
@@ -591,6 +689,8 @@ class TestBlockSMBTraining(unittest.TestCase):
         self.assertIn("target_model", restored["states"])
         self.assertEqual(summary["stage"], BLOCK_SMB_SPEC.name)
         self.assertEqual(summary["metrics"]["loss_total"], 1.0)
+        self.assertEqual(summary["config"]["architecture_name"], BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(summary["specs"]["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
         self.assertIn("target_model", summary["state_keys"])
         self.assertIn("code_revision", summary)
         self.assertIn("environment", summary)

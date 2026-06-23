@@ -15,14 +15,17 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
+    BASELINE_ARCHITECTURE_SPEC,
     SUPPORTED_CONTROLLER_SCHEDULES,
     TRACKING_BACKENDS,
-    AgentWorldModelCritic,
     ExperimentTrackerConfig,
     StageBatch,
     VisionEncoder,
     WorldModelState,
+    build_architecture,
     build_checkpoint,
+    get_architecture,
     load_checkpoint,
     make_experiment_tracker,
     save_checkpoint,
@@ -68,6 +71,8 @@ class BlockSMBAblationConfig:
 @dataclass(frozen=True)
 class BlockSMBTrainingConfig:
     seed: int = 0
+    architecture_name: str = BASELINE_ARCHITECTURE_NAME
+    architecture_config: Mapping[str, Any] = field(default_factory=dict)
     epochs: int = 1
     episodes_per_epoch: int = 2
     rollout_steps: int = 32
@@ -118,6 +123,24 @@ class BlockSMBTrainingConfig:
     tracking_mode: Optional[str] = None
 
     def __post_init__(self) -> None:
+        if not self.architecture_name:
+            raise ValueError("architecture_name must be non-empty")
+        if any(not str(key) for key in self.architecture_config):
+            raise ValueError("architecture_config keys must be non-empty")
+        resolved_architecture_config = dict(self.architecture_config)
+        resolved_architecture_config.setdefault("hidden_dim", self.hidden_dim)
+        resolved_architecture_config.setdefault("controller_schedule", self.controller_schedule)
+        object.__setattr__(
+            self,
+            "architecture_config",
+            resolved_architecture_config,
+        )
+        object.__setattr__(self, "hidden_dim", int(resolved_architecture_config["hidden_dim"]))
+        object.__setattr__(
+            self,
+            "controller_schedule",
+            str(resolved_architecture_config["controller_schedule"]),
+        )
         if isinstance(self.reward_config, Mapping):
             object.__setattr__(self, "reward_config", BlockSMBRewardConfig(**self.reward_config))
         elif not isinstance(self.reward_config, BlockSMBRewardConfig):
@@ -309,18 +332,39 @@ def build_curriculum(config: BlockSMBTrainingConfig) -> list[tuple[str, dict]]:
     return scenarios
 
 
-def make_block_smb_model(config: BlockSMBTrainingConfig) -> AgentWorldModelCritic:
-    return AgentWorldModelCritic(
-        BLOCK_SMB_SPEC.vocab_size,
-        BLOCK_SMB_SPEC.seq_len_a,
-        BLOCK_SMB_SPEC.seq_len_c,
-        BLOCK_SMB_SPEC.ratio_bc,
-        d_model=config.hidden_dim,
-        controller_schedule=config.controller_schedule,
+def block_smb_architecture_metadata(config: BlockSMBTrainingConfig) -> dict[str, Any]:
+    architecture = get_architecture(config.architecture_name)
+    return {
+        "name": architecture.name,
+        "config": dict(config.architecture_config),
+        "spec": architecture.metadata(),
+    }
+
+
+def block_smb_architecture_specs(config: BlockSMBTrainingConfig) -> dict[str, Any]:
+    metadata = block_smb_architecture_metadata(config)
+    return {
+        "architecture": metadata["spec"],
+        "architecture_config": metadata["config"],
+    }
+
+
+def make_block_smb_model(config: BlockSMBTrainingConfig) -> torch.nn.Module:
+    architecture = get_architecture(config.architecture_name)
+    expected_contract = BASELINE_ARCHITECTURE_SPEC.output_contract
+    if architecture.output_contract != expected_contract:
+        raise ValueError(
+            "Block SMB training requires architecture output contract "
+            f"{expected_contract!r}, got {architecture.output_contract!r}"
+        )
+    return build_architecture(
+        config.architecture_name,
+        BLOCK_SMB_SPEC,
+        dict(config.architecture_config),
     )
 
 
-def make_target_network(model: AgentWorldModelCritic) -> AgentWorldModelCritic:
+def make_target_network(model: torch.nn.Module) -> torch.nn.Module:
     target_model = copy.deepcopy(model)
     target_model.eval()
     for parameter in target_model.parameters():
@@ -330,8 +374,8 @@ def make_target_network(model: AgentWorldModelCritic) -> AgentWorldModelCritic:
 
 @torch.no_grad()
 def update_target_network(
-    target_model: AgentWorldModelCritic,
-    source_model: AgentWorldModelCritic,
+    target_model: torch.nn.Module,
+    source_model: torch.nn.Module,
     tau: float,
 ) -> None:
     if not 0 < tau <= 1:
@@ -346,8 +390,8 @@ def update_target_network(
 
 
 def target_network_parameter_delta(
-    model: AgentWorldModelCritic,
-    target_model: Optional[AgentWorldModelCritic],
+    model: torch.nn.Module,
+    target_model: Optional[torch.nn.Module],
     device: torch.device,
 ) -> torch.Tensor:
     if target_model is None:
@@ -479,7 +523,7 @@ def apply_block_smb_ablations(
 
 
 def _action_from_model(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     batch: StageBatch,
     *,
     deterministic: bool,
@@ -536,7 +580,7 @@ def _action_from_model(
 
 
 def collect_trajectory(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     stage: BlockSMBStage,
     scenario_name: str,
     *,
@@ -615,7 +659,7 @@ def collect_trajectory(
 
 
 def compute_imagined_rollout_losses(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     trajectories: list[BlockSMBTrajectory],
     config: BlockSMBTrainingConfig,
     device: torch.device,
@@ -716,7 +760,7 @@ def measured_dynamics_instability(
 
 def target_network_is_active(
     config: BlockSMBTrainingConfig,
-    target_model: Optional[AgentWorldModelCritic],
+    target_model: Optional[torch.nn.Module],
     instability: torch.Tensor,
 ) -> bool:
     if target_model is None or config.target_network_mode == "off":
@@ -727,12 +771,12 @@ def target_network_is_active(
 
 
 def compute_block_smb_losses(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     transitions: list[BlockSMBTransition],
     config: BlockSMBTrainingConfig,
     device: torch.device,
     trajectories: Optional[list[BlockSMBTrajectory]] = None,
-    target_model: Optional[AgentWorldModelCritic] = None,
+    target_model: Optional[torch.nn.Module] = None,
 ) -> dict[str, torch.Tensor]:
     if not transitions:
         raise ValueError("transitions must be non-empty")
@@ -823,7 +867,7 @@ def compute_block_smb_losses(
 
 
 def train_block_smb_epoch(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     optimizer: optim.Optimizer,
     curriculum: list[tuple[str, dict]],
     config: BlockSMBTrainingConfig,
@@ -831,7 +875,7 @@ def train_block_smb_epoch(
     *,
     device: torch.device,
     vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
-    target_model: Optional[AgentWorldModelCritic] = None,
+    target_model: Optional[torch.nn.Module] = None,
 ) -> tuple[dict[str, float], BlockSMBReplayBuffer]:
     model.train()
     if target_model is not None:
@@ -886,7 +930,7 @@ def train_block_smb_epoch(
 
 
 def evaluate_block_smb(
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     config: BlockSMBTrainingConfig,
     *,
     device: torch.device,
@@ -977,14 +1021,14 @@ def evaluate_block_smb(
 
 def save_block_smb_checkpoint(
     path: Path,
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     optimizer: optim.Optimizer,
     *,
     epoch: int,
     global_step: int,
     config: BlockSMBTrainingConfig,
     metrics: Mapping[str, float],
-    target_model: Optional[AgentWorldModelCritic] = None,
+    target_model: Optional[torch.nn.Module] = None,
 ) -> dict[str, Any]:
     states = {
         "model": model.state_dict(),
@@ -1011,7 +1055,8 @@ def save_block_smb_checkpoint(
                 "seq_len_c": BLOCK_SMB_SPEC.seq_len_c,
                 "ratio_bc": BLOCK_SMB_SPEC.ratio_bc,
                 "vocab_size": BLOCK_SMB_SPEC.vocab_size,
-            }
+            },
+            **block_smb_architecture_specs(config),
         },
         states=states,
     )
@@ -1054,11 +1099,13 @@ def _should_evaluate_epoch(config: BlockSMBTrainingConfig, completed_epoch: int)
 
 def restore_block_smb_checkpoint(
     path: Path,
-    model: AgentWorldModelCritic,
+    model: torch.nn.Module,
     optimizer: Optional[optim.Optimizer] = None,
     *,
     map_location: Any = "cpu",
-    target_model: Optional[AgentWorldModelCritic] = None,
+    target_model: Optional[torch.nn.Module] = None,
+    architecture_name: Optional[str] = None,
+    architecture_config: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
@@ -1067,6 +1114,23 @@ def restore_block_smb_checkpoint(
         raise ValueError("checkpoint model does not match Block SMB trainer")
     if checkpoint["checkpoint_kind"] != BLOCK_SMB_CHECKPOINT_KIND:
         raise ValueError("checkpoint kind does not match Block SMB trainer")
+    checkpoint_config = checkpoint.get("config", {})
+    checkpoint_architecture_name = checkpoint_config.get("architecture_name")
+    if architecture_name is not None and checkpoint_architecture_name is not None:
+        if str(checkpoint_architecture_name) != architecture_name:
+            raise ValueError(
+                "checkpoint architecture "
+                f"{checkpoint_architecture_name!r} does not match "
+                f"{architecture_name!r}"
+            )
+    checkpoint_architecture_config = checkpoint_config.get("architecture_config")
+    if architecture_config is not None and checkpoint_architecture_config is not None:
+        if dict(checkpoint_architecture_config) != dict(architecture_config):
+            raise ValueError(
+                "checkpoint architecture config "
+                f"{checkpoint_architecture_config!r} does not match "
+                f"{dict(architecture_config)!r}"
+            )
     states = checkpoint["states"]
     load_result = model.load_state_dict(states["model"], strict=False)
     allowed_missing_prefixes = (
@@ -1125,6 +1189,8 @@ def train_and_evaluate_block_smb(
             optimizer,
             map_location=device,
             target_model=target_model,
+            architecture_name=config.architecture_name,
+            architecture_config=config.architecture_config,
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
@@ -1274,5 +1340,6 @@ def train_and_evaluate_block_smb(
         "metrics": last_metrics,
         "evaluation": evaluation,
         "curriculum": [name for name, _scenario in curriculum],
+        "architecture": block_smb_architecture_metadata(config),
         "model": model,
     }
