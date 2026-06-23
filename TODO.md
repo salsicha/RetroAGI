@@ -407,7 +407,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Add support for games with no reliable asset pipeline by allowing
       self-supervised, emulator-state, or manually labeled perception datasets
       as alternative vision sources.
-- [ ] Add backend abstraction for emulator providers such as `stable-retro`,
+- [x] Add backend abstraction for emulator providers such as `stable-retro`,
       native Python simulators, Gymnasium-compatible envs, or custom adapters.
 - [ ] Add deterministic backend capability tests for reset seeding, save/load
       state, frame stepping, action repeat, rendering mode, and headless mode.

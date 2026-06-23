@@ -339,16 +339,17 @@ passing a seed to `MarioScenarioEnv.generate_scenario`.
 ## Stage 3: Full SMB
 
 **Status:** perception and a `FullSMBStage` lifecycle adapter exist. The adapter
-wraps `stable-retro` lazily, maps the shared SMB action vocabulary to
-backend-specific button vectors, and normalizes both Gym-style four-value and
-Gymnasium-style five-value `step` results into the shared stage contract.
-Backend game-variable extraction is normalized into `full_smb_signals` and
-`state_vec`. Frame skipping, resizing, normalization, stacking, and episode
-masks are implemented. Emulator state snapshots are implemented for repeatable
-evaluation. `FullSMBSegmentationVision` now defaults to the versioned 13-class
-patch-level Vision Transformer checkpoint; the previous six-class DeepLab
-wrapper remains available as `FullSMBDeepLabSegmentationVision` for legacy
-checkpoint inspection.
+wraps `stable-retro` lazily through the shared `GymnasiumBackendAdapter`, maps
+the shared SMB action vocabulary to backend-specific button vectors, and
+normalizes both Gym-style four-value and Gymnasium-style five-value `step`
+results into the shared stage contract. Backend game-variable extraction is
+normalized into `full_smb_signals` and `state_vec`. Frame skipping, resizing,
+normalization, stacking, and episode masks are implemented. Emulator state
+snapshots are implemented for repeatable evaluation through the backend
+adapter's `env` or `env.em` save/load state API. `FullSMBSegmentationVision`
+now defaults to the versioned 13-class patch-level Vision Transformer
+checkpoint; the previous six-class DeepLab wrapper remains available as
+`FullSMBDeepLabSegmentationVision` for legacy checkpoint inspection.
 
 Backend-specific values must be normalized at this boundary rather than leaking
 into shared training code.
@@ -433,12 +434,12 @@ reported.
 
 ### Reset
 
-The adapter calls the backend reset, returns only its initial RGB observation,
-retains reset `info`, and passes a supplied seed through when the backend
-supports it. If the backend reset does not accept `seed`, the adapter calls
-`env.seed(seed)` when available before resetting. Reset begins a new emulator
-episode, clears adapter-owned episode mask state, and repopulates the frame
-stack with invalid reset padding plus the first valid reset frame.
+The shared backend adapter calls reset, returns the normalized initial
+observation/info pair, and passes a supplied seed through when the backend
+supports it. If backend reset does not accept `seed`, the adapter calls
+`env.seed(seed)` when available before resetting. `FullSMBStage` then begins a
+new emulator episode, clears adapter-owned episode mask state, and repopulates
+the frame stack with invalid reset padding plus the first valid reset frame.
 
 ### Smoke Checks
 

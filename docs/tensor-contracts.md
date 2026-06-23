@@ -49,6 +49,15 @@ stage-native discrete action, and `GameSpec.action_button_vector(...)` maps the
 same policy action to a backend button vector using button names rather than
 backend-specific button positions.
 
+`GameBackendSpec` is the game-owned backend provider contract. It declares the
+provider kind (`stable_retro`, `native_python`, `gymnasium`, or `custom`), the
+creation entrypoint, reset/step/state APIs, observation and action APIs, and
+capabilities such as seeded reset, save/load state, rendering, headless mode,
+action repeat, and Gym/Gymnasium step compatibility. SMB declares
+`stable-retro` through this contract and wraps it with
+`GymnasiumBackendAdapter`, which normalizes reset and step return values before
+they reach stage code.
+
 Stage ladder names use the game-neutral progressive-resolution convention
 defined by `STANDARD_STAGE_NAMES`. Every game starts with `synthetic`, ends with
 `full`, and may include standard intermediate rungs such as `block`,
@@ -140,10 +149,11 @@ used.
 
 `retroagi experiment --game <name>` records the selected `GamePluginSpec` in
 the combined experiment manifest. The manifest includes backend version,
-content identifiers, asset provenance, per-stage game ladder metadata,
-recording slots, and promotion decisions for the architecture rungs that map to
-the selected stages. Promotion manifests embed the same experiment payloads, so
-architecture sweeps and promotion runs share one game-level traceability shape.
+backend provider contract, content identifiers, asset provenance, per-stage
+game ladder metadata, recording slots, and promotion decisions for the
+architecture rungs that map to the selected stages. Promotion manifests embed
+the same experiment payloads, so architecture sweeps and promotion runs share
+one game-level traceability shape.
 
 ## StageSpec
 

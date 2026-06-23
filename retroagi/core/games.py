@@ -11,6 +11,7 @@ from .actions import (
     action_backend_id as _action_backend_id,
     action_button_vector as _action_button_vector,
 )
+from .backends import BackendCapabilitySpec, GameBackendSpec
 from .rewards import RewardConfigSchema, RewardTermSpec
 from .stage_resolution import STANDARD_STAGE_NAMES
 from .synthetic import SyntheticDataSpec, SyntheticSplitSpec
@@ -204,6 +205,7 @@ class GameSpec:
     reward_terms: Mapping[str, str]
     stage_ladder: tuple[StageLadderEntry, ...]
     emulator_backend: str
+    backend: GameBackendSpec | None = None
     asset_requirements: tuple[AssetRequirement, ...] = ()
     asset_checklist: tuple[AssetChecklistItem, ...] = ()
     licensing: Mapping[str, str] = field(default_factory=dict)
@@ -233,6 +235,11 @@ class GameSpec:
             raise ValueError(f"game {self.name!r} must define emulator_backend")
         if not self.licensing:
             raise ValueError(f"game {self.name!r} must define licensing metadata")
+        if self.backend is not None and self.backend.name != self.emulator_backend:
+            raise ValueError(
+                f"game {self.name!r} backend spec {self.backend.name!r} must "
+                f"match emulator_backend {self.emulator_backend!r}"
+            )
         self._validate_actions()
         self._validate_stage_ladder()
         self._validate_reward_schema()
@@ -445,6 +452,18 @@ class GameSpec:
         if self.block_game is None:
             raise KeyError(f"game {self.name!r} does not define a block game spec")
         return self.block_game
+
+    def backend_spec(self) -> GameBackendSpec:
+        if self.backend is not None:
+            return self.backend
+        return GameBackendSpec(
+            name=self.emulator_backend,
+            provider_kind="custom",
+            entrypoint="game profile",
+            observation_api="stage-native observations",
+            action_api="stage-native actions",
+            metadata={"implicit": True},
+        )
 
 
 SMB_REWARD_SCHEMA = RewardConfigSchema(
@@ -764,6 +783,30 @@ SMB_GAME_SPEC = GameSpec(
         ),
     ),
     emulator_backend="stable-retro",
+    backend=GameBackendSpec(
+        name="stable-retro",
+        provider_kind="stable_retro",
+        entrypoint="retro.make",
+        observation_api="Gymnasium-style RGB observation",
+        action_api="MultiBinary button vector from backend button names",
+        reset_api="reset(seed=None)",
+        step_api="step(button_vector) -> obs, reward, terminated, truncated, info",
+        state_api="env.get_state/set_state or env.em.get_state/set_state",
+        capabilities=BackendCapabilitySpec(
+            reset_seed=True,
+            save_load_state=True,
+            frame_step=True,
+            action_repeat=True,
+            render=True,
+            headless=True,
+            gymnasium_step_api=True,
+            legacy_gym_step_api=True,
+        ),
+        metadata={
+            "game": "SuperMarioBros-Nes",
+            "wrapper": "retroagi.core.backends.GymnasiumBackendAdapter",
+        },
+    ),
     asset_requirements=(
         AssetRequirement(
             name="smb_sprites",
@@ -876,6 +919,7 @@ def validate_game_spec(game: GameSpec) -> GameSpec:
         block_game=game.block_game,
         stage_ladder=tuple(game.stage_ladder),
         emulator_backend=game.emulator_backend,
+        backend=game.backend,
         asset_requirements=tuple(game.asset_requirements),
         asset_checklist=tuple(game.asset_checklist),
         licensing=dict(game.licensing),

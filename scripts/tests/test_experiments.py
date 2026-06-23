@@ -98,6 +98,12 @@ class TestExperimentRunner(unittest.TestCase):
         self.assertEqual(manifest["game"]["name"], "smb")
         self.assertEqual(manifest["game"]["backend"]["name"], "stable-retro")
         self.assertIn("version", manifest["game"]["backend"])
+        backend_contract = manifest["game"]["backend"]["contract"]
+        self.assertEqual(backend_contract["provider_kind"], "stable_retro")
+        self.assertEqual(backend_contract["entrypoint"], "retro.make")
+        self.assertTrue(backend_contract["capabilities"]["reset_seed"])
+        self.assertTrue(backend_contract["capabilities"]["save_load_state"])
+        self.assertEqual(backend_contract["metadata"]["game"], "SuperMarioBros-Nes")
         self.assertTrue(
             any(
                 content["name"] == "smb_rom"

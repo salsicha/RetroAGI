@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from retroagi.core import (
+    BACKEND_PROVIDER_KINDS,
     GAME_SPECS,
     GAME_PLUGIN_REGISTRY,
     SMB_ACTIONS,
@@ -17,10 +18,12 @@ from retroagi.core import (
     ActionSpec,
     AssetChecklistItem,
     AssetRequirement,
+    BackendCapabilitySpec,
     BlockGameSpec,
     GamePluginRegistry,
     GamePluginSpec,
     GamePromotionGateSpec,
+    GameBackendSpec,
     GameSpec,
     GameTaskSchema,
     GameTaskSpec,
@@ -91,6 +94,15 @@ class TestGameSpec(unittest.TestCase):
         self.assertIs(spec.task_schema, SMB_TASK_SCHEMA)
         self.assertEqual(spec.synthetic_data, SMB_SYNTHETIC_DATA_SPECS)
         self.assertIs(spec.block_game, SMB_BLOCK_GAME_SPEC)
+        self.assertEqual(BACKEND_PROVIDER_KINDS[0], "stable_retro")
+        backend = spec.backend_spec()
+        self.assertEqual(backend.name, "stable-retro")
+        self.assertEqual(backend.provider_kind, "stable_retro")
+        self.assertEqual(backend.entrypoint, "retro.make")
+        self.assertTrue(backend.capabilities.reset_seed)
+        self.assertTrue(backend.capabilities.save_load_state)
+        self.assertTrue(backend.capabilities.legacy_gym_step_api)
+        self.assertEqual(backend.metadata["game"], "SuperMarioBros-Nes")
 
     def test_stage_resolution_uses_game_neutral_names_and_legacy_aliases(self):
         self.assertEqual(
@@ -504,6 +516,36 @@ class TestGameSpec(unittest.TestCase):
             [source["source_kind"] for source in manifest["dataset_sources"]],
             ["self_supervised", "emulator_state", "manual_labels"],
         )
+
+    def test_game_spec_validation_rejects_mismatched_backend_spec(self):
+        with self.assertRaisesRegex(ValueError, "must match emulator_backend"):
+            GameSpec(
+                name="bad",
+                family="unit",
+                action_space=(ActionSpec("noop", 0),),
+                observation_sources=("state",),
+                semantic_classes=("background",),
+                signal_schema={"progress": "progress"},
+                reward_terms={"progress": "reward"},
+                stage_ladder=SMB_GAME_SPEC.stage_ladder,
+                emulator_backend="mock",
+                backend=GameBackendSpec(
+                    name="other",
+                    provider_kind="custom",
+                    entrypoint="unit.make",
+                    observation_api="obs",
+                    action_api="action",
+                    capabilities=BackendCapabilitySpec(
+                        reset_seed=False,
+                        save_load_state=False,
+                        frame_step=True,
+                        action_repeat=False,
+                        render=False,
+                        headless=True,
+                    ),
+                ),
+                licensing={"assets": "none"},
+            )
 
     def test_game_spec_validation_rejects_mismatched_reward_schema(self):
         with self.assertRaisesRegex(ValueError, "reward schema is for"):

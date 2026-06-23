@@ -518,6 +518,7 @@ def _game_manifest(plugin) -> dict[str, Any]:
         "backend": {
             "name": game.emulator_backend,
             "version": _backend_version(game.emulator_backend),
+            "contract": game.backend_spec().to_manifest(),
         },
         "stage_ladder": [
             {

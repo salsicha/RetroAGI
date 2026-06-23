@@ -30,6 +30,13 @@ selection. Use `--game smb --stage synthetic|block|full` for the game-neutral
 path; legacy SMB-specific stage aliases such as `synthetic-1d`, `block-smb`,
 and `full-smb` remain accepted for existing scripts.
 
+Each game profile declares a backend provider contract through
+`GameBackendSpec`. Experiment manifests write the backend name, installed
+version when available, provider kind, entrypoint, reset/step/state API notes,
+and capability flags. Use that manifest contract when comparing runs across
+`stable-retro`, Gymnasium-compatible wrappers, native Python simulators, or
+custom game adapters.
+
 Before committing or preserving asset-backed artifacts, check the selected
 game's `asset_checklist` in the experiment manifest. For SMB this means sprite
 source/license evidence before committing extracted sprites or asset-mock

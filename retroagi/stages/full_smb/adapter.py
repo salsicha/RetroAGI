@@ -3,7 +3,6 @@
 from collections import deque
 import copy
 from dataclasses import dataclass
-import inspect
 from typing import Any, Mapping, Optional
 
 import numpy as np
@@ -13,6 +12,7 @@ import torch.nn.functional as F
 from retroagi.core import (
     GameSignalExtractor,
     GameSignals,
+    GymnasiumBackendAdapter,
     SMB_GAME_SPEC,
     SMBAction,
     StageBatch,
@@ -226,6 +226,10 @@ class FullSMBStage:
             if env is not None
             else make_stable_retro_env(env_config, **dict(env_kwargs or {}))
         )
+        self.backend = GymnasiumBackendAdapter(
+            self.env,
+            context="Full SMB backend",
+        )
         self.vision = vision or FullSMBSegmentationVision()
         if isinstance(self.vision, torch.nn.Module):
             self.vision.eval()
@@ -244,17 +248,13 @@ class FullSMBStage:
 
     @property
     def buttons(self) -> tuple[str, ...]:
-        buttons = getattr(self.env, "buttons", None)
-        if buttons is None:
-            raise ValueError("stable-retro environment does not expose button names")
-        return tuple(str(button) for button in buttons)
+        return self.backend.buttons
 
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
-        result = self._reset_backend(seed=seed)
-        observation, info = self._unpack_reset(result)
-        observation = self._rgb_observation(observation)
+        result = self.backend.reset(seed=seed)
+        observation = self._rgb_observation(result.observation)
         self.last_info = self._annotated_info(
-            info, terminated=False, truncated=False
+            result.info, terminated=False, truncated=False
         )
         self._last_episode_mask = 1.0
         self._last_terminal = False
@@ -275,11 +275,13 @@ class FullSMBStage:
         terminated = False
         truncated = False
         for _ in range(self.observation_config.frame_skip):
-            result = self.env.step(button_action)
-            observation, reward, terminated, truncated, info = self._unpack_step(result)
-            observation = self._rgb_observation(observation)
-            total_reward += reward
-            frame_rewards.append(float(reward))
+            result = self.backend.step(button_action)
+            observation = self._rgb_observation(result.observation)
+            terminated = result.terminated
+            truncated = result.truncated
+            info = result.info
+            total_reward += result.reward
+            frame_rewards.append(float(result.reward))
             self._append_frame(observation, valid=True)
             if terminated or truncated:
                 break
@@ -309,9 +311,8 @@ class FullSMBStage:
 
         if self._last_observation is None:
             raise RuntimeError("cannot save Full SMB emulator state before reset")
-        owner = self._emulator_state_owner()
         return FullSMBEmulatorState(
-            backend_state=copy.deepcopy(owner.get_state()),
+            backend_state=copy.deepcopy(self.backend.get_state()),
             observation=self._last_observation.copy(),
             last_info=copy.deepcopy(dict(self.last_info)),
             episode_mask=float(self._last_episode_mask),
@@ -328,8 +329,7 @@ class FullSMBStage:
             raise TypeError("state must be a FullSMBEmulatorState")
         if len(state.frame_stack) > self.observation_config.frame_stack:
             raise ValueError("saved frame stack is larger than this stage config")
-        owner = self._emulator_state_owner()
-        owner.set_state(copy.deepcopy(state.backend_state))
+        self.backend.set_state(copy.deepcopy(state.backend_state))
         observation = self._rgb_observation(state.observation)
         self._last_observation = observation.copy()
         self.last_info = copy.deepcopy(state.last_info)
@@ -377,30 +377,7 @@ class FullSMBStage:
         )
 
     def close(self) -> None:
-        close = getattr(self.env, "close", None)
-        if close is not None:
-            close()
-
-    def _reset_backend(self, seed: Optional[int]):
-        if seed is None:
-            return self.env.reset()
-        reset = self.env.reset
-        if _call_accepts_keyword(reset, "seed"):
-            return reset(seed=seed)
-        seed_fn = getattr(self.env, "seed", None)
-        if seed_fn is not None:
-            seed_fn(seed)
-        return reset()
-
-    def _emulator_state_owner(self):
-        if _has_state_api(self.env):
-            return self.env
-        emulator = getattr(self.env, "em", None)
-        if _has_state_api(emulator):
-            return emulator
-        raise RuntimeError(
-            "Full SMB backend must expose get_state/set_state on env or env.em"
-        )
+        self.backend.close()
 
     @staticmethod
     def _rgb_observation(observation: Any) -> np.ndarray:
@@ -467,41 +444,6 @@ class FullSMBStage:
         }
 
     @staticmethod
-    def _unpack_reset(result: Any) -> tuple[Any, Mapping[str, Any]]:
-        if (
-            isinstance(result, tuple)
-            and len(result) == 2
-            and isinstance(result[1], Mapping)
-        ):
-            return result[0], result[1]
-        return result, {}
-
-    @staticmethod
-    def _unpack_step(result: Any) -> tuple[Any, float, bool, bool, Mapping[str, Any]]:
-        if not isinstance(result, tuple):
-            raise ValueError("stable-retro step must return a tuple")
-        if len(result) == 5:
-            observation, reward, terminated, truncated, info = result
-            return observation, float(reward), bool(terminated), bool(truncated), info
-        if len(result) == 4:
-            observation, reward, done, info = result
-            info = FullSMBStage._info(info)
-            truncated = bool(
-                info.get("truncated", False)
-                or info.get("TimeLimit.truncated", False)
-            )
-            return (
-                observation,
-                float(reward),
-                bool(done and not truncated),
-                truncated,
-                info,
-            )
-        raise ValueError(
-            "stable-retro step must return 4 values (Gym) or 5 values (Gymnasium)"
-        )
-
-    @staticmethod
     def _info(info: Any) -> dict[str, Any]:
         if info is None:
             return {}
@@ -558,25 +500,6 @@ def extract_full_smb_signals(
         terminated=bool(terminated),
         truncated=bool(truncated),
         termination_reason=reason,
-    )
-
-
-def _call_accepts_keyword(callable_obj: Any, keyword: str) -> bool:
-    try:
-        signature = inspect.signature(callable_obj)
-    except (TypeError, ValueError):
-        return False
-    for parameter in signature.parameters.values():
-        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
-            return True
-        if parameter.name == keyword:
-            return True
-    return False
-
-
-def _has_state_api(owner: Any) -> bool:
-    return callable(getattr(owner, "get_state", None)) and callable(
-        getattr(owner, "set_state", None)
     )
 
 
