@@ -3,7 +3,7 @@
 import io
 import json
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -72,6 +72,12 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "3",
                     "--episodes-per-epoch",
                     "4",
+                    "--architecture",
+                    "baseline",
+                    "--architecture-config",
+                    "hidden_dim=12",
+                    "--architecture-config",
+                    "controller_schedule=linear",
                     "--controller-schedule",
                     "linear",
                     "--imagined-rollout-horizon",
@@ -138,8 +144,9 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.architecture_name, BASELINE_ARCHITECTURE_NAME)
         self.assertEqual(
             config.architecture_config,
-            {"hidden_dim": 32, "controller_schedule": "linear"},
+            {"hidden_dim": 12, "controller_schedule": "linear"},
         )
+        self.assertEqual(config.hidden_dim, 12)
         self.assertEqual(config.imagined_rollout_horizon, 2)
         self.assertEqual(config.imagined_rollout_weight, 0.2)
         self.assertEqual(config.target_network_mode, "auto")
@@ -177,8 +184,9 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["config"]["architecture_name"], BASELINE_ARCHITECTURE_NAME)
         self.assertEqual(
             payload["config"]["architecture_config"],
-            {"hidden_dim": 32, "controller_schedule": "linear"},
+            {"hidden_dim": 12, "controller_schedule": "linear"},
         )
+        self.assertEqual(payload["config"]["hidden_dim"], 12)
         self.assertEqual(payload["config"]["imagined_rollout_horizon"], 2)
         self.assertEqual(payload["config"]["imagined_rollout_weight"], 0.2)
         self.assertEqual(payload["config"]["target_network_mode"], "auto")
@@ -291,6 +299,11 @@ class TestBlockSMBCLI(unittest.TestCase):
             "config": {
                 "seed": 11,
                 "epochs": 7,
+                "architecture_name": BASELINE_ARCHITECTURE_NAME,
+                "architecture_config": {
+                    "hidden_dim": 16,
+                    "controller_schedule": "constant",
+                },
                 "hidden_dim": 16,
                 "fixed_scenarios": ["level_2_gap.json"],
                 "ablation": {
@@ -328,6 +341,10 @@ class TestBlockSMBCLI(unittest.TestCase):
                         "data/block_smb/policy.pth",
                         "--evaluation-episodes",
                         "2",
+                        "--hidden-dim",
+                        "18",
+                        "--architecture-config",
+                        "controller_schedule=linear",
                         "--reward-goal",
                         "80",
                         "--enable-vision",
@@ -339,7 +356,12 @@ class TestBlockSMBCLI(unittest.TestCase):
         config = train.call_args.args[0]
         self.assertEqual(config.seed, 11)
         self.assertEqual(config.epochs, 7)
-        self.assertEqual(config.hidden_dim, 16)
+        self.assertEqual(config.hidden_dim, 18)
+        self.assertEqual(config.controller_schedule, "linear")
+        self.assertEqual(
+            config.architecture_config,
+            {"hidden_dim": 18, "controller_schedule": "linear"},
+        )
         self.assertEqual(config.fixed_scenarios, ("level_2_gap.json",))
         self.assertEqual(config.resume_path, Path("data/block_smb/policy.pth"))
         self.assertEqual(config.evaluation_episodes, 2)
@@ -356,6 +378,10 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertFalse(config.record_videos)
         self.assertIsNone(config.video_dir)
         self.assertEqual(payload["config"]["resume_path"], "data/block_smb/policy.pth")
+        self.assertEqual(
+            payload["config"]["architecture_config"],
+            {"hidden_dim": 18, "controller_schedule": "linear"},
+        )
 
     def test_record_command_enables_recording_with_checkpoint_config(self):
         checkpoint = {
@@ -444,6 +470,13 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["vision"]["checkpoint_path"], "data/block_vit/block_vit.pth")
         self.assertTrue(payload["perception"]["bottleneck"])
         self.assertEqual(payload["perception"]["bottleneck_reasons"], ["mean_iou"])
+
+    def test_architecture_config_requires_key_value_syntax(self):
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                self.run_main(["train", "--architecture-config", "hidden_dim"])
+
+        self.assertEqual(raised.exception.code, 2)
 
 
 if __name__ == "__main__":

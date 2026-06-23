@@ -230,7 +230,7 @@ high-fidelity evaluations.
 - [x] Refactor Full SMB transfer and comparison to load architecture-specific
       checkpoints through the registry instead of assuming only
       `AgentWorldModelCritic`.
-- [ ] Add top-level CLI support for architecture selection, for example
+- [x] Add top-level CLI support for architecture selection, for example
       `--architecture baseline` plus architecture-specific config overrides.
 - [ ] Give Synthetic 1D top-level CLI parity with Block SMB for seed, epochs,
       device, checkpoint, resume, output summary, and architecture selection.

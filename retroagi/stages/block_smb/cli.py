@@ -13,8 +13,10 @@ import numpy as np
 import torch
 
 from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
     SUPPORTED_CONTROLLER_SCHEDULES,
     TRACKING_BACKENDS,
+    architecture_names,
     load_checkpoint,
     select_device,
     to_plain_data,
@@ -71,6 +73,45 @@ def _non_positive_float(value: str) -> float:
     if parsed > 0:
         raise argparse.ArgumentTypeError("must be non-positive")
     return parsed
+
+
+def _architecture_name(value: str) -> str:
+    normalized = value.strip()
+    if normalized.lower() == "baseline":
+        return BASELINE_ARCHITECTURE_NAME
+    available = set(architecture_names())
+    if normalized in available:
+        return normalized
+    choices = ", ".join(sorted({"baseline", *available}))
+    raise argparse.ArgumentTypeError(f"unknown architecture {value!r}; expected one of: {choices}")
+
+
+def _architecture_config_item(value: str) -> tuple[str, Any]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("must use KEY=VALUE syntax")
+    key, raw_value = value.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise argparse.ArgumentTypeError("architecture config key must be non-empty")
+    return key, _parse_architecture_config_value(raw_value.strip())
+
+
+def _parse_architecture_config_value(value: str) -> Any:
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"none", "null"}:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return value
 
 
 REWARD_CONFIG_ARGS = {
@@ -135,6 +176,20 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         "--controller-schedule",
         choices=SUPPORTED_CONTROLLER_SCHEDULES,
         help="low-level controller gain schedule",
+    )
+    parser.add_argument(
+        "--architecture",
+        dest="architecture_name",
+        type=_architecture_name,
+        help="model architecture to instantiate; use 'baseline' for the default",
+    )
+    parser.add_argument(
+        "--architecture-config",
+        action="append",
+        default=None,
+        type=_architecture_config_item,
+        metavar="KEY=VALUE",
+        help="architecture-specific config override; may be repeated",
     )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"))
     parser.add_argument("--fixed-scenario", action="append", dest="fixed_scenarios")
@@ -382,6 +437,31 @@ def _apply_ablation_config_overrides(values: dict[str, Any], args: argparse.Name
     values["ablation"] = BlockSMBAblationConfig(**ablation_values)
 
 
+def _apply_architecture_overrides(values: dict[str, Any], args: argparse.Namespace) -> None:
+    architecture_name = getattr(args, "architecture_name", None)
+    if architecture_name is not None:
+        values["architecture_name"] = architecture_name
+
+    explicit_overrides = dict(getattr(args, "architecture_config", None) or ())
+    legacy_overrides = {
+        name: values[name]
+        for name in ("hidden_dim", "controller_schedule")
+        if name in values and name not in explicit_overrides
+    }
+    if not explicit_overrides and not legacy_overrides:
+        return
+    current = values.get("architecture_config", {})
+    if current is None:
+        current_values: dict[str, Any] = {}
+    elif isinstance(current, Mapping):
+        current_values = dict(current)
+    else:
+        raise TypeError("architecture_config must be a mapping")
+    current_values.update(legacy_overrides)
+    current_values.update(explicit_overrides)
+    values["architecture_config"] = current_values
+
+
 def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(values)
     for name in (
@@ -403,6 +483,11 @@ def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
         ablation = normalized["ablation"]
         if not isinstance(ablation, BlockSMBAblationConfig):
             normalized["ablation"] = BlockSMBAblationConfig(**dict(ablation))
+    if normalized.get("architecture_config") is not None:
+        architecture_config = normalized["architecture_config"]
+        if not isinstance(architecture_config, Mapping):
+            raise TypeError("architecture_config must be a mapping")
+        normalized["architecture_config"] = dict(architecture_config)
     return normalized
 
 
@@ -426,6 +511,7 @@ def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
     values = _config_overrides(args)
     _apply_reward_config_overrides(values, args)
     _apply_ablation_config_overrides(values, args)
+    _apply_architecture_overrides(values, args)
     if args.checkpoint is not None:
         values["checkpoint_path"] = args.checkpoint
         values["save_checkpoints"] = True
@@ -446,6 +532,7 @@ def _make_checkpoint_config(args: argparse.Namespace, *, record: bool) -> BlockS
     values.update(overrides)
     _apply_reward_config_overrides(values, args)
     _apply_ablation_config_overrides(values, args)
+    _apply_architecture_overrides(values, args)
     values["resume_path"] = args.checkpoint
     values["save_checkpoints"] = False
     values["record_videos"] = record

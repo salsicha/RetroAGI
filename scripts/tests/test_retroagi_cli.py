@@ -18,6 +18,10 @@ class TestRetroAGICLI(unittest.TestCase):
                     "block-smb",
                     "--epochs",
                     "3",
+                    "--architecture",
+                    "baseline",
+                    "--architecture-config",
+                    "hidden_dim=12",
                     "--checkpoint",
                     "data/block_smb/policy.pth",
                 ]
@@ -29,6 +33,10 @@ class TestRetroAGICLI(unittest.TestCase):
                 "train",
                 "--epochs",
                 "3",
+                "--architecture",
+                "baseline",
+                "--architecture-config",
+                "hidden_dim=12",
                 "--checkpoint",
                 "data/block_smb/policy.pth",
             ]
