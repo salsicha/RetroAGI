@@ -286,7 +286,7 @@ high-fidelity evaluations.
       experiments and promotions, routes controller schedules through
       architecture config, maps trainer-owned switches to stage CLI flags, and
       records the resolved variant in manifests.
-- [ ] Define architecture-specific checkpoint schema extensions and migration
+- [x] Define architecture-specific checkpoint schema extensions and migration
       rules so multiple model families can coexist without ambiguous state
       loading.
 - [ ] Add tests proving incompatible architecture checkpoints fail before state

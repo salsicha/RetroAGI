@@ -6,6 +6,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Iterable, Mapping, Optional
 
 from .actions import SMB_ACTIONS
+from .architectures import ArchitectureSpec
 from .checkpoint import validate_checkpoint
 from .config import ModelConfig
 from .interfaces import StageSpec, VisionSpec
@@ -81,6 +82,7 @@ def validate_checkpoint_compatibility(
     *,
     stage: Optional[StageSpec] = None,
     model: Optional[ModelConfig] = None,
+    architecture: Optional[ArchitectureSpec] = None,
     vision: Optional[VisionSpec] = None,
     checkpoint_kind: Optional[str] = None,
     required_states: Iterable[str] = (),
@@ -102,6 +104,44 @@ def validate_checkpoint_compatibility(
             "checkpoint_kind "
             f"{normalized['checkpoint_kind']!r} does not match expected {checkpoint_kind!r}",
         )
+
+    if architecture is not None:
+        checkpoint_architecture = normalized.get("architecture")
+        config = normalized.get("config", {})
+        config_architecture_name = (
+            config.get("architecture_name") if isinstance(config, Mapping) else None
+        )
+        if checkpoint_architecture:
+            expected = architecture.metadata()
+            actual = _plain(checkpoint_architecture)
+            for key in (
+                "name",
+                "checkpoint_model_name",
+                "checkpoint_compatibility_policy",
+                "output_contract",
+                "supported_stage_names",
+            ):
+                if actual.get(key) != expected.get(key):
+                    _fail(
+                        context,
+                        f"architecture {key} {actual.get(key)!r} does not match expected "
+                        f"{expected.get(key)!r}",
+                    )
+        elif config_architecture_name is not None:
+            if str(config_architecture_name) != architecture.name:
+                _fail(
+                    context,
+                    "legacy config architecture_name "
+                    f"{str(config_architecture_name)!r} does not match expected "
+                    f"{architecture.name!r}",
+                )
+        else:
+            _fail(context, "missing architecture checkpoint extension")
+        if stage is not None and not architecture.supports_stage(stage):
+            _fail(
+                context,
+                f"architecture {architecture.name!r} does not support stage {stage.name!r}",
+            )
 
     states = normalized["states"]
     missing_states = [name for name in required_states if name not in states]

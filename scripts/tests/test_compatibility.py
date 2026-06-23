@@ -1,17 +1,20 @@
 """Tests for startup compatibility validation."""
 
+import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 import torch
 
 from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
+    BASELINE_ARCHITECTURE_SPEC,
     CompatibilityError,
     ModelConfig,
-    StageSpec,
     build_checkpoint,
+    get_architecture,
+    register_architecture,
     validate_checkpoint_compatibility,
     validate_model_vision_compatibility,
     validate_stage_spec,
@@ -21,6 +24,20 @@ from scripts.vit.train_block_vit import TrainConfig, save_checkpoint
 
 
 class TestCompatibilityValidation(unittest.TestCase):
+    def alternate_architecture(self):
+        name = "unit_test_alternate_agent_world_model_critic"
+        try:
+            return get_architecture(name)
+        except KeyError:
+            spec = replace(
+                BASELINE_ARCHITECTURE_SPEC,
+                name=name,
+                checkpoint_model_name=name,
+                output_contract=f"{name}.forward.v1",
+            )
+            register_architecture(spec)
+            return spec
+
     def test_accepts_block_vit_startup_contract(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
         config = ModelConfig(name="block_smb_vit", hidden_dim=16, patch_size=16)
@@ -61,6 +78,50 @@ class TestCompatibilityValidation(unittest.TestCase):
                 required_states=("model", "optimizer"),
             )
 
+    def test_accepts_matching_architecture_checkpoint_contract(self):
+        checkpoint = build_checkpoint(
+            stage=BLOCK_SMB_SPEC.name,
+            model_name="block_smb_policy",
+            checkpoint_kind="policy",
+            config={
+                "architecture_name": BASELINE_ARCHITECTURE_NAME,
+                "architecture_config": {"hidden_dim": 16},
+            },
+            states={"model": {"weight": torch.tensor([1.0])}},
+        )
+
+        normalized = validate_checkpoint_compatibility(
+            checkpoint,
+            stage=BLOCK_SMB_SPEC,
+            architecture=BASELINE_ARCHITECTURE_SPEC,
+            checkpoint_kind="policy",
+            required_states=("model",),
+        )
+
+        self.assertEqual(normalized["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
+
+    def test_rejects_incompatible_architecture_checkpoint_before_state_load(self):
+        alternate = self.alternate_architecture()
+        checkpoint = build_checkpoint(
+            stage=BLOCK_SMB_SPEC.name,
+            model_name="block_smb_policy",
+            checkpoint_kind="policy",
+            config={
+                "architecture_name": alternate.name,
+                "architecture_config": {"hidden_dim": 16},
+            },
+            states={"model": {"weight": torch.tensor([1.0])}},
+        )
+
+        with self.assertRaisesRegex(CompatibilityError, "architecture name"):
+            validate_checkpoint_compatibility(
+                checkpoint,
+                stage=BLOCK_SMB_SPEC,
+                architecture=BASELINE_ARCHITECTURE_SPEC,
+                checkpoint_kind="policy",
+                required_states=("model",),
+            )
+
     def test_block_vit_checkpoint_is_compatible_with_startup_contract(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -68,7 +129,9 @@ class TestCompatibilityValidation(unittest.TestCase):
 
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "block_vit.pth"
-            save_checkpoint(path, model, optimizer, epoch=0, metrics={"mean_iou": 0.1}, config=config)
+            save_checkpoint(
+                path, model, optimizer, epoch=0, metrics={"mean_iou": 0.1}, config=config
+            )
             checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 
         normalized = validate_checkpoint_compatibility(
