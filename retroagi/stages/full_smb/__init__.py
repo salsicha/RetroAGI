@@ -1,8 +1,10 @@
 """Stage 3: full Super Mario Bros emulator integration."""
 
 from .adapter import (
+    DEFAULT_FULL_SMB_CONTENT,
     FULL_SMB_GAME,
     FULL_SMB_SPEC,
+    FullSMBContentSpec,
     FullSMBEmulatorState,
     FullSMBEnvConfig,
     FullSMBObservationConfig,
@@ -68,12 +70,14 @@ __all__ = [
     "FullSMBTrainingConfig",
     "FullSMBTrainingResult",
     "DEFAULT_FULL_SMB_VIT_CHECKPOINT",
+    "DEFAULT_FULL_SMB_CONTENT",
     "FALLBACK_FULL_SMB_VIT_CHECKPOINT",
     "FULL_SMB_DEEPLAB_CLASSES",
     "FULL_SMB_VIT_CHECKPOINT_KIND",
     "FULL_SMB_VIT_CLASSES",
     "FULL_SMB_VIT_MODEL_NAME",
     "FullSMBDeepLabSegmentationVision",
+    "FullSMBContentSpec",
     "FullSMBSegmentationVision",
     "FullSMBVITLoadResult",
     "FullSMBVisionTransformer",

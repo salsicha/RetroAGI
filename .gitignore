@@ -8,3 +8,4 @@ notebooks/ctm/data/
 *.gif
 .venv/
 graphify-out/
+local/full_smb/

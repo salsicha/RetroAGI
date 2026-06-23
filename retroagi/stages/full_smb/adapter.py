@@ -41,6 +41,60 @@ FULL_SMB_SPEC = StageSpec(
 
 
 @dataclass(frozen=True)
+class FullSMBContentSpec:
+    """Supported local content contract for real Full SMB emulator runs."""
+
+    game: str = FULL_SMB_GAME
+    rom_label: str = "Super Mario Bros NES ROM"
+    stable_retro_import_dir: str = "local/full_smb/roms"
+    checksum_dir: str = "local/full_smb/checksums"
+    checksum_algorithm: str = "sha256"
+    install_command: str = "python -m pip install -e '.[full-smb]'"
+    legal_notice: str = (
+        "Use a legally obtained, user-provided ROM. Do not commit, bundle, or "
+        "redistribute ROM content with RetroAGI artifacts."
+    )
+
+    @property
+    def stable_retro_import_command(self) -> str:
+        return f"python -m retro.import {self.stable_retro_import_dir}"
+
+    @property
+    def checksum_record_path(self) -> str:
+        return f"{self.checksum_dir}/{self.game}.{self.checksum_algorithm}"
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "game": self.game,
+            "rom_label": self.rom_label,
+            "stable_retro_import_dir": self.stable_retro_import_dir,
+            "stable_retro_import_command": self.stable_retro_import_command,
+            "checksum_algorithm": self.checksum_algorithm,
+            "checksum_record_path": self.checksum_record_path,
+            "install_command": self.install_command,
+            "legal_notice": self.legal_notice,
+        }
+
+    def setup_failure_message(self, reason: str, *, game: Optional[str] = None) -> str:
+        target_game = game or self.game
+        return (
+            f"Full SMB stable-retro setup failed for game {target_game!r}: {reason}\n"
+            f"Install backend: {self.install_command}\n"
+            f"Required content: {self.rom_label} imported as stable-retro game "
+            f"{target_game!r}.\n"
+            f"Local ROM staging directory: {self.stable_retro_import_dir}/ "
+            "(ignored by git).\n"
+            f"Import command: {self.stable_retro_import_command}\n"
+            f"Checksum record: write the {self.checksum_algorithm} hash to "
+            f"{self.checksum_record_path} and preserve it with the local run notes.\n"
+            f"Legal/provenance: {self.legal_notice}"
+        )
+
+
+DEFAULT_FULL_SMB_CONTENT = FullSMBContentSpec()
+
+
+@dataclass(frozen=True)
 class FullSMBEnvConfig:
     """Backend selection for the stable-retro Full SMB environment."""
 
@@ -184,6 +238,7 @@ REASON_KEYS = ("terminal_reason", "termination_reason", "done_reason", "end_reas
 
 def make_stable_retro_env(
     config: FullSMBEnvConfig = FullSMBEnvConfig(),
+    content_spec: FullSMBContentSpec = DEFAULT_FULL_SMB_CONTENT,
     **kwargs: Any,
 ):
     """Create the stable-retro backend lazily so tests do not require ROM setup."""
@@ -192,7 +247,9 @@ def make_stable_retro_env(
         import retro
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "Full SMB requires stable-retro and an imported SuperMarioBros-Nes ROM"
+            content_spec.setup_failure_message(
+                "stable-retro is not installed", game=config.game
+            )
         ) from exc
 
     make_kwargs: dict[str, Any] = {"game": config.game}
@@ -201,7 +258,12 @@ def make_stable_retro_env(
     if config.scenario is not None:
         make_kwargs["scenario"] = config.scenario
     make_kwargs.update(kwargs)
-    return retro.make(**make_kwargs)
+    try:
+        return retro.make(**make_kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            content_spec.setup_failure_message(str(exc), game=config.game)
+        ) from exc
 
 
 class FullSMBStage:
@@ -213,6 +275,7 @@ class FullSMBStage:
         self,
         env: Any = None,
         env_config: FullSMBEnvConfig = FullSMBEnvConfig(),
+        content_spec: FullSMBContentSpec = DEFAULT_FULL_SMB_CONTENT,
         signal_config: FullSMBSignalConfig = FullSMBSignalConfig(),
         observation_config: FullSMBObservationConfig = FullSMBObservationConfig(),
         vision: Optional[VisionEncoder] = None,
@@ -224,7 +287,11 @@ class FullSMBStage:
         self.env = (
             env
             if env is not None
-            else make_stable_retro_env(env_config, **dict(env_kwargs or {}))
+            else make_stable_retro_env(
+                env_config,
+                content_spec=content_spec,
+                **dict(env_kwargs or {}),
+            )
         )
         self.backend = GymnasiumBackendAdapter(
             self.env,

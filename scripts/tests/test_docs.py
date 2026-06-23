@@ -5,6 +5,7 @@ from pathlib import Path
 
 OPERATIONS_DOC = Path("docs/operations.md")
 REPRODUCIBILITY_DOC = Path("docs/reproducibility.md")
+FULL_SMB_CONTENT_DOC = Path("docs/full-smb-content.md")
 README = Path("README.md")
 
 
@@ -20,6 +21,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "## Block SMB Perception",
             "## Block SMB Policy",
             "## Full SMB Vision",
+            "## Full SMB Content Setup",
             "## Full SMB Adapter And Transfer",
         ):
             self.assertIn(section, text)
@@ -42,6 +44,9 @@ class TestOperationsDocumentation(unittest.TestCase):
             "--game pong",
             "artifacts/multi_game/reports/baseline_cross_game.json",
             "game_key",
+            "[full-smb-content.md](full-smb-content.md)",
+            "SuperMarioBros-Nes",
+            "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
         ):
             self.assertIn(term, text)
 
@@ -71,7 +76,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "## 4. Run The Baseline Architecture Promotion Fixture",
             "## 5. Run A Traceable Architecture Sweep",
             "## 6. Run A Traceable CPU Smoke Training",
-            "## 12. Preserve The Run",
+            "## 11. Set Up Full SMB Local Content",
+            "## 13. Preserve The Run",
         ):
             self.assertIn(section, text)
 
@@ -88,6 +94,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi evaluate --game smb --stage full",
             "retroagi transfer --game smb --stage full",
             "retroagi compare --game smb --stage full",
+            "python -m retro.import local/full_smb/roms",
         ):
             self.assertIn(command, text)
 
@@ -103,8 +110,26 @@ class TestOperationsDocumentation(unittest.TestCase):
             "data/vit/full_smb_vit.pth",
             "data/full_smb/transferred_policy.pth",
             "artifacts/full_smb/transfer_vs_scratch.json",
+            "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
         ):
             self.assertIn(artifact, text)
+
+    def test_full_smb_content_setup_documents_local_only_rom_contract(self):
+        text = FULL_SMB_CONTENT_DOC.read_text(encoding="utf-8")
+
+        for term in (
+            "# Full SMB Content Setup",
+            "SuperMarioBros-Nes",
+            "retro.make(game=\"SuperMarioBros-Nes\")",
+            "python -m pip install -e '.[full-smb]'",
+            "local/full_smb/roms/",
+            "python -m retro.import local/full_smb/roms",
+            "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
+            "shasum -a 256",
+            "must not be committed",
+            "RuntimeError",
+        ):
+            self.assertIn(term, text)
 
     def test_readme_links_reproducibility_procedure(self):
         readme = README.read_text(encoding="utf-8")

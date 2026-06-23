@@ -432,7 +432,7 @@ Full SMB currently supports adapter smoke tests, policy transfer, and
 transfer-vs-scratch comparison. This milestone turns Full SMB into a trainable
 and playable end target.
 
-- [ ] Define the supported Full SMB content setup: required ROM/game identifier,
+- [x] Define the supported Full SMB content setup: required ROM/game identifier,
       stable-retro integration path, local file locations, checksum handling,
       legal/provenance notes, and failure messages when content is missing.
 - [ ] Add a Full SMB environment capability check command that verifies backend

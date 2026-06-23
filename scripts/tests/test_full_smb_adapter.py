@@ -1,6 +1,9 @@
 """Tests for the Full SMB stable-retro stage adapter."""
 
+import sys
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -14,12 +17,15 @@ from retroagi.core import (
     full_smb_action,
 )
 from retroagi.stages.full_smb import (
+    DEFAULT_FULL_SMB_CONTENT,
     FULL_SMB_SPEC,
+    FullSMBContentSpec,
     FullSMBObservationConfig,
     FullSMBSignalExtractor,
     FullSMBSmokeConfig,
     FullSMBStage,
     extract_full_smb_signals,
+    make_stable_retro_env,
     run_deterministic_reset_smoke,
     run_headless_random_agent_smoke,
 )
@@ -226,6 +232,52 @@ class TestFullSMBStage(unittest.TestCase):
                 resize_shape=(8, 8),
             ),
         )
+
+    def test_content_spec_documents_supported_local_rom_setup(self):
+        spec = DEFAULT_FULL_SMB_CONTENT
+        manifest = spec.to_manifest()
+
+        self.assertIsInstance(spec, FullSMBContentSpec)
+        self.assertEqual(manifest["game"], "SuperMarioBros-Nes")
+        self.assertEqual(manifest["stable_retro_import_dir"], "local/full_smb/roms")
+        self.assertEqual(
+            manifest["stable_retro_import_command"],
+            "python -m retro.import local/full_smb/roms",
+        )
+        self.assertEqual(manifest["checksum_algorithm"], "sha256")
+        self.assertEqual(
+            manifest["checksum_record_path"],
+            "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
+        )
+        self.assertIn("legally obtained", manifest["legal_notice"])
+        self.assertIn("Do not commit", manifest["legal_notice"])
+
+    def test_make_stable_retro_env_reports_missing_backend_setup(self):
+        with patch.dict(sys.modules, {"retro": None}):
+            with self.assertRaisesRegex(RuntimeError, "stable-retro is not installed") as cm:
+                make_stable_retro_env()
+
+        message = str(cm.exception)
+        self.assertIn("SuperMarioBros-Nes", message)
+        self.assertIn("python -m pip install -e '.[full-smb]'", message)
+        self.assertIn("python -m retro.import local/full_smb/roms", message)
+        self.assertIn("local/full_smb/checksums/SuperMarioBros-Nes.sha256", message)
+        self.assertIn("legally obtained", message)
+
+    def test_make_stable_retro_env_reports_missing_imported_rom_setup(self):
+        def raise_missing_game(**_kwargs):
+            raise FileNotFoundError("game data not found")
+
+        retro = SimpleNamespace(make=raise_missing_game)
+        with patch.dict(sys.modules, {"retro": retro}):
+            with self.assertRaisesRegex(RuntimeError, "game data not found") as cm:
+                make_stable_retro_env()
+
+        message = str(cm.exception)
+        self.assertIn("Required content", message)
+        self.assertIn("SuperMarioBros-Nes", message)
+        self.assertIn("Local ROM staging directory", message)
+        self.assertIn("Checksum record", message)
 
     def test_signal_extractor_accepts_nested_position_and_death_reason(self):
         signals = extract_full_smb_signals(

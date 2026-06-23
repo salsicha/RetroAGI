@@ -245,6 +245,26 @@ them.
 | Expected Metrics | `accuracy`, `foreground_accuracy`, `mean_iou`, plus per-class `iou/<class>` and `recall/<class>` in the versioned checkpoint. The documented reference checkpoint reports about 99.94 percent overall accuracy, 99.89 percent foreground accuracy, and 99.14 percent mean IoU on 1,000 held-out synthetic scenes. |
 | Artifact Locations | Sprites: `assets/spritesheets/` and `assets/sprites/`. Synthetic data: `data/vit/train.npz` and `data/vit/val.npz`. Default versioned checkpoint: `data/vit/full_smb_vit.pth`. Legacy raw weights: `data/vit/vit_smb.pth`. Preview image: `data/vit/predictions.png`. |
 
+## Full SMB Content Setup
+
+Real Full SMB emulator runs use the local content contract in
+[full-smb-content.md](full-smb-content.md). The supported stable-retro game id
+is `SuperMarioBros-Nes`, created through `retro.make(game="SuperMarioBros-Nes")`
+after the user imports a legally obtained ROM with:
+
+```bash
+mkdir -p local/full_smb/roms local/full_smb/checksums
+python -m retro.import local/full_smb/roms
+shasum -a 256 local/full_smb/roms/<your-rom-file>.nes \
+  > local/full_smb/checksums/SuperMarioBros-Nes.sha256
+```
+
+`local/full_smb/` is ignored by git. Preserve only metadata and checksums in
+run notes or `artifacts/full_smb/<run>/content.json`; never commit or bundle
+ROM bytes. Missing backend or missing imported game failures are raised through
+the Full SMB content spec and include the install command, import command,
+checksum path, and legal/provenance reminder.
+
 ## Full SMB Adapter And Transfer
 
 Full SMB connects the shared stage contract to the stable-retro emulator. Its

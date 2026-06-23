@@ -510,7 +510,36 @@ scenes. Do not promote a Block SMB policy to Full SMB inference or continued
 training until the Full SMB ViT checkpoint has passed the selected held-out
 semantic and position gates.
 
-## 11. Reproduce Full SMB Adapter, Inference, And Continued Training
+## 11. Set Up Full SMB Local Content
+
+Full SMB headless training and evaluation require the local stable-retro content
+setup described in [full-smb-content.md](full-smb-content.md). The supported
+game id is `SuperMarioBros-Nes`; ROM content must be legally obtained,
+user-provided, local-only, and excluded from git.
+
+```bash
+python -m pip install -e '.[full-smb]'
+mkdir -p local/full_smb/roms local/full_smb/checksums
+python -m retro.import local/full_smb/roms
+shasum -a 256 local/full_smb/roms/<your-rom-file>.nes \
+  > local/full_smb/checksums/SuperMarioBros-Nes.sha256
+```
+
+Expected local-only evidence:
+
+- `local/full_smb/roms/` exists and is ignored by git,
+- stable-retro can resolve `SuperMarioBros-Nes`,
+- `local/full_smb/checksums/SuperMarioBros-Nes.sha256` records the SHA-256 hash
+  for the imported ROM,
+- run notes or `artifacts/full_smb/<run>/content.json` record the game id,
+  import command, checksum algorithm, checksum file path, and provenance note
+  without copying ROM bytes.
+
+If the backend or imported game is missing, `FullSMBStage()` raises a setup
+error that includes the install command, `python -m retro.import
+local/full_smb/roms`, checksum path, and legal/provenance reminder.
+
+## 12. Reproduce Full SMB Adapter, Inference, And Continued Training
 
 Run the headless emulator smoke path to verify the full observation and action
 contract:
@@ -556,7 +585,7 @@ Expected evidence:
   mean entropies, mean margins, collection reward, resets, terminations, and
   truncations.
 
-## 12. Preserve The Run
+## 13. Preserve The Run
 
 Before publishing or comparing results, preserve:
 
