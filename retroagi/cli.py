@@ -116,7 +116,7 @@ def run(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
     if stage == "block-smb":
         return _run_block_smb(args, stage_args)
     if stage == "full-smb":
-        return _run_full_smb(command, stage_args)
+        return _run_full_smb(args, stage_args)
     if stage == "synthetic-1d":
         return _run_synthetic_1d(args, stage_args)
     raise ValueError(f"unsupported stage {stage!r}")
@@ -137,7 +137,20 @@ def _run_block_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
     return int(block_smb_cli.main(block_args))
 
 
-def _run_full_smb(command: str, stage_args: Sequence[str]) -> int:
+def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
+    command = str(args.command)
+    if command == "train":
+        from retroagi.stages.full_smb.train import main as train_main
+
+        return int(train_main(["train", *stage_args]))
+    if command == "resume":
+        from retroagi.stages.full_smb.train import main as train_main
+
+        train_args = ["train", "--resume", str(args.checkpoint)]
+        if args.save_checkpoint is not None:
+            train_args.extend(["--checkpoint", str(args.save_checkpoint)])
+        train_args.extend(stage_args)
+        return int(train_main(train_args))
     if command == "evaluate":
         return _run_full_smb_evaluate(stage_args)
     if command == "transfer":
@@ -151,12 +164,19 @@ def _run_full_smb(command: str, stage_args: Sequence[str]) -> int:
         compare_main(list(stage_args))
         return 0
     raise ValueError(
-        "Full SMB currently supports evaluate, transfer, and compare through "
-        "the top-level CLI; direct training/resume is not implemented yet"
+        "Full SMB currently supports train, resume, evaluate, transfer, and compare "
+        "through the top-level CLI"
     )
 
 
 def _run_full_smb_evaluate(stage_args: Sequence[str]) -> int:
+    if any(
+        arg == "--policy-checkpoint" or arg.startswith("--policy-checkpoint=") for arg in stage_args
+    ):
+        from retroagi.stages.full_smb.train import main as train_main
+
+        return int(train_main(["evaluate", *stage_args]))
+
     from retroagi.stages.full_smb.run import main as run_full_smb
 
     parser = argparse.ArgumentParser(prog="retroagi evaluate --stage full-smb")

@@ -20,6 +20,17 @@ from .smoke import (
     run_deterministic_reset_smoke,
     run_headless_random_agent_smoke,
 )
+from .train import (
+    FULL_SMB_POLICY_CHECKPOINT_KIND,
+    FULL_SMB_POLICY_MODEL_NAME,
+    FullSMBEvaluationResult,
+    FullSMBTrainingConfig,
+    FullSMBTrainingResult,
+    build_full_smb_policy_checkpoint,
+    evaluate_full_smb_policy,
+    load_full_smb_policy_checkpoint,
+    train_full_smb_policy,
+)
 from .vision import (
     DEFAULT_FULL_SMB_VIT_CHECKPOINT,
     FALLBACK_FULL_SMB_VIT_CHECKPOINT,
@@ -30,18 +41,21 @@ from .vision import (
     FULL_SMB_VIT_MODEL_NAME,
     FullSMBDeepLabSegmentationVision,
     FullSMBSegmentationVision,
-    FullSMBVITLoadResult,
     FullSMBVisionTransformer,
+    FullSMBVITLoadResult,
     build_full_smb_vit_checkpoint,
     load_full_smb_vit_checkpoint,
 )
 
 __all__ = [
     "FULL_SMB_GAME",
+    "FULL_SMB_POLICY_CHECKPOINT_KIND",
+    "FULL_SMB_POLICY_MODEL_NAME",
     "FULL_SMB_SEMANTIC_CLASSES",
     "FULL_SMB_SPEC",
     "FullSMBEmulatorState",
     "FullSMBEnvConfig",
+    "FullSMBEvaluationResult",
     "FullSMBObservationConfig",
     "FullSMBDeterministicResetSmokeResult",
     "FullSMBRandomAgentSmokeResult",
@@ -49,6 +63,8 @@ __all__ = [
     "FullSMBSignalConfig",
     "FullSMBSignals",
     "FullSMBSmokeConfig",
+    "FullSMBTrainingConfig",
+    "FullSMBTrainingResult",
     "DEFAULT_FULL_SMB_VIT_CHECKPOINT",
     "FALLBACK_FULL_SMB_VIT_CHECKPOINT",
     "FULL_SMB_DEEPLAB_CLASSES",
@@ -61,9 +77,13 @@ __all__ = [
     "FullSMBVisionTransformer",
     "FullSMBStage",
     "build_full_smb_vit_checkpoint",
+    "build_full_smb_policy_checkpoint",
+    "evaluate_full_smb_policy",
     "extract_full_smb_signals",
+    "load_full_smb_policy_checkpoint",
     "load_full_smb_vit_checkpoint",
     "make_stable_retro_env",
     "run_deterministic_reset_smoke",
     "run_headless_random_agent_smoke",
+    "train_full_smb_policy",
 ]

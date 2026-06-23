@@ -292,7 +292,7 @@ high-fidelity evaluations.
 - [x] Add tests proving incompatible architecture checkpoints fail before state
       loading and compatible checkpoints can transfer across Block SMB and Full
       SMB when their declared contracts match.
-- [ ] Implement direct Full SMB policy fine-tuning, resume, evaluation, and
+- [x] Implement direct Full SMB policy fine-tuning, resume, evaluation, and
       checkpointing so the highest-fidelity rung can measure learning instead
       of only transfer and inference comparison.
 - [ ] Add a known-good architecture sweep fixture that runs the baseline through

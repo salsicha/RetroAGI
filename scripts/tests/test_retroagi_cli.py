@@ -207,7 +207,7 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
-    def test_full_smb_evaluate_dispatches_to_smoke_runner(self):
+    def test_full_smb_evaluate_without_policy_dispatches_to_smoke_runner(self):
         with patch("retroagi.stages.full_smb.run.main") as run_full_smb:
             exit_code = cli.main(
                 [
@@ -228,6 +228,83 @@ class TestRetroAGICLI(unittest.TestCase):
             seed=42,
             render=False,
             encode_observations=True,
+        )
+
+    def test_full_smb_train_resume_and_policy_evaluate_forward_arguments(self):
+        with patch("retroagi.stages.full_smb.train.main", return_value=0) as train_main:
+            train_exit = cli.main(
+                [
+                    "train",
+                    "--stage",
+                    "full-smb",
+                    "--epochs",
+                    "2",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                ]
+            )
+
+        self.assertEqual(train_exit, 0)
+        train_main.assert_called_once_with(
+            [
+                "train",
+                "--epochs",
+                "2",
+                "--checkpoint",
+                "data/full_smb/policy.pth",
+            ]
+        )
+
+        with patch("retroagi.stages.full_smb.train.main", return_value=0) as train_main:
+            resume_exit = cli.main(
+                [
+                    "resume",
+                    "--stage",
+                    "full",
+                    "--checkpoint",
+                    "data/full_smb/old.pth",
+                    "--save-checkpoint",
+                    "data/full_smb/new.pth",
+                    "--epochs",
+                    "3",
+                ]
+            )
+
+        self.assertEqual(resume_exit, 0)
+        train_main.assert_called_once_with(
+            [
+                "train",
+                "--resume",
+                "data/full_smb/old.pth",
+                "--checkpoint",
+                "data/full_smb/new.pth",
+                "--epochs",
+                "3",
+            ]
+        )
+
+        with patch("retroagi.stages.full_smb.train.main", return_value=0) as train_main:
+            evaluate_exit = cli.main(
+                [
+                    "evaluate",
+                    "--stage",
+                    "full-smb",
+                    "--policy-checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--evaluation-episodes",
+                    "2",
+                ]
+            )
+
+        self.assertEqual(evaluate_exit, 0)
+        train_main.assert_called_once_with(
+            [
+                "evaluate",
+                "--policy-checkpoint",
+                "data/full_smb/policy.pth",
+                "--evaluation-episodes",
+                "2",
+            ]
         )
 
     def test_full_smb_transfer_and_compare_forward_arguments(self):
@@ -277,14 +354,14 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
-    def test_full_smb_train_reports_unsupported_command(self):
+    def test_full_smb_record_reports_unsupported_command(self):
         stream = io.StringIO()
         with redirect_stderr(stream):
             with self.assertRaises(SystemExit) as raised:
-                cli.main(["train", "--stage", "full-smb"])
+                cli.main(["record", "--stage", "full-smb"])
 
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("direct training/resume is not implemented", stream.getvalue())
+        self.assertIn("train, resume, evaluate, transfer, and compare", stream.getvalue())
 
 
 if __name__ == "__main__":
