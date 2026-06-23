@@ -61,6 +61,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "summary": {
             "run_count": len(runs),
             "row_count": len(rows),
+            "game_count": len({row["game_key"] for row in rows}),
+            "game_row_counts": _game_row_counts(rows),
             "passed_count": sum(1 for row in rows if row.get("passed") is True),
             "failed_count": sum(1 for row in rows if row.get("passed") is False),
             "stopped_count": sum(1 for row in rows if row.get("status") == "stopped"),
@@ -78,11 +80,14 @@ def _load_manifest(path: Path) -> dict[str, Any]:
 
 def _run_summary(path: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
     architecture = _architecture(manifest)
+    game = _game(manifest)
     return {
         "input": str(path),
         "manifest_type": _manifest_type(manifest),
         "architecture": architecture,
         "architecture_key": _architecture_key(architecture),
+        "game": game,
+        "game_key": _game_key(game),
         "seed": manifest.get("seed"),
         "device": manifest.get("device"),
         "passed": manifest.get("passed"),
@@ -176,6 +181,8 @@ def _base_row(path: Path, run: Mapping[str, Any], *, kind: str, name: str) -> di
         "comparison_key": name,
         "architecture": run["architecture"],
         "architecture_key": run["architecture_key"],
+        "game": run["game"],
+        "game_key": run["game_key"],
         "seed": run.get("seed"),
         "device": run.get("device"),
     }
@@ -201,6 +208,32 @@ def _architecture_key(architecture: Mapping[str, Any]) -> str:
         f"{architecture.get('name')} "
         f"{json.dumps(config, sort_keys=True, separators=(',', ':'))}"
     )
+
+
+def _game(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    game = manifest.get("game", {})
+    if not isinstance(game, Mapping):
+        game = {}
+    backend = game.get("backend", {})
+    if not isinstance(backend, Mapping):
+        backend = {}
+    stage_ladder = game.get("stage_ladder", [])
+    if not isinstance(stage_ladder, Sequence) or isinstance(stage_ladder, (str, bytes)):
+        stage_ladder = []
+    return {
+        "name": game.get("name"),
+        "family": game.get("family"),
+        "backend": backend.get("name"),
+        "stage_ladder": [
+            stage.get("name")
+            for stage in stage_ladder
+            if isinstance(stage, Mapping) and stage.get("name") is not None
+        ],
+    }
+
+
+def _game_key(game: Mapping[str, Any]) -> str:
+    return str(game.get("name") or "unknown-game")
 
 
 def _manifest_type(manifest: Mapping[str, Any]) -> str:
@@ -278,7 +311,9 @@ def _attach_regression_deltas(
         if not isinstance(metrics, Mapping):
             metrics = {}
         for metric, value in metrics.items():
-            baseline_value = baseline_metrics.get((row["comparison_key"], metric))
+            baseline_value = baseline_metrics.get(
+                (row["game_key"], row["comparison_key"], metric)
+            )
             if baseline_value is None:
                 continue
             delta = float(value) - baseline_value
@@ -294,7 +329,7 @@ def _attach_regression_deltas(
 def _baseline_metric_index(
     rows: Sequence[Mapping[str, Any]],
     baseline: Mapping[str, Any] | None,
-) -> dict[tuple[str, str], float]:
+) -> dict[tuple[str, str, str], float]:
     if baseline is None:
         return {}
     baseline_key = baseline.get("architecture_key")
@@ -307,8 +342,19 @@ def _baseline_metric_index(
             continue
         for metric, value in metrics.items():
             if isinstance(value, (int, float)) and not isinstance(value, bool):
-                index.setdefault((str(row["comparison_key"]), str(metric)), float(value))
+                index.setdefault(
+                    (str(row["game_key"]), str(row["comparison_key"]), str(metric)),
+                    float(value),
+                )
     return index
+
+
+def _game_row_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row.get("game_key", "unknown-game"))
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

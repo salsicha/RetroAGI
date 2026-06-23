@@ -417,7 +417,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Add a second-game smoke test that proves the architecture registry,
       action mapping, signal extraction, and experiment manifest are not
       hard-coded to SMB.
-- [ ] Update operations and reproducibility docs with multi-game commands,
+- [x] Update operations and reproducibility docs with multi-game commands,
       artifact layouts, and per-game promotion reports.
 
 **Exit criteria:** adding a new game requires a game profile, action spec,

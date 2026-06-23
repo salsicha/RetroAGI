@@ -15,6 +15,7 @@ class TestOperationsDocumentation(unittest.TestCase):
         for section in (
             "# Operations Reference",
             "## Runtime Baseline",
+            "## Multi-Game Operations",
             "## Synthetic 1D",
             "## Block SMB Perception",
             "## Block SMB Policy",
@@ -34,6 +35,15 @@ class TestOperationsDocumentation(unittest.TestCase):
             "action_agreement",
         ):
             self.assertIn(metric, text)
+
+        for term in (
+            "artifacts/multi_game/<game>/<architecture>/manifest.json",
+            "retroagi experiment",
+            "--game pong",
+            "artifacts/multi_game/reports/baseline_cross_game.json",
+            "game_key",
+        ):
+            self.assertIn(term, text)
 
         for artifact in (
             "data/block_vit/block_vit.pth",
@@ -72,6 +82,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi promote",
             "retroagi experiment",
             "retroagi report",
+            "retroagi experiment \\\n  --game pong",
             "retroagi train --game smb --stage block",
             "retroagi diagnose-vision --game smb --stage block",
             "retroagi evaluate --game smb --stage full",
@@ -84,6 +95,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "artifacts/repro/promotion_baseline_interface.json",
             "artifacts/repro/architecture_sweeps/baseline/manifest.json",
             "artifacts/repro/architecture_sweeps/report.json",
+            "artifacts/repro/multi_game/pong/baseline/manifest.json",
+            "artifacts/repro/multi_game/report.json",
             "artifacts/repro/block_smb_smoke/run_summary.json",
             "artifacts/repro/block_smb_smoke/events.jsonl",
             "data/block_smb/policy.pth",

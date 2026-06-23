@@ -16,13 +16,23 @@ def _write_manifest(path: Path, manifest):
     path.write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def _experiment_manifest(*, hidden_dim, controller_mse, success_rate):
+def _experiment_manifest(*, hidden_dim, controller_mse, success_rate, game_name="smb"):
     architecture = {
         "name": BASELINE_ARCHITECTURE_NAME,
         "config": {"hidden_dim": hidden_dim},
     }
     return {
         "architecture": architecture,
+        "game": {
+            "name": game_name,
+            "family": game_name,
+            "backend": {"name": "stable-retro" if game_name == "smb" else "gymnasium-pong"},
+            "stage_ladder": [
+                {"name": "synthetic"},
+                {"name": "block"},
+                {"name": "full"},
+            ],
+        },
         "seed": 7,
         "device": "cpu",
         "artifacts_dir": "artifacts/experiment",
@@ -57,6 +67,16 @@ def _promotion_manifest():
         "architecture": {
             "name": BASELINE_ARCHITECTURE_NAME,
             "config": {"hidden_dim": 8},
+        },
+        "game": {
+            "name": "smb",
+            "family": "platformer",
+            "backend": {"name": "stable-retro"},
+            "stage_ladder": [
+                {"name": "synthetic"},
+                {"name": "block"},
+                {"name": "full"},
+            ],
         },
         "seed": 3,
         "device": "cpu",
@@ -135,13 +155,18 @@ class TestArchitectureReports(unittest.TestCase):
         self.assertEqual(written, report)
         self.assertEqual(report["summary"]["run_count"], 2)
         self.assertEqual(report["summary"]["row_count"], 4)
+        self.assertEqual(report["summary"]["game_count"], 1)
+        self.assertEqual(report["summary"]["game_row_counts"], {"smb": 4})
         self.assertEqual(report["baseline"]["architecture"]["config"], {"hidden_dim": 8})
+        self.assertEqual(report["runs"][0]["game"]["name"], "smb")
         variant_synthetic = next(
             row
             for row in report["rows"]
             if row["architecture"]["config"] == {"hidden_dim": 12}
             and row["stage"] == "synthetic-1d"
         )
+        self.assertEqual(variant_synthetic["game"]["name"], "smb")
+        self.assertEqual(variant_synthetic["game_key"], "smb")
         self.assertEqual(
             variant_synthetic["artifacts"]["checkpoint_path"], "artifacts/synthetic/checkpoint.pth"
         )
@@ -170,6 +195,86 @@ class TestArchitectureReports(unittest.TestCase):
         self.assertEqual(stage["comparison_key"], "synthetic-concept:synthetic-1d")
         self.assertEqual(stage["automatic_gates"][0]["name"], "runtime-seconds")
         self.assertEqual(stage["metrics"]["controller_mse"], 0.25)
+
+    def test_report_scopes_regression_deltas_by_game(self):
+        with TemporaryDirectory() as tmpdir:
+            smb_baseline = Path(tmpdir) / "smb_baseline.json"
+            smb_variant = Path(tmpdir) / "smb_variant.json"
+            pong_baseline = Path(tmpdir) / "pong_baseline.json"
+            pong_variant = Path(tmpdir) / "pong_variant.json"
+            output_path = Path(tmpdir) / "report.json"
+            _write_manifest(
+                smb_baseline,
+                _experiment_manifest(
+                    hidden_dim=8,
+                    controller_mse=1.0,
+                    success_rate=0.25,
+                    game_name="smb",
+                ),
+            )
+            _write_manifest(
+                smb_variant,
+                _experiment_manifest(
+                    hidden_dim=12,
+                    controller_mse=0.9,
+                    success_rate=0.35,
+                    game_name="smb",
+                ),
+            )
+            _write_manifest(
+                pong_baseline,
+                _experiment_manifest(
+                    hidden_dim=8,
+                    controller_mse=5.0,
+                    success_rate=0.0,
+                    game_name="pong",
+                ),
+            )
+            _write_manifest(
+                pong_variant,
+                _experiment_manifest(
+                    hidden_dim=12,
+                    controller_mse=4.0,
+                    success_rate=0.0,
+                    game_name="pong",
+                ),
+            )
+
+            exit_code, report = self.run_main(
+                [
+                    "--input",
+                    str(smb_baseline),
+                    "--input",
+                    str(smb_variant),
+                    "--input",
+                    str(pong_baseline),
+                    "--input",
+                    str(pong_variant),
+                    "--output",
+                    str(output_path),
+                    "--baseline-config",
+                    "hidden_dim=8",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["summary"]["game_count"], 2)
+        self.assertEqual(report["summary"]["game_row_counts"], {"pong": 4, "smb": 4})
+        pong_synthetic = next(
+            row
+            for row in report["rows"]
+            if row["game_key"] == "pong"
+            and row["architecture"]["config"] == {"hidden_dim": 12}
+            and row["stage"] == "synthetic-1d"
+        )
+        self.assertEqual(
+            pong_synthetic["regression_deltas"]["controller_mse"]["baseline"],
+            5.0,
+        )
+        self.assertEqual(
+            pong_synthetic["regression_deltas"]["controller_mse"]["delta"],
+            -1.0,
+        )
 
 
 if __name__ == "__main__":

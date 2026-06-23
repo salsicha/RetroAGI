@@ -242,10 +242,85 @@ retroagi report \
 Expected report evidence:
 
 - one row per stage for every input manifest,
+- `game` and `game_key` on every run and report row,
 - numeric metric deltas against the selected baseline when matching metrics are
-  present,
+  present, scoped to the same game and comparison row,
 - artifact links back to each stage summary, checkpoint, and log,
 - pass/fail gates carried through from the combined manifests.
+
+For a multi-game profile smoke, keep each game under its own artifact root.
+SMB is the runnable reference for synthetic and block stages; Pong currently
+supports the synthetic experiment path as a second-game profile check while
+its block and full runners remain planned.
+
+```bash
+retroagi experiment \
+  --game pong \
+  --stage synthetic \
+  --output artifacts/repro/multi_game/pong/baseline/manifest.json \
+  --artifacts-dir artifacts/repro/multi_game/pong/baseline \
+  --seed 0 \
+  --device cpu \
+  --architecture baseline \
+  --architecture-config hidden_dim=8 \
+  --synthetic-epochs 1 \
+  --synthetic-train-samples 16 \
+  --synthetic-validation-samples 8 \
+  --synthetic-test-samples 8 \
+  --gate 'synthetic:controller_mse<100'
+```
+
+Verify the Pong profile manifest:
+
+```bash
+test -s artifacts/repro/multi_game/pong/baseline/manifest.json
+python - <<'PY'
+import json
+from pathlib import Path
+
+manifest = json.loads(Path("artifacts/repro/multi_game/pong/baseline/manifest.json").read_text())
+assert manifest["passed"] is True
+assert manifest["game"]["name"] == "pong"
+assert manifest["game"]["backend"]["contract"]["provider_kind"] == "gymnasium"
+assert [stage["name"] for stage in manifest["game"]["stage_ladder"]] == [
+    "synthetic",
+    "block",
+    "full",
+]
+assert manifest["game"]["content_identifiers"] == []
+assert manifest["stages"][0]["game_stage"]["name"] == "synthetic"
+assert manifest["promotion_decisions"][0]["status"] == "passed"
+print("Pong profile manifest verified")
+PY
+```
+
+Create a cross-game report once both SMB and Pong manifests exist:
+
+```bash
+retroagi report \
+  --input artifacts/repro/architecture_sweeps/baseline/manifest.json \
+  --input artifacts/repro/multi_game/pong/baseline/manifest.json \
+  --baseline-architecture agent_world_model_critic \
+  --baseline-config hidden_dim=8 \
+  --output artifacts/repro/multi_game/report.json
+```
+
+Verify the report preserves per-game grouping:
+
+```bash
+test -s artifacts/repro/multi_game/report.json
+python - <<'PY'
+import json
+from pathlib import Path
+
+report = json.loads(Path("artifacts/repro/multi_game/report.json").read_text())
+assert report["summary"]["game_count"] >= 2
+assert "smb" in report["summary"]["game_row_counts"]
+assert "pong" in report["summary"]["game_row_counts"]
+assert all("game_key" in row for row in report["rows"])
+print("Multi-game report verified")
+PY
+```
 
 ## 6. Run A Traceable CPU Smoke Training
 

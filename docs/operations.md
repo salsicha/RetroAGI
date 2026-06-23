@@ -63,6 +63,96 @@ semantic masks. These source entries are written to experiment manifests so
 promotion reports can distinguish asset-backed perception from fallback
 supervision.
 
+## Multi-Game Operations
+
+Use the game registry as the source of truth before launching a run:
+
+```bash
+python - <<'PY'
+from retroagi.core import game_plugin_names, get_game_plugin
+
+for name in game_plugin_names():
+    plugin = get_game_plugin(name)
+    stages = ", ".join(stage.name for stage in plugin.game.stage_ladder)
+    print(f"{name}: {stages}")
+PY
+```
+
+SMB is the fully runnable reference game for synthetic, block, and full-fidelity
+commands. Pong is the proof-of-concept second game profile. It can produce a
+traceable synthetic experiment manifest today; its block and full runtime
+runners remain planned contracts until the Pong stage adapters are implemented.
+
+Run the SMB reference sweep into a game-scoped artifacts directory:
+
+```bash
+retroagi experiment \
+  --game smb \
+  --stage synthetic \
+  --stage block \
+  --output artifacts/multi_game/smb/baseline/manifest.json \
+  --artifacts-dir artifacts/multi_game/smb/baseline \
+  --device cpu \
+  --architecture baseline \
+  --architecture-config hidden_dim=8 \
+  --synthetic-epochs 1 \
+  --synthetic-train-samples 16 \
+  --synthetic-validation-samples 8 \
+  --synthetic-test-samples 8 \
+  --block-epochs 1 \
+  --block-episodes-per-epoch 1 \
+  --block-rollout-steps 2 \
+  --block-evaluation-episodes 1 \
+  --block-evaluation-max-steps 2 \
+  --block-fixed-scenario level_1_flat.json \
+  --gate 'synthetic:controller_mse<100' \
+  --gate 'block:eval_success_rate>=0'
+```
+
+Run the Pong profile smoke into its own game-scoped directory:
+
+```bash
+retroagi experiment \
+  --game pong \
+  --stage synthetic \
+  --output artifacts/multi_game/pong/baseline/manifest.json \
+  --artifacts-dir artifacts/multi_game/pong/baseline \
+  --device cpu \
+  --architecture baseline \
+  --architecture-config hidden_dim=8 \
+  --synthetic-epochs 1 \
+  --synthetic-train-samples 16 \
+  --synthetic-validation-samples 8 \
+  --synthetic-test-samples 8 \
+  --gate 'synthetic:controller_mse<100'
+```
+
+Use this artifact layout for comparable multi-game work:
+
+| Path | Contents |
+| --- | --- |
+| `artifacts/multi_game/<game>/<architecture>/manifest.json` | Experiment manifest for one architecture/game run. |
+| `artifacts/multi_game/<game>/<architecture>/<stage>/run_summary.json` | Stage summary emitted by the stage runner. |
+| `artifacts/multi_game/<game>/<architecture>/<stage>/checkpoint.pth` | Stage checkpoint when the runner writes one. |
+| `artifacts/multi_game/<game>/<architecture>/<stage>/events.jsonl` | Structured log for stages that emit events. |
+| `artifacts/multi_game/reports/<name>.json` | Cross-game or per-game comparison report. |
+
+Build a report from comparable manifests:
+
+```bash
+retroagi report \
+  --input artifacts/multi_game/smb/baseline/manifest.json \
+  --input artifacts/multi_game/pong/baseline/manifest.json \
+  --baseline-architecture agent_world_model_critic \
+  --baseline-config hidden_dim=8 \
+  --output artifacts/multi_game/reports/baseline_cross_game.json
+```
+
+Report rows include `game`, `game_key`, architecture, stage/rung, metrics,
+gates, artifacts, and regression deltas. Deltas are scoped by both game and
+comparison row, so a Pong metric is compared to a Pong baseline rather than an
+SMB baseline with the same architecture config.
+
 ## Progressive-Resolution Responsibilities
 
 Use the stages in this order when evaluating an architecture concept:
