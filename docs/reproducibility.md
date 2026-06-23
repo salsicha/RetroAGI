@@ -539,6 +539,42 @@ If the backend or imported game is missing, `FullSMBStage()` raises a setup
 error that includes the install command, `python -m retro.import
 local/full_smb/roms`, checksum path, and legal/provenance reminder.
 
+Run the Full SMB environment capability check:
+
+```bash
+retroagi check-env --game smb --stage full \
+  --seed 0 \
+  --steps 4 \
+  --frame-skip 2 \
+  --output artifacts/full_smb/env_check.json
+```
+
+Verify the report before launching headless training:
+
+```bash
+test -s artifacts/full_smb/env_check.json
+python - <<'PY'
+import json
+from pathlib import Path
+
+report = json.loads(Path("artifacts/full_smb/env_check.json").read_text())
+assert report["passed"] is True
+for check in (
+    "backend_import",
+    "game_registration",
+    "rom_availability",
+    "headless_reset",
+    "render_reset",
+    "save_load_state",
+    "action_step",
+    "frame_skip",
+    "deterministic_seeding",
+):
+    assert report["checks"][check]["passed"], check
+print("Full SMB environment capability check verified")
+PY
+```
+
 ## 12. Reproduce Full SMB Adapter, Inference, And Continued Training
 
 Run the headless emulator smoke path to verify the full observation and action

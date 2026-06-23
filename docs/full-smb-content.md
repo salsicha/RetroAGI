@@ -52,7 +52,7 @@ shasum -a 256 local/full_smb/roms/<your-rom-file>.nes \
 The checksum file should identify the ROM used for a run, but the ROM itself
 must not be committed, bundled, uploaded with artifacts, or redistributed.
 
-## Missing Content Behavior
+## Environment Check
 
 `FullSMBStage()` creates the backend lazily through
 `make_stable_retro_env(...)`. When `stable-retro` is not installed or the
@@ -66,7 +66,17 @@ must not be committed, bundled, uploaded with artifacts, or redistributed.
 - the SHA-256 checksum record path,
 - the legal/provenance reminder.
 
-The next operational gate is a headless Full SMB capability check command. It
-will use this same content spec before attempting reset, render, save-state,
-action-step, frame-skip, and deterministic-seed checks.
+After importing the ROM, run the headless capability check before training:
 
+```bash
+retroagi check-env --game smb --stage full \
+  --seed 0 \
+  --steps 4 \
+  --frame-skip 2 \
+  --output artifacts/full_smb/env_check.json
+```
+
+The command uses this content spec, then verifies backend import, game
+registration, ROM availability, headless reset, render reset, save/load state,
+action stepping, frame-skip metadata, and deterministic seeding. It writes a
+JSON report and exits nonzero if any required check fails.

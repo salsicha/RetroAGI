@@ -47,6 +47,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "[full-smb-content.md](full-smb-content.md)",
             "SuperMarioBros-Nes",
             "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
+            "retroagi check-env --game smb --stage full",
+            "artifacts/full_smb/env_check.json",
         ):
             self.assertIn(term, text)
 
@@ -95,6 +97,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi transfer --game smb --stage full",
             "retroagi compare --game smb --stage full",
             "python -m retro.import local/full_smb/roms",
+            "retroagi check-env --game smb --stage full",
         ):
             self.assertIn(command, text)
 
@@ -111,6 +114,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "data/full_smb/transferred_policy.pth",
             "artifacts/full_smb/transfer_vs_scratch.json",
             "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
+            "artifacts/full_smb/env_check.json",
         ):
             self.assertIn(artifact, text)
 
@@ -128,6 +132,9 @@ class TestOperationsDocumentation(unittest.TestCase):
             "shasum -a 256",
             "must not be committed",
             "RuntimeError",
+            "retroagi check-env --game smb --stage full",
+            "verifies backend import",
+            "registration, ROM availability",
         ):
             self.assertIn(term, text)
 

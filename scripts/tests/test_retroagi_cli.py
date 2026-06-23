@@ -403,6 +403,36 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_full_smb_check_env_forwards_arguments(self):
+        with patch("retroagi.stages.full_smb.capabilities.main", return_value=0) as check_main:
+            exit_code = cli.main(
+                [
+                    "check-env",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "full",
+                    "--seed",
+                    "17",
+                    "--frame-skip",
+                    "3",
+                    "--output",
+                    "artifacts/full_smb/env_check.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        check_main.assert_called_once_with(
+            [
+                "--seed",
+                "17",
+                "--frame-skip",
+                "3",
+                "--output",
+                "artifacts/full_smb/env_check.json",
+            ]
+        )
+
     def test_full_smb_record_reports_unsupported_command(self):
         stream = io.StringIO()
         with redirect_stderr(stream):
@@ -410,7 +440,10 @@ class TestRetroAGICLI(unittest.TestCase):
                 cli.main(["record", "--stage", "full-smb"])
 
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("train, resume, evaluate, transfer, and compare", stream.getvalue())
+        self.assertIn(
+            "train, resume, evaluate, transfer, compare, and check-env",
+            stream.getvalue(),
+        )
 
 
 if __name__ == "__main__":

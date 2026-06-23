@@ -98,6 +98,12 @@ def build_parser() -> argparse.ArgumentParser:
     compare = subparsers.add_parser("compare", help="compare checkpoints for a stage")
     _add_stage_arg(compare)
 
+    check_env = subparsers.add_parser(
+        "check-env",
+        help="check the selected stage backend and local content setup",
+    )
+    _add_stage_arg(check_env)
+
     subparsers.add_parser(
         "experiment",
         help="run one architecture through selected stages and write a combined manifest",
@@ -178,9 +184,13 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
 
         compare_main(list(stage_args))
         return 0
+    if command == "check-env":
+        from retroagi.stages.full_smb.capabilities import main as capabilities_main
+
+        return int(capabilities_main(list(stage_args)))
     raise ValueError(
-        "Full SMB currently supports train, resume, evaluate, transfer, and compare "
-        "through the top-level CLI"
+        "Full SMB currently supports train, resume, evaluate, transfer, compare, "
+        "and check-env through the top-level CLI"
     )
 
 

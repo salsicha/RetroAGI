@@ -435,7 +435,7 @@ and playable end target.
 - [x] Define the supported Full SMB content setup: required ROM/game identifier,
       stable-retro integration path, local file locations, checksum handling,
       legal/provenance notes, and failure messages when content is missing.
-- [ ] Add a Full SMB environment capability check command that verifies backend
+- [x] Add a Full SMB environment capability check command that verifies backend
       import, game registration, ROM availability, headless reset, render reset,
       save/load state, action stepping, frame skip, and deterministic seeding.
 - [ ] Define Full SMB train/eval task sets using emulator states or level starts,

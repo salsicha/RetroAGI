@@ -265,6 +265,21 @@ ROM bytes. Missing backend or missing imported game failures are raised through
 the Full SMB content spec and include the install command, import command,
 checksum path, and legal/provenance reminder.
 
+Before headless training or evaluation, run the environment capability check:
+
+```bash
+retroagi check-env --game smb --stage full \
+  --seed 0 \
+  --steps 4 \
+  --frame-skip 2 \
+  --output artifacts/full_smb/env_check.json
+```
+
+The report verifies backend import, game registration, ROM availability,
+headless reset, render reset, save/load state, action stepping, frame-skip
+metadata, and deterministic seeding. Treat a nonzero exit as a setup failure,
+not a training failure.
+
 ## Full SMB Adapter And Transfer
 
 Full SMB connects the shared stage contract to the stable-retro emulator. Its

@@ -15,6 +15,11 @@ from .adapter import (
     extract_full_smb_signals,
     make_stable_retro_env,
 )
+from .capabilities import (
+    FullSMBEnvironmentCapabilityResult,
+    FullSMBEnvironmentCheckConfig,
+    run_full_smb_environment_check,
+)
 from .smoke import (
     FullSMBDeterministicResetSmokeResult,
     FullSMBRandomAgentSmokeResult,
@@ -58,6 +63,8 @@ __all__ = [
     "FULL_SMB_SPEC",
     "FullSMBEmulatorState",
     "FullSMBEnvConfig",
+    "FullSMBEnvironmentCapabilityResult",
+    "FullSMBEnvironmentCheckConfig",
     "FullSMBEvaluationResult",
     "FullSMBObservationConfig",
     "FullSMBDeterministicResetSmokeResult",
@@ -90,6 +97,7 @@ __all__ = [
     "load_full_smb_vit_checkpoint",
     "make_stable_retro_env",
     "run_deterministic_reset_smoke",
+    "run_full_smb_environment_check",
     "run_headless_random_agent_smoke",
     "train_full_smb_policy",
 ]
