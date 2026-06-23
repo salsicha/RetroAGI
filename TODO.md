@@ -376,6 +376,112 @@ not trainer rewrites. At least one non-SMB game can run through the synthetic
 and block rungs, produce a traceable experiment manifest, and exercise the same
 architecture promotion machinery as SMB.
 
+## P9: Full SMB Training And Play
+
+Full SMB currently supports adapter smoke tests, policy transfer, and
+transfer-vs-scratch comparison. This milestone turns Full SMB into a trainable
+and playable end target.
+
+- [ ] Define the supported Full SMB content setup: required ROM/game identifier,
+      stable-retro integration path, local file locations, checksum handling,
+      legal/provenance notes, and failure messages when content is missing.
+- [ ] Add a Full SMB environment capability check command that verifies backend
+      import, game registration, ROM availability, headless reset, render reset,
+      save/load state, action stepping, frame skip, and deterministic seeding.
+- [ ] Define Full SMB train/eval task sets using emulator states or level starts,
+      including short smoke tasks, fixed benchmark tasks, curriculum tasks, and
+      held-out generalization tasks.
+- [ ] Create and document deterministic Full SMB save-state artifacts for
+      starting positions, level sections, death/retry states, and benchmark
+      tasks without committing copyrighted content.
+- [ ] Define Full SMB success thresholds for each fixed task: progress,
+      completion, survival, score/coins, time budget, death count, and minimum
+      return.
+- [ ] Expand Full SMB signal extraction with tested memory variables or backend
+      info fields for x/y position, screen/level, score, coins, lives, power
+      state, death, timeout, flag/level completion, and game-over state.
+- [ ] Define a Full SMB reward config owned by the Full SMB adapter, separating
+      emulator progress, completion, survival, score/coin, enemy, damage, death,
+      and frame-penalty terms from Block SMB rewards.
+- [ ] Add reward-term breakdowns to Full SMB step info and tests proving the
+      reported terms sum to the scalar reward.
+- [ ] Verify and tune Full SMB frame preprocessing: crop/resize policy,
+      frame-skip, frame stacking, grayscale/RGB choice, normalization, HUD
+      handling, episode masks, and camera/scroll position encoding.
+- [ ] Add Full SMB perception diagnostics on real emulator frames using the
+      Full SMB ViT checkpoint: semantic confidence, class coverage, temporal
+      stability, position consistency, and bottleneck flags.
+- [ ] Decide whether Full SMB policy training freezes, fine-tunes, or replaces
+      Full SMB ViT perception; expose that choice in config and checkpoints.
+- [ ] Implement `FullSMBTrainingConfig` with seed, device, rollout length,
+      epochs/updates, vector env count, learning rate, loss weights, reward
+      config, checkpoint paths, resume paths, recording paths, tracking config,
+      and deterministic mode.
+- [ ] Implement direct Full SMB policy training from scratch using the shared
+      architecture factory and Full SMB stage batches.
+- [ ] Implement transferred-policy fine-tuning from a Block SMB or Full SMB
+      transfer checkpoint.
+- [ ] Add recurrent-state and episode-boundary handling in Full SMB rollouts,
+      including death, timeout, level completion, game over, and manual reset.
+- [ ] Add rollout/replay storage for Full SMB with saved actions, rewards,
+      dones, truncations, episode masks, scenario/task IDs, emulator state IDs,
+      and selected signal fields.
+- [ ] Add numerical safety checks for Full SMB training: finite losses,
+      gradient clipping, reward scale checks, value/reward prediction bounds,
+      action entropy tracking, and early stop on NaN or exploding loss.
+- [ ] Add periodic deterministic Full SMB evaluation during training, separate
+      from stochastic exploration rollouts.
+- [ ] Save versioned Full SMB trainer checkpoints with model, optimizer,
+      optional perception, RNG state, task/curriculum state, config, metrics,
+      backend metadata, and source checkpoint provenance.
+- [ ] Implement robust Full SMB resume so interrupted training can continue
+      with the same task schedule, RNG streams, optimizer, recurrent-state
+      expectations, and tracking destination.
+- [ ] Add Full SMB recording support for evaluation episodes, including frame
+      arrays, actions, rewards, signals, task IDs, and optional video export.
+- [ ] Add `retroagi train --stage full-smb` with scratch and fine-tune modes.
+- [ ] Add `retroagi resume --stage full-smb` with checkpoint and optional output
+      checkpoint paths.
+- [ ] Add `retroagi evaluate --stage full-smb --checkpoint ...` that loads a
+      saved policy and reports fixed-task threshold diagnostics.
+- [ ] Add `retroagi record --stage full-smb --checkpoint ...` that records
+      deterministic policy rollouts and writes artifacts.
+- [ ] Add `retroagi play --stage full-smb --checkpoint ...` for interactive
+      playback of a trained policy with render, speed, pause, reset, deterministic
+      or sampling mode, and optional recording.
+- [ ] Add a human-control mode under `retroagi play --stage full-smb --human`
+      for manual debugging of action mapping, reward signals, rendering, and
+      save-state starts.
+- [ ] Add CLI options for selecting Full SMB task set, level/state, render mode,
+      max steps, frame skip, action repeat, deterministic policy, and recording
+      output.
+- [ ] Add a policy-inspection overlay for play mode showing action name,
+      action probabilities, reward terms, score/progress signals, termination
+      reason, and current task threshold status.
+- [ ] Add comparison commands for transferred, scratch-trained, fine-tuned, and
+      known-good policies on identical seeded Full SMB task streams.
+- [ ] Define Full SMB artifact layout under `artifacts/full_smb/<run>/` for
+      summaries, structured logs, recordings, videos, evaluation reports,
+      comparison reports, and tracking outputs.
+- [ ] Add Full SMB CPU smoke tests using minimal steps and mocked or tiny backend
+      paths where real emulator content is unavailable in CI.
+- [ ] Add local integration tests, skipped unless content is available, that run
+      real stable-retro reset/step/evaluate/play smoke paths.
+- [ ] Add tests for Full SMB checkpoint compatibility, resume behavior,
+      transfer-to-train loading, fixed-task threshold diagnostics, and play-mode
+      policy loading.
+- [ ] Benchmark emulator throughput and document recommended CPU, CUDA, and MPS
+      settings for Full SMB training and play.
+- [ ] Update operations and reproducibility docs with Full SMB train, resume,
+      evaluate, record, play, and comparison commands.
+- [ ] Produce one known-good Full SMB policy artifact or documented benchmark
+      run that can be loaded, evaluated, recorded, and played locally.
+
+**Exit criteria:** a supported local setup can train or fine-tune a Full SMB
+policy, resume it, evaluate it against documented fixed-task thresholds, record
+deterministic rollouts, and play the saved policy with live rendering and
+diagnostic overlays.
+
 ## Definition of Done
 
 The full system is working when a clean checkout can:
@@ -388,3 +494,5 @@ The full system is working when a clean checkout can:
 6. Run deterministic Full SMB evaluations.
 7. Produce metrics, logs, checkpoints, and evaluation videos.
 8. Resume an interrupted run without losing experiment state.
+9. Train or fine-tune a Full SMB policy.
+10. Play a saved Full SMB policy with rendering and diagnostics.
