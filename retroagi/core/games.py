@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
-from .actions import SMB_ACTION_SPECS, ActionSpec
+from .actions import (
+    SMB_ACTION_SPECS,
+    ActionSpec,
+    action_backend_id as _action_backend_id,
+    action_button_vector as _action_button_vector,
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +129,16 @@ class GameSpec:
                     return action
             raise KeyError(f"unknown action {value!r} for game {self.name!r}")
         return self.action_space[int(value)]
+
+    def action_backend_id(self, value: int | str) -> int:
+        """Return the stage-native discrete ID for a policy action."""
+
+        return _action_backend_id(self.action(value))
+
+    def action_button_vector(self, value: int | str, buttons: Sequence[str]):
+        """Return a backend button vector for a policy action and button layout."""
+
+        return _action_button_vector(self.action(value), buttons)
 
 
 SMB_GAME_SPEC = GameSpec(

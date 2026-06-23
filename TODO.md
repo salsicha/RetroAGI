@@ -354,7 +354,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Replace the global SMB action vocabulary with per-game `ActionSpec`
       definitions that support discrete buttons, multi-button combos,
       continuous controls, no-op/release behavior, and stable integer IDs.
-- [ ] Add action mapping tests proving each game profile maps abstract policy
+- [x] Add action mapping tests proving each game profile maps abstract policy
       actions to backend-native controls without depending on button order.
 - [ ] Define a `GameSignalExtractor` protocol for score, progress, health,
       lives, inventory, collectibles, completion, death, timeout, and any

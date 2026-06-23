@@ -2,7 +2,10 @@
 
 import unittest
 
+import numpy as np
+
 from retroagi.core import (
+    GAME_SPECS,
     SMB_ACTIONS,
     SMB_GAME_SPEC,
     ActionSpec,
@@ -47,6 +50,34 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(spec.action(5).name, "jump")
         with self.assertRaisesRegex(KeyError, "unknown action"):
             spec.action("dash")
+
+    def test_registered_games_map_policy_actions_to_backend_controls(self):
+        for game in GAME_SPECS.values():
+            with self.subTest(game=game.name):
+                for action in game.action_space:
+                    if action.kind != "continuous":
+                        self.assertEqual(
+                            game.action_backend_id(action.stable_id),
+                            action.backend_id,
+                        )
+                    self.assertIs(game.action(action.name), action)
+
+    def test_smb_button_mapping_uses_profile_metadata_without_button_order(self):
+        spec = SMB_GAME_SPEC
+        buttons = ("A", "RIGHT", "B", "LEFT", "START")
+        permuted_buttons = ("START", "LEFT", "B", "RIGHT", "A")
+
+        mapped = spec.action_button_vector("right_jump", buttons)
+        permuted = spec.action_button_vector("right_jump", permuted_buttons)
+        np.testing.assert_array_equal(mapped, np.array([1, 1, 0, 0, 0], dtype=np.int8))
+        np.testing.assert_array_equal(
+            permuted,
+            np.array([0, 0, 0, 1, 1], dtype=np.int8),
+        )
+        np.testing.assert_array_equal(
+            spec.action_button_vector("noop", permuted_buttons),
+            np.zeros(len(permuted_buttons), dtype=np.int8),
+        )
 
     def test_game_spec_validation_rejects_sparse_action_ids(self):
         with self.assertRaisesRegex(ValueError, "contiguous"):

@@ -44,6 +44,10 @@ multi-button combos, release-all/no-op behavior, per-button release behavior,
 continuous controls, and a stage-native discrete backend ID when it differs
 from the stable policy ID. Legacy SMB helpers still accept `SMBAction`, but the
 source of truth for SMB backend mapping is `SMB_GAME_SPEC.action_space`.
+`GameSpec.action_backend_id(...)` maps an abstract policy action to a
+stage-native discrete action, and `GameSpec.action_button_vector(...)` maps the
+same policy action to a backend button vector using button names rather than
+backend-specific button positions.
 
 ## StageSpec
 
