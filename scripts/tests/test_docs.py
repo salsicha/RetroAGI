@@ -8,6 +8,7 @@ REPRODUCIBILITY_DOC = Path("docs/reproducibility.md")
 FULL_SMB_CONTENT_DOC = Path("docs/full-smb-content.md")
 FULL_SMB_TASKS_DOC = Path("docs/full-smb-tasks.md")
 FULL_SMB_SAVE_STATES_DOC = Path("docs/full-smb-save-states.md")
+FULL_SMB_SUCCESS_THRESHOLDS_DOC = Path("docs/full-smb-success-thresholds.md")
 README = Path("README.md")
 
 
@@ -54,8 +55,10 @@ class TestOperationsDocumentation(unittest.TestCase):
             "artifacts/full_smb/env_check.json",
             "[full-smb-tasks.md](full-smb-tasks.md)",
             "[full-smb-save-states.md](full-smb-save-states.md)",
+            "[full-smb-success-thresholds.md](full-smb-success-thresholds.md)",
             "heldout_generalization",
             "python -m retroagi.stages.full_smb.save_states create",
+            "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
         ):
             self.assertIn(term, text)
 
@@ -108,6 +111,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "python -m retroagi.stages.full_smb.save_states plan",
             "python -m retroagi.stages.full_smb.save_states create",
             "from retroagi.stages.full_smb import full_smb_task_catalog",
+            "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
         ):
             self.assertIn(command, text)
 
@@ -167,7 +171,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "`benchmark_1_1_start`",
             "`curriculum_1_1_midpipe`",
             "`heldout_8_1_long`",
-            "Success thresholds are intentionally not defined",
+            "[full-smb-success-thresholds.md](full-smb-success-thresholds.md)",
+            "progress, completion, survival, score/coins",
         ):
             self.assertIn(term, text)
 
@@ -188,6 +193,26 @@ class TestOperationsDocumentation(unittest.TestCase):
             "`section_1_1_midpipe`",
             "`death_retry_1_1_first_gap`",
             "must not be committed",
+            "[full-smb-success-thresholds.md](full-smb-success-thresholds.md)",
+        ):
+            self.assertIn(term, text)
+
+    def test_full_smb_success_thresholds_document_fixed_benchmark_protocol(self):
+        text = FULL_SMB_SUCCESS_THRESHOLDS_DOC.read_text(encoding="utf-8")
+
+        for term in (
+            "# Full SMB Success Thresholds",
+            "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
+            "`benchmark_1_1_start`",
+            "`benchmark_1_2_start`",
+            "`benchmark_2_1_start`",
+            "`3200`",
+            "`0.667`",
+            "`0.333`",
+            "progress, completion, survival, score/coins",
+            "evaluate_full_smb_success_threshold",
+            "threshold_met",
+            "Full SMB signal extraction",
         ):
             self.assertIn(term, text)
 

@@ -69,9 +69,11 @@ Use the sets in this order:
 1. Run `smoke` after content setup and `check-env`.
 2. Generate and review the local save-state artifacts.
 3. Train with the ordered `curriculum` tasks.
-4. Evaluate repeatedly on `fixed_benchmark` tasks.
+4. Evaluate repeatedly on `fixed_benchmark` tasks using the thresholds in
+   [full-smb-success-thresholds.md](full-smb-success-thresholds.md).
 5. Touch `heldout_generalization` only for promotion or regression reports.
 
-Success thresholds are intentionally not defined in this document. The next
-threshold task sets the required progress, completion, survival, score/coins,
-time budget, death count, and return gates for the fixed benchmark tasks.
+Success thresholds are intentionally defined in a separate document so the task
+catalog can stay focused on starts, seeds, splits, episodes, and step budgets.
+The threshold source covers progress, completion, survival, score/coins, time
+budget, death count, and return gates for every fixed benchmark task.

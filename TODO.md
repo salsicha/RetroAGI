@@ -444,7 +444,7 @@ and playable end target.
 - [x] Create and document deterministic Full SMB save-state artifacts for
       starting positions, level sections, death/retry states, and benchmark
       tasks without committing copyrighted content.
-- [ ] Define Full SMB success thresholds for each fixed task: progress,
+- [x] Define Full SMB success thresholds for each fixed task: progress,
       completion, survival, score/coins, time budget, death count, and minimum
       return.
 - [ ] Expand Full SMB signal extraction with tested memory variables or backend

@@ -635,6 +635,30 @@ The save-state workflow is documented in
 [full-smb-save-states.md](full-smb-save-states.md). Do not commit the generated
 `.state` files or ROM-derived screenshots.
 
+Inspect the fixed benchmark success thresholds:
+
+```bash
+python - <<'PY'
+from retroagi.stages.full_smb import (
+    FIXED_FULL_SMB_SUCCESS_THRESHOLDS,
+    full_smb_task_catalog,
+)
+
+fixed_tasks = full_smb_task_catalog().tasks_for_set("fixed_benchmark")
+assert set(FIXED_FULL_SMB_SUCCESS_THRESHOLDS) == {
+    task.name for task in fixed_tasks
+}
+for task in fixed_tasks:
+    threshold = FIXED_FULL_SMB_SUCCESS_THRESHOLDS[task.name]
+    assert threshold.min_episodes <= task.episodes
+    assert threshold.max_steps == task.max_steps
+print("Full SMB fixed-task thresholds verified")
+PY
+```
+
+The threshold protocol is documented in
+[full-smb-success-thresholds.md](full-smb-success-thresholds.md).
+
 ## 12. Reproduce Full SMB Adapter, Inference, And Continued Training
 
 Run the headless emulator smoke path to verify the full observation and action

@@ -311,6 +311,13 @@ python -m retroagi.stages.full_smb.save_states create \
 The generated `.state` files are local-only ROM-derived artifacts and must not
 be committed.
 
+Fixed benchmark success thresholds are documented in
+[full-smb-success-thresholds.md](full-smb-success-thresholds.md) and exposed by
+`retroagi.stages.full_smb.FIXED_FULL_SMB_SUCCESS_THRESHOLDS`. Full SMB
+evaluation reports should preserve per-task progress, completion rate, survival
+rate, mean score, mean coins, death count, mean return, episode count, step
+budget, and `threshold_met` diagnostics.
+
 ## Full SMB Adapter And Transfer
 
 Full SMB connects the shared stage contract to the stable-retro emulator. Its

@@ -97,5 +97,6 @@ Before using the artifacts for training or evaluation:
 5. Do not commit `.state` files, ROMs, or generated screenshots derived from the
    ROM unless their licensing and provenance have been reviewed separately.
 
-The next Full SMB task defines fixed-task success thresholds that consume these
-task and save-state names.
+Full SMB fixed-task success thresholds that consume these task and save-state
+names are documented in
+[full-smb-success-thresholds.md](full-smb-success-thresholds.md).

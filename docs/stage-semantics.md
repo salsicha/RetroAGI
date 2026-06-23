@@ -536,3 +536,10 @@ Deterministic local save-state recipes live in
 stable-retro source states, scripted actions, local output paths, and linked
 task names. The generated `.state` files are local-only ROM-derived artifacts
 under `local/full_smb/states/` and must not be committed.
+
+Fixed benchmark success thresholds live in
+`retroagi.stages.full_smb.success` and are documented in
+[full-smb-success-thresholds.md](full-smb-success-thresholds.md). Full SMB
+evaluators should report progress, completion, survival, score/coins, deaths,
+return, episode count, step budget, and `threshold_met` diagnostics against
+that module rather than defining separate trainer-owned success logic.
