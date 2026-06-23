@@ -70,6 +70,8 @@ class TestExperimentRunner(unittest.TestCase):
                             str(output),
                             "--artifacts-dir",
                             str(artifacts_dir),
+                            "--game",
+                            "smb",
                             "--seed",
                             "7",
                             "--device",
@@ -93,10 +95,31 @@ class TestExperimentRunner(unittest.TestCase):
         self.assertEqual(manifest["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
         self.assertEqual(manifest["architecture"]["config"], {"hidden_dim": 8})
         self.assertEqual(manifest["seed"], 7)
+        self.assertEqual(manifest["game"]["name"], "smb")
+        self.assertEqual(manifest["game"]["backend"]["name"], "stable-retro")
+        self.assertIn("version", manifest["game"]["backend"])
+        self.assertTrue(
+            any(
+                content["name"] == "smb_rom"
+                for content in manifest["game"]["content_identifiers"]
+            )
+        )
+        self.assertTrue(
+            any(
+                asset["name"] == "smb_sprites"
+                for asset in manifest["game"]["asset_provenance"]
+            )
+        )
         self.assertEqual(
             [stage["stage"] for stage in manifest["stages"]], ["synthetic-1d", "block-smb"]
         )
         synthetic, block = manifest["stages"]
+        self.assertEqual(synthetic["game_stage"]["name"], "synthetic")
+        self.assertEqual(block["game_stage"]["name"], "block")
+        self.assertEqual(
+            block["game_stage"]["stage_adapter"],
+            "retroagi.stages.block_smb.adapter.BlockSMBStage",
+        )
         self.assertEqual(synthetic["metrics"]["controller_mse"], 0.4)
         self.assertEqual(block["metrics"]["eval_success_rate"], 0.5)
         self.assertEqual(
@@ -105,9 +128,24 @@ class TestExperimentRunner(unittest.TestCase):
         )
         self.assertEqual(block["log_path"], str(Path(tmpdir) / "artifacts/block_smb/events.jsonl"))
         self.assertIn("retroagi", synthetic["command"])
+        self.assertIn("--game", synthetic["command"])
         self.assertIn("--architecture-config", block["command"])
         self.assertTrue(
             all(gate["passed"] for stage in manifest["stages"] for gate in stage["gates"])
+        )
+        self.assertEqual(
+            [decision["status"] for decision in manifest["promotion_decisions"]],
+            ["passed", "passed"],
+        )
+        self.assertEqual(
+            manifest["promotion_decisions"][0]["architecture_rungs"],
+            ["synthetic-concept"],
+        )
+        self.assertEqual(
+            manifest["game_promotion"]["phases"][1]["rung_statuses"][
+                "synthetic-concept"
+            ],
+            "passed",
         )
 
     def test_experiment_runner_applies_architecture_ablations(self):

@@ -115,6 +115,13 @@ current gate table for `synthetic-concept`, `block-smb-smoke`,
 new game requires declaring its promotion expectations in the game profile
 rather than adding game-specific checks to `retroagi promote`.
 
+`retroagi experiment --game <name>` records the selected `GamePluginSpec` in
+the combined experiment manifest. The manifest includes backend version,
+content identifiers, asset provenance, per-stage game ladder metadata,
+recording slots, and promotion decisions for the architecture rungs that map to
+the selected stages. Promotion manifests embed the same experiment payloads, so
+architecture sweeps and promotion runs share one game-level traceability shape.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

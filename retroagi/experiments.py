@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import re
 from dataclasses import dataclass
@@ -13,6 +14,9 @@ from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     architecture_names,
     build_architecture_variant,
+    build_game_promotion_plan,
+    game_plugin_names,
+    get_game_plugin,
     parse_architecture_ablation_item,
     to_plain_data,
 )
@@ -26,6 +30,14 @@ STAGE_ALIASES = {
     "block": "block-smb",
 }
 SUPPORTED_EXPERIMENT_STAGES = tuple(sorted({"synthetic-1d", "block-smb"}))
+EXPERIMENT_STAGE_GAME_STAGE = {
+    "synthetic-1d": "synthetic",
+    "block-smb": "block",
+}
+EXPERIMENT_STAGE_PROMOTION_RUNGS = {
+    "synthetic-1d": ("synthetic-concept",),
+    "block-smb": ("block-smb-smoke",),
+}
 GATE_PATTERN = re.compile(
     r"^(?:(?P<stage>[A-Za-z0-9_-]+):)?"
     r"(?P<metric>[A-Za-z0-9_./-]+)"
@@ -112,6 +124,16 @@ def _architecture_name(value: str) -> str:
     raise argparse.ArgumentTypeError(f"unknown architecture {value!r}; expected one of: {choices}")
 
 
+def _game_name(value: str) -> str:
+    name = value.lower()
+    if name in game_plugin_names():
+        return name
+    available = ", ".join(game_plugin_names())
+    raise argparse.ArgumentTypeError(
+        f"unknown game {value!r}; available game plugins: {available}"
+    )
+
+
 def _architecture_config_item(value: str) -> tuple[str, Any]:
     if "=" not in value:
         raise argparse.ArgumentTypeError("must use KEY=VALUE syntax")
@@ -177,6 +199,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument(
+        "--game",
+        default="smb",
+        type=_game_name,
+        help="game profile to attach to the experiment manifest; default: smb",
+    )
+    parser.add_argument(
         "--architecture",
         dest="architecture_name",
         type=_architecture_name,
@@ -227,8 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
 def build_experiment_plans(args: argparse.Namespace) -> list[StageRunPlan]:
     variant = build_architecture_variant(args.architecture_config or (), args.ablation or ())
     architecture_config = dict(variant.architecture_config)
+    plugin = _experiment_game_plugin(args)
     plans = []
     for stage in args.stage:
+        _resolve_experiment_game_stage(plugin, stage)
         if stage == "synthetic-1d":
             plans.append(_synthetic_plan(args, architecture_config, variant.args_for_stage(stage)))
         elif stage == "block-smb":
@@ -287,7 +317,15 @@ def _synthetic_plan(
     ]
     return StageRunPlan(
         stage="synthetic-1d",
-        command=["retroagi", "train", "--stage", "synthetic-1d", *stage_args],
+        command=[
+            "retroagi",
+            "train",
+            "--game",
+            getattr(args, "game", "smb"),
+            "--stage",
+            "synthetic-1d",
+            *stage_args,
+        ],
         stage_args=["train", *stage_args],
         summary_path=summary_path,
         checkpoint_path=checkpoint_path,
@@ -340,7 +378,15 @@ def _block_smb_plan(
         stage_args.append("--disable-checkpoint-transfer")
     return StageRunPlan(
         stage="block-smb",
-        command=["retroagi", "train", "--stage", "block-smb", *stage_args],
+        command=[
+            "retroagi",
+            "train",
+            "--game",
+            getattr(args, "game", "smb"),
+            "--stage",
+            "block-smb",
+            *stage_args,
+        ],
         stage_args=["train", *stage_args],
         summary_path=summary_path,
         checkpoint_path=checkpoint_path,
@@ -354,6 +400,7 @@ def run_experiment(
     runners: Mapping[str, Callable[[Sequence[str]], int]] | None = None,
 ) -> dict[str, Any]:
     plans = build_experiment_plans(args)
+    plugin = _experiment_game_plugin(args)
     runners = dict(runners or _default_runners())
     gates = list(args.gate or ())
     stage_results = []
@@ -366,13 +413,15 @@ def run_experiment(
         if not isinstance(metrics, Mapping):
             metrics = {}
         gate_results = [gate.evaluate(metrics) for gate in gates if gate.applies_to(plan.stage)]
-        stage_results.append(
+        stage_result = (
             {
                 "stage": plan.stage,
+                "game_stage": _stage_game_manifest(plugin, plan.stage),
                 "command": plan.command,
                 "summary_path": str(plan.summary_path),
                 "checkpoint_path": str(plan.checkpoint_path),
                 "log_path": str(plan.log_path) if plan.log_path is not None else None,
+                "recordings": [],
                 "exit_code": exit_code,
                 "config": summary.get("config", {}),
                 "metrics": dict(metrics),
@@ -380,6 +429,12 @@ def run_experiment(
                 "passed": exit_code == 0 and all(result["passed"] for result in gate_results),
             }
         )
+        stage_result["promotion_decision"] = _stage_promotion_decision(
+            plugin,
+            plan.stage,
+            stage_result,
+        )
+        stage_results.append(stage_result)
     return _manifest(args, stage_results, gates)
 
 
@@ -406,6 +461,17 @@ def _manifest(
     gates: Sequence[MetricGate],
 ) -> dict[str, Any]:
     variant = build_architecture_variant(args.architecture_config or (), args.ablation or ())
+    plugin = _experiment_game_plugin(args)
+    promotion_decisions = [
+        stage["promotion_decision"]
+        for stage in stage_results
+        if "promotion_decision" in stage
+    ]
+    rung_statuses = {
+        rung: decision["status"]
+        for decision in promotion_decisions
+        for rung in decision["architecture_rungs"]
+    }
     return {
         "architecture": {
             "name": args.architecture_name,
@@ -414,11 +480,123 @@ def _manifest(
         "architecture_variant": variant.metadata(),
         "seed": args.seed,
         "device": args.device,
+        "game": _game_manifest(plugin),
+        "game_promotion": build_game_promotion_plan(plugin).to_manifest(
+            rung_statuses,
+            plugin.promotion_gates,
+        ),
         "artifacts_dir": str(args.artifacts_dir),
         "stages": stage_results,
         "gates": [to_plain_data(gate) for gate in gates],
+        "promotion_decisions": promotion_decisions,
         "passed": all(stage["passed"] for stage in stage_results),
     }
+
+
+def _experiment_game_plugin(args: argparse.Namespace):
+    return get_game_plugin(getattr(args, "game", "smb"))
+
+
+def _resolve_experiment_game_stage(plugin, experiment_stage: str):
+    game_stage = EXPERIMENT_STAGE_GAME_STAGE[experiment_stage]
+    resolution = plugin.resolve_stage(game_stage)
+    expected_stage_spec = experiment_stage.replace("-", "_")
+    if resolution.stage_spec_name != expected_stage_spec:
+        raise ValueError(
+            f"game {plugin.name!r} stage {game_stage!r} resolves to "
+            f"{resolution.stage_spec_name!r}, but this experiment runner supports "
+            f"{expected_stage_spec!r}"
+        )
+    return resolution
+
+
+def _game_manifest(plugin) -> dict[str, Any]:
+    game = plugin.game
+    return {
+        "name": plugin.name,
+        "family": game.family,
+        "backend": {
+            "name": game.emulator_backend,
+            "version": _backend_version(game.emulator_backend),
+        },
+        "stage_ladder": [
+            {
+                "name": stage.name,
+                "stage_spec_name": stage.stage_spec_name,
+                "role": stage.role,
+                "required_artifacts": list(stage.required_artifacts),
+                "promotion_gate_summary": stage.promotion_gate_summary,
+            }
+            for stage in game.stage_ladder
+        ],
+        "content_identifiers": [
+            {
+                "name": asset.name,
+                "required": asset.required,
+                "local_path": asset.local_path,
+            }
+            for asset in game.asset_requirements
+        ],
+        "asset_provenance": [
+            {
+                "name": asset.name,
+                "provenance": asset.provenance,
+                "license_notes": asset.license_notes,
+            }
+            for asset in game.asset_requirements
+        ],
+        "licensing": dict(game.licensing),
+    }
+
+
+def _stage_game_manifest(plugin, experiment_stage: str) -> dict[str, Any]:
+    resolution = _resolve_experiment_game_stage(plugin, experiment_stage)
+    stage = next(stage for stage in plugin.game.stage_ladder if stage.name == resolution.name)
+    return {
+        "name": resolution.name,
+        "stage_spec_name": resolution.stage_spec_name,
+        "role": resolution.role,
+        "required_artifacts": list(stage.required_artifacts),
+        "promotion_gate_summary": stage.promotion_gate_summary,
+        "stage_adapter": plugin.stage_adapters.get(resolution.name),
+        "vision_encoder": plugin.vision_encoders.get(resolution.name),
+    }
+
+
+def _stage_promotion_decision(
+    plugin,
+    experiment_stage: str,
+    stage_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    rungs = EXPERIMENT_STAGE_PROMOTION_RUNGS[experiment_stage]
+    passed = bool(stage_result.get("passed"))
+    status = "passed" if passed else "failed"
+    return {
+        "stage": experiment_stage,
+        "game_stage": stage_result["game_stage"]["name"],
+        "architecture_rungs": list(rungs),
+        "status": status,
+        "passed": passed,
+        "promotion_gates": [
+            plugin.promotion_gates[rung].to_manifest()
+            for rung in rungs
+            if rung in plugin.promotion_gates
+        ],
+        "reason": None if passed else "stage failed experiment or metric gates",
+    }
+
+
+def _backend_version(backend_name: str) -> str | None:
+    packages = {
+        "stable-retro": "stable-retro",
+    }
+    package_name = packages.get(backend_name)
+    if package_name is None:
+        return None
+    try:
+        return importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:

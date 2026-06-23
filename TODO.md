@@ -395,7 +395,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Add game-level promotion gates so each game can define required metrics,
       success thresholds, runtime budgets, artifact checks, and failure reasons
       at each fidelity rung.
-- [ ] Add game-level experiment manifests that include architecture, game,
+- [x] Add game-level experiment manifests that include architecture, game,
       stage, seed, device, config, backend version, ROM/content identifiers,
       asset provenance, metrics, checkpoints, logs, recordings, and promotion
       decisions.

@@ -154,13 +154,15 @@ interchangeable training targets:
 Use `retroagi experiment` when comparing architecture concepts across runnable
 fidelity layers. The command below runs the baseline through Synthetic 1D
 architecture validation and a tiny Block SMB simplified-game training smoke,
-then writes one combined manifest with the resolved architecture, per-stage
-commands, configs, metrics, checkpoints, logs, gates, and pass/fail status.
+then writes one combined manifest with the resolved architecture, game profile,
+backend/content metadata, per-stage commands, configs, metrics, checkpoints,
+logs, gates, promotion decisions, and pass/fail status.
 
 ```bash
 retroagi experiment \
   --stage synthetic-1d \
   --stage block-smb \
+  --game smb \
   --output artifacts/repro/architecture_sweeps/baseline/manifest.json \
   --artifacts-dir artifacts/repro/architecture_sweeps/baseline \
   --seed 0 \
@@ -196,6 +198,10 @@ assert manifest["architecture"] == {
 }
 assert manifest["seed"] == 0
 assert manifest["device"] == "cpu"
+assert manifest["game"]["name"] == "smb"
+assert manifest["game"]["backend"]["name"] == "stable-retro"
+assert any(item["name"] == "smb_rom" for item in manifest["game"]["content_identifiers"])
+assert any(item["name"] == "smb_sprites" for item in manifest["game"]["asset_provenance"])
 assert manifest["passed"] is True
 assert {stage["stage"] for stage in manifest["stages"]} == {
     "synthetic-1d",
@@ -203,11 +209,15 @@ assert {stage["stage"] for stage in manifest["stages"]} == {
 }
 for stage in manifest["stages"]:
     assert stage["command"]
+    assert stage["game_stage"]["name"] in {"synthetic", "block"}
     assert Path(stage["summary_path"]).name == "run_summary.json"
     assert Path(stage["checkpoint_path"]).name == "checkpoint.pth"
+    assert isinstance(stage["recordings"], list)
     assert isinstance(stage["config"], dict)
     assert isinstance(stage["metrics"], dict)
     assert all(gate["passed"] for gate in stage["gates"])
+assert {decision["status"] for decision in manifest["promotion_decisions"]} == {"passed"}
+assert manifest["game_promotion"]["phases"][1]["rung_statuses"]["synthetic-concept"] == "passed"
 assert manifest["gates"]
 print("Architecture sweep manifest verified")
 PY
