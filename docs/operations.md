@@ -37,6 +37,14 @@ datasets, local-only ROM handling before Full SMB emulator runs, and generator
 config/seed/source-asset provenance before referencing generated datasets from
 checkpoints.
 
+When a game does not have a reliable sprite or asset pipeline, declare
+non-asset `PerceptionDatasetSourceSpec` entries in its perception pipeline:
+`self_supervised` for contrastive or predictive frame objectives,
+`emulator_state` for backend object-state labels, and `manual_labels` for human
+semantic masks. These source entries are written to experiment manifests so
+promotion reports can distinguish asset-backed perception from fallback
+supervision.
+
 ## Progressive-Resolution Responsibilities
 
 Use the stages in this order when evaluating an architecture concept:

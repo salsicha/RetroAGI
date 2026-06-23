@@ -123,7 +123,12 @@ from .models import (
     WorldModel,
     WorldModelState,
 )
-from .perception import PerceptionPipelineSpec, SemanticVocabularySpec
+from .perception import (
+    PERCEPTION_DATASET_SOURCE_KINDS,
+    PerceptionDatasetSourceSpec,
+    PerceptionPipelineSpec,
+    SemanticVocabularySpec,
+)
 from .rewards import RewardConfigSchema, RewardTermSpec
 from .signals import GameSignalExtractor, GameSignals
 from .stage_resolution import (
@@ -196,7 +201,9 @@ __all__ = [
     "LinearVisionEncoder",
     "ModelConfig",
     "OPTIONAL_STAGE_NAMES",
+    "PERCEPTION_DATASET_SOURCE_KINDS",
     "PatchVisionTransformer",
+    "PerceptionDatasetSourceSpec",
     "PerceptionPipelineSpec",
     "PositionalEncoding",
     "PromotionArtifactGateSpec",

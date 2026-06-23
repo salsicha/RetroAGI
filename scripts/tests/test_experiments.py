@@ -141,6 +141,12 @@ class TestExperimentRunner(unittest.TestCase):
             "min_accuracy",
             block["game_stage"]["perception_pipeline"]["diagnostic_thresholds"],
         )
+        self.assertEqual(
+            block["game_stage"]["perception_pipeline"]["dataset_sources"][0][
+                "source_kind"
+            ],
+            "emulator_state",
+        )
         self.assertEqual(synthetic["metrics"]["controller_mse"], 0.4)
         self.assertEqual(block["metrics"]["eval_success_rate"], 0.5)
         self.assertEqual(

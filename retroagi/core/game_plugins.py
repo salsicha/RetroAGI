@@ -12,7 +12,11 @@ from .game_promotion import (
     PromotionMetricGateSpec,
 )
 from .games import GameSpec, SMB_GAME_SPEC
-from .perception import PerceptionPipelineSpec, SemanticVocabularySpec
+from .perception import (
+    PerceptionDatasetSourceSpec,
+    PerceptionPipelineSpec,
+    SemanticVocabularySpec,
+)
 from .rewards import RewardConfigSchema
 from .stage_resolution import StageResolution, resolve_game_stage
 from .tasks import TaskSuccessThreshold
@@ -115,6 +119,16 @@ class GamePluginSpec:
                     f"game plugin {self.name!r} perception pipeline {name!r} "
                     f"references unknown stage {pipeline.stage_name!r}"
                 ) from exc
+            for source in pipeline.dataset_sources:
+                for source_stage in source.stage_names:
+                    try:
+                        self.resolve_stage(source_stage)
+                    except KeyError as exc:
+                        raise ValueError(
+                            f"game plugin {self.name!r} perception pipeline "
+                            f"{name!r} source {source.name!r} references "
+                            f"unknown stage {source_stage!r}"
+                        ) from exc
 
     def stage_adapter(self, name: str) -> str:
         stage = self.resolve_stage(name)
@@ -303,6 +317,21 @@ SMB_GAME_PLUGIN = GamePluginSpec(
                 "position_tolerance": 0.05,
             },
             dataset_artifacts=("procedural Block SMB rollouts",),
+            dataset_sources=(
+                PerceptionDatasetSourceSpec(
+                    name="block_exact_state_labels",
+                    source_kind="emulator_state",
+                    stage_names=("block",),
+                    observation_source="block_smb_rgb_frames",
+                    label_source=(
+                        "MarioScenarioEnv symbolic state and "
+                        "BlockVisionTransformer palette targets"
+                    ),
+                    entrypoint="scripts.vit.train_block_vit",
+                    dataset_artifacts=("procedural Block SMB rollouts",),
+                    metadata={"requires_asset_pipeline": False},
+                ),
+            ),
             metadata={
                 "checkpoint_kind": "vision_encoder",
                 "training_entrypoint": "scripts.vit.train_block_vit",
@@ -337,6 +366,23 @@ SMB_GAME_PLUGIN = GamePluginSpec(
                 "assets/sprites/",
                 "data/vit/train.npz",
                 "data/vit/val.npz",
+            ),
+            dataset_sources=(
+                PerceptionDatasetSourceSpec(
+                    name="full_asset_mock_synthetic_scenes",
+                    source_kind="asset_synthetic",
+                    stage_names=("full_asset_mock",),
+                    observation_source="synthetic full-game asset RGB scenes",
+                    label_source="synthetic masks from scripts.vit.generate_dataset",
+                    entrypoint="scripts.vit.generate_dataset",
+                    dataset_artifacts=(
+                        "assets/spritesheets/",
+                        "assets/sprites/",
+                        "data/vit/train.npz",
+                        "data/vit/val.npz",
+                    ),
+                    metadata={"requires_asset_pipeline": True},
+                ),
             ),
             metadata={
                 "checkpoint_kind": "vision_encoder",

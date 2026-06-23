@@ -124,13 +124,18 @@ new game requires declaring its promotion expectations in the game profile
 rather than adding game-specific checks to `retroagi promote`.
 
 `PerceptionPipelineSpec` separates visual perception by game profile. Each
-pipeline owns its semantic vocabulary, vision encoder entrypoint, asset or label
-extraction source, synthetic-frame composition source, checkpoint path, dataset
-artifacts, and diagnostic thresholds. The SMB plugin currently declares a
-`block` pipeline for exact labels from the simplified simulator and a
-`full_asset_mock` pipeline for full-game assets composed into synthetic scenes.
-Experiment stage manifests include the resolved pipeline so model runs record
-which vocabulary, checkpoint naming convention, and perception thresholds were
+pipeline owns its semantic vocabulary, vision encoder entrypoint, optional
+asset extraction and synthetic-frame composition sources, checkpoint path,
+dataset artifacts, and diagnostic thresholds. `PerceptionDatasetSourceSpec`
+declares where supervision comes from: `asset_synthetic`, `self_supervised`,
+`emulator_state`, or `manual_labels`. That lets games without reliable assets
+train perception from contrastive/self-supervised rollouts, backend state
+snapshots, or manually labeled frames without pretending they have a sprite
+pipeline. The SMB plugin currently declares a `block` pipeline from exact
+emulator-state labels in the simplified simulator and a `full_asset_mock`
+pipeline for full-game assets composed into synthetic scenes. Experiment stage
+manifests include the resolved pipeline so model runs record which vocabulary,
+checkpoint naming convention, dataset source, and perception thresholds were
 used.
 
 `retroagi experiment --game <name>` records the selected `GamePluginSpec` in

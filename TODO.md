@@ -404,7 +404,7 @@ architecture cheaply before spending high-fidelity emulator time.
       checkpoint naming, and diagnostic thresholds.
 - [x] Add an asset and licensing checklist for each game profile before assets
       or generated datasets are committed or referenced.
-- [ ] Add support for games with no reliable asset pipeline by allowing
+- [x] Add support for games with no reliable asset pipeline by allowing
       self-supervised, emulator-state, or manually labeled perception datasets
       as alternative vision sources.
 - [ ] Add backend abstraction for emulator providers such as `stable-retro`,

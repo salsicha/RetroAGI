@@ -25,6 +25,8 @@ from retroagi.core import (
     GameTaskSchema,
     GameTaskSpec,
     OPTIONAL_STAGE_NAMES,
+    PERCEPTION_DATASET_SOURCE_KINDS,
+    PerceptionDatasetSourceSpec,
     PerceptionPipelineSpec,
     STANDARD_STAGE_NAMES,
     RewardConfigSchema,
@@ -175,6 +177,15 @@ class TestGameSpec(unittest.TestCase):
             "retroagi.stages.block_smb.env.MarioScenarioEnv",
         )
         self.assertEqual(block_perception.diagnostic_thresholds["min_accuracy"], 0.95)
+        self.assertTrue(block_perception.supports_source_kind("emulator_state"))
+        self.assertFalse(block_perception.supports_source_kind("asset_synthetic"))
+        self.assertEqual(
+            block_perception.dataset_sources[0].label_source,
+            (
+                "MarioScenarioEnv symbolic state and "
+                "BlockVisionTransformer palette targets"
+            ),
+        )
         self.assertEqual(full_asset_perception.stage_name, "full_asset_mock")
         self.assertEqual(
             full_asset_perception.semantic_classes,
@@ -199,6 +210,11 @@ class TestGameSpec(unittest.TestCase):
         self.assertIn(
             "data/vit/val.npz",
             full_asset_perception.to_manifest()["dataset_artifacts"],
+        )
+        self.assertTrue(full_asset_perception.supports_source_kind("asset_synthetic"))
+        self.assertEqual(
+            full_asset_perception.to_manifest()["dataset_sources"][0]["source_kind"],
+            "asset_synthetic",
         )
 
         reward_config = plugin.reward_config({"progress": 0.07})
@@ -419,6 +435,75 @@ class TestGameSpec(unittest.TestCase):
         self.assertIn("source asset provenance", generated.policy)
         with self.assertRaisesRegex(KeyError, "unknown asset checklist item"):
             spec.asset_checklist_item("missing")
+
+    def test_perception_pipeline_supports_non_asset_dataset_sources(self):
+        self.assertEqual(
+            PERCEPTION_DATASET_SOURCE_KINDS,
+            (
+                "asset_synthetic",
+                "self_supervised",
+                "emulator_state",
+                "manual_labels",
+            ),
+        )
+        vocabulary = SemanticVocabularySpec(
+            name="unit",
+            classes=("background", "actor"),
+            background_class="background",
+        )
+
+        pipeline = PerceptionPipelineSpec(
+            game_name="smb",
+            name="full",
+            stage_name="full",
+            semantic_vocabulary=vocabulary,
+            vision_encoder="unit.Vision",
+            asset_extraction=None,
+            synthetic_frame_composition=None,
+            checkpoint_path="data/unit/full_vit.pth",
+            diagnostic_thresholds={"min_accuracy": 0.5},
+            dataset_sources=(
+                PerceptionDatasetSourceSpec(
+                    name="contrastive_rollouts",
+                    source_kind="self_supervised",
+                    stage_names=("full",),
+                    observation_source="emulator RGB frame pairs",
+                    label_source="temporal contrastive objective",
+                    entrypoint="unit.self_supervised",
+                    dataset_artifacts=("data/unit/contrastive.npz",),
+                ),
+                PerceptionDatasetSourceSpec(
+                    name="state_snapshots",
+                    source_kind="emulator_state",
+                    stage_names=("full",),
+                    observation_source="emulator RGB frames",
+                    label_source="backend object-state snapshots",
+                    entrypoint="unit.state_labels",
+                    dataset_artifacts=("data/unit/state_labels.npz",),
+                ),
+                PerceptionDatasetSourceSpec(
+                    name="human_labels",
+                    source_kind="manual_labels",
+                    stage_names=("full",),
+                    observation_source="sampled emulator frames",
+                    label_source="manual semantic masks",
+                    entrypoint="unit.manual_labels",
+                    dataset_artifacts=("data/unit/manual_labels.jsonl",),
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            pipeline.source_kinds,
+            ("self_supervised", "emulator_state", "manual_labels"),
+        )
+        self.assertTrue(pipeline.supports_source_kind("manual_labels"))
+        manifest = pipeline.to_manifest()
+        self.assertIsNone(manifest["asset_extraction"])
+        self.assertEqual(
+            [source["source_kind"] for source in manifest["dataset_sources"]],
+            ["self_supervised", "emulator_state", "manual_labels"],
+        )
 
     def test_game_spec_validation_rejects_mismatched_reward_schema(self):
         with self.assertRaisesRegex(ValueError, "reward schema is for"):
@@ -718,6 +803,36 @@ class TestGameSpec(unittest.TestCase):
                 },
             )
 
+        with self.assertRaisesRegex(ValueError, "unknown stage"):
+            GamePluginSpec(
+                name="smb",
+                game=SMB_GAME_SPEC,
+                stage_adapters={"full": "unit.Adapter"},
+                vision_encoders={"full": "unit.Vision"},
+                perception_pipelines={
+                    "full": PerceptionPipelineSpec(
+                        game_name="smb",
+                        name="full",
+                        stage_name="full",
+                        semantic_vocabulary=unit_vocab,
+                        vision_encoder="unit.Vision",
+                        asset_extraction=None,
+                        synthetic_frame_composition=None,
+                        checkpoint_path="data/unit.pth",
+                        diagnostic_thresholds={"accuracy": 1.0},
+                        dataset_sources=(
+                            PerceptionDatasetSourceSpec(
+                                name="bad_stage",
+                                source_kind="manual_labels",
+                                stage_names=("missing",),
+                                observation_source="frames",
+                                label_source="manual masks",
+                            ),
+                        ),
+                    )
+                },
+            )
+
         with self.assertRaisesRegex(ValueError, "perception pipeline keys"):
             GamePluginSpec(
                 name="smb",
@@ -792,6 +907,66 @@ class TestGameSpec(unittest.TestCase):
                 synthetic_frame_composition="unit.compose",
                 checkpoint_path="data/unit.pth",
                 diagnostic_thresholds={"accuracy": float("inf")},
+            )
+
+        with self.assertRaisesRegex(ValueError, "kind must be one of"):
+            PerceptionDatasetSourceSpec(
+                name="bad_kind",
+                source_kind="sprites_only",
+                stage_names=("block",),
+                observation_source="frames",
+                label_source="labels",
+            )
+
+        with self.assertRaisesRegex(ValueError, "asset-synthetic sources"):
+            PerceptionPipelineSpec(
+                game_name="smb",
+                name="full",
+                stage_name="full",
+                semantic_vocabulary=unit_vocab,
+                vision_encoder="unit.Vision",
+                asset_extraction=None,
+                synthetic_frame_composition=None,
+                checkpoint_path="data/unit.pth",
+                diagnostic_thresholds={"accuracy": 1.0},
+                dataset_sources=(
+                    PerceptionDatasetSourceSpec(
+                        name="asset_mock",
+                        source_kind="asset_synthetic",
+                        stage_names=("full",),
+                        observation_source="sprites",
+                        label_source="synthetic masks",
+                    ),
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "dataset source names"):
+            PerceptionPipelineSpec(
+                game_name="smb",
+                name="full",
+                stage_name="full",
+                semantic_vocabulary=unit_vocab,
+                vision_encoder="unit.Vision",
+                asset_extraction=None,
+                synthetic_frame_composition=None,
+                checkpoint_path="data/unit.pth",
+                diagnostic_thresholds={"accuracy": 1.0},
+                dataset_sources=(
+                    PerceptionDatasetSourceSpec(
+                        name="dup",
+                        source_kind="manual_labels",
+                        stage_names=("full",),
+                        observation_source="frames",
+                        label_source="manual masks",
+                    ),
+                    PerceptionDatasetSourceSpec(
+                        name="dup",
+                        source_kind="emulator_state",
+                        stage_names=("full",),
+                        observation_source="frames",
+                        label_source="state labels",
+                    ),
+                ),
             )
 
         with self.assertRaisesRegex(ValueError, "names must be unique"):
