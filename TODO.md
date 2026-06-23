@@ -303,6 +303,10 @@ high-fidelity evaluations.
       SMB can load into Full SMB, run deterministic inference, and continue
       direct Full SMB training from the transferred checkpoint while preserving
       architecture-specific checkpoint contracts.
+- [ ] Add hierarchical transformer controller transfer support so the Mario
+      control policy trains on Block SMB, runs inference unchanged on Full SMB,
+      and continues learning on Full SMB from the transferred controller
+      checkpoint with explicit metrics for transfer quality and adaptation.
 - [ ] Add a required Full SMB asset-mock perception adaptation rung between
       Block SMB and Full SMB policy inference/training: compose mock scenarios
       from the full game assets, fine-tune or train the Full SMB ViT on those
