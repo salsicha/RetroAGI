@@ -5,28 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
-from .actions import SMB_ACTIONS
-
-
-@dataclass(frozen=True)
-class ActionSpec:
-    """Stable per-game action identity and backend mapping metadata."""
-
-    name: str
-    stable_id: int
-    kind: str = "discrete"
-    buttons: tuple[str, ...] = ()
-    description: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("action name must be non-empty")
-        if self.stable_id < 0:
-            raise ValueError("action stable_id must be non-negative")
-        if not self.kind:
-            raise ValueError("action kind must be non-empty")
-        if len(set(self.buttons)) != len(self.buttons):
-            raise ValueError(f"action {self.name!r} has duplicate buttons")
+from .actions import SMB_ACTION_SPECS, ActionSpec
 
 
 @dataclass(frozen=True)
@@ -147,32 +126,10 @@ class GameSpec:
         return self.action_space[int(value)]
 
 
-def _smb_action_specs() -> tuple[ActionSpec, ...]:
-    return tuple(
-        ActionSpec(
-            name=action.name.lower(),
-            stable_id=int(action),
-            buttons=_SMB_ACTION_BUTTONS[action.name],
-            description=f"SMB shared action {action.name}",
-        )
-        for action in SMB_ACTIONS
-    )
-
-
-_SMB_ACTION_BUTTONS = {
-    "NOOP": (),
-    "RIGHT": ("RIGHT",),
-    "RIGHT_JUMP": ("RIGHT", "A"),
-    "LEFT": ("LEFT",),
-    "LEFT_JUMP": ("LEFT", "A"),
-    "JUMP": ("A",),
-}
-
-
 SMB_GAME_SPEC = GameSpec(
     name="smb",
     family="super_mario_bros",
-    action_space=_smb_action_specs(),
+    action_space=SMB_ACTION_SPECS,
     observation_sources=(
         "synthetic_1d_sequences",
         "block_smb_rgb_frames",

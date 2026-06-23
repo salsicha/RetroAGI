@@ -42,6 +42,8 @@ class TestGameSpec(unittest.TestCase):
 
         self.assertEqual(ids, list(range(len(SMB_ACTIONS))))
         self.assertEqual(spec.action("right_jump").buttons, ("RIGHT", "A"))
+        self.assertTrue(spec.action("noop").release_all)
+        self.assertTrue(spec.action("noop").is_noop)
         self.assertEqual(spec.action(5).name, "jump")
         with self.assertRaisesRegex(KeyError, "unknown action"):
             spec.action("dash")

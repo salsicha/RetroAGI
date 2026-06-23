@@ -38,6 +38,13 @@ models, `full_asset_mock` bootstraps the Full SMB ViT from full-game assets in
 synthetic scenarios, and Full SMB validates inference before continuing
 training in the emulator.
 
+The action space is a tuple of `ActionSpec` entries owned by the game profile.
+Each entry declares a stable integer ID plus optional backend metadata:
+multi-button combos, release-all/no-op behavior, per-button release behavior,
+continuous controls, and a stage-native discrete backend ID when it differs
+from the stable policy ID. Legacy SMB helpers still accept `SMBAction`, but the
+source of truth for SMB backend mapping is `SMB_GAME_SPEC.action_space`.
+
 ## StageSpec
 
 `StageSpec` is immutable metadata, not a tensor.

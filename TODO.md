@@ -351,7 +351,7 @@ architecture cheaply before spending high-fidelity emulator time.
 - [x] Split game-neutral stage contracts from SMB-specific assumptions so
       `StageSpec` no longer depends on `SMBAction` naming or SMB vocabulary
       size checks.
-- [ ] Replace the global SMB action vocabulary with per-game `ActionSpec`
+- [x] Replace the global SMB action vocabulary with per-game `ActionSpec`
       definitions that support discrete buttons, multi-button combos,
       continuous controls, no-op/release behavior, and stable integer IDs.
 - [ ] Add action mapping tests proving each game profile maps abstract policy
