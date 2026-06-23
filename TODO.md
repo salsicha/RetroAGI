@@ -467,7 +467,7 @@ and playable end target.
       epochs/updates, vector env count, learning rate, loss weights, reward
       config, checkpoint paths, resume paths, recording paths, tracking config,
       and deterministic mode.
-- [ ] Implement direct Full SMB policy training from scratch using the shared
+- [x] Implement direct Full SMB policy training from scratch using the shared
       architecture factory and Full SMB stage batches.
 - [ ] Implement transferred-policy fine-tuning from a Block SMB or Full SMB
       transfer checkpoint.

@@ -559,6 +559,15 @@ single-env, so checkpoints record both the requested `vector_env_count` and
 `active_vector_env_count=1`; the later vector rollout task is responsible for
 turning that request into parallel emulator execution.
 
+Direct scratch training is selected by omitting `resume_path` and
+`init_checkpoint`. In that mode the trainer constructs the policy through the
+shared architecture factory, consumes `FullSMBStage.encode_observation(...)`
+A/B/C `StageBatch` tensors directly, validates their Full SMB sequence lengths
+and dtypes before policy inference, and records
+`training_source.mode="scratch"` plus the stage-batch contract in checkpoint
+config and metadata. Resume and transferred-initialization runs record the
+source checkpoint provenance in the same fields.
+
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,
 when no scratch checkpoint exists yet, a same-architecture scratch-initialized

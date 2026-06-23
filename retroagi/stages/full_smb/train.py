@@ -15,10 +15,10 @@ import torch.optim as optim
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
-    ExperimentTrackerConfig,
     SMB_ACTIONS,
-    StageBatch,
     TRACKING_BACKENDS,
+    ExperimentTrackerConfig,
+    StageBatch,
     build_checkpoint,
     load_checkpoint,
     make_experiment_tracker,
@@ -46,6 +46,9 @@ from retroagi.stages.full_smb.vision import (
 FULL_SMB_POLICY_MODEL_NAME = "full_smb_policy"
 FULL_SMB_POLICY_CHECKPOINT_KIND = "full_smb_policy_trainer"
 FULL_SMB_ACTION_COUNT = len(SMB_ACTIONS)
+FULL_SMB_TRAINING_SOURCE_SCRATCH = "scratch"
+FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT = "init_checkpoint"
+FULL_SMB_TRAINING_SOURCE_RESUME_CHECKPOINT = "resume_checkpoint"
 FULL_SMB_PERCEPTION_FREEZE = "freeze"
 FULL_SMB_PERCEPTION_FINE_TUNE = "fine_tune"
 FULL_SMB_PERCEPTION_REPLACE = "replace"
@@ -155,14 +158,10 @@ class FullSMBTrainingConfig:
         elif not isinstance(self.reward_config, FullSMBRewardConfig):
             raise TypeError("reward_config must be a FullSMBRewardConfig or mapping")
         rollout_length = (
-            self.max_steps_per_episode
-            if self.rollout_length is None
-            else self.rollout_length
+            self.max_steps_per_episode if self.rollout_length is None else self.rollout_length
         )
         updates_per_epoch = (
-            self.episodes_per_epoch
-            if self.updates_per_epoch is None
-            else self.updates_per_epoch
+            self.episodes_per_epoch if self.updates_per_epoch is None else self.updates_per_epoch
         )
         object.__setattr__(self, "rollout_length", int(rollout_length))
         object.__setattr__(self, "max_steps_per_episode", int(rollout_length))
@@ -223,8 +222,7 @@ class FullSMBTrainingConfig:
             and self.full_smb_vision_checkpoint is None
         ):
             raise ValueError(
-                "full_smb_vision_checkpoint is required unless "
-                "perception_mode='replace'"
+                "full_smb_vision_checkpoint is required unless " "perception_mode='replace'"
             )
 
 
@@ -297,9 +295,16 @@ def train_full_smb_policy(
 
     seed_everything(config.seed, deterministic=config.deterministic)
     device = select_device(config.device)
-    model, start_epoch, global_step, architecture_name, architecture_config, checkpoint, vision = (
-        _load_training_state(config, device)
-    )
+    (
+        model,
+        start_epoch,
+        global_step,
+        architecture_name,
+        architecture_config,
+        checkpoint,
+        vision,
+        training_source,
+    ) = _load_training_state(config, device)
     if vision is None:
         vision = _build_full_smb_perception(config, device)
     _restore_perception_state(vision, checkpoint)
@@ -390,6 +395,7 @@ def train_full_smb_policy(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
             vision=vision,
+            training_source=training_source,
         )
         tracker.log_metrics(
             checkpoint["metrics"],
@@ -517,12 +523,24 @@ def build_full_smb_policy_checkpoint(
     architecture_name: str,
     architecture_config: Mapping[str, Any],
     vision: Optional[FullSMBSegmentationVision] = None,
+    training_source: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     perception = _perception_checkpoint_metadata(config, vision)
     rollout = _rollout_metadata(config)
     loss_weights = _loss_weight_metadata(config)
     recording = _recording_metadata(config)
     tracking = _tracking_metadata(config)
+    source = dict(
+        training_source
+        or _training_source_metadata(
+            FULL_SMB_TRAINING_SOURCE_SCRATCH,
+            checkpoint_path=None,
+            checkpoint=None,
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+        )
+    )
+    stage_batch_contract = _stage_batch_contract_metadata()
     states: dict[str, Any] = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -547,6 +565,8 @@ def build_full_smb_policy_checkpoint(
             "reward": config.reward_config.to_manifest(),
             "recording": recording,
             "tracking": tracking,
+            "training_source": source,
+            "stage_batch_contract": stage_batch_contract,
             "architecture_name": architecture_name,
             "architecture_config": dict(architecture_config),
         },
@@ -571,6 +591,8 @@ def build_full_smb_policy_checkpoint(
                 "reward": config.reward_config.to_manifest(),
                 "recording": recording,
                 "tracking": tracking,
+                "source": source,
+                "stage_batch_contract": stage_batch_contract,
             },
         },
     )
@@ -595,6 +617,7 @@ def _load_training_state(
     dict[str, Any],
     Optional[Mapping[str, Any]],
     Optional[FullSMBSegmentationVision],
+    dict[str, Any],
 ]:
     if config.resume_path is not None:
         checkpoint = load_checkpoint(config.resume_path, map_location=device)
@@ -605,6 +628,13 @@ def _load_training_state(
             architecture_config=architecture_config,
         ).to(device)
         model.load_state_dict(checkpoint["states"]["model"])
+        source = _training_source_metadata(
+            FULL_SMB_TRAINING_SOURCE_RESUME_CHECKPOINT,
+            checkpoint_path=config.resume_path,
+            checkpoint=checkpoint,
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+        )
         return (
             model,
             int(checkpoint.get("epoch", 0)),
@@ -613,6 +643,7 @@ def _load_training_state(
             architecture_config,
             checkpoint,
             None,
+            source,
         )
 
     if config.init_checkpoint is not None:
@@ -628,6 +659,13 @@ def _load_training_state(
             transferred.checkpoint
         )
         checkpoint = transferred.checkpoint
+        source = _training_source_metadata(
+            FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT,
+            checkpoint_path=config.init_checkpoint,
+            checkpoint=checkpoint,
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+        )
     else:
         architecture_name = config.architecture_name
         architecture_config = dict(config.architecture_config)
@@ -637,7 +675,14 @@ def _load_training_state(
         ).to(device)
         vision = None
         checkpoint = None
-    return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision
+        source = _training_source_metadata(
+            FULL_SMB_TRAINING_SOURCE_SCRATCH,
+            checkpoint_path=None,
+            checkpoint=None,
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+        )
+    return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision, source
 
 
 def _train_episode(
@@ -693,6 +738,7 @@ def _policy_action_logits(
     *,
     device: torch.device,
 ) -> torch.Tensor:
+    _validate_full_smb_stage_batch(batch)
     src_a = batch.src_a.to(device)
     src_b = batch.src_b.to(device)
     src_c = batch.src_c.to(device)
@@ -867,6 +913,77 @@ def _tracking_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
         "mode": config.tracking_mode,
         "structured_log_path": str(config.log_path) if config.log_path else None,
     }
+
+
+def _training_source_metadata(
+    mode: str,
+    *,
+    checkpoint_path: Optional[Path],
+    checkpoint: Optional[Mapping[str, Any]],
+    architecture_name: str,
+    architecture_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    checkpoint_stage = None
+    checkpoint_model_name = None
+    checkpoint_kind = None
+    checkpoint_epoch = None
+    checkpoint_global_step = None
+    if checkpoint is not None:
+        checkpoint_stage = checkpoint.get("stage")
+        checkpoint_model_name = checkpoint.get("model_name")
+        checkpoint_kind = checkpoint.get("checkpoint_kind")
+        checkpoint_epoch = int(checkpoint.get("epoch", 0))
+        checkpoint_global_step = int(checkpoint.get("global_step", 0))
+    return {
+        "mode": mode,
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        "checkpoint_stage": checkpoint_stage,
+        "checkpoint_model_name": checkpoint_model_name,
+        "checkpoint_kind": checkpoint_kind,
+        "checkpoint_epoch": checkpoint_epoch,
+        "checkpoint_global_step": checkpoint_global_step,
+        "uses_shared_architecture_factory": True,
+        "architecture_name": architecture_name,
+        "architecture_config": dict(architecture_config),
+    }
+
+
+def _stage_batch_contract_metadata() -> dict[str, Any]:
+    return {
+        "source": "FullSMBStage.encode_observation",
+        "src_a": {"rank": 2, "sequence_length": FULL_SMB_SPEC.seq_len_a, "dtype": "long"},
+        "src_b": {"rank": 2, "sequence_length": FULL_SMB_SPEC.seq_len_b, "dtype": "long"},
+        "src_c": {
+            "rank": 2,
+            "feature_length": FULL_SMB_SPEC.seq_len_c,
+            "dtype": "floating",
+        },
+    }
+
+
+def _validate_full_smb_stage_batch(batch: StageBatch) -> None:
+    if batch.src_a.ndim != 2 or batch.src_a.shape[1] != FULL_SMB_SPEC.seq_len_a:
+        raise ValueError(
+            "Full SMB stage batch src_a must have shape "
+            f"[B, {FULL_SMB_SPEC.seq_len_a}], got {tuple(batch.src_a.shape)}"
+        )
+    if batch.src_b.ndim != 2 or batch.src_b.shape[1] != FULL_SMB_SPEC.seq_len_b:
+        raise ValueError(
+            "Full SMB stage batch src_b must have shape "
+            f"[B, {FULL_SMB_SPEC.seq_len_b}], got {tuple(batch.src_b.shape)}"
+        )
+    if batch.src_c.ndim != 2 or batch.src_c.shape[1] != FULL_SMB_SPEC.seq_len_c:
+        raise ValueError(
+            "Full SMB stage batch src_c must have shape "
+            f"[B, {FULL_SMB_SPEC.seq_len_c}], got {tuple(batch.src_c.shape)}"
+        )
+    batch_size = batch.src_a.shape[0]
+    if batch.src_b.shape[0] != batch_size or batch.src_c.shape[0] != batch_size:
+        raise ValueError("Full SMB stage batch streams must share the same batch size")
+    if batch.src_a.dtype != torch.long or batch.src_b.dtype != torch.long:
+        raise ValueError("Full SMB stage batch A/B streams must use torch.long tokens")
+    if not torch.is_floating_point(batch.src_c):
+        raise ValueError("Full SMB stage batch C stream must use floating point features")
 
 
 def append_full_smb_log_event(path: Path, event: Mapping[str, Any]) -> None:
@@ -1081,10 +1198,14 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
     architecture_config = dict(args.architecture_config or ())
     perception_mode = getattr(args, "perception_mode", None)
     if args.fine_tune_vision:
-        if perception_mode is not None and _resolve_perception_mode(
-            perception_mode,
-            freeze_vision=False,
-        ) != FULL_SMB_PERCEPTION_FINE_TUNE:
+        if (
+            perception_mode is not None
+            and _resolve_perception_mode(
+                perception_mode,
+                freeze_vision=False,
+            )
+            != FULL_SMB_PERCEPTION_FINE_TUNE
+        ):
             raise ValueError("--fine-tune-vision conflicts with --perception-mode")
         perception_mode = FULL_SMB_PERCEPTION_FINE_TUNE
     return FullSMBTrainingConfig(

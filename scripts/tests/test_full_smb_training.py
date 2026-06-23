@@ -12,13 +12,14 @@ from unittest.mock import patch
 import torch
 
 import retroagi.stages.full_smb.train as full_smb_train_module
-from retroagi.core import load_checkpoint
+from retroagi.core import BASELINE_ARCHITECTURE_NAME, StageBatch, load_checkpoint
 from retroagi.stages.full_smb import (
     FULL_SMB_PERCEPTION_FINE_TUNE,
     FULL_SMB_PERCEPTION_FREEZE,
     FULL_SMB_PERCEPTION_REPLACE,
     FULL_SMB_POLICY_CHECKPOINT_KIND,
     FULL_SMB_POLICY_MODEL_NAME,
+    FULL_SMB_SPEC,
     FullSMBObservationConfig,
     FullSMBRewardConfig,
     FullSMBStage,
@@ -48,6 +49,95 @@ def tiny_stage(vision):
 
 
 class TestFullSMBTraining(unittest.TestCase):
+    def test_scratch_training_uses_shared_architecture_factory_and_stage_batches(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=5,
+                architecture_name=BASELINE_ARCHITECTURE_NAME,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=2,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+
+            with patch.object(
+                full_smb_train_module,
+                "make_full_smb_policy_model",
+                wraps=full_smb_train_module.make_full_smb_policy_model,
+            ) as factory:
+                result = train_full_smb_policy(config, make_stage=tiny_stage)
+
+        factory.assert_called_once_with(
+            architecture_name=BASELINE_ARCHITECTURE_NAME,
+            architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+        )
+        source = result.checkpoint["config"]["training_source"]
+        self.assertEqual(source["mode"], "scratch")
+        self.assertIsNone(source["checkpoint_path"])
+        self.assertTrue(source["uses_shared_architecture_factory"])
+        self.assertEqual(source["architecture_name"], BASELINE_ARCHITECTURE_NAME)
+        self.assertEqual(
+            source["architecture_config"],
+            {"hidden_dim": 8, "controller_schedule": "linear"},
+        )
+        self.assertEqual(
+            result.checkpoint["metadata"]["training"]["source"]["mode"],
+            "scratch",
+        )
+        contract = result.checkpoint["metadata"]["training"]["stage_batch_contract"]
+        self.assertEqual(contract["src_a"]["sequence_length"], FULL_SMB_SPEC.seq_len_a)
+        self.assertEqual(contract["src_b"]["sequence_length"], FULL_SMB_SPEC.seq_len_b)
+        self.assertEqual(contract["src_c"]["feature_length"], FULL_SMB_SPEC.seq_len_c)
+
+    def test_scratch_training_rejects_non_full_smb_stage_batch(self):
+        class BadStage:
+            def reset(self, seed=None):
+                del seed
+                return object()
+
+            def encode_observation(self, _observation):
+                return StageBatch(
+                    src_a=torch.zeros((1, FULL_SMB_SPEC.seq_len_a + 1), dtype=torch.long),
+                    target_a=None,
+                    src_b=torch.zeros((1, FULL_SMB_SPEC.seq_len_b), dtype=torch.long),
+                    target_b=None,
+                    src_c=torch.zeros((1, FULL_SMB_SPEC.seq_len_c), dtype=torch.float32),
+                    target_c=None,
+                    metadata={},
+                )
+
+            def step(self, _action):
+                return object(), 0.0, True, False, {}
+
+            def close(self):
+                return None
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=6,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=1,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+
+            with self.assertRaisesRegex(ValueError, "src_a"):
+                train_full_smb_policy(config, make_stage=lambda _vision: BadStage())
+
     def test_train_resume_and_evaluate_full_smb_policy_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -120,9 +210,7 @@ class TestFullSMBTraining(unittest.TestCase):
                 str(full_vision_path),
             )
             self.assertTrue(checkpoint["metadata"]["perception"]["frozen"])
-            self.assertFalse(
-                checkpoint["metadata"]["perception"]["optimizer_updates_enabled"]
-            )
+            self.assertFalse(checkpoint["metadata"]["perception"]["optimizer_updates_enabled"])
 
             resume_config = FullSMBTrainingConfig(
                 seed=7,
@@ -274,8 +362,7 @@ class TestFullSMBTraining(unittest.TestCase):
             result = train_full_smb_policy(config, make_stage=tiny_stage)
 
             events = [
-                json.loads(line)
-                for line in log_path.read_text(encoding="utf-8").splitlines()
+                json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
 
         checkpoint = result.checkpoint
@@ -308,11 +395,14 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(events[1]["metrics"]["steps"], 2.0)
 
     def test_train_cli_builds_expanded_full_smb_config(self):
-        with patch.object(
-            full_smb_train_module,
-            "train_full_smb_policy",
-            return_value=SimpleNamespace(as_dict=lambda: {"ok": True}),
-        ) as train, contextlib.redirect_stdout(io.StringIO()):
+        with (
+            patch.object(
+                full_smb_train_module,
+                "train_full_smb_policy",
+                return_value=SimpleNamespace(as_dict=lambda: {"ok": True}),
+            ) as train,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             exit_code = full_smb_train_module.main(
                 [
                     "train",

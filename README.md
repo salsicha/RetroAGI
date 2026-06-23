@@ -141,7 +141,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    starts from a fresh trainable Full SMB ViT.
    Full SMB trainer checkpoints also capture the resolved rollout/update shape,
    vector environment request, reward config, loss weights, recording paths,
-   tracking config, and deterministic mode.
+   tracking config, deterministic mode, training source provenance, and the
+   validated Full SMB A/B/C stage-batch contract. Scratch training is selected
+   by omitting `--resume` and `--init-checkpoint`, which builds the policy via
+   the shared architecture factory before consuming Full SMB stage batches.
    Real Full SMB emulator runs require the optional stable-retro backend:
    `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
    training do not install or build that native emulator dependency.
