@@ -262,8 +262,11 @@ high-fidelity evaluations.
       The initial `retroagi promote` implementation runs interface, Synthetic
       concept, and Block SMB smoke checks, writes one promotion manifest, and
       records later high-fidelity rungs as skipped with prerequisite reasons.
-- [ ] Define small, medium, and full budgets for each promotion layer so model
+- [x] Define small, medium, and full budgets for each promotion layer so model
       ideas can be rejected quickly before spending emulator time.
+      `retroagi promote --budget small|medium|full` now records per-rung
+      budgets in the manifest, applies them to runnable rungs, and lets
+      explicit CLI overrides replace individual budget values.
 - [ ] Add automatic promotion gates that stop an architecture when it fails
       required metrics, numerical checks, runtime limits, or artifact checks.
 - [ ] Produce a comparison report for architecture sweeps with per-stage metrics,

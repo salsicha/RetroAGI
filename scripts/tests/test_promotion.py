@@ -74,8 +74,10 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertTrue(manifest["passed"])
         self.assertEqual(manifest["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
         self.assertEqual(manifest["architecture"]["config"], {"hidden_dim": 8})
+        self.assertEqual(manifest["budget"]["name"], "small")
         self.assertEqual(manifest["rungs"][0]["name"], "interface-smoke")
         self.assertEqual(manifest["rungs"][0]["status"], "passed")
+        self.assertEqual(manifest["rungs"][0]["budget"], {"batch_size": 2})
         self.assertEqual(
             [stage["stage"] for stage in manifest["rungs"][0]["stages"]],
             ["synthetic_1d", "block_smb", "full_smb"],
@@ -114,6 +116,77 @@ class TestPromotionPipeline(unittest.TestCase):
         self.assertEqual(rung_statuses["block-smb-smoke"], "passed")
         self.assertEqual(rung_statuses["full-smb-fine-tuning"], "skipped")
         self.assertIn("reason", manifest["rungs"][-1])
+        self.assertEqual(manifest["budget"]["name"], "small")
+        self.assertEqual(manifest["budget"]["rungs"]["block-smb-smoke"]["rollout_steps"], 2)
+        self.assertEqual(
+            manifest["rungs"][-1]["budget"],
+            {"epochs": 1, "rollout_steps": 128, "evaluation_episodes": 2},
+        )
+
+    def test_medium_budget_changes_experiment_arguments(self):
+        calls = []
+
+        def fake_run_experiment(args):
+            calls.append(args)
+            return _fake_experiment_manifest(args)
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment):
+                exit_code, manifest = self.run_main(
+                    [
+                        "--rung",
+                        "synthetic-concept",
+                        "--budget",
+                        "medium",
+                        "--output",
+                        str(Path(tmpdir) / "promotion.json"),
+                        "--artifacts-dir",
+                        str(Path(tmpdir) / "artifacts"),
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(manifest["budget"]["name"], "medium")
+        self.assertEqual(calls[0].synthetic_epochs, 3)
+        self.assertEqual(calls[0].synthetic_train_samples, 128)
+        self.assertEqual(calls[0].gate[0].threshold, 5.0)
+        self.assertEqual(manifest["rungs"][0]["budget"]["epochs"], 3)
+
+    def test_cli_overrides_budget_values(self):
+        calls = []
+
+        def fake_run_experiment(args):
+            calls.append(args)
+            return _fake_experiment_manifest(args)
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("retroagi.experiments.run_experiment", side_effect=fake_run_experiment):
+                exit_code, manifest = self.run_main(
+                    [
+                        "--rung",
+                        "block-smb-smoke",
+                        "--budget",
+                        "medium",
+                        "--output",
+                        str(Path(tmpdir) / "promotion.json"),
+                        "--artifacts-dir",
+                        str(Path(tmpdir) / "artifacts"),
+                        "--device",
+                        "cpu",
+                        "--block-smoke-rollout-steps",
+                        "3",
+                        "--block-smoke-success-rate",
+                        "0.25",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls[0].block_rollout_steps, 3)
+        self.assertEqual(calls[0].gate[0].threshold, 0.25)
+        self.assertEqual(manifest["rungs"][0]["budget"]["rollout_steps"], 3)
+        self.assertEqual(manifest["rungs"][0]["budget"]["success_rate_threshold"], 0.25)
 
     def test_failed_experiment_rung_fails_promotion(self):
         with TemporaryDirectory() as tmpdir:
