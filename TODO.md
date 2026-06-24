@@ -505,7 +505,7 @@ and playable end target.
 - [x] Add CLI options for selecting Full SMB task set, level/state, render mode,
       max steps, frame skip, action repeat, deterministic policy, and recording
       output.
-- [ ] Add a policy-inspection overlay for play mode showing action name,
+- [x] Add a policy-inspection overlay for play mode showing action name,
       action probabilities, reward terms, score/progress signals, termination
       reason, and current task threshold status.
 - [ ] Add comparison commands for transferred, scratch-trained, fine-tuned, and

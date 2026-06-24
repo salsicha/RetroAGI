@@ -47,6 +47,7 @@ from retroagi.stages.full_smb.adapter import (
 from retroagi.stages.full_smb.success import (
     FIXED_FULL_SMB_SUCCESS_THRESHOLDS,
     evaluate_fixed_full_smb_success_thresholds,
+    evaluate_full_smb_success_threshold,
     summarize_fixed_full_smb_success_metrics,
 )
 from retroagi.stages.full_smb.tasks import (
@@ -432,6 +433,10 @@ class FullSMBPlayConfig:
     pause_at_start: bool = False
     interactive_controls: bool = True
     recording_prefix: str = "play"
+    inspection_overlay: bool = False
+    overlay_interval_steps: int = 1
+    overlay_top_actions: int = 5
+    overlay_history_limit: int = 256
     human_control: bool = False
     human_default_action: int = int(SMB_ACTIONS[0])
     human_action_script: tuple[int, ...] = ()
@@ -447,6 +452,10 @@ class FullSMBPlayConfig:
             raise ValueError("fps must be non-negative")
         if float(self.sampling_temperature) <= 0.0:
             raise ValueError("sampling_temperature must be positive")
+        for name in ("overlay_interval_steps", "overlay_top_actions", "overlay_history_limit"):
+            if int(getattr(self, name)) <= 0:
+                raise ValueError(f"{name} must be positive")
+            object.__setattr__(self, name, int(getattr(self, name)))
         if not str(self.recording_prefix).strip():
             raise ValueError("recording_prefix must be non-empty")
         object.__setattr__(
@@ -482,6 +491,8 @@ class FullSMBPlayResult:
     recording: Mapping[str, Any] = field(default_factory=_empty_full_smb_recording_manifest)
     final_signals: Mapping[str, Any] = field(default_factory=dict)
     last_reward_terms: Mapping[str, float] = field(default_factory=dict)
+    last_overlay: Mapping[str, Any] = field(default_factory=dict)
+    overlay_history: tuple[Mapping[str, Any], ...] = ()
     human_action_bindings: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -1022,6 +1033,8 @@ def play_full_smb_policy(
     quit_requested = False
     final_info: Mapping[str, Any] = {}
     world_model_state: WorldModelState | None = None
+    overlay_history: list[Mapping[str, Any]] = []
+    last_overlay: Mapping[str, Any] = {}
     interactive = bool(play_config.interactive_controls and _stdin_supports_play_controls())
     paused = bool(play_config.pause_at_start and interactive)
     script_index = 0
@@ -1040,6 +1053,7 @@ def play_full_smb_policy(
             info=stage.last_info,
             stage=stage,
         )
+        fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(stage, stage.last_info)
         episode_open = True
         while len(actions) < play_config.max_steps:
             command = _poll_full_smb_play_command(
@@ -1074,6 +1088,10 @@ def play_full_smb_policy(
                     info=stage.last_info,
                     stage=stage,
                 )
+                fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
+                    stage,
+                    stage.last_info,
+                )
                 episode_open = True
                 _render_full_smb_stage(stage, enabled=play_config.render)
             if paused:
@@ -1087,6 +1105,7 @@ def play_full_smb_policy(
                     script_index=script_index,
                 )
                 next_world_model_state = None
+                action_probabilities = None
             else:
                 assert model is not None
                 batch = stage.encode_observation(observation)
@@ -1103,6 +1122,10 @@ def play_full_smb_policy(
                 action = _select_full_smb_play_action(
                     logits,
                     deterministic=play_config.deterministic_policy,
+                    temperature=play_config.sampling_temperature,
+                )
+                action_probabilities = _full_smb_action_probabilities(
+                    logits,
                     temperature=play_config.sampling_temperature,
                 )
                 next_world_model_state = forward.next_world_model_state
@@ -1129,11 +1152,44 @@ def play_full_smb_policy(
                 total_return += float(reward)
                 episode_return += float(reward)
                 _render_full_smb_stage(stage, enabled=play_config.render)
+                _update_full_smb_fixed_task_episode_metrics(
+                    fixed_task_metrics,
+                    stage,
+                    info,
+                )
                 boundary = _full_smb_rollout_boundary(
                     terminated=terminated,
                     truncated=truncated,
                     info=info,
                 )
+                if play_config.inspection_overlay:
+                    last_overlay = _full_smb_play_overlay_snapshot(
+                        step_index=len(actions),
+                        episode_index=episode_index,
+                        action=action,
+                        action_probabilities=action_probabilities,
+                        probability_source=(
+                            "human_selection" if play_config.human_control else "policy_softmax"
+                        ),
+                        reward=float(reward),
+                        episode_return=float(episode_return),
+                        total_return=float(total_return),
+                        terminated=terminated,
+                        truncated=truncated,
+                        info=info,
+                        boundary=boundary,
+                        fixed_task_metrics=fixed_task_metrics,
+                        play_config=play_config,
+                    )
+                    overlay_history.append(last_overlay)
+                    if len(overlay_history) > play_config.overlay_history_limit:
+                        overlay_history.pop(0)
+                    if (
+                        len(actions) % play_config.overlay_interval_steps == 0
+                        or terminated
+                        or truncated
+                    ):
+                        _write_full_smb_play_overlay(last_overlay)
                 if boundary.reset_recurrent_state:
                     world_model_state = None
                 elif next_world_model_state is not None and repeat_index == 0:
@@ -1166,6 +1222,10 @@ def play_full_smb_policy(
                         observation=observation,
                         info=stage.last_info,
                         stage=stage,
+                    )
+                    fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
+                        stage,
+                        stage.last_info,
                     )
                     episode_open = True
                     _render_full_smb_stage(stage, enabled=play_config.render)
@@ -1205,6 +1265,8 @@ def play_full_smb_policy(
             recording=recording_manifest,
             final_signals=_selected_full_smb_signal_fields(final_info),
             last_reward_terms=_last_full_smb_reward_terms(final_info),
+            last_overlay=last_overlay,
+            overlay_history=tuple(overlay_history),
             human_action_bindings=(
                 _full_smb_human_action_bindings() if play_config.human_control else {}
             ),
@@ -1226,6 +1288,218 @@ def _select_full_smb_play_action(
         return int(scaled_logits.argmax(dim=-1).item())
     distribution = torch.distributions.Categorical(logits=scaled_logits)
     return int(distribution.sample().item())
+
+
+def _full_smb_action_probabilities(
+    logits: torch.Tensor,
+    *,
+    temperature: float,
+) -> tuple[float, ...]:
+    scaled_logits = logits.detach().float() / float(temperature)
+    probabilities = torch.softmax(scaled_logits, dim=-1)
+    if probabilities.ndim > 1:
+        probabilities = probabilities[0]
+    probabilities = probabilities[:FULL_SMB_ACTION_COUNT].cpu()
+    return tuple(float(value) for value in probabilities.tolist())
+
+
+def _full_smb_play_overlay_snapshot(
+    *,
+    step_index: int,
+    episode_index: int,
+    action: int,
+    action_probabilities: Optional[tuple[float, ...]],
+    probability_source: str,
+    reward: float,
+    episode_return: float,
+    total_return: float,
+    terminated: bool,
+    truncated: bool,
+    info: Mapping[str, Any],
+    boundary: FullSMBRolloutBoundary,
+    fixed_task_metrics: Mapping[str, Any],
+    play_config: FullSMBPlayConfig,
+) -> dict[str, Any]:
+    probabilities, top_actions = _full_smb_play_action_probability_payload(
+        action=action,
+        action_probabilities=action_probabilities,
+        source=probability_source,
+        top_actions=play_config.overlay_top_actions,
+    )
+    signals = _full_smb_play_overlay_signals(info)
+    threshold_status = _full_smb_play_threshold_status(
+        fixed_task_metrics,
+        episode_return=episode_return,
+        evaluation_max_steps=play_config.max_steps,
+    )
+    return {
+        "step": int(step_index),
+        "episode": int(episode_index),
+        "action_id": int(action),
+        "action_name": SMB_ACTIONS[action].name,
+        "action_probability_source": probability_source,
+        "action_probabilities": probabilities,
+        "top_action_probabilities": top_actions,
+        "reward": float(reward),
+        "episode_return": float(episode_return),
+        "total_return": float(total_return),
+        "reward_terms": _last_full_smb_reward_terms(info),
+        "signals": signals,
+        "terminated": bool(terminated),
+        "truncated": bool(truncated),
+        "termination_reason": _full_smb_play_termination_reason(info, boundary),
+        "boundary_reasons": tuple(boundary.reasons),
+        "threshold_status": threshold_status,
+    }
+
+
+def _full_smb_play_action_probability_payload(
+    *,
+    action: int,
+    action_probabilities: Optional[tuple[float, ...]],
+    source: str,
+    top_actions: int,
+) -> tuple[dict[str, float], list[dict[str, Any]]]:
+    if action_probabilities is None:
+        probabilities = {
+            action_item.name: (1.0 if int(action_item) == int(action) else 0.0)
+            for action_item in SMB_ACTIONS
+        }
+    else:
+        probabilities = {
+            action_item.name: float(action_probabilities[int(action_item)])
+            for action_item in SMB_ACTIONS
+            if int(action_item) < len(action_probabilities)
+        }
+    ranked = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)
+    action_ids_by_name = {action_item.name: int(action_item) for action_item in SMB_ACTIONS}
+    top = [
+        {
+            "action_id": action_ids_by_name[name],
+            "action_name": name,
+            "probability": float(probability),
+            "source": source,
+        }
+        for name, probability in ranked[: int(top_actions)]
+    ]
+    return probabilities, top
+
+
+def _full_smb_play_overlay_signals(info: Mapping[str, Any]) -> dict[str, Any]:
+    signals = _selected_full_smb_signal_fields(info)
+    source = _full_smb_signal_source(info)
+    progress = _full_smb_signal_progress(source)
+    if progress is not None:
+        signals["progress"] = progress
+    score = _optional_float(source.get("score"))
+    if score is not None:
+        signals["score"] = score
+    coins = _optional_float(source.get("coins"))
+    if coins is None:
+        collectibles = source.get("collectibles")
+        if isinstance(collectibles, Mapping):
+            coins = _optional_float(collectibles.get("coins"))
+    if coins is not None:
+        signals["coins"] = coins
+    return signals
+
+
+def _full_smb_play_termination_reason(
+    info: Mapping[str, Any],
+    boundary: FullSMBRolloutBoundary,
+) -> Optional[str]:
+    source = _full_smb_signal_source(info)
+    for key in ("termination_reason", "done_reason", "reason"):
+        value = source.get(key)
+        if value is not None and value != "":
+            return str(value)
+    if boundary.reasons:
+        return ",".join(boundary.reasons)
+    return None
+
+
+def _full_smb_play_threshold_status(
+    fixed_task_metrics: Mapping[str, Any],
+    *,
+    episode_return: float,
+    evaluation_max_steps: int,
+) -> dict[str, Any]:
+    task_name = fixed_task_metrics.get("task_name")
+    if task_name is None:
+        return {
+            "available": False,
+            "task_name": None,
+            "threshold_met": False,
+            "reason": "not_fixed_benchmark_task",
+        }
+    task_name = str(task_name)
+    if task_name not in FIXED_FULL_SMB_SUCCESS_THRESHOLDS:
+        return {
+            "available": False,
+            "task_name": task_name,
+            "threshold_met": False,
+            "reason": "not_fixed_benchmark_task",
+        }
+    observed = _finalize_full_smb_fixed_task_episode_metrics(
+        fixed_task_metrics,
+        episode_return=float(episode_return),
+    )
+    status = evaluate_full_smb_success_threshold(
+        task_name,
+        observed,
+        evaluation_episodes=1,
+        evaluation_max_steps=int(evaluation_max_steps),
+    )
+    return {
+        "available": True,
+        "task_name": task_name,
+        **to_plain_data(status),
+    }
+
+
+def _write_full_smb_play_overlay(snapshot: Mapping[str, Any]) -> None:
+    print(_format_full_smb_play_overlay(snapshot), file=sys.stderr, flush=True)
+
+
+def _format_full_smb_play_overlay(snapshot: Mapping[str, Any]) -> str:
+    top_actions = snapshot.get("top_action_probabilities", ())
+    top_text = " ".join(
+        f"{item.get('action_name')}={float(item.get('probability', 0.0)):.2f}"
+        for item in top_actions
+        if isinstance(item, Mapping)
+    )
+    signals = snapshot.get("signals", {})
+    signal_text = ""
+    if isinstance(signals, Mapping):
+        signal_parts = []
+        for name in ("progress", "score", "coins", "lives"):
+            if name in signals:
+                signal_parts.append(f"{name}={signals[name]}")
+        signal_text = " ".join(signal_parts)
+    reward_terms = snapshot.get("reward_terms", {})
+    reward_text = ""
+    if isinstance(reward_terms, Mapping):
+        reward_text = " ".join(
+            f"{name}={float(value):.3f}"
+            for name, value in reward_terms.items()
+            if _optional_float(value) is not None
+        )
+    threshold = snapshot.get("threshold_status", {})
+    threshold_text = "threshold=n/a"
+    if isinstance(threshold, Mapping) and threshold.get("available"):
+        threshold_text = (
+            f"threshold={threshold.get('task_name')}:"
+            f"{'pass' if threshold.get('threshold_met') else 'pending'}"
+        )
+    reason = snapshot.get("termination_reason") or "-"
+    return (
+        "[FullSMB overlay] "
+        f"step={snapshot.get('step')} episode={snapshot.get('episode')} "
+        f"action={snapshot.get('action_name')} reward={float(snapshot.get('reward', 0.0)):.3f} "
+        f"return={float(snapshot.get('episode_return', 0.0)):.3f} "
+        f"top=[{top_text}] signals=[{signal_text}] rewards=[{reward_text}] "
+        f"termination={reason} {threshold_text}"
+    )
 
 
 def _select_full_smb_human_action(
@@ -3600,6 +3874,22 @@ def _add_play_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-reset-on-done", action="store_false", dest="reset_on_done")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--recording-prefix", default="play")
+    parser.set_defaults(inspection_overlay=False)
+    parser.add_argument(
+        "--inspection-overlay",
+        "--overlay",
+        action="store_true",
+        dest="inspection_overlay",
+        help="emit policy inspection overlay lines to stderr during play",
+    )
+    parser.add_argument(
+        "--no-inspection-overlay",
+        "--no-overlay",
+        action="store_false",
+        dest="inspection_overlay",
+    )
+    parser.add_argument("--overlay-interval-steps", type=int, default=1)
+    parser.add_argument("--overlay-top-actions", type=int, default=5)
     parser.add_argument(
         "--human-default-action",
         type=_full_smb_action_id_arg,
@@ -3805,6 +4095,9 @@ def _play_config_from_args(args: argparse.Namespace) -> FullSMBPlayConfig:
         pause_at_start=args.pause_at_start,
         interactive_controls=args.interactive_controls,
         recording_prefix=args.recording_prefix,
+        inspection_overlay=args.inspection_overlay,
+        overlay_interval_steps=args.overlay_interval_steps,
+        overlay_top_actions=args.overlay_top_actions,
         human_control=bool(args.human),
         human_default_action=args.human_default_action,
         human_action_script=tuple(args.human_actions or ()),

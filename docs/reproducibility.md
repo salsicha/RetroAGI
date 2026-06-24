@@ -787,6 +787,7 @@ retroagi play --game smb --stage full \
   --action-repeat 2 \
   --render-mode human \
   --deterministic-policy \
+  --inspection-overlay \
   --fps 30 \
   --record \
   --record-dir artifacts/full_smb/recordings \
@@ -802,6 +803,10 @@ select the Full SMB start; an explicit `--state` overrides the catalog task
 start while still recording the selected task metadata in the resolved config.
 `--frame-skip` configures emulator frame preprocessing and `--action-repeat`
 holds each selected play action for multiple executed steps.
+`--inspection-overlay` writes a compact policy-inspection HUD to stderr and
+stores the same data in the play summary: selected action, policy probabilities,
+reward terms, score/progress signals, termination reason, and the current
+fixed-task threshold gate status.
 
 For manual action-mapping and reward-signal debugging, run human mode without a
 policy checkpoint:

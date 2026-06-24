@@ -140,6 +140,7 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --action-repeat 2 \
      --render-mode human \
      --deterministic-policy \
+     --inspection-overlay \
      --render \
      --fps 30 \
      --record-output artifacts/full_smb/play_manifest.npz
@@ -164,7 +165,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--scenario`, and `--frame-skip` to select repeatable task starts. Full SMB
    play mode also accepts `--render-mode human|none`, `--action-repeat`,
    `--deterministic-policy` or `--sampling-policy`, and `--record-output` for
-   the playback manifest.
+   the playback manifest. Add `--inspection-overlay` to stream a compact
+   policy-inspection HUD to stderr with action probabilities, reward terms,
+   score/progress signals, termination reason, and fixed-task threshold gates.
    Full SMB policy training records its perception choice in every checkpoint:
    `--perception-mode freeze` reuses a frozen Full SMB ViT checkpoint,
    `fine_tune` includes trainable ViT parameters in the optimizer, and `replace`

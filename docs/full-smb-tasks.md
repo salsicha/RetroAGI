@@ -61,6 +61,7 @@ retroagi play --game smb --stage full \
   --action-repeat 2 \
   --render-mode human \
   --deterministic-policy \
+  --inspection-overlay \
   --record-output artifacts/full_smb/play_manifest.npz
 ```
 
@@ -70,7 +71,9 @@ in that set matching a stable-retro level start. Without `--task-set`, level
 aliases such as `1-1`, `1-2`, and `2-1` resolve to the fixed benchmark starts.
 Use `--state Level1-1` when a raw stable-retro state should override the
 catalog start, and `--scenario <name>` when a backend scenario file should be
-loaded.
+loaded. In play mode, `--inspection-overlay` reports the selected action,
+policy probabilities, reward terms, score/progress signals, termination reason,
+and current fixed-task threshold gates for the resolved task start.
 
 ## Catalog Summary
 

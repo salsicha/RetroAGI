@@ -1288,6 +1288,102 @@ class TestFullSMBTraining(unittest.TestCase):
                 ),
             )
 
+    def test_policy_inspection_overlay_reports_action_signals_and_threshold(self):
+        class OverlayBenchmarkEnv(TinyFullSMBEnv):
+            def reset(self, seed=None):
+                observation, info = super().reset(seed=seed)
+                info["level"] = "Level1-1"
+                return observation, info
+
+            def step(self, action):
+                del action
+                self.step_count += 1
+                return (
+                    self._observation(0),
+                    1.0,
+                    True,
+                    False,
+                    {
+                        "level": "Level1-1",
+                        "x_pos": 3300,
+                        "y_pos": 96,
+                        "score": 900,
+                        "coins": 0,
+                        "lives": 3,
+                        "level_complete": True,
+                    },
+                )
+
+        def overlay_stage(vision):
+            return FullSMBStage(
+                env=OverlayBenchmarkEnv(),
+                vision=vision,
+                observation_config=FullSMBObservationConfig(
+                    frame_skip=1,
+                    frame_stack=2,
+                    resize_shape=(16, 20),
+                ),
+            )
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=44,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            play_config = FullSMBPlayConfig(
+                max_steps=1,
+                render=False,
+                fps=0.0,
+                deterministic_policy=True,
+                interactive_controls=False,
+                inspection_overlay=True,
+                overlay_top_actions=3,
+            )
+            logits = torch.full(
+                (1, full_smb_train_module.FULL_SMB_ACTION_COUNT),
+                -5.0,
+            )
+            logits[0, int(SMB_ACTIONS[1])] = 5.0
+
+            with (
+                patch.object(
+                    full_smb_train_module,
+                    "_policy_action_logits_and_state",
+                    return_value=full_smb_train_module.FullSMBPolicyForwardResult(
+                        logits=logits,
+                        next_world_model_state=None,
+                    ),
+                ),
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                result = play_full_smb_policy(
+                    torch.nn.Identity(),
+                    config=config,
+                    play_config=play_config,
+                    make_stage=overlay_stage,
+                )
+
+        overlay = result.last_overlay
+        threshold = overlay["threshold_status"]
+        self.assertIn("[FullSMB overlay]", stderr.getvalue())
+        self.assertIn("action=RIGHT", stderr.getvalue())
+        self.assertEqual(overlay["action_name"], "RIGHT")
+        self.assertGreater(overlay["action_probabilities"]["RIGHT"], 0.9)
+        self.assertEqual(overlay["signals"]["score"], 900.0)
+        self.assertEqual(overlay["signals"]["progress"], 3300.0)
+        self.assertIn("total", overlay["reward_terms"])
+        self.assertIn("terminated", overlay["termination_reason"])
+        self.assertEqual(threshold["task_name"], "benchmark_1_1_start")
+        self.assertTrue(threshold["available"])
+        self.assertTrue(threshold["meets_progress"])
+        self.assertFalse(threshold["enough_episodes"])
+        self.assertEqual(len(result.overlay_history), 1)
+
     def test_human_playback_runs_scripted_actions_without_policy(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -1746,6 +1842,9 @@ class TestFullSMBTraining(unittest.TestCase):
                     "--render-mode",
                     "none",
                     "--deterministic-policy",
+                    "--inspection-overlay",
+                    "--overlay-top-actions",
+                    "2",
                     "--record-dir",
                     "artifacts/full_smb/play",
                     "--record-output",
@@ -1768,6 +1867,8 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(play_config.action_repeat, 3)
         self.assertFalse(play_config.render)
         self.assertTrue(play_config.deterministic_policy)
+        self.assertTrue(play_config.inspection_overlay)
+        self.assertEqual(play_config.overlay_top_actions, 2)
         self.assertEqual(payload["action_repeat"], 3)
 
     def test_play_cli_human_mode_does_not_require_checkpoint(self):

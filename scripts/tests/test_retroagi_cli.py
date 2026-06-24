@@ -458,6 +458,9 @@ class TestRetroAGICLI(unittest.TestCase):
                     "none",
                     "--no-render",
                     "--sampling-policy",
+                    "--overlay",
+                    "--overlay-top-actions",
+                    "2",
                     "--record-output",
                     "artifacts/full_smb/play_manifest.npz",
                 ]
@@ -483,6 +486,9 @@ class TestRetroAGICLI(unittest.TestCase):
                 "none",
                 "--no-render",
                 "--sampling-policy",
+                "--overlay",
+                "--overlay-top-actions",
+                "2",
                 "--record-output",
                 "artifacts/full_smb/play_manifest.npz",
             ]
