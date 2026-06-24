@@ -585,8 +585,15 @@ metadata under `rollouts` and `config.rollout_storage` /
 action, scalar reward, done/terminated/truncated flags, episode mask, boundary
 reasons, scenario/task/emulator-state identifiers when exposed by the backend,
 and selected `full_smb_signals` plus reward terms. This storage is intended for
-resume diagnostics, promotion evidence, and deterministic replay inputs; frame
-recording remains a separate artifact task.
+resume diagnostics, promotion evidence, and deterministic replay inputs.
+Evaluation recording is a separate artifact stream: when `recording_dir` or
+`recording_path` is configured, deterministic Full SMB evaluations write
+compressed per-episode `.npz` files containing initial-plus-post-step RGB frame
+arrays, actions, action names, rewards, termination flags, serialized
+`full_smb_signals`, task/scenario/emulator-state IDs, and episode metadata.
+Evaluation manifests are stored in the result/checkpoint metadata, and video
+export is attempted only for video-suffixed `recording_path` values when OpenCV
+is available.
 
 Full SMB training stops before an optimizer step when numerical checks fail.
 The trainer validates finite action logits, log-probs, entropy, policy losses,

@@ -711,6 +711,8 @@ retroagi train --game smb --stage full \
   --evaluation-max-steps 64 \
   --evaluation-interval-epochs 1 \
   --reward-emulator-progress 1.0 \
+  --recording-dir artifacts/full_smb/recordings \
+  --recording-path artifacts/full_smb/recording_manifest.npz \
   --log-path artifacts/full_smb/train.jsonl \
   --checkpoint data/full_smb/policy.pth
 ```
@@ -745,7 +747,11 @@ the later vector rollout implementation lands. `config.rollout_storage` and
 `metadata.training.rollout_storage` must use schema version 1 and include
 compact replay rows for each training rollout: action, reward, done flags,
 episode mask, boundary reasons, scenario/task/emulator-state IDs when available,
-selected Full SMB signals, and reward terms. `config.safety` and
+selected Full SMB signals, and reward terms. Evaluation recording artifacts are
+separate compressed `.npz` files with initial-plus-post-step RGB frames, actions,
+action names, rewards, termination flags, serialized Full SMB signals, and
+task/scenario/emulator-state IDs; the evaluation result records their manifest
+and optional OpenCV video-export status. `config.safety` and
 `metadata.training.safety` must record finite-check behavior, gradient clipping,
 reward-scale limits, reward/value prediction bounds, and the action-entropy and
 gradient metrics tracked during training. `config.training_source` must include
@@ -766,6 +772,8 @@ Expected evidence:
 - `data/full_smb/policy.pth` with schema-v1 `config.task_curriculum`,
   `config.backend`, `config.rng_state`, and source checkpoint provenance,
 - `artifacts/full_smb/train.jsonl`,
+- `artifacts/full_smb/recordings/<evaluation-prefix>/*.npz`,
+- `artifacts/full_smb/recording_manifest_<evaluation-prefix>.npz`,
 - `artifacts/full_smb/transfer_vs_scratch.json`,
 - comparison fields including `action_agreement`, action histograms,
   mean entropies, mean margins, collection reward, resets, terminations, and

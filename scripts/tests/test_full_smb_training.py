@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import torch
 
 import retroagi.stages.full_smb.train as full_smb_train_module
@@ -1048,6 +1049,63 @@ class TestFullSMBTraining(unittest.TestCase):
             result.as_dict()["evaluations"][1]["metrics"]["eval_steps"],
             2.0,
         )
+
+    def test_full_smb_evaluation_recordings_write_episode_artifacts(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            recording_dir = tmp / "recordings"
+            recording_path = tmp / "recording_manifest.npz"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=29,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=2,
+                evaluation_episodes=2,
+                evaluation_max_steps=2,
+                deterministic_actions=True,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                recording_dir=recording_dir,
+                recording_path=recording_path,
+            )
+
+            result = train_full_smb_policy(config, make_stage=tiny_stage)
+
+            recording = result.evaluation.recording
+            self.assertTrue(recording["enabled"])
+            self.assertEqual(recording["recording_prefix"], "epoch0001")
+            self.assertEqual(recording["artifact_count"], 2)
+            self.assertTrue(Path(recording["manifest_path"]).exists())
+            manifest_npz = np.load(recording["manifest_path"])
+            manifest = json.loads(str(manifest_npz["manifest_json"]))
+            self.assertEqual(manifest["artifact_count"], 2)
+            artifact = recording["artifacts"][0]
+            artifact_path = Path(artifact["path"])
+            self.assertTrue(artifact_path.exists())
+            data = np.load(artifact_path)
+            self.assertEqual(data["frames"].shape, (3, 16, 20, 3))
+            self.assertEqual(data["actions"].shape, (2,))
+            self.assertEqual(data["action_names"].shape, (2,))
+            self.assertEqual(data["rewards"].shape, (2,))
+            self.assertEqual(data["terminated"].shape, (2,))
+            self.assertEqual(data["truncated"].shape, (2,))
+            self.assertEqual(data["signals_json"].shape, (2,))
+            self.assertEqual(data["task_ids"].shape, (2,))
+            signals = json.loads(str(data["signals_json"][0]))
+            self.assertEqual(signals["position"], [10030.0, 96.0])
+            metadata = json.loads(str(data["episode_metadata_json"]))
+            self.assertEqual(metadata["step_count"], 2)
+            self.assertTrue(metadata["frames_are_initial_plus_post_step"])
+            checkpoint_recording = result.checkpoint["metadata"]["training"]["recording"]
+            self.assertTrue(checkpoint_recording["enabled"])
+            self.assertIn("signals_json", checkpoint_recording["episode_fields"])
+            stored_evaluation = result.checkpoint["metadata"]["training"]["evaluation"][
+                "evaluations"
+            ][0]["evaluation"]
+            self.assertEqual(stored_evaluation["recording"]["artifact_count"], 2)
 
     def test_train_cli_builds_expanded_full_smb_config(self):
         with (

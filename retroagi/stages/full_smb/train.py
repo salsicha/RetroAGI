@@ -117,6 +117,22 @@ _FULL_SMB_SELECTED_SIGNAL_FIELDS = (
 _FULL_SMB_DEFAULT_MAX_ABS_LOSS = 1_000_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
+_FULL_SMB_RECORDING_SCHEMA_VERSION = 1
+_FULL_SMB_VIDEO_SUFFIXES = (".avi", ".mkv", ".mov", ".mp4")
+
+
+def _empty_full_smb_recording_manifest() -> dict[str, Any]:
+    return {
+        "schema_version": _FULL_SMB_RECORDING_SCHEMA_VERSION,
+        "enabled": False,
+        "recording_dir": None,
+        "recording_path": None,
+        "recording_prefix": None,
+        "artifact_count": 0,
+        "artifacts": [],
+        "manifest_path": None,
+        "video_export": {"enabled": False, "artifacts": []},
+    }
 
 
 def _resolve_perception_mode(
@@ -302,9 +318,10 @@ class FullSMBEvaluationResult:
     success_rate: float
     terminated_count: int
     truncated_count: int
+    recording: Mapping[str, Any] = field(default_factory=_empty_full_smb_recording_manifest)
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return to_plain_data(asdict(self))
 
 
 @dataclass(frozen=True)
@@ -554,6 +571,7 @@ def train_full_smb_policy(
                         make_stage=make_stage,
                         vision=vision,
                         device=device,
+                        recording_prefix=f"epoch{completed_epoch:04d}",
                     )
                     eval_metrics = _full_smb_evaluation_metrics(evaluation)
                     evaluations.append(
@@ -586,6 +604,7 @@ def train_full_smb_policy(
                     make_stage=make_stage,
                     vision=vision,
                     device=device,
+                    recording_prefix="final",
                 )
         finally:
             stage.close()
@@ -661,6 +680,7 @@ def evaluate_full_smb_policy(
     make_stage: Optional[StageFactory] = None,
     vision: Optional[FullSMBSegmentationVision] = None,
     device: Optional[torch.device] = None,
+    recording_prefix: str = "evaluation",
 ) -> FullSMBEvaluationResult:
     """Evaluate a Full SMB policy with deterministic action selection."""
 
@@ -676,15 +696,36 @@ def evaluate_full_smb_policy(
     steps = 0
     terminated_count = 0
     truncated_count = 0
+    recording_targets = _resolve_full_smb_recording_targets(config, recording_prefix)
+    recording_artifacts: list[dict[str, Any]] = []
     try:
         for episode_index in range(config.evaluation_episodes):
-            observation = stage.reset(seed=config.seed + 10_000 + episode_index)
+            episode_seed = config.seed + 10_000 + episode_index
+            observation = stage.reset(seed=episode_seed)
             episode_return = 0.0
+            episode_recording = _start_full_smb_episode_recording(
+                episode_index=episode_index,
+                seed=episode_seed,
+                observation=observation,
+                info=stage.last_info,
+                stage=stage,
+            )
             for _step in range(config.evaluation_max_steps):
                 batch = stage.encode_observation(observation)
                 logits = _policy_action_logits(model, batch, device=resolved_device)
                 action = int(logits.argmax(dim=-1).item())
-                observation, reward, terminated, truncated, _info = stage.step(action)
+                observation, reward, terminated, truncated, info = stage.step(action)
+                if recording_targets["enabled"]:
+                    _append_full_smb_episode_recording_step(
+                        episode_recording,
+                        observation=observation,
+                        action=action,
+                        reward=float(reward),
+                        terminated=terminated,
+                        truncated=truncated,
+                        info=info,
+                        stage=stage,
+                    )
                 episode_return += float(reward)
                 steps += 1
                 if terminated:
@@ -694,6 +735,14 @@ def evaluate_full_smb_policy(
                 if terminated or truncated:
                     break
             returns.append(float(episode_return))
+            if recording_targets["enabled"]:
+                recording_artifacts.append(
+                    _write_full_smb_episode_recording(
+                        episode_recording,
+                        recording_targets,
+                        total_return=float(episode_return),
+                    )
+                )
     finally:
         stage.close()
         if owns_vision:
@@ -701,6 +750,10 @@ def evaluate_full_smb_policy(
 
     episodes = len(returns)
     successes = terminated_count
+    recording_manifest = _full_smb_recording_manifest(
+        recording_targets,
+        recording_artifacts,
+    )
     return FullSMBEvaluationResult(
         episodes=episodes,
         max_steps_per_episode=config.evaluation_max_steps,
@@ -710,6 +763,7 @@ def evaluate_full_smb_policy(
         success_rate=float(successes / episodes) if episodes else 0.0,
         terminated_count=terminated_count,
         truncated_count=truncated_count,
+        recording=recording_manifest,
     )
 
 
@@ -1827,10 +1881,353 @@ def _selected_full_smb_signal_fields(info: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _recording_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
+    recording_path = config.recording_path
     return {
+        "schema_version": _FULL_SMB_RECORDING_SCHEMA_VERSION,
+        "enabled": bool(config.recording_dir is not None or recording_path is not None),
         "recording_dir": str(config.recording_dir) if config.recording_dir else None,
-        "recording_path": str(config.recording_path) if config.recording_path else None,
+        "recording_path": str(recording_path) if recording_path else None,
+        "episode_artifact_format": "npz_compressed",
+        "episode_fields": (
+            "frames",
+            "actions",
+            "action_names",
+            "rewards",
+            "terminated",
+            "truncated",
+            "signals_json",
+            "task_ids",
+            "scenario_ids",
+            "emulator_state_ids",
+            "episode_metadata_json",
+        ),
+        "frames_are_initial_plus_post_step": True,
+        "optional_video_export": bool(
+            recording_path is not None and recording_path.suffix.lower() in _FULL_SMB_VIDEO_SUFFIXES
+        ),
     }
+
+
+def _resolve_full_smb_recording_targets(
+    config: FullSMBTrainingConfig,
+    recording_prefix: str,
+) -> dict[str, Any]:
+    enabled = bool(config.recording_dir is not None or config.recording_path is not None)
+    safe_prefix = _safe_full_smb_recording_prefix(recording_prefix)
+    recording_path = (
+        _scoped_full_smb_recording_path(config.recording_path, safe_prefix)
+        if config.recording_path is not None
+        else None
+    )
+    video_path = (
+        recording_path
+        if recording_path is not None and recording_path.suffix.lower() in _FULL_SMB_VIDEO_SUFFIXES
+        else None
+    )
+    manifest_path = recording_path if video_path is None else None
+    if config.recording_dir is not None:
+        episode_dir = config.recording_dir
+        if safe_prefix:
+            episode_dir = episode_dir / safe_prefix
+    elif recording_path is not None:
+        episode_dir = recording_path.parent / f"{recording_path.stem}_episodes"
+    else:
+        episode_dir = None
+    return {
+        "schema_version": _FULL_SMB_RECORDING_SCHEMA_VERSION,
+        "enabled": enabled,
+        "recording_prefix": safe_prefix,
+        "episode_dir": episode_dir,
+        "manifest_path": manifest_path,
+        "video_path": video_path,
+        "configured_recording_dir": config.recording_dir,
+        "configured_recording_path": config.recording_path,
+    }
+
+
+def _safe_full_smb_recording_prefix(prefix: str) -> str:
+    cleaned = "".join(
+        character if character.isalnum() or character in ("-", "_") else "_"
+        for character in str(prefix or "evaluation")
+    ).strip("_")
+    return cleaned or "evaluation"
+
+
+def _scoped_full_smb_recording_path(path: Path, recording_prefix: str) -> Path:
+    if recording_prefix == "evaluation":
+        return path
+    return path.with_name(f"{path.stem}_{recording_prefix}{path.suffix}")
+
+
+def _start_full_smb_episode_recording(
+    *,
+    episode_index: int,
+    seed: int,
+    observation: np.ndarray,
+    info: Mapping[str, Any],
+    stage: FullSMBStage,
+) -> dict[str, Any]:
+    identifiers = _full_smb_rollout_identifiers(stage, info)
+    return {
+        "episode_index": int(episode_index),
+        "seed": int(seed),
+        "frames": [_recording_frame_array(observation)],
+        "actions": [],
+        "action_names": [],
+        "rewards": [],
+        "terminated": [],
+        "truncated": [],
+        "signals": [],
+        "task_ids": [],
+        "scenario_ids": [],
+        "emulator_state_ids": [],
+        "initial_signals": _selected_full_smb_signal_fields(info),
+        "initial_identifiers": identifiers,
+    }
+
+
+def _append_full_smb_episode_recording_step(
+    recording: dict[str, Any],
+    *,
+    observation: np.ndarray,
+    action: int,
+    reward: float,
+    terminated: bool,
+    truncated: bool,
+    info: Mapping[str, Any],
+    stage: FullSMBStage,
+) -> None:
+    identifiers = _full_smb_rollout_identifiers(stage, info)
+    recording["frames"].append(_recording_frame_array(observation))
+    recording["actions"].append(int(action))
+    recording["action_names"].append(SMB_ACTIONS[int(action)].name)
+    recording["rewards"].append(float(reward))
+    recording["terminated"].append(bool(terminated))
+    recording["truncated"].append(bool(truncated))
+    recording["signals"].append(_selected_full_smb_signal_fields(info))
+    recording["task_ids"].append(identifiers["task_id"] or "")
+    recording["scenario_ids"].append(identifiers["scenario_id"] or "")
+    recording["emulator_state_ids"].append(identifiers["emulator_state_id"] or "")
+
+
+def _write_full_smb_episode_recording(
+    recording: Mapping[str, Any],
+    targets: Mapping[str, Any],
+    *,
+    total_return: float,
+) -> dict[str, Any]:
+    episode_dir = targets.get("episode_dir")
+    if not isinstance(episode_dir, Path):
+        raise ValueError("Full SMB recording requires an episode directory")
+    episode_dir.mkdir(parents=True, exist_ok=True)
+    episode_index = int(recording["episode_index"])
+    prefix = str(targets.get("recording_prefix") or "evaluation")
+    artifact_path = episode_dir / f"{prefix}_episode{episode_index:04d}.npz"
+    frames = np.stack(recording["frames"]).astype(np.uint8, copy=False)
+    actions = np.asarray(recording["actions"], dtype=np.int64)
+    rewards = np.asarray(recording["rewards"], dtype=np.float32)
+    terminated = np.asarray(recording["terminated"], dtype=np.bool_)
+    truncated = np.asarray(recording["truncated"], dtype=np.bool_)
+    signals_json = np.asarray(
+        [_json_dumps_plain(signal) for signal in recording["signals"]],
+        dtype=np.str_,
+    )
+    np.savez_compressed(
+        artifact_path,
+        frames=frames,
+        actions=actions,
+        action_names=_string_array(recording["action_names"]),
+        rewards=rewards,
+        terminated=terminated,
+        truncated=truncated,
+        signals_json=signals_json,
+        task_ids=_string_array(recording["task_ids"]),
+        scenario_ids=_string_array(recording["scenario_ids"]),
+        emulator_state_ids=_string_array(recording["emulator_state_ids"]),
+        episode_metadata_json=np.asarray(
+            _json_dumps_plain(
+                {
+                    "schema_version": _FULL_SMB_RECORDING_SCHEMA_VERSION,
+                    "episode_index": episode_index,
+                    "seed": int(recording["seed"]),
+                    "step_count": int(actions.shape[0]),
+                    "total_return": float(total_return),
+                    "frames_are_initial_plus_post_step": True,
+                    "initial_signals": recording["initial_signals"],
+                    "initial_identifiers": recording["initial_identifiers"],
+                }
+            ),
+            dtype=np.str_,
+        ),
+    )
+    video = _write_full_smb_episode_video(recording, targets, frames=frames)
+    unique_task_ids = _unique_nonempty_strings(recording["task_ids"])
+    unique_scenario_ids = _unique_nonempty_strings(recording["scenario_ids"])
+    unique_emulator_state_ids = _unique_nonempty_strings(recording["emulator_state_ids"])
+    artifact = {
+        "schema_version": _FULL_SMB_RECORDING_SCHEMA_VERSION,
+        "episode_index": episode_index,
+        "seed": int(recording["seed"]),
+        "path": str(artifact_path),
+        "step_count": int(actions.shape[0]),
+        "frame_count": int(frames.shape[0]),
+        "total_return": float(total_return),
+        "task_ids": unique_task_ids,
+        "scenario_ids": unique_scenario_ids,
+        "emulator_state_ids": unique_emulator_state_ids,
+        "fields": _recording_metadata_fields(),
+        "video": video,
+    }
+    return artifact
+
+
+def _write_full_smb_episode_video(
+    recording: Mapping[str, Any],
+    targets: Mapping[str, Any],
+    *,
+    frames: np.ndarray,
+) -> dict[str, Any]:
+    video_path = targets.get("video_path")
+    if not isinstance(video_path, Path):
+        return {"enabled": False, "status": "not_requested", "path": None}
+    episode_index = int(recording["episode_index"])
+    episode_count_suffix = f"_episode{episode_index:04d}"
+    target_path = video_path
+    if episode_index > 0:
+        target_path = video_path.with_name(
+            f"{video_path.stem}{episode_count_suffix}{video_path.suffix}"
+        )
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return {
+            "enabled": True,
+            "status": "skipped",
+            "path": str(target_path),
+            "reason": "opencv-python is not installed",
+        }
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    height, width = frames.shape[1], frames.shape[2]
+    writer = cv2.VideoWriter(
+        str(target_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        30.0,
+        (int(width), int(height)),
+    )
+    if not writer.isOpened():
+        return {
+            "enabled": True,
+            "status": "skipped",
+            "path": str(target_path),
+            "reason": "OpenCV could not open the video writer",
+        }
+    try:
+        for frame in frames:
+            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    finally:
+        writer.release()
+    return {"enabled": True, "status": "written", "path": str(target_path)}
+
+
+def _full_smb_recording_manifest(
+    targets: Mapping[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not targets.get("enabled"):
+        return _empty_full_smb_recording_manifest()
+    manifest = {
+        "schema_version": _FULL_SMB_RECORDING_SCHEMA_VERSION,
+        "enabled": True,
+        "recording_dir": (
+            str(targets["configured_recording_dir"])
+            if targets.get("configured_recording_dir") is not None
+            else None
+        ),
+        "recording_path": (
+            str(targets["configured_recording_path"])
+            if targets.get("configured_recording_path") is not None
+            else None
+        ),
+        "resolved_episode_dir": (
+            str(targets["episode_dir"]) if targets.get("episode_dir") is not None else None
+        ),
+        "recording_prefix": targets.get("recording_prefix"),
+        "artifact_count": len(artifacts),
+        "artifacts": to_plain_data(artifacts),
+        "manifest_path": (
+            str(targets["manifest_path"]) if targets.get("manifest_path") is not None else None
+        ),
+        "video_export": {
+            "enabled": targets.get("video_path") is not None,
+            "artifacts": [artifact["video"] for artifact in artifacts],
+        },
+    }
+    manifest_path = targets.get("manifest_path")
+    if isinstance(manifest_path, Path):
+        _write_full_smb_recording_manifest(manifest_path, manifest)
+    return manifest
+
+
+def _write_full_smb_recording_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _json_dumps_plain(manifest)
+    if path.suffix.lower() == ".npz":
+        np.savez_compressed(
+            path,
+            manifest_json=np.asarray(payload, dtype=np.str_),
+            episode_paths=_string_array(
+                artifact["path"] for artifact in manifest.get("artifacts", ())
+            ),
+        )
+        return
+    path.write_text(payload + "\n", encoding="utf-8")
+
+
+def _recording_frame_array(observation: np.ndarray) -> np.ndarray:
+    array = np.asarray(observation)
+    if array.ndim != 3 or array.shape[-1] not in (3, 4):
+        raise ValueError("Full SMB recording frames must have RGB or RGBA channel layout")
+    array = array[..., :3]
+    if array.dtype != np.uint8:
+        array = np.nan_to_num(array.astype(np.float32), nan=0.0, posinf=255.0, neginf=0.0)
+        if bool(array.size) and float(np.nanmax(array)) <= 1.0:
+            array = array * 255.0
+        array = np.clip(array, 0.0, 255.0).round().astype(np.uint8)
+    return np.ascontiguousarray(array)
+
+
+def _recording_metadata_fields() -> tuple[str, ...]:
+    return (
+        "frames",
+        "actions",
+        "action_names",
+        "rewards",
+        "terminated",
+        "truncated",
+        "signals_json",
+        "task_ids",
+        "scenario_ids",
+        "emulator_state_ids",
+        "episode_metadata_json",
+    )
+
+
+def _string_array(values: Any) -> np.ndarray:
+    return np.asarray([str(value) for value in values], dtype=np.str_)
+
+
+def _unique_nonempty_strings(values: Any) -> list[str]:
+    unique: list[str] = []
+    for value in values:
+        text = str(value)
+        if not text or text in unique:
+            continue
+        unique.append(text)
+    return unique
+
+
+def _json_dumps_plain(value: Any) -> str:
+    return json.dumps(to_plain_data(value), sort_keys=True)
 
 
 def _tracking_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:

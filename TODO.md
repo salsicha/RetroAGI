@@ -487,7 +487,7 @@ and playable end target.
 - [x] Implement robust Full SMB resume so interrupted training can continue
       with the same task schedule, RNG streams, optimizer, recurrent-state
       expectations, and tracking destination.
-- [ ] Add Full SMB recording support for evaluation episodes, including frame
+- [x] Add Full SMB recording support for evaluation episodes, including frame
       arrays, actions, rewards, signals, task IDs, and optional video export.
 - [ ] Add `retroagi train --stage full-smb` with scratch and fine-tune modes.
 - [ ] Add `retroagi resume --stage full-smb` with checkpoint and optional output
