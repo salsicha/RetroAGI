@@ -134,11 +134,20 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --recording-path artifacts/full_smb/recording_manifest.npz
    retroagi play --game smb --stage full \
      --checkpoint data/full_smb/policy.pth \
+     --task-set fixed_benchmark \
+     --level 1-1 \
+     --frame-skip 4 \
+     --action-repeat 2 \
+     --render-mode human \
+     --deterministic-policy \
      --render \
-     --fps 30
+     --fps 30 \
+     --record-output artifacts/full_smb/play_manifest.npz
    retroagi play --game smb --stage full \
      --human \
-     --state Level1-1 \
+     --task-set smoke \
+     --level 1-1 \
+     --render-mode human \
      --render \
      --fps 30
    retroagi compare --game smb --stage full \
@@ -151,6 +160,11 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    aliases such as `block-smb` and `full-smb` remain accepted. Stage-specific
    options are forwarded to the selected implementation; the legacy
    `retroagi-block-smb` command remains available for Block SMB-only workflows.
+   Full SMB commands accept `--task-set`, `--task`, `--level`, `--state`,
+   `--scenario`, and `--frame-skip` to select repeatable task starts. Full SMB
+   play mode also accepts `--render-mode human|none`, `--action-repeat`,
+   `--deterministic-policy` or `--sampling-policy`, and `--record-output` for
+   the playback manifest.
    Full SMB policy training records its perception choice in every checkpoint:
    `--perception-mode freeze` reuses a frozen Full SMB ViT checkpoint,
    `fine_tune` includes trainable ViT parameters in the optimizer, and `replace`

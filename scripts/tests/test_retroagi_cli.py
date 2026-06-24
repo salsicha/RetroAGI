@@ -446,8 +446,20 @@ class TestRetroAGICLI(unittest.TestCase):
                     "data/full_smb/policy.pth",
                     "--steps",
                     "5",
+                    "--task-set",
+                    "fixed_benchmark",
+                    "--level",
+                    "1-1",
+                    "--frame-skip",
+                    "4",
+                    "--action-repeat",
+                    "2",
+                    "--render-mode",
+                    "none",
                     "--no-render",
-                    "--sample",
+                    "--sampling-policy",
+                    "--record-output",
+                    "artifacts/full_smb/play_manifest.npz",
                 ]
             )
 
@@ -459,8 +471,20 @@ class TestRetroAGICLI(unittest.TestCase):
                 "data/full_smb/policy.pth",
                 "--steps",
                 "5",
+                "--task-set",
+                "fixed_benchmark",
+                "--level",
+                "1-1",
+                "--frame-skip",
+                "4",
+                "--action-repeat",
+                "2",
+                "--render-mode",
+                "none",
                 "--no-render",
-                "--sample",
+                "--sampling-policy",
+                "--record-output",
+                "artifacts/full_smb/play_manifest.npz",
             ]
         )
 

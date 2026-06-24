@@ -1248,6 +1248,46 @@ class TestFullSMBTraining(unittest.TestCase):
             self.assertEqual(data["actions"].shape, (3,))
             self.assertEqual(data["action_names"].shape, (3,))
 
+    def test_playback_repeats_selected_actions(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=42,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            play_config = FullSMBPlayConfig(
+                max_steps=4,
+                action_repeat=2,
+                render=False,
+                fps=0.0,
+                interactive_controls=False,
+                human_control=True,
+                human_action_script=(int(SMB_ACTIONS[1]), int(SMB_ACTIONS[5])),
+            )
+
+            result = play_full_smb_policy(
+                None,
+                config=config,
+                play_config=play_config,
+                make_stage=tiny_stage,
+            )
+
+            self.assertEqual(result.steps, 4)
+            self.assertEqual(result.action_repeat, 2)
+            self.assertEqual(
+                result.actions,
+                (
+                    int(SMB_ACTIONS[1]),
+                    int(SMB_ACTIONS[1]),
+                    int(SMB_ACTIONS[5]),
+                    int(SMB_ACTIONS[5]),
+                ),
+            )
+
     def test_human_playback_runs_scripted_actions_without_policy(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -1647,6 +1687,88 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(play_config.sampling_temperature, 0.5)
         self.assertTrue(payload["recording"]["enabled"])
         self.assertEqual(payload["mean_return"], 3.0)
+
+    def test_play_cli_resolves_task_runtime_and_recording_options(self):
+        playback = full_smb_train_module.FullSMBPlayResult(
+            steps=1,
+            resets=1,
+            completed_episodes=0,
+            total_return=1.0,
+            episode_returns=(1.0,),
+            actions=(1,),
+            action_names=("RIGHT",),
+            deterministic_policy=True,
+            sampling_temperature=1.0,
+            render=False,
+            fps=30.0,
+            action_repeat=3,
+            recording={
+                "enabled": True,
+                "recording_dir": "artifacts/full_smb/play",
+                "recording_path": "artifacts/full_smb/play_manifest.npz",
+                "artifact_count": 0,
+                "artifacts": [],
+            },
+        )
+        with (
+            patch.object(
+                full_smb_train_module,
+                "load_full_smb_policy_checkpoint",
+                return_value=(object(), object(), {}),
+            ),
+            patch.object(
+                full_smb_train_module,
+                "policy_architecture_from_checkpoint",
+                return_value=(BASELINE_ARCHITECTURE_NAME, {"hidden_dim": 8}),
+            ),
+            patch.object(
+                full_smb_train_module,
+                "play_full_smb_policy",
+                return_value=playback,
+            ) as play,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "play",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--task-set",
+                    "fixed_benchmark",
+                    "--level",
+                    "1-2",
+                    "--frame-skip",
+                    "4",
+                    "--steps",
+                    "9",
+                    "--action-repeat",
+                    "3",
+                    "--render-mode",
+                    "none",
+                    "--deterministic-policy",
+                    "--record-dir",
+                    "artifacts/full_smb/play",
+                    "--record-output",
+                    "artifacts/full_smb/play_manifest.npz",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        config = play.call_args.kwargs["config"]
+        play_config = play.call_args.kwargs["play_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(config.task_set, "fixed_benchmark")
+        self.assertEqual(config.task_name, "benchmark_1_2_start")
+        self.assertEqual(config.level, "1-2")
+        self.assertEqual(config.emulator_state, "Level1-2")
+        self.assertEqual(config.frame_skip, 4)
+        self.assertEqual(config.recording_dir, Path("artifacts/full_smb/play"))
+        self.assertEqual(config.recording_path, Path("artifacts/full_smb/play_manifest.npz"))
+        self.assertEqual(play_config.max_steps, 9)
+        self.assertEqual(play_config.action_repeat, 3)
+        self.assertFalse(play_config.render)
+        self.assertTrue(play_config.deterministic_policy)
+        self.assertEqual(payload["action_repeat"], 3)
 
     def test_play_cli_human_mode_does_not_require_checkpoint(self):
         playback = full_smb_train_module.FullSMBPlayResult(

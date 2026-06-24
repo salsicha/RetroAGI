@@ -502,7 +502,7 @@ and playable end target.
 - [x] Add a human-control mode under `retroagi play --stage full-smb --human`
       for manual debugging of action mapping, reward signals, rendering, and
       save-state starts.
-- [ ] Add CLI options for selecting Full SMB task set, level/state, render mode,
+- [x] Add CLI options for selecting Full SMB task set, level/state, render mode,
       max steps, frame skip, action repeat, deterministic policy, and recording
       output.
 - [ ] Add a policy-inspection overlay for play mode showing action name,

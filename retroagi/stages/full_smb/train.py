@@ -40,6 +40,7 @@ from retroagi.stages.full_smb.adapter import (
     DEFAULT_FULL_SMB_CONTENT,
     FULL_SMB_SPEC,
     FullSMBEnvConfig,
+    FullSMBObservationConfig,
     FullSMBRewardConfig,
     FullSMBStage,
 )
@@ -47,6 +48,11 @@ from retroagi.stages.full_smb.success import (
     FIXED_FULL_SMB_SUCCESS_THRESHOLDS,
     evaluate_fixed_full_smb_success_thresholds,
     summarize_fixed_full_smb_success_metrics,
+)
+from retroagi.stages.full_smb.tasks import (
+    FULL_SMB_TASK_SET_NAMES,
+    FullSMBTaskSpec,
+    full_smb_task_catalog,
 )
 from retroagi.stages.full_smb.transfer import (
     FULL_SMB_TRANSFER_CHECKPOINT_KIND,
@@ -152,6 +158,7 @@ _FULL_SMB_FIXED_LEVEL_TASK_NAMES = {
     "level2-1": "benchmark_2_1_start",
     "2-1": "benchmark_2_1_start",
 }
+_FULL_SMB_PLAY_RENDER_MODES = ("human", "none")
 
 
 def _validate_full_smb_action_id(action: Any) -> int:
@@ -258,8 +265,12 @@ class FullSMBTrainingConfig:
     perception_mode: Optional[str] = None
     freeze_vision: bool = True
     game_id: str = DEFAULT_FULL_SMB_CONTENT.game
+    task_set: Optional[str] = None
+    task_name: Optional[str] = None
+    level: Optional[str] = None
     emulator_state: Optional[str] = None
     scenario: Optional[str] = None
+    frame_skip: Optional[int] = None
     save_checkpoints: bool = False
     output_summary: Optional[Path] = None
     log_path: Optional[Path] = None
@@ -329,6 +340,16 @@ class FullSMBTrainingConfig:
             raise ValueError("tracking_project must be non-empty")
         if not str(self.game_id).strip():
             raise ValueError("game_id must be non-empty")
+        if self.task_set is not None and self.task_set not in FULL_SMB_TASK_SET_NAMES:
+            raise ValueError(f"task_set must be one of {FULL_SMB_TASK_SET_NAMES}")
+        for name in ("task_name", "level", "emulator_state", "scenario"):
+            value = getattr(self, name)
+            if value is not None and not str(value).strip():
+                raise ValueError(f"{name} must be non-empty when provided")
+        if self.frame_skip is not None:
+            if int(self.frame_skip) <= 0:
+                raise ValueError("frame_skip must be positive")
+            object.__setattr__(self, "frame_skip", int(self.frame_skip))
         for path_name in (
             "checkpoint_path",
             "resume_path",
@@ -402,6 +423,7 @@ class FullSMBPlayConfig:
     """Runtime controls for playing back a saved Full SMB policy."""
 
     max_steps: int = 1_000
+    action_repeat: int = 1
     render: bool = True
     fps: float = 30.0
     deterministic_policy: bool = True
@@ -417,6 +439,10 @@ class FullSMBPlayConfig:
     def __post_init__(self) -> None:
         if int(self.max_steps) < 0:
             raise ValueError("max_steps must be non-negative")
+        if int(self.action_repeat) <= 0:
+            raise ValueError("action_repeat must be positive")
+        object.__setattr__(self, "max_steps", int(self.max_steps))
+        object.__setattr__(self, "action_repeat", int(self.action_repeat))
         if float(self.fps) < 0.0:
             raise ValueError("fps must be non-negative")
         if float(self.sampling_temperature) <= 0.0:
@@ -450,6 +476,7 @@ class FullSMBPlayResult:
     sampling_temperature: float
     render: bool
     fps: float
+    action_repeat: int = 1
     control_mode: str = "policy"
     quit_requested: bool = False
     recording: Mapping[str, Any] = field(default_factory=_empty_full_smb_recording_manifest)
@@ -1079,65 +1106,73 @@ def play_full_smb_policy(
                     temperature=play_config.sampling_temperature,
                 )
                 next_world_model_state = forward.next_world_model_state
-            observation, reward, terminated, truncated, info = stage.step(action)
-            final_info = info
-            if recording_targets["enabled"]:
-                _append_full_smb_episode_recording_step(
-                    episode_recording,
-                    observation=observation,
-                    action=action,
-                    reward=float(reward),
+            repeated_steps = min(
+                play_config.action_repeat,
+                play_config.max_steps - len(actions),
+            )
+            for repeat_index in range(repeated_steps):
+                observation, reward, terminated, truncated, info = stage.step(action)
+                final_info = info
+                if recording_targets["enabled"]:
+                    _append_full_smb_episode_recording_step(
+                        episode_recording,
+                        observation=observation,
+                        action=action,
+                        reward=float(reward),
+                        terminated=terminated,
+                        truncated=truncated,
+                        info=info,
+                        stage=stage,
+                    )
+                actions.append(action)
+                action_names.append(SMB_ACTIONS[action].name)
+                total_return += float(reward)
+                episode_return += float(reward)
+                _render_full_smb_stage(stage, enabled=play_config.render)
+                boundary = _full_smb_rollout_boundary(
                     terminated=terminated,
                     truncated=truncated,
                     info=info,
-                    stage=stage,
                 )
-            actions.append(action)
-            action_names.append(SMB_ACTIONS[action].name)
-            total_return += float(reward)
-            episode_return += float(reward)
-            _render_full_smb_stage(stage, enabled=play_config.render)
-            boundary = _full_smb_rollout_boundary(
-                terminated=terminated,
-                truncated=truncated,
-                info=info,
-            )
-            if boundary.reset_recurrent_state:
-                world_model_state = None
-            elif next_world_model_state is not None:
-                world_model_state = next_world_model_state.detach()
-            else:
-                world_model_state = None
+                if boundary.reset_recurrent_state:
+                    world_model_state = None
+                elif next_world_model_state is not None and repeat_index == 0:
+                    world_model_state = next_world_model_state.detach()
+                else:
+                    world_model_state = None
 
-            if terminated or truncated:
-                completed_episodes += 1
-                episode_returns.append(float(episode_return))
-                if recording_targets["enabled"]:
-                    _finish_full_smb_play_recording_episode(
-                        episode_recording,
-                        recording_targets,
-                        recording_artifacts,
-                        episode_return=episode_return,
+                if terminated or truncated:
+                    completed_episodes += 1
+                    episode_returns.append(float(episode_return))
+                    if recording_targets["enabled"]:
+                        _finish_full_smb_play_recording_episode(
+                            episode_recording,
+                            recording_targets,
+                            recording_artifacts,
+                            episode_return=episode_return,
+                        )
+                    episode_open = False
+                    if not play_config.reset_on_done or len(actions) >= play_config.max_steps:
+                        episode_recording = None
+                        break
+                    episode_index += 1
+                    episode_seed = config.seed + episode_index
+                    observation = stage.reset(seed=episode_seed)
+                    resets += 1
+                    episode_return = 0.0
+                    episode_recording = _start_full_smb_episode_recording(
+                        episode_index=episode_index,
+                        seed=episode_seed,
+                        observation=observation,
+                        info=stage.last_info,
+                        stage=stage,
                     )
-                episode_open = False
-                if not play_config.reset_on_done or len(actions) >= play_config.max_steps:
-                    episode_recording = None
+                    episode_open = True
+                    _render_full_smb_stage(stage, enabled=play_config.render)
                     break
-                episode_index += 1
-                episode_seed = config.seed + episode_index
-                observation = stage.reset(seed=episode_seed)
-                resets += 1
-                episode_return = 0.0
-                episode_recording = _start_full_smb_episode_recording(
-                    episode_index=episode_index,
-                    seed=episode_seed,
-                    observation=observation,
-                    info=stage.last_info,
-                    stage=stage,
-                )
-                episode_open = True
-                _render_full_smb_stage(stage, enabled=play_config.render)
-            _sleep_full_smb_play_frame(play_config.fps)
+                _sleep_full_smb_play_frame(play_config.fps)
+            if play_config.action_repeat > 1 and not (terminated or truncated):
+                world_model_state = None
         if episode_open:
             if episode_return or not episode_returns:
                 episode_returns.append(float(episode_return))
@@ -1164,6 +1199,7 @@ def play_full_smb_policy(
             sampling_temperature=play_config.sampling_temperature,
             render=play_config.render,
             fps=play_config.fps,
+            action_repeat=play_config.action_repeat,
             control_mode=control_mode,
             quit_requested=quit_requested,
             recording=recording_manifest,
@@ -2042,6 +2078,9 @@ def _make_stage(
 ) -> FullSMBStage:
     if make_stage is not None:
         return make_stage(vision)
+    observation_config = FullSMBObservationConfig()
+    if config.frame_skip is not None:
+        observation_config = FullSMBObservationConfig(frame_skip=config.frame_skip)
     return FullSMBStage(
         env_config=FullSMBEnvConfig(
             game=config.game_id,
@@ -2049,6 +2088,7 @@ def _make_stage(
             scenario=config.scenario,
         ),
         vision=vision,
+        observation_config=observation_config,
         reward_config=config.reward_config,
     )
 
@@ -3253,8 +3293,103 @@ def _fixed_full_smb_task_name(stage: FullSMBStage, info: Mapping[str, Any]) -> O
 def _fixed_full_smb_task_name_from_level(value: Any) -> Optional[str]:
     if value is None:
         return None
-    key = str(value).strip().lower().replace("_", "-").replace(" ", "")
+    key = _full_smb_level_selector_key(value)
     return _FULL_SMB_FIXED_LEVEL_TASK_NAMES.get(key)
+
+
+def _full_smb_level_selector_key(value: Any) -> str:
+    return str(value).strip().lower().replace("_", "-").replace(" ", "")
+
+
+def _full_smb_state_from_level(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    key = _full_smb_level_selector_key(text)
+    suffix = key[len("level") :] if key.startswith("level") else key
+    if suffix and suffix[0].isdigit():
+        return f"Level{suffix}"
+    return text
+
+
+def _full_smb_task_matches_level(task: FullSMBTaskSpec, level: str) -> bool:
+    key = _full_smb_level_selector_key(level)
+    state = task.start.state
+    state_key = _full_smb_level_selector_key(state) if state is not None else ""
+    canonical_state = _full_smb_state_from_level(level)
+    canonical_key = (
+        _full_smb_level_selector_key(canonical_state) if canonical_state is not None else ""
+    )
+    return state_key in {key, canonical_key}
+
+
+def _select_full_smb_task(
+    *,
+    task_set: Optional[str],
+    task_name: Optional[str],
+    level: Optional[str],
+) -> Optional[FullSMBTaskSpec]:
+    catalog = full_smb_task_catalog()
+    if task_name is not None:
+        try:
+            task = catalog.task(task_name)
+        except KeyError as exc:
+            raise ValueError(f"unknown Full SMB task {task_name!r}") from exc
+        if task_set is not None and task.task_set != task_set:
+            raise ValueError(
+                f"Full SMB task {task_name!r} belongs to task set "
+                f"{task.task_set!r}, not {task_set!r}"
+            )
+        if level is not None and not _full_smb_task_matches_level(task, level):
+            raise ValueError(f"Full SMB task {task_name!r} does not start at level {level!r}")
+        return task
+    if level is not None:
+        if task_set is None:
+            task_name_for_level = _fixed_full_smb_task_name_from_level(level)
+            if task_name_for_level is not None:
+                return catalog.task(task_name_for_level)
+        candidates = catalog.tasks_for_set(task_set) if task_set is not None else catalog.tasks
+        for task in candidates:
+            if _full_smb_task_matches_level(task, level):
+                return task
+        if task_set is not None:
+            raise ValueError(f"Full SMB task set {task_set!r} has no level {level!r}")
+        return None
+    if task_set is not None:
+        tasks = catalog.tasks_for_set(task_set)
+        if not tasks:
+            raise ValueError(f"Full SMB task set {task_set!r} has no tasks")
+        return tasks[0]
+    return None
+
+
+def _resolve_full_smb_task_selection(args: argparse.Namespace) -> dict[str, Optional[str]]:
+    task_set = getattr(args, "task_set", None)
+    task_name = getattr(args, "task_name", None)
+    level = getattr(args, "level", None)
+    emulator_state = getattr(args, "emulator_state", None)
+    scenario = getattr(args, "scenario", None)
+    task = _select_full_smb_task(
+        task_set=task_set,
+        task_name=task_name,
+        level=level,
+    )
+    if task is not None:
+        task_set = task.task_set if task_set is None else task_set
+        task_name = task.name
+        level = task.start.state if level is None else level
+        emulator_state = task.start.state if emulator_state is None else emulator_state
+    elif level is not None and emulator_state is None:
+        emulator_state = _full_smb_state_from_level(level)
+    return {
+        "task_set": task_set,
+        "task_name": task_name,
+        "level": level,
+        "emulator_state": emulator_state,
+        "scenario": scenario,
+    }
 
 
 def _full_smb_signal_source(info: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -3408,9 +3543,20 @@ def _add_recording_args(parser: argparse.ArgumentParser, *, use_defaults: bool) 
     )
     parser.add_argument(
         "--recording-path",
+        "--record-output",
         type=Path,
         default=DEFAULT_FULL_SMB_RECORDING_MANIFEST if use_defaults else None,
     )
+
+
+def _add_full_smb_runtime_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--game-id", default=DEFAULT_FULL_SMB_CONTENT.game)
+    parser.add_argument("--task-set", choices=FULL_SMB_TASK_SET_NAMES)
+    parser.add_argument("--task", dest="task_name")
+    parser.add_argument("--level")
+    parser.add_argument("--state", dest="emulator_state")
+    parser.add_argument("--scenario")
+    parser.add_argument("--frame-skip", type=int)
 
 
 def _add_play_args(parser: argparse.ArgumentParser) -> None:
@@ -3420,13 +3566,25 @@ def _add_play_args(parser: argparse.ArgumentParser) -> None:
         help="use manual human actions instead of loading a policy checkpoint",
     )
     parser.add_argument("--steps", "--max-steps", dest="play_max_steps", type=int, default=1_000)
+    parser.add_argument("--action-repeat", type=int, default=1)
     parser.set_defaults(play_render=True)
     parser.add_argument("--render", action="store_true", dest="play_render")
     parser.add_argument("--no-render", action="store_false", dest="play_render")
+    parser.add_argument("--render-mode", choices=_FULL_SMB_PLAY_RENDER_MODES)
     parser.add_argument("--fps", type=float, default=30.0)
-    parser.add_argument(
-        "--sample",
+    parser.set_defaults(policy_deterministic=True)
+    policy_mode = parser.add_mutually_exclusive_group()
+    policy_mode.add_argument(
+        "--deterministic-policy",
         action="store_true",
+        dest="policy_deterministic",
+        help="take the highest-probability policy action at each decision point",
+    )
+    policy_mode.add_argument(
+        "--sample",
+        "--sampling-policy",
+        action="store_false",
+        dest="policy_deterministic",
         help="sample actions from the policy distribution instead of taking argmax",
     )
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -3456,9 +3614,6 @@ def _add_play_args(parser: argparse.ArgumentParser) -> None:
         default=[],
         help="scripted human action for non-interactive debugging; may be repeated",
     )
-    parser.add_argument("--game-id", default=DEFAULT_FULL_SMB_CONTENT.game)
-    parser.add_argument("--state", dest="emulator_state")
-    parser.add_argument("--scenario")
     _add_recording_args(parser, use_defaults=False)
 
 
@@ -3614,6 +3769,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tracking-project", default="retroagi")
     parser.add_argument("--tracking-run-name")
     parser.add_argument("--tracking-mode")
+    _add_full_smb_runtime_args(parser)
 
 
 def _add_reward_args(parser: argparse.ArgumentParser) -> None:
@@ -3635,11 +3791,15 @@ def _reward_config_from_args(args: argparse.Namespace) -> FullSMBRewardConfig:
 
 
 def _play_config_from_args(args: argparse.Namespace) -> FullSMBPlayConfig:
+    render = bool(args.play_render)
+    if args.render_mode is not None:
+        render = args.render_mode != "none"
     return FullSMBPlayConfig(
         max_steps=args.play_max_steps,
-        render=args.play_render,
+        action_repeat=args.action_repeat,
+        render=render,
         fps=args.fps,
-        deterministic_policy=not args.sample,
+        deterministic_policy=bool(args.policy_deterministic),
         sampling_temperature=args.temperature,
         reset_on_done=args.reset_on_done,
         pause_at_start=args.pause_at_start,
@@ -3676,6 +3836,7 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
     if getattr(args, "record", False) and recording_dir is None and recording_path is None:
         recording_dir = DEFAULT_FULL_SMB_RECORDING_DIR
         recording_path = DEFAULT_FULL_SMB_RECORDING_MANIFEST
+    task_selection = _resolve_full_smb_task_selection(args)
     return FullSMBTrainingConfig(
         seed=args.seed,
         training_mode=getattr(args, "training_mode", FULL_SMB_TRAINING_MODE_AUTO),
@@ -3723,8 +3884,12 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         perception_mode=perception_mode,
         freeze_vision=not args.fine_tune_vision,
         game_id=getattr(args, "game_id", DEFAULT_FULL_SMB_CONTENT.game),
-        emulator_state=getattr(args, "emulator_state", None),
-        scenario=getattr(args, "scenario", None),
+        task_set=task_selection["task_set"],
+        task_name=task_selection["task_name"],
+        level=task_selection["level"],
+        emulator_state=task_selection["emulator_state"],
+        scenario=task_selection["scenario"],
+        frame_skip=getattr(args, "frame_skip", None),
         save_checkpoints=(
             is_resume_command
             or getattr(args, "save_checkpoints", False)

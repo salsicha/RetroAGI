@@ -780,18 +780,28 @@ Play the saved policy locally with rendering and optional playback artifacts:
 ```bash
 retroagi play --game smb --stage full \
   --checkpoint data/full_smb/policy.pth \
+  --task-set fixed_benchmark \
+  --level 1-1 \
+  --frame-skip 4 \
   --steps 1000 \
-  --render \
+  --action-repeat 2 \
+  --render-mode human \
+  --deterministic-policy \
   --fps 30 \
   --record \
   --record-dir artifacts/full_smb/recordings \
-  --recording-path artifacts/full_smb/play_manifest.npz \
+  --record-output artifacts/full_smb/play_manifest.npz \
   --output-summary artifacts/full_smb/play_summary.json
 ```
 
-Use `--no-render` for headless playback, `--sample --temperature <value>` for
-stochastic policy sampling, and `p`, `r`, or `q` in an interactive terminal to
-pause/resume, reset, or quit playback.
+Use `--render-mode none` or `--no-render` for headless playback,
+`--sampling-policy --temperature <value>` for stochastic policy sampling, and
+`p`, `r`, or `q` in an interactive terminal to pause/resume, reset, or quit
+playback. `--task-set`, `--task`, `--level`, `--state`, and `--scenario`
+select the Full SMB start; an explicit `--state` overrides the catalog task
+start while still recording the selected task metadata in the resolved config.
+`--frame-skip` configures emulator frame preprocessing and `--action-repeat`
+holds each selected play action for multiple executed steps.
 
 For manual action-mapping and reward-signal debugging, run human mode without a
 policy checkpoint:
@@ -799,10 +809,11 @@ policy checkpoint:
 ```bash
 retroagi play --game smb --stage full \
   --human \
-  --state Level1-1 \
+  --task-set smoke \
+  --level 1-1 \
   --scenario debug \
   --steps 1000 \
-  --render \
+  --render-mode human \
   --fps 30
 ```
 

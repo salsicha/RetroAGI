@@ -46,6 +46,32 @@ local save-state recipes are documented in
 [full-smb-save-states.md](full-smb-save-states.md). The repository commits the
 recipes and expected paths, not ROM-derived emulator state bytes.
 
+## CLI Selection
+
+Full SMB train, evaluate, record, and play commands accept the same task-start
+selectors:
+
+```bash
+retroagi play --game smb --stage full \
+  --checkpoint data/full_smb/policy.pth \
+  --task-set fixed_benchmark \
+  --level 1-1 \
+  --frame-skip 4 \
+  --steps 1000 \
+  --action-repeat 2 \
+  --render-mode human \
+  --deterministic-policy \
+  --record-output artifacts/full_smb/play_manifest.npz
+```
+
+Use `--task <name>` for an exact catalog task, `--task-set <set>` for the
+first task in a set, or `--task-set <set> --level <world-stage>` for the task
+in that set matching a stable-retro level start. Without `--task-set`, level
+aliases such as `1-1`, `1-2`, and `2-1` resolve to the fixed benchmark starts.
+Use `--state Level1-1` when a raw stable-retro state should override the
+catalog start, and `--scenario <name>` when a backend scenario file should be
+loaded.
+
 ## Catalog Summary
 
 | Name | Task Set | Split | Start | Seed | Episodes | Max Steps | Goal |
