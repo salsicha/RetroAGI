@@ -524,7 +524,7 @@ and playable end target.
       settings for Full SMB training and play.
 - [x] Update operations and reproducibility docs with Full SMB train, resume,
       evaluate, record, play, and comparison commands.
-- [ ] Produce one known-good Full SMB policy artifact or documented benchmark
+- [x] Produce one known-good Full SMB policy artifact or documented benchmark
       run that can be loaded, evaluated, recorded, and played locally.
 
 **Exit criteria:** a supported local setup can train or fine-tune a Full SMB

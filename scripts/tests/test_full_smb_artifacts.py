@@ -1,14 +1,25 @@
 """Tests for Full SMB run artifact layout helpers."""
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from retroagi.stages.full_smb import (
+    DEFAULT_FULL_SMB_DOCUMENTED_BENCHMARK_RUN_NAME,
     FULL_SMB_ARTIFACT_LAYOUT_SCHEMA_VERSION,
+    FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_ARTIFACTS,
+    FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_COMMANDS,
     FullSMBArtifactLayout,
     full_smb_artifact_layout,
+    full_smb_documented_benchmark_manifest,
+    validate_full_smb_documented_benchmark_manifest,
 )
+
+DOCUMENTED_BENCHMARK_MANIFEST = Path(
+    "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json"
+)
+DOCUMENTED_BENCHMARK_RUNBOOK = Path("artifacts/full_smb/documented_benchmark_seed0/RUN.md")
 
 
 class TestFullSMBArtifacts(unittest.TestCase):
@@ -31,6 +42,10 @@ class TestFullSMBArtifacts(unittest.TestCase):
             },
         )
         files = layout.files()
+        self.assertEqual(
+            files["environment_check"],
+            Path("artifacts/full_smb/baseline_seed0/env_check.json"),
+        )
         self.assertEqual(
             files["train_summary"],
             Path("artifacts/full_smb/baseline_seed0/summaries/train_summary.json"),
@@ -58,6 +73,10 @@ class TestFullSMBArtifacts(unittest.TestCase):
         self.assertEqual(
             files["policy_checkpoint"],
             Path("artifacts/full_smb/baseline_seed0/checkpoints/policy.pth"),
+        )
+        self.assertEqual(
+            files["resumed_policy_checkpoint"],
+            Path("artifacts/full_smb/baseline_seed0/checkpoints/resumed_policy.pth"),
         )
 
     def test_layout_manifest_is_serializable(self):
@@ -88,6 +107,61 @@ class TestFullSMBArtifacts(unittest.TestCase):
             with self.subTest(run_name=run_name):
                 with self.assertRaisesRegex(ValueError, "run_name"):
                     FullSMBArtifactLayout(run_name)
+
+    def test_documented_benchmark_manifest_declares_local_replay_contract(self):
+        manifest = full_smb_documented_benchmark_manifest()
+
+        validate_full_smb_documented_benchmark_manifest(manifest)
+        self.assertEqual(manifest["run_name"], DEFAULT_FULL_SMB_DOCUMENTED_BENCHMARK_RUN_NAME)
+        self.assertEqual(
+            set(manifest["required_commands"]), set(FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_COMMANDS)
+        )
+        self.assertEqual(
+            set(manifest["required_artifacts"]),
+            set(FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_ARTIFACTS),
+        )
+        self.assertFalse(manifest["rom_bytes_committed"])
+        self.assertFalse(manifest["checkpoint_bytes_committed"])
+        self.assertIn(
+            "retroagi evaluate --game smb --stage full", manifest["required_commands"]["evaluate"]
+        )
+        self.assertIn(
+            "retroagi record --game smb --stage full", manifest["required_commands"]["record"]
+        )
+        self.assertIn(
+            "retroagi play --game smb --stage full", manifest["required_commands"]["play"]
+        )
+        self.assertEqual(
+            manifest["required_artifacts"]["policy_checkpoint"],
+            "artifacts/full_smb/documented_benchmark_seed0/checkpoints/policy.pth",
+        )
+
+    def test_committed_documented_benchmark_artifact_is_valid(self):
+        manifest = json.loads(DOCUMENTED_BENCHMARK_MANIFEST.read_text(encoding="utf-8"))
+        canonical = full_smb_documented_benchmark_manifest()
+
+        validate_full_smb_documented_benchmark_manifest(manifest)
+        self.assertEqual(manifest, canonical)
+
+        runbook = DOCUMENTED_BENCHMARK_RUNBOOK.read_text(encoding="utf-8")
+        for term in (
+            "Documented Full SMB Benchmark Run",
+            "ROM bytes committed: `false`",
+            "Checkpoint bytes committed: `false`",
+            "retroagi evaluate --game smb --stage full",
+            "retroagi record --game smb --stage full",
+            "retroagi play --game smb --stage full",
+            "success_thresholds_met: true",
+            "action_agreement",
+        ):
+            self.assertIn(term, runbook)
+
+    def test_documented_benchmark_manifest_rejects_missing_commands(self):
+        manifest = full_smb_documented_benchmark_manifest()
+        del manifest["required_commands"]["play"]
+
+        with self.assertRaisesRegex(ValueError, "missing commands"):
+            validate_full_smb_documented_benchmark_manifest(manifest)
 
 
 if __name__ == "__main__":

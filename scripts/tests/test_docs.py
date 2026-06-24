@@ -93,6 +93,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi compare --game smb --stage full",
             "artifacts/full_smb/<run>/checkpoints/resumed_policy.pth",
             "artifacts/full_smb/<run>/recordings/play_manifest.npz",
+            "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
+            "artifacts/full_smb/documented_benchmark_seed0/RUN.md",
         ):
             self.assertIn(term, text)
 
@@ -110,6 +112,10 @@ class TestOperationsDocumentation(unittest.TestCase):
         readme = README.read_text(encoding="utf-8")
 
         self.assertIn("[operations reference](docs/operations.md)", readme)
+        self.assertIn(
+            "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
+            readme,
+        )
 
     def test_reproducibility_procedure_starts_from_clean_checkout(self):
         text = REPRODUCIBILITY_DOC.read_text(encoding="utf-8")
@@ -162,6 +168,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "data/block_smb/policy.pth",
             "data/vit/full_smb_vit.pth",
             "data/full_smb/transferred_policy.pth",
+            "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
+            "artifacts/full_smb/documented_benchmark_seed0/RUN.md",
             "artifacts/full_smb/baseline_seed0/artifact_layout.json",
             "artifacts/full_smb/baseline_seed0/summaries/throughput_benchmark.json",
             "artifacts/full_smb/baseline_seed0/logs/train.jsonl",

@@ -333,6 +333,7 @@ the resolved paths.
 | Path | Contents |
 | --- | --- |
 | `artifacts/full_smb/<run>/content.json` | Local content metadata, game id, checksum filename/hash, and provenance notes. Do not include ROM bytes. |
+| `artifacts/full_smb/<run>/env_check.json` | Full SMB backend/content capability check from `retroagi check-env`. |
 | `artifacts/full_smb/<run>/artifact_layout.json` | Serialized `FullSMBArtifactLayout.to_manifest()` output for the preserved run. |
 | `artifacts/full_smb/<run>/summaries/throughput_benchmark.json` | Local emulator throughput benchmark with step rate, emulator-frame rate, selected device, and CPU/CUDA/MPS runtime recommendations. |
 | `artifacts/full_smb/<run>/summaries/train_summary.json` | Full SMB train or resume summary from `--output-summary`. |
@@ -386,6 +387,12 @@ checkpoint size, and tracker backends all change throughput.
 
 Use this command order when preserving a trainable and playable Full SMB run.
 Create the run layout first so every later command writes to stable paths:
+
+The checked-in documented benchmark contract is
+`artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json`, with
+the matching runbook at `artifacts/full_smb/documented_benchmark_seed0/RUN.md`.
+It intentionally commits only commands, paths, and qualification gates because
+Full SMB ROM bytes and emulator-trained checkpoints are local-only artifacts.
 
 ```bash
 python - <<'PY'
@@ -540,7 +547,10 @@ retroagi compare --game smb --stage full \
 The minimum preserved evidence for this workflow is the transfer checkpoint and
 sidecar, policy checkpoint and sidecar, train/resume summaries, structured log,
 evaluation report, recording summary and manifests, play summary, comparison
-report, throughput benchmark, and content metadata.
+report, throughput benchmark, and content metadata. The documented benchmark
+qualifies only after the local `evaluation.json` has `success_thresholds_met`
+set to true, every fixed task has `threshold_met` set to true, the recording
+and play manifests exist, and the comparison report includes `action_agreement`.
 
 ## Full SMB Adapter And Transfer
 

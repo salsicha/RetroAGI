@@ -21,9 +21,15 @@ from .adapter import (
 from .artifacts import (
     DEFAULT_FULL_SMB_ARTIFACT_ROOT,
     DEFAULT_FULL_SMB_ARTIFACT_RUN_NAME,
+    DEFAULT_FULL_SMB_DOCUMENTED_BENCHMARK_RUN_NAME,
     FULL_SMB_ARTIFACT_LAYOUT_SCHEMA_VERSION,
+    FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_ARTIFACTS,
+    FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_COMMANDS,
+    FULL_SMB_DOCUMENTED_BENCHMARK_SCHEMA_VERSION,
     FullSMBArtifactLayout,
     full_smb_artifact_layout,
+    full_smb_documented_benchmark_manifest,
+    validate_full_smb_documented_benchmark_manifest,
 )
 from .benchmark import (
     FullSMBThroughputBenchmarkConfig,
@@ -124,6 +130,9 @@ from .vision import (
 __all__ = [
     "FULL_SMB_GAME",
     "FULL_SMB_ARTIFACT_LAYOUT_SCHEMA_VERSION",
+    "FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_ARTIFACTS",
+    "FULL_SMB_DOCUMENTED_BENCHMARK_REQUIRED_COMMANDS",
+    "FULL_SMB_DOCUMENTED_BENCHMARK_SCHEMA_VERSION",
     "FULL_SMB_PERCEPTION_FINE_TUNE",
     "FULL_SMB_PERCEPTION_FREEZE",
     "FULL_SMB_PERCEPTION_MODES",
@@ -145,6 +154,7 @@ __all__ = [
     "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
     "DEFAULT_FULL_SMB_ARTIFACT_ROOT",
     "DEFAULT_FULL_SMB_ARTIFACT_RUN_NAME",
+    "DEFAULT_FULL_SMB_DOCUMENTED_BENCHMARK_RUN_NAME",
     "FullSMBEmulatorState",
     "FullSMBEnvConfig",
     "FullSMBEnvironmentCapabilityResult",
@@ -202,6 +212,7 @@ __all__ = [
     "extract_full_smb_signals",
     "fixed_full_smb_success_threshold",
     "full_smb_artifact_layout",
+    "full_smb_documented_benchmark_manifest",
     "full_smb_save_state_plan",
     "full_smb_task_catalog",
     "load_full_smb_policy_checkpoint",
@@ -219,5 +230,6 @@ __all__ = [
     "save_full_smb_throughput_benchmark",
     "summarize_fixed_full_smb_success_metrics",
     "train_full_smb_policy",
+    "validate_full_smb_documented_benchmark_manifest",
     "write_full_smb_save_state_plan",
 ]

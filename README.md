@@ -58,7 +58,8 @@ actor/world-model/critic flow.
   optional TensorBoard or W&B tracking.
 - **Full SMB** has the asset-mock ViT bootstrapping rung, a stable-retro stage
   adapter, headless smoke evaluation, Block SMB policy transfer, continued Full
-  SMB training, and transfer-vs-scratch comparison tooling.
+  SMB training, transfer-vs-scratch comparison tooling, and a documented local
+  benchmark run at `artifacts/full_smb/documented_benchmark_seed0/`.
 - **Operations** are covered by CI, native install instructions, stage
   operations guidance, and a clean-checkout reproducibility procedure.
 
@@ -80,6 +81,9 @@ The [Block SMB success thresholds](docs/block-smb-success-thresholds.md) define
 the deterministic fixed-scenario bar for considering a policy known-good.
 The current known-good baseline is a scripted policy artifact at
 `artifacts/block_smb/known_good_scripted_seed20260622/`.
+Full SMB cannot commit ROM-derived emulator artifacts, so its checked-in
+counterpart is the documented local benchmark manifest at
+`artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json`.
 
 The [operations reference](docs/operations.md) lists hardware expectations,
 runtime targets, metrics, and artifact locations for each stage.

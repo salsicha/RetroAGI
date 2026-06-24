@@ -928,6 +928,8 @@ is trainable.
 
 Expected evidence:
 
+- `artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json`,
+- `artifacts/full_smb/documented_benchmark_seed0/RUN.md`,
 - `data/full_smb/transferred_policy.pth`,
 - `data/full_smb/transferred_policy.json`,
 - `data/full_smb/policy.pth` with `config.perception.mode`,
@@ -956,6 +958,11 @@ Expected evidence:
 - comparison fields including `action_agreement`, action histograms,
   mean entropies, mean margins, collection reward, resets, terminations, and
   truncations.
+
+The checked-in `documented_benchmark_seed0` manifest is the Full SMB benchmark
+contract that can be replayed on a local legal ROM setup. It does not commit
+ROM bytes or checkpoint bytes; it names the required local artifacts and gates
+for a run that can be loaded, evaluated, recorded, and played locally.
 
 ## 13. Preserve The Run
 
