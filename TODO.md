@@ -515,7 +515,7 @@ and playable end target.
       comparison reports, and tracking outputs.
 - [x] Add Full SMB CPU smoke tests using minimal steps and mocked or tiny backend
       paths where real emulator content is unavailable in CI.
-- [ ] Add local integration tests, skipped unless content is available, that run
+- [x] Add local integration tests, skipped unless content is available, that run
       real stable-retro reset/step/evaluate/play smoke paths.
 - [ ] Add tests for Full SMB checkpoint compatibility, resume behavior,
       transfer-to-train loading, fixed-task threshold diagnostics, and play-mode
