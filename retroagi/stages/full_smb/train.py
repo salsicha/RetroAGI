@@ -6,7 +6,7 @@ import argparse
 import json
 import math
 import random
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -16,6 +16,7 @@ import torch.optim as optim
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
+    CHECKPOINT_SCHEMA_KEY,
     SMB_ACTIONS,
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
@@ -34,6 +35,7 @@ from retroagi.stages.block_smb.train import (
     BLOCK_SMB_MODEL_NAME,
 )
 from retroagi.stages.full_smb.adapter import (
+    DEFAULT_FULL_SMB_CONTENT,
     FULL_SMB_SPEC,
     FullSMBRewardConfig,
     FullSMBStage,
@@ -486,6 +488,7 @@ def train_full_smb_policy(
             ),
         )
         stage = _make_stage(make_stage, vision, config)
+        backend_metadata = _full_smb_backend_metadata(stage, config)
         try:
             model.train()
             _set_perception_training_mode(vision, config)
@@ -609,6 +612,7 @@ def train_full_smb_policy(
             training_source=training_source,
             rollouts=rollouts,
             evaluations=evaluations,
+            backend_metadata=backend_metadata,
         )
         tracker.log_metrics(
             checkpoint["metrics"],
@@ -742,11 +746,19 @@ def build_full_smb_policy_checkpoint(
     training_source: Optional[Mapping[str, Any]] = None,
     rollouts: Optional[list[FullSMBRolloutStorage] | tuple[FullSMBRolloutStorage, ...]] = None,
     evaluations: Optional[list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]] = None,
+    backend_metadata: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     perception = _perception_checkpoint_metadata(config, vision)
     rollout = _rollout_metadata(config)
     rollout_storage = _rollout_storage_metadata(rollouts or ())
     evaluation = _evaluation_metadata(config, evaluations or ())
+    task_curriculum = _task_curriculum_metadata(
+        config,
+        epoch=epoch,
+        global_step=global_step,
+        rollouts=rollouts or (),
+    )
+    backend = dict(backend_metadata or _full_smb_backend_metadata(None, config))
     loss_weights = _loss_weight_metadata(config)
     safety = _safety_metadata(config)
     recording = _recording_metadata(config)
@@ -771,6 +783,7 @@ def build_full_smb_policy_checkpoint(
     }
     if _perception_optimizer_enabled(config) and vision is not None:
         states["perception"] = vision.state_dict()
+    rng_state = _rng_state_metadata(config, states)
     return build_checkpoint(
         stage=FULL_SMB_SPEC.name,
         model_name=FULL_SMB_POLICY_MODEL_NAME,
@@ -791,6 +804,9 @@ def build_full_smb_policy_checkpoint(
             "stage_batch_contract": stage_batch_contract,
             "rollout_storage": rollout_storage,
             "evaluation": evaluation,
+            "task_curriculum": task_curriculum,
+            "backend": backend,
+            "rng_state": rng_state,
             "architecture_name": architecture_name,
             "architecture_config": dict(architecture_config),
         },
@@ -820,6 +836,9 @@ def build_full_smb_policy_checkpoint(
                 "stage_batch_contract": stage_batch_contract,
                 "rollout_storage": rollout_storage,
                 "evaluation": evaluation,
+                "task_curriculum": task_curriculum,
+                "backend": backend,
+                "rng_state": rng_state,
             },
         },
     )
@@ -1561,6 +1580,147 @@ def _evaluation_metadata(
     }
 
 
+def _rng_state_metadata(
+    config: FullSMBTrainingConfig,
+    states: Mapping[str, Any],
+) -> dict[str, Any]:
+    python_rng = states.get("python_rng")
+    return {
+        "schema_version": 1,
+        "saved_state_keys": [
+            key for key in ("torch_rng", "python_rng", "numpy_rng") if key in states
+        ],
+        "deterministic_algorithms_requested": bool(config.deterministic),
+        "deterministic_actions": bool(config.deterministic_actions),
+        "torch_deterministic_algorithms_enabled": torch.are_deterministic_algorithms_enabled(),
+        "python_random_version": (
+            int(python_rng[0]) if isinstance(python_rng, tuple) and python_rng else None
+        ),
+    }
+
+
+def _task_curriculum_metadata(
+    config: FullSMBTrainingConfig,
+    *,
+    epoch: int,
+    global_step: int,
+    rollouts: list[FullSMBRolloutStorage] | tuple[FullSMBRolloutStorage, ...],
+) -> dict[str, Any]:
+    rollout_records = [rollout.as_dict() for rollout in rollouts]
+    completed_rollouts = len(rollout_records)
+    completed_steps = int(sum(record["step_count"] for record in rollout_records))
+    training_complete = int(epoch) >= int(config.epochs)
+    next_update_index = None if training_complete else 1
+    next_epoch = None if training_complete else int(epoch) + 1
+    next_episode_seed = (
+        None if training_complete else int(config.seed) + int(epoch) * int(config.updates_per_epoch)
+    )
+    task_ids = _unique_rollout_values(rollout_records, "task_id")
+    scenario_ids = _unique_rollout_values(rollout_records, "scenario_id")
+    emulator_state_ids = _unique_rollout_values(rollout_records, "emulator_state_id")
+    return {
+        "schema_version": 1,
+        "schedule_kind": "seeded_epoch_update_rollouts",
+        "task_source": (
+            "stage_info_fields"
+            if task_ids or scenario_ids or emulator_state_ids
+            else "stage_default"
+        ),
+        "base_seed": int(config.seed),
+        "episode_seed_formula": "seed + epoch_index * updates_per_epoch + update_index",
+        "completed_epoch": int(epoch),
+        "target_epochs": int(config.epochs),
+        "updates_per_epoch": int(config.updates_per_epoch),
+        "global_step": int(global_step),
+        "completed_rollouts": completed_rollouts,
+        "completed_steps": completed_steps,
+        "training_complete": training_complete,
+        "next_epoch": next_epoch,
+        "next_update_index": next_update_index,
+        "next_episode_seed": next_episode_seed,
+        "observed_task_ids": task_ids,
+        "observed_scenario_ids": scenario_ids,
+        "observed_emulator_state_ids": emulator_state_ids,
+        "rollout_ids": [str(record["rollout_id"]) for record in rollout_records],
+    }
+
+
+def _unique_rollout_values(
+    rollout_records: list[Mapping[str, Any]],
+    field_name: str,
+) -> list[str]:
+    values: list[str] = []
+    for record in rollout_records:
+        for step in record.get("steps", ()):
+            if not isinstance(step, Mapping):
+                continue
+            value = step.get(field_name)
+            if value is None or value == "":
+                continue
+            text = str(value)
+            if text not in values:
+                values.append(text)
+    return values
+
+
+def _full_smb_backend_metadata(
+    stage: Optional[FullSMBStage],
+    config: FullSMBTrainingConfig,
+) -> dict[str, Any]:
+    env_config = getattr(stage, "env_config", None)
+    content_spec = getattr(stage, "content_spec", DEFAULT_FULL_SMB_CONTENT)
+    signal_config = getattr(stage, "signal_config", None)
+    observation_config = getattr(stage, "observation_config", None)
+    reward_config = getattr(stage, "reward_config", config.reward_config)
+    backend = getattr(stage, "backend", None)
+    env = getattr(stage, "env", None)
+    buttons = ()
+    if stage is not None:
+        try:
+            buttons = tuple(str(button) for button in stage.buttons)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            buttons = ()
+    env_manifest = _metadata_manifest(env_config) or {"game": DEFAULT_FULL_SMB_CONTENT.game}
+    return {
+        "schema_version": 1,
+        "provider": "stable-retro",
+        "stage_spec": {
+            "name": FULL_SMB_SPEC.name,
+            "action_space_name": FULL_SMB_SPEC.action_space_name,
+            "action_count": FULL_SMB_SPEC.action_count,
+        },
+        "stage_class": _class_path(stage),
+        "backend_adapter_class": _class_path(backend),
+        "env_class": _class_path(env),
+        "env_config": env_manifest,
+        "content": _metadata_manifest(content_spec),
+        "signal_config": _metadata_manifest(signal_config),
+        "observation": _metadata_manifest(observation_config),
+        "reward": _metadata_manifest(reward_config),
+        "buttons": buttons,
+        "headless": True,
+    }
+
+
+def _metadata_manifest(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "to_manifest"):
+        return value.to_manifest()
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, Mapping):
+        return dict(value)
+    return to_plain_data(value)
+
+
+def _class_path(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    value_type = type(value)
+    return f"{value_type.__module__}.{value_type.__qualname__}"
+
+
 def _safety_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
     return {
         "finite_checks_enabled": True,
@@ -1699,7 +1859,13 @@ def _training_source_metadata(
         checkpoint_kind = checkpoint.get("checkpoint_kind")
         checkpoint_epoch = int(checkpoint.get("epoch", 0))
         checkpoint_global_step = int(checkpoint.get("global_step", 0))
+    provenance = _source_checkpoint_provenance(
+        mode,
+        checkpoint_path=checkpoint_path,
+        checkpoint=checkpoint,
+    )
     return {
+        "schema_version": 1,
         "mode": mode,
         "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
         "checkpoint_stage": checkpoint_stage,
@@ -1707,9 +1873,46 @@ def _training_source_metadata(
         "checkpoint_kind": checkpoint_kind,
         "checkpoint_epoch": checkpoint_epoch,
         "checkpoint_global_step": checkpoint_global_step,
+        "checkpoint_schema_version": provenance["checkpoint_schema_version"],
+        "source_checkpoint_provenance": provenance,
         "uses_shared_architecture_factory": True,
         "architecture_name": architecture_name,
         "architecture_config": dict(architecture_config),
+    }
+
+
+def _source_checkpoint_provenance(
+    mode: str,
+    *,
+    checkpoint_path: Optional[Path],
+    checkpoint: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    metadata = checkpoint.get("metadata", {}) if isinstance(checkpoint, Mapping) else {}
+    config = checkpoint.get("config", {}) if isinstance(checkpoint, Mapping) else {}
+    return {
+        "schema_version": 1,
+        "mode": mode,
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        "checkpoint_schema_version": (
+            checkpoint.get(CHECKPOINT_SCHEMA_KEY) if isinstance(checkpoint, Mapping) else None
+        ),
+        "stage": checkpoint.get("stage") if isinstance(checkpoint, Mapping) else None,
+        "model_name": checkpoint.get("model_name") if isinstance(checkpoint, Mapping) else None,
+        "checkpoint_kind": (
+            checkpoint.get("checkpoint_kind") if isinstance(checkpoint, Mapping) else None
+        ),
+        "epoch": int(checkpoint.get("epoch", 0)) if isinstance(checkpoint, Mapping) else None,
+        "global_step": (
+            int(checkpoint.get("global_step", 0)) if isinstance(checkpoint, Mapping) else None
+        ),
+        "metrics": checkpoint.get("metrics", {}) if isinstance(checkpoint, Mapping) else {},
+        "architecture": (
+            checkpoint.get("architecture", {}) if isinstance(checkpoint, Mapping) else {}
+        ),
+        "code_revision": (metadata.get("code_revision") if isinstance(metadata, Mapping) else None),
+        "upstream_training_source": (
+            config.get("training_source") if isinstance(config, Mapping) else None
+        ),
     }
 
 

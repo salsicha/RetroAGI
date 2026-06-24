@@ -717,8 +717,9 @@ retroagi train --game smb --stage full \
 
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
 `config.reward`, `config.safety`, `config.recording`, `config.tracking`,
-`config.rollout_storage`, `config.evaluation`, and `metadata.training`.
-Structured logs should contain separate `train_rollout` and
+`config.rollout_storage`, `config.evaluation`, `config.task_curriculum`,
+`config.backend`, `config.rng_state`, and `metadata.training`. Structured logs
+should contain separate `train_rollout` and
 `deterministic_evaluation` events so fixed-policy evaluation is not mixed with
 stochastic exploration rollouts. `config.rollout.vector_env_count` records the
 requested vectorization contract; `active_vector_env_count` remains `1` until
@@ -729,7 +730,13 @@ episode mask, boundary reasons, scenario/task/emulator-state IDs when available,
 selected Full SMB signals, and reward terms. `config.safety` and
 `metadata.training.safety` must record finite-check behavior, gradient clipping,
 reward-scale limits, reward/value prediction bounds, and the action-entropy and
-gradient metrics tracked during training.
+gradient metrics tracked during training. `config.training_source` must include
+`source_checkpoint_provenance` with the upstream checkpoint path, schema version,
+stage/model/kind, metrics, architecture extension, and code revision when a run
+resumes from or fine-tunes a saved checkpoint. The sidecar JSON beside the
+`.pth` file should list `model`, `optimizer`, `torch_rng`, `python_rng`, and
+`numpy_rng` in `state_keys`, plus `perception` when the selected perception mode
+is trainable.
 
 Expected evidence:
 
@@ -738,6 +745,8 @@ Expected evidence:
 - `data/full_smb/policy.pth` with `config.perception.mode`,
 - `data/full_smb/policy.pth` with schema-v1 `config.rollout_storage`,
 - `data/full_smb/policy.pth` with `config.safety` and final safety metrics,
+- `data/full_smb/policy.pth` with schema-v1 `config.task_curriculum`,
+  `config.backend`, `config.rng_state`, and source checkpoint provenance,
 - `artifacts/full_smb/train.jsonl`,
 - `artifacts/full_smb/transfer_vs_scratch.json`,
 - comparison fields including `action_agreement`, action histograms,

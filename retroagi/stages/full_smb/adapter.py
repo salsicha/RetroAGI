@@ -521,6 +521,7 @@ class FullSMBStage:
         env_kwargs: Optional[Mapping[str, Any]] = None,
     ):
         self.env_config = env_config
+        self.content_spec = content_spec
         self.signal_config = signal_config
         self.observation_config = observation_config
         self.reward_config = reward_config

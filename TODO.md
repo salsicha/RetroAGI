@@ -481,7 +481,7 @@ and playable end target.
       action entropy tracking, and early stop on NaN or exploding loss.
 - [x] Add periodic deterministic Full SMB evaluation during training, separate
       from stochastic exploration rollouts.
-- [ ] Save versioned Full SMB trainer checkpoints with model, optimizer,
+- [x] Save versioned Full SMB trainer checkpoints with model, optimizer,
       optional perception, RNG state, task/curriculum state, config, metrics,
       backend metadata, and source checkpoint provenance.
 - [ ] Implement robust Full SMB resume so interrupted training can continue

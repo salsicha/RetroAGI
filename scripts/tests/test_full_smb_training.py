@@ -14,6 +14,7 @@ import torch
 import retroagi.stages.full_smb.train as full_smb_train_module
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
+    CHECKPOINT_SCHEMA_KEY,
     StageBatch,
     WorldModelState,
     load_checkpoint,
@@ -594,6 +595,18 @@ class TestFullSMBTraining(unittest.TestCase):
             )
 
             self.assertTrue(policy_path.exists())
+            sidecar = json.loads(policy_path.with_suffix(".json").read_text(encoding="utf-8"))
+            self.assertEqual(sidecar[CHECKPOINT_SCHEMA_KEY], 1)
+            self.assertEqual(sidecar["checkpoint_kind"], FULL_SMB_POLICY_CHECKPOINT_KIND)
+            for state_key in (
+                "model",
+                "optimizer",
+                "torch_rng",
+                "python_rng",
+                "numpy_rng",
+            ):
+                self.assertIn(state_key, sidecar["state_keys"])
+                self.assertIn(state_key, checkpoint["states"])
             self.assertEqual(result.checkpoint["model_name"], FULL_SMB_POLICY_MODEL_NAME)
             self.assertEqual(
                 result.checkpoint["config"]["training_source"]["mode"],
@@ -611,6 +624,16 @@ class TestFullSMBTraining(unittest.TestCase):
                 result.checkpoint["config"]["training_source"]["checkpoint_kind"],
                 FULL_SMB_TRANSFER_CHECKPOINT_KIND,
             )
+            source = result.checkpoint["config"]["training_source"]
+            self.assertEqual(source["schema_version"], 1)
+            self.assertEqual(source["checkpoint_schema_version"], 1)
+            provenance = source["source_checkpoint_provenance"]
+            self.assertEqual(provenance["checkpoint_path"], str(transfer_path))
+            self.assertEqual(provenance["checkpoint_schema_version"], 1)
+            self.assertEqual(provenance["stage"], FULL_SMB_SPEC.name)
+            self.assertEqual(provenance["model_name"], FULL_SMB_TRANSFER_MODEL_NAME)
+            self.assertEqual(provenance["checkpoint_kind"], FULL_SMB_TRANSFER_CHECKPOINT_KIND)
+            self.assertIn("architecture", provenance)
             self.assertEqual(
                 result.checkpoint["checkpoint_kind"],
                 FULL_SMB_POLICY_CHECKPOINT_KIND,
@@ -640,6 +663,34 @@ class TestFullSMBTraining(unittest.TestCase):
             )
             self.assertTrue(checkpoint["metadata"]["perception"]["frozen"])
             self.assertFalse(checkpoint["metadata"]["perception"]["optimizer_updates_enabled"])
+            training_metadata = checkpoint["metadata"]["training"]
+            rng_state = training_metadata["rng_state"]
+            self.assertEqual(rng_state["schema_version"], 1)
+            self.assertEqual(
+                rng_state["saved_state_keys"],
+                ["torch_rng", "python_rng", "numpy_rng"],
+            )
+            self.assertTrue(rng_state["deterministic_algorithms_requested"])
+            task_curriculum = training_metadata["task_curriculum"]
+            self.assertEqual(task_curriculum["schema_version"], 1)
+            self.assertEqual(task_curriculum["schedule_kind"], "seeded_epoch_update_rollouts")
+            self.assertEqual(task_curriculum["completed_epoch"], 1)
+            self.assertEqual(task_curriculum["completed_rollouts"], 1)
+            self.assertEqual(task_curriculum["rollout_ids"], ["epoch0001_update0001"])
+            self.assertTrue(task_curriculum["training_complete"])
+            self.assertIsNone(task_curriculum["next_episode_seed"])
+            backend = training_metadata["backend"]
+            self.assertEqual(backend["schema_version"], 1)
+            self.assertEqual(backend["provider"], "stable-retro")
+            self.assertEqual(backend["env_config"]["game"], "SuperMarioBros-Nes")
+            self.assertEqual(backend["content"]["game"], "SuperMarioBros-Nes")
+            self.assertEqual(
+                backend["buttons"],
+                ["B", "A", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT"],
+            )
+            self.assertEqual(checkpoint["config"]["backend"], backend)
+            self.assertEqual(checkpoint["config"]["task_curriculum"], task_curriculum)
+            self.assertEqual(checkpoint["config"]["rng_state"], rng_state)
 
             resume_config = FullSMBTrainingConfig(
                 seed=7,
