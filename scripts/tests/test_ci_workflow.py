@@ -27,6 +27,8 @@ class TestCIWorkflow(unittest.TestCase):
         self.assertIn('python -m pip install ".[test,vision]"', workflow)
         self.assertNotIn(".[full-smb]", workflow)
         self.assertIn("retroagi train --stage block-smb", workflow)
+        self.assertIn("Run tiny Full SMB CPU smoke tests", workflow)
+        self.assertIn("python -m unittest scripts.tests.test_full_smb_cpu_smoke -v", workflow)
         self.assertIn("retroagi promote", workflow)
         self.assertIn("--rung interface-smoke", workflow)
         self.assertIn("--output artifacts/ci/promotion_baseline_interface.json", workflow)

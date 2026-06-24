@@ -513,7 +513,7 @@ and playable end target.
 - [x] Define Full SMB artifact layout under `artifacts/full_smb/<run>/` for
       summaries, structured logs, recordings, videos, evaluation reports,
       comparison reports, and tracking outputs.
-- [ ] Add Full SMB CPU smoke tests using minimal steps and mocked or tiny backend
+- [x] Add Full SMB CPU smoke tests using minimal steps and mocked or tiny backend
       paths where real emulator content is unavailable in CI.
 - [ ] Add local integration tests, skipped unless content is available, that run
       real stable-retro reset/step/evaluate/play smoke paths.

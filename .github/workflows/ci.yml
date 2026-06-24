@@ -144,6 +144,9 @@ jobs:
           --output artifacts/ci/block_smb_smoke.json
           --log-path artifacts/ci/block_smb_smoke.jsonl
 
+      - name: Run tiny Full SMB CPU smoke tests
+        run: python -m unittest scripts.tests.test_full_smb_cpu_smoke -v
+
   architecture-promotion-fixture:
     name: Architecture Promotion Fixture
     runs-on: ubuntu-latest
