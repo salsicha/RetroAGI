@@ -573,6 +573,13 @@ checkpoint. Both paths start Full SMB optimizer updates at epoch zero and record
 whether the source was a Block SMB policy or a Full SMB transfer checkpoint.
 Resume runs record their source checkpoint provenance in the same fields.
 
+Full SMB training now carries the shared world-model recurrent state between
+rollout steps while the same episode is continuing. The trainer drops that state
+at explicit Full SMB boundaries: manual reset, termination, truncation, death,
+timeout, level completion, or game over. Boundary counts and recurrent reset
+counts are logged as rollout metrics, and checkpoint rollout metadata records
+`recurrent_state_policy="carry_until_full_smb_boundary"` plus the reset reasons.
+
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,
 when no scratch checkpoint exists yet, a same-architecture scratch-initialized

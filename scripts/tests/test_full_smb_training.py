@@ -12,7 +12,12 @@ from unittest.mock import patch
 import torch
 
 import retroagi.stages.full_smb.train as full_smb_train_module
-from retroagi.core import BASELINE_ARCHITECTURE_NAME, StageBatch, load_checkpoint
+from retroagi.core import (
+    BASELINE_ARCHITECTURE_NAME,
+    StageBatch,
+    WorldModelState,
+    load_checkpoint,
+)
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
 from retroagi.stages.block_smb.train import (
     BLOCK_SMB_CHECKPOINT_KIND,
@@ -188,6 +193,133 @@ class TestFullSMBTraining(unittest.TestCase):
             checkpoint["metadata"]["training"]["source"],
             source,
         )
+
+    def test_full_smb_rollout_boundary_classifies_terminal_signals(self):
+        cases = (
+            (
+                {"full_smb_signals": {"death": True}},
+                True,
+                False,
+                {"terminated", "death"},
+            ),
+            (
+                {"full_smb_signals": {"timeout": True}},
+                False,
+                False,
+                {"timeout"},
+            ),
+            (
+                {"full_smb_signals": {"completion": True}},
+                True,
+                False,
+                {"terminated", "level_completion"},
+            ),
+            (
+                {"full_smb_signals": {"game_over": True}},
+                True,
+                False,
+                {"terminated", "game_over"},
+            ),
+            (
+                {"manual_reset": True},
+                False,
+                False,
+                {"manual_reset"},
+            ),
+        )
+
+        for info, terminated, truncated, expected_reasons in cases:
+            with self.subTest(expected_reasons=expected_reasons):
+                boundary = full_smb_train_module._full_smb_rollout_boundary(
+                    terminated=terminated,
+                    truncated=truncated,
+                    info=info,
+                )
+                self.assertTrue(boundary.reset_recurrent_state)
+                self.assertEqual(boundary.episode_mask, 0.0)
+                self.assertLessEqual(expected_reasons, set(boundary.reasons))
+
+        continuing = full_smb_train_module._full_smb_rollout_boundary(
+            terminated=False,
+            truncated=False,
+            info={"full_smb_signals": {"death": False, "timeout": False}},
+        )
+        self.assertFalse(continuing.reset_recurrent_state)
+        self.assertEqual(continuing.episode_mask, 1.0)
+
+    def test_manual_reset_boundary_drops_carried_recurrent_state(self):
+        class ManualResetEnv(TinyFullSMBEnv):
+            def step(self, action):
+                observation, reward, terminated, truncated, info = super().step(action)
+                info["level_complete"] = False
+                if self.step_count == 2:
+                    info["manual_reset"] = True
+                    info["termination_reason"] = "manual_reset"
+                return observation, reward, False, False, info
+
+        seen_states: list[WorldModelState | None] = []
+
+        def fake_policy(_model, _batch, *, device, world_model_state=None):
+            del device
+            seen_states.append(world_model_state)
+            value = float(len(seen_states))
+            logits = torch.zeros(
+                (1, full_smb_train_module.FULL_SMB_ACTION_COUNT),
+                dtype=torch.float32,
+                requires_grad=True,
+            )
+            next_state = WorldModelState(
+                hidden=torch.full((1, 1, 8), value),
+                cell=torch.full((1, 1, 8), value),
+            )
+            return logits, next_state
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=9,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=3,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                deterministic_actions=True,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            with patch.object(
+                full_smb_train_module,
+                "_policy_action_logits_and_state",
+                side_effect=fake_policy,
+            ):
+                result = train_full_smb_policy(
+                    config,
+                    make_stage=lambda vision: FullSMBStage(
+                        env=ManualResetEnv(),
+                        vision=vision,
+                        observation_config=FullSMBObservationConfig(
+                            frame_skip=1,
+                            frame_stack=2,
+                            resize_shape=(16, 20),
+                        ),
+                    ),
+                )
+
+        self.assertEqual(len(seen_states), 3)
+        self.assertIsNone(seen_states[0])
+        self.assertIsInstance(seen_states[1], WorldModelState)
+        self.assertIsNone(seen_states[2])
+        self.assertEqual(result.history["episode_return"], [6.0])
+        self.assertEqual(result.checkpoint["metrics"]["mean_train_return"], 6.0)
+        self.assertEqual(
+            result.checkpoint["metadata"]["training"]["rollout"]["recurrent_state_policy"],
+            "carry_until_full_smb_boundary",
+        )
+        self.assertEqual(result.history["boundary_manual_reset"], [2.0])
+        self.assertEqual(result.history["recurrent_state_resets"], [2.0])
 
     def test_train_resume_and_evaluate_full_smb_policy_checkpoint(self):
         with TemporaryDirectory() as tmpdir:

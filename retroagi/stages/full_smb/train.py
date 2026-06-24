@@ -19,6 +19,7 @@ from retroagi.core import (
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
     StageBatch,
+    WorldModelState,
     build_checkpoint,
     load_checkpoint,
     make_experiment_tracker,
@@ -279,6 +280,15 @@ class FullSMBTrainingResult:
         }
 
 
+@dataclass(frozen=True)
+class FullSMBRolloutBoundary:
+    """Episode-boundary decision for recurrent Full SMB rollout state."""
+
+    reset_recurrent_state: bool
+    episode_mask: float
+    reasons: tuple[str, ...]
+
+
 StageFactory = Callable[[FullSMBSegmentationVision], FullSMBStage]
 
 
@@ -369,6 +379,10 @@ def train_full_smb_policy(
                     global_step += int(metrics["steps"])
                     history["episode_return"].append(float(metrics["return"]))
                     history["policy_loss"].append(float(metrics["loss"]))
+                    for metric_name, metric_value in metrics.items():
+                        if metric_name in {"return", "loss", "steps"}:
+                            continue
+                        history.setdefault(metric_name, []).append(float(metric_value))
                     tracker.log_metrics(metrics, step=global_step, prefix="train")
                     _log_full_smb_event(
                         config,
@@ -781,16 +795,29 @@ def _train_episode(
     observation = stage.reset(seed=seed)
     total_return = 0.0
     losses: list[float] = []
+    world_model_state: WorldModelState | None = None
+    recurrent_state_resets = 1
+    boundary_counts: dict[str, int] = {"manual_reset": 1}
     for _step in range(max_steps):
         batch = stage.encode_observation(observation)
-        logits = _policy_action_logits(model, batch, device=device)
+        logits, next_world_model_state = _policy_action_logits_and_state(
+            model,
+            batch,
+            device=device,
+            world_model_state=world_model_state,
+        )
         distribution = torch.distributions.Categorical(logits=logits)
         if deterministic_actions:
             action_tensor = logits.argmax(dim=-1)
         else:
             action_tensor = distribution.sample()
         log_prob = distribution.log_prob(action_tensor)
-        observation, reward, terminated, truncated, _info = stage.step(int(action_tensor.item()))
+        observation, reward, terminated, truncated, info = stage.step(int(action_tensor.item()))
+        boundary = _full_smb_rollout_boundary(
+            terminated=terminated,
+            truncated=truncated,
+            info=info,
+        )
         scaled_reward = torch.as_tensor(
             float(reward) * reward_scale,
             dtype=log_prob.dtype,
@@ -805,9 +832,26 @@ def _train_episode(
         optimizer.step()
         losses.append(float(loss.detach().cpu().item()))
         total_return += float(reward)
+        if boundary.reset_recurrent_state:
+            recurrent_state_resets += 1
+            for reason in boundary.reasons:
+                boundary_counts[reason] = boundary_counts.get(reason, 0) + 1
+            world_model_state = None
+        elif next_world_model_state is not None:
+            world_model_state = next_world_model_state.detach()
+        else:
+            world_model_state = None
         if terminated or truncated:
             break
-    return {"return": total_return, "loss": _mean(losses), "steps": float(len(losses))}
+    metrics = {
+        "return": total_return,
+        "loss": _mean(losses),
+        "steps": float(len(losses)),
+        "recurrent_state_resets": float(recurrent_state_resets),
+    }
+    for reason, count in boundary_counts.items():
+        metrics[f"boundary_{reason}"] = float(count)
+    return metrics
 
 
 def _policy_action_logits(
@@ -816,6 +860,17 @@ def _policy_action_logits(
     *,
     device: torch.device,
 ) -> torch.Tensor:
+    logits, _state = _policy_action_logits_and_state(model, batch, device=device)
+    return logits
+
+
+def _policy_action_logits_and_state(
+    model: torch.nn.Module,
+    batch: StageBatch,
+    *,
+    device: torch.device,
+    world_model_state: WorldModelState | None = None,
+) -> tuple[torch.Tensor, WorldModelState | None]:
     _validate_full_smb_stage_batch(batch)
     src_a = batch.src_a.to(device)
     src_b = batch.src_b.to(device)
@@ -824,9 +879,99 @@ def _policy_action_logits(
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
     if episode_mask is not None:
         episode_mask = torch.as_tensor(episode_mask, dtype=src_c.dtype, device=src_c.device)
-    outputs = model(src_a, src_b, src_c, tau=1.0, episode_mask=episode_mask)
+    outputs = model(
+        src_a,
+        src_b,
+        src_c,
+        tau=1.0,
+        world_model_state=world_model_state,
+        episode_mask=episode_mask,
+        return_world_model_state=True,
+    )
     logits_a = outputs[4]
-    return logits_a[:, -1, :FULL_SMB_ACTION_COUNT]
+    next_world_model_state = outputs[-1]
+    return logits_a[:, -1, :FULL_SMB_ACTION_COUNT], next_world_model_state
+
+
+def _full_smb_rollout_boundary(
+    *,
+    terminated: bool,
+    truncated: bool,
+    info: Mapping[str, Any],
+) -> FullSMBRolloutBoundary:
+    reasons: list[str] = []
+    signals = info.get("full_smb_signals") if isinstance(info, Mapping) else None
+    signal_info = signals if isinstance(signals, Mapping) else {}
+    if terminated:
+        reasons.append("terminated")
+    if truncated:
+        reasons.append("truncated")
+    if _info_flag(signal_info, ("death",)) or _info_flag(info, ("death", "dead")):
+        reasons.append("death")
+    if (
+        truncated
+        or _info_flag(signal_info, ("timeout",))
+        or _info_flag(info, ("timeout", "time_up", "TimeLimit.truncated"))
+        or _reason_matches_info(info, ("timeout", "time up", "time_up", "out of time"))
+    ):
+        reasons.append("timeout")
+    if (
+        _info_flag(signal_info, ("completion",))
+        or _info_flag(info, ("level_complete", "completion", "flag_get"))
+        or _reason_matches_info(info, ("level_complete", "complete", "clear", "goal", "flag"))
+    ):
+        reasons.append("level_completion")
+    if (
+        _info_flag(signal_info, ("game_over",))
+        or _info_flag(info, ("game_over",))
+        or _reason_matches_info(info, ("game_over", "game over"))
+    ):
+        reasons.append("game_over")
+    if _info_flag(
+        info, ("manual_reset", "reset_requested", "manual_reset_requested")
+    ) or _reason_matches_info(info, ("manual_reset", "manual reset", "user_reset")):
+        reasons.append("manual_reset")
+    unique_reasons = tuple(dict.fromkeys(reasons))
+    return FullSMBRolloutBoundary(
+        reset_recurrent_state=bool(unique_reasons),
+        episode_mask=0.0 if unique_reasons else 1.0,
+        reasons=unique_reasons,
+    )
+
+
+def _info_flag(info: Mapping[str, Any], keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        if key not in info:
+            continue
+        value = info[key]
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "n", "off", ""}:
+                continue
+        try:
+            tensor = torch.as_tensor(value)
+        except (RuntimeError, TypeError, ValueError):
+            continue
+        if tensor.numel() == 1 and bool(tensor.item()):
+            return True
+    return False
+
+
+def _reason_matches_info(info: Mapping[str, Any], patterns: tuple[str, ...]) -> bool:
+    reason = None
+    if "full_smb_signals" in info and isinstance(info["full_smb_signals"], Mapping):
+        reason = info["full_smb_signals"].get("termination_reason")
+    if reason is None:
+        for key in ("termination_reason", "done_reason", "reason"):
+            if key in info and info[key] is not None:
+                reason = info[key]
+                break
+    if reason is None:
+        return False
+    normalized = str(reason).strip().lower()
+    return any(pattern in normalized for pattern in patterns)
 
 
 def _make_stage(
@@ -972,6 +1117,16 @@ def _rollout_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
         "vector_env_count": int(config.vector_env_count),
         "active_vector_env_count": 1,
         "vectorized_training_enabled": False,
+        "recurrent_state_policy": "carry_until_full_smb_boundary",
+        "recurrent_state_reset_reasons": (
+            "manual_reset",
+            "terminated",
+            "truncated",
+            "death",
+            "timeout",
+            "level_completion",
+            "game_over",
+        ),
     }
 
 

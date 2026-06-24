@@ -471,7 +471,7 @@ and playable end target.
       architecture factory and Full SMB stage batches.
 - [x] Implement transferred-policy fine-tuning from a Block SMB or Full SMB
       transfer checkpoint.
-- [ ] Add recurrent-state and episode-boundary handling in Full SMB rollouts,
+- [x] Add recurrent-state and episode-boundary handling in Full SMB rollouts,
       including death, timeout, level completion, game over, and manual reset.
 - [ ] Add rollout/replay storage for Full SMB with saved actions, rewards,
       dones, truncations, episode masks, scenario/task IDs, emulator state IDs,

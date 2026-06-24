@@ -147,6 +147,9 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    the shared architecture factory before consuming Full SMB stage batches.
    `--init-checkpoint` starts transferred-policy fine-tuning from either a raw
    Block SMB policy checkpoint or an existing Full SMB transfer checkpoint.
+   Rollouts carry recurrent world-model state only while the episode continues
+   and drop it on manual reset, death, timeout, completion, game over,
+   termination, or truncation boundaries.
    Real Full SMB emulator runs require the optional stable-retro backend:
    `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
    training do not install or build that native emulator dependency.
