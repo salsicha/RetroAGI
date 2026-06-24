@@ -517,7 +517,7 @@ and playable end target.
       paths where real emulator content is unavailable in CI.
 - [x] Add local integration tests, skipped unless content is available, that run
       real stable-retro reset/step/evaluate/play smoke paths.
-- [ ] Add tests for Full SMB checkpoint compatibility, resume behavior,
+- [x] Add tests for Full SMB checkpoint compatibility, resume behavior,
       transfer-to-train loading, fixed-task threshold diagnostics, and play-mode
       policy loading.
 - [ ] Benchmark emulator throughput and document recommended CPU, CUDA, and MPS
