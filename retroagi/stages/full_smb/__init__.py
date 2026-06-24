@@ -18,6 +18,13 @@ from .adapter import (
     extract_full_smb_signals,
     make_stable_retro_env,
 )
+from .artifacts import (
+    DEFAULT_FULL_SMB_ARTIFACT_ROOT,
+    DEFAULT_FULL_SMB_ARTIFACT_RUN_NAME,
+    FULL_SMB_ARTIFACT_LAYOUT_SCHEMA_VERSION,
+    FullSMBArtifactLayout,
+    full_smb_artifact_layout,
+)
 from .capabilities import (
     FullSMBEnvironmentCapabilityResult,
     FullSMBEnvironmentCheckConfig,
@@ -108,6 +115,7 @@ from .vision import (
 
 __all__ = [
     "FULL_SMB_GAME",
+    "FULL_SMB_ARTIFACT_LAYOUT_SCHEMA_VERSION",
     "FULL_SMB_PERCEPTION_FINE_TUNE",
     "FULL_SMB_PERCEPTION_FREEZE",
     "FULL_SMB_PERCEPTION_MODES",
@@ -127,6 +135,8 @@ __all__ = [
     "FULL_SMB_TASK_CATALOG",
     "FULL_SMB_TASK_SET_NAMES",
     "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
+    "DEFAULT_FULL_SMB_ARTIFACT_ROOT",
+    "DEFAULT_FULL_SMB_ARTIFACT_RUN_NAME",
     "FullSMBEmulatorState",
     "FullSMBEnvConfig",
     "FullSMBEnvironmentCapabilityResult",
@@ -165,6 +175,7 @@ __all__ = [
     "FULL_SMB_VIT_MODEL_NAME",
     "FullSMBDeepLabSegmentationVision",
     "FullSMBContentSpec",
+    "FullSMBArtifactLayout",
     "FullSMBSegmentationVision",
     "FullSMBVITLoadResult",
     "FullSMBVisionTransformer",
@@ -180,6 +191,7 @@ __all__ = [
     "evaluate_full_smb_perception",
     "extract_full_smb_signals",
     "fixed_full_smb_success_threshold",
+    "full_smb_artifact_layout",
     "full_smb_save_state_plan",
     "full_smb_task_catalog",
     "load_full_smb_policy_checkpoint",

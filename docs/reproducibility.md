@@ -699,13 +699,35 @@ retroagi compare --game smb --stage full \
   --seed 0 \
   --seed 1 \
   --scratch-seed 0 \
-  --output artifacts/full_smb/policy_suite_comparison.json
+  --output artifacts/full_smb/baseline_seed0/comparisons/policy_suite_comparison.json
 ```
 
 The suite report includes one stream per task/seed pair, per-policy action
 histograms, entropy and margin metrics, and aggregate pairwise action agreement
 for every named policy role. Omit `--scratch-trained-checkpoint` to compare the
 transferred checkpoint against a deterministic scratch initialization.
+
+Before preserving a Full SMB run, create the canonical run directory and layout
+manifest:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+from retroagi.stages.full_smb import full_smb_artifact_layout
+
+layout = full_smb_artifact_layout("baseline_seed0")
+layout.ensure_directories()
+layout.files()["layout_manifest"].write_text(
+    json.dumps(layout.to_manifest(), indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+```
+
+The preserved layout is rooted at `artifacts/full_smb/baseline_seed0/` with
+`summaries/`, `logs/`, `recordings/`, `videos/`, `evaluations/`,
+`comparisons/`, `tracking/`, and `checkpoints/` subdirectories.
 
 Continue training with an explicit perception mode so the checkpoint records
 whether the Full SMB ViT was frozen, fine-tuned, or replaced:
@@ -723,10 +745,12 @@ retroagi train --game smb --stage full \
   --evaluation-max-steps 64 \
   --evaluation-interval-epochs 1 \
   --reward-emulator-progress 1.0 \
-  --recording-dir artifacts/full_smb/recordings \
-  --recording-path artifacts/full_smb/recording_manifest.npz \
-  --log-path artifacts/full_smb/train.jsonl \
-  --checkpoint data/full_smb/policy.pth
+  --recording-dir artifacts/full_smb/baseline_seed0/recordings \
+  --recording-path artifacts/full_smb/baseline_seed0/recordings/recording_manifest.npz \
+  --log-path artifacts/full_smb/baseline_seed0/logs/train.jsonl \
+  --tracking-log-dir artifacts/full_smb/baseline_seed0/tracking \
+  --output-summary artifacts/full_smb/baseline_seed0/summaries/train_summary.json \
+  --checkpoint artifacts/full_smb/baseline_seed0/checkpoints/policy.pth
 ```
 
 Use `--mode scratch` and omit `--init-checkpoint` for a new Full SMB policy; use
@@ -739,8 +763,8 @@ and rejects schedule, recurrent-state, or tracking drift:
 
 ```bash
 retroagi resume --game smb --stage full \
-  --checkpoint data/full_smb/policy.pth \
-  --save-checkpoint data/full_smb/resumed_policy.pth \
+  --checkpoint artifacts/full_smb/baseline_seed0/checkpoints/policy.pth \
+  --save-checkpoint artifacts/full_smb/baseline_seed0/checkpoints/resumed_policy.pth \
   --epochs 2 \
   --updates-per-epoch 1 \
   --rollout-steps 64 \
@@ -759,10 +783,10 @@ Evaluate the saved policy and preserve fixed-task threshold diagnostics:
 
 ```bash
 retroagi evaluate --game smb --stage full \
-  --checkpoint data/full_smb/policy.pth \
+  --checkpoint artifacts/full_smb/baseline_seed0/checkpoints/policy.pth \
   --evaluation-episodes 3 \
   --evaluation-max-steps 2400 \
-  --output-summary artifacts/full_smb/evaluation.json
+  --output-summary artifacts/full_smb/baseline_seed0/evaluations/evaluation.json
 ```
 
 The evaluation report includes `fixed_task_results`, per-task `threshold_met`
@@ -774,12 +798,12 @@ Record deterministic policy rollouts from the saved policy:
 
 ```bash
 retroagi record --game smb --stage full \
-  --checkpoint data/full_smb/policy.pth \
+  --checkpoint artifacts/full_smb/baseline_seed0/checkpoints/policy.pth \
   --evaluation-episodes 3 \
   --evaluation-max-steps 2400 \
-  --record-dir artifacts/full_smb/recordings \
-  --recording-path artifacts/full_smb/recording_manifest.npz \
-  --output-summary artifacts/full_smb/recording_summary.json
+  --record-dir artifacts/full_smb/baseline_seed0/recordings \
+  --recording-path artifacts/full_smb/baseline_seed0/recordings/recording_manifest.npz \
+  --output-summary artifacts/full_smb/baseline_seed0/summaries/recording_summary.json
 ```
 
 The record command reuses deterministic policy evaluation, writes the same
@@ -790,7 +814,7 @@ Play the saved policy locally with rendering and optional playback artifacts:
 
 ```bash
 retroagi play --game smb --stage full \
-  --checkpoint data/full_smb/policy.pth \
+  --checkpoint artifacts/full_smb/baseline_seed0/checkpoints/policy.pth \
   --task-set fixed_benchmark \
   --level 1-1 \
   --frame-skip 4 \
@@ -801,9 +825,9 @@ retroagi play --game smb --stage full \
   --inspection-overlay \
   --fps 30 \
   --record \
-  --record-dir artifacts/full_smb/recordings \
-  --record-output artifacts/full_smb/play_manifest.npz \
-  --output-summary artifacts/full_smb/play_summary.json
+  --record-dir artifacts/full_smb/baseline_seed0/recordings \
+  --record-output artifacts/full_smb/baseline_seed0/recordings/play_manifest.npz \
+  --output-summary artifacts/full_smb/baseline_seed0/summaries/play_summary.json
 ```
 
 Use `--render-mode none` or `--no-render` for headless playback,
@@ -874,15 +898,22 @@ Expected evidence:
 - `data/full_smb/policy.pth` with `config.safety` and final safety metrics,
 - `data/full_smb/policy.pth` with schema-v1 `config.task_curriculum`,
   `config.backend`, `config.rng_state`, and source checkpoint provenance,
-- `artifacts/full_smb/train.jsonl`,
-- `artifacts/full_smb/evaluation.json` with fixed-task threshold diagnostics,
-- `artifacts/full_smb/recordings/<evaluation-prefix>/*.npz`,
-- `artifacts/full_smb/recording_summary.json`,
-- `artifacts/full_smb/recording_manifest_<evaluation-prefix>.npz`,
-- `artifacts/full_smb/recording_manifest.npz`,
-- `artifacts/full_smb/play_summary.json`,
-- `artifacts/full_smb/play_manifest.npz`,
-- `artifacts/full_smb/transfer_vs_scratch.json`,
+- `artifacts/full_smb/baseline_seed0/artifact_layout.json`,
+- `artifacts/full_smb/baseline_seed0/content.json`,
+- `artifacts/full_smb/baseline_seed0/checkpoints/policy.pth`,
+- `artifacts/full_smb/baseline_seed0/checkpoints/transferred_policy.pth`,
+- `artifacts/full_smb/baseline_seed0/logs/train.jsonl`,
+- `artifacts/full_smb/baseline_seed0/evaluations/evaluation.json` with fixed-task threshold diagnostics,
+- `artifacts/full_smb/baseline_seed0/recordings/<evaluation-prefix>/*.npz`,
+- `artifacts/full_smb/baseline_seed0/summaries/recording_summary.json`,
+- `artifacts/full_smb/baseline_seed0/recordings/recording_manifest_<evaluation-prefix>.npz`,
+- `artifacts/full_smb/baseline_seed0/recordings/recording_manifest.npz`,
+- `artifacts/full_smb/baseline_seed0/summaries/play_summary.json`,
+- `artifacts/full_smb/baseline_seed0/recordings/play_manifest.npz`,
+- `artifacts/full_smb/baseline_seed0/comparisons/policy_suite_comparison.json`,
+- optional videos under `artifacts/full_smb/baseline_seed0/videos/`,
+- optional tracking output under `artifacts/full_smb/baseline_seed0/tracking/`,
+- legacy comparison output such as `artifacts/full_smb/transfer_vs_scratch.json` when comparing old two-policy runs,
 - comparison fields including `action_agreement`, action histograms,
   mean entropies, mean margins, collection reward, resets, terminations, and
   truncations.

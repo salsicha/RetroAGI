@@ -174,6 +174,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    the playback manifest. Add `--inspection-overlay` to stream a compact
    policy-inspection HUD to stderr with action probabilities, reward terms,
    score/progress signals, termination reason, and fixed-task threshold gates.
+   Preserved Full SMB runs should use the canonical layout from
+   `full_smb_artifact_layout("<run>")` under `artifacts/full_smb/<run>/` for
+   summaries, logs, recordings, videos, evaluation reports, comparisons,
+   tracking output, and checkpoint copies.
    Full SMB policy training records its perception choice in every checkpoint:
    `--perception-mode freeze` reuses a frozen Full SMB ViT checkpoint,
    `fine_tune` includes trainable ViT parameters in the optimizer, and `replace`

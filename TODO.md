@@ -510,7 +510,7 @@ and playable end target.
       reason, and current task threshold status.
 - [x] Add comparison commands for transferred, scratch-trained, fine-tuned, and
       known-good policies on identical seeded Full SMB task streams.
-- [ ] Define Full SMB artifact layout under `artifacts/full_smb/<run>/` for
+- [x] Define Full SMB artifact layout under `artifacts/full_smb/<run>/` for
       summaries, structured logs, recordings, videos, evaluation reports,
       comparison reports, and tracking outputs.
 - [ ] Add Full SMB CPU smoke tests using minimal steps and mocked or tiny backend
