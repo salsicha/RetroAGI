@@ -744,6 +744,21 @@ Omit `--save-checkpoint` to resume in place at `--checkpoint`; provide
 `--save-checkpoint` when preserving the interrupted checkpoint separately from
 the continued policy.
 
+Evaluate the saved policy and preserve fixed-task threshold diagnostics:
+
+```bash
+retroagi evaluate --game smb --stage full \
+  --checkpoint data/full_smb/policy.pth \
+  --evaluation-episodes 3 \
+  --evaluation-max-steps 2400 \
+  --output-summary artifacts/full_smb/evaluation.json
+```
+
+The evaluation report includes `fixed_task_results`, per-task `threshold_met`
+and `threshold_diagnostics`, `tuning_metrics`, and top-level
+`success_thresholds_met` when the stage info identifies one of the fixed
+benchmark tasks or canonical level starts.
+
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
 `config.reward`, `config.safety`, `config.recording`, `config.tracking`,
 `config.rollout_storage`, `config.evaluation`, `config.task_curriculum`,
@@ -781,6 +796,7 @@ Expected evidence:
 - `data/full_smb/policy.pth` with schema-v1 `config.task_curriculum`,
   `config.backend`, `config.rng_state`, and source checkpoint provenance,
 - `artifacts/full_smb/train.jsonl`,
+- `artifacts/full_smb/evaluation.json` with fixed-task threshold diagnostics,
 - `artifacts/full_smb/recordings/<evaluation-prefix>/*.npz`,
 - `artifacts/full_smb/recording_manifest_<evaluation-prefix>.npz`,
 - `artifacts/full_smb/transfer_vs_scratch.json`,

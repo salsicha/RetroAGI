@@ -492,7 +492,7 @@ and playable end target.
 - [x] Add `retroagi train --stage full-smb` with scratch and fine-tune modes.
 - [x] Add `retroagi resume --stage full-smb` with checkpoint and optional output
       checkpoint paths.
-- [ ] Add `retroagi evaluate --stage full-smb --checkpoint ...` that loads a
+- [x] Add `retroagi evaluate --stage full-smb --checkpoint ...` that loads a
       saved policy and reports fixed-task threshold diagnostics.
 - [ ] Add `retroagi record --stage full-smb --checkpoint ...` that records
       deterministic policy rollouts and writes artifacts.

@@ -40,6 +40,11 @@ from retroagi.stages.full_smb.adapter import (
     FullSMBRewardConfig,
     FullSMBStage,
 )
+from retroagi.stages.full_smb.success import (
+    FIXED_FULL_SMB_SUCCESS_THRESHOLDS,
+    evaluate_fixed_full_smb_success_thresholds,
+    summarize_fixed_full_smb_success_metrics,
+)
 from retroagi.stages.full_smb.transfer import (
     FULL_SMB_TRANSFER_CHECKPOINT_KIND,
     FULL_SMB_TRANSFER_MODEL_NAME,
@@ -134,6 +139,14 @@ _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
 _FULL_SMB_RECORDING_SCHEMA_VERSION = 1
 _FULL_SMB_VIDEO_SUFFIXES = (".avi", ".mkv", ".mov", ".mp4")
+_FULL_SMB_FIXED_LEVEL_TASK_NAMES = {
+    "level1-1": "benchmark_1_1_start",
+    "1-1": "benchmark_1_1_start",
+    "level1-2": "benchmark_1_2_start",
+    "1-2": "benchmark_1_2_start",
+    "level2-1": "benchmark_2_1_start",
+    "2-1": "benchmark_2_1_start",
+}
 
 
 def _empty_full_smb_recording_manifest() -> dict[str, Any]:
@@ -355,6 +368,9 @@ class FullSMBEvaluationResult:
     terminated_count: int
     truncated_count: int
     recording: Mapping[str, Any] = field(default_factory=_empty_full_smb_recording_manifest)
+    fixed_task_results: Mapping[str, Any] = field(default_factory=dict)
+    tuning_metrics: Mapping[str, float] = field(default_factory=dict)
+    success_thresholds_met: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return to_plain_data(asdict(self))
@@ -734,11 +750,16 @@ def evaluate_full_smb_policy(
     truncated_count = 0
     recording_targets = _resolve_full_smb_recording_targets(config, recording_prefix)
     recording_artifacts: list[dict[str, Any]] = []
+    fixed_task_episode_metrics: dict[str, list[dict[str, float]]] = {}
     try:
         for episode_index in range(config.evaluation_episodes):
             episode_seed = config.seed + 10_000 + episode_index
             observation = stage.reset(seed=episode_seed)
             episode_return = 0.0
+            fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
+                stage,
+                stage.last_info,
+            )
             episode_recording = _start_full_smb_episode_recording(
                 episode_index=episode_index,
                 seed=episode_seed,
@@ -751,6 +772,11 @@ def evaluate_full_smb_policy(
                 logits = _policy_action_logits(model, batch, device=resolved_device)
                 action = int(logits.argmax(dim=-1).item())
                 observation, reward, terminated, truncated, info = stage.step(action)
+                _update_full_smb_fixed_task_episode_metrics(
+                    fixed_task_metrics,
+                    stage,
+                    info,
+                )
                 if recording_targets["enabled"]:
                     _append_full_smb_episode_recording_step(
                         episode_recording,
@@ -771,6 +797,14 @@ def evaluate_full_smb_policy(
                 if terminated or truncated:
                     break
             returns.append(float(episode_return))
+            task_name = fixed_task_metrics["task_name"]
+            if task_name is not None:
+                fixed_task_episode_metrics.setdefault(str(task_name), []).append(
+                    _finalize_full_smb_fixed_task_episode_metrics(
+                        fixed_task_metrics,
+                        episode_return=float(episode_return),
+                    )
+                )
             if recording_targets["enabled"]:
                 recording_artifacts.append(
                     _write_full_smb_episode_recording(
@@ -790,6 +824,24 @@ def evaluate_full_smb_policy(
         recording_targets,
         recording_artifacts,
     )
+    fixed_task_results = _full_smb_fixed_task_results(
+        fixed_task_episode_metrics,
+        evaluation_episodes=config.evaluation_episodes,
+        evaluation_max_steps=config.evaluation_max_steps,
+    )
+    tuning_metrics = summarize_fixed_full_smb_success_metrics(
+        fixed_task_results,
+        {
+            task_name: {
+                **dict(result.get("threshold_diagnostics", {})),
+                "threshold_met": bool(result.get("threshold_met", False)),
+            }
+            for task_name, result in fixed_task_results.items()
+        },
+    )
+    success_thresholds_met = bool(fixed_task_results) and all(
+        bool(result.get("threshold_met", False)) for result in fixed_task_results.values()
+    )
     return FullSMBEvaluationResult(
         episodes=episodes,
         max_steps_per_episode=config.evaluation_max_steps,
@@ -800,6 +852,9 @@ def evaluate_full_smb_policy(
         terminated_count=terminated_count,
         truncated_count=truncated_count,
         recording=recording_manifest,
+        fixed_task_results=fixed_task_results,
+        tuning_metrics=tuning_metrics,
+        success_thresholds_met=success_thresholds_met,
     )
 
 
@@ -2548,13 +2603,185 @@ def _should_evaluate_epoch(config: FullSMBTrainingConfig, completed_epoch: int) 
 
 
 def _full_smb_evaluation_metrics(evaluation: FullSMBEvaluationResult) -> dict[str, float]:
-    return {
+    metrics = {
         "eval_mean_return": float(evaluation.mean_return),
         "eval_success_rate": float(evaluation.success_rate),
         "eval_steps": float(evaluation.steps),
         "eval_terminated_count": float(evaluation.terminated_count),
         "eval_truncated_count": float(evaluation.truncated_count),
     }
+    for metric_name, metric_value in evaluation.tuning_metrics.items():
+        metrics[f"eval_{metric_name}"] = float(metric_value)
+    metrics["eval_success_thresholds_met"] = float(evaluation.success_thresholds_met)
+    return metrics
+
+
+def _start_full_smb_fixed_task_episode_metrics(
+    stage: FullSMBStage,
+    info: Mapping[str, Any],
+) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "task_name": _fixed_full_smb_task_name(stage, info),
+        "progress": [],
+        "scores": [],
+        "coins": [],
+        "completion": False,
+        "death": False,
+    }
+    _update_full_smb_fixed_task_episode_metrics(metrics, stage, info)
+    return metrics
+
+
+def _update_full_smb_fixed_task_episode_metrics(
+    metrics: dict[str, Any],
+    stage: FullSMBStage,
+    info: Mapping[str, Any],
+) -> None:
+    if metrics["task_name"] is None:
+        metrics["task_name"] = _fixed_full_smb_task_name(stage, info)
+    source = _full_smb_signal_source(info)
+    progress = _full_smb_signal_progress(source)
+    if progress is not None:
+        metrics["progress"].append(progress)
+    score = _optional_float(source.get("score"))
+    if score is not None:
+        metrics["scores"].append(score)
+    coins = _optional_float(source.get("coins"))
+    if coins is None:
+        collectibles = source.get("collectibles")
+        if isinstance(collectibles, Mapping):
+            coins = _optional_float(collectibles.get("coins"))
+    if coins is not None:
+        metrics["coins"].append(coins)
+    metrics["completion"] = bool(metrics["completion"] or source.get("completion", False))
+    metrics["death"] = bool(
+        metrics["death"] or source.get("death", False) or source.get("game_over", False)
+    )
+
+
+def _finalize_full_smb_fixed_task_episode_metrics(
+    metrics: Mapping[str, Any],
+    *,
+    episode_return: float,
+) -> dict[str, float]:
+    progress_values = tuple(float(value) for value in metrics.get("progress", ()))
+    scores = tuple(float(value) for value in metrics.get("scores", ()))
+    coins = tuple(float(value) for value in metrics.get("coins", ()))
+    death = bool(metrics.get("death", False))
+    completion = bool(metrics.get("completion", False))
+    return {
+        "max_progress": _max(progress_values),
+        "mean_progress": _mean(progress_values),
+        "completion_rate": 1.0 if completion else 0.0,
+        "survival_rate": 0.0 if death else 1.0,
+        "mean_score": scores[-1] if scores else 0.0,
+        "mean_coins": coins[-1] if coins else 0.0,
+        "death_count": 1.0 if death else 0.0,
+        "mean_return": float(episode_return),
+    }
+
+
+def _full_smb_fixed_task_results(
+    episode_metrics: Mapping[str, list[dict[str, float]]],
+    *,
+    evaluation_episodes: int,
+    evaluation_max_steps: int,
+) -> dict[str, Any]:
+    raw_results = {
+        task_name: _aggregate_full_smb_fixed_task_episode_metrics(episodes)
+        for task_name, episodes in episode_metrics.items()
+        if task_name in FIXED_FULL_SMB_SUCCESS_THRESHOLDS
+    }
+    threshold_results = evaluate_fixed_full_smb_success_thresholds(
+        raw_results,
+        evaluation_episodes=evaluation_episodes,
+        evaluation_max_steps=evaluation_max_steps,
+    )
+    results: dict[str, Any] = {}
+    for task_name, raw_result in raw_results.items():
+        threshold_result = dict(threshold_results.get(task_name, {}))
+        threshold = threshold_result.pop("threshold", None)
+        threshold_met = bool(threshold_result.pop("threshold_met", False))
+        results[task_name] = {
+            **raw_result,
+            "threshold": threshold,
+            "threshold_met": threshold_met,
+            "threshold_diagnostics": threshold_result,
+        }
+    return results
+
+
+def _aggregate_full_smb_fixed_task_episode_metrics(
+    episodes: list[dict[str, float]],
+) -> dict[str, float]:
+    progress = tuple(float(episode.get("max_progress", 0.0)) for episode in episodes)
+    scores = tuple(float(episode.get("mean_score", 0.0)) for episode in episodes)
+    coins = tuple(float(episode.get("mean_coins", 0.0)) for episode in episodes)
+    returns = tuple(float(episode.get("mean_return", 0.0)) for episode in episodes)
+    completion = tuple(float(episode.get("completion_rate", 0.0)) for episode in episodes)
+    survival = tuple(float(episode.get("survival_rate", 0.0)) for episode in episodes)
+    deaths = tuple(float(episode.get("death_count", 0.0)) for episode in episodes)
+    return {
+        "episodes": float(len(episodes)),
+        "max_progress": _max(progress),
+        "mean_progress": _mean(progress),
+        "completion_rate": _mean(completion),
+        "survival_rate": _mean(survival),
+        "mean_score": _mean(scores),
+        "mean_coins": _mean(coins),
+        "death_count": float(sum(deaths)),
+        "mean_return": _mean(returns),
+    }
+
+
+def _fixed_full_smb_task_name(stage: FullSMBStage, info: Mapping[str, Any]) -> Optional[str]:
+    identifiers = _full_smb_rollout_identifiers(stage, info)
+    for field_name in ("task_id", "scenario_id", "emulator_state_id"):
+        value = identifiers.get(field_name)
+        if value in FIXED_FULL_SMB_SUCCESS_THRESHOLDS:
+            return value
+    source = _full_smb_signal_source(info)
+    for value in (source.get("level"), identifiers.get("emulator_state_id")):
+        task_name = _fixed_full_smb_task_name_from_level(value)
+        if task_name is not None:
+            return task_name
+    return None
+
+
+def _fixed_full_smb_task_name_from_level(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    key = str(value).strip().lower().replace("_", "-").replace(" ", "")
+    return _FULL_SMB_FIXED_LEVEL_TASK_NAMES.get(key)
+
+
+def _full_smb_signal_source(info: Mapping[str, Any]) -> Mapping[str, Any]:
+    signals = info.get("full_smb_signals")
+    return signals if isinstance(signals, Mapping) else info
+
+
+def _full_smb_signal_progress(source: Mapping[str, Any]) -> Optional[float]:
+    progress = _optional_float(source.get("progress"))
+    if progress is not None:
+        return progress
+    position = source.get("position")
+    if position is None:
+        return None
+    try:
+        values = tuple(position)
+    except TypeError:
+        return None
+    return _optional_float(values[0]) if values else None
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _validate_full_smb_policy_checkpoint(checkpoint: Mapping[str, Any]) -> None:
@@ -2696,7 +2923,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     evaluate = subparsers.add_parser("evaluate")
     _add_common_args(evaluate)
-    evaluate.add_argument("--policy-checkpoint", type=Path, required=True)
+    evaluate.add_argument("--policy-checkpoint", "--checkpoint", type=Path, required=True)
 
     args = parser.parse_args(argv)
     config = _config_from_args(args)

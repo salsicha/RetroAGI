@@ -198,7 +198,10 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
 
 def _run_full_smb_evaluate(stage_args: Sequence[str]) -> int:
     if any(
-        arg == "--policy-checkpoint" or arg.startswith("--policy-checkpoint=") for arg in stage_args
+        arg in {"--policy-checkpoint", "--checkpoint"}
+        or arg.startswith("--policy-checkpoint=")
+        or arg.startswith("--checkpoint=")
+        for arg in stage_args
     ):
         from retroagi.stages.full_smb.train import main as train_main
 

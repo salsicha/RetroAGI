@@ -716,6 +716,79 @@ class TestFullSMBTraining(unittest.TestCase):
             checkpoint["global_step"],
         )
 
+    def test_evaluation_reports_fixed_task_threshold_diagnostics(self):
+        class PassingBenchmarkEnv(TinyFullSMBEnv):
+            def reset(self, seed=None):
+                observation, info = super().reset(seed=seed)
+                info.update(
+                    {
+                        "level": "Level1-1",
+                    }
+                )
+                return observation, info
+
+            def step(self, action):
+                del action
+                self.step_count += 1
+                return (
+                    self._observation(0),
+                    1.0,
+                    True,
+                    False,
+                    {
+                        "level": "Level1-1",
+                        "x_pos": 3300,
+                        "y_pos": 96,
+                        "score": 900,
+                        "coins": 0,
+                        "lives": 3,
+                        "level_complete": True,
+                    },
+                )
+
+        def benchmark_stage(vision):
+            return FullSMBStage(
+                env=PassingBenchmarkEnv(),
+                vision=vision,
+                observation_config=FullSMBObservationConfig(
+                    frame_skip=1,
+                    frame_stack=2,
+                    resize_shape=(16, 20),
+                ),
+            )
+
+        with TemporaryDirectory() as tmpdir:
+            full_vision_path = Path(tmpdir) / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            architecture_config = {"hidden_dim": 8, "controller_schedule": "linear"}
+            model = full_smb_train_module.make_full_smb_policy_model(
+                architecture_name=BASELINE_ARCHITECTURE_NAME,
+                architecture_config=architecture_config,
+            )
+            config = FullSMBTrainingConfig(
+                seed=41,
+                architecture_config=architecture_config,
+                evaluation_episodes=3,
+                evaluation_max_steps=2400,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            evaluation = evaluate_full_smb_policy(
+                model,
+                config=config,
+                make_stage=benchmark_stage,
+            )
+
+        task = evaluation.fixed_task_results["benchmark_1_1_start"]
+        self.assertTrue(evaluation.success_thresholds_met)
+        self.assertTrue(task["threshold_met"])
+        self.assertTrue(task["threshold_diagnostics"]["meets_progress"])
+        self.assertEqual(task["completion_rate"], 1.0)
+        self.assertEqual(task["survival_rate"], 1.0)
+        self.assertEqual(task["death_count"], 0.0)
+        self.assertEqual(evaluation.tuning_metrics["threshold_pass_rate"], 1.0)
+        self.assertEqual(evaluation.as_dict()["fixed_task_results"], evaluation.fixed_task_results)
+
     def test_resume_restores_rng_and_rejects_schedule_or_tracking_drift(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -1291,6 +1364,61 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.resume_path, Path("data/full_smb/policy.pth"))
         self.assertEqual(config.checkpoint_path, Path("data/full_smb/resumed_policy.pth"))
         self.assertTrue(config.save_checkpoints)
+
+    def test_evaluate_cli_accepts_checkpoint_alias(self):
+        evaluation = full_smb_train_module.FullSMBEvaluationResult(
+            episodes=1,
+            max_steps_per_episode=2,
+            steps=2,
+            returns=(1.0,),
+            mean_return=1.0,
+            success_rate=1.0,
+            terminated_count=1,
+            truncated_count=0,
+            fixed_task_results={
+                "benchmark_1_1_start": {
+                    "threshold_met": True,
+                    "threshold_diagnostics": {"meets_progress": True},
+                }
+            },
+            tuning_metrics={"threshold_pass_rate": 1.0},
+            success_thresholds_met=True,
+        )
+        with (
+            patch.object(
+                full_smb_train_module,
+                "load_full_smb_policy_checkpoint",
+                return_value=(object(), object(), {}),
+            ) as load_policy,
+            patch.object(
+                full_smb_train_module,
+                "policy_architecture_from_checkpoint",
+                return_value=(BASELINE_ARCHITECTURE_NAME, {"hidden_dim": 8}),
+            ),
+            patch.object(
+                full_smb_train_module,
+                "evaluate_full_smb_policy",
+                return_value=evaluation,
+            ) as evaluate,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "evaluate",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--evaluation-episodes",
+                    "1",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        load_policy.assert_called_once()
+        self.assertEqual(load_policy.call_args.args[0], Path("data/full_smb/policy.pth"))
+        evaluate.assert_called_once()
+        self.assertTrue(payload["success_thresholds_met"])
+        self.assertEqual(payload["tuning_metrics"]["threshold_pass_rate"], 1.0)
 
     def test_perception_modes_resolve_and_record_trainable_state(self):
         with TemporaryDirectory() as tmpdir:
