@@ -39,6 +39,7 @@ from retroagi.stages.block_smb.train import (
 from retroagi.stages.full_smb.adapter import (
     DEFAULT_FULL_SMB_CONTENT,
     FULL_SMB_SPEC,
+    FullSMBEnvConfig,
     FullSMBRewardConfig,
     FullSMBStage,
 )
@@ -153,6 +154,17 @@ _FULL_SMB_FIXED_LEVEL_TASK_NAMES = {
 }
 
 
+def _validate_full_smb_action_id(action: Any) -> int:
+    try:
+        action_id = int(action)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid Full SMB action id {action!r}") from exc
+    if action_id < 0 or action_id >= FULL_SMB_ACTION_COUNT:
+        valid = ", ".join(f"{int(action)}={action.name.lower()}" for action in SMB_ACTIONS)
+        raise ValueError(f"invalid Full SMB action id {action_id}; expected one of: {valid}")
+    return action_id
+
+
 def _empty_full_smb_recording_manifest() -> dict[str, Any]:
     return {
         "schema_version": _FULL_SMB_RECORDING_SCHEMA_VERSION,
@@ -245,6 +257,9 @@ class FullSMBTrainingConfig:
     full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT
     perception_mode: Optional[str] = None
     freeze_vision: bool = True
+    game_id: str = DEFAULT_FULL_SMB_CONTENT.game
+    emulator_state: Optional[str] = None
+    scenario: Optional[str] = None
     save_checkpoints: bool = False
     output_summary: Optional[Path] = None
     log_path: Optional[Path] = None
@@ -312,6 +327,8 @@ class FullSMBTrainingConfig:
             raise ValueError(f"tracking_backend must be one of {TRACKING_BACKENDS}")
         if not self.tracking_project:
             raise ValueError("tracking_project must be non-empty")
+        if not str(self.game_id).strip():
+            raise ValueError("game_id must be non-empty")
         for path_name in (
             "checkpoint_path",
             "resume_path",
@@ -393,6 +410,9 @@ class FullSMBPlayConfig:
     pause_at_start: bool = False
     interactive_controls: bool = True
     recording_prefix: str = "play"
+    human_control: bool = False
+    human_default_action: int = int(SMB_ACTIONS[0])
+    human_action_script: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if int(self.max_steps) < 0:
@@ -403,6 +423,16 @@ class FullSMBPlayConfig:
             raise ValueError("sampling_temperature must be positive")
         if not str(self.recording_prefix).strip():
             raise ValueError("recording_prefix must be non-empty")
+        object.__setattr__(
+            self,
+            "human_default_action",
+            _validate_full_smb_action_id(self.human_default_action),
+        )
+        object.__setattr__(
+            self,
+            "human_action_script",
+            tuple(_validate_full_smb_action_id(action) for action in self.human_action_script),
+        )
 
 
 @dataclass(frozen=True)
@@ -420,9 +450,12 @@ class FullSMBPlayResult:
     sampling_temperature: float
     render: bool
     fps: float
+    control_mode: str = "policy"
     quit_requested: bool = False
     recording: Mapping[str, Any] = field(default_factory=_empty_full_smb_recording_manifest)
     final_signals: Mapping[str, Any] = field(default_factory=dict)
+    last_reward_terms: Mapping[str, float] = field(default_factory=dict)
+    human_action_bindings: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def mean_return(self) -> float:
@@ -432,6 +465,14 @@ class FullSMBPlayResult:
         payload = to_plain_data(asdict(self))
         payload["mean_return"] = self.mean_return
         return payload
+
+
+@dataclass(frozen=True)
+class FullSMBPlayCommand:
+    """One non-blocking terminal command for Full SMB play mode."""
+
+    kind: str
+    action: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -918,7 +959,7 @@ def evaluate_full_smb_policy(
 
 @torch.no_grad()
 def play_full_smb_policy(
-    model: torch.nn.Module,
+    model: Optional[torch.nn.Module],
     *,
     config: FullSMBTrainingConfig = FullSMBTrainingConfig(),
     play_config: FullSMBPlayConfig = FullSMBPlayConfig(),
@@ -928,9 +969,12 @@ def play_full_smb_policy(
 ) -> FullSMBPlayResult:
     """Play a saved Full SMB policy with optional rendering and recording."""
 
+    if model is None and not play_config.human_control:
+        raise ValueError("policy playback requires a model unless human_control is enabled")
     seed_everything(config.seed, deterministic=config.deterministic)
     resolved_device = device or select_device(config.device)
-    model.eval()
+    if model is not None:
+        model.eval()
     owns_vision = vision is None
     if vision is None:
         vision = _build_full_smb_perception(config, resolved_device)
@@ -953,6 +997,8 @@ def play_full_smb_policy(
     world_model_state: WorldModelState | None = None
     interactive = bool(play_config.interactive_controls and _stdin_supports_play_controls())
     paused = bool(play_config.pause_at_start and interactive)
+    script_index = 0
+    control_mode = "human" if play_config.human_control else "policy"
     try:
         episode_index = 0
         episode_seed = config.seed
@@ -969,13 +1015,16 @@ def play_full_smb_policy(
         )
         episode_open = True
         while len(actions) < play_config.max_steps:
-            command = _poll_full_smb_play_command(enabled=interactive)
-            if command == "quit":
+            command = _poll_full_smb_play_command(
+                enabled=interactive,
+                allow_actions=play_config.human_control,
+            )
+            if command is not None and command.kind == "quit":
                 quit_requested = True
                 break
-            if command == "pause":
+            if command is not None and command.kind == "pause":
                 paused = not paused
-            if command == "reset":
+            if command is not None and command.kind == "reset":
                 if recording_targets["enabled"]:
                     _finish_full_smb_play_recording_episode(
                         episode_recording,
@@ -1004,22 +1053,32 @@ def play_full_smb_policy(
                 _sleep_full_smb_play_frame(play_config.fps)
                 continue
 
-            batch = stage.encode_observation(observation)
-            forward = _coerce_policy_forward_result(
-                _policy_action_logits_and_state(
-                    model,
-                    batch,
-                    device=resolved_device,
-                    world_model_state=world_model_state,
+            if play_config.human_control:
+                action, script_index = _select_full_smb_human_action(
+                    command,
+                    play_config=play_config,
+                    script_index=script_index,
                 )
-            )
-            logits = forward.logits
-            _finite_tensor_or_raise("action_logits", logits)
-            action = _select_full_smb_play_action(
-                logits,
-                deterministic=play_config.deterministic_policy,
-                temperature=play_config.sampling_temperature,
-            )
+                next_world_model_state = None
+            else:
+                assert model is not None
+                batch = stage.encode_observation(observation)
+                forward = _coerce_policy_forward_result(
+                    _policy_action_logits_and_state(
+                        model,
+                        batch,
+                        device=resolved_device,
+                        world_model_state=world_model_state,
+                    )
+                )
+                logits = forward.logits
+                _finite_tensor_or_raise("action_logits", logits)
+                action = _select_full_smb_play_action(
+                    logits,
+                    deterministic=play_config.deterministic_policy,
+                    temperature=play_config.sampling_temperature,
+                )
+                next_world_model_state = forward.next_world_model_state
             observation, reward, terminated, truncated, info = stage.step(action)
             final_info = info
             if recording_targets["enabled"]:
@@ -1045,8 +1104,8 @@ def play_full_smb_policy(
             )
             if boundary.reset_recurrent_state:
                 world_model_state = None
-            elif forward.next_world_model_state is not None:
-                world_model_state = forward.next_world_model_state.detach()
+            elif next_world_model_state is not None:
+                world_model_state = next_world_model_state.detach()
             else:
                 world_model_state = None
 
@@ -1105,9 +1164,14 @@ def play_full_smb_policy(
             sampling_temperature=play_config.sampling_temperature,
             render=play_config.render,
             fps=play_config.fps,
+            control_mode=control_mode,
             quit_requested=quit_requested,
             recording=recording_manifest,
             final_signals=_selected_full_smb_signal_fields(final_info),
+            last_reward_terms=_last_full_smb_reward_terms(final_info),
+            human_action_bindings=(
+                _full_smb_human_action_bindings() if play_config.human_control else {}
+            ),
         )
     finally:
         stage.close()
@@ -1126,6 +1190,88 @@ def _select_full_smb_play_action(
         return int(scaled_logits.argmax(dim=-1).item())
     distribution = torch.distributions.Categorical(logits=scaled_logits)
     return int(distribution.sample().item())
+
+
+def _select_full_smb_human_action(
+    command: Optional[FullSMBPlayCommand],
+    *,
+    play_config: FullSMBPlayConfig,
+    script_index: int,
+) -> tuple[int, int]:
+    if command is not None and command.kind == "action" and command.action is not None:
+        return command.action, script_index
+    if script_index < len(play_config.human_action_script):
+        return play_config.human_action_script[script_index], script_index + 1
+    return play_config.human_default_action, script_index
+
+
+def _full_smb_action_id_arg(value: str) -> int:
+    parsed = _full_smb_human_action_id(value)
+    if parsed is None:
+        valid = ", ".join(f"{int(action)}={action.name.lower()}" for action in SMB_ACTIONS)
+        raise argparse.ArgumentTypeError(
+            f"invalid action {value!r}; expected action id/name or one of: {valid}"
+        )
+    return parsed
+
+
+def _full_smb_human_action_id(value: str) -> Optional[int]:
+    normalized = str(value).strip().lower().replace("-", "_")
+    aliases = _full_smb_human_action_aliases()
+    if normalized in aliases:
+        return aliases[normalized]
+    try:
+        return _validate_full_smb_action_id(int(normalized))
+    except (TypeError, ValueError):
+        return None
+
+
+def _full_smb_human_action_aliases() -> dict[str, int]:
+    return {
+        "": int(SMB_ACTIONS[0]),
+        "noop": int(SMB_ACTIONS[0]),
+        "none": int(SMB_ACTIONS[0]),
+        "idle": int(SMB_ACTIONS[0]),
+        ".": int(SMB_ACTIONS[0]),
+        "right": int(SMB_ACTIONS[1]),
+        "d": int(SMB_ACTIONS[1]),
+        "right_jump": int(SMB_ACTIONS[2]),
+        "rightjump": int(SMB_ACTIONS[2]),
+        "jump_right": int(SMB_ACTIONS[2]),
+        "dr": int(SMB_ACTIONS[2]),
+        "rd": int(SMB_ACTIONS[2]),
+        "d+": int(SMB_ACTIONS[2]),
+        "right+a": int(SMB_ACTIONS[2]),
+        "left": int(SMB_ACTIONS[3]),
+        "l": int(SMB_ACTIONS[3]),
+        "a": int(SMB_ACTIONS[3]),
+        "left_jump": int(SMB_ACTIONS[4]),
+        "leftjump": int(SMB_ACTIONS[4]),
+        "jump_left": int(SMB_ACTIONS[4]),
+        "al": int(SMB_ACTIONS[4]),
+        "la": int(SMB_ACTIONS[4]),
+        "a+": int(SMB_ACTIONS[4]),
+        "left+a": int(SMB_ACTIONS[4]),
+        "jump": int(SMB_ACTIONS[5]),
+        "j": int(SMB_ACTIONS[5]),
+        "w": int(SMB_ACTIONS[5]),
+        "space": int(SMB_ACTIONS[5]),
+    }
+
+
+def _full_smb_human_action_bindings() -> dict[str, Any]:
+    by_action: dict[str, list[str]] = {action.name.lower(): [] for action in SMB_ACTIONS}
+    for alias, action_id in _full_smb_human_action_aliases().items():
+        by_action[SMB_ACTIONS[action_id].name.lower()].append(alias or "<enter>")
+    return {
+        "input_mode": "line",
+        "commands": {
+            "pause_or_resume": ("p", "pause", "resume"),
+            "reset": ("r", "reset"),
+            "quit": ("q", "quit", "exit"),
+        },
+        "actions": {name: tuple(sorted(aliases)) for name, aliases in by_action.items()},
+    }
 
 
 def _finish_full_smb_play_recording_episode(
@@ -1165,7 +1311,11 @@ def _stdin_supports_play_controls() -> bool:
     return bool(stream is not None and hasattr(stream, "isatty") and stream.isatty())
 
 
-def _poll_full_smb_play_command(*, enabled: bool) -> Optional[str]:
+def _poll_full_smb_play_command(
+    *,
+    enabled: bool,
+    allow_actions: bool = False,
+) -> Optional[FullSMBPlayCommand]:
     if not enabled:
         return None
     try:
@@ -1178,12 +1328,28 @@ def _poll_full_smb_play_command(*, enabled: bool) -> Optional[str]:
         return None
     text = sys.stdin.readline().strip().lower()
     if text in {"q", "quit", "exit"}:
-        return "quit"
+        return FullSMBPlayCommand("quit")
     if text in {"p", "pause", "resume"}:
-        return "pause"
+        return FullSMBPlayCommand("pause")
     if text in {"r", "reset"}:
-        return "reset"
+        return FullSMBPlayCommand("reset")
+    if allow_actions:
+        action = _full_smb_human_action_id(text)
+        if action is not None:
+            return FullSMBPlayCommand("action", action=action)
     return None
+
+
+def _last_full_smb_reward_terms(info: Mapping[str, Any]) -> dict[str, float]:
+    reward_terms = info.get("reward_terms") if isinstance(info, Mapping) else None
+    if not isinstance(reward_terms, Mapping):
+        return {}
+    terms: dict[str, float] = {}
+    for name, value in reward_terms.items():
+        numeric_value = _optional_float(value)
+        if numeric_value is not None:
+            terms[str(name)] = numeric_value
+    return terms
 
 
 def load_full_smb_policy_checkpoint(
@@ -1876,7 +2042,15 @@ def _make_stage(
 ) -> FullSMBStage:
     if make_stage is not None:
         return make_stage(vision)
-    return FullSMBStage(vision=vision, reward_config=config.reward_config)
+    return FullSMBStage(
+        env_config=FullSMBEnvConfig(
+            game=config.game_id,
+            state=config.emulator_state,
+            scenario=config.scenario,
+        ),
+        vision=vision,
+        reward_config=config.reward_config,
+    )
 
 
 def _perception_checkpoint_path(config: FullSMBTrainingConfig) -> Optional[Path]:
@@ -3240,6 +3414,11 @@ def _add_recording_args(parser: argparse.ArgumentParser, *, use_defaults: bool) 
 
 
 def _add_play_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--human",
+        action="store_true",
+        help="use manual human actions instead of loading a policy checkpoint",
+    )
     parser.add_argument("--steps", "--max-steps", dest="play_max_steps", type=int, default=1_000)
     parser.set_defaults(play_render=True)
     parser.add_argument("--render", action="store_true", dest="play_render")
@@ -3263,6 +3442,23 @@ def _add_play_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-reset-on-done", action="store_false", dest="reset_on_done")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--recording-prefix", default="play")
+    parser.add_argument(
+        "--human-default-action",
+        type=_full_smb_action_id_arg,
+        default=int(SMB_ACTIONS[0]),
+        help="fallback action for human mode when no input/script action is available",
+    )
+    parser.add_argument(
+        "--human-action",
+        dest="human_actions",
+        action="append",
+        type=_full_smb_action_id_arg,
+        default=[],
+        help="scripted human action for non-interactive debugging; may be repeated",
+    )
+    parser.add_argument("--game-id", default=DEFAULT_FULL_SMB_CONTENT.game)
+    parser.add_argument("--state", dest="emulator_state")
+    parser.add_argument("--scenario")
     _add_recording_args(parser, use_defaults=False)
 
 
@@ -3301,10 +3497,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     play = subparsers.add_parser("play")
     _add_common_args(play)
-    play.add_argument("--policy-checkpoint", "--checkpoint", type=Path, required=True)
+    play.add_argument("--policy-checkpoint", "--checkpoint", type=Path)
     _add_play_args(play)
 
     args = parser.parse_args(argv)
+    if args.command == "play" and not args.human and args.policy_checkpoint is None:
+        parser.error("play requires --checkpoint unless --human is set")
     config = _config_from_args(args)
     if args.command in {"train", "resume"}:
         result = train_full_smb_policy(config)
@@ -3331,11 +3529,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
     elif args.command == "play":
-        model, _optimizer, checkpoint = load_full_smb_policy_checkpoint(
-            args.policy_checkpoint,
-            device=select_device(config.device),
-        )
-        architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
+        model = None
+        architecture_name = config.architecture_name
+        architecture_config = dict(config.architecture_config)
+        if args.policy_checkpoint is not None and not args.human:
+            model, _optimizer, checkpoint = load_full_smb_policy_checkpoint(
+                args.policy_checkpoint,
+                device=select_device(config.device),
+            )
+            architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
         play_config = _play_config_from_args(args)
         play_training_config = FullSMBTrainingConfig(
             **{
@@ -3443,6 +3645,9 @@ def _play_config_from_args(args: argparse.Namespace) -> FullSMBPlayConfig:
         pause_at_start=args.pause_at_start,
         interactive_controls=args.interactive_controls,
         recording_prefix=args.recording_prefix,
+        human_control=bool(args.human),
+        human_default_action=args.human_default_action,
+        human_action_script=tuple(args.human_actions or ()),
     )
 
 
@@ -3517,6 +3722,9 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         full_smb_vision_checkpoint=args.full_smb_vision_checkpoint,
         perception_mode=perception_mode,
         freeze_vision=not args.fine_tune_vision,
+        game_id=getattr(args, "game_id", DEFAULT_FULL_SMB_CONTENT.game),
+        emulator_state=getattr(args, "emulator_state", None),
+        scenario=getattr(args, "scenario", None),
         save_checkpoints=(
             is_resume_command
             or getattr(args, "save_checkpoints", False)

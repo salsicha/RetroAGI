@@ -499,7 +499,7 @@ and playable end target.
 - [x] Add `retroagi play --stage full-smb --checkpoint ...` for interactive
       playback of a trained policy with render, speed, pause, reset, deterministic
       or sampling mode, and optional recording.
-- [ ] Add a human-control mode under `retroagi play --stage full-smb --human`
+- [x] Add a human-control mode under `retroagi play --stage full-smb --human`
       for manual debugging of action mapping, reward signals, rendering, and
       save-state starts.
 - [ ] Add CLI options for selecting Full SMB task set, level/state, render mode,

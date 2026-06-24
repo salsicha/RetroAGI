@@ -793,6 +793,24 @@ Use `--no-render` for headless playback, `--sample --temperature <value>` for
 stochastic policy sampling, and `p`, `r`, or `q` in an interactive terminal to
 pause/resume, reset, or quit playback.
 
+For manual action-mapping and reward-signal debugging, run human mode without a
+policy checkpoint:
+
+```bash
+retroagi play --game smb --stage full \
+  --human \
+  --state Level1-1 \
+  --scenario debug \
+  --steps 1000 \
+  --render \
+  --fps 30
+```
+
+Human mode accepts line controls for the shared SMB vocabulary: `d/right`,
+`d+/right_jump`, `a/left`, `a+/left_jump`, `w/space/jump`, and empty input for
+noop. Use repeated `--human-action right --human-action jump` arguments for
+scripted non-interactive debugging.
+
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
 `config.reward`, `config.safety`, `config.recording`, `config.tracking`,
 `config.rollout_storage`, `config.evaluation`, `config.task_curriculum`,

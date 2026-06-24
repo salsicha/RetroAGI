@@ -16,6 +16,7 @@ import retroagi.stages.full_smb.train as full_smb_train_module
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     CHECKPOINT_SCHEMA_KEY,
+    SMB_ACTIONS,
     StageBatch,
     WorldModelState,
     load_checkpoint,
@@ -1247,6 +1248,43 @@ class TestFullSMBTraining(unittest.TestCase):
             self.assertEqual(data["actions"].shape, (3,))
             self.assertEqual(data["action_names"].shape, (3,))
 
+    def test_human_playback_runs_scripted_actions_without_policy(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=43,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            play_config = FullSMBPlayConfig(
+                max_steps=3,
+                render=False,
+                fps=0.0,
+                human_control=True,
+                human_action_script=(int(SMB_ACTIONS[1]), int(SMB_ACTIONS[5])),
+                human_default_action=int(SMB_ACTIONS[0]),
+                interactive_controls=False,
+            )
+
+            result = play_full_smb_policy(
+                None,
+                config=config,
+                play_config=play_config,
+                make_stage=tiny_stage,
+            )
+
+        self.assertEqual(result.control_mode, "human")
+        self.assertEqual(
+            result.actions,
+            (int(SMB_ACTIONS[1]), int(SMB_ACTIONS[5]), int(SMB_ACTIONS[0])),
+        )
+        self.assertEqual(result.action_names, ("RIGHT", "JUMP", "NOOP"))
+        self.assertIn("right", result.human_action_bindings["actions"])
+        self.assertIn("total", result.last_reward_terms)
+
     def test_train_cli_builds_expanded_full_smb_config(self):
         with (
             patch.object(
@@ -1609,6 +1647,69 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(play_config.sampling_temperature, 0.5)
         self.assertTrue(payload["recording"]["enabled"])
         self.assertEqual(payload["mean_return"], 3.0)
+
+    def test_play_cli_human_mode_does_not_require_checkpoint(self):
+        playback = full_smb_train_module.FullSMBPlayResult(
+            steps=2,
+            resets=1,
+            completed_episodes=0,
+            total_return=2.0,
+            episode_returns=(2.0,),
+            actions=(int(SMB_ACTIONS[1]), int(SMB_ACTIONS[5])),
+            action_names=("RIGHT", "JUMP"),
+            deterministic_policy=True,
+            sampling_temperature=1.0,
+            render=False,
+            fps=0.0,
+            control_mode="human",
+            human_action_bindings={"actions": {"right": ("d", "right")}},
+        )
+        with (
+            patch.object(full_smb_train_module, "load_full_smb_policy_checkpoint") as load_policy,
+            patch.object(
+                full_smb_train_module,
+                "play_full_smb_policy",
+                return_value=playback,
+            ) as play,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "play",
+                    "--human",
+                    "--steps",
+                    "2",
+                    "--no-render",
+                    "--fps",
+                    "0",
+                    "--human-action",
+                    "right",
+                    "--human-action",
+                    "jump",
+                    "--human-default-action",
+                    "noop",
+                    "--state",
+                    "Level1-1",
+                    "--scenario",
+                    "debug",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        config = play.call_args.kwargs["config"]
+        play_config = play.call_args.kwargs["play_config"]
+        self.assertEqual(exit_code, 0)
+        load_policy.assert_not_called()
+        self.assertIsNone(play.call_args.args[0])
+        self.assertEqual(config.emulator_state, "Level1-1")
+        self.assertEqual(config.scenario, "debug")
+        self.assertTrue(play_config.human_control)
+        self.assertEqual(
+            play_config.human_action_script,
+            (int(SMB_ACTIONS[1]), int(SMB_ACTIONS[5])),
+        )
+        self.assertEqual(play_config.human_default_action, int(SMB_ACTIONS[0]))
+        self.assertEqual(payload["control_mode"], "human")
 
     def test_perception_modes_resolve_and_record_trainable_state(self):
         with TemporaryDirectory() as tmpdir:
