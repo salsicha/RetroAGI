@@ -469,7 +469,7 @@ and playable end target.
       and deterministic mode.
 - [x] Implement direct Full SMB policy training from scratch using the shared
       architecture factory and Full SMB stage batches.
-- [ ] Implement transferred-policy fine-tuning from a Block SMB or Full SMB
+- [x] Implement transferred-policy fine-tuning from a Block SMB or Full SMB
       transfer checkpoint.
 - [ ] Add recurrent-state and episode-boundary handling in Full SMB rollouts,
       including death, timeout, level completion, game over, and manual reset.

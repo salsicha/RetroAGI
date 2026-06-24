@@ -13,6 +13,11 @@ import torch
 
 import retroagi.stages.full_smb.train as full_smb_train_module
 from retroagi.core import BASELINE_ARCHITECTURE_NAME, StageBatch, load_checkpoint
+from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
+from retroagi.stages.block_smb.train import (
+    BLOCK_SMB_CHECKPOINT_KIND,
+    BLOCK_SMB_MODEL_NAME,
+)
 from retroagi.stages.full_smb import (
     FULL_SMB_PERCEPTION_FINE_TUNE,
     FULL_SMB_PERCEPTION_FREEZE,
@@ -28,7 +33,11 @@ from retroagi.stages.full_smb import (
     load_full_smb_policy_checkpoint,
     train_full_smb_policy,
 )
-from retroagi.stages.full_smb.transfer import transfer_block_smb_checkpoint_to_full_smb
+from retroagi.stages.full_smb.transfer import (
+    FULL_SMB_TRANSFER_CHECKPOINT_KIND,
+    FULL_SMB_TRANSFER_MODEL_NAME,
+    transfer_block_smb_checkpoint_to_full_smb,
+)
 from scripts.tests.test_full_smb_transfer import (
     TinyFullSMBEnv,
     write_block_policy_checkpoint,
@@ -138,6 +147,48 @@ class TestFullSMBTraining(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "src_a"):
                 train_full_smb_policy(config, make_stage=lambda _vision: BadStage())
 
+    def test_block_smb_init_checkpoint_transfers_and_fine_tunes_directly(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            block_policy_path = tmp / "block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            _source_model, source_config = write_block_policy_checkpoint(block_policy_path)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=8,
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=2,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                init_checkpoint=block_policy_path,
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            result = train_full_smb_policy(config, make_stage=tiny_stage)
+
+        checkpoint = result.checkpoint
+        source = checkpoint["config"]["training_source"]
+        self.assertEqual(checkpoint["model_name"], FULL_SMB_POLICY_MODEL_NAME)
+        self.assertEqual(source["mode"], "init_checkpoint")
+        self.assertEqual(source["init_checkpoint_source"], "block_smb_policy_checkpoint")
+        self.assertEqual(source["checkpoint_path"], str(block_policy_path))
+        self.assertEqual(source["checkpoint_stage"], BLOCK_SMB_SPEC.name)
+        self.assertEqual(source["checkpoint_model_name"], BLOCK_SMB_MODEL_NAME)
+        self.assertEqual(source["checkpoint_kind"], BLOCK_SMB_CHECKPOINT_KIND)
+        self.assertEqual(source["resolved_transfer_stage"], FULL_SMB_SPEC.name)
+        self.assertEqual(source["resolved_transfer_model_name"], FULL_SMB_TRANSFER_MODEL_NAME)
+        self.assertEqual(
+            source["resolved_transfer_checkpoint_kind"],
+            FULL_SMB_TRANSFER_CHECKPOINT_KIND,
+        )
+        self.assertEqual(source["full_smb_vision_checkpoint"], str(full_vision_path))
+        self.assertEqual(source["architecture_config"], source_config.architecture_config)
+        self.assertEqual(
+            checkpoint["metadata"]["training"]["source"],
+            source,
+        )
+
     def test_train_resume_and_evaluate_full_smb_policy_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -182,6 +233,22 @@ class TestFullSMBTraining(unittest.TestCase):
 
             self.assertTrue(policy_path.exists())
             self.assertEqual(result.checkpoint["model_name"], FULL_SMB_POLICY_MODEL_NAME)
+            self.assertEqual(
+                result.checkpoint["config"]["training_source"]["mode"],
+                "init_checkpoint",
+            )
+            self.assertEqual(
+                result.checkpoint["config"]["training_source"]["init_checkpoint_source"],
+                "full_smb_transfer_checkpoint",
+            )
+            self.assertEqual(
+                result.checkpoint["config"]["training_source"]["checkpoint_path"],
+                str(transfer_path),
+            )
+            self.assertEqual(
+                result.checkpoint["config"]["training_source"]["checkpoint_kind"],
+                FULL_SMB_TRANSFER_CHECKPOINT_KIND,
+            )
             self.assertEqual(
                 result.checkpoint["checkpoint_kind"],
                 FULL_SMB_POLICY_CHECKPOINT_KIND,

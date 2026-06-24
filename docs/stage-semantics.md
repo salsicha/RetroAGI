@@ -565,8 +565,13 @@ shared architecture factory, consumes `FullSMBStage.encode_observation(...)`
 A/B/C `StageBatch` tensors directly, validates their Full SMB sequence lengths
 and dtypes before policy inference, and records
 `training_source.mode="scratch"` plus the stage-batch contract in checkpoint
-config and metadata. Resume and transferred-initialization runs record the
-source checkpoint provenance in the same fields.
+config and metadata. `init_checkpoint` selects transferred-policy fine-tuning:
+it may point at either a raw Block SMB policy checkpoint, which the trainer
+converts into the Full SMB contract in memory, or an existing Full SMB transfer
+checkpoint. Both paths start Full SMB optimizer updates at epoch zero and record
+`training_source.mode="init_checkpoint"`, the source checkpoint identity, and
+whether the source was a Block SMB policy or a Full SMB transfer checkpoint.
+Resume runs record their source checkpoint provenance in the same fields.
 
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,

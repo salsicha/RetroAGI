@@ -26,6 +26,11 @@ from retroagi.core import (
     select_device,
     to_plain_data,
 )
+from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
+from retroagi.stages.block_smb.train import (
+    BLOCK_SMB_CHECKPOINT_KIND,
+    BLOCK_SMB_MODEL_NAME,
+)
 from retroagi.stages.full_smb.adapter import (
     FULL_SMB_SPEC,
     FullSMBRewardConfig,
@@ -37,6 +42,7 @@ from retroagi.stages.full_smb.transfer import (
     load_transferred_full_smb_policy,
     make_full_smb_policy_model,
     policy_architecture_from_checkpoint,
+    transfer_block_smb_checkpoint_to_full_smb,
 )
 from retroagi.stages.full_smb.vision import (
     DEFAULT_FULL_SMB_VIT_CHECKPOINT,
@@ -49,6 +55,8 @@ FULL_SMB_ACTION_COUNT = len(SMB_ACTIONS)
 FULL_SMB_TRAINING_SOURCE_SCRATCH = "scratch"
 FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT = "init_checkpoint"
 FULL_SMB_TRAINING_SOURCE_RESUME_CHECKPOINT = "resume_checkpoint"
+FULL_SMB_INIT_SOURCE_BLOCK_POLICY = "block_smb_policy_checkpoint"
+FULL_SMB_INIT_SOURCE_TRANSFER = "full_smb_transfer_checkpoint"
 FULL_SMB_PERCEPTION_FREEZE = "freeze"
 FULL_SMB_PERCEPTION_FINE_TUNE = "fine_tune"
 FULL_SMB_PERCEPTION_REPLACE = "replace"
@@ -647,6 +655,47 @@ def _load_training_state(
         )
 
     if config.init_checkpoint is not None:
+        return _load_init_training_state(config, device)
+    architecture_name = config.architecture_name
+    architecture_config = dict(config.architecture_config)
+    model = make_full_smb_policy_model(
+        architecture_name=architecture_name,
+        architecture_config=architecture_config,
+    ).to(device)
+    vision = None
+    checkpoint = None
+    source = _training_source_metadata(
+        FULL_SMB_TRAINING_SOURCE_SCRATCH,
+        checkpoint_path=None,
+        checkpoint=None,
+        architecture_name=architecture_name,
+        architecture_config=architecture_config,
+    )
+    return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision, source
+
+
+def _load_init_training_state(
+    config: FullSMBTrainingConfig,
+    device: torch.device,
+) -> tuple[
+    torch.nn.Module,
+    int,
+    int,
+    str,
+    dict[str, Any],
+    Optional[Mapping[str, Any]],
+    Optional[FullSMBSegmentationVision],
+    dict[str, Any],
+]:
+    if config.init_checkpoint is None:
+        raise ValueError("init_checkpoint is required")
+    init_checkpoint = load_checkpoint(config.init_checkpoint, map_location=device)
+    if _matches_checkpoint_identity(
+        init_checkpoint,
+        stage=FULL_SMB_SPEC.name,
+        model_name=FULL_SMB_TRANSFER_MODEL_NAME,
+        checkpoint_kind=FULL_SMB_TRANSFER_CHECKPOINT_KIND,
+    ):
         transferred = load_transferred_full_smb_policy(
             config.init_checkpoint,
             full_smb_vision_checkpoint=_perception_checkpoint_path(config),
@@ -655,10 +704,8 @@ def _load_training_state(
         )
         model = transferred.model
         vision = transferred.vision
-        architecture_name, architecture_config = policy_architecture_from_checkpoint(
-            transferred.checkpoint
-        )
         checkpoint = transferred.checkpoint
+        architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
         source = _training_source_metadata(
             FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT,
             checkpoint_path=config.init_checkpoint,
@@ -666,23 +713,54 @@ def _load_training_state(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         )
-    else:
-        architecture_name = config.architecture_name
-        architecture_config = dict(config.architecture_config)
-        model = make_full_smb_policy_model(
-            architecture_name=architecture_name,
-            architecture_config=architecture_config,
-        ).to(device)
-        vision = None
-        checkpoint = None
+        source["init_checkpoint_source"] = FULL_SMB_INIT_SOURCE_TRANSFER
+        return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision, source
+
+    if _matches_checkpoint_identity(
+        init_checkpoint,
+        stage=BLOCK_SMB_SPEC.name,
+        model_name=BLOCK_SMB_MODEL_NAME,
+        checkpoint_kind=BLOCK_SMB_CHECKPOINT_KIND,
+    ):
+        transferred = transfer_block_smb_checkpoint_to_full_smb(
+            config.init_checkpoint,
+            output_checkpoint=None,
+            full_smb_vision_checkpoint=_perception_checkpoint_path(config),
+            block_vision_checkpoint=None,
+            device=device,
+            freeze_vision=config.freeze_vision,
+        )
+        model = transferred.model
+        vision = transferred.vision
+        checkpoint = transferred.checkpoint
+        architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
         source = _training_source_metadata(
-            FULL_SMB_TRAINING_SOURCE_SCRATCH,
-            checkpoint_path=None,
-            checkpoint=None,
+            FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT,
+            checkpoint_path=config.init_checkpoint,
+            checkpoint=transferred.source_checkpoint,
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         )
-    return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision, source
+        source.update(
+            {
+                "init_checkpoint_source": FULL_SMB_INIT_SOURCE_BLOCK_POLICY,
+                "resolved_transfer_stage": checkpoint.get("stage"),
+                "resolved_transfer_model_name": checkpoint.get("model_name"),
+                "resolved_transfer_checkpoint_kind": checkpoint.get("checkpoint_kind"),
+                "resolved_transfer_epoch": int(checkpoint.get("epoch", 0)),
+                "resolved_transfer_global_step": int(checkpoint.get("global_step", 0)),
+                "full_smb_vision_checkpoint": (
+                    str(transferred.full_smb_vision_path)
+                    if transferred.full_smb_vision_path is not None
+                    else None
+                ),
+            }
+        )
+        return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision, source
+
+    raise ValueError(
+        "init_checkpoint must be a Block SMB policy checkpoint or a Full SMB " "transfer checkpoint"
+    )
 
 
 def _train_episode(
@@ -946,6 +1024,20 @@ def _training_source_metadata(
         "architecture_name": architecture_name,
         "architecture_config": dict(architecture_config),
     }
+
+
+def _matches_checkpoint_identity(
+    checkpoint: Mapping[str, Any],
+    *,
+    stage: str,
+    model_name: str,
+    checkpoint_kind: str,
+) -> bool:
+    return (
+        checkpoint.get("stage") == stage
+        and checkpoint.get("model_name") == model_name
+        and checkpoint.get("checkpoint_kind") == checkpoint_kind
+    )
 
 
 def _stage_batch_contract_metadata() -> dict[str, Any]:
