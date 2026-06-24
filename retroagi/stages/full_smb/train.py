@@ -459,6 +459,8 @@ def train_full_smb_policy(
     _restore_perception_state(vision, checkpoint)
     optimizer = _make_training_optimizer(model, vision, config)
     _restore_optimizer_state(optimizer, checkpoint, strict=True)
+    if config.resume_path is not None and checkpoint is not None:
+        training_source["restored_rng_state"] = _restore_resume_rng_state(checkpoint)
     history: dict[str, list[float]] = {"episode_return": [], "policy_loss": []}
     rollouts: list[FullSMBRolloutStorage] = []
     evaluations: list[dict[str, Any]] = []
@@ -868,6 +870,7 @@ def _load_training_state(
     if config.resume_path is not None:
         checkpoint = load_checkpoint(config.resume_path, map_location=device)
         _validate_full_smb_policy_checkpoint(checkpoint)
+        resume_contract = _validate_resume_contract(config, checkpoint)
         architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
         model = make_full_smb_policy_model(
             architecture_name=architecture_name,
@@ -881,6 +884,7 @@ def _load_training_state(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         )
+        source["resume_contract"] = resume_contract
         return (
             model,
             int(checkpoint.get("epoch", 0)),
@@ -1913,6 +1917,113 @@ def _source_checkpoint_provenance(
         "upstream_training_source": (
             config.get("training_source") if isinstance(config, Mapping) else None
         ),
+    }
+
+
+def _validate_resume_contract(
+    config: FullSMBTrainingConfig,
+    checkpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+    checkpoint_config = checkpoint.get("config", {})
+    if not isinstance(checkpoint_config, Mapping):
+        raise ValueError("Full SMB resume checkpoint config must be a mapping")
+    checked_fields: dict[str, Any] = {}
+    for field_name in (
+        "seed",
+        "updates_per_epoch",
+        "rollout_length",
+        "max_steps_per_episode",
+        "deterministic",
+        "deterministic_actions",
+    ):
+        if field_name not in checkpoint_config:
+            continue
+        expected = checkpoint_config[field_name]
+        actual = getattr(config, field_name)
+        if actual != expected:
+            raise ValueError(
+                "Full SMB resume task schedule mismatch: "
+                f"{field_name}={actual!r} does not match checkpoint value {expected!r}"
+            )
+        checked_fields[field_name] = actual
+
+    previous_rollout = checkpoint_config.get("rollout", {})
+    if isinstance(previous_rollout, Mapping):
+        current_rollout = _rollout_metadata(config)
+        for field_name in ("recurrent_state_policy", "recurrent_state_reset_reasons"):
+            if field_name not in previous_rollout:
+                continue
+            expected = previous_rollout[field_name]
+            actual = current_rollout[field_name]
+            expected_value = tuple(expected) if isinstance(expected, (list, tuple)) else expected
+            actual_value = tuple(actual) if isinstance(actual, (list, tuple)) else actual
+            if actual_value != expected_value:
+                raise ValueError(
+                    "Full SMB resume recurrent-state contract mismatch: "
+                    f"{field_name}={actual!r} does not match checkpoint value {expected!r}"
+                )
+            checked_fields[f"rollout.{field_name}"] = to_plain_data(actual)
+
+    previous_tracking = checkpoint_config.get("tracking", {})
+    if isinstance(previous_tracking, Mapping):
+        current_tracking = _tracking_metadata(config)
+        for field_name in ("backend", "log_dir", "project", "run_name", "mode"):
+            if field_name not in previous_tracking:
+                continue
+            expected = previous_tracking[field_name]
+            actual = current_tracking[field_name]
+            if actual != expected:
+                raise ValueError(
+                    "Full SMB resume tracking destination mismatch: "
+                    f"{field_name}={actual!r} does not match checkpoint value {expected!r}"
+                )
+            checked_fields[f"tracking.{field_name}"] = actual
+
+    rng_state = checkpoint_config.get("rng_state", {})
+    saved_rng_keys = []
+    if isinstance(rng_state, Mapping):
+        saved_rng_keys = list(rng_state.get("saved_state_keys", ()))
+    missing_rng_keys = [
+        key
+        for key in ("torch_rng", "python_rng", "numpy_rng")
+        if key not in checkpoint.get("states", {})
+    ]
+    if missing_rng_keys:
+        raise ValueError(
+            "Full SMB resume checkpoint is missing RNG state keys: " + ", ".join(missing_rng_keys)
+        )
+    return {
+        "schema_version": 1,
+        "validated": True,
+        "start_epoch": int(checkpoint.get("epoch", 0)),
+        "start_global_step": int(checkpoint.get("global_step", 0)),
+        "checked_fields": checked_fields,
+        "saved_rng_state_keys": saved_rng_keys,
+        "required_rng_state_keys": ("torch_rng", "python_rng", "numpy_rng"),
+    }
+
+
+def _restore_resume_rng_state(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+    states = checkpoint.get("states", {})
+    restored: list[str] = []
+    torch_rng = states.get("torch_rng")
+    if torch_rng is not None:
+        torch.set_rng_state(torch.as_tensor(torch_rng, dtype=torch.uint8).cpu())
+        restored.append("torch_rng")
+    python_rng = states.get("python_rng")
+    if python_rng is not None:
+        random.setstate(python_rng)
+        restored.append("python_rng")
+    numpy_rng = states.get("numpy_rng")
+    if numpy_rng is not None:
+        np.random.set_state(numpy_rng)
+        restored.append("numpy_rng")
+    return {
+        "schema_version": 1,
+        "restored": True,
+        "restored_state_keys": restored,
+        "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
+        "checkpoint_global_step": int(checkpoint.get("global_step", 0)),
     }
 
 

@@ -715,6 +715,24 @@ retroagi train --game smb --stage full \
   --checkpoint data/full_smb/policy.pth
 ```
 
+Resume from the saved policy checkpoint with the same schedule and tracking
+destination. The resume path restores saved RNG streams before the next rollout
+and rejects schedule, recurrent-state, or tracking drift:
+
+```bash
+retroagi resume --game smb --stage full \
+  --checkpoint data/full_smb/policy.pth \
+  --save-checkpoint data/full_smb/policy.pth \
+  --epochs 2 \
+  --updates-per-epoch 1 \
+  --rollout-steps 64 \
+  --evaluation-episodes 1 \
+  --evaluation-max-steps 64 \
+  --evaluation-interval-epochs 1 \
+  --tracking-backend none \
+  --tracking-project retroagi
+```
+
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
 `config.reward`, `config.safety`, `config.recording`, `config.tracking`,
 `config.rollout_storage`, `config.evaluation`, `config.task_curriculum`,

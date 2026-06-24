@@ -715,6 +715,93 @@ class TestFullSMBTraining(unittest.TestCase):
             checkpoint["global_step"],
         )
 
+    def test_resume_restores_rng_and_rejects_schedule_or_tracking_drift(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            interrupted_path = tmp / "interrupted.pth"
+            resumed_path = tmp / "resumed.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            base_kwargs = {
+                "seed": 31,
+                "architecture_config": {
+                    "hidden_dim": 8,
+                    "controller_schedule": "linear",
+                },
+                "updates_per_epoch": 1,
+                "rollout_length": 3,
+                "evaluation_episodes": 0,
+                "evaluation_max_steps": 0,
+                "device": "cpu",
+                "full_smb_vision_checkpoint": full_vision_path,
+                "tracking_backend": "none",
+                "tracking_project": "retroagi-resume",
+                "tracking_run_name": "resume-contract",
+            }
+            train_full_smb_policy(
+                FullSMBTrainingConfig(
+                    **base_kwargs,
+                    epochs=1,
+                    checkpoint_path=interrupted_path,
+                    save_checkpoints=True,
+                ),
+                make_stage=tiny_stage,
+            )
+            resumed = train_full_smb_policy(
+                FullSMBTrainingConfig(
+                    **base_kwargs,
+                    epochs=2,
+                    resume_path=interrupted_path,
+                    checkpoint_path=resumed_path,
+                    save_checkpoints=True,
+                ),
+                make_stage=tiny_stage,
+            )
+            uninterrupted = train_full_smb_policy(
+                FullSMBTrainingConfig(
+                    **base_kwargs,
+                    epochs=2,
+                ),
+                make_stage=tiny_stage,
+            )
+
+            with self.assertRaisesRegex(ValueError, "task schedule mismatch"):
+                train_full_smb_policy(
+                    FullSMBTrainingConfig(
+                        **{
+                            **base_kwargs,
+                            "seed": 32,
+                        },
+                        epochs=2,
+                        resume_path=interrupted_path,
+                    ),
+                    make_stage=tiny_stage,
+                )
+            with self.assertRaisesRegex(ValueError, "tracking destination mismatch"):
+                train_full_smb_policy(
+                    FullSMBTrainingConfig(
+                        **{
+                            **base_kwargs,
+                            "tracking_run_name": "different-run",
+                        },
+                        epochs=2,
+                        resume_path=interrupted_path,
+                    ),
+                    make_stage=tiny_stage,
+                )
+
+        for name, value in uninterrupted.checkpoint["states"]["model"].items():
+            torch.testing.assert_close(resumed.checkpoint["states"]["model"][name], value)
+        source = resumed.checkpoint["config"]["training_source"]
+        self.assertEqual(source["mode"], "resume_checkpoint")
+        self.assertTrue(source["resume_contract"]["validated"])
+        self.assertEqual(source["resume_contract"]["start_epoch"], 1)
+        self.assertEqual(
+            source["restored_rng_state"]["restored_state_keys"],
+            ["torch_rng", "python_rng", "numpy_rng"],
+        )
+        self.assertEqual(resumed.rollouts[0].rollout_id, "epoch0002_update0001")
+
     def test_training_changes_policy_weights(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

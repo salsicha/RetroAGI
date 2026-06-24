@@ -484,7 +484,7 @@ and playable end target.
 - [x] Save versioned Full SMB trainer checkpoints with model, optimizer,
       optional perception, RNG state, task/curriculum state, config, metrics,
       backend metadata, and source checkpoint provenance.
-- [ ] Implement robust Full SMB resume so interrupted training can continue
+- [x] Implement robust Full SMB resume so interrupted training can continue
       with the same task schedule, RNG streams, optimizer, recurrent-state
       expectations, and tracking destination.
 - [ ] Add Full SMB recording support for evaluation episodes, including frame
