@@ -729,7 +729,7 @@ and rejects schedule, recurrent-state, or tracking drift:
 ```bash
 retroagi resume --game smb --stage full \
   --checkpoint data/full_smb/policy.pth \
-  --save-checkpoint data/full_smb/policy.pth \
+  --save-checkpoint data/full_smb/resumed_policy.pth \
   --epochs 2 \
   --updates-per-epoch 1 \
   --rollout-steps 64 \
@@ -739,6 +739,10 @@ retroagi resume --game smb --stage full \
   --tracking-backend none \
   --tracking-project retroagi
 ```
+
+Omit `--save-checkpoint` to resume in place at `--checkpoint`; provide
+`--save-checkpoint` when preserving the interrupted checkpoint separately from
+the continued policy.
 
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
 `config.reward`, `config.safety`, `config.recording`, `config.tracking`,

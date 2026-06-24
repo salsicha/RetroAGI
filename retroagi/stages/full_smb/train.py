@@ -2610,68 +2610,89 @@ def _parse_value(value: str) -> Any:
         return value
 
 
+def _add_training_update_args(
+    parser: argparse.ArgumentParser,
+    *,
+    include_start_mode: bool,
+) -> None:
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--episodes-per-epoch", type=int, default=1)
+    parser.add_argument("--max-steps-per-episode", type=int, default=64)
+    parser.add_argument("--updates-per-epoch", type=int)
+    parser.add_argument("--rollout-length", "--rollout-steps", dest="rollout_length", type=int)
+    if include_start_mode:
+        parser.add_argument(
+            "--mode",
+            "--training-mode",
+            dest="training_mode",
+            default=FULL_SMB_TRAINING_MODE_AUTO,
+            choices=(
+                FULL_SMB_TRAINING_MODE_AUTO,
+                FULL_SMB_TRAINING_MODE_SCRATCH,
+                "fine-tune",
+                FULL_SMB_TRAINING_MODE_FINE_TUNE,
+                "finetune",
+            ),
+            help=(
+                "training start mode: auto infers from --resume/--init-checkpoint, "
+                "scratch starts a new policy, fine_tune requires --init-checkpoint"
+            ),
+        )
+    parser.add_argument("--vector-env-count", type=int, default=1)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--entropy-weight", type=float, default=0.01)
+    parser.add_argument("--policy-loss-weight", type=float, default=1.0)
+    parser.add_argument("--representation-weight", type=float, default=0.0)
+    parser.add_argument("--world-model-weight", type=float, default=0.0)
+    parser.add_argument("--reward-loss-weight", type=float, default=0.0)
+    parser.add_argument("--value-loss-weight", type=float, default=0.0)
+    parser.add_argument("--action-aux-weight", type=float, default=0.0)
+    parser.add_argument("--critic-loss-weight", type=float, default=0.0)
+    parser.add_argument("--reward-scale", type=float, default=1.0)
+    parser.add_argument("--gradient-clip-norm", type=float, default=1.0)
+    parser.add_argument(
+        "--max-abs-loss",
+        type=float,
+        default=_FULL_SMB_DEFAULT_MAX_ABS_LOSS,
+    )
+    parser.add_argument(
+        "--max-abs-scaled-reward",
+        type=float,
+        default=_FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD,
+    )
+    parser.add_argument(
+        "--max-abs-prediction",
+        type=float,
+        default=_FULL_SMB_DEFAULT_MAX_ABS_PREDICTION,
+    )
+    parser.add_argument("--deterministic-actions", action="store_true")
+    parser.add_argument("--recording-dir", type=Path)
+    parser.add_argument("--recording-path", type=Path)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     train = subparsers.add_parser("train")
     _add_common_args(train)
-    train.add_argument("--epochs", type=int, default=1)
-    train.add_argument("--episodes-per-epoch", type=int, default=1)
-    train.add_argument("--max-steps-per-episode", type=int, default=64)
-    train.add_argument("--updates-per-epoch", type=int)
-    train.add_argument("--rollout-length", "--rollout-steps", dest="rollout_length", type=int)
-    train.add_argument(
-        "--mode",
-        "--training-mode",
-        dest="training_mode",
-        default=FULL_SMB_TRAINING_MODE_AUTO,
-        choices=(
-            FULL_SMB_TRAINING_MODE_AUTO,
-            FULL_SMB_TRAINING_MODE_SCRATCH,
-            "fine-tune",
-            FULL_SMB_TRAINING_MODE_FINE_TUNE,
-            "finetune",
-        ),
-        help=(
-            "training start mode: auto infers from --resume/--init-checkpoint, "
-            "scratch starts a new policy, fine_tune requires --init-checkpoint"
-        ),
-    )
-    train.add_argument("--vector-env-count", type=int, default=1)
-    train.add_argument("--learning-rate", type=float, default=1e-4)
-    train.add_argument("--entropy-weight", type=float, default=0.01)
-    train.add_argument("--policy-loss-weight", type=float, default=1.0)
-    train.add_argument("--representation-weight", type=float, default=0.0)
-    train.add_argument("--world-model-weight", type=float, default=0.0)
-    train.add_argument("--reward-loss-weight", type=float, default=0.0)
-    train.add_argument("--value-loss-weight", type=float, default=0.0)
-    train.add_argument("--action-aux-weight", type=float, default=0.0)
-    train.add_argument("--critic-loss-weight", type=float, default=0.0)
-    train.add_argument("--reward-scale", type=float, default=1.0)
-    train.add_argument("--gradient-clip-norm", type=float, default=1.0)
-    train.add_argument(
-        "--max-abs-loss",
-        type=float,
-        default=_FULL_SMB_DEFAULT_MAX_ABS_LOSS,
-    )
-    train.add_argument(
-        "--max-abs-scaled-reward",
-        type=float,
-        default=_FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD,
-    )
-    train.add_argument(
-        "--max-abs-prediction",
-        type=float,
-        default=_FULL_SMB_DEFAULT_MAX_ABS_PREDICTION,
-    )
-    train.add_argument("--deterministic-actions", action="store_true")
+    _add_training_update_args(train, include_start_mode=True)
     train.add_argument("--checkpoint", type=Path)
     train.add_argument("--resume", type=Path)
     train.add_argument("--init-checkpoint", type=Path)
     train.add_argument("--save-checkpoints", action="store_true")
-    train.add_argument("--recording-dir", type=Path)
-    train.add_argument("--recording-path", type=Path)
+
+    resume = subparsers.add_parser("resume")
+    _add_common_args(resume)
+    _add_training_update_args(resume, include_start_mode=False)
+    resume.add_argument("--checkpoint", required=True, type=Path, dest="resume_checkpoint")
+    resume.add_argument(
+        "--save-checkpoint",
+        "--output-checkpoint",
+        type=Path,
+        dest="checkpoint",
+        help="optional output checkpoint path; defaults to overwriting --checkpoint",
+    )
 
     evaluate = subparsers.add_parser("evaluate")
     _add_common_args(evaluate)
@@ -2679,7 +2700,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     args = parser.parse_args(argv)
     config = _config_from_args(args)
-    if args.command == "train":
+    if args.command in {"train", "resume"}:
         result = train_full_smb_policy(config)
         print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
     elif args.command == "evaluate":
@@ -2793,6 +2814,12 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         ):
             raise ValueError("--fine-tune-vision conflicts with --perception-mode")
         perception_mode = FULL_SMB_PERCEPTION_FINE_TUNE
+    is_resume_command = getattr(args, "command", None) == "resume"
+    resume_checkpoint = getattr(args, "resume_checkpoint", None)
+    resume_path = resume_checkpoint if is_resume_command else getattr(args, "resume", None)
+    checkpoint_path = getattr(args, "checkpoint", None)
+    if is_resume_command and checkpoint_path is None:
+        checkpoint_path = resume_checkpoint
     return FullSMBTrainingConfig(
         seed=args.seed,
         training_mode=getattr(args, "training_mode", FULL_SMB_TRAINING_MODE_AUTO),
@@ -2833,14 +2860,17 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         evaluation_episodes=args.evaluation_episodes,
         evaluation_max_steps=args.evaluation_max_steps,
         evaluation_interval_epochs=args.evaluation_interval_epochs,
-        checkpoint_path=getattr(args, "checkpoint", None),
-        resume_path=getattr(args, "resume", None),
+        checkpoint_path=checkpoint_path,
+        resume_path=resume_path,
         init_checkpoint=getattr(args, "init_checkpoint", None),
         full_smb_vision_checkpoint=args.full_smb_vision_checkpoint,
         perception_mode=perception_mode,
         freeze_vision=not args.fine_tune_vision,
-        save_checkpoints=getattr(args, "save_checkpoints", False)
-        or getattr(args, "checkpoint", None) is not None,
+        save_checkpoints=(
+            is_resume_command
+            or getattr(args, "save_checkpoints", False)
+            or getattr(args, "checkpoint", None) is not None
+        ),
         output_summary=args.output_summary,
         log_path=args.log_path,
         recording_dir=getattr(args, "recording_dir", None),

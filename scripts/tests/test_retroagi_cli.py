@@ -330,13 +330,33 @@ class TestRetroAGICLI(unittest.TestCase):
         self.assertEqual(resume_exit, 0)
         train_main.assert_called_once_with(
             [
-                "train",
-                "--resume",
-                "data/full_smb/old.pth",
+                "resume",
                 "--checkpoint",
+                "data/full_smb/old.pth",
+                "--save-checkpoint",
                 "data/full_smb/new.pth",
                 "--epochs",
                 "3",
+            ]
+        )
+
+        with patch("retroagi.stages.full_smb.train.main", return_value=0) as train_main:
+            resume_in_place_exit = cli.main(
+                [
+                    "resume",
+                    "--stage",
+                    "full-smb",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                ]
+            )
+
+        self.assertEqual(resume_in_place_exit, 0)
+        train_main.assert_called_once_with(
+            [
+                "resume",
+                "--checkpoint",
+                "data/full_smb/policy.pth",
             ]
         )
 

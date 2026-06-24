@@ -165,9 +165,9 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
     if command == "resume":
         from retroagi.stages.full_smb.train import main as train_main
 
-        train_args = ["train", "--resume", str(args.checkpoint)]
+        train_args = ["resume", "--checkpoint", str(args.checkpoint)]
         if args.save_checkpoint is not None:
-            train_args.extend(["--checkpoint", str(args.save_checkpoint)])
+            train_args.extend(["--save-checkpoint", str(args.save_checkpoint)])
         train_args.extend(stage_args)
         return int(train_main(train_args))
     if command == "evaluate":

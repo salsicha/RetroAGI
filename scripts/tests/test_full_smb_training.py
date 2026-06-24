@@ -1239,6 +1239,59 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.training_mode, "fine_tune")
         self.assertEqual(config.init_checkpoint, Path("data/full_smb/transferred_policy.pth"))
 
+    def test_resume_cli_builds_full_smb_resume_config(self):
+        with (
+            patch.object(
+                full_smb_train_module,
+                "train_full_smb_policy",
+                return_value=SimpleNamespace(as_dict=lambda: {"ok": True}),
+            ) as train,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "resume",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--epochs",
+                    "5",
+                    "--updates-per-epoch",
+                    "2",
+                ]
+            )
+
+        config = train.call_args.args[0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(config.resume_path, Path("data/full_smb/policy.pth"))
+        self.assertEqual(config.checkpoint_path, Path("data/full_smb/policy.pth"))
+        self.assertTrue(config.save_checkpoints)
+        self.assertEqual(config.epochs, 5)
+        self.assertEqual(config.updates_per_epoch, 2)
+
+        with (
+            patch.object(
+                full_smb_train_module,
+                "train_full_smb_policy",
+                return_value=SimpleNamespace(as_dict=lambda: {"ok": True}),
+            ) as train,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "resume",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--output-checkpoint",
+                    "data/full_smb/resumed_policy.pth",
+                ]
+            )
+
+        config = train.call_args.args[0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(config.resume_path, Path("data/full_smb/policy.pth"))
+        self.assertEqual(config.checkpoint_path, Path("data/full_smb/resumed_policy.pth"))
+        self.assertTrue(config.save_checkpoints)
+
     def test_perception_modes_resolve_and_record_trainable_state(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
