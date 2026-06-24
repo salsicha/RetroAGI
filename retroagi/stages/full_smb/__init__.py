@@ -25,6 +25,14 @@ from .artifacts import (
     FullSMBArtifactLayout,
     full_smb_artifact_layout,
 )
+from .benchmark import (
+    FullSMBThroughputBenchmarkConfig,
+    FullSMBThroughputBenchmarkResult,
+    benchmark_full_smb_throughput,
+    recommended_full_smb_runtime_settings,
+    run_full_smb_throughput_benchmark,
+    save_full_smb_throughput_benchmark,
+)
 from .capabilities import (
     FullSMBEnvironmentCapabilityResult,
     FullSMBEnvironmentCheckConfig,
@@ -163,6 +171,8 @@ __all__ = [
     "FullSMBTaskCatalog",
     "FullSMBTaskSpec",
     "FullSMBTaskStart",
+    "FullSMBThroughputBenchmarkConfig",
+    "FullSMBThroughputBenchmarkResult",
     "FullSMBTrainingConfig",
     "FullSMBTrainingResult",
     "DEFAULT_FULL_SMB_VIT_CHECKPOINT",
@@ -199,10 +209,14 @@ __all__ = [
     "load_full_smb_vit_checkpoint",
     "make_stable_retro_env",
     "play_full_smb_policy",
+    "benchmark_full_smb_throughput",
+    "recommended_full_smb_runtime_settings",
     "run_deterministic_reset_smoke",
     "run_full_smb_perception_diagnostic",
     "run_full_smb_environment_check",
+    "run_full_smb_throughput_benchmark",
     "run_headless_random_agent_smoke",
+    "save_full_smb_throughput_benchmark",
     "summarize_fixed_full_smb_success_metrics",
     "train_full_smb_policy",
     "write_full_smb_save_state_plan",

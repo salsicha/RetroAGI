@@ -36,6 +36,10 @@ class TestFullSMBArtifacts(unittest.TestCase):
             Path("artifacts/full_smb/baseline_seed0/summaries/train_summary.json"),
         )
         self.assertEqual(
+            files["throughput_benchmark"],
+            Path("artifacts/full_smb/baseline_seed0/summaries/throughput_benchmark.json"),
+        )
+        self.assertEqual(
             files["train_log"],
             Path("artifacts/full_smb/baseline_seed0/logs/train.jsonl"),
         )

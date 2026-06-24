@@ -575,6 +575,42 @@ print("Full SMB environment capability check verified")
 PY
 ```
 
+Benchmark local emulator throughput before launching long Full SMB training,
+recording, or play sessions:
+
+```bash
+python -m retroagi.stages.full_smb.benchmark \
+  --steps 1000 \
+  --warmup-steps 100 \
+  --frame-skip 2 \
+  --device cpu \
+  --output artifacts/full_smb/baseline_seed0/summaries/throughput_benchmark.json
+```
+
+Verify the throughput report and the embedded CPU/CUDA/MPS recommendations:
+
+```bash
+test -s artifacts/full_smb/baseline_seed0/summaries/throughput_benchmark.json
+python - <<'PY'
+import json
+from pathlib import Path
+
+report = json.loads(
+    Path("artifacts/full_smb/baseline_seed0/summaries/throughput_benchmark.json").read_text()
+)
+assert report["measured_steps"] == 1000
+assert report["emulator_frames_per_second"] > 0.0
+assert set(report["recommended_settings"]) == {"cpu", "cuda", "mps"}
+assert report["recommended_settings"]["cpu"]["device_flag"] == "--device cpu"
+print("Full SMB throughput benchmark verified")
+PY
+```
+
+Use CPU for CI and content checks, CUDA for Linux/NVIDIA policy and ViT compute,
+and MPS for Apple Silicon policy and ViT compute after comparing the same
+benchmark against CPU. Keep training/evaluation benchmarks headless; use
+`--render` only when measuring play latency.
+
 Inspect the Full SMB task catalog before choosing training or evaluation tasks:
 
 ```bash

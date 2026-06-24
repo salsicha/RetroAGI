@@ -84,6 +84,7 @@ class FullSMBArtifactLayout:
         return {
             "content_metadata": self.run_dir / "content.json",
             "layout_manifest": self.run_dir / "artifact_layout.json",
+            "throughput_benchmark": self.summaries_dir / "throughput_benchmark.json",
             "train_summary": self.summaries_dir / "train_summary.json",
             "resume_summary": self.summaries_dir / "resume_summary.json",
             "recording_summary": self.summaries_dir / "recording_summary.json",

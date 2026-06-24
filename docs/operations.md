@@ -334,6 +334,7 @@ the resolved paths.
 | --- | --- |
 | `artifacts/full_smb/<run>/content.json` | Local content metadata, game id, checksum filename/hash, and provenance notes. Do not include ROM bytes. |
 | `artifacts/full_smb/<run>/artifact_layout.json` | Serialized `FullSMBArtifactLayout.to_manifest()` output for the preserved run. |
+| `artifacts/full_smb/<run>/summaries/throughput_benchmark.json` | Local emulator throughput benchmark with step rate, emulator-frame rate, selected device, and CPU/CUDA/MPS runtime recommendations. |
 | `artifacts/full_smb/<run>/summaries/train_summary.json` | Full SMB train or resume summary from `--output-summary`. |
 | `artifacts/full_smb/<run>/summaries/recording_summary.json` | Record command summary from `--output-summary`. |
 | `artifacts/full_smb/<run>/summaries/play_summary.json` | Play command summary, including optional inspection overlay fields. |
@@ -347,6 +348,39 @@ the resolved paths.
 | `artifacts/full_smb/<run>/tracking/` | TensorBoard, W&B offline files, or other tracker output from `--tracking-log-dir`. |
 | `artifacts/full_smb/<run>/checkpoints/` | Run-local copies or symlinks for policy and transferred checkpoints. |
 
+## Full SMB Throughput Benchmark And Device Settings
+
+Run a local throughput benchmark after `check-env` passes and before committing
+to long Full SMB training or play captures:
+
+```bash
+python -m retroagi.stages.full_smb.benchmark \
+  --steps 1000 \
+  --warmup-steps 100 \
+  --frame-skip 2 \
+  --device cpu \
+  --output artifacts/full_smb/<run>/summaries/throughput_benchmark.json
+```
+
+The benchmark reports `steps_per_second`, `emulator_frames_per_second`,
+`average_emulator_frames_per_step`, reset counts, terminal counts, final
+signals, and `recommended_settings` for `cpu`, `cuda`, and `mps`. Add
+`--encode-observations --vision-checkpoint data/vit/full_smb_vit.pth` when the
+goal is to measure emulator plus Full SMB ViT preprocessing. Add `--render`
+only for play-latency checks; keep training and evaluation benchmarks headless.
+
+Recommended Full SMB device settings:
+
+| Device | Training | Play |
+| --- | --- | --- |
+| CPU | Use `--device cpu` for CI, `check-env`, smoke training, and machines without an accelerator. Keep `--render-mode none`, freeze perception for policy smoke runs, and start with small `--rollout-steps` such as 32 to 64 until the benchmark report shows enough emulator headroom. | Use CPU for manual debugging and deterministic playback. Use `--render-mode human --fps 30` for interactive play and `--render-mode none` for evaluation, recording, or latency measurement. |
+| CUDA | Use `--device cuda` on Linux/NVIDIA systems when policy, world-model, critic, or Full SMB ViT compute dominates the benchmark. The `stable-retro` emulator still steps on CPU, so increase rollout length or policy size only after measuring local `emulator_frames_per_second`. | Use CUDA for heavier policy/ViT inference during rendered playback. Disable recording or video export when measuring interaction latency. |
+| MPS | Use `--device mps` on Apple Silicon after comparing the same benchmark with CPU. MPS is most useful for ViT and larger policy compute; tiny one-env rollouts may be limited by device-transfer overhead. | Use MPS for macOS rendered policy playback when model inference is heavier than the baseline smoke configuration; benchmark CPU and MPS with the same `frame_skip` and `--steps`. |
+
+Treat the benchmark as local evidence, not a portable performance guarantee:
+ROM setup, stable-retro version, render mode, frame skip, recording, ViT
+checkpoint size, and tracker backends all change throughput.
+
 ## Full SMB Adapter And Transfer
 
 Full SMB connects the shared stage contract to the stable-retro emulator. Its
@@ -356,8 +390,8 @@ from the transferred model checkpoints at full fidelity.
 
 | Area | Operational Target |
 | --- | --- |
-| Hardware | CPU is required for headless smoke tests and transfer checks. GPU acceleration is not required for the adapter; CUDA or MPS may be used for model inference comparisons. |
-| Runtime | Headless smoke checks should stay short at the default 200 steps. Comparison runtime scales linearly with `--steps * task_count * seed_count * policy_count` because named policies are evaluated on identical seeded task streams. Full SMB policy training scales with `--epochs`, `--updates-per-epoch`, and `--rollout-steps`; `--vector-env-count` is captured in config/checkpoints but active training remains single-env until vector rollout storage lands. |
+| Hardware | CPU is required for headless smoke tests and transfer checks. GPU acceleration is not required for the adapter; CUDA or MPS may be used for policy, world-model, critic, and ViT compute after local throughput benchmarking. |
+| Runtime | Headless smoke checks should stay short at the default 200 steps. Comparison runtime scales linearly with `--steps * task_count * seed_count * policy_count` because named policies are evaluated on identical seeded task streams. Full SMB policy training scales with `--epochs`, `--updates-per-epoch`, and `--rollout-steps`; `--vector-env-count` is captured in config/checkpoints but active training remains single-env until vector rollout storage lands. Use `python -m retroagi.stages.full_smb.benchmark` to record local `emulator_frames_per_second` before long runs. |
 | Smoke Command | `retroagi evaluate --game smb --stage full --steps 500 --seed 0 --encode-observations`. |
 | Transfer Command | `retroagi transfer --game smb --stage full --block-policy-checkpoint data/block_smb/policy.pth --full-smb-vision-checkpoint data/vit/full_smb_vit.pth --output-checkpoint data/full_smb/transferred_policy.pth`. |
 | Training Command | `retroagi train --game smb --stage full --mode fine-tune --init-checkpoint data/full_smb/transferred_policy.pth --full-smb-vision-checkpoint data/vit/full_smb_vit.pth --perception-mode freeze --updates-per-epoch 1 --rollout-steps 64 --evaluation-episodes 1 --evaluation-max-steps 64 --evaluation-interval-epochs 1 --recording-dir artifacts/full_smb/<run>/recordings --recording-path artifacts/full_smb/<run>/recordings/recording_manifest.npz --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth --log-path artifacts/full_smb/<run>/logs/train.jsonl --output-summary artifacts/full_smb/<run>/summaries/train_summary.json --tracking-log-dir artifacts/full_smb/<run>/tracking`. Use `--mode scratch` and omit `--init-checkpoint` to start a new Full SMB policy. |
@@ -367,7 +401,7 @@ from the transferred model checkpoints at full fidelity.
 | Play Command | `retroagi play --game smb --stage full --checkpoint data/full_smb/policy.pth --task-set fixed_benchmark --level 1-1 --steps 1000 --render-mode human --inspection-overlay --fps 30`. Use `--sampling-policy --temperature 0.75` for stochastic action sampling, `--render-mode none` or `--no-render` for headless playback, `--pause-at-start` for terminal-controlled stepping, `--no-reset-on-done` to stop after the first terminal episode, and `--record --record-dir artifacts/full_smb/recordings --record-output artifacts/full_smb/play_manifest.npz` to preserve playback artifacts. Human debugging uses `retroagi play --game smb --stage full --human --task-set smoke --level 1-1 --scenario debug --render-mode human --fps 30`; line controls are `d/right`, `d+/right_jump`, `a/left`, `a+/left_jump`, `w/space/jump`, and empty input for noop. Terminal controls are `p` for pause/resume, `r` for reset, and `q` for quit when stdin is interactive. |
 | Compare Command | `retroagi compare --game smb --stage full --transfer-checkpoint artifacts/full_smb/<run>/checkpoints/transferred_policy.pth --scratch-trained-checkpoint artifacts/full_smb/<run>/checkpoints/scratch_policy.pth --fine-tuned-checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth --known-good-checkpoint artifacts/full_smb/<run>/checkpoints/known_good_policy.pth --task-set fixed_benchmark --seed 0 --seed 1 --output artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json`. |
 | Expected Metrics | Smoke output reports `steps`, `resets`, `episodes`, total `reward`, adapter-owned `FullSMBRewardConfig` plus `reward_terms`, the `FullSMBObservationConfig` preprocessing manifest, and `camera_vec` when stage info is retained. Transfer checkpoints preserve source policy metrics and transfer provenance. Trainer checkpoints preserve resolved rollout/update settings, loss weights, reward config, perception mode, deterministic mode, RNG state keys, task/curriculum state, backend/content metadata, source-checkpoint provenance, recording paths, tracking config, periodic deterministic evaluation cadence/results, evaluation recording manifests, and train/evaluation returns. Policy evaluation and recording report `fixed_task_results`, per-task `threshold_met` and `threshold_diagnostics`, `tuning_metrics.threshold_pass_rate`, `tuning_metrics.score`, top-level `success_thresholds_met`, and a `recording` manifest when artifacts are enabled. Play reports steps, resets, completed episodes, total/mean return, selected action IDs/names, control mode, deterministic-vs-sampling mode, render/fps settings, quit status, final signals, last reward terms, last inspection overlay, bounded overlay history, human action bindings when active, and optional recording manifest. Comparisons report one stream per task/seed pair, per-policy action histograms, mean entropies, mean margins, collection reward, reset/termination counts, and aggregate pairwise `action_agreement` across transferred, scratch, fine-tuned, known-good, and additional named policies. |
-| Artifact Locations | Use `artifacts/full_smb/<run>/` for preserved Full SMB runs. Transfer checkpoint: `data/full_smb/transferred_policy.pth` and sidecar `data/full_smb/transferred_policy.json`, copied or symlinked to `artifacts/full_smb/<run>/checkpoints/transferred_policy.pth` when preserving a run. Continued policy checkpoint: `artifacts/full_smb/<run>/checkpoints/policy.pth`. Required Full SMB vision checkpoint: `data/vit/full_smb_vit.pth`. Training log: `artifacts/full_smb/<run>/logs/train.jsonl`. Policy evaluation summary: `artifacts/full_smb/<run>/evaluations/evaluation.json`. Recording summary: `artifacts/full_smb/<run>/summaries/recording_summary.json`. Evaluation/play recordings: compressed per-episode `.npz` files under `artifacts/full_smb/<run>/recordings/<evaluation-prefix>/` plus `artifacts/full_smb/<run>/recordings/recording_manifest.npz`, `artifacts/full_smb/<run>/recordings/recording_manifest_<evaluation-prefix>.npz`, or an explicit play manifest such as `artifacts/full_smb/<run>/recordings/play_manifest.npz`; each episode file stores frames, actions, rewards, signals, task/scenario/state IDs, and termination flags. Optional video export is attempted when `--recording-path` has a video suffix and OpenCV is installed; store videos under `artifacts/full_smb/<run>/videos/`. Optional tracker output: `artifacts/full_smb/<run>/tracking/`. Comparison summaries: `artifacts/full_smb/<run>/comparisons/transfer_vs_scratch.json` for the legacy two-policy report or `artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json` for named policy suites. Legacy flat paths such as `artifacts/full_smb/train.jsonl`, `artifacts/full_smb/evaluation.json`, and `artifacts/full_smb/transfer_vs_scratch.json` remain recognizable but should be migrated into run directories for preserved experiments. |
+| Artifact Locations | Use `artifacts/full_smb/<run>/` for preserved Full SMB runs. Transfer checkpoint: `data/full_smb/transferred_policy.pth` and sidecar `data/full_smb/transferred_policy.json`, copied or symlinked to `artifacts/full_smb/<run>/checkpoints/transferred_policy.pth` when preserving a run. Continued policy checkpoint: `artifacts/full_smb/<run>/checkpoints/policy.pth`. Required Full SMB vision checkpoint: `data/vit/full_smb_vit.pth`. Throughput report: `artifacts/full_smb/<run>/summaries/throughput_benchmark.json`. Training log: `artifacts/full_smb/<run>/logs/train.jsonl`. Policy evaluation summary: `artifacts/full_smb/<run>/evaluations/evaluation.json`. Recording summary: `artifacts/full_smb/<run>/summaries/recording_summary.json`. Evaluation/play recordings: compressed per-episode `.npz` files under `artifacts/full_smb/<run>/recordings/<evaluation-prefix>/` plus `artifacts/full_smb/<run>/recordings/recording_manifest.npz`, `artifacts/full_smb/<run>/recordings/recording_manifest_<evaluation-prefix>.npz`, or an explicit play manifest such as `artifacts/full_smb/<run>/recordings/play_manifest.npz`; each episode file stores frames, actions, rewards, signals, task/scenario/state IDs, and termination flags. Optional video export is attempted when `--recording-path` has a video suffix and OpenCV is installed; store videos under `artifacts/full_smb/<run>/videos/`. Optional tracker output: `artifacts/full_smb/<run>/tracking/`. Comparison summaries: `artifacts/full_smb/<run>/comparisons/transfer_vs_scratch.json` for the legacy two-policy report or `artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json` for named policy suites. Legacy flat paths such as `artifacts/full_smb/train.jsonl`, `artifacts/full_smb/evaluation.json`, and `artifacts/full_smb/transfer_vs_scratch.json` remain recognizable but should be migrated into run directories for preserved experiments. |
 
 ## Preservation Checklist
 

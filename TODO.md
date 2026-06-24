@@ -520,7 +520,7 @@ and playable end target.
 - [x] Add tests for Full SMB checkpoint compatibility, resume behavior,
       transfer-to-train loading, fixed-task threshold diagnostics, and play-mode
       policy loading.
-- [ ] Benchmark emulator throughput and document recommended CPU, CUDA, and MPS
+- [x] Benchmark emulator throughput and document recommended CPU, CUDA, and MPS
       settings for Full SMB training and play.
 - [ ] Update operations and reproducibility docs with Full SMB train, resume,
       evaluate, record, play, and comparison commands.
