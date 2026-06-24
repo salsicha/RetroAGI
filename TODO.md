@@ -496,7 +496,7 @@ and playable end target.
       saved policy and reports fixed-task threshold diagnostics.
 - [x] Add `retroagi record --stage full-smb --checkpoint ...` that records
       deterministic policy rollouts and writes artifacts.
-- [ ] Add `retroagi play --stage full-smb --checkpoint ...` for interactive
+- [x] Add `retroagi play --stage full-smb --checkpoint ...` for interactive
       playback of a trained policy with render, speed, pause, reset, deterministic
       or sampling mode, and optional recording.
 - [ ] Add a human-control mode under `retroagi play --stage full-smb --human`

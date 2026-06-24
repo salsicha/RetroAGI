@@ -112,6 +112,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi train --game smb --stage block",
             "retroagi diagnose-vision --game smb --stage block",
             "retroagi evaluate --game smb --stage full",
+            "retroagi play --game smb --stage full",
             "retroagi transfer --game smb --stage full",
             "retroagi compare --game smb --stage full",
             "python -m retro.import local/full_smb/roms",

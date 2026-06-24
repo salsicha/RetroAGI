@@ -436,6 +436,34 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+        with patch("retroagi.stages.full_smb.train.main", return_value=0) as train_main:
+            play_exit = cli.main(
+                [
+                    "play",
+                    "--stage",
+                    "full-smb",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--steps",
+                    "5",
+                    "--no-render",
+                    "--sample",
+                ]
+            )
+
+        self.assertEqual(play_exit, 0)
+        train_main.assert_called_once_with(
+            [
+                "play",
+                "--checkpoint",
+                "data/full_smb/policy.pth",
+                "--steps",
+                "5",
+                "--no-render",
+                "--sample",
+            ]
+        )
+
     def test_full_smb_transfer_and_compare_forward_arguments(self):
         with patch("retroagi.stages.full_smb.transfer.main") as transfer_main:
             transfer_exit = cli.main(

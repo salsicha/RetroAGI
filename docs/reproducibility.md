@@ -775,6 +775,24 @@ The record command reuses deterministic policy evaluation, writes the same
 fixed-task diagnostics, and turns on `.npz` episode artifacts by default if no
 recording destination is supplied.
 
+Play the saved policy locally with rendering and optional playback artifacts:
+
+```bash
+retroagi play --game smb --stage full \
+  --checkpoint data/full_smb/policy.pth \
+  --steps 1000 \
+  --render \
+  --fps 30 \
+  --record \
+  --record-dir artifacts/full_smb/recordings \
+  --recording-path artifacts/full_smb/play_manifest.npz \
+  --output-summary artifacts/full_smb/play_summary.json
+```
+
+Use `--no-render` for headless playback, `--sample --temperature <value>` for
+stochastic policy sampling, and `p`, `r`, or `q` in an interactive terminal to
+pause/resume, reset, or quit playback.
+
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
 `config.reward`, `config.safety`, `config.recording`, `config.tracking`,
 `config.rollout_storage`, `config.evaluation`, `config.task_curriculum`,
@@ -817,6 +835,8 @@ Expected evidence:
 - `artifacts/full_smb/recording_summary.json`,
 - `artifacts/full_smb/recording_manifest_<evaluation-prefix>.npz`,
 - `artifacts/full_smb/recording_manifest.npz`,
+- `artifacts/full_smb/play_summary.json`,
+- `artifacts/full_smb/play_manifest.npz`,
 - `artifacts/full_smb/transfer_vs_scratch.json`,
 - comparison fields including `action_agreement`, action histograms,
   mean entropies, mean margins, collection reward, resets, terminations, and

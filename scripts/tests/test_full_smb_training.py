@@ -33,11 +33,13 @@ from retroagi.stages.full_smb import (
     FULL_SMB_POLICY_MODEL_NAME,
     FULL_SMB_SPEC,
     FullSMBObservationConfig,
+    FullSMBPlayConfig,
     FullSMBRewardConfig,
     FullSMBStage,
     FullSMBTrainingConfig,
     evaluate_full_smb_policy,
     load_full_smb_policy_checkpoint,
+    play_full_smb_policy,
     train_full_smb_policy,
 )
 from retroagi.stages.full_smb.transfer import (
@@ -1197,6 +1199,54 @@ class TestFullSMBTraining(unittest.TestCase):
             ][0]["evaluation"]
             self.assertEqual(stored_evaluation["recording"]["artifact_count"], 2)
 
+    def test_playback_runs_saved_policy_with_recording_artifacts(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            recording_dir = tmp / "play_recordings"
+            recording_path = tmp / "play_manifest.npz"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            model = full_smb_train_module.make_full_smb_policy_model(
+                architecture_name=BASELINE_ARCHITECTURE_NAME,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+            )
+            config = FullSMBTrainingConfig(
+                seed=41,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                recording_dir=recording_dir,
+                recording_path=recording_path,
+            )
+            play_config = FullSMBPlayConfig(
+                max_steps=3,
+                render=False,
+                fps=0.0,
+                deterministic_policy=True,
+                interactive_controls=False,
+                recording_prefix="play",
+            )
+
+            result = play_full_smb_policy(
+                model,
+                config=config,
+                play_config=play_config,
+                make_stage=tiny_stage,
+            )
+
+            self.assertEqual(result.steps, 3)
+            self.assertEqual(result.resets, 1)
+            self.assertEqual(result.completed_episodes, 0)
+            self.assertEqual(len(result.actions), 3)
+            self.assertEqual(result.recording["artifact_count"], 1)
+            self.assertTrue(Path(result.recording["manifest_path"]).exists())
+            artifact_path = Path(result.recording["artifacts"][0]["path"])
+            self.assertTrue(artifact_path.exists())
+            data = np.load(artifact_path)
+            self.assertEqual(data["frames"].shape, (4, 16, 20, 3))
+            self.assertEqual(data["actions"].shape, (3,))
+            self.assertEqual(data["action_names"].shape, (3,))
+
     def test_train_cli_builds_expanded_full_smb_config(self):
         with (
             patch.object(
@@ -1481,6 +1531,84 @@ class TestFullSMBTraining(unittest.TestCase):
         )
         self.assertTrue(payload["recording"]["enabled"])
         self.assertEqual(payload["recording"]["artifact_count"], 1)
+
+    def test_play_cli_builds_playback_config(self):
+        playback = full_smb_train_module.FullSMBPlayResult(
+            steps=2,
+            resets=1,
+            completed_episodes=0,
+            total_return=3.0,
+            episode_returns=(3.0,),
+            actions=(1, 2),
+            action_names=("RIGHT", "A"),
+            deterministic_policy=False,
+            sampling_temperature=0.5,
+            render=False,
+            fps=0.0,
+            recording={
+                "enabled": True,
+                "recording_dir": str(full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_DIR),
+                "recording_path": str(full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_MANIFEST),
+                "artifact_count": 1,
+                "artifacts": [{"path": "artifacts/full_smb/recordings/play.npz"}],
+            },
+        )
+        with (
+            patch.object(
+                full_smb_train_module,
+                "load_full_smb_policy_checkpoint",
+                return_value=(object(), object(), {}),
+            ) as load_policy,
+            patch.object(
+                full_smb_train_module,
+                "policy_architecture_from_checkpoint",
+                return_value=(BASELINE_ARCHITECTURE_NAME, {"hidden_dim": 8}),
+            ),
+            patch.object(
+                full_smb_train_module,
+                "play_full_smb_policy",
+                return_value=playback,
+            ) as play,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "play",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--steps",
+                    "2",
+                    "--no-render",
+                    "--fps",
+                    "0",
+                    "--sample",
+                    "--temperature",
+                    "0.5",
+                    "--record",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        config = play.call_args.kwargs["config"]
+        play_config = play.call_args.kwargs["play_config"]
+        self.assertEqual(exit_code, 0)
+        load_policy.assert_called_once()
+        self.assertEqual(load_policy.call_args.args[0], Path("data/full_smb/policy.pth"))
+        self.assertEqual(
+            config.recording_dir,
+            full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_DIR,
+        )
+        self.assertEqual(
+            config.recording_path,
+            full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_MANIFEST,
+        )
+        self.assertEqual(play_config.max_steps, 2)
+        self.assertFalse(play_config.render)
+        self.assertEqual(play_config.fps, 0.0)
+        self.assertFalse(play_config.deterministic_policy)
+        self.assertEqual(play_config.sampling_temperature, 0.5)
+        self.assertTrue(payload["recording"]["enabled"])
+        self.assertEqual(payload["mean_return"], 3.0)
 
     def test_perception_modes_resolve_and_record_trainable_state(self):
         with TemporaryDirectory() as tmpdir:

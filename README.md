@@ -132,6 +132,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --checkpoint data/full_smb/policy.pth \
      --record-dir artifacts/full_smb/recordings \
      --recording-path artifacts/full_smb/recording_manifest.npz
+   retroagi play --game smb --stage full \
+     --checkpoint data/full_smb/policy.pth \
+     --render \
+     --fps 30
    retroagi compare --game smb --stage full \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
      --output artifacts/full_smb/transfer_vs_scratch.json

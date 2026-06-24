@@ -6,6 +6,8 @@ import argparse
 import json
 import math
 import random
+import sys
+import time
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -376,6 +378,60 @@ class FullSMBEvaluationResult:
 
     def as_dict(self) -> dict[str, Any]:
         return to_plain_data(asdict(self))
+
+
+@dataclass(frozen=True)
+class FullSMBPlayConfig:
+    """Runtime controls for playing back a saved Full SMB policy."""
+
+    max_steps: int = 1_000
+    render: bool = True
+    fps: float = 30.0
+    deterministic_policy: bool = True
+    sampling_temperature: float = 1.0
+    reset_on_done: bool = True
+    pause_at_start: bool = False
+    interactive_controls: bool = True
+    recording_prefix: str = "play"
+
+    def __post_init__(self) -> None:
+        if int(self.max_steps) < 0:
+            raise ValueError("max_steps must be non-negative")
+        if float(self.fps) < 0.0:
+            raise ValueError("fps must be non-negative")
+        if float(self.sampling_temperature) <= 0.0:
+            raise ValueError("sampling_temperature must be positive")
+        if not str(self.recording_prefix).strip():
+            raise ValueError("recording_prefix must be non-empty")
+
+
+@dataclass(frozen=True)
+class FullSMBPlayResult:
+    """Summary produced by Full SMB policy playback."""
+
+    steps: int
+    resets: int
+    completed_episodes: int
+    total_return: float
+    episode_returns: tuple[float, ...]
+    actions: tuple[int, ...]
+    action_names: tuple[str, ...]
+    deterministic_policy: bool
+    sampling_temperature: float
+    render: bool
+    fps: float
+    quit_requested: bool = False
+    recording: Mapping[str, Any] = field(default_factory=_empty_full_smb_recording_manifest)
+    final_signals: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def mean_return(self) -> float:
+        return _mean(tuple(self.episode_returns))
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = to_plain_data(asdict(self))
+        payload["mean_return"] = self.mean_return
+        return payload
 
 
 @dataclass(frozen=True)
@@ -858,6 +914,276 @@ def evaluate_full_smb_policy(
         tuning_metrics=tuning_metrics,
         success_thresholds_met=success_thresholds_met,
     )
+
+
+@torch.no_grad()
+def play_full_smb_policy(
+    model: torch.nn.Module,
+    *,
+    config: FullSMBTrainingConfig = FullSMBTrainingConfig(),
+    play_config: FullSMBPlayConfig = FullSMBPlayConfig(),
+    make_stage: Optional[StageFactory] = None,
+    vision: Optional[FullSMBSegmentationVision] = None,
+    device: Optional[torch.device] = None,
+) -> FullSMBPlayResult:
+    """Play a saved Full SMB policy with optional rendering and recording."""
+
+    seed_everything(config.seed, deterministic=config.deterministic)
+    resolved_device = device or select_device(config.device)
+    model.eval()
+    owns_vision = vision is None
+    if vision is None:
+        vision = _build_full_smb_perception(config, resolved_device)
+    if isinstance(vision, torch.nn.Module):
+        vision.eval()
+    stage = _make_stage(make_stage, vision, config)
+    recording_targets = _resolve_full_smb_recording_targets(
+        config,
+        play_config.recording_prefix,
+    )
+    recording_artifacts: list[dict[str, Any]] = []
+    episode_returns: list[float] = []
+    actions: list[int] = []
+    action_names: list[str] = []
+    total_return = 0.0
+    completed_episodes = 0
+    resets = 0
+    quit_requested = False
+    final_info: Mapping[str, Any] = {}
+    world_model_state: WorldModelState | None = None
+    interactive = bool(play_config.interactive_controls and _stdin_supports_play_controls())
+    paused = bool(play_config.pause_at_start and interactive)
+    try:
+        episode_index = 0
+        episode_seed = config.seed
+        observation = stage.reset(seed=episode_seed)
+        resets += 1
+        _render_full_smb_stage(stage, enabled=play_config.render)
+        episode_return = 0.0
+        episode_recording = _start_full_smb_episode_recording(
+            episode_index=episode_index,
+            seed=episode_seed,
+            observation=observation,
+            info=stage.last_info,
+            stage=stage,
+        )
+        episode_open = True
+        while len(actions) < play_config.max_steps:
+            command = _poll_full_smb_play_command(enabled=interactive)
+            if command == "quit":
+                quit_requested = True
+                break
+            if command == "pause":
+                paused = not paused
+            if command == "reset":
+                if recording_targets["enabled"]:
+                    _finish_full_smb_play_recording_episode(
+                        episode_recording,
+                        recording_targets,
+                        recording_artifacts,
+                        episode_return=episode_return,
+                    )
+                episode_open = False
+                episode_returns.append(float(episode_return))
+                episode_index += 1
+                episode_seed = config.seed + episode_index
+                observation = stage.reset(seed=episode_seed)
+                resets += 1
+                world_model_state = None
+                episode_return = 0.0
+                episode_recording = _start_full_smb_episode_recording(
+                    episode_index=episode_index,
+                    seed=episode_seed,
+                    observation=observation,
+                    info=stage.last_info,
+                    stage=stage,
+                )
+                episode_open = True
+                _render_full_smb_stage(stage, enabled=play_config.render)
+            if paused:
+                _sleep_full_smb_play_frame(play_config.fps)
+                continue
+
+            batch = stage.encode_observation(observation)
+            forward = _coerce_policy_forward_result(
+                _policy_action_logits_and_state(
+                    model,
+                    batch,
+                    device=resolved_device,
+                    world_model_state=world_model_state,
+                )
+            )
+            logits = forward.logits
+            _finite_tensor_or_raise("action_logits", logits)
+            action = _select_full_smb_play_action(
+                logits,
+                deterministic=play_config.deterministic_policy,
+                temperature=play_config.sampling_temperature,
+            )
+            observation, reward, terminated, truncated, info = stage.step(action)
+            final_info = info
+            if recording_targets["enabled"]:
+                _append_full_smb_episode_recording_step(
+                    episode_recording,
+                    observation=observation,
+                    action=action,
+                    reward=float(reward),
+                    terminated=terminated,
+                    truncated=truncated,
+                    info=info,
+                    stage=stage,
+                )
+            actions.append(action)
+            action_names.append(SMB_ACTIONS[action].name)
+            total_return += float(reward)
+            episode_return += float(reward)
+            _render_full_smb_stage(stage, enabled=play_config.render)
+            boundary = _full_smb_rollout_boundary(
+                terminated=terminated,
+                truncated=truncated,
+                info=info,
+            )
+            if boundary.reset_recurrent_state:
+                world_model_state = None
+            elif forward.next_world_model_state is not None:
+                world_model_state = forward.next_world_model_state.detach()
+            else:
+                world_model_state = None
+
+            if terminated or truncated:
+                completed_episodes += 1
+                episode_returns.append(float(episode_return))
+                if recording_targets["enabled"]:
+                    _finish_full_smb_play_recording_episode(
+                        episode_recording,
+                        recording_targets,
+                        recording_artifacts,
+                        episode_return=episode_return,
+                    )
+                episode_open = False
+                if not play_config.reset_on_done or len(actions) >= play_config.max_steps:
+                    episode_recording = None
+                    break
+                episode_index += 1
+                episode_seed = config.seed + episode_index
+                observation = stage.reset(seed=episode_seed)
+                resets += 1
+                episode_return = 0.0
+                episode_recording = _start_full_smb_episode_recording(
+                    episode_index=episode_index,
+                    seed=episode_seed,
+                    observation=observation,
+                    info=stage.last_info,
+                    stage=stage,
+                )
+                episode_open = True
+                _render_full_smb_stage(stage, enabled=play_config.render)
+            _sleep_full_smb_play_frame(play_config.fps)
+        if episode_open:
+            if episode_return or not episode_returns:
+                episode_returns.append(float(episode_return))
+            if recording_targets["enabled"]:
+                _finish_full_smb_play_recording_episode(
+                    episode_recording,
+                    recording_targets,
+                    recording_artifacts,
+                    episode_return=episode_return,
+                )
+        recording_manifest = _full_smb_recording_manifest(
+            recording_targets,
+            recording_artifacts,
+        )
+        return FullSMBPlayResult(
+            steps=len(actions),
+            resets=resets,
+            completed_episodes=completed_episodes,
+            total_return=float(total_return),
+            episode_returns=tuple(episode_returns),
+            actions=tuple(actions),
+            action_names=tuple(action_names),
+            deterministic_policy=play_config.deterministic_policy,
+            sampling_temperature=play_config.sampling_temperature,
+            render=play_config.render,
+            fps=play_config.fps,
+            quit_requested=quit_requested,
+            recording=recording_manifest,
+            final_signals=_selected_full_smb_signal_fields(final_info),
+        )
+    finally:
+        stage.close()
+        if owns_vision:
+            del vision
+
+
+def _select_full_smb_play_action(
+    logits: torch.Tensor,
+    *,
+    deterministic: bool,
+    temperature: float,
+) -> int:
+    scaled_logits = logits / float(temperature)
+    if deterministic:
+        return int(scaled_logits.argmax(dim=-1).item())
+    distribution = torch.distributions.Categorical(logits=scaled_logits)
+    return int(distribution.sample().item())
+
+
+def _finish_full_smb_play_recording_episode(
+    recording: Optional[Mapping[str, Any]],
+    targets: Mapping[str, Any],
+    artifacts: list[dict[str, Any]],
+    *,
+    episode_return: float,
+) -> None:
+    if recording is None:
+        return
+    artifacts.append(
+        _write_full_smb_episode_recording(
+            recording,
+            targets,
+            total_return=float(episode_return),
+        )
+    )
+
+
+def _render_full_smb_stage(stage: FullSMBStage, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    render = getattr(stage.env, "render", None)
+    if render is not None:
+        render()
+
+
+def _sleep_full_smb_play_frame(fps: float) -> None:
+    if fps <= 0.0:
+        return
+    time.sleep(1.0 / float(fps))
+
+
+def _stdin_supports_play_controls() -> bool:
+    stream = sys.stdin
+    return bool(stream is not None and hasattr(stream, "isatty") and stream.isatty())
+
+
+def _poll_full_smb_play_command(*, enabled: bool) -> Optional[str]:
+    if not enabled:
+        return None
+    try:
+        import select
+
+        readable, _writable, _errors = select.select([sys.stdin], [], [], 0.0)
+    except (OSError, ValueError):
+        return None
+    if not readable:
+        return None
+    text = sys.stdin.readline().strip().lower()
+    if text in {"q", "quit", "exit"}:
+        return "quit"
+    if text in {"p", "pause", "resume"}:
+        return "pause"
+    if text in {"r", "reset"}:
+        return "reset"
+    return None
 
 
 def load_full_smb_policy_checkpoint(
@@ -2913,6 +3239,33 @@ def _add_recording_args(parser: argparse.ArgumentParser, *, use_defaults: bool) 
     )
 
 
+def _add_play_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--steps", "--max-steps", dest="play_max_steps", type=int, default=1_000)
+    parser.set_defaults(play_render=True)
+    parser.add_argument("--render", action="store_true", dest="play_render")
+    parser.add_argument("--no-render", action="store_false", dest="play_render")
+    parser.add_argument("--fps", type=float, default=30.0)
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="sample actions from the policy distribution instead of taking argmax",
+    )
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--pause-at-start", action="store_true")
+    parser.set_defaults(interactive_controls=True, reset_on_done=True)
+    parser.add_argument(
+        "--no-interactive-controls",
+        action="store_false",
+        dest="interactive_controls",
+        help="disable stdin controls: p=pause/resume, r=reset, q=quit",
+    )
+    parser.add_argument("--reset-on-done", action="store_true", dest="reset_on_done")
+    parser.add_argument("--no-reset-on-done", action="store_false", dest="reset_on_done")
+    parser.add_argument("--record", action="store_true")
+    parser.add_argument("--recording-prefix", default="play")
+    _add_recording_args(parser, use_defaults=False)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2946,6 +3299,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     record.add_argument("--policy-checkpoint", "--checkpoint", type=Path, required=True)
     _add_recording_args(record, use_defaults=True)
 
+    play = subparsers.add_parser("play")
+    _add_common_args(play)
+    play.add_argument("--policy-checkpoint", "--checkpoint", type=Path, required=True)
+    _add_play_args(play)
+
     args = parser.parse_args(argv)
     config = _config_from_args(args)
     if args.command in {"train", "resume"}:
@@ -2965,6 +3323,32 @@ def main(argv: Optional[list[str]] = None) -> int:
             }
         )
         result = evaluate_full_smb_policy(model, config=eval_config)
+        if config.output_summary is not None:
+            config.output_summary.parent.mkdir(parents=True, exist_ok=True)
+            config.output_summary.write_text(
+                json.dumps(result.as_dict(), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+    elif args.command == "play":
+        model, _optimizer, checkpoint = load_full_smb_policy_checkpoint(
+            args.policy_checkpoint,
+            device=select_device(config.device),
+        )
+        architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
+        play_config = _play_config_from_args(args)
+        play_training_config = FullSMBTrainingConfig(
+            **{
+                **to_plain_data(config),
+                "architecture_name": architecture_name,
+                "architecture_config": architecture_config,
+            }
+        )
+        result = play_full_smb_policy(
+            model,
+            config=play_training_config,
+            play_config=play_config,
+        )
         if config.output_summary is not None:
             config.output_summary.parent.mkdir(parents=True, exist_ok=True)
             config.output_summary.write_text(
@@ -3048,6 +3432,20 @@ def _reward_config_from_args(args: argparse.Namespace) -> FullSMBRewardConfig:
     return FullSMBRewardConfig(**values)
 
 
+def _play_config_from_args(args: argparse.Namespace) -> FullSMBPlayConfig:
+    return FullSMBPlayConfig(
+        max_steps=args.play_max_steps,
+        render=args.play_render,
+        fps=args.fps,
+        deterministic_policy=not args.sample,
+        sampling_temperature=args.temperature,
+        reset_on_done=args.reset_on_done,
+        pause_at_start=args.pause_at_start,
+        interactive_controls=args.interactive_controls,
+        recording_prefix=args.recording_prefix,
+    )
+
+
 def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
     architecture_config = dict(args.architecture_config or ())
     perception_mode = getattr(args, "perception_mode", None)
@@ -3068,6 +3466,11 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
     checkpoint_path = getattr(args, "checkpoint", None)
     if is_resume_command and checkpoint_path is None:
         checkpoint_path = resume_checkpoint
+    recording_dir = getattr(args, "recording_dir", None)
+    recording_path = getattr(args, "recording_path", None)
+    if getattr(args, "record", False) and recording_dir is None and recording_path is None:
+        recording_dir = DEFAULT_FULL_SMB_RECORDING_DIR
+        recording_path = DEFAULT_FULL_SMB_RECORDING_MANIFEST
     return FullSMBTrainingConfig(
         seed=args.seed,
         training_mode=getattr(args, "training_mode", FULL_SMB_TRAINING_MODE_AUTO),
@@ -3121,8 +3524,8 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         ),
         output_summary=args.output_summary,
         log_path=args.log_path,
-        recording_dir=getattr(args, "recording_dir", None),
-        recording_path=getattr(args, "recording_path", None),
+        recording_dir=recording_dir,
+        recording_path=recording_path,
         tracking_backend=args.tracking_backend,
         tracking_log_dir=args.tracking_log_dir,
         tracking_project=args.tracking_project,
