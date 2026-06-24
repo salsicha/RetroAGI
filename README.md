@@ -154,6 +154,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    records with actions, rewards, done/truncated flags, episode masks,
    boundary reasons, scenario/task/emulator-state IDs when available, selected
    Full SMB signals, and reward terms.
+   Full SMB training also records numerical safety settings and metrics:
+   finite loss/logit/gradient checks, gradient clipping, reward-scale bounds,
+   reward/value prediction bounds, action entropy, and early-stop reasons for
+   NaN or exploding values.
    Real Full SMB emulator runs require the optional stable-retro backend:
    `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
    training do not install or build that native emulator dependency.

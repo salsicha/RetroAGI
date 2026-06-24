@@ -588,6 +588,17 @@ and selected `full_smb_signals` plus reward terms. This storage is intended for
 resume diagnostics, promotion evidence, and deterministic replay inputs; frame
 recording remains a separate artifact task.
 
+Full SMB training stops before an optimizer step when numerical checks fail.
+The trainer validates finite action logits, log-probs, entropy, policy losses,
+total losses, gradients, scaled rewards, and reward/value predictions. It clips
+gradients with `FullSMBTrainingConfig.gradient_clip_norm`, records entropy,
+gradient norm, clip-event, scaled-reward, and prediction-bound metrics, and
+writes the active thresholds into `config.safety` and
+`metadata.training.safety`. The configurable guards are
+`max_abs_loss`, `max_abs_scaled_reward`, and `max_abs_prediction`; CLI aliases
+are `--max-abs-loss`, `--max-abs-scaled-reward`, and
+`--max-abs-prediction`.
+
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,
 when no scratch checkpoint exists yet, a same-architecture scratch-initialized

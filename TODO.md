@@ -476,7 +476,7 @@ and playable end target.
 - [x] Add rollout/replay storage for Full SMB with saved actions, rewards,
       dones, truncations, episode masks, scenario/task IDs, emulator state IDs,
       and selected signal fields.
-- [ ] Add numerical safety checks for Full SMB training: finite losses,
+- [x] Add numerical safety checks for Full SMB training: finite losses,
       gradient clipping, reward scale checks, value/reward prediction bounds,
       action entropy tracking, and early stop on NaN or exploding loss.
 - [ ] Add periodic deterministic Full SMB evaluation during training, separate

@@ -426,6 +426,131 @@ class TestFullSMBTraining(unittest.TestCase):
             11.0,
         )
 
+    def test_training_stops_early_on_nonfinite_action_logits(self):
+        def nan_policy(_model, _batch, *, device, world_model_state=None):
+            del device, world_model_state
+            logits = torch.full(
+                (1, full_smb_train_module.FULL_SMB_ACTION_COUNT),
+                float("nan"),
+                dtype=torch.float32,
+                requires_grad=True,
+            )
+            return logits, None
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            log_path = tmp / "train.jsonl"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=12,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=1,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                log_path=log_path,
+            )
+            with (
+                patch.object(
+                    full_smb_train_module,
+                    "_policy_action_logits_and_state",
+                    side_effect=nan_policy,
+                ),
+                self.assertRaisesRegex(FloatingPointError, "action_logits"),
+            ):
+                train_full_smb_policy(config, make_stage=tiny_stage)
+
+            events = [
+                json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(events[-1]["event"], "training_stopped_early")
+        self.assertIn("action_logits", events[-1]["reason"])
+
+    def test_training_stops_early_on_scaled_reward_bound_violation(self):
+        class HugeRewardEnv(TinyFullSMBEnv):
+            def step(self, action):
+                observation, _reward, _terminated, _truncated, info = super().step(action)
+                info["level_complete"] = False
+                return observation, 10.0, False, True, info
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=14,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=1,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                max_abs_scaled_reward=1.0,
+            )
+
+            with self.assertRaisesRegex(FloatingPointError, "scaled reward"):
+                train_full_smb_policy(
+                    config,
+                    make_stage=lambda vision: FullSMBStage(
+                        env=HugeRewardEnv(),
+                        vision=vision,
+                        observation_config=FullSMBObservationConfig(
+                            frame_skip=1,
+                            frame_stack=2,
+                            resize_shape=(16, 20),
+                        ),
+                    ),
+                )
+
+    def test_training_stops_early_on_prediction_bound_violation(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            model = full_smb_train_module.make_full_smb_policy_model(
+                architecture_name=BASELINE_ARCHITECTURE_NAME,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+            )
+
+            def bad_predict_value(state):
+                return torch.full(
+                    (state.shape[0],),
+                    2.0,
+                    dtype=state.dtype,
+                    device=state.device,
+                )
+
+            model.predict_value = bad_predict_value
+            config = FullSMBTrainingConfig(
+                seed=15,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=1,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                max_abs_prediction=1.0,
+            )
+
+            with (
+                patch.object(
+                    full_smb_train_module,
+                    "make_full_smb_policy_model",
+                    return_value=model,
+                ),
+                self.assertRaisesRegex(FloatingPointError, "value_prediction"),
+            ):
+                train_full_smb_policy(config, make_stage=tiny_stage)
+
     def test_train_resume_and_evaluate_full_smb_policy_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -584,6 +709,9 @@ class TestFullSMBTraining(unittest.TestCase):
             value_loss_weight=0.4,
             action_aux_weight=0.5,
             critic_loss_weight=0.6,
+            max_abs_loss=123.0,
+            max_abs_scaled_reward=45.0,
+            max_abs_prediction=67.0,
             deterministic=False,
             checkpoint_path="data/full_smb/policy.pth",
             resume_path="data/full_smb/resume.pth",
@@ -608,6 +736,9 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.reward_config.death, -7.0)
         self.assertEqual(config.policy_loss_weight, 0.75)
         self.assertEqual(config.value_loss_weight, 0.4)
+        self.assertEqual(config.max_abs_loss, 123.0)
+        self.assertEqual(config.max_abs_scaled_reward, 45.0)
+        self.assertEqual(config.max_abs_prediction, 67.0)
         self.assertFalse(config.deterministic)
         self.assertEqual(config.checkpoint_path, Path("data/full_smb/policy.pth"))
         self.assertEqual(config.resume_path, Path("data/full_smb/resume.pth"))
@@ -625,6 +756,12 @@ class TestFullSMBTraining(unittest.TestCase):
             FullSMBTrainingConfig(vector_env_count=0)
         with self.assertRaisesRegex(ValueError, "loss weights"):
             FullSMBTrainingConfig(value_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "max_abs_loss"):
+            FullSMBTrainingConfig(max_abs_loss=0)
+        with self.assertRaisesRegex(ValueError, "max_abs_scaled_reward"):
+            FullSMBTrainingConfig(max_abs_scaled_reward=0)
+        with self.assertRaisesRegex(ValueError, "max_abs_prediction"):
+            FullSMBTrainingConfig(max_abs_prediction=0)
         with self.assertRaisesRegex(TypeError, "reward_config"):
             FullSMBTrainingConfig(reward_config=object())
         with self.assertRaisesRegex(ValueError, "tracking_backend"):
@@ -656,6 +793,9 @@ class TestFullSMBTraining(unittest.TestCase):
                 ),
                 policy_loss_weight=0.5,
                 value_loss_weight=0.25,
+                max_abs_loss=999.0,
+                max_abs_scaled_reward=88.0,
+                max_abs_prediction=77.0,
                 deterministic=True,
                 log_path=log_path,
                 recording_dir=recording_dir,
@@ -677,6 +817,12 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertFalse(checkpoint["config"]["rollout"]["vectorized_training_enabled"])
         self.assertEqual(checkpoint["config"]["loss_weights"]["policy"], 0.5)
         self.assertEqual(checkpoint["config"]["loss_weights"]["value"], 0.25)
+        safety = checkpoint["metadata"]["training"]["safety"]
+        self.assertTrue(safety["finite_checks_enabled"])
+        self.assertEqual(safety["max_abs_loss"], 999.0)
+        self.assertEqual(safety["max_abs_scaled_reward"], 88.0)
+        self.assertEqual(safety["max_abs_prediction"], 77.0)
+        self.assertEqual(checkpoint["config"]["safety"], safety)
         self.assertEqual(
             checkpoint["config"]["reward"]["terms"]["emulator_progress"],
             0.5,
@@ -697,6 +843,12 @@ class TestFullSMBTraining(unittest.TestCase):
         )
         self.assertEqual(events[0]["config"]["rollout_length"], 2)
         self.assertEqual(events[1]["metrics"]["steps"], 2.0)
+        self.assertIn("mean_entropy", result.history)
+        self.assertIn("mean_gradient_norm", result.history)
+        self.assertIn("max_abs_scaled_reward", result.history)
+        self.assertGreaterEqual(checkpoint["metrics"]["mean_action_entropy"], 0.0)
+        self.assertGreaterEqual(checkpoint["metrics"]["mean_gradient_norm"], 0.0)
+        self.assertLessEqual(checkpoint["metrics"]["max_abs_prediction"], 77.0)
 
     def test_train_cli_builds_expanded_full_smb_config(self):
         with (
@@ -728,6 +880,12 @@ class TestFullSMBTraining(unittest.TestCase):
                     "0.8",
                     "--value-loss-weight",
                     "0.2",
+                    "--max-abs-loss",
+                    "123",
+                    "--max-abs-scaled-reward",
+                    "45",
+                    "--max-abs-prediction",
+                    "67",
                     "--reward-emulator-progress",
                     "0.4",
                     "--reward-death",
@@ -760,6 +918,9 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.learning_rate, 0.0007)
         self.assertEqual(config.policy_loss_weight, 0.8)
         self.assertEqual(config.value_loss_weight, 0.2)
+        self.assertEqual(config.max_abs_loss, 123.0)
+        self.assertEqual(config.max_abs_scaled_reward, 45.0)
+        self.assertEqual(config.max_abs_prediction, 67.0)
         self.assertEqual(config.reward_config.emulator_progress, 0.4)
         self.assertEqual(config.reward_config.death, -9.0)
         self.assertFalse(config.deterministic)

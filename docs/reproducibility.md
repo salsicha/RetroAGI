@@ -713,14 +713,17 @@ retroagi train --game smb --stage full \
 ```
 
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
-`config.reward`, `config.recording`, `config.tracking`,
+`config.reward`, `config.safety`, `config.recording`, `config.tracking`,
 `config.rollout_storage`, and `metadata.training`. `config.rollout.vector_env_count`
 records the requested vectorization contract; `active_vector_env_count` remains
 `1` until the later vector rollout implementation lands. `config.rollout_storage`
 and `metadata.training.rollout_storage` must use schema version 1 and include
 compact replay rows for each training rollout: action, reward, done flags,
 episode mask, boundary reasons, scenario/task/emulator-state IDs when available,
-selected Full SMB signals, and reward terms.
+selected Full SMB signals, and reward terms. `config.safety` and
+`metadata.training.safety` must record finite-check behavior, gradient clipping,
+reward-scale limits, reward/value prediction bounds, and the action-entropy and
+gradient metrics tracked during training.
 
 Expected evidence:
 
@@ -728,6 +731,7 @@ Expected evidence:
 - `data/full_smb/transferred_policy.json`,
 - `data/full_smb/policy.pth` with `config.perception.mode`,
 - `data/full_smb/policy.pth` with schema-v1 `config.rollout_storage`,
+- `data/full_smb/policy.pth` with `config.safety` and final safety metrics,
 - `artifacts/full_smb/train.jsonl`,
 - `artifacts/full_smb/transfer_vs_scratch.json`,
 - comparison fields including `action_agreement`, action histograms,

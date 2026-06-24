@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -111,6 +112,9 @@ _FULL_SMB_SELECTED_SIGNAL_FIELDS = (
     "truncated",
     "termination_reason",
 )
+_FULL_SMB_DEFAULT_MAX_ABS_LOSS = 1_000_000.0
+_FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
+_FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
 
 
 def _resolve_perception_mode(
@@ -167,6 +171,9 @@ class FullSMBTrainingConfig:
         default_factory=FullSMBRewardConfig
     )
     gradient_clip_norm: float = 1.0
+    max_abs_loss: float = _FULL_SMB_DEFAULT_MAX_ABS_LOSS
+    max_abs_scaled_reward: float = _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD
+    max_abs_prediction: float = _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION
     deterministic: bool = True
     deterministic_actions: bool = False
     device: str = "auto"
@@ -225,7 +232,14 @@ class FullSMBTrainingConfig:
                 raise ValueError(f"{name} must be non-negative")
         if self.vector_env_count <= 0:
             raise ValueError("vector_env_count must be positive")
-        for name in ("learning_rate", "reward_scale", "gradient_clip_norm"):
+        for name in (
+            "learning_rate",
+            "reward_scale",
+            "gradient_clip_norm",
+            "max_abs_loss",
+            "max_abs_scaled_reward",
+            "max_abs_prediction",
+        ):
             if float(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} must be positive")
         loss_weights = _loss_weight_metadata(self).values()
@@ -385,6 +399,20 @@ class FullSMBRolloutBoundary:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class FullSMBPolicyForwardResult:
+    """Forward-pass data needed for action selection and safety diagnostics."""
+
+    logits: torch.Tensor
+    next_world_model_state: WorldModelState | None
+    next_state_pred: Optional[torch.Tensor] = None
+    criticism: Optional[torch.Tensor] = None
+
+    def __iter__(self):
+        yield self.logits
+        yield self.next_world_model_state
+
+
 StageFactory = Callable[[FullSMBSegmentationVision], FullSMBStage]
 
 
@@ -459,21 +487,35 @@ def train_full_smb_policy(
             for epoch in range(start_epoch, config.epochs):
                 for update_index in range(config.updates_per_epoch):
                     episode_seed = config.seed + epoch * config.updates_per_epoch + update_index
-                    episode = _train_episode(
-                        model,
-                        optimizer,
-                        stage,
-                        seed=episode_seed,
-                        max_steps=config.rollout_length,
-                        device=device,
-                        reward_scale=config.reward_scale,
-                        entropy_weight=config.entropy_weight,
-                        policy_loss_weight=config.policy_loss_weight,
-                        gradient_clip_norm=config.gradient_clip_norm,
-                        deterministic_actions=config.deterministic_actions,
-                        gradient_parameters=gradient_parameters,
-                        rollout_id=f"epoch{epoch + 1:04d}_update{update_index + 1:04d}",
-                    )
+                    try:
+                        episode = _train_episode(
+                            model,
+                            optimizer,
+                            stage,
+                            seed=episode_seed,
+                            max_steps=config.rollout_length,
+                            device=device,
+                            reward_scale=config.reward_scale,
+                            entropy_weight=config.entropy_weight,
+                            policy_loss_weight=config.policy_loss_weight,
+                            gradient_clip_norm=config.gradient_clip_norm,
+                            max_abs_loss=config.max_abs_loss,
+                            max_abs_scaled_reward=config.max_abs_scaled_reward,
+                            max_abs_prediction=config.max_abs_prediction,
+                            deterministic_actions=config.deterministic_actions,
+                            gradient_parameters=gradient_parameters,
+                            rollout_id=f"epoch{epoch + 1:04d}_update{update_index + 1:04d}",
+                        )
+                    except FloatingPointError as exc:
+                        _log_full_smb_event(
+                            config,
+                            "training_stopped_early",
+                            epoch=epoch + 1,
+                            update=update_index + 1,
+                            global_step=global_step,
+                            reason=str(exc),
+                        )
+                        raise
                     metrics = episode.metrics
                     rollouts.append(episode.rollout)
                     global_step += int(metrics["steps"])
@@ -511,6 +553,11 @@ def train_full_smb_policy(
             metrics={
                 "mean_train_return": _mean(history["episode_return"]),
                 "mean_policy_loss": _mean(history["policy_loss"]),
+                "mean_action_entropy": _mean(history.get("mean_entropy", [])),
+                "mean_gradient_norm": _mean(history.get("mean_gradient_norm", [])),
+                "max_gradient_norm": _max(history.get("max_gradient_norm", [])),
+                "max_abs_scaled_reward": _max(history.get("max_abs_scaled_reward", [])),
+                "max_abs_prediction": _max(history.get("max_abs_prediction", [])),
                 "evaluation_mean_return": evaluation.mean_return,
                 "evaluation_success_rate": evaluation.success_rate,
             },
@@ -654,6 +701,7 @@ def build_full_smb_policy_checkpoint(
     rollout = _rollout_metadata(config)
     rollout_storage = _rollout_storage_metadata(rollouts or ())
     loss_weights = _loss_weight_metadata(config)
+    safety = _safety_metadata(config)
     recording = _recording_metadata(config)
     tracking = _tracking_metadata(config)
     source = dict(
@@ -688,6 +736,7 @@ def build_full_smb_policy_checkpoint(
             "perception": perception,
             "rollout": rollout,
             "loss_weights": loss_weights,
+            "safety": safety,
             "reward": config.reward_config.to_manifest(),
             "recording": recording,
             "tracking": tracking,
@@ -715,6 +764,7 @@ def build_full_smb_policy_checkpoint(
                 "deterministic_actions": config.deterministic_actions,
                 "rollout": rollout,
                 "loss_weights": loss_weights,
+                "safety": safety,
                 "reward": config.reward_config.to_manifest(),
                 "recording": recording,
                 "tracking": tracking,
@@ -895,6 +945,9 @@ def _train_episode(
     entropy_weight: float,
     policy_loss_weight: float,
     gradient_clip_norm: float,
+    max_abs_loss: float,
+    max_abs_scaled_reward: float,
+    max_abs_prediction: float,
     deterministic_actions: bool,
     gradient_parameters: tuple[torch.nn.Parameter, ...],
     rollout_id: str,
@@ -902,24 +955,46 @@ def _train_episode(
     observation = stage.reset(seed=seed)
     total_return = 0.0
     losses: list[float] = []
+    policy_losses: list[float] = []
+    entropies: list[float] = []
+    gradient_norms: list[float] = []
+    gradient_clip_events = 0
+    scaled_rewards: list[float] = []
+    value_prediction_abs_values: list[float] = []
+    reward_prediction_abs_values: list[float] = []
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
     recurrent_state_resets = 1
     boundary_counts: dict[str, int] = {"manual_reset": 1}
     for _step in range(max_steps):
         batch = stage.encode_observation(observation)
-        logits, next_world_model_state = _policy_action_logits_and_state(
+        forward = _coerce_policy_forward_result(
+            _policy_action_logits_and_state(
+                model,
+                batch,
+                device=device,
+                world_model_state=world_model_state,
+            )
+        )
+        logits = forward.logits
+        next_world_model_state = forward.next_world_model_state
+        _finite_tensor_or_raise("action_logits", logits)
+        prediction_metrics = _prediction_safety_metrics(
             model,
             batch,
+            forward,
             device=device,
-            world_model_state=world_model_state,
+            max_abs_prediction=max_abs_prediction,
         )
+        value_prediction_abs_values.append(prediction_metrics["value_prediction_abs_max"])
+        reward_prediction_abs_values.append(prediction_metrics["reward_prediction_abs_max"])
         distribution = torch.distributions.Categorical(logits=logits)
         if deterministic_actions:
             action_tensor = logits.argmax(dim=-1)
         else:
             action_tensor = distribution.sample()
         log_prob = distribution.log_prob(action_tensor)
+        _finite_tensor_or_raise("action_log_prob", log_prob)
         observation, reward, terminated, truncated, info = stage.step(int(action_tensor.item()))
         boundary = _full_smb_rollout_boundary(
             terminated=terminated,
@@ -945,19 +1020,40 @@ def _train_episode(
                 signals=_selected_full_smb_signal_fields(info),
             )
         )
+        scaled_reward_value = _checked_scaled_reward(
+            reward,
+            reward_scale=reward_scale,
+            max_abs_scaled_reward=max_abs_scaled_reward,
+        )
         scaled_reward = torch.as_tensor(
-            float(reward) * reward_scale,
+            scaled_reward_value,
             dtype=log_prob.dtype,
             device=log_prob.device,
         )
         entropy = distribution.entropy().mean()
+        _finite_tensor_or_raise("action_entropy", entropy)
         policy_loss = -(log_prob.mean() * scaled_reward.detach())
         loss = policy_loss_weight * policy_loss - entropy_weight * entropy
+        _finite_tensor_or_raise("policy_loss", policy_loss)
+        _finite_tensor_or_raise("loss", loss)
+        _bounded_tensor_or_raise("loss", loss.detach(), max_abs_loss)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(gradient_parameters, gradient_clip_norm)
+        _check_gradients_or_raise(gradient_parameters)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            gradient_parameters,
+            gradient_clip_norm,
+        )
+        _finite_tensor_or_raise("gradient_norm", grad_norm)
         optimizer.step()
         losses.append(float(loss.detach().cpu().item()))
+        policy_losses.append(float(policy_loss.detach().cpu().item()))
+        entropies.append(float(entropy.detach().cpu().item()))
+        gradient_norm = float(grad_norm.detach().cpu().item())
+        gradient_norms.append(gradient_norm)
+        if gradient_norm > gradient_clip_norm:
+            gradient_clip_events += 1
+        scaled_rewards.append(float(scaled_reward_value))
         total_return += float(reward)
         if boundary.reset_recurrent_state:
             recurrent_state_resets += 1
@@ -975,6 +1071,23 @@ def _train_episode(
         "loss": _mean(losses),
         "steps": float(len(losses)),
         "recurrent_state_resets": float(recurrent_state_resets),
+        "loss_policy": _mean(policy_losses),
+        "mean_entropy": _mean(entropies),
+        "min_entropy": min(entropies) if entropies else 0.0,
+        "max_entropy": max(entropies) if entropies else 0.0,
+        "mean_gradient_norm": _mean(gradient_norms),
+        "max_gradient_norm": max(gradient_norms) if gradient_norms else 0.0,
+        "gradient_clip_events": float(gradient_clip_events),
+        "mean_scaled_reward": _mean(scaled_rewards),
+        "max_abs_scaled_reward": _max_abs(scaled_rewards),
+        "mean_value_prediction_abs": _mean(value_prediction_abs_values),
+        "max_value_prediction_abs": _max(value_prediction_abs_values),
+        "mean_reward_prediction_abs": _mean(reward_prediction_abs_values),
+        "max_reward_prediction_abs": _max(reward_prediction_abs_values),
+        "max_abs_prediction": max(
+            _max(value_prediction_abs_values),
+            _max(reward_prediction_abs_values),
+        ),
     }
     for reason, count in boundary_counts.items():
         metrics[f"boundary_{reason}"] = float(count)
@@ -995,8 +1108,10 @@ def _policy_action_logits(
     *,
     device: torch.device,
 ) -> torch.Tensor:
-    logits, _state = _policy_action_logits_and_state(model, batch, device=device)
-    return logits
+    forward = _coerce_policy_forward_result(
+        _policy_action_logits_and_state(model, batch, device=device)
+    )
+    return forward.logits
 
 
 def _policy_action_logits_and_state(
@@ -1005,7 +1120,7 @@ def _policy_action_logits_and_state(
     *,
     device: torch.device,
     world_model_state: WorldModelState | None = None,
-) -> tuple[torch.Tensor, WorldModelState | None]:
+) -> FullSMBPolicyForwardResult:
     _validate_full_smb_stage_batch(batch)
     src_a = batch.src_a.to(device)
     src_b = batch.src_b.to(device)
@@ -1023,9 +1138,109 @@ def _policy_action_logits_and_state(
         episode_mask=episode_mask,
         return_world_model_state=True,
     )
+    next_state_pred = outputs[1]
+    criticism = outputs[2]
     logits_a = outputs[4]
     next_world_model_state = outputs[-1]
-    return logits_a[:, -1, :FULL_SMB_ACTION_COUNT], next_world_model_state
+    return FullSMBPolicyForwardResult(
+        logits=logits_a[:, -1, :FULL_SMB_ACTION_COUNT],
+        next_world_model_state=next_world_model_state,
+        next_state_pred=next_state_pred,
+        criticism=criticism,
+    )
+
+
+def _coerce_policy_forward_result(value: Any) -> FullSMBPolicyForwardResult:
+    if isinstance(value, FullSMBPolicyForwardResult):
+        return value
+    logits, next_world_model_state = value
+    return FullSMBPolicyForwardResult(
+        logits=logits,
+        next_world_model_state=next_world_model_state,
+    )
+
+
+def _prediction_safety_metrics(
+    model: torch.nn.Module,
+    batch: StageBatch,
+    forward: FullSMBPolicyForwardResult,
+    *,
+    device: torch.device,
+    max_abs_prediction: float,
+) -> dict[str, float]:
+    value_prediction_abs_max = 0.0
+    reward_prediction_abs_max = 0.0
+    with torch.no_grad():
+        if hasattr(model, "predict_value"):
+            value_pred = model.predict_value(batch.src_c.to(device).detach())
+            _finite_tensor_or_raise("value_prediction", value_pred)
+            _bounded_tensor_or_raise(
+                "value_prediction",
+                value_pred,
+                max_abs_prediction,
+            )
+            value_prediction_abs_max = _tensor_abs_max(value_pred)
+        if forward.next_state_pred is not None and hasattr(model, "predict_reward"):
+            reward_pred = model.predict_reward(forward.next_state_pred.detach())
+            _finite_tensor_or_raise("reward_prediction", reward_pred)
+            _bounded_tensor_or_raise(
+                "reward_prediction",
+                reward_pred,
+                max_abs_prediction,
+            )
+            reward_prediction_abs_max = _tensor_abs_max(reward_pred)
+    return {
+        "value_prediction_abs_max": value_prediction_abs_max,
+        "reward_prediction_abs_max": reward_prediction_abs_max,
+    }
+
+
+def _checked_scaled_reward(
+    reward: float,
+    *,
+    reward_scale: float,
+    max_abs_scaled_reward: float,
+) -> float:
+    scaled_reward = float(reward) * float(reward_scale)
+    if not math.isfinite(scaled_reward):
+        raise FloatingPointError(
+            "Full SMB training stopped early: scaled reward is NaN or infinite"
+        )
+    if abs(scaled_reward) > max_abs_scaled_reward:
+        raise FloatingPointError(
+            "Full SMB training stopped early: scaled reward "
+            f"{scaled_reward:.6g} exceeds max_abs_scaled_reward "
+            f"{max_abs_scaled_reward:.6g}"
+        )
+    return scaled_reward
+
+
+def _finite_tensor_or_raise(name: str, tensor: torch.Tensor) -> None:
+    if not torch.isfinite(tensor).all().item():
+        raise FloatingPointError(
+            f"Full SMB training stopped early: {name} contains NaN or infinite values"
+        )
+
+
+def _bounded_tensor_or_raise(name: str, tensor: torch.Tensor, max_abs_value: float) -> None:
+    observed = _tensor_abs_max(tensor)
+    if observed > max_abs_value:
+        raise FloatingPointError(
+            f"Full SMB training stopped early: {name} absolute value "
+            f"{observed:.6g} exceeds configured bound {max_abs_value:.6g}"
+        )
+
+
+def _tensor_abs_max(tensor: torch.Tensor) -> float:
+    if tensor.numel() == 0:
+        return 0.0
+    return float(tensor.detach().abs().max().cpu().item())
+
+
+def _check_gradients_or_raise(parameters: tuple[torch.nn.Parameter, ...]) -> None:
+    for parameter in parameters:
+        if parameter.grad is not None:
+            _finite_tensor_or_raise("gradient", parameter.grad)
 
 
 def _full_smb_rollout_boundary(
@@ -1279,6 +1494,39 @@ def _rollout_storage_metadata(
     }
 
 
+def _safety_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
+    return {
+        "finite_checks_enabled": True,
+        "early_stop_on_nonfinite": True,
+        "early_stop_on_exploding_loss": True,
+        "gradient_clip_norm": float(config.gradient_clip_norm),
+        "reward_scale": float(config.reward_scale),
+        "max_abs_loss": float(config.max_abs_loss),
+        "max_abs_scaled_reward": float(config.max_abs_scaled_reward),
+        "max_abs_prediction": float(config.max_abs_prediction),
+        "prediction_bounds": {
+            "min": -float(config.max_abs_prediction),
+            "max": float(config.max_abs_prediction),
+            "fields": ("value_prediction", "reward_prediction"),
+        },
+        "tracked_metrics": (
+            "mean_entropy",
+            "min_entropy",
+            "max_entropy",
+            "mean_gradient_norm",
+            "max_gradient_norm",
+            "gradient_clip_events",
+            "mean_scaled_reward",
+            "max_abs_scaled_reward",
+            "mean_value_prediction_abs",
+            "max_value_prediction_abs",
+            "mean_reward_prediction_abs",
+            "max_reward_prediction_abs",
+            "max_abs_prediction",
+        ),
+    }
+
+
 def _full_smb_rollout_identifiers(
     stage: FullSMBStage,
     info: Mapping[str, Any],
@@ -1498,6 +1746,14 @@ def _mean(values: list[float] | tuple[float, ...]) -> float:
     return float(sum(values) / len(values)) if values else 0.0
 
 
+def _max(values: list[float] | tuple[float, ...]) -> float:
+    return float(max(values)) if values else 0.0
+
+
+def _max_abs(values: list[float] | tuple[float, ...]) -> float:
+    return float(max((abs(value) for value in values), default=0.0))
+
+
 def _architecture_config_item(value: str) -> tuple[str, Any]:
     if "=" not in value:
         raise argparse.ArgumentTypeError("architecture config must use KEY=VALUE syntax")
@@ -1545,6 +1801,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     train.add_argument("--critic-loss-weight", type=float, default=0.0)
     train.add_argument("--reward-scale", type=float, default=1.0)
     train.add_argument("--gradient-clip-norm", type=float, default=1.0)
+    train.add_argument(
+        "--max-abs-loss",
+        type=float,
+        default=_FULL_SMB_DEFAULT_MAX_ABS_LOSS,
+    )
+    train.add_argument(
+        "--max-abs-scaled-reward",
+        type=float,
+        default=_FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD,
+    )
+    train.add_argument(
+        "--max-abs-prediction",
+        type=float,
+        default=_FULL_SMB_DEFAULT_MAX_ABS_PREDICTION,
+    )
     train.add_argument("--deterministic-actions", action="store_true")
     train.add_argument("--checkpoint", type=Path)
     train.add_argument("--resume", type=Path)
@@ -1694,6 +1965,17 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         reward_scale=getattr(args, "reward_scale", 1.0),
         reward_config=_reward_config_from_args(args),
         gradient_clip_norm=getattr(args, "gradient_clip_norm", 1.0),
+        max_abs_loss=getattr(args, "max_abs_loss", _FULL_SMB_DEFAULT_MAX_ABS_LOSS),
+        max_abs_scaled_reward=getattr(
+            args,
+            "max_abs_scaled_reward",
+            _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD,
+        ),
+        max_abs_prediction=getattr(
+            args,
+            "max_abs_prediction",
+            _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION,
+        ),
         deterministic=True if args.deterministic is None else bool(args.deterministic),
         deterministic_actions=getattr(args, "deterministic_actions", False),
         device=args.device,
