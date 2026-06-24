@@ -125,6 +125,13 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --updates-per-epoch 1 \
      --rollout-steps 64 \
      --checkpoint data/full_smb/policy.pth
+   retroagi evaluate --game smb --stage full \
+     --checkpoint data/full_smb/policy.pth \
+     --evaluation-episodes 3
+   retroagi record --game smb --stage full \
+     --checkpoint data/full_smb/policy.pth \
+     --record-dir artifacts/full_smb/recordings \
+     --recording-path artifacts/full_smb/recording_manifest.npz
    retroagi compare --game smb --stage full \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
      --output artifacts/full_smb/transfer_vs_scratch.json

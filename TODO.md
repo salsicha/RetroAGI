@@ -494,7 +494,7 @@ and playable end target.
       checkpoint paths.
 - [x] Add `retroagi evaluate --stage full-smb --checkpoint ...` that loads a
       saved policy and reports fixed-task threshold diagnostics.
-- [ ] Add `retroagi record --stage full-smb --checkpoint ...` that records
+- [x] Add `retroagi record --stage full-smb --checkpoint ...` that records
       deterministic policy rollouts and writes artifacts.
 - [ ] Add `retroagi play --stage full-smb --checkpoint ...` for interactive
       playback of a trained policy with render, speed, pause, reset, deterministic

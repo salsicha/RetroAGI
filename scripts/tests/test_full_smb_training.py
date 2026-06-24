@@ -1420,6 +1420,68 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertTrue(payload["success_thresholds_met"])
         self.assertEqual(payload["tuning_metrics"]["threshold_pass_rate"], 1.0)
 
+    def test_record_cli_records_checkpoint_with_default_artifacts(self):
+        evaluation = full_smb_train_module.FullSMBEvaluationResult(
+            episodes=1,
+            max_steps_per_episode=2,
+            steps=2,
+            returns=(1.0,),
+            mean_return=1.0,
+            success_rate=1.0,
+            terminated_count=1,
+            truncated_count=0,
+            recording={
+                "enabled": True,
+                "recording_dir": str(full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_DIR),
+                "recording_path": str(full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_MANIFEST),
+                "artifact_count": 1,
+                "artifacts": [{"path": "artifacts/full_smb/recordings/evaluation.npz"}],
+            },
+        )
+        with (
+            patch.object(
+                full_smb_train_module,
+                "load_full_smb_policy_checkpoint",
+                return_value=(object(), object(), {}),
+            ) as load_policy,
+            patch.object(
+                full_smb_train_module,
+                "policy_architecture_from_checkpoint",
+                return_value=(BASELINE_ARCHITECTURE_NAME, {"hidden_dim": 8}),
+            ),
+            patch.object(
+                full_smb_train_module,
+                "evaluate_full_smb_policy",
+                return_value=evaluation,
+            ) as evaluate,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "record",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--evaluation-episodes",
+                    "1",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        config = evaluate.call_args.kwargs["config"]
+        self.assertEqual(exit_code, 0)
+        load_policy.assert_called_once()
+        self.assertEqual(load_policy.call_args.args[0], Path("data/full_smb/policy.pth"))
+        self.assertEqual(
+            config.recording_dir,
+            full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_DIR,
+        )
+        self.assertEqual(
+            config.recording_path,
+            full_smb_train_module.DEFAULT_FULL_SMB_RECORDING_MANIFEST,
+        )
+        self.assertTrue(payload["recording"]["enabled"])
+        self.assertEqual(payload["recording"]["artifact_count"], 1)
+
     def test_perception_modes_resolve_and_record_trainable_state(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

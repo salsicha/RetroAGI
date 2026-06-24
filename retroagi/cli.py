@@ -172,6 +172,10 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         return int(train_main(train_args))
     if command == "evaluate":
         return _run_full_smb_evaluate(stage_args)
+    if command == "record":
+        from retroagi.stages.full_smb.train import main as train_main
+
+        return int(train_main(["record", *stage_args]))
     if command == "diagnose-vision":
         from retroagi.stages.full_smb.diagnostics import main as diagnostics_main
 
@@ -192,7 +196,7 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         return int(capabilities_main(list(stage_args)))
     raise ValueError(
         "Full SMB currently supports train, resume, evaluate, diagnose-vision, "
-        "transfer, compare, and check-env through the top-level CLI"
+        "record, transfer, compare, and check-env through the top-level CLI"
     )
 
 

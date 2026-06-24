@@ -139,6 +139,8 @@ _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
 _FULL_SMB_RECORDING_SCHEMA_VERSION = 1
 _FULL_SMB_VIDEO_SUFFIXES = (".avi", ".mkv", ".mov", ".mp4")
+DEFAULT_FULL_SMB_RECORDING_DIR = Path("artifacts/full_smb/recordings")
+DEFAULT_FULL_SMB_RECORDING_MANIFEST = Path("artifacts/full_smb/recording_manifest.npz")
 _FULL_SMB_FIXED_LEVEL_TASK_NAMES = {
     "level1-1": "benchmark_1_1_start",
     "1-1": "benchmark_1_1_start",
@@ -2893,8 +2895,22 @@ def _add_training_update_args(
         default=_FULL_SMB_DEFAULT_MAX_ABS_PREDICTION,
     )
     parser.add_argument("--deterministic-actions", action="store_true")
-    parser.add_argument("--recording-dir", type=Path)
-    parser.add_argument("--recording-path", type=Path)
+    _add_recording_args(parser, use_defaults=False)
+
+
+def _add_recording_args(parser: argparse.ArgumentParser, *, use_defaults: bool) -> None:
+    parser.add_argument(
+        "--record-dir",
+        "--recording-dir",
+        dest="recording_dir",
+        type=Path,
+        default=DEFAULT_FULL_SMB_RECORDING_DIR if use_defaults else None,
+    )
+    parser.add_argument(
+        "--recording-path",
+        type=Path,
+        default=DEFAULT_FULL_SMB_RECORDING_MANIFEST if use_defaults else None,
+    )
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -2925,12 +2941,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     _add_common_args(evaluate)
     evaluate.add_argument("--policy-checkpoint", "--checkpoint", type=Path, required=True)
 
+    record = subparsers.add_parser("record")
+    _add_common_args(record)
+    record.add_argument("--policy-checkpoint", "--checkpoint", type=Path, required=True)
+    _add_recording_args(record, use_defaults=True)
+
     args = parser.parse_args(argv)
     config = _config_from_args(args)
     if args.command in {"train", "resume"}:
         result = train_full_smb_policy(config)
         print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
-    elif args.command == "evaluate":
+    elif args.command in {"evaluate", "record"}:
         model, _optimizer, checkpoint = load_full_smb_policy_checkpoint(
             args.policy_checkpoint,
             device=select_device(config.device),
