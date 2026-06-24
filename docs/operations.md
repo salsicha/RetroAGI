@@ -336,6 +336,7 @@ the resolved paths.
 | `artifacts/full_smb/<run>/artifact_layout.json` | Serialized `FullSMBArtifactLayout.to_manifest()` output for the preserved run. |
 | `artifacts/full_smb/<run>/summaries/throughput_benchmark.json` | Local emulator throughput benchmark with step rate, emulator-frame rate, selected device, and CPU/CUDA/MPS runtime recommendations. |
 | `artifacts/full_smb/<run>/summaries/train_summary.json` | Full SMB train or resume summary from `--output-summary`. |
+| `artifacts/full_smb/<run>/summaries/resume_summary.json` | Resume summary from `retroagi resume --game smb --stage full --output-summary`. |
 | `artifacts/full_smb/<run>/summaries/recording_summary.json` | Record command summary from `--output-summary`. |
 | `artifacts/full_smb/<run>/summaries/play_summary.json` | Play command summary, including optional inspection overlay fields. |
 | `artifacts/full_smb/<run>/logs/train.jsonl` | Structured training events from `--log-path`. |
@@ -380,6 +381,166 @@ Recommended Full SMB device settings:
 Treat the benchmark as local evidence, not a portable performance guarantee:
 ROM setup, stable-retro version, render mode, frame skip, recording, ViT
 checkpoint size, and tracker backends all change throughput.
+
+## Full SMB Command Workflow
+
+Use this command order when preserving a trainable and playable Full SMB run.
+Create the run layout first so every later command writes to stable paths:
+
+```bash
+python - <<'PY'
+import json
+from retroagi.stages.full_smb import full_smb_artifact_layout
+
+layout = full_smb_artifact_layout("<run>")
+layout.ensure_directories()
+layout.files()["layout_manifest"].write_text(
+    json.dumps(layout.to_manifest(), indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+```
+
+Transfer the Block SMB policy into the Full SMB policy contract after the Full
+SMB ViT has passed the asset-mock perception gate:
+
+```bash
+retroagi transfer --game smb --stage full \
+  --block-policy-checkpoint data/block_smb/policy.pth \
+  --block-vision-checkpoint data/block_vit/block_vit.pth \
+  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --output-checkpoint artifacts/full_smb/<run>/checkpoints/transferred_policy.pth
+```
+
+Fine-tune the transferred policy headlessly and preserve the resolved config,
+logs, checkpoint, recording manifest, and deterministic evaluation cadence:
+
+```bash
+retroagi train --game smb --stage full \
+  --mode fine-tune \
+  --init-checkpoint artifacts/full_smb/<run>/checkpoints/transferred_policy.pth \
+  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --perception-mode freeze \
+  --task-set curriculum \
+  --epochs 1 \
+  --updates-per-epoch 1 \
+  --rollout-steps 64 \
+  --evaluation-episodes 1 \
+  --evaluation-max-steps 64 \
+  --evaluation-interval-epochs 1 \
+  --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth \
+  --recording-dir artifacts/full_smb/<run>/recordings \
+  --recording-path artifacts/full_smb/<run>/recordings/recording_manifest.npz \
+  --log-path artifacts/full_smb/<run>/logs/train.jsonl \
+  --tracking-log-dir artifacts/full_smb/<run>/tracking \
+  --output-summary artifacts/full_smb/<run>/summaries/train_summary.json
+```
+
+Use `--mode scratch` and omit `--init-checkpoint` to train a Full SMB policy
+from a fresh architecture instance. Use `--perception-mode fine_tune` only when
+the run is intentionally updating the Full SMB ViT; otherwise keep
+`--perception-mode freeze` so policy changes are easier to compare.
+
+Resume with the same task schedule and tracking destination. Preserve a
+separate resumed checkpoint when the interrupted checkpoint should remain
+available for audit:
+
+```bash
+retroagi resume --game smb --stage full \
+  --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth \
+  --save-checkpoint artifacts/full_smb/<run>/checkpoints/resumed_policy.pth \
+  --task-set curriculum \
+  --epochs 2 \
+  --updates-per-epoch 1 \
+  --rollout-steps 64 \
+  --evaluation-episodes 1 \
+  --evaluation-max-steps 64 \
+  --evaluation-interval-epochs 1 \
+  --tracking-backend none \
+  --tracking-log-dir artifacts/full_smb/<run>/tracking \
+  --output-summary artifacts/full_smb/<run>/summaries/resume_summary.json
+```
+
+Evaluate the saved policy on the fixed benchmark set and keep the threshold
+diagnostics separate from training summaries:
+
+```bash
+retroagi evaluate --game smb --stage full \
+  --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth \
+  --task-set fixed_benchmark \
+  --evaluation-episodes 3 \
+  --evaluation-max-steps 2400 \
+  --output-summary artifacts/full_smb/<run>/evaluations/evaluation.json
+```
+
+Record deterministic evaluation rollouts for replay and regression debugging:
+
+```bash
+retroagi record --game smb --stage full \
+  --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth \
+  --task-set fixed_benchmark \
+  --evaluation-episodes 3 \
+  --evaluation-max-steps 2400 \
+  --record-dir artifacts/full_smb/<run>/recordings \
+  --recording-path artifacts/full_smb/<run>/recordings/recording_manifest.npz \
+  --output-summary artifacts/full_smb/<run>/summaries/recording_summary.json
+```
+
+Play the saved policy locally with rendering, action-repeat control, and the
+policy-inspection overlay:
+
+```bash
+retroagi play --game smb --stage full \
+  --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth \
+  --task-set fixed_benchmark \
+  --level 1-1 \
+  --steps 1000 \
+  --frame-skip 4 \
+  --action-repeat 2 \
+  --render-mode human \
+  --deterministic-policy \
+  --inspection-overlay \
+  --fps 30 \
+  --record \
+  --record-dir artifacts/full_smb/<run>/recordings \
+  --record-output artifacts/full_smb/<run>/recordings/play_manifest.npz \
+  --output-summary artifacts/full_smb/<run>/summaries/play_summary.json
+```
+
+Use `--render-mode none` or `--no-render` for headless playback, and use
+`--sampling-policy --temperature <value>` when policy sampling is part of the
+experiment. Human-control debugging does not require a checkpoint:
+
+```bash
+retroagi play --game smb --stage full \
+  --human \
+  --task-set smoke \
+  --level 1-1 \
+  --scenario debug \
+  --render-mode human \
+  --fps 30
+```
+
+Compare transferred, scratch-trained, fine-tuned, and known-good policies on
+identical task and seed streams:
+
+```bash
+retroagi compare --game smb --stage full \
+  --transfer-checkpoint artifacts/full_smb/<run>/checkpoints/transferred_policy.pth \
+  --scratch-trained-checkpoint artifacts/full_smb/<run>/checkpoints/scratch_policy.pth \
+  --fine-tuned-checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth \
+  --known-good-checkpoint artifacts/full_smb/<run>/checkpoints/known_good_policy.pth \
+  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --task-set fixed_benchmark \
+  --seed 0 \
+  --seed 1 \
+  --output artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json
+```
+
+The minimum preserved evidence for this workflow is the transfer checkpoint and
+sidecar, policy checkpoint and sidecar, train/resume summaries, structured log,
+evaluation report, recording summary and manifests, play summary, comparison
+report, throughput benchmark, and content metadata.
 
 ## Full SMB Adapter And Transfer
 

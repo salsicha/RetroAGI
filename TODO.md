@@ -522,7 +522,7 @@ and playable end target.
       policy loading.
 - [x] Benchmark emulator throughput and document recommended CPU, CUDA, and MPS
       settings for Full SMB training and play.
-- [ ] Update operations and reproducibility docs with Full SMB train, resume,
+- [x] Update operations and reproducibility docs with Full SMB train, resume,
       evaluate, record, play, and comparison commands.
 - [ ] Produce one known-good Full SMB policy artifact or documented benchmark
       run that can be loaded, evaluated, recorded, and played locally.

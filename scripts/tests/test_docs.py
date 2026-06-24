@@ -28,6 +28,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "## Full SMB Task Sets",
             "## Full SMB Adapter And Transfer",
             "## Full SMB Throughput Benchmark And Device Settings",
+            "## Full SMB Command Workflow",
         ):
             self.assertIn(section, text)
 
@@ -67,6 +68,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "artifacts/full_smb/<run>/artifact_layout.json",
             "artifacts/full_smb/<run>/summaries/throughput_benchmark.json",
             "artifacts/full_smb/<run>/summaries/train_summary.json",
+            "artifacts/full_smb/<run>/summaries/resume_summary.json",
             "artifacts/full_smb/<run>/logs/train.jsonl",
             "artifacts/full_smb/<run>/recordings/",
             "artifacts/full_smb/<run>/videos/",
@@ -84,6 +86,13 @@ class TestOperationsDocumentation(unittest.TestCase):
             "semantic_confidence",
             "class_coverage",
             "temporal_stability",
+            "retroagi train --game smb --stage full",
+            "retroagi resume --game smb --stage full",
+            "retroagi record --game smb --stage full",
+            "retroagi play --game smb --stage full",
+            "retroagi compare --game smb --stage full",
+            "artifacts/full_smb/<run>/checkpoints/resumed_policy.pth",
+            "artifacts/full_smb/<run>/recordings/play_manifest.npz",
         ):
             self.assertIn(term, text)
 
@@ -156,6 +165,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "artifacts/full_smb/baseline_seed0/artifact_layout.json",
             "artifacts/full_smb/baseline_seed0/summaries/throughput_benchmark.json",
             "artifacts/full_smb/baseline_seed0/logs/train.jsonl",
+            "artifacts/full_smb/baseline_seed0/summaries/resume_summary.json",
             "artifacts/full_smb/baseline_seed0/evaluations/evaluation.json",
             "artifacts/full_smb/baseline_seed0/comparisons/policy_suite_comparison.json",
             "artifacts/full_smb/transfer_vs_scratch.json",

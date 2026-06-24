@@ -808,7 +808,8 @@ retroagi resume --game smb --stage full \
   --evaluation-max-steps 64 \
   --evaluation-interval-epochs 1 \
   --tracking-backend none \
-  --tracking-project retroagi
+  --tracking-project retroagi \
+  --output-summary artifacts/full_smb/baseline_seed0/summaries/resume_summary.json
 ```
 
 Omit `--save-checkpoint` to resume in place at `--checkpoint`; provide
@@ -937,8 +938,10 @@ Expected evidence:
 - `artifacts/full_smb/baseline_seed0/artifact_layout.json`,
 - `artifacts/full_smb/baseline_seed0/content.json`,
 - `artifacts/full_smb/baseline_seed0/checkpoints/policy.pth`,
+- `artifacts/full_smb/baseline_seed0/checkpoints/resumed_policy.pth`,
 - `artifacts/full_smb/baseline_seed0/checkpoints/transferred_policy.pth`,
 - `artifacts/full_smb/baseline_seed0/logs/train.jsonl`,
+- `artifacts/full_smb/baseline_seed0/summaries/resume_summary.json`,
 - `artifacts/full_smb/baseline_seed0/evaluations/evaluation.json` with fixed-task threshold diagnostics,
 - `artifacts/full_smb/baseline_seed0/recordings/<evaluation-prefix>/*.npz`,
 - `artifacts/full_smb/baseline_seed0/summaries/recording_summary.json`,
