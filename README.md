@@ -150,6 +150,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    Rollouts carry recurrent world-model state only while the episode continues
    and drop it on manual reset, death, timeout, completion, game over,
    termination, or truncation boundaries.
+   Training summaries and checkpoints now include compact rollout replay
+   records with actions, rewards, done/truncated flags, episode masks,
+   boundary reasons, scenario/task/emulator-state IDs when available, selected
+   Full SMB signals, and reward terms.
    Real Full SMB emulator runs require the optional stable-retro backend:
    `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
    training do not install or build that native emulator dependency.

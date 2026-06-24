@@ -579,6 +579,14 @@ at explicit Full SMB boundaries: manual reset, termination, truncation, death,
 timeout, level completion, or game over. Boundary counts and recurrent reset
 counts are logged as rollout metrics, and checkpoint rollout metadata records
 `recurrent_state_policy="carry_until_full_smb_boundary"` plus the reset reasons.
+Training results and policy checkpoints also include compact rollout replay
+metadata under `rollouts` and `config.rollout_storage` /
+`metadata.training.rollout_storage`. Each recorded step stores the selected SMB
+action, scalar reward, done/terminated/truncated flags, episode mask, boundary
+reasons, scenario/task/emulator-state identifiers when exposed by the backend,
+and selected `full_smb_signals` plus reward terms. This storage is intended for
+resume diagnostics, promotion evidence, and deterministic replay inputs; frame
+recording remains a separate artifact task.
 
 `compare_transferred_checkpoint_with_scratch(...)` evaluates a transferred Full
 SMB checkpoint against either a supplied scratch-trained Full SMB checkpoint or,

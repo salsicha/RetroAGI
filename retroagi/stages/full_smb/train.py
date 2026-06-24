@@ -75,6 +75,42 @@ _FULL_SMB_PERCEPTION_ALIASES = {
     FULL_SMB_PERCEPTION_REPLACE: FULL_SMB_PERCEPTION_REPLACE,
     "scratch": FULL_SMB_PERCEPTION_REPLACE,
 }
+_FULL_SMB_ROLLOUT_STORAGE_FIELDS = (
+    "step_index",
+    "action",
+    "action_name",
+    "reward",
+    "done",
+    "terminated",
+    "truncated",
+    "episode_mask",
+    "boundary_reasons",
+    "scenario_id",
+    "task_id",
+    "emulator_state_id",
+    "signals",
+)
+_FULL_SMB_SELECTED_SIGNAL_FIELDS = (
+    "position",
+    "progress",
+    "score",
+    "coins",
+    "collectibles",
+    "lives",
+    "screen",
+    "level",
+    "world",
+    "stage",
+    "power_state",
+    "completion",
+    "death",
+    "timeout",
+    "game_over",
+    "objectives",
+    "terminated",
+    "truncated",
+    "termination_reason",
+)
 
 
 def _resolve_perception_mode(
@@ -253,6 +289,64 @@ class FullSMBEvaluationResult:
 
 
 @dataclass(frozen=True)
+class FullSMBRolloutStep:
+    """Serializable Full SMB transition record for replay and diagnostics."""
+
+    step_index: int
+    action: int
+    action_name: str
+    reward: float
+    done: bool
+    terminated: bool
+    truncated: bool
+    episode_mask: float
+    boundary_reasons: tuple[str, ...]
+    scenario_id: Optional[str]
+    task_id: Optional[str]
+    emulator_state_id: Optional[str]
+    signals: Mapping[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return to_plain_data(asdict(self))
+
+
+@dataclass(frozen=True)
+class FullSMBRolloutStorage:
+    """Compact replay record for one Full SMB training rollout."""
+
+    rollout_id: str
+    seed: int
+    max_steps: int
+    steps: tuple[FullSMBRolloutStep, ...] = ()
+
+    @property
+    def total_return(self) -> float:
+        return float(sum(step.reward for step in self.steps))
+
+    @property
+    def step_count(self) -> int:
+        return len(self.steps)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "rollout_id": self.rollout_id,
+            "seed": int(self.seed),
+            "max_steps": int(self.max_steps),
+            "steps": [step.as_dict() for step in self.steps],
+            "total_return": self.total_return,
+            "step_count": self.step_count,
+        }
+
+
+@dataclass(frozen=True)
+class FullSMBEpisodeTrainingResult:
+    """Metrics and replay storage produced by one online training rollout."""
+
+    metrics: Mapping[str, float]
+    rollout: FullSMBRolloutStorage
+
+
+@dataclass(frozen=True)
 class FullSMBTrainingResult:
     """Artifacts from one direct Full SMB training run."""
 
@@ -260,6 +354,7 @@ class FullSMBTrainingResult:
     history: Mapping[str, list[float]]
     evaluation: FullSMBEvaluationResult
     checkpoint_path: Optional[Path]
+    rollouts: tuple[FullSMBRolloutStorage, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -275,6 +370,7 @@ class FullSMBTrainingResult:
                 "metadata": to_plain_data(self.checkpoint.get("metadata", {})),
             },
             "history": to_plain_data(self.history),
+            "rollouts": [rollout.as_dict() for rollout in self.rollouts],
             "evaluation": self.evaluation.as_dict(),
             "checkpoint_path": str(self.checkpoint_path) if self.checkpoint_path else None,
         }
@@ -329,6 +425,7 @@ def train_full_smb_policy(
     optimizer = _make_training_optimizer(model, vision, config)
     _restore_optimizer_state(optimizer, checkpoint, strict=True)
     history: dict[str, list[float]] = {"episode_return": [], "policy_loss": []}
+    rollouts: list[FullSMBRolloutStorage] = []
     _initialize_full_smb_log(config)
     tracker = make_experiment_tracker(
         ExperimentTrackerConfig(
@@ -362,7 +459,7 @@ def train_full_smb_policy(
             for epoch in range(start_epoch, config.epochs):
                 for update_index in range(config.updates_per_epoch):
                     episode_seed = config.seed + epoch * config.updates_per_epoch + update_index
-                    metrics = _train_episode(
+                    episode = _train_episode(
                         model,
                         optimizer,
                         stage,
@@ -375,7 +472,10 @@ def train_full_smb_policy(
                         gradient_clip_norm=config.gradient_clip_norm,
                         deterministic_actions=config.deterministic_actions,
                         gradient_parameters=gradient_parameters,
+                        rollout_id=f"epoch{epoch + 1:04d}_update{update_index + 1:04d}",
                     )
+                    metrics = episode.metrics
+                    rollouts.append(episode.rollout)
                     global_step += int(metrics["steps"])
                     history["episode_return"].append(float(metrics["return"]))
                     history["policy_loss"].append(float(metrics["loss"]))
@@ -418,6 +518,7 @@ def train_full_smb_policy(
             architecture_config=architecture_config,
             vision=vision,
             training_source=training_source,
+            rollouts=rollouts,
         )
         tracker.log_metrics(
             checkpoint["metrics"],
@@ -445,6 +546,7 @@ def train_full_smb_policy(
             history=history,
             evaluation=evaluation,
             checkpoint_path=checkpoint_path if config.save_checkpoints else None,
+            rollouts=tuple(rollouts),
         )
         if config.output_summary is not None:
             save_full_smb_training_summary(config.output_summary, result)
@@ -546,9 +648,11 @@ def build_full_smb_policy_checkpoint(
     architecture_config: Mapping[str, Any],
     vision: Optional[FullSMBSegmentationVision] = None,
     training_source: Optional[Mapping[str, Any]] = None,
+    rollouts: Optional[list[FullSMBRolloutStorage] | tuple[FullSMBRolloutStorage, ...]] = None,
 ) -> dict[str, Any]:
     perception = _perception_checkpoint_metadata(config, vision)
     rollout = _rollout_metadata(config)
+    rollout_storage = _rollout_storage_metadata(rollouts or ())
     loss_weights = _loss_weight_metadata(config)
     recording = _recording_metadata(config)
     tracking = _tracking_metadata(config)
@@ -589,6 +693,7 @@ def build_full_smb_policy_checkpoint(
             "tracking": tracking,
             "training_source": source,
             "stage_batch_contract": stage_batch_contract,
+            "rollout_storage": rollout_storage,
             "architecture_name": architecture_name,
             "architecture_config": dict(architecture_config),
         },
@@ -615,6 +720,7 @@ def build_full_smb_policy_checkpoint(
                 "tracking": tracking,
                 "source": source,
                 "stage_batch_contract": stage_batch_contract,
+                "rollout_storage": rollout_storage,
             },
         },
     )
@@ -791,10 +897,12 @@ def _train_episode(
     gradient_clip_norm: float,
     deterministic_actions: bool,
     gradient_parameters: tuple[torch.nn.Parameter, ...],
-) -> dict[str, float]:
+    rollout_id: str,
+) -> FullSMBEpisodeTrainingResult:
     observation = stage.reset(seed=seed)
     total_return = 0.0
     losses: list[float] = []
+    steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
     recurrent_state_resets = 1
     boundary_counts: dict[str, int] = {"manual_reset": 1}
@@ -817,6 +925,25 @@ def _train_episode(
             terminated=terminated,
             truncated=truncated,
             info=info,
+        )
+        action = int(action_tensor.item())
+        identifiers = _full_smb_rollout_identifiers(stage, info)
+        steps.append(
+            FullSMBRolloutStep(
+                step_index=_step,
+                action=action,
+                action_name=SMB_ACTIONS[action].name,
+                reward=float(reward),
+                done=bool(terminated or truncated),
+                terminated=bool(terminated),
+                truncated=bool(truncated),
+                episode_mask=float(boundary.episode_mask),
+                boundary_reasons=boundary.reasons,
+                scenario_id=identifiers["scenario_id"],
+                task_id=identifiers["task_id"],
+                emulator_state_id=identifiers["emulator_state_id"],
+                signals=_selected_full_smb_signal_fields(info),
+            )
         )
         scaled_reward = torch.as_tensor(
             float(reward) * reward_scale,
@@ -851,7 +978,15 @@ def _train_episode(
     }
     for reason, count in boundary_counts.items():
         metrics[f"boundary_{reason}"] = float(count)
-    return metrics
+    return FullSMBEpisodeTrainingResult(
+        metrics=metrics,
+        rollout=FullSMBRolloutStorage(
+            rollout_id=rollout_id,
+            seed=int(seed),
+            max_steps=int(max_steps),
+            steps=tuple(steps),
+        ),
+    )
 
 
 def _policy_action_logits(
@@ -1128,6 +1263,88 @@ def _rollout_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
             "game_over",
         ),
     }
+
+
+def _rollout_storage_metadata(
+    rollouts: list[FullSMBRolloutStorage] | tuple[FullSMBRolloutStorage, ...],
+) -> dict[str, Any]:
+    stored_rollouts = [rollout.as_dict() for rollout in rollouts]
+    return {
+        "schema_version": 1,
+        "storage_kind": "compact_full_smb_rollout_replay",
+        "stored_rollouts": len(stored_rollouts),
+        "stored_steps": int(sum(rollout["step_count"] for rollout in stored_rollouts)),
+        "fields": _FULL_SMB_ROLLOUT_STORAGE_FIELDS,
+        "rollouts": stored_rollouts,
+    }
+
+
+def _full_smb_rollout_identifiers(
+    stage: FullSMBStage,
+    info: Mapping[str, Any],
+) -> dict[str, Optional[str]]:
+    env_config = getattr(stage, "env_config", None)
+    scenario_id = _first_present_string(
+        info,
+        ("scenario_id", "scenario_name", "scenario", "task_scenario"),
+    )
+    task_id = _first_present_string(
+        info,
+        ("task_id", "task_name", "task", "full_smb_task", "task_spec"),
+    )
+    emulator_state_id = _first_present_string(
+        info,
+        (
+            "emulator_state_id",
+            "state_id",
+            "save_state_id",
+            "save_state",
+            "state",
+        ),
+    )
+    if scenario_id is None and env_config is not None:
+        scenario_id = _attribute_string(env_config, "scenario")
+    if emulator_state_id is None and env_config is not None:
+        emulator_state_id = _attribute_string(env_config, "state")
+    return {
+        "scenario_id": scenario_id,
+        "task_id": task_id,
+        "emulator_state_id": emulator_state_id,
+    }
+
+
+def _first_present_string(
+    mapping: Mapping[str, Any],
+    keys: tuple[str, ...],
+) -> Optional[str]:
+    for key in keys:
+        if key not in mapping:
+            continue
+        value = mapping[key]
+        if value is None or value == "":
+            continue
+        return str(value)
+    return None
+
+
+def _attribute_string(value: Any, name: str) -> Optional[str]:
+    item = getattr(value, name, None)
+    if item is None or item == "":
+        return None
+    return str(item)
+
+
+def _selected_full_smb_signal_fields(info: Mapping[str, Any]) -> dict[str, Any]:
+    signals = info.get("full_smb_signals")
+    source = signals if isinstance(signals, Mapping) else info
+    selected = {
+        field: to_plain_data(source[field])
+        for field in _FULL_SMB_SELECTED_SIGNAL_FIELDS
+        if field in source
+    }
+    if "reward_terms" in info and isinstance(info["reward_terms"], Mapping):
+        selected["reward_terms"] = to_plain_data(info["reward_terms"])
+    return selected
 
 
 def _recording_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:

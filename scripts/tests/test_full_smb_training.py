@@ -321,6 +321,111 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(result.history["boundary_manual_reset"], [2.0])
         self.assertEqual(result.history["recurrent_state_resets"], [2.0])
 
+    def test_training_records_compact_full_smb_rollout_storage(self):
+        class ReplayInfoEnv(TinyFullSMBEnv):
+            def step(self, action):
+                observation, reward, _terminated, _truncated, info = super().step(action)
+                info.update(
+                    {
+                        "level_complete": False,
+                        "scenario_id": "scenario-a",
+                        "task_id": "task-1",
+                        "emulator_state_id": "state-1",
+                    }
+                )
+                return observation, reward, False, self.step_count >= 2, info
+
+        def fake_policy(_model, _batch, *, device, world_model_state=None):
+            del device, world_model_state
+            logits = torch.zeros(
+                (1, full_smb_train_module.FULL_SMB_ACTION_COUNT),
+                dtype=torch.float32,
+                requires_grad=True,
+            )
+            next_state = WorldModelState(
+                hidden=torch.zeros((1, 1, 8)),
+                cell=torch.zeros((1, 1, 8)),
+            )
+            return logits, next_state
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=10,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=3,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                deterministic_actions=True,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            with patch.object(
+                full_smb_train_module,
+                "_policy_action_logits_and_state",
+                side_effect=fake_policy,
+            ):
+                result = train_full_smb_policy(
+                    config,
+                    make_stage=lambda vision: FullSMBStage(
+                        env=ReplayInfoEnv(),
+                        vision=vision,
+                        observation_config=FullSMBObservationConfig(
+                            frame_skip=1,
+                            frame_stack=2,
+                            resize_shape=(16, 20),
+                        ),
+                    ),
+                )
+
+        self.assertEqual(len(result.rollouts), 1)
+        rollout = result.rollouts[0]
+        self.assertEqual(rollout.rollout_id, "epoch0001_update0001")
+        self.assertEqual(rollout.seed, 10)
+        self.assertEqual(rollout.max_steps, 3)
+        self.assertEqual(rollout.step_count, 2)
+        self.assertEqual(rollout.total_return, 3.0)
+
+        first, second = rollout.steps
+        self.assertEqual(first.step_index, 0)
+        self.assertEqual(first.action, 0)
+        self.assertEqual(first.action_name, "NOOP")
+        self.assertEqual(first.reward, 1.0)
+        self.assertFalse(first.done)
+        self.assertEqual(first.episode_mask, 1.0)
+        self.assertEqual(first.scenario_id, "scenario-a")
+        self.assertEqual(first.task_id, "task-1")
+        self.assertEqual(first.emulator_state_id, "state-1")
+        self.assertEqual(first.signals["progress"], 11.0)
+        self.assertEqual(first.signals["reward_terms"]["total"], 1.0)
+
+        self.assertTrue(second.done)
+        self.assertFalse(second.terminated)
+        self.assertTrue(second.truncated)
+        self.assertEqual(second.episode_mask, 0.0)
+        self.assertEqual(set(second.boundary_reasons), {"truncated", "timeout"})
+        self.assertEqual(second.signals["progress"], 12.0)
+
+        storage = result.checkpoint["metadata"]["training"]["rollout_storage"]
+        self.assertEqual(storage["schema_version"], 1)
+        self.assertEqual(storage["storage_kind"], "compact_full_smb_rollout_replay")
+        self.assertEqual(storage["stored_rollouts"], 1)
+        self.assertEqual(storage["stored_steps"], 2)
+        self.assertEqual(storage["rollouts"][0]["rollout_id"], "epoch0001_update0001")
+        self.assertEqual(storage["rollouts"][0]["steps"][1]["truncated"], True)
+        self.assertEqual(
+            result.checkpoint["config"]["rollout_storage"],
+            storage,
+        )
+        self.assertEqual(
+            result.as_dict()["rollouts"][0]["steps"][0]["signals"]["progress"],
+            11.0,
+        )
+
     def test_train_resume_and_evaluate_full_smb_policy_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
