@@ -479,7 +479,7 @@ and playable end target.
 - [x] Add numerical safety checks for Full SMB training: finite losses,
       gradient clipping, reward scale checks, value/reward prediction bounds,
       action entropy tracking, and early stop on NaN or exploding loss.
-- [ ] Add periodic deterministic Full SMB evaluation during training, separate
+- [x] Add periodic deterministic Full SMB evaluation during training, separate
       from stochastic exploration rollouts.
 - [ ] Save versioned Full SMB trainer checkpoints with model, optimizer,
       optional perception, RNG state, task/curriculum state, config, metrics,

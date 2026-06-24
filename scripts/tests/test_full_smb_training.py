@@ -701,6 +701,7 @@ class TestFullSMBTraining(unittest.TestCase):
             max_steps_per_episode=99,
             rollout_length=4,
             vector_env_count=2,
+            evaluation_interval_epochs=3,
             reward_config={"emulator_progress": 0.5, "death": -7.0},
             policy_loss_weight=0.75,
             representation_weight=0.1,
@@ -731,6 +732,7 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.rollout_length, 4)
         self.assertEqual(config.max_steps_per_episode, 4)
         self.assertEqual(config.vector_env_count, 2)
+        self.assertEqual(config.evaluation_interval_epochs, 3)
         self.assertIsInstance(config.reward_config, FullSMBRewardConfig)
         self.assertEqual(config.reward_config.emulator_progress, 0.5)
         self.assertEqual(config.reward_config.death, -7.0)
@@ -754,6 +756,8 @@ class TestFullSMBTraining(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "vector_env_count"):
             FullSMBTrainingConfig(vector_env_count=0)
+        with self.assertRaisesRegex(ValueError, "evaluation_interval_epochs"):
+            FullSMBTrainingConfig(evaluation_interval_epochs=0)
         with self.assertRaisesRegex(ValueError, "loss weights"):
             FullSMBTrainingConfig(value_loss_weight=-0.1)
         with self.assertRaisesRegex(ValueError, "max_abs_loss"):
@@ -837,6 +841,13 @@ class TestFullSMBTraining(unittest.TestCase):
             checkpoint["metadata"]["training"]["rollout"]["vector_env_count"],
             3,
         )
+        evaluation = checkpoint["metadata"]["training"]["evaluation"]
+        self.assertEqual(evaluation["schema_version"], 1)
+        self.assertEqual(evaluation["cadence"], "periodic_deterministic")
+        self.assertEqual(evaluation["interval_epochs"], 1)
+        self.assertFalse(evaluation["enabled"])
+        self.assertEqual(evaluation["stored_evaluations"], 0)
+        self.assertEqual(checkpoint["config"]["evaluation"], evaluation)
         self.assertEqual(
             [event["event"] for event in events],
             ["run_started", "train_rollout", "run_finished"],
@@ -849,6 +860,56 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertGreaterEqual(checkpoint["metrics"]["mean_action_entropy"], 0.0)
         self.assertGreaterEqual(checkpoint["metrics"]["mean_gradient_norm"], 0.0)
         self.assertLessEqual(checkpoint["metrics"]["max_abs_prediction"], 77.0)
+
+    def test_periodic_deterministic_evaluation_writes_separate_full_smb_log(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            log_path = tmp / "train.jsonl"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=18,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=3,
+                updates_per_epoch=1,
+                rollout_length=2,
+                evaluation_episodes=1,
+                evaluation_max_steps=2,
+                evaluation_interval_epochs=2,
+                deterministic_actions=True,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                log_path=log_path,
+            )
+            result = train_full_smb_policy(config, make_stage=tiny_stage)
+            events = [
+                json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(len(result.history["episode_return"]), 3)
+        self.assertEqual(len(result.history["eval_mean_return"]), 2)
+        self.assertEqual([record["epoch"] for record in result.evaluations], [2, 3])
+        self.assertEqual(
+            [event["epoch"] for event in events if event["event"] == "train_rollout"],
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            [event["epoch"] for event in events if event["event"] == "deterministic_evaluation"],
+            [2, 3],
+        )
+        self.assertEqual(events[0]["config"]["evaluation_interval_epochs"], 2)
+        self.assertEqual(events[-1]["event"], "run_finished")
+        self.assertEqual(result.checkpoint["metrics"]["periodic_evaluation_count"], 2.0)
+        evaluation = result.checkpoint["metadata"]["training"]["evaluation"]
+        self.assertTrue(evaluation["enabled"])
+        self.assertEqual(evaluation["interval_epochs"], 2)
+        self.assertEqual(evaluation["stored_evaluations"], 2)
+        self.assertTrue(evaluation["separate_from_training_rollouts"])
+        self.assertEqual(evaluation["evaluations"][0]["epoch"], 2)
+        self.assertEqual(
+            result.as_dict()["evaluations"][1]["metrics"]["eval_steps"],
+            2.0,
+        )
 
     def test_train_cli_builds_expanded_full_smb_config(self):
         with (
@@ -872,6 +933,8 @@ class TestFullSMBTraining(unittest.TestCase):
                     "5",
                     "--rollout-steps",
                     "6",
+                    "--evaluation-interval-epochs",
+                    "3",
                     "--vector-env-count",
                     "2",
                     "--learning-rate",
@@ -914,6 +977,7 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.epochs, 4)
         self.assertEqual(config.updates_per_epoch, 5)
         self.assertEqual(config.rollout_length, 6)
+        self.assertEqual(config.evaluation_interval_epochs, 3)
         self.assertEqual(config.vector_env_count, 2)
         self.assertEqual(config.learning_rate, 0.0007)
         self.assertEqual(config.policy_loss_weight, 0.8)

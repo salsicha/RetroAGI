@@ -707,6 +707,9 @@ retroagi train --game smb --stage full \
   --epochs 1 \
   --updates-per-epoch 1 \
   --rollout-steps 64 \
+  --evaluation-episodes 1 \
+  --evaluation-max-steps 64 \
+  --evaluation-interval-epochs 1 \
   --reward-emulator-progress 1.0 \
   --log-path artifacts/full_smb/train.jsonl \
   --checkpoint data/full_smb/policy.pth
@@ -714,10 +717,13 @@ retroagi train --game smb --stage full \
 
 The trainer checkpoint must include `config.rollout`, `config.loss_weights`,
 `config.reward`, `config.safety`, `config.recording`, `config.tracking`,
-`config.rollout_storage`, and `metadata.training`. `config.rollout.vector_env_count`
-records the requested vectorization contract; `active_vector_env_count` remains
-`1` until the later vector rollout implementation lands. `config.rollout_storage`
-and `metadata.training.rollout_storage` must use schema version 1 and include
+`config.rollout_storage`, `config.evaluation`, and `metadata.training`.
+Structured logs should contain separate `train_rollout` and
+`deterministic_evaluation` events so fixed-policy evaluation is not mixed with
+stochastic exploration rollouts. `config.rollout.vector_env_count` records the
+requested vectorization contract; `active_vector_env_count` remains `1` until
+the later vector rollout implementation lands. `config.rollout_storage` and
+`metadata.training.rollout_storage` must use schema version 1 and include
 compact replay rows for each training rollout: action, reward, done flags,
 episode mask, boundary reasons, scenario/task/emulator-state IDs when available,
 selected Full SMB signals, and reward terms. `config.safety` and
