@@ -559,16 +559,17 @@ single-env, so checkpoints record both the requested `vector_env_count` and
 `active_vector_env_count=1`; the later vector rollout task is responsible for
 turning that request into parallel emulator execution.
 
-Direct scratch training is selected by omitting `resume_path` and
-`init_checkpoint`. In that mode the trainer constructs the policy through the
-shared architecture factory, consumes `FullSMBStage.encode_observation(...)`
-A/B/C `StageBatch` tensors directly, validates their Full SMB sequence lengths
-and dtypes before policy inference, and records
-`training_source.mode="scratch"` plus the stage-batch contract in checkpoint
-config and metadata. `init_checkpoint` selects transferred-policy fine-tuning:
-it may point at either a raw Block SMB policy checkpoint, which the trainer
-converts into the Full SMB contract in memory, or an existing Full SMB transfer
-checkpoint. Both paths start Full SMB optimizer updates at epoch zero and record
+Direct scratch training is selected with `--mode scratch` or by omitting both
+`resume_path` and `init_checkpoint` in auto mode. In that mode the trainer
+constructs the policy through the shared architecture factory, consumes
+`FullSMBStage.encode_observation(...)` A/B/C `StageBatch` tensors directly,
+validates their Full SMB sequence lengths and dtypes before policy inference,
+and records `training_source.mode="scratch"` plus the stage-batch contract in
+checkpoint config and metadata. Transferred-policy fine-tuning is selected with
+`--mode fine-tune --init-checkpoint ...`; the init checkpoint may point at either
+a raw Block SMB policy checkpoint, which the trainer converts into the Full SMB
+contract in memory, or an existing Full SMB transfer checkpoint. Both paths start
+Full SMB optimizer updates at epoch zero and record
 `training_source.mode="init_checkpoint"`, the source checkpoint identity, and
 whether the source was a Block SMB policy or a Full SMB transfer checkpoint.
 Resume runs record their source checkpoint provenance in the same fields.

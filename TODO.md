@@ -489,7 +489,7 @@ and playable end target.
       expectations, and tracking destination.
 - [x] Add Full SMB recording support for evaluation episodes, including frame
       arrays, actions, rewards, signals, task IDs, and optional video export.
-- [ ] Add `retroagi train --stage full-smb` with scratch and fine-tune modes.
+- [x] Add `retroagi train --stage full-smb` with scratch and fine-tune modes.
 - [ ] Add `retroagi resume --stage full-smb` with checkpoint and optional output
       checkpoint paths.
 - [ ] Add `retroagi evaluate --stage full-smb --checkpoint ...` that loads a

@@ -701,6 +701,7 @@ whether the Full SMB ViT was frozen, fine-tuned, or replaced:
 
 ```bash
 retroagi train --game smb --stage full \
+  --mode fine-tune \
   --init-checkpoint data/full_smb/transferred_policy.pth \
   --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
   --perception-mode freeze \
@@ -716,6 +717,10 @@ retroagi train --game smb --stage full \
   --log-path artifacts/full_smb/train.jsonl \
   --checkpoint data/full_smb/policy.pth
 ```
+
+Use `--mode scratch` and omit `--init-checkpoint` for a new Full SMB policy; use
+`--mode fine-tune` with `--init-checkpoint` to continue from a transferred Block
+SMB or Full SMB transfer checkpoint.
 
 Resume from the saved policy checkpoint with the same schedule and tracking
 destination. The resume path restores saved RNG streams before the next rollout

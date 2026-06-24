@@ -870,6 +870,7 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.episodes_per_epoch, 3)
         self.assertEqual(config.rollout_length, 4)
         self.assertEqual(config.max_steps_per_episode, 4)
+        self.assertEqual(config.training_mode, "auto")
         self.assertEqual(config.vector_env_count, 2)
         self.assertEqual(config.evaluation_interval_epochs, 3)
         self.assertIsInstance(config.reward_config, FullSMBRewardConfig)
@@ -911,6 +912,22 @@ class TestFullSMBTraining(unittest.TestCase):
             FullSMBTrainingConfig(tracking_backend="unknown")
         with self.assertRaisesRegex(ValueError, "tracking_project"):
             FullSMBTrainingConfig(tracking_project="")
+        self.assertEqual(
+            FullSMBTrainingConfig(
+                training_mode="fine-tune",
+                init_checkpoint="data/full_smb/transferred_policy.pth",
+            ).training_mode,
+            "fine_tune",
+        )
+        with self.assertRaisesRegex(ValueError, "training_mode"):
+            FullSMBTrainingConfig(training_mode="unknown")
+        with self.assertRaisesRegex(ValueError, "scratch.*init_checkpoint"):
+            FullSMBTrainingConfig(
+                training_mode="scratch",
+                init_checkpoint="data/full_smb/transferred_policy.pth",
+            )
+        with self.assertRaisesRegex(ValueError, "fine_tune.*requires init_checkpoint"):
+            FullSMBTrainingConfig(training_mode="fine_tune")
 
     def test_expanded_training_config_is_logged_and_checkpointed(self):
         with TemporaryDirectory() as tmpdir:
@@ -1151,6 +1168,8 @@ class TestFullSMBTraining(unittest.TestCase):
                     "-9",
                     "--nondeterministic",
                     "--deterministic-actions",
+                    "--mode",
+                    "scratch",
                     "--checkpoint",
                     "data/full_smb/policy.pth",
                     "--recording-dir",
@@ -1183,6 +1202,7 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.max_abs_prediction, 67.0)
         self.assertEqual(config.reward_config.emulator_progress, 0.4)
         self.assertEqual(config.reward_config.death, -9.0)
+        self.assertEqual(config.training_mode, "scratch")
         self.assertFalse(config.deterministic)
         self.assertTrue(config.deterministic_actions)
         self.assertEqual(config.checkpoint_path, Path("data/full_smb/policy.pth"))
@@ -1192,6 +1212,32 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.tracking_backend, "none")
         self.assertEqual(config.tracking_project, "retroagi-cli")
         self.assertEqual(config.tracking_run_name, "full-cli")
+
+    def test_train_cli_builds_explicit_fine_tune_full_smb_config(self):
+        with (
+            patch.object(
+                full_smb_train_module,
+                "train_full_smb_policy",
+                return_value=SimpleNamespace(as_dict=lambda: {"ok": True}),
+            ) as train,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "train",
+                    "--mode",
+                    "fine-tune",
+                    "--init-checkpoint",
+                    "data/full_smb/transferred_policy.pth",
+                    "--perception-mode",
+                    "freeze",
+                ]
+            )
+
+        config = train.call_args.args[0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(config.training_mode, "fine_tune")
+        self.assertEqual(config.init_checkpoint, Path("data/full_smb/transferred_policy.pth"))
 
     def test_perception_modes_resolve_and_record_trainable_state(self):
         with TemporaryDirectory() as tmpdir:

@@ -59,6 +59,21 @@ FULL_SMB_ACTION_COUNT = len(SMB_ACTIONS)
 FULL_SMB_TRAINING_SOURCE_SCRATCH = "scratch"
 FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT = "init_checkpoint"
 FULL_SMB_TRAINING_SOURCE_RESUME_CHECKPOINT = "resume_checkpoint"
+FULL_SMB_TRAINING_MODE_AUTO = "auto"
+FULL_SMB_TRAINING_MODE_SCRATCH = "scratch"
+FULL_SMB_TRAINING_MODE_FINE_TUNE = "fine_tune"
+FULL_SMB_TRAINING_MODES = (
+    FULL_SMB_TRAINING_MODE_AUTO,
+    FULL_SMB_TRAINING_MODE_SCRATCH,
+    FULL_SMB_TRAINING_MODE_FINE_TUNE,
+)
+_FULL_SMB_TRAINING_MODE_ALIASES = {
+    FULL_SMB_TRAINING_MODE_AUTO: FULL_SMB_TRAINING_MODE_AUTO,
+    FULL_SMB_TRAINING_MODE_SCRATCH: FULL_SMB_TRAINING_MODE_SCRATCH,
+    "fine-tune": FULL_SMB_TRAINING_MODE_FINE_TUNE,
+    FULL_SMB_TRAINING_MODE_FINE_TUNE: FULL_SMB_TRAINING_MODE_FINE_TUNE,
+    "finetune": FULL_SMB_TRAINING_MODE_FINE_TUNE,
+}
 FULL_SMB_INIT_SOURCE_BLOCK_POLICY = "block_smb_policy_checkpoint"
 FULL_SMB_INIT_SOURCE_TRANSFER = "full_smb_transfer_checkpoint"
 FULL_SMB_PERCEPTION_FREEZE = "freeze"
@@ -149,6 +164,14 @@ def _resolve_perception_mode(
     return normalized
 
 
+def _resolve_training_mode(mode: Optional[str]) -> str:
+    normalized = _FULL_SMB_TRAINING_MODE_ALIASES.get(str(mode or "auto").strip().lower())
+    if normalized is None:
+        choices = ", ".join(FULL_SMB_TRAINING_MODES)
+        raise ValueError(f"training_mode must be one of {choices}")
+    return normalized
+
+
 def _loss_weight_metadata(config: Any) -> dict[str, float]:
     return {
         "policy": float(config.policy_loss_weight),
@@ -167,6 +190,7 @@ class FullSMBTrainingConfig:
     """Configuration for direct emulator-level Full SMB policy updates."""
 
     seed: int = 0
+    training_mode: str = FULL_SMB_TRAINING_MODE_AUTO
     architecture_name: str = BASELINE_ARCHITECTURE_NAME
     architecture_config: Mapping[str, Any] = field(default_factory=dict)
     epochs: int = 1
@@ -287,6 +311,18 @@ class FullSMBTrainingConfig:
                 object.__setattr__(self, path_name, Path(path_value))
         if self.resume_path is not None and self.init_checkpoint is not None:
             raise ValueError("resume_path and init_checkpoint are mutually exclusive")
+        training_mode = _resolve_training_mode(self.training_mode)
+        object.__setattr__(self, "training_mode", training_mode)
+        if training_mode == FULL_SMB_TRAINING_MODE_SCRATCH:
+            if self.resume_path is not None:
+                raise ValueError("training_mode='scratch' cannot be used with resume_path")
+            if self.init_checkpoint is not None:
+                raise ValueError("training_mode='scratch' cannot be used with init_checkpoint")
+        if training_mode == FULL_SMB_TRAINING_MODE_FINE_TUNE:
+            if self.resume_path is not None:
+                raise ValueError("training_mode='fine_tune' cannot be used with resume_path")
+            if self.init_checkpoint is None:
+                raise ValueError("training_mode='fine_tune' requires init_checkpoint")
         perception_mode = _resolve_perception_mode(
             self.perception_mode,
             freeze_vision=self.freeze_vision,
@@ -2585,6 +2621,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     train.add_argument("--max-steps-per-episode", type=int, default=64)
     train.add_argument("--updates-per-epoch", type=int)
     train.add_argument("--rollout-length", "--rollout-steps", dest="rollout_length", type=int)
+    train.add_argument(
+        "--mode",
+        "--training-mode",
+        dest="training_mode",
+        default=FULL_SMB_TRAINING_MODE_AUTO,
+        choices=(
+            FULL_SMB_TRAINING_MODE_AUTO,
+            FULL_SMB_TRAINING_MODE_SCRATCH,
+            "fine-tune",
+            FULL_SMB_TRAINING_MODE_FINE_TUNE,
+            "finetune",
+        ),
+        help=(
+            "training start mode: auto infers from --resume/--init-checkpoint, "
+            "scratch starts a new policy, fine_tune requires --init-checkpoint"
+        ),
+    )
     train.add_argument("--vector-env-count", type=int, default=1)
     train.add_argument("--learning-rate", type=float, default=1e-4)
     train.add_argument("--entropy-weight", type=float, default=0.01)
@@ -2742,6 +2795,7 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         perception_mode = FULL_SMB_PERCEPTION_FINE_TUNE
     return FullSMBTrainingConfig(
         seed=args.seed,
+        training_mode=getattr(args, "training_mode", FULL_SMB_TRAINING_MODE_AUTO),
         architecture_name=args.architecture,
         architecture_config=architecture_config,
         epochs=getattr(args, "epochs", 0),
