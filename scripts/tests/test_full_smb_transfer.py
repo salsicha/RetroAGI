@@ -35,6 +35,8 @@ from retroagi.stages.full_smb import (
 )
 from retroagi.stages.full_smb.compare import (
     FullSMBPolicyComparisonConfig,
+    FullSMBPolicySuiteComparisonConfig,
+    compare_full_smb_policy_suite,
     compare_transferred_checkpoint_with_scratch,
     save_full_smb_policy_comparison,
 )
@@ -425,6 +427,85 @@ class TestFullSMBTransfer(unittest.TestCase):
         self.assertEqual(result.scratch_source, "scratch_initialization")
         self.assertEqual(saved["evaluated_steps"], 4)
         self.assertEqual(saved["scratch_seed"], 99)
+
+    def test_compares_named_policies_on_seeded_task_streams(self):
+        observed_tasks = []
+
+        def task_stage(vision, task):
+            observed_tasks.append(task.name if task is not None else None)
+            return FullSMBStage(
+                env=TinyFullSMBEnv(),
+                vision=vision,
+                observation_config=FullSMBObservationConfig(
+                    frame_skip=1,
+                    frame_stack=2,
+                    resize_shape=(16, 20),
+                ),
+            )
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            transfer_path = tmp / "full_smb_transfer.pth"
+            report_path = tmp / "suite_comparison.json"
+            write_block_policy_checkpoint(source_policy_path)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            transfer_block_smb_checkpoint_to_full_smb(
+                source_policy_path,
+                output_checkpoint=transfer_path,
+                full_smb_vision_checkpoint=full_vision_path,
+                block_vision_checkpoint=None,
+                device="cpu",
+            )
+
+            result = compare_full_smb_policy_suite(
+                transfer_path,
+                make_stage=task_stage,
+                scratch_checkpoint=transfer_path,
+                fine_tuned_checkpoint=transfer_path,
+                known_good_checkpoint=transfer_path,
+                full_smb_vision_checkpoint=full_vision_path,
+                config=FullSMBPolicySuiteComparisonConfig(
+                    steps=3,
+                    seeds=(5, 6),
+                    scratch_seed=99,
+                    device="cpu",
+                ),
+                task_names=("benchmark_1_1_start", "benchmark_1_2_start"),
+            )
+            save_full_smb_policy_comparison(report_path, result)
+            saved = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            observed_tasks,
+            [
+                "benchmark_1_1_start",
+                "benchmark_1_1_start",
+                "benchmark_1_2_start",
+                "benchmark_1_2_start",
+            ],
+        )
+        self.assertEqual(result.seeds, (5, 6))
+        self.assertEqual(
+            result.task_names,
+            ("benchmark_1_1_start", "benchmark_1_2_start"),
+        )
+        self.assertEqual(result.requested_steps_per_stream, 3)
+        self.assertEqual(result.evaluated_steps, 12)
+        self.assertEqual(len(result.streams), 4)
+        self.assertEqual(
+            set(result.policies),
+            {"transferred", "scratch_trained", "fine_tuned", "known_good"},
+        )
+        self.assertEqual(result.policies["scratch_trained"]["source"], "scratch_checkpoint")
+        self.assertIn("transferred_vs_scratch_trained", result.aggregate_pairwise)
+        self.assertEqual(
+            result.aggregate_pairwise["transferred_vs_scratch_trained"]["compared_steps"],
+            12,
+        )
+        self.assertEqual(saved["evaluated_steps"], 12)
+        self.assertEqual(saved["streams"][0]["task"]["name"], "benchmark_1_1_start")
 
 
 if __name__ == "__main__":

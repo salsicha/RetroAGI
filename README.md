@@ -153,7 +153,13 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --fps 30
    retroagi compare --game smb --stage full \
      --transfer-checkpoint data/full_smb/transferred_policy.pth \
-     --output artifacts/full_smb/transfer_vs_scratch.json
+     --scratch-trained-checkpoint data/full_smb/scratch_policy.pth \
+     --fine-tuned-checkpoint data/full_smb/fine_tuned_policy.pth \
+     --known-good-checkpoint data/full_smb/known_good_policy.pth \
+     --task-set fixed_benchmark \
+     --seed 0 \
+     --seed 1 \
+     --output artifacts/full_smb/policy_suite_comparison.json
    retroagi evaluate --game smb --stage full --steps 500 --seed 0
    ```
    The `retroagi` command is the preferred entry point for selecting a game and

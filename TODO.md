@@ -508,7 +508,7 @@ and playable end target.
 - [x] Add a policy-inspection overlay for play mode showing action name,
       action probabilities, reward terms, score/progress signals, termination
       reason, and current task threshold status.
-- [ ] Add comparison commands for transferred, scratch-trained, fine-tuned, and
+- [x] Add comparison commands for transferred, scratch-trained, fine-tuned, and
       known-good policies on identical seeded Full SMB task streams.
 - [ ] Define Full SMB artifact layout under `artifacts/full_smb/<run>/` for
       summaries, structured logs, recordings, videos, evaluation reports,

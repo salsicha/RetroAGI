@@ -682,19 +682,30 @@ retroagi transfer --game smb --stage full \
   --output-checkpoint data/full_smb/transferred_policy.pth
 ```
 
-Compare the transferred policy against a scratch baseline on the same seeded
-observation stream, then use the Full SMB training command to continue learning
-from the transferred checkpoint when the emulator setup is available:
+Compare transferred, scratch-trained, fine-tuned, and known-good policies on
+the same seeded fixed-task streams, then use the Full SMB training command to
+continue learning from the transferred checkpoint when the emulator setup is
+available:
 
 ```bash
 retroagi compare --game smb --stage full \
   --transfer-checkpoint data/full_smb/transferred_policy.pth \
+  --scratch-trained-checkpoint data/full_smb/scratch_policy.pth \
+  --fine-tuned-checkpoint data/full_smb/fine_tuned_policy.pth \
+  --known-good-checkpoint data/full_smb/known_good_policy.pth \
   --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --task-set fixed_benchmark \
   --steps 128 \
   --seed 0 \
+  --seed 1 \
   --scratch-seed 0 \
-  --output artifacts/full_smb/transfer_vs_scratch.json
+  --output artifacts/full_smb/policy_suite_comparison.json
 ```
+
+The suite report includes one stream per task/seed pair, per-policy action
+histograms, entropy and margin metrics, and aggregate pairwise action agreement
+for every named policy role. Omit `--scratch-trained-checkpoint` to compare the
+transferred checkpoint against a deterministic scratch initialization.
 
 Continue training with an explicit perception mode so the checkpoint records
 whether the Full SMB ViT was frozen, fine-tuned, or replaced:

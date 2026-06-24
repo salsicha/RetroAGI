@@ -615,15 +615,27 @@ both policies see identical `FullSMBStage` batches. The report includes action
 agreement, action histograms, mean entropy, mean top-logit margin, reset counts,
 episode endings, and collection reward.
 
+`compare_full_smb_policy_suite(...)` extends that protocol to named policy
+roles. It can compare the transferred policy, a scratch-trained checkpoint or
+scratch initialization, a fine-tuned checkpoint, a known-good checkpoint, and
+additional `NAME=CHECKPOINT` policies across every selected task/seed stream.
+Each stream is driven by the same seeded random actions, so pairwise action
+agreement is computed from identical Full SMB observations.
+
 ```bash
 python -m retroagi.stages.full_smb.compare \
   --transfer-checkpoint data/full_smb/transferred_policy.pth \
-  --scratch-checkpoint data/full_smb/scratch_policy.pth \
-  --output artifacts/full_smb/transfer_vs_scratch.json
+  --scratch-trained-checkpoint data/full_smb/scratch_policy.pth \
+  --fine-tuned-checkpoint data/full_smb/fine_tuned_policy.pth \
+  --known-good-checkpoint data/full_smb/known_good_policy.pth \
+  --task-set fixed_benchmark \
+  --seed 0 \
+  --seed 1 \
+  --output artifacts/full_smb/policy_suite_comparison.json
 ```
 
-Omit `--scratch-checkpoint` to compare against a deterministic scratch
-initialization controlled by `--scratch-seed`.
+Omit `--scratch-checkpoint` or `--scratch-trained-checkpoint` to compare against
+a deterministic scratch initialization controlled by `--scratch-seed`.
 
 ### Emulator State
 

@@ -552,8 +552,20 @@ class TestRetroAGICLI(unittest.TestCase):
                     "full_smb",
                     "--transfer-checkpoint",
                     "data/full_smb/transferred_policy.pth",
+                    "--scratch-trained-checkpoint",
+                    "data/full_smb/scratch_policy.pth",
+                    "--fine-tuned-checkpoint",
+                    "data/full_smb/fine_tuned_policy.pth",
+                    "--known-good-checkpoint",
+                    "data/full_smb/known_good_policy.pth",
+                    "--task-set",
+                    "fixed_benchmark",
+                    "--seed",
+                    "0",
+                    "--seed",
+                    "1",
                     "--output",
-                    "artifacts/full_smb/transfer_vs_scratch.json",
+                    "artifacts/full_smb/policy_suite_comparison.json",
                 ]
             )
 
@@ -562,8 +574,20 @@ class TestRetroAGICLI(unittest.TestCase):
             [
                 "--transfer-checkpoint",
                 "data/full_smb/transferred_policy.pth",
+                "--scratch-trained-checkpoint",
+                "data/full_smb/scratch_policy.pth",
+                "--fine-tuned-checkpoint",
+                "data/full_smb/fine_tuned_policy.pth",
+                "--known-good-checkpoint",
+                "data/full_smb/known_good_policy.pth",
+                "--task-set",
+                "fixed_benchmark",
+                "--seed",
+                "0",
+                "--seed",
+                "1",
                 "--output",
-                "artifacts/full_smb/transfer_vs_scratch.json",
+                "artifacts/full_smb/policy_suite_comparison.json",
             ]
         )
 
