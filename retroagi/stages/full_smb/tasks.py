@@ -160,9 +160,7 @@ class FullSMBTaskCatalog:
                 task_set: [task.to_manifest() for task in self.tasks_for_set(task_set)]
                 for task_set in FULL_SMB_TASK_SET_NAMES
             },
-            "save_state_artifact_paths": [
-                str(path) for path in self.save_state_artifact_paths
-            ],
+            "save_state_artifact_paths": [str(path) for path in self.save_state_artifact_paths],
         }
 
 

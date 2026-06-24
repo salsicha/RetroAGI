@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
 import importlib
 import inspect
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -86,9 +86,7 @@ def run_full_smb_environment_check(
 
     try:
         retro_module = (
-            retro_module_factory()
-            if retro_module_factory is not None
-            else _import_retro_module()
+            retro_module_factory() if retro_module_factory is not None else _import_retro_module()
         )
         checks["backend_import"] = _check(
             True,
@@ -153,9 +151,7 @@ def run_full_smb_environment_check(
             ),
         )
         backend_probe = backend_report.to_manifest()
-        checks["save_load_state"] = _check_from_backend_probe(
-            backend_probe, "save_load_state"
-        )
+        checks["save_load_state"] = _check_from_backend_probe(backend_probe, "save_load_state")
     finally:
         stage.close()
 
@@ -346,7 +342,9 @@ def _registered_games(retro_module: Any) -> set[str] | None:
 
 
 def _call_listing_variants(owner: Any, listing: Callable[..., Any]) -> list[list[Any]]:
-    calls = [(),]
+    calls = [
+        (),
+    ]
     integrations = getattr(owner, "Integrations", None)
     if integrations is not None and getattr(integrations, "ALL", None) is not None:
         calls.append((getattr(integrations, "ALL"),))

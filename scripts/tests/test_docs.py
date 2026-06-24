@@ -148,7 +148,7 @@ class TestOperationsDocumentation(unittest.TestCase):
         for term in (
             "# Full SMB Content Setup",
             "SuperMarioBros-Nes",
-            "retro.make(game=\"SuperMarioBros-Nes\")",
+            'retro.make(game="SuperMarioBros-Nes")',
             "python -m pip install -e '.[full-smb]'",
             "local/full_smb/roms/",
             "python -m retro.import local/full_smb/roms",

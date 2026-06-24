@@ -199,11 +199,7 @@ def summarize_fixed_full_smb_success_metrics(
 ) -> dict[str, float]:
     """Summarize Full SMB fixed-task metrics for tuning comparisons."""
 
-    task_names = [
-        name
-        for name in FIXED_FULL_SMB_SUCCESS_THRESHOLDS
-        if name in fixed_task_results
-    ]
+    task_names = [name for name in FIXED_FULL_SMB_SUCCESS_THRESHOLDS if name in fixed_task_results]
     if not task_names:
         return {
             "task_count": 0.0,
@@ -251,8 +247,7 @@ def summarize_fixed_full_smb_success_metrics(
 
 def _validate_threshold_catalog() -> None:
     fixed_tasks = {
-        task.name: task
-        for task in full_smb_task_catalog().tasks_for_set("fixed_benchmark")
+        task.name: task for task in full_smb_task_catalog().tasks_for_set("fixed_benchmark")
     }
     missing = sorted(set(fixed_tasks).difference(FIXED_FULL_SMB_SUCCESS_THRESHOLDS))
     extra = sorted(set(FIXED_FULL_SMB_SUCCESS_THRESHOLDS).difference(fixed_tasks))
@@ -263,13 +258,9 @@ def _validate_threshold_catalog() -> None:
     for task_name, threshold in FIXED_FULL_SMB_SUCCESS_THRESHOLDS.items():
         task = fixed_tasks[task_name]
         if threshold.min_episodes > task.episodes:
-            raise ValueError(
-                f"Full SMB threshold {task_name!r} requires more episodes than task"
-            )
+            raise ValueError(f"Full SMB threshold {task_name!r} requires more episodes than task")
         if threshold.max_steps != task.max_steps:
-            raise ValueError(
-                f"Full SMB threshold {task_name!r} must use the task max_steps"
-            )
+            raise ValueError(f"Full SMB threshold {task_name!r} must use the task max_steps")
 
 
 def _metric(result: Mapping[str, float], *names: str) -> float:
@@ -284,9 +275,7 @@ def _mean_metric(
     fixed_task_results: Mapping[str, Mapping[str, float]],
     *names: str,
 ) -> float:
-    return sum(_metric(fixed_task_results[name], *names) for name in task_names) / len(
-        task_names
-    )
+    return sum(_metric(fixed_task_results[name], *names) for name in task_names) / len(task_names)
 
 
 _validate_threshold_catalog()

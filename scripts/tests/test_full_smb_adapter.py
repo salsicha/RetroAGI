@@ -1,8 +1,8 @@
 """Tests for the Full SMB stable-retro stage adapter."""
 
 import sys
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -19,8 +19,8 @@ from retroagi.core import (
 from retroagi.stages.full_smb import (
     DEFAULT_FULL_SMB_CONTENT,
     DEFAULT_FULL_SMB_REWARD_CONFIG,
-    FULL_SMB_SPEC,
     FULL_SMB_REWARD_SCHEMA,
+    FULL_SMB_SPEC,
     FullSMBContentSpec,
     FullSMBObservationConfig,
     FullSMBRewardConfig,
@@ -278,13 +278,7 @@ class SeededHeadlessRetroEnv:
         height, width = 16, 20
         y = np.arange(height, dtype=np.uint16).reshape(height, 1)
         x = np.arange(width, dtype=np.uint16).reshape(1, width)
-        base = (
-            self.seed_value * 17
-            + self.step_count * 31
-            + action_value * 13
-            + x
-            + y
-        ) % 256
+        base = (self.seed_value * 17 + self.step_count * 31 + action_value * 13 + x + y) % 256
         return np.stack(
             (
                 base,
@@ -320,9 +314,7 @@ class TestFullSMBStage(unittest.TestCase):
 
     def assert_reward_total_matches_terms(self, reward, info):
         terms = info["reward_terms"]
-        summed_terms = sum(
-            float(value) for name, value in terms.items() if name != "total"
-        )
+        summed_terms = sum(float(value) for name, value in terms.items() if name != "total")
         self.assertAlmostEqual(float(reward), float(terms["total"]))
         self.assertAlmostEqual(float(reward), summed_terms)
         self.assertAlmostEqual(float(info["reward_total"]), float(reward))
@@ -425,9 +417,7 @@ class TestFullSMBStage(unittest.TestCase):
         )
         try:
             reset_observation = stage.reset(seed=123)
-            observation, reward, _terminated, _truncated, info = stage.step(
-                SMBAction.RIGHT
-            )
+            observation, reward, _terminated, _truncated, info = stage.step(SMBAction.RIGHT)
         finally:
             stage.close()
 
@@ -470,9 +460,7 @@ class TestFullSMBStage(unittest.TestCase):
         )
         try:
             stage.reset(seed=8)
-            _observation, reward, terminated, truncated, info = stage.step(
-                SMBAction.RIGHT
-            )
+            _observation, reward, terminated, truncated, info = stage.step(SMBAction.RIGHT)
         finally:
             stage.close()
 
@@ -656,9 +644,7 @@ class TestFullSMBStage(unittest.TestCase):
         )
         try:
             stage.reset(seed=5)
-            observation, reward, terminated, truncated, info = stage.step(
-                SMBAction.RIGHT
-            )
+            observation, reward, terminated, truncated, info = stage.step(SMBAction.RIGHT)
             batch = stage.encode_observation(observation, info)
         finally:
             stage.close()
@@ -704,9 +690,7 @@ class TestFullSMBStage(unittest.TestCase):
         )
         try:
             stage.reset(seed=3)
-            observation, _reward, _terminated, _truncated, info = stage.step(
-                SMBAction.RIGHT
-            )
+            observation, _reward, _terminated, _truncated, info = stage.step(SMBAction.RIGHT)
             batch = stage.encode_observation(observation, info)
         finally:
             stage.close()
@@ -774,14 +758,12 @@ class TestFullSMBStage(unittest.TestCase):
         )
         try:
             stage.reset(seed=7)
-            observation_1, _reward_1, _terminated_1, _truncated_1, _info_1 = (
-                stage.step(SMBAction.RIGHT)
+            observation_1, _reward_1, _terminated_1, _truncated_1, _info_1 = stage.step(
+                SMBAction.RIGHT
             )
             saved = stage.save_emulator_state()
 
-            observation_2, reward_2, terminated_2, truncated_2, info_2 = stage.step(
-                SMBAction.LEFT
-            )
+            observation_2, reward_2, terminated_2, truncated_2, info_2 = stage.step(SMBAction.LEFT)
             batch_2 = stage.encode_observation(observation_2, info_2)
 
             restored_observation = stage.load_emulator_state(saved)
@@ -835,9 +817,7 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertEqual(observation.dtype, np.uint8)
             self.assertEqual(observation.shape, (224, 256, 3))
 
-            next_observation, reward, terminated, truncated, info = stage.step(
-                SMBAction.RIGHT_JUMP
-            )
+            next_observation, reward, terminated, truncated, info = stage.step(SMBAction.RIGHT_JUMP)
             np.testing.assert_array_equal(
                 env.actions[-1],
                 full_smb_action(SMBAction.RIGHT_JUMP, env.buttons),
@@ -908,9 +888,7 @@ class TestFullSMBStage(unittest.TestCase):
         stage = FullSMBStage(env=env, vision=StaticFullSMBVision())
         try:
             stage.reset()
-            _observation, reward, terminated, truncated, _info = stage.step(
-                SMBAction.NOOP
-            )
+            _observation, reward, terminated, truncated, _info = stage.step(SMBAction.NOOP)
         finally:
             stage.close()
 

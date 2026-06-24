@@ -1,7 +1,7 @@
 """Tests for Full SMB environment capability checks."""
 
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 

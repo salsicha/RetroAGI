@@ -1,7 +1,7 @@
 """Full-SMB stable-retro adapter for the shared stage contract."""
 
-from collections import deque
 import copy
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
@@ -10,12 +10,12 @@ import torch
 import torch.nn.functional as F
 
 from retroagi.core import (
+    SMB_GAME_SPEC,
     GameSignalExtractor,
     GameSignals,
     GymnasiumBackendAdapter,
     RewardConfigSchema,
     RewardTermSpec,
-    SMB_GAME_SPEC,
     SMBAction,
     StageBatch,
     StageSpec,
@@ -281,15 +281,11 @@ class FullSMBObservationConfig:
         if any(int(value) < 0 for value in self.crop_margins):
             raise ValueError("crop_margins values must be non-negative")
         if self.hud_policy not in FULL_SMB_HUD_POLICIES:
-            raise ValueError(
-                f"hud_policy must be one of {', '.join(FULL_SMB_HUD_POLICIES)}"
-            )
+            raise ValueError(f"hud_policy must be one of {', '.join(FULL_SMB_HUD_POLICIES)}")
         if self.hud_crop_top < 0:
             raise ValueError("hud_crop_top must be non-negative")
         if self.color_mode not in FULL_SMB_COLOR_MODES:
-            raise ValueError(
-                f"color_mode must be one of {', '.join(FULL_SMB_COLOR_MODES)}"
-            )
+            raise ValueError(f"color_mode must be one of {', '.join(FULL_SMB_COLOR_MODES)}")
         if len(self.normalization_mean) != 3 or len(self.normalization_std) != 3:
             raise ValueError("normalization_mean/std must contain three RGB values")
         if any(float(value) <= 0.0 for value in self.normalization_std):
@@ -343,9 +339,7 @@ class FullSMBSignals(GameSignals):
     power_state: Optional[str] = None
     game_over: bool = False
 
-    def to_state_vec(
-        self, config: FullSMBSignalConfig = FullSMBSignalConfig()
-    ) -> np.ndarray:
+    def to_state_vec(self, config: FullSMBSignalConfig = FullSMBSignalConfig()) -> np.ndarray:
         x, y = self.position if self.position is not None else (0.0, 0.0)
         return np.asarray(
             [
@@ -386,9 +380,7 @@ class FullSMBSignalExtractor(GameSignalExtractor):
         terminated: bool,
         truncated: bool,
     ) -> FullSMBSignals:
-        return extract_full_smb_signals(
-            info, terminated=terminated, truncated=truncated
-        )
+        return extract_full_smb_signals(info, terminated=terminated, truncated=truncated)
 
 
 POSITION_X_KEYS = (
@@ -497,9 +489,7 @@ def make_stable_retro_env(
         import retro
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            content_spec.setup_failure_message(
-                "stable-retro is not installed", game=config.game
-            )
+            content_spec.setup_failure_message("stable-retro is not installed", game=config.game)
         ) from exc
 
     make_kwargs: dict[str, Any] = {"game": config.game}
@@ -511,9 +501,7 @@ def make_stable_retro_env(
     try:
         return retro.make(**make_kwargs)
     except Exception as exc:
-        raise RuntimeError(
-            content_spec.setup_failure_message(str(exc), game=config.game)
-        ) from exc
+        raise RuntimeError(content_spec.setup_failure_message(str(exc), game=config.game)) from exc
 
 
 class FullSMBStage:
@@ -557,12 +545,8 @@ class FullSMBStage:
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
-        self._frame_stack: deque[torch.Tensor] = deque(
-            maxlen=self.observation_config.frame_stack
-        )
-        self._frame_mask: deque[bool] = deque(
-            maxlen=self.observation_config.frame_stack
-        )
+        self._frame_stack: deque[torch.Tensor] = deque(maxlen=self.observation_config.frame_stack)
+        self._frame_mask: deque[bool] = deque(maxlen=self.observation_config.frame_stack)
         self._last_observation: Optional[np.ndarray] = None
 
     @property
@@ -572,9 +556,7 @@ class FullSMBStage:
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
         result = self.backend.reset(seed=seed)
         observation = self._rgb_observation(result.observation)
-        self.last_info = self._annotated_info(
-            result.info, terminated=False, truncated=False
-        )
+        self.last_info = self._annotated_info(result.info, terminated=False, truncated=False)
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
@@ -607,9 +589,7 @@ class FullSMBStage:
                 break
         if observation is None:
             raise RuntimeError("Full SMB frame_skip must execute at least one frame")
-        info = self._annotated_info(
-            info, terminated=terminated, truncated=truncated
-        )
+        info = self._annotated_info(info, terminated=terminated, truncated=truncated)
         reward_terms = self._reward_terms(
             backend_reward=backend_reward,
             frame_count=len(frame_rewards),
@@ -719,8 +699,7 @@ class FullSMBStage:
         array = np.asarray(observation)
         if array.ndim != 3 or array.shape[-1] not in (3, 4):
             raise ValueError(
-                "Full SMB observations must have shape [H, W, C] with RGB or "
-                "RGBA channels"
+                "Full SMB observations must have shape [H, W, C] with RGB or " "RGBA channels"
             )
         array = array[..., :3]
         if array.dtype != np.uint8:
@@ -783,9 +762,7 @@ class FullSMBStage:
         top, right, bottom, left = self.observation_config.effective_crop_margins()
         height, width = tensor.shape[:2]
         if top + bottom >= height or left + right >= width:
-            raise ValueError(
-                "Full SMB crop margins must leave at least one pixel in both axes"
-            )
+            raise ValueError("Full SMB crop margins must leave at least one pixel in both axes")
         y_end = height - bottom if bottom else height
         x_end = width - right if right else width
         return tensor[top:y_end, left:x_end]
@@ -806,9 +783,7 @@ class FullSMBStage:
     def _observation_metadata(
         self, device: torch.device, info: Mapping[str, Any]
     ) -> dict[str, Any]:
-        frame_stack = torch.stack(tuple(self._frame_stack), dim=0).permute(
-            0, 3, 1, 2
-        )
+        frame_stack = torch.stack(tuple(self._frame_stack), dim=0).permute(0, 3, 1, 2)
         camera_vec = np.asarray(info.get("camera_vec", np.zeros(4)), dtype=np.float32)
         return {
             "frame_stack": frame_stack.unsqueeze(0).to(device),
@@ -829,9 +804,9 @@ class FullSMBStage:
                 "mean": self.observation_config.normalization_mean,
                 "std": self.observation_config.normalization_std,
             },
-            "camera_vec": torch.as_tensor(
-                camera_vec, dtype=torch.float32, device=device
-            ).unsqueeze(0),
+            "camera_vec": torch.as_tensor(camera_vec, dtype=torch.float32, device=device).unsqueeze(
+                0
+            ),
             "camera_state_enabled": self.observation_config.include_camera_state,
             "output_channels": 3,
         }
@@ -844,13 +819,9 @@ class FullSMBStage:
             raise ValueError("stable-retro info must be a mapping")
         return dict(info)
 
-    def _annotated_info(
-        self, info: Any, *, terminated: bool, truncated: bool
-    ) -> dict[str, Any]:
+    def _annotated_info(self, info: Any, *, terminated: bool, truncated: bool) -> dict[str, Any]:
         annotated = self._info(info)
-        signals = extract_full_smb_signals(
-            annotated, terminated=terminated, truncated=truncated
-        )
+        signals = extract_full_smb_signals(annotated, terminated=terminated, truncated=truncated)
         state_vec = signals.to_state_vec(self.signal_config)
         camera_vec = _camera_vec(annotated, signals, self.signal_config)
         annotated["full_smb_signals"] = signals.as_dict()
@@ -872,13 +843,10 @@ class FullSMBStage:
         config = self.reward_config
         terms = {
             "emulator_progress": float(backend_reward) * config.emulator_progress,
-            "completion": _event_started(previous, current, "completion")
-            * config.completion,
+            "completion": _event_started(previous, current, "completion") * config.completion,
             "survival": _survival_indicator(current) * config.survival,
-            "score": _positive_signal_delta(previous, current, "score")
-            * config.score,
-            "coin": _positive_signal_delta(previous, current, "coins")
-            * config.coin,
+            "score": _positive_signal_delta(previous, current, "score") * config.score,
+            "coin": _positive_signal_delta(previous, current, "coins") * config.coin,
             "enemy": _objective_magnitude(current, "enemy") * config.enemy,
             "damage": _objective_magnitude(current, "damage") * config.damage,
             "death": _event_started(previous, current, "death") * config.death,
@@ -1013,9 +981,7 @@ def _camera_vec(
         if screen_y is None:
             screen_y = float(screen[1])
     player_x = signals.position[0] if signals.position is not None else None
-    player_camera_x = (
-        player_x - scroll_x if player_x is not None and scroll_x is not None else None
-    )
+    player_camera_x = player_x - scroll_x if player_x is not None and scroll_x is not None else None
     return np.asarray(
         [
             _normalize_feature(scroll_x, config.position_x_max),
@@ -1112,9 +1078,7 @@ def _signal_mapping(info: Mapping[str, Any]) -> Mapping[str, Any]:
     return {}
 
 
-def _event_started(
-    previous: Mapping[str, Any], current: Mapping[str, Any], name: str
-) -> float:
+def _event_started(previous: Mapping[str, Any], current: Mapping[str, Any], name: str) -> float:
     return 1.0 if bool(current.get(name)) and not bool(previous.get(name)) else 0.0
 
 
@@ -1165,9 +1129,7 @@ def _numeric_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[f
     return None
 
 
-def _bool_value(
-    info: Mapping[str, Any], keys: tuple[str, ...], *, default: bool
-) -> bool:
+def _bool_value(info: Mapping[str, Any], keys: tuple[str, ...], *, default: bool) -> bool:
     for value in _values_for_keys(info, keys):
         if isinstance(value, str):
             normalized = value.strip().lower()

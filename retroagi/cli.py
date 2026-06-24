@@ -21,9 +21,7 @@ def _game_name(value: str) -> str:
     if name in game_plugin_names():
         return name
     available = ", ".join(game_plugin_names())
-    raise argparse.ArgumentTypeError(
-        f"unknown game {value!r}; available game plugins: {available}"
-    )
+    raise argparse.ArgumentTypeError(f"unknown game {value!r}; available game plugins: {available}")
 
 
 def _add_game_arg(parser: argparse.ArgumentParser) -> None:

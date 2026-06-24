@@ -311,9 +311,7 @@ def _attach_regression_deltas(
         if not isinstance(metrics, Mapping):
             metrics = {}
         for metric, value in metrics.items():
-            baseline_value = baseline_metrics.get(
-                (row["game_key"], row["comparison_key"], metric)
-            )
+            baseline_value = baseline_metrics.get((row["game_key"], row["comparison_key"], metric))
             if baseline_value is None:
                 continue
             delta = float(value) - baseline_value

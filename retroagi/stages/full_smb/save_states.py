@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
 import hashlib
 import json
-from pathlib import Path
 import pickle
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 import numpy as np
@@ -78,15 +78,13 @@ class FullSMBSaveStateArtifactSpec:
             raise ValueError("Full SMB save-state artifact name must be non-empty")
         if self.category not in FULL_SMB_SAVE_STATE_CATEGORIES:
             raise ValueError(
-                "Full SMB save-state category must be one of "
-                f"{FULL_SMB_SAVE_STATE_CATEGORIES}"
+                "Full SMB save-state category must be one of " f"{FULL_SMB_SAVE_STATE_CATEGORIES}"
             )
         if self.path.is_absolute():
             raise ValueError("Full SMB save-state artifact paths must be relative")
         if not str(self.path).startswith(str(FULL_SMB_SAVE_STATE_LOCAL_ROOT) + "/"):
             raise ValueError(
-                "Full SMB save-state artifacts must live under "
-                f"{FULL_SMB_SAVE_STATE_LOCAL_ROOT}"
+                "Full SMB save-state artifacts must live under " f"{FULL_SMB_SAVE_STATE_LOCAL_ROOT}"
             )
         if not self.source_state:
             raise ValueError("Full SMB save-state source_state must be non-empty")
@@ -143,13 +141,9 @@ class FullSMBSaveStatePlan:
         paths = [artifact.path for artifact in self.artifacts]
         if len(set(paths)) != len(paths):
             raise ValueError("Full SMB save-state artifact paths must be unique")
-        missing = sorted(
-            set(FULL_SMB_SAVE_STATE_CATEGORIES).difference(self.categories())
-        )
+        missing = sorted(set(FULL_SMB_SAVE_STATE_CATEGORIES).difference(self.categories()))
         if missing:
-            raise ValueError(
-                f"Full SMB save-state plan is missing categories: {missing}"
-            )
+            raise ValueError(f"Full SMB save-state plan is missing categories: {missing}")
 
     def artifact(self, name: str) -> FullSMBSaveStateArtifactSpec:
         for artifact in self.artifacts:
@@ -157,28 +151,18 @@ class FullSMBSaveStatePlan:
                 return artifact
         raise KeyError(f"unknown Full SMB save-state artifact {name!r}")
 
-    def artifacts_for_category(
-        self, category: str
-    ) -> tuple[FullSMBSaveStateArtifactSpec, ...]:
+    def artifacts_for_category(self, category: str) -> tuple[FullSMBSaveStateArtifactSpec, ...]:
         if category not in FULL_SMB_SAVE_STATE_CATEGORIES:
             raise ValueError(f"unknown Full SMB save-state category {category!r}")
-        return tuple(
-            artifact for artifact in self.artifacts if artifact.category == category
-        )
+        return tuple(artifact for artifact in self.artifacts if artifact.category == category)
 
-    def artifacts_for_task(
-        self, task_name: str
-    ) -> tuple[FullSMBSaveStateArtifactSpec, ...]:
-        return tuple(
-            artifact for artifact in self.artifacts if task_name in artifact.task_names
-        )
+    def artifacts_for_task(self, task_name: str) -> tuple[FullSMBSaveStateArtifactSpec, ...]:
+        return tuple(artifact for artifact in self.artifacts if task_name in artifact.task_names)
 
     def categories(self) -> tuple[str, ...]:
         declared = {artifact.category for artifact in self.artifacts}
         return tuple(
-            category
-            for category in FULL_SMB_SAVE_STATE_CATEGORIES
-            if category in declared
+            category for category in FULL_SMB_SAVE_STATE_CATEGORIES if category in declared
         )
 
     @property
@@ -193,9 +177,7 @@ class FullSMBSaveStatePlan:
             "copyrighted_content_committed": False,
             "artifacts": [artifact.to_manifest() for artifact in self.artifacts],
             "categories": {
-                category: [
-                    artifact.name for artifact in self.artifacts_for_category(category)
-                ]
+                category: [artifact.name for artifact in self.artifacts_for_category(category)]
                 for category in FULL_SMB_SAVE_STATE_CATEGORIES
             },
         }
@@ -247,9 +229,7 @@ def write_full_smb_save_state_plan(
     selected_plan = plan or full_smb_save_state_plan()
     manifest = selected_plan.to_manifest()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(to_plain_data(manifest), indent=2, sort_keys=True) + "\n"
-    )
+    path.write_text(json.dumps(to_plain_data(manifest), indent=2, sort_keys=True) + "\n")
     return manifest
 
 
@@ -281,9 +261,7 @@ def create_full_smb_save_state_artifact(
         info = dict(getattr(stage, "last_info", {}))
         for segment in spec.action_script:
             for _ in range(segment.frames):
-                observation, reward, terminated, truncated, info = stage.step(
-                    segment.action
-                )
+                observation, reward, terminated, truncated, info = stage.step(segment.action)
                 observation = np.asarray(observation)
                 reward_total += float(reward)
                 steps_executed += 1
@@ -339,9 +317,7 @@ def create_full_smb_save_state_artifacts(
     selected_plan = plan or full_smb_save_state_plan()
     names = tuple(artifact_names)
     artifacts = (
-        tuple(selected_plan.artifact(name) for name in names)
-        if names
-        else selected_plan.artifacts
+        tuple(selected_plan.artifact(name) for name in names) if names else selected_plan.artifacts
     )
     results = [
         create_full_smb_save_state_artifact(
@@ -403,15 +379,12 @@ def _coerce_action(action: SMBAction | int | str) -> SMBAction:
         except KeyError as exc:
             valid = ", ".join(item.name.lower() for item in SMBAction)
             raise ValueError(
-                "invalid Full SMB save-state action "
-                f"{action!r}; expected one of: {valid}"
+                "invalid Full SMB save-state action " f"{action!r}; expected one of: {valid}"
             ) from exc
     return coerce_smb_action(action)
 
 
-def _coerce_step(
-    step: FullSMBSaveStateStep | Mapping[str, Any]
-) -> FullSMBSaveStateStep:
+def _coerce_step(step: FullSMBSaveStateStep | Mapping[str, Any]) -> FullSMBSaveStateStep:
     if isinstance(step, FullSMBSaveStateStep):
         return step
     return FullSMBSaveStateStep(

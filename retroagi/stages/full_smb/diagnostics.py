@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import json
-from pathlib import Path
 import random
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 import numpy as np
@@ -198,10 +198,7 @@ def evaluate_full_smb_perception(
         bottleneck_reasons.append("temporal_stability")
     if position_metrics["position_rmse"] > thresholds.max_position_rmse:
         bottleneck_reasons.append("position_rmse")
-    if (
-        position_metrics["position_within_tolerance"]
-        < thresholds.min_position_within_tolerance
-    ):
+    if position_metrics["position_within_tolerance"] < thresholds.min_position_within_tolerance:
         bottleneck_reasons.append("position_consistency")
 
     return {
@@ -270,9 +267,7 @@ def _position_targets_from_infos(
         if state is not None and state.size >= 2:
             target_y = float(state[1])
             target_x = (
-                float(camera[3])
-                if camera is not None and camera.size >= 4
-                else float(state[0])
+                float(camera[3]) if camera is not None and camera.size >= 4 else float(state[0])
             )
             targets.append((target_x, target_y))
             valid.append(True)
