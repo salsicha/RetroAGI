@@ -30,6 +30,20 @@ from scripts.vit.train_block_vit import (
     make_loader,
 )
 
+GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+
+
+def skip_unavailable_checkpoint(testcase: unittest.TestCase, checkpoint: Path, label: str) -> None:
+    if not checkpoint.exists():
+        testcase.skipTest(f"{label} checkpoint is not available")
+    try:
+        with checkpoint.open("rb") as handle:
+            prefix = handle.read(len(GIT_LFS_POINTER_PREFIX))
+    except OSError as exc:
+        testcase.skipTest(f"{label} checkpoint cannot be read: {exc}")
+    if prefix == GIT_LFS_POINTER_PREFIX:
+        testcase.skipTest(f"{label} checkpoint is a Git LFS pointer without its blob")
+
 
 class OracleBlockVisionTransformer(BlockVisionTransformer):
     def forward(self, observation):
@@ -294,8 +308,7 @@ class TestVisionInterface(unittest.TestCase):
 
     def test_existing_vit_checkpoint_loads_into_shared_architecture(self):
         checkpoint = Path("data/vit/vit_smb.pth")
-        if not checkpoint.exists():
-            self.skipTest("trained ViT checkpoint is not available")
+        skip_unavailable_checkpoint(self, checkpoint, "trained ViT")
 
         result = load_full_smb_vit_checkpoint(checkpoint)
 
@@ -305,6 +318,24 @@ class TestVisionInterface(unittest.TestCase):
         output = result.model.encode(torch.zeros(1, 3, 240, 256))
         self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
         self.assertEqual(output.position.shape, (1, 2))
+
+    def test_full_smb_vit_loader_reports_git_lfs_pointer_without_blob(self):
+        with TemporaryDirectory() as tmpdir:
+            checkpoint = Path(tmpdir) / "full_smb_vit.pth"
+            checkpoint.write_text(
+                "\n".join(
+                    (
+                        "version https://git-lfs.github.com/spec/v1",
+                        "oid sha256:0123456789abcdef",
+                        "size 12345",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "Git LFS pointer"):
+                load_full_smb_vit_checkpoint(checkpoint)
 
 
 class TestFullSMBVision(unittest.TestCase):
@@ -332,8 +363,7 @@ class TestFullSMBVision(unittest.TestCase):
         from retroagi.stages.full_smb import FullSMBSegmentationVision
 
         checkpoint = Path("data/vit/full_smb_vit.pth")
-        if not checkpoint.exists():
-            self.skipTest("trained Full SMB ViT checkpoint is not available")
+        skip_unavailable_checkpoint(self, checkpoint, "trained Full SMB ViT")
 
         model = FullSMBSegmentationVision(checkpoint=checkpoint)
         output = model.encode(torch.zeros(1, 3, 240, 256))
@@ -349,8 +379,7 @@ class TestFullSMBVision(unittest.TestCase):
         from retroagi.stages.full_smb import FullSMBSegmentationVision
 
         checkpoint = Path("data/vit/vit_smb.pth")
-        if not checkpoint.exists():
-            self.skipTest("legacy Full SMB ViT checkpoint is not available")
+        skip_unavailable_checkpoint(self, checkpoint, "legacy Full SMB ViT")
 
         model = FullSMBSegmentationVision(checkpoint=checkpoint)
         output = model.encode(torch.zeros(1, 3, 240, 256))
@@ -363,8 +392,7 @@ class TestFullSMBVision(unittest.TestCase):
         from retroagi.stages.full_smb import FullSMBDeepLabSegmentationVision
 
         checkpoint = Path("scripts/segmentation/MarioSegmentationModel.pth")
-        if not checkpoint.exists():
-            self.skipTest("trained DeepLab checkpoint is not available")
+        skip_unavailable_checkpoint(self, checkpoint, "trained DeepLab")
 
         model = FullSMBDeepLabSegmentationVision(checkpoint=checkpoint)
         self.assertEqual(model.spec.num_classes, 6)

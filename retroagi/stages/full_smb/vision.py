@@ -43,6 +43,7 @@ LEGACY_DEEPLAB_CHECKPOINT = (
     Path(__file__).parents[3] / "scripts" / "segmentation" / "MarioSegmentationModel.pth"
 )
 DEFAULT_CHECKPOINT = DEFAULT_FULL_SMB_VIT_CHECKPOINT
+GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
 
 
 @dataclass(frozen=True)
@@ -210,10 +211,14 @@ def load_full_smb_vit_checkpoint(
             f"Full SMB ViT checkpoint not found at {checkpoint_path}; train it with "
             "scripts/vit/train_vit.py or pass checkpoint=None for an untrained model"
         )
+    if _is_git_lfs_pointer(checkpoint_path):
+        raise FileNotFoundError(
+            f"Full SMB ViT checkpoint at {checkpoint_path} is a Git LFS pointer, "
+            "but the model blob is not available in this checkout. Run `git lfs "
+            "pull` or pass checkpoint=None for an untrained model."
+        )
 
-    checkpoint, state, model_config = _load_full_smb_vit_checkpoint_payload(
-        checkpoint_path, device
-    )
+    checkpoint, state, model_config = _load_full_smb_vit_checkpoint_payload(checkpoint_path, device)
     model = FullSMBVisionTransformer(
         dim=int(model_config.get("hidden_dim", model_config.get("dim", 192))),
         depth=int(model_config.get("depth", 6)),
@@ -280,10 +285,29 @@ def _resolve_full_smb_vit_checkpoint(path: Optional[Path]) -> Path:
             and FALLBACK_FULL_SMB_VIT_CHECKPOINT.exists()
         ):
             return FALLBACK_FULL_SMB_VIT_CHECKPOINT
+        if (
+            checkpoint_path == DEFAULT_FULL_SMB_VIT_CHECKPOINT
+            and checkpoint_path.exists()
+            and _is_git_lfs_pointer(checkpoint_path)
+            and FALLBACK_FULL_SMB_VIT_CHECKPOINT.exists()
+            and not _is_git_lfs_pointer(FALLBACK_FULL_SMB_VIT_CHECKPOINT)
+        ):
+            return FALLBACK_FULL_SMB_VIT_CHECKPOINT
         return checkpoint_path
-    if DEFAULT_FULL_SMB_VIT_CHECKPOINT.exists():
+    if DEFAULT_FULL_SMB_VIT_CHECKPOINT.exists() and not _is_git_lfs_pointer(
+        DEFAULT_FULL_SMB_VIT_CHECKPOINT
+    ):
         return DEFAULT_FULL_SMB_VIT_CHECKPOINT
     return FALLBACK_FULL_SMB_VIT_CHECKPOINT
+
+
+def _is_git_lfs_pointer(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            prefix = handle.read(len(GIT_LFS_POINTER_PREFIX))
+    except OSError:
+        return False
+    return prefix == GIT_LFS_POINTER_PREFIX
 
 
 def _load_full_smb_vit_checkpoint_payload(
@@ -340,9 +364,7 @@ def _looks_like_state_dict(checkpoint: Mapping[str, Any]) -> bool:
     return "pos_embed" in checkpoint and "patch_embed.weight" in checkpoint
 
 
-def _infer_vit_config_from_state(
-    state: Mapping[str, torch.Tensor]
-) -> dict[str, int | float]:
+def _infer_vit_config_from_state(state: Mapping[str, torch.Tensor]) -> dict[str, int | float]:
     hidden_dim = int(state["pos_embed"].shape[-1])
     patch_size = int(state["patch_embed.weight"].shape[-1])
     depth = 0
