@@ -1,0 +1,158 @@
+{
+  "architecture": {},
+  "checkpoint_kind": "vision_encoder",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "d7f29ead180bab63e5bf87f06d618e6fcec3243b",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "d7f29ea",
+    "system": "git"
+  },
+  "config": {
+    "checkpoints": {
+      "best_metric": "mean_iou",
+      "best_mode": "max",
+      "metadata": {},
+      "output_path": "data/full_pipeline_20260626_1450/block_vit/block_vit.pth",
+      "resume_path": null,
+      "save_interval_epochs": 1
+    },
+    "environment": {
+      "deterministic": true,
+      "metadata": {},
+      "num_envs": 1,
+      "rollout_steps": 32,
+      "scenario": null,
+      "seed": 7,
+      "stage": "block_smb"
+    },
+    "evaluation": {
+      "deterministic": true,
+      "episodes": null,
+      "interval_epochs": 1,
+      "metadata": {},
+      "metrics": [
+        "loss",
+        "semantic_loss",
+        "position_loss",
+        "accuracy",
+        "foreground_accuracy",
+        "mean_iou"
+      ],
+      "samples": 512,
+      "seed": 1000007
+    },
+    "metadata": {
+      "position_weight": 2.0
+    },
+    "model": {
+      "depth": 2,
+      "dropout": 0.1,
+      "heads": 4,
+      "hidden_dim": 64,
+      "metadata": {},
+      "name": "block_smb_vit",
+      "patch_size": 16,
+      "vocab_size": null
+    },
+    "name": "block_vit_training",
+    "training": {
+      "batch_size": 32,
+      "device": "cuda",
+      "epochs": 20,
+      "gradient_clip_norm": 1.0,
+      "learning_rate": 0.0003,
+      "metadata": {},
+      "samples_per_epoch": 2048,
+      "seed": 7,
+      "weight_decay": 0.05
+    }
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-124-generic",
+      "system": "Linux",
+      "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.7.0+cu126"
+    }
+  },
+  "epoch": 16,
+  "global_step": 0,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "d7f29ead180bab63e5bf87f06d618e6fcec3243b",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "d7f29ea",
+      "system": "git"
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-124-generic",
+        "system": "Linux",
+        "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.7.0+cu126"
+      }
+    },
+    "trainer": "scripts.vit.train_block_vit"
+  },
+  "metrics": {
+    "accuracy": 0.9996012369791667,
+    "foreground_accuracy": 0.9982370295747284,
+    "loss": 0.008138181598042138,
+    "mean_iou": 0.9904216876226731,
+    "position_loss": 0.0004137043342780089,
+    "semantic_loss": 0.007310772976779845
+  },
+  "model_name": "block_smb_vit",
+  "specs": {
+    "vision": {
+      "name": "block_smb_vit",
+      "position_dim": 2,
+      "semantic_classes": [
+        "background",
+        "mario",
+        "platform",
+        "coin",
+        "goal",
+        "enemy",
+        "moving_platform"
+      ],
+      "token_dim": 64
+    }
+  },
+  "stage": "block_smb",
+  "state_keys": [
+    "model",
+    "optimizer"
+  ]
+}

@@ -1,0 +1,410 @@
+{
+  "backend_probe": {
+    "action_repeat": true,
+    "failures": {},
+    "frame_step": true,
+    "headless": true,
+    "passed": true,
+    "render": true,
+    "reset_seed": true,
+    "save_load_state": true
+  },
+  "checks": {
+    "action_step": {
+      "details": {
+        "action": {
+          "button_vector": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          "buttons": [
+            "B",
+            "None",
+            "SELECT",
+            "START",
+            "UP",
+            "DOWN",
+            "LEFT",
+            "RIGHT",
+            "A"
+          ],
+          "frame_rewards": [
+            0.0,
+            0.0
+          ],
+          "frame_skip": 2,
+          "frames_executed": 2,
+          "shared_id": 1,
+          "shared_name": "RIGHT"
+        },
+        "reward": 0.0,
+        "shape": [
+          224,
+          240,
+          3
+        ],
+        "terminated": false,
+        "truncated": false
+      },
+      "passed": true,
+      "reason": null
+    },
+    "backend_import": {
+      "details": {
+        "module": "retro"
+      },
+      "passed": true,
+      "reason": null
+    },
+    "deterministic_seeding": {
+      "details": {
+        "steps": 4
+      },
+      "passed": true,
+      "reason": null
+    },
+    "frame_skip": {
+      "details": {
+        "frame_skip": 2,
+        "frames_executed": 2
+      },
+      "passed": true,
+      "reason": null
+    },
+    "game_registration": {
+      "details": {
+        "verification": "stable-retro environment created successfully"
+      },
+      "passed": true,
+      "reason": null
+    },
+    "headless_reset": {
+      "details": {
+        "shape": [
+          224,
+          240,
+          3
+        ]
+      },
+      "passed": true,
+      "reason": null
+    },
+    "render_reset": {
+      "details": {
+        "rendered": true,
+        "shape": []
+      },
+      "passed": true,
+      "reason": null
+    },
+    "rom_availability": {
+      "details": {
+        "game": "SuperMarioBros-Nes"
+      },
+      "passed": true,
+      "reason": null
+    },
+    "save_load_state": {
+      "details": {},
+      "passed": true,
+      "reason": null
+    }
+  },
+  "content": {
+    "checksum_algorithm": "sha256",
+    "checksum_record_path": "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
+    "game": "SuperMarioBros-Nes",
+    "install_command": "python -m pip install -e '.[full-smb]'",
+    "legal_notice": "Use a legally obtained, user-provided ROM. Do not commit, bundle, or redistribute ROM content with RetroAGI artifacts.",
+    "rom_label": "Super Mario Bros NES ROM",
+    "stable_retro_import_command": "python -m retro.import local/full_smb/roms",
+    "stable_retro_import_dir": "local/full_smb/roms"
+  },
+  "deterministic_reset": {
+    "deterministic": true,
+    "first": {
+      "action_ids": [
+        3,
+        3,
+        0,
+        2
+      ],
+      "encoded_observations": 0,
+      "observation_checksums": [
+        "406c2b112e1b3516f8b5a23a6a647052e9e010d994145b65a60dea55a10c72fb",
+        "2813a26a4e75f9e0779ad75acdbb9471fcdb7a37f54678f95e638833edfd7707",
+        "ed437b70253b72d1bd0e36bc948eae0054dfc2fdc45114b011768997e19e596c",
+        "ed437b70253b72d1bd0e36bc948eae0054dfc2fdc45114b011768997e19e596c",
+        "07ef64a06d6f69c16a344a4d181762eaf703155bff38689fb4928f8c87cff535"
+      ],
+      "rewards": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "seed": 0,
+      "signals": [
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        },
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        },
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        },
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        }
+      ],
+      "terminated": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "truncated": [
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    "mismatch": null,
+    "second": {
+      "action_ids": [
+        3,
+        3,
+        0,
+        2
+      ],
+      "encoded_observations": 0,
+      "observation_checksums": [
+        "406c2b112e1b3516f8b5a23a6a647052e9e010d994145b65a60dea55a10c72fb",
+        "2813a26a4e75f9e0779ad75acdbb9471fcdb7a37f54678f95e638833edfd7707",
+        "ed437b70253b72d1bd0e36bc948eae0054dfc2fdc45114b011768997e19e596c",
+        "ed437b70253b72d1bd0e36bc948eae0054dfc2fdc45114b011768997e19e596c",
+        "07ef64a06d6f69c16a344a4d181762eaf703155bff38689fb4928f8c87cff535"
+      ],
+      "rewards": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "seed": 0,
+      "signals": [
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        },
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        },
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        },
+        {
+          "coins": 0,
+          "collectibles": {
+            "coins": 0
+          },
+          "completion": false,
+          "death": false,
+          "game_over": false,
+          "health": null,
+          "inventory": {},
+          "level": null,
+          "lives": 2,
+          "objectives": {},
+          "position": null,
+          "power_state": null,
+          "progress": null,
+          "score": 0,
+          "screen": null,
+          "stage": null,
+          "terminated": false,
+          "termination_reason": null,
+          "timeout": false,
+          "truncated": false,
+          "world": null
+        }
+      ],
+      "terminated": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "truncated": [
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    "seed": 0
+  },
+  "passed": true
+}

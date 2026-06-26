@@ -1,0 +1,149 @@
+/home/amoran/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:382: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.3)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+{
+  "config": {
+    "batch_size": 8,
+    "device": "cuda",
+    "frame_skip": 1,
+    "rollout_steps": 128,
+    "samples": 64,
+    "seed": 0
+  },
+  "perception": {
+    "bottleneck": true,
+    "bottleneck_reasons": [
+      "position_rmse",
+      "position_consistency"
+    ],
+    "class_coverage": 0.6923076923076923,
+    "covered_classes": [
+      "sky",
+      "pipe",
+      "coin",
+      "goomba",
+      "koopa",
+      "mario",
+      "hill",
+      "cloud",
+      "bush"
+    ],
+    "missing_classes": [
+      "ground",
+      "brick",
+      "question_block",
+      "mushroom"
+    ],
+    "patches": 15360.0,
+    "per_class_coverage": {
+      "brick": 0.0,
+      "bush": 0.004166666883975267,
+      "cloud": 0.04225260391831398,
+      "coin": 0.12285156548023224,
+      "goomba": 0.0007161458488553762,
+      "ground": 0.0,
+      "hill": 0.02773437462747097,
+      "koopa": 0.00019531250291038305,
+      "mario": 0.01992187462747097,
+      "mushroom": 0.0,
+      "pipe": 6.510417006211355e-05,
+      "question_block": 0.0,
+      "sky": 0.7820963263511658
+    },
+    "position_mean_error": 1.1776149272918701,
+    "position_rmse": 0.832899759670282,
+    "position_samples": 64.0,
+    "position_within_tolerance": 0.0,
+    "samples": 64.0,
+    "semantic_confidence": 0.9763607740402221,
+    "temporal_stability": 0.9956349247977847,
+    "thresholds": {
+      "max_position_rmse": 0.35,
+      "min_class_coverage": 0.15,
+      "min_position_within_tolerance": 0.3,
+      "min_semantic_confidence": 0.35,
+      "min_temporal_stability": 0.4,
+      "position_tolerance": 0.25
+    }
+  },
+  "trace": {
+    "action_ids": [
+      3,
+      3,
+      0,
+      2,
+      4,
+      3,
+      3,
+      2,
+      3,
+      2,
+      4,
+      1,
+      4,
+      1,
+      2,
+      1,
+      0,
+      4,
+      2,
+      4,
+      5,
+      4,
+      1,
+      2,
+      0,
+      5,
+      0,
+      5,
+      2,
+      3,
+      4,
+      0,
+      2,
+      3,
+      2,
+      4,
+      5,
+      1,
+      4,
+      3,
+      3,
+      4,
+      2,
+      0,
+      4,
+      0,
+      0,
+      5,
+      3,
+      5,
+      5,
+      5,
+      0,
+      4,
+      3,
+      2,
+      1,
+      5,
+      2,
+      5,
+      0,
+      1,
+      4
+    ],
+    "observation_shape": [
+      64,
+      224,
+      240,
+      3
+    ],
+    "reset_count": 1,
+    "samples": 64
+  },
+  "vision": {
+    "checkpoint_path": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit.pth",
+    "frozen": true
+  }
+}

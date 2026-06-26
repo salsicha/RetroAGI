@@ -787,14 +787,26 @@ def train_full_smb_policy(
                     if completed_epoch == config.epochs:
                         final_evaluation = evaluation
             if final_evaluation is None:
-                final_evaluation = evaluate_full_smb_policy(
-                    model,
-                    config=config,
-                    make_stage=make_stage,
-                    vision=vision,
-                    device=device,
-                    recording_prefix="final",
-                )
+                if config.evaluation_episodes > 0 and config.evaluation_max_steps > 0:
+                    final_evaluation = evaluate_full_smb_policy(
+                        model,
+                        config=config,
+                        make_stage=make_stage,
+                        vision=vision,
+                        device=device,
+                        recording_prefix="final",
+                    )
+                else:
+                    final_evaluation = FullSMBEvaluationResult(
+                        episodes=0,
+                        max_steps_per_episode=0,
+                        steps=0,
+                        returns=(),
+                        mean_return=0.0,
+                        success_rate=0.0,
+                        terminated_count=0,
+                        truncated_count=0,
+                    )
         finally:
             stage.close()
 

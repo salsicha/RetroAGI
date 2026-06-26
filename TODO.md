@@ -3,6 +3,59 @@
 This roadmap is ordered by dependency and execution priority. Finish each
 milestone's exit criteria before expanding the next one.
 
+## Active Run: Full SMB Evaluation Pipeline (2026-06-26)
+
+Goal: retrain the Block SMB rung, retrain Full SMB asset-mock perception, run
+Full SMB policy training for a few minutes, and preserve evaluation artifacts.
+
+- [x] Preflight CUDA, Python, stable-retro, ROM/content, and existing artifact
+      availability.
+- [x] Retrain Block SMB perception from procedural frames and save a run-local
+      Block ViT checkpoint.
+- [x] Diagnose the retrained Block SMB perception checkpoint against the policy
+      bottleneck thresholds.
+- [x] Train Block SMB policy against all fixed scenarios using the retrained
+      Block ViT checkpoint.
+- [x] Evaluate and record the Block SMB policy against fixed-scenario success
+      thresholds.
+- [x] Regenerate or verify Full SMB asset-mock train/validation datasets.
+- [x] Train Full SMB ViT on asset-mock data and save a run-local checkpoint.
+- [x] Diagnose the Full SMB ViT checkpoint.
+- [x] Transfer the trained Block SMB policy into the Full SMB policy contract.
+- [x] Run Full SMB headless fine-tuning for a few minutes.
+- [x] Evaluate the resulting Full SMB policy on fixed benchmark tasks.
+- [x] Summarize final metrics, artifacts, environment deviations, and blockers.
+
+Current result:
+
+- Block SMB perception passed diagnostic thresholds with no bottleneck flags.
+- Block SMB policy trained for 25 epochs but only passed `level_1_flat.json`;
+      overall fixed-scenario threshold pass rate is 0.25.
+- Full SMB ViT reached 99.23 percent validation mIoU on asset-mock data, but
+      real-emulator diagnostics still flagged position quality as a bottleneck.
+- Full SMB policy fine-tuning completed after a trainer patch that lets
+      explicit no-evaluation runs save a checkpoint before separate-process
+      evaluation.
+- Full SMB fixed-benchmark evaluation over 2,400 steps produced zero progress,
+      zero score, zero completion, and 0.0 success rate.
+
+Next steps:
+
+- [ ] Fix Full SMB signal extraction so real-emulator position/progress fields
+      are populated during training and evaluation; current rollouts report
+      `position: null`, `progress: null`, and zero emulator progress reward.
+- [ ] Add a regression test for `train_full_smb_policy` with
+      `evaluation_episodes=0` to prove no final in-process emulator evaluation
+      is attempted.
+- [ ] Add a Full SMB perception diagnostic that separates semantic confidence
+      from position extraction failures, so asset-mock ViT quality is not
+      conflated with missing emulator RAM/signal plumbing.
+- [ ] Improve Block SMB policy training before using it as a transfer source:
+      focus on `level_2_gap.json`, `level_3_stairs.json`, and
+      `level_4_platforms.json` until fixed-scenario threshold pass rate is 1.0.
+- [ ] Re-run Full SMB transfer and fine-tuning only after Block SMB passes all
+      fixed scenarios and Full SMB real-emulator position diagnostics pass.
+
 ## Completed Work
 
 **Architecture and stages**

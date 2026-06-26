@@ -1,0 +1,43 @@
+{
+  "config": {
+    "batch_size": 32,
+    "device": "cuda",
+    "rollout_steps": 32,
+    "samples": 256,
+    "seed": 7
+  },
+  "perception": {
+    "accuracy": 0.9991373697916667,
+    "bottleneck": false,
+    "bottleneck_reasons": [],
+    "foreground_accuracy": 0.9960039206815954,
+    "foreground_patches": 13263.0,
+    "mean_iou": 0.986213022720282,
+    "patches": 61440.0,
+    "per_class_iou": {
+      "background": 1.0,
+      "coin": 0.9440559440559441,
+      "enemy": 0.9776,
+      "goal": 1.0,
+      "mario": 0.9848812095032398,
+      "moving_platform": 1.0,
+      "platform": 0.9969540054827901
+    },
+    "position_mse": 0.0003861108998535201,
+    "position_rmse": 0.019649704828661425,
+    "position_within_tolerance": 0.97265625,
+    "samples": 256.0,
+    "thresholds": {
+      "max_position_rmse": 0.06,
+      "min_accuracy": 0.95,
+      "min_foreground_accuracy": 0.9,
+      "min_mean_iou": 0.7,
+      "min_position_within_tolerance": 0.9,
+      "position_tolerance": 0.05
+    }
+  },
+  "vision": {
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_vit/block_vit.pth",
+    "frozen": true
+  }
+}

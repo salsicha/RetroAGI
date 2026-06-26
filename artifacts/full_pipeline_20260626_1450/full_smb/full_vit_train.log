@@ -1,0 +1,58 @@
+/home/amoran/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:382: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.3)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Device: cuda
+Train: 5000  Val: 1000
+ViT params: 2.87M
+Epoch 01/30 | loss 0.8457 | acc 98.21% | fg_acc 95.66% | mIoU 73.80%
+Epoch 02/30 | loss 0.1367 | acc 99.11% | fg_acc 99.02% | mIoU 91.15%
+Epoch 03/30 | loss 0.0569 | acc 99.43% | fg_acc 99.30% | mIoU 93.95%
+Epoch 04/30 | loss 0.0360 | acc 99.61% | fg_acc 99.67% | mIoU 96.36%
+Epoch 05/30 | loss 0.0245 | acc 99.53% | fg_acc 99.60% | mIoU 94.39%
+Epoch 06/30 | loss 0.0221 | acc 99.78% | fg_acc 99.68% | mIoU 96.15%
+Epoch 07/30 | loss 0.0169 | acc 99.75% | fg_acc 99.78% | mIoU 97.74%
+Epoch 08/30 | loss 0.0132 | acc 99.87% | fg_acc 99.81% | mIoU 98.40%
+Epoch 09/30 | loss 0.0125 | acc 99.77% | fg_acc 99.81% | mIoU 97.83%
+Epoch 10/30 | loss 0.0106 | acc 99.88% | fg_acc 99.77% | mIoU 98.54%
+Epoch 11/30 | loss 0.0107 | acc 99.78% | fg_acc 99.87% | mIoU 97.85%
+Epoch 12/30 | loss 0.0090 | acc 99.88% | fg_acc 99.86% | mIoU 98.76%
+Epoch 13/30 | loss 0.0074 | acc 99.85% | fg_acc 99.83% | mIoU 98.55%
+Epoch 14/30 | loss 0.0070 | acc 99.88% | fg_acc 99.86% | mIoU 98.73%
+Epoch 15/30 | loss 0.0069 | acc 99.91% | fg_acc 99.86% | mIoU 98.80%
+Epoch 16/30 | loss 0.0058 | acc 99.91% | fg_acc 99.87% | mIoU 98.75%
+Epoch 17/30 | loss 0.0056 | acc 99.95% | fg_acc 99.88% | mIoU 99.13%
+Epoch 18/30 | loss 0.0053 | acc 99.89% | fg_acc 99.88% | mIoU 98.97%
+Epoch 19/30 | loss 0.0050 | acc 99.94% | fg_acc 99.87% | mIoU 99.07%
+Epoch 20/30 | loss 0.0042 | acc 99.95% | fg_acc 99.89% | mIoU 99.13%
+Epoch 21/30 | loss 0.0039 | acc 99.92% | fg_acc 99.89% | mIoU 99.05%
+Epoch 22/30 | loss 0.0039 | acc 99.93% | fg_acc 99.89% | mIoU 99.03%
+Epoch 23/30 | loss 0.0036 | acc 99.92% | fg_acc 99.87% | mIoU 98.85%
+Epoch 24/30 | loss 0.0033 | acc 99.94% | fg_acc 99.90% | mIoU 99.20%
+Epoch 25/30 | loss 0.0033 | acc 99.95% | fg_acc 99.90% | mIoU 99.23%
+Epoch 26/30 | loss 0.0028 | acc 99.94% | fg_acc 99.89% | mIoU 99.12%
+Epoch 27/30 | loss 0.0029 | acc 99.93% | fg_acc 99.90% | mIoU 99.10%
+Epoch 28/30 | loss 0.0028 | acc 99.94% | fg_acc 99.90% | mIoU 99.18%
+Epoch 29/30 | loss 0.0026 | acc 99.95% | fg_acc 99.90% | mIoU 99.18%
+Epoch 30/30 | loss 0.0029 | acc 99.95% | fg_acc 99.90% | mIoU 99.18%
+
+── Final per-class metrics (val) ──
+class              recall      IoU
+sky                100.0%   100.0%
+ground             100.0%   100.0%
+brick               99.9%    99.8%
+question_block      99.8%    99.8%
+pipe               100.0%    99.9%
+coin                99.5%    98.2%
+goomba              99.7%    99.2%
+koopa               99.5%    98.2%
+mario              100.0%    99.9%
+mushroom            99.3%    97.4%
+hill                99.9%    99.5%
+cloud               99.8%    99.6%
+bush                99.7%    98.6%
+
+Overall acc 99.95% | foreground acc 99.90% | mIoU 99.23%
+Saved checkpoint -> data/full_pipeline_20260626_1450/full_vit/full_smb_vit.pth
+Saved legacy weights -> data/full_pipeline_20260626_1450/full_vit/vit_smb.pth
+Saved predictions -> /home/amoran/repos/RetroAGI/data/vit/predictions.png

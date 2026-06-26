@@ -1,0 +1,147 @@
+{
+  "architecture": {},
+  "checkpoint_kind": "vision_encoder",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "d7f29ead180bab63e5bf87f06d618e6fcec3243b",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "d7f29ea",
+    "system": "git"
+  },
+  "config": {
+    "data": {
+      "train": "data/vit/train.npz",
+      "val": "data/vit/val.npz"
+    },
+    "model": {
+      "depth": 6,
+      "dropout": 0.1,
+      "heads": 6,
+      "hidden_dim": 192,
+      "mlp_ratio": 4.0,
+      "name": "full_smb_vit",
+      "patch_size": 16
+    },
+    "training": {
+      "batch_size": 64,
+      "epochs": 30,
+      "learning_rate": 0.0003
+    }
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-124-generic",
+      "system": "Linux",
+      "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.7.0+cu126"
+    }
+  },
+  "epoch": 25,
+  "global_step": 0,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "d7f29ead180bab63e5bf87f06d618e6fcec3243b",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "d7f29ea",
+      "system": "git"
+    },
+    "legacy_raw_checkpoint": "data/full_pipeline_20260626_1450/full_vit/vit_smb.pth",
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-124-generic",
+        "system": "Linux",
+        "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.7.0+cu126"
+      }
+    },
+    "training_script": "scripts/vit/train_vit.py"
+  },
+  "metrics": {
+    "accuracy": 0.9994708333333333,
+    "foreground_accuracy": 0.9990177815410669,
+    "iou/brick": 0.9976835765577947,
+    "iou/bush": 0.9857142857142858,
+    "iou/cloud": 0.9955220842662325,
+    "iou/coin": 0.9816232771822359,
+    "iou/goomba": 0.9916036943744753,
+    "iou/ground": 1.0,
+    "iou/hill": 0.9953715608125482,
+    "iou/koopa": 0.982078853046595,
+    "iou/mario": 0.9992372234935164,
+    "iou/mushroom": 0.9744525547445255,
+    "iou/pipe": 0.9992014374126572,
+    "iou/question_block": 0.9982646420824295,
+    "iou/sky": 0.9995965825568929,
+    "mean_iou": 0.9923345978649376,
+    "recall/brick": 0.9986088569441224,
+    "recall/bush": 0.9966666666666667,
+    "recall/cloud": 0.9983670136762605,
+    "recall/coin": 0.9945694336695112,
+    "recall/goomba": 0.9974662162162162,
+    "recall/ground": 1.0,
+    "recall/hill": 0.9987100103199175,
+    "recall/koopa": 0.9954586739327884,
+    "recall/mario": 1.0,
+    "recall/mushroom": 0.9925650557620818,
+    "recall/pipe": 0.9998002397123452,
+    "recall/question_block": 0.9982646420824295,
+    "recall/sky": 0.9996186791931473
+  },
+  "model_name": "full_smb_vit",
+  "specs": {
+    "vision": {
+      "name": "full_smb_vit",
+      "position_dim": 2,
+      "semantic_classes": [
+        "sky",
+        "ground",
+        "brick",
+        "question_block",
+        "pipe",
+        "coin",
+        "goomba",
+        "koopa",
+        "mario",
+        "mushroom",
+        "hill",
+        "cloud",
+        "bush"
+      ],
+      "token_dim": 192
+    }
+  },
+  "stage": "full_smb",
+  "state_keys": [
+    "model"
+  ]
+}

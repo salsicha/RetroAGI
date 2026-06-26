@@ -1,0 +1,60 @@
+/home/amoran/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:382: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+Traceback (most recent call last):
+  File "/home/amoran/repos/RetroAGI/retroagi/stages/full_smb/adapter.py", line 502, in make_stable_retro_env
+    return retro.make(**make_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/Downloads/stable-retro-master/retro/__init__.py", line 64, in make
+    return RetroEnv(game, state, inttype=inttype, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/Downloads/stable-retro-master/retro/retro_env.py", line 102, in __init__
+    self.em = retro.RetroEmulator(rom_path)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Cannot create multiple emulator instances per process, make sure to call env.close() on each environment before creating a new one
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/amoran/repos/RetroAGI/retroagi/cli.py", line 284, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/cli.py", line 277, in main
+    return run(args, stage_args)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/cli.py", line 141, in run
+    return _run_full_smb(args, stage_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/cli.py", line 167, in _run_full_smb
+    return int(train_main(["train", *stage_args]))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/stages/full_smb/train.py", line 3953, in main
+    result = train_full_smb_policy(config)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/stages/full_smb/train.py", line 757, in train_full_smb_policy
+    evaluation = evaluate_full_smb_policy(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/stages/full_smb/train.py", line 883, in evaluate_full_smb_policy
+    stage = _make_stage(make_stage, vision, config)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/stages/full_smb/train.py", line 2358, in _make_stage
+    return FullSMBStage(
+           ^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/stages/full_smb/adapter.py", line 531, in __init__
+    else make_stable_retro_env(
+         ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/amoran/repos/RetroAGI/retroagi/stages/full_smb/adapter.py", line 504, in make_stable_retro_env
+    raise RuntimeError(content_spec.setup_failure_message(str(exc), game=config.game)) from exc
+RuntimeError: Full SMB stable-retro setup failed for game 'SuperMarioBros-Nes': Cannot create multiple emulator instances per process, make sure to call env.close() on each environment before creating a new one
+Install backend: python -m pip install -e '.[full-smb]'
+Required content: Super Mario Bros NES ROM imported as stable-retro game 'SuperMarioBros-Nes'.
+Local ROM staging directory: local/full_smb/roms/ (ignored by git).
+Import command: python -m retro.import local/full_smb/roms
+Checksum record: write the sha256 hash to local/full_smb/checksums/SuperMarioBros-Nes.sha256 and preserve it with the local run notes.
+Legal/provenance: Use a legally obtained, user-provided ROM. Do not commit, bundle, or redistribute ROM content with RetroAGI artifacts.
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.3)
+Hello from the pygame community. https://www.pygame.org/contribute.html

@@ -1,0 +1,500 @@
+{
+  "architecture": {
+    "config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 32
+    },
+    "name": "agent_world_model_critic",
+    "spec": {
+      "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+      "checkpoint_model_name": "agent_world_model_critic",
+      "configurable_hyperparameters": {
+        "controller_schedule": "constant",
+        "hidden_dim": 64
+      },
+      "name": "agent_world_model_critic",
+      "output_contract": "agent_world_model_critic.forward.v1",
+      "supported_stage_names": [
+        "synthetic_1d",
+        "block_smb",
+        "full_smb",
+        "pong_block"
+      ]
+    }
+  },
+  "config": {
+    "ablation": {
+      "checkpoint_transfer_enabled": true,
+      "critic_feedback_enabled": true,
+      "hierarchy_enabled": true,
+      "recurrent_state_enabled": true,
+      "vision_enabled": true,
+      "world_model_enabled": true
+    },
+    "action_aux_weight": 0.01,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 32
+    },
+    "architecture_name": "agent_world_model_critic",
+    "checkpoint_path": "data/block_smb/cuda_start_20260626_1447_policy.pth",
+    "controller_schedule": "constant",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cuda",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 2,
+    "epochs": 2,
+    "evaluation_episodes": 1,
+    "evaluation_interval_epochs": 1,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 0,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 32,
+    "imagined_rollout_horizon": 0,
+    "imagined_rollout_weight": 0.0,
+    "learning_rate": 0.0003,
+    "log_path": "artifacts/block_smb/cuda_start_20260626_1447/events.jsonl",
+    "num_envs": 1,
+    "policy_loss_weight": 1.0,
+    "record_videos": false,
+    "representation_weight": 0.05,
+    "resume_path": null,
+    "reward_config": {
+      "coin": 10.0,
+      "enemy_hit": -10.0,
+      "enemy_stomp": 5.0,
+      "fall_death": -10.0,
+      "frame_penalty": -0.01,
+      "goal": 50.0,
+      "progress_per_pixel": 0.05
+    },
+    "reward_loss_weight": 0.01,
+    "rollout_steps": 64,
+    "save_checkpoints": true,
+    "seed": 0,
+    "target_network_instability_threshold": 1.0,
+    "target_network_mode": "off",
+    "target_network_tau": 0.01,
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "value_loss_weight": 0.25,
+    "video_dir": null,
+    "world_model_weight": 0.1
+  },
+  "curriculum": [
+    "level_1_flat.json",
+    "level_2_gap.json",
+    "level_3_stairs.json",
+    "level_4_platforms.json"
+  ],
+  "evaluation": {
+    "fixed_scenarios": {
+      "level_1_flat.json": {
+        "return": -2.0,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+          "scenario_name": "level_1_flat.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": false,
+          "evaluation_episodes": 1,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      },
+      "level_2_gap.json": {
+        "return": -2.0,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+          "scenario_name": "level_2_gap.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": false,
+          "evaluation_episodes": 1,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      },
+      "level_3_stairs.json": {
+        "return": -2.0,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+          "scenario_name": "level_3_stairs.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": false,
+          "evaluation_episodes": 1,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      },
+      "level_4_platforms.json": {
+        "return": -2.0,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+          "scenario_name": "level_4_platforms.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": false,
+          "evaluation_episodes": 1,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      }
+    },
+    "mean_return": -2.0,
+    "success_rate": 0.0,
+    "success_thresholds_met": false,
+    "tuning_metrics": {
+      "mean_return": -2.0,
+      "mean_success_rate": 0.0,
+      "scenario_count": 4.0,
+      "score": -2.0,
+      "threshold_pass_rate": 0.0
+    }
+  },
+  "evaluations": [
+    {
+      "epoch": 1,
+      "evaluation": {
+        "fixed_scenarios": {
+          "level_1_flat.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+              "scenario_name": "level_1_flat.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          },
+          "level_2_gap.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+              "scenario_name": "level_2_gap.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          },
+          "level_3_stairs.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+              "scenario_name": "level_3_stairs.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          },
+          "level_4_platforms.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+              "scenario_name": "level_4_platforms.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          }
+        },
+        "mean_return": -2.0,
+        "success_rate": 0.0,
+        "success_thresholds_met": false,
+        "tuning_metrics": {
+          "mean_return": -2.0,
+          "mean_success_rate": 0.0,
+          "scenario_count": 4.0,
+          "score": -2.0,
+          "threshold_pass_rate": 0.0
+        }
+      },
+      "global_step": 2
+    },
+    {
+      "epoch": 2,
+      "evaluation": {
+        "fixed_scenarios": {
+          "level_1_flat.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+              "scenario_name": "level_1_flat.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          },
+          "level_2_gap.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+              "scenario_name": "level_2_gap.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          },
+          "level_3_stairs.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+              "scenario_name": "level_3_stairs.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          },
+          "level_4_platforms.json": {
+            "return": -2.0,
+            "success_rate": 0.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+              "scenario_name": "level_4_platforms.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": false,
+              "evaluation_episodes": 1,
+              "evaluation_max_steps": 200,
+              "meets_return": false,
+              "meets_success_rate": false,
+              "within_step_budget": true
+            },
+            "threshold_met": false
+          }
+        },
+        "mean_return": -2.0,
+        "success_rate": 0.0,
+        "success_thresholds_met": false,
+        "tuning_metrics": {
+          "mean_return": -2.0,
+          "mean_success_rate": 0.0,
+          "scenario_count": 4.0,
+          "score": -2.0,
+          "threshold_pass_rate": 0.0
+        }
+      },
+      "global_step": 4
+    }
+  ],
+  "history": [
+    {
+      "episodes": 2.0,
+      "eval_mean_return": -2.0,
+      "eval_success_rate": 0.0,
+      "eval_threshold_pass_rate": 0.0,
+      "eval_tuning_score": -2.0,
+      "gradient_norm": 0.99183189868927,
+      "imagined_rollout_steps": 0.0,
+      "loss_actor_pass1": 0.45342689752578735,
+      "loss_actor_pass2": 0.3411019444465637,
+      "loss_critic": 0.005330272950232029,
+      "loss_critic_feedback": 0.005330272950232029,
+      "loss_dynamics": 0.09682300686836243,
+      "loss_entropy": 1.5996968746185303,
+      "loss_imagined_dynamics": 0.0,
+      "loss_imagined_reward": 0.0,
+      "loss_imagined_rollout": 0.0,
+      "loss_policy": 0.3411019444465637,
+      "loss_representation": 0.45342689752578735,
+      "loss_reward": 0.008231601677834988,
+      "loss_total": 0.6146374344825745,
+      "loss_value": 1.028364896774292,
+      "loss_world_model": 0.09682300686836243,
+      "mean_return": -0.6175,
+      "target_network_active": 0.0,
+      "target_network_drift": 0.0,
+      "target_network_instability": 0.09682300686836243,
+      "target_network_tau": 0.009999999776482582
+    },
+    {
+      "episodes": 2.0,
+      "eval_mean_return": -2.0,
+      "eval_success_rate": 0.0,
+      "eval_threshold_pass_rate": 0.0,
+      "eval_tuning_score": -2.0,
+      "gradient_norm": 0.49627161026000977,
+      "imagined_rollout_steps": 0.0,
+      "loss_actor_pass1": 0.44315099716186523,
+      "loss_actor_pass2": 0.3549707531929016,
+      "loss_critic": 0.005258196499198675,
+      "loss_critic_feedback": 0.005258196499198675,
+      "loss_dynamics": 0.08474570512771606,
+      "loss_entropy": 1.6181833744049072,
+      "loss_imagined_dynamics": 0.0,
+      "loss_imagined_reward": 0.0,
+      "loss_imagined_rollout": 0.0,
+      "loss_policy": 0.3549707531929016,
+      "loss_representation": 0.44315099716186523,
+      "loss_reward": 0.0074814679101109505,
+      "loss_total": 0.6239742040634155,
+      "loss_value": 1.0178922414779663,
+      "loss_world_model": 0.08474570512771606,
+      "mean_return": -0.5725000000000001,
+      "target_network_active": 0.0,
+      "target_network_drift": 0.0,
+      "target_network_instability": 0.08474570512771606,
+      "target_network_tau": 0.009999999776482582
+    }
+  ],
+  "metrics": {
+    "episodes": 2.0,
+    "eval_mean_return": -2.0,
+    "eval_success_rate": 0.0,
+    "eval_threshold_pass_rate": 0.0,
+    "eval_tuning_score": -2.0,
+    "gradient_norm": 0.49627161026000977,
+    "imagined_rollout_steps": 0.0,
+    "loss_actor_pass1": 0.44315099716186523,
+    "loss_actor_pass2": 0.3549707531929016,
+    "loss_critic": 0.005258196499198675,
+    "loss_critic_feedback": 0.005258196499198675,
+    "loss_dynamics": 0.08474570512771606,
+    "loss_entropy": 1.6181833744049072,
+    "loss_imagined_dynamics": 0.0,
+    "loss_imagined_reward": 0.0,
+    "loss_imagined_rollout": 0.0,
+    "loss_policy": 0.3549707531929016,
+    "loss_representation": 0.44315099716186523,
+    "loss_reward": 0.0074814679101109505,
+    "loss_total": 0.6239742040634155,
+    "loss_value": 1.0178922414779663,
+    "loss_world_model": 0.08474570512771606,
+    "mean_return": -0.5725000000000001,
+    "target_network_active": 0.0,
+    "target_network_drift": 0.0,
+    "target_network_instability": 0.08474570512771606,
+    "target_network_tau": 0.009999999776482582
+  },
+  "vision": {
+    "checkpoint_path": "data/block_vit/block_vit.pth",
+    "checkpoint_transfer": true,
+    "frozen": true
+  }
+}

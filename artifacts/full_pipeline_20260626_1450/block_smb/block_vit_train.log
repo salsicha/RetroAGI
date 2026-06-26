@@ -1,0 +1,182 @@
+/home/amoran/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:382: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.3)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Device: cuda; parameters: 165,127
+Generating fixed validation rollout...
+Collected   320/512 frames
+Collected   512/512 frames
+Collected   320/2048 frames
+Collected   637/2048 frames
+Collected   957/2048 frames
+Collected  1277/2048 frames
+Collected  1597/2048 frames
+Collected  1917/2048 frames
+Collected  2048/2048 frames
+Epoch 001/020 train=1.0079 val=0.5815 fg_acc= 79.5% mIoU= 57.7% pos_mse=0.03252
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 002/020 train=0.4940 val=0.3357 fg_acc= 86.0% mIoU= 71.5% pos_mse=0.00576
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   318/2048 frames
+Collected   638/2048 frames
+Collected   958/2048 frames
+Collected  1268/2048 frames
+Collected  1588/2048 frames
+Collected  1908/2048 frames
+Collected  2048/2048 frames
+Epoch 003/020 train=0.3219 val=0.2070 fg_acc= 91.6% mIoU= 78.6% pos_mse=0.00224
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 004/020 train=0.1966 val=0.1107 fg_acc= 95.1% mIoU= 88.1% pos_mse=0.00093
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1596/2048 frames
+Collected  1916/2048 frames
+Collected  2048/2048 frames
+Epoch 005/020 train=0.1289 val=0.0951 fg_acc= 97.2% mIoU= 90.6% pos_mse=0.00045
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   635/2048 frames
+Collected   955/2048 frames
+Collected  1275/2048 frames
+Collected  1595/2048 frames
+Collected  1915/2048 frames
+Collected  2048/2048 frames
+Epoch 006/020 train=0.0961 val=0.0604 fg_acc= 98.0% mIoU= 92.8% pos_mse=0.00036
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   635/2048 frames
+Collected   955/2048 frames
+Collected  1275/2048 frames
+Collected  1595/2048 frames
+Collected  1915/2048 frames
+Collected  2048/2048 frames
+Epoch 007/020 train=0.0779 val=0.0389 fg_acc= 99.0% mIoU= 95.7% pos_mse=0.00034
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 008/020 train=0.0581 val=0.0361 fg_acc= 99.0% mIoU= 96.1% pos_mse=0.00035
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 009/020 train=0.0482 val=0.0320 fg_acc= 98.9% mIoU= 95.9% pos_mse=0.00036
+Collected   320/2048 frames
+Collected   633/2048 frames
+Collected   953/2048 frames
+Collected  1273/2048 frames
+Collected  1593/2048 frames
+Collected  1913/2048 frames
+Collected  2048/2048 frames
+Epoch 010/020 train=0.0425 val=0.0321 fg_acc= 99.0% mIoU= 96.6% pos_mse=0.00041
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 011/020 train=0.0448 val=0.0394 fg_acc= 98.7% mIoU= 95.5% pos_mse=0.00041
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1914/2048 frames
+Collected  2048/2048 frames
+Epoch 012/020 train=0.0332 val=0.0198 fg_acc= 99.3% mIoU= 97.1% pos_mse=0.00039
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   313/2048 frames
+Collected   633/2048 frames
+Collected   947/2048 frames
+Collected  1267/2048 frames
+Collected  1587/2048 frames
+Collected  1905/2048 frames
+Collected  2048/2048 frames
+Epoch 013/020 train=0.0290 val=0.0246 fg_acc= 99.3% mIoU= 97.2% pos_mse=0.00042
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 014/020 train=0.0274 val=0.0177 fg_acc= 99.3% mIoU= 97.5% pos_mse=0.00045
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 015/020 train=0.0258 val=0.0136 fg_acc= 99.6% mIoU= 98.2% pos_mse=0.00044
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1595/2048 frames
+Collected  1915/2048 frames
+Collected  2048/2048 frames
+Epoch 016/020 train=0.0211 val=0.0137 fg_acc= 99.4% mIoU= 97.8% pos_mse=0.00041
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 017/020 train=0.0213 val=0.0081 fg_acc= 99.8% mIoU= 99.0% pos_mse=0.00041
+Saved checkpoint: data/full_pipeline_20260626_1450/block_vit/block_vit.pth
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1920/2048 frames
+Collected  2048/2048 frames
+Epoch 018/020 train=0.0195 val=0.0097 fg_acc= 99.6% mIoU= 98.4% pos_mse=0.00040
+Collected   320/2048 frames
+Collected   640/2048 frames
+Collected   960/2048 frames
+Collected  1280/2048 frames
+Collected  1600/2048 frames
+Collected  1918/2048 frames
+Collected  2048/2048 frames
+Epoch 019/020 train=0.0186 val=0.0096 fg_acc= 99.6% mIoU= 98.4% pos_mse=0.00042
+Collected   312/2048 frames
+Collected   632/2048 frames
+Collected   947/2048 frames
+Collected  1267/2048 frames
+Collected  1587/2048 frames
+Collected  1907/2048 frames
+Collected  2048/2048 frames
+Epoch 020/020 train=0.0217 val=0.0064 fg_acc= 99.7% mIoU= 98.9% pos_mse=0.00044
