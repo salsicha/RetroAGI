@@ -126,6 +126,37 @@ class RewardSignalRetroEnv(GymnasiumRetroEnv):
         )
 
 
+class ZeroBackendProgressRetroEnv(GymnasiumRetroEnv):
+    def reset(self, seed=None):
+        self.reset_seed = seed
+        return (
+            np.zeros((224, 256, 3), dtype=np.uint8),
+            {
+                "xscrollHi": 0,
+                "xscrollLo": 10,
+                "score": 0,
+                "coins": 0,
+                "lives": 3,
+            },
+        )
+
+    def step(self, action):
+        self.actions.append(np.asarray(action))
+        return (
+            np.ones((224, 256, 3), dtype=np.uint8),
+            0.0,
+            False,
+            False,
+            {
+                "xscrollHi": 0,
+                "xscrollLo": 30,
+                "score": 0,
+                "coins": 0,
+                "lives": 3,
+            },
+        )
+
+
 class PreprocessingRetroEnv(GymnasiumRetroEnv):
     def reset(self, seed=None):
         self.reset_seed = seed
@@ -485,6 +516,26 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertAlmostEqual(reward, 20.65)
         self.assert_reward_total_matches_terms(reward, info)
 
+    def test_zero_backend_reward_uses_signal_progress_delta(self):
+        reward_config = FullSMBRewardConfig(emulator_progress=0.5)
+        stage = FullSMBStage(
+            env=ZeroBackendProgressRetroEnv(),
+            vision=StaticFullSMBVision(),
+            reward_config=reward_config,
+        )
+        try:
+            stage.reset(seed=9)
+            _observation, reward, _terminated, _truncated, info = stage.step(SMBAction.RIGHT)
+        finally:
+            stage.close()
+
+        self.assertEqual(info["full_smb_signals"]["position"], (30.0, 0.0))
+        self.assertEqual(info["full_smb_signals"]["progress"], 30.0)
+        self.assertEqual(info["reward_terms"]["emulator_progress"], 0.0)
+        self.assertEqual(info["reward_terms"]["signal_progress"], 10.0)
+        self.assertAlmostEqual(reward, 10.0)
+        self.assert_reward_total_matches_terms(reward, info)
+
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):
             with self.assertRaisesRegex(
@@ -629,6 +680,24 @@ class TestFullSMBStage(unittest.TestCase):
         timeout = extractor.extract({}, terminated=False, truncated=True)
         self.assertTrue(timeout.timeout)
         self.assertTrue(timeout.truncated)
+
+    def test_signal_extractor_reads_scroll_position_without_y_target(self):
+        signals = extract_full_smb_signals(
+            {
+                "xscrollHi": 1,
+                "xscrollLo": 44,
+                "score": 100,
+                "coins": 7,
+                "lives": 2,
+            },
+            terminated=False,
+            truncated=False,
+        )
+
+        self.assertEqual(signals.position, (300.0, 0.0))
+        self.assertEqual(signals.progress, 300.0)
+        self.assertEqual(signals.score, 100)
+        self.assertEqual(signals.coins, 7)
 
     def test_frame_skip_resize_stack_and_continuing_episode_mask(self):
         env = FrameSkipRetroEnv()

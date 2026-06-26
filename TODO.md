@@ -41,17 +41,17 @@ Current result:
 
 Next steps:
 
-- [ ] Fix Full SMB signal extraction so real-emulator position/progress fields
+- [x] Fix Full SMB signal extraction so real-emulator position/progress fields
       are populated during training and evaluation; current rollouts report
       `position: null`, `progress: null`, and zero emulator progress reward.
-  - [ ] Inspect stable-retro `SuperMarioBros-Nes` `info`, `data.json`, and RAM
+  - [x] Inspect stable-retro `SuperMarioBros-Nes` `info`, `data.json`, and RAM
         variables for player x/y, screen/page, score, coins, lives, death, and
         completion fields.
-  - [ ] Map RAM-backed or info-backed x/page values into monotonic absolute
+  - [x] Map RAM-backed or info-backed x/page values into monotonic absolute
         progress for `FullSMBSignals.position` and `FullSMBSignals.progress`.
-  - [ ] Preserve stable-retro backend reward while adding explicit progress
+  - [x] Preserve stable-retro backend reward while adding explicit progress
         terms to `reward_terms` diagnostics.
-  - [ ] Verify `retroagi check-env --game smb --stage full` reports non-null
+  - [x] Verify a real `FullSMBStage` rollout reports non-null
         position/progress after RIGHT and RIGHT_JUMP steps.
 - [ ] Add a regression test for `train_full_smb_policy` with
       `evaluation_episodes=0` to prove no final in-process emulator evaluation

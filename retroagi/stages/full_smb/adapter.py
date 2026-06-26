@@ -390,6 +390,8 @@ POSITION_X_KEYS = (
     "xpos",
     "mario_x",
     "player_x",
+    "marioX",
+    "playerX",
 )
 POSITION_Y_KEYS = (
     "y",
@@ -398,6 +400,8 @@ POSITION_Y_KEYS = (
     "ypos",
     "mario_y",
     "player_y",
+    "marioY",
+    "playerY",
 )
 INFO_CONTAINER_KEYS = (
     "memory",
@@ -409,9 +413,9 @@ INFO_CONTAINER_KEYS = (
 SCREEN_KEYS = ("screen", "screen_position", "screen_pos")
 SCREEN_X_KEYS = ("screen_x", "screenX", "x_screen")
 SCREEN_Y_KEYS = ("screen_y", "screenY", "y_screen")
-SCROLL_X_KEYS = ("xscroll", "x_scroll", "scroll_x", "camera_x")
-SCROLL_X_LO_KEYS = ("xscrollLo", "x_scroll_lo", "scroll_x_lo")
-SCROLL_X_HI_KEYS = ("xscrollHi", "x_scroll_hi", "scroll_x_hi")
+SCROLL_X_KEYS = ("xscroll", "x_scroll", "scroll_x", "camera_x", "scrolling")
+SCROLL_X_LO_KEYS = ("xscrollLo", "x_scroll_lo", "scroll_x_lo", "levelLo")
+SCROLL_X_HI_KEYS = ("xscrollHi", "x_scroll_hi", "scroll_x_hi", "levelHi")
 SCORE_KEYS = ("score", "Score")
 COIN_KEYS = ("coins", "coin", "coin_count", "coins_collected")
 LIFE_KEYS = ("lives", "life", "lives_left")
@@ -844,6 +848,9 @@ class FullSMBStage:
         config = self.reward_config
         terms = {
             "emulator_progress": float(backend_reward) * config.emulator_progress,
+            "signal_progress": _progress_delta(previous, current) * config.emulator_progress
+            if float(backend_reward) == 0.0
+            else 0.0,
             "completion": _event_started(previous, current, "completion") * config.completion,
             "survival": _survival_indicator(current) * config.survival,
             "score": _positive_signal_delta(previous, current, "score") * config.score,
@@ -944,9 +951,16 @@ def _position_value(info: Mapping[str, Any]) -> Optional[tuple[float, float]]:
     y = _numeric_value(info, POSITION_Y_KEYS)
     if x is None:
         x = _scroll_position_x(info)
-    if x is not None and y is not None:
-        return (x, y)
+    if x is not None:
+        return (x, y if y is not None else _fallback_position_y(info))
     return None
+
+
+def _fallback_position_y(info: Mapping[str, Any]) -> float:
+    screen_y = _numeric_value(info, SCREEN_Y_KEYS)
+    if screen_y is not None:
+        return screen_y
+    return 0.0
 
 
 def _scroll_position_x(info: Mapping[str, Any]) -> Optional[float]:
@@ -1098,6 +1112,10 @@ def _positive_signal_delta(
     previous_value = _numeric_from_value(previous.get(name))
     baseline = previous_value if previous_value is not None else 0.0
     return max(current_value - baseline, 0.0)
+
+
+def _progress_delta(previous: Mapping[str, Any], current: Mapping[str, Any]) -> float:
+    return _positive_signal_delta(previous, current, "progress")
 
 
 def _objective_magnitude(current: Mapping[str, Any], name: str) -> float:
