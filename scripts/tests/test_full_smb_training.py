@@ -199,6 +199,47 @@ class TestFullSMBTraining(unittest.TestCase):
             source,
         )
 
+    def test_training_with_disabled_evaluation_writes_checkpoint_without_second_stage(self):
+        stage_constructions = 0
+
+        def counted_stage(vision):
+            nonlocal stage_constructions
+            stage_constructions += 1
+            return tiny_stage(vision)
+
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            checkpoint_path = tmp / "policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=18,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=2,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                checkpoint_path=checkpoint_path,
+                save_checkpoints=True,
+            )
+            result = train_full_smb_policy(config, make_stage=counted_stage)
+
+            self.assertTrue(checkpoint_path.exists())
+
+        self.assertEqual(stage_constructions, 1)
+        self.assertEqual(result.evaluation.episodes, 0)
+        self.assertEqual(result.evaluation.steps, 0)
+        self.assertEqual(result.evaluation.returns, ())
+        self.assertEqual(result.evaluation.mean_return, 0.0)
+        self.assertEqual(result.checkpoint_path, checkpoint_path)
+        self.assertEqual(
+            result.checkpoint["metrics"]["periodic_evaluation_count"],
+            0.0,
+        )
+
     def test_full_smb_rollout_boundary_classifies_terminal_signals(self):
         cases = (
             (

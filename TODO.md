@@ -53,12 +53,12 @@ Next steps:
         terms to `reward_terms` diagnostics.
   - [x] Verify a real `FullSMBStage` rollout reports non-null
         position/progress after RIGHT and RIGHT_JUMP steps.
-- [ ] Add a regression test for `train_full_smb_policy` with
+- [x] Add a regression test for `train_full_smb_policy` with
       `evaluation_episodes=0` to prove no final in-process emulator evaluation
       is attempted.
-  - [ ] Use a fake stage factory that counts environment construction calls.
-  - [ ] Assert the checkpoint is written when evaluation is disabled.
-  - [ ] Assert the result contains an empty final evaluation rather than
+  - [x] Use a fake stage factory that counts environment construction calls.
+  - [x] Assert the checkpoint is written when evaluation is disabled.
+  - [x] Assert the result contains an empty final evaluation rather than
         launching a second emulator instance.
 - [ ] Add a Full SMB perception diagnostic that separates semantic confidence
       from position extraction failures, so asset-mock ViT quality is not
