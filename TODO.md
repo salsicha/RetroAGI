@@ -60,14 +60,14 @@ Next steps:
   - [x] Assert the checkpoint is written when evaluation is disabled.
   - [x] Assert the result contains an empty final evaluation rather than
         launching a second emulator instance.
-- [ ] Add a Full SMB perception diagnostic that separates semantic confidence
+- [x] Add a Full SMB perception diagnostic that separates semantic confidence
       from position extraction failures, so asset-mock ViT quality is not
       conflated with missing emulator RAM/signal plumbing.
-  - [ ] Report separate flags for `semantic_bottleneck`,
+  - [x] Report separate flags for `semantic_bottleneck`,
         `vision_position_bottleneck`, and `signal_extraction_bottleneck`.
-  - [ ] Treat missing or null emulator position targets as a signal-extraction
+  - [x] Treat missing or null emulator position targets as a signal-extraction
         failure, not as evidence that the ViT position head is wrong.
-  - [ ] Keep the existing combined `bottleneck` field for compatibility, derived
+  - [x] Keep the existing combined `bottleneck` field for compatibility, derived
         from the separate flags.
 - [ ] Improve Block SMB policy training before using it as a transfer source:
       focus on `level_2_gap.json`, `level_3_stairs.json`, and

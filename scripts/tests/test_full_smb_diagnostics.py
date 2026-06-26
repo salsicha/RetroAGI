@@ -115,6 +115,9 @@ class TestFullSMBPerceptionDiagnostics(unittest.TestCase):
         )
 
         self.assertFalse(metrics["bottleneck"])
+        self.assertFalse(metrics["semantic_bottleneck"])
+        self.assertFalse(metrics["vision_position_bottleneck"])
+        self.assertFalse(metrics["signal_extraction_bottleneck"])
         self.assertEqual(metrics["bottleneck_reasons"], [])
         self.assertGreater(metrics["semantic_confidence"], 0.99)
         self.assertEqual(metrics["class_coverage"], 1.0)
@@ -143,10 +146,49 @@ class TestFullSMBPerceptionDiagnostics(unittest.TestCase):
         )
 
         self.assertTrue(metrics["bottleneck"])
+        self.assertTrue(metrics["semantic_bottleneck"])
+        self.assertTrue(metrics["vision_position_bottleneck"])
+        self.assertFalse(metrics["signal_extraction_bottleneck"])
         self.assertIn("semantic_confidence", metrics["bottleneck_reasons"])
         self.assertIn("class_coverage", metrics["bottleneck_reasons"])
         self.assertIn("position_rmse", metrics["bottleneck_reasons"])
         self.assertIn("position_consistency", metrics["bottleneck_reasons"])
+        self.assertEqual(
+            metrics["semantic_bottleneck_reasons"],
+            ["semantic_confidence", "class_coverage"],
+        )
+        self.assertEqual(
+            metrics["vision_position_bottleneck_reasons"],
+            ["position_rmse", "position_consistency"],
+        )
+        self.assertEqual(metrics["signal_extraction_bottleneck_reasons"], [])
+
+    def test_missing_position_targets_are_signal_extraction_bottleneck(self):
+        vision = StableDiagnosticVision()
+        frames = torch.zeros(2, 8, 8, 3, dtype=torch.uint8)
+        infos = [{}, {}]
+
+        metrics = evaluate_full_smb_perception(
+            vision,
+            frames,
+            infos,
+            thresholds=FullSMBPerceptionDiagnosticThresholds(
+                min_semantic_confidence=0.90,
+                min_class_coverage=1.0,
+                min_temporal_stability=1.0,
+                max_position_rmse=0.0,
+                min_position_within_tolerance=1.0,
+                position_tolerance=0.0,
+            ),
+        )
+
+        self.assertTrue(metrics["bottleneck"])
+        self.assertFalse(metrics["semantic_bottleneck"])
+        self.assertFalse(metrics["vision_position_bottleneck"])
+        self.assertTrue(metrics["signal_extraction_bottleneck"])
+        self.assertEqual(metrics["position_samples"], 0.0)
+        self.assertEqual(metrics["signal_extraction_bottleneck_reasons"], ["missing_position_targets"])
+        self.assertIn("missing_position_targets", metrics["bottleneck_reasons"])
 
     def test_collect_full_smb_perception_diagnostic_frames_uses_stage_rollout(self):
         stage = DiagnosticStage()

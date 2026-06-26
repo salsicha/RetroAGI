@@ -189,17 +189,31 @@ def evaluate_full_smb_perception(
         tolerance=thresholds.position_tolerance,
     )
 
-    bottleneck_reasons = []
+    semantic_bottleneck_reasons = []
     if semantic_confidence < thresholds.min_semantic_confidence:
-        bottleneck_reasons.append("semantic_confidence")
+        semantic_bottleneck_reasons.append("semantic_confidence")
     if class_coverage < thresholds.min_class_coverage:
-        bottleneck_reasons.append("class_coverage")
+        semantic_bottleneck_reasons.append("class_coverage")
     if temporal_stability < thresholds.min_temporal_stability:
-        bottleneck_reasons.append("temporal_stability")
-    if position_metrics["position_rmse"] > thresholds.max_position_rmse:
-        bottleneck_reasons.append("position_rmse")
-    if position_metrics["position_within_tolerance"] < thresholds.min_position_within_tolerance:
-        bottleneck_reasons.append("position_consistency")
+        semantic_bottleneck_reasons.append("temporal_stability")
+
+    signal_extraction_bottleneck = position_metrics["position_samples"] <= 0.0
+    signal_extraction_bottleneck_reasons = (
+        ["missing_position_targets"] if signal_extraction_bottleneck else []
+    )
+
+    vision_position_bottleneck_reasons = []
+    if not signal_extraction_bottleneck:
+        if position_metrics["position_rmse"] > thresholds.max_position_rmse:
+            vision_position_bottleneck_reasons.append("position_rmse")
+        if position_metrics["position_within_tolerance"] < thresholds.min_position_within_tolerance:
+            vision_position_bottleneck_reasons.append("position_consistency")
+
+    bottleneck_reasons = [
+        *semantic_bottleneck_reasons,
+        *vision_position_bottleneck_reasons,
+        *signal_extraction_bottleneck_reasons,
+    ]
 
     return {
         "samples": float(frames.shape[0]),
@@ -212,6 +226,12 @@ def evaluate_full_smb_perception(
         "temporal_stability": float(temporal_stability),
         **position_metrics,
         "thresholds": thresholds.as_dict(),
+        "semantic_bottleneck": bool(semantic_bottleneck_reasons),
+        "semantic_bottleneck_reasons": semantic_bottleneck_reasons,
+        "vision_position_bottleneck": bool(vision_position_bottleneck_reasons),
+        "vision_position_bottleneck_reasons": vision_position_bottleneck_reasons,
+        "signal_extraction_bottleneck": bool(signal_extraction_bottleneck_reasons),
+        "signal_extraction_bottleneck_reasons": signal_extraction_bottleneck_reasons,
         "bottleneck": bool(bottleneck_reasons),
         "bottleneck_reasons": bottleneck_reasons,
     }
