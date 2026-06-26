@@ -44,17 +44,50 @@ Next steps:
 - [ ] Fix Full SMB signal extraction so real-emulator position/progress fields
       are populated during training and evaluation; current rollouts report
       `position: null`, `progress: null`, and zero emulator progress reward.
+  - [ ] Inspect stable-retro `SuperMarioBros-Nes` `info`, `data.json`, and RAM
+        variables for player x/y, screen/page, score, coins, lives, death, and
+        completion fields.
+  - [ ] Map RAM-backed or info-backed x/page values into monotonic absolute
+        progress for `FullSMBSignals.position` and `FullSMBSignals.progress`.
+  - [ ] Preserve stable-retro backend reward while adding explicit progress
+        terms to `reward_terms` diagnostics.
+  - [ ] Verify `retroagi check-env --game smb --stage full` reports non-null
+        position/progress after RIGHT and RIGHT_JUMP steps.
 - [ ] Add a regression test for `train_full_smb_policy` with
       `evaluation_episodes=0` to prove no final in-process emulator evaluation
       is attempted.
+  - [ ] Use a fake stage factory that counts environment construction calls.
+  - [ ] Assert the checkpoint is written when evaluation is disabled.
+  - [ ] Assert the result contains an empty final evaluation rather than
+        launching a second emulator instance.
 - [ ] Add a Full SMB perception diagnostic that separates semantic confidence
       from position extraction failures, so asset-mock ViT quality is not
       conflated with missing emulator RAM/signal plumbing.
+  - [ ] Report separate flags for `semantic_bottleneck`,
+        `vision_position_bottleneck`, and `signal_extraction_bottleneck`.
+  - [ ] Treat missing or null emulator position targets as a signal-extraction
+        failure, not as evidence that the ViT position head is wrong.
+  - [ ] Keep the existing combined `bottleneck` field for compatibility, derived
+        from the separate flags.
 - [ ] Improve Block SMB policy training before using it as a transfer source:
       focus on `level_2_gap.json`, `level_3_stairs.json`, and
       `level_4_platforms.json` until fixed-scenario threshold pass rate is 1.0.
+  - [ ] Run targeted Block SMB resumes or curriculum weighting for the three
+        failing scenarios.
+  - [ ] Compare transfer from the checked-in known-good Block SMB baseline
+        against the newly trained policy before another Full SMB run.
+  - [ ] Preserve the next successful Block SMB checkpoint only after all four
+        fixed-scenario thresholds pass with at least 3 evaluation episodes.
 - [ ] Re-run Full SMB transfer and fine-tuning only after Block SMB passes all
       fixed scenarios and Full SMB real-emulator position diagnostics pass.
+  - [ ] Transfer the known-good Block SMB checkpoint into the Full SMB policy
+        contract with the latest Full SMB ViT checkpoint.
+  - [ ] Run a short Full SMB fine-tune with evaluation disabled only if
+        stable-retro still cannot create a second emulator in-process.
+  - [ ] Evaluate in a separate process on `fixed_benchmark` with at least 3
+        episodes and the documented 2,400 step budget.
+  - [ ] Record deterministic Full SMB evaluation rollouts for the fixed
+        benchmark once progress is non-zero.
 
 ## Completed Work
 
