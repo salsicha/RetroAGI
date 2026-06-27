@@ -692,6 +692,40 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_full_smb_imitate_forwards_arguments(self):
+        with patch("retroagi.stages.full_smb.imitation.main", return_value=0) as imitation_main:
+            exit_code = cli.main(
+                [
+                    "imitate",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "full",
+                    "--checkpoint",
+                    "data/full_smb/source.pth",
+                    "--output-checkpoint",
+                    "data/full_smb/warm_start.pth",
+                    "--steps",
+                    "64",
+                    "--output-summary",
+                    "artifacts/full_smb/warm_start.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        imitation_main.assert_called_once_with(
+            [
+                "--checkpoint",
+                "data/full_smb/source.pth",
+                "--output-checkpoint",
+                "data/full_smb/warm_start.pth",
+                "--steps",
+                "64",
+                "--output-summary",
+                "artifacts/full_smb/warm_start.json",
+            ]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

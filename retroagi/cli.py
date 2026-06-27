@@ -87,6 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     play = subparsers.add_parser("play", help="play a saved policy for the selected stage")
     _add_stage_arg(play)
 
+    imitate = subparsers.add_parser("imitate", help="run imitation warm starts")
+    _add_stage_arg(imitate)
+
     diagnose = subparsers.add_parser(
         "diagnose-vision",
         help="run perception diagnostics for stages that expose them",
@@ -189,6 +192,10 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         from retroagi.stages.full_smb.train import main as train_main
 
         return int(train_main(["play", *stage_args]))
+    if command == "imitate":
+        from retroagi.stages.full_smb.imitation import main as imitation_main
+
+        return int(imitation_main(list(stage_args)))
     if command == "diagnose-vision":
         from retroagi.stages.full_smb.diagnostics import main as diagnostics_main
 
@@ -213,8 +220,8 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         return int(capabilities_main(list(stage_args)))
     raise ValueError(
         "Full SMB currently supports train, resume, evaluate, diagnose-vision, "
-        "diagnose-actions, record, play, transfer, compare, and check-env through "
-        "the top-level CLI"
+        "diagnose-actions, record, play, imitate, transfer, compare, and check-env "
+        "through the top-level CLI"
     )
 
 

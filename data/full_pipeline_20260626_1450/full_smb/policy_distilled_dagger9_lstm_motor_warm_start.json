@@ -1,0 +1,876 @@
+{
+  "architecture": {
+    "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+    "checkpoint_model_name": "agent_world_model_critic",
+    "config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "extension_schema_version": 1,
+    "name": "agent_world_model_critic",
+    "output_contract": "agent_world_model_critic.forward.v1",
+    "supported_stage_names": [
+      "synthetic_1d",
+      "block_smb",
+      "full_smb",
+      "pong_block"
+    ]
+  },
+  "checkpoint_kind": "full_smb_policy_trainer",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "ad4705d4f53d9c5b08ff36d870658d3fd5c53aa1",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "ad4705d",
+    "system": "git"
+  },
+  "config": {
+    "action_aux_weight": 0.0,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "architecture_name": "agent_world_model_critic",
+    "backend": {
+      "backend_adapter_class": null,
+      "buttons": [],
+      "content": {
+        "checksum_algorithm": "sha256",
+        "checksum_record_path": "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
+        "game": "SuperMarioBros-Nes",
+        "install_command": "python -m pip install -e '.[full-smb]'",
+        "legal_notice": "Use a legally obtained, user-provided ROM. Do not commit, bundle, or redistribute ROM content with RetroAGI artifacts.",
+        "rom_label": "Super Mario Bros NES ROM",
+        "stable_retro_import_command": "python -m retro.import local/full_smb/roms",
+        "stable_retro_import_dir": "local/full_smb/roms"
+      },
+      "env_class": null,
+      "env_config": {
+        "game": "SuperMarioBros-Nes"
+      },
+      "headless": true,
+      "observation": null,
+      "provider": "stable-retro",
+      "reward": {
+        "defaults_preserve_backend_reward": true,
+        "owner": "full_smb_adapter",
+        "schema": "full_smb_adapter",
+        "separated_from": "BlockSMBRewardConfig",
+        "term_signals": {
+          "coin": {
+            "description": "Reward weight for coin-count deltas",
+            "direction": "positive",
+            "signal": "full_smb_signals.coins"
+          },
+          "completion": {
+            "description": "Bonus for clearing a Full SMB task or level section",
+            "direction": "positive",
+            "signal": "full_smb_signals.completion"
+          },
+          "damage": {
+            "description": "Penalty for damage or unsafe collisions",
+            "direction": "negative",
+            "signal": "full_smb_signals.objectives.damage"
+          },
+          "death": {
+            "description": "Terminal penalty for death or game over",
+            "direction": "negative",
+            "signal": "full_smb_signals.death"
+          },
+          "emulator_progress": {
+            "description": "Scale applied to the stable-retro emulator progress reward",
+            "direction": "positive",
+            "signal": "stable_retro_reward"
+          },
+          "enemy": {
+            "description": "Reward for defeating enemies when the backend exposes it",
+            "direction": "positive",
+            "signal": "full_smb_signals.objectives.enemy"
+          },
+          "frame_penalty": {
+            "description": "Per-executed-backend-frame time cost",
+            "direction": "negative",
+            "signal": "time"
+          },
+          "score": {
+            "description": "Reward weight for score deltas exposed by the emulator",
+            "direction": "positive",
+            "signal": "full_smb_signals.score"
+          },
+          "survival": {
+            "description": "Per-transition or terminal bonus for staying alive",
+            "direction": "positive",
+            "signal": "full_smb_signals.terminated"
+          }
+        },
+        "terms": {
+          "coin": 0.0,
+          "completion": 0.0,
+          "damage": 0.0,
+          "death": 0.0,
+          "emulator_progress": 1.0,
+          "enemy": 0.0,
+          "frame_penalty": 0.0,
+          "score": 0.0,
+          "survival": 0.0
+        }
+      },
+      "schema_version": 1,
+      "signal_config": null,
+      "stage_class": null,
+      "stage_spec": {
+        "action_count": 6,
+        "action_space_name": "smb",
+        "name": "full_smb"
+      }
+    },
+    "checkpoint_path": null,
+    "critic_loss_weight": 0.0,
+    "deterministic": true,
+    "deterministic_actions": false,
+    "device": "cuda",
+    "emulator_state": "Level1-1",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 1,
+    "epochs": 1,
+    "evaluation": {
+      "cadence": "periodic_deterministic",
+      "enabled": false,
+      "episodes": 0,
+      "evaluations": [],
+      "interval_epochs": 1,
+      "max_steps_per_episode": 0,
+      "schema_version": 1,
+      "separate_from_training_rollouts": true,
+      "stored_evaluations": 0
+    },
+    "evaluation_episodes": 0,
+    "evaluation_interval_epochs": 1,
+    "evaluation_max_steps": 0,
+    "frame_skip": 1,
+    "freeze_vision": true,
+    "full_smb_vision_checkpoint": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth",
+    "game_id": "SuperMarioBros-Nes",
+    "gradient_clip_norm": 1.0,
+    "init_checkpoint": null,
+    "learning_rate": 0.0001,
+    "level": null,
+    "log_path": null,
+    "loss_weights": {
+      "action_aux": 0.0,
+      "critic": 0.0,
+      "entropy": 0.01,
+      "policy": 1.0,
+      "representation": 0.0,
+      "reward": 0.0,
+      "value": 0.0,
+      "world_model": 0.05
+    },
+    "max_abs_loss": 1000000.0,
+    "max_abs_prediction": 1000000.0,
+    "max_abs_scaled_reward": 1000.0,
+    "max_steps_per_episode": 64,
+    "output_summary": null,
+    "perception": {
+      "checkpoint_loaded": true,
+      "checkpoint_path": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth",
+      "encoder": "full_smb_vit",
+      "frozen": true,
+      "mode": "freeze",
+      "optimizer_updates_enabled": false,
+      "requested_checkpoint_path": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth",
+      "state_saved": false,
+      "trainable": false
+    },
+    "perception_mode": "freeze",
+    "policy_loss_weight": 1.0,
+    "recording": {
+      "enabled": false,
+      "episode_artifact_format": "npz_compressed",
+      "episode_fields": [
+        "frames",
+        "actions",
+        "action_names",
+        "rewards",
+        "terminated",
+        "truncated",
+        "signals_json",
+        "task_ids",
+        "scenario_ids",
+        "emulator_state_ids",
+        "episode_metadata_json"
+      ],
+      "frames_are_initial_plus_post_step": true,
+      "optional_video_export": false,
+      "recording_dir": null,
+      "recording_path": null,
+      "schema_version": 1
+    },
+    "recording_dir": null,
+    "recording_path": null,
+    "representation_weight": 0.0,
+    "resume_path": null,
+    "reward": {
+      "defaults_preserve_backend_reward": true,
+      "owner": "full_smb_adapter",
+      "schema": "full_smb_adapter",
+      "separated_from": "BlockSMBRewardConfig",
+      "term_signals": {
+        "coin": {
+          "description": "Reward weight for coin-count deltas",
+          "direction": "positive",
+          "signal": "full_smb_signals.coins"
+        },
+        "completion": {
+          "description": "Bonus for clearing a Full SMB task or level section",
+          "direction": "positive",
+          "signal": "full_smb_signals.completion"
+        },
+        "damage": {
+          "description": "Penalty for damage or unsafe collisions",
+          "direction": "negative",
+          "signal": "full_smb_signals.objectives.damage"
+        },
+        "death": {
+          "description": "Terminal penalty for death or game over",
+          "direction": "negative",
+          "signal": "full_smb_signals.death"
+        },
+        "emulator_progress": {
+          "description": "Scale applied to the stable-retro emulator progress reward",
+          "direction": "positive",
+          "signal": "stable_retro_reward"
+        },
+        "enemy": {
+          "description": "Reward for defeating enemies when the backend exposes it",
+          "direction": "positive",
+          "signal": "full_smb_signals.objectives.enemy"
+        },
+        "frame_penalty": {
+          "description": "Per-executed-backend-frame time cost",
+          "direction": "negative",
+          "signal": "time"
+        },
+        "score": {
+          "description": "Reward weight for score deltas exposed by the emulator",
+          "direction": "positive",
+          "signal": "full_smb_signals.score"
+        },
+        "survival": {
+          "description": "Per-transition or terminal bonus for staying alive",
+          "direction": "positive",
+          "signal": "full_smb_signals.terminated"
+        }
+      },
+      "terms": {
+        "coin": 0.0,
+        "completion": 0.0,
+        "damage": 0.0,
+        "death": 0.0,
+        "emulator_progress": 1.0,
+        "enemy": 0.0,
+        "frame_penalty": 0.0,
+        "score": 0.0,
+        "survival": 0.0
+      }
+    },
+    "reward_config": {
+      "coin": 0.0,
+      "completion": 0.0,
+      "damage": 0.0,
+      "death": 0.0,
+      "emulator_progress": 1.0,
+      "enemy": 0.0,
+      "frame_penalty": 0.0,
+      "score": 0.0,
+      "survival": 0.0
+    },
+    "reward_loss_weight": 0.0,
+    "reward_scale": 1.0,
+    "rng_state": {
+      "deterministic_actions": false,
+      "deterministic_algorithms_requested": true,
+      "python_random_version": 3,
+      "saved_state_keys": [
+        "torch_rng",
+        "python_rng",
+        "numpy_rng"
+      ],
+      "schema_version": 1,
+      "torch_deterministic_algorithms_enabled": false
+    },
+    "rollout": {
+      "active_vector_env_count": 1,
+      "epochs": 1,
+      "recurrent_state_policy": "carry_until_full_smb_boundary",
+      "recurrent_state_reset_reasons": [
+        "manual_reset",
+        "terminated",
+        "truncated",
+        "death",
+        "timeout",
+        "level_completion",
+        "game_over"
+      ],
+      "rollout_length": 64,
+      "updates_per_epoch": 1,
+      "vector_env_count": 1,
+      "vectorized_training_enabled": false
+    },
+    "rollout_length": 64,
+    "rollout_storage": {
+      "fields": [
+        "step_index",
+        "action",
+        "action_name",
+        "reward",
+        "done",
+        "terminated",
+        "truncated",
+        "episode_mask",
+        "boundary_reasons",
+        "scenario_id",
+        "task_id",
+        "emulator_state_id",
+        "signals"
+      ],
+      "rollouts": [],
+      "schema_version": 1,
+      "storage_kind": "compact_full_smb_rollout_replay",
+      "stored_rollouts": 0,
+      "stored_steps": 0
+    },
+    "safety": {
+      "early_stop_on_exploding_loss": true,
+      "early_stop_on_nonfinite": true,
+      "finite_checks_enabled": true,
+      "gradient_clip_norm": 1.0,
+      "max_abs_loss": 1000000.0,
+      "max_abs_prediction": 1000000.0,
+      "max_abs_scaled_reward": 1000.0,
+      "prediction_bounds": {
+        "fields": [
+          "value_prediction",
+          "reward_prediction"
+        ],
+        "max": 1000000.0,
+        "min": -1000000.0
+      },
+      "reward_scale": 1.0,
+      "tracked_metrics": [
+        "mean_entropy",
+        "min_entropy",
+        "max_entropy",
+        "mean_gradient_norm",
+        "max_gradient_norm",
+        "gradient_clip_events",
+        "mean_scaled_reward",
+        "max_abs_scaled_reward",
+        "mean_value_prediction_abs",
+        "max_value_prediction_abs",
+        "mean_reward_prediction_abs",
+        "max_reward_prediction_abs",
+        "max_abs_prediction"
+      ]
+    },
+    "save_checkpoints": false,
+    "scenario": null,
+    "seed": 0,
+    "stage_batch_contract": {
+      "source": "FullSMBStage.encode_observation",
+      "src_a": {
+        "dtype": "long",
+        "rank": 2,
+        "sequence_length": 8
+      },
+      "src_b": {
+        "dtype": "long",
+        "rank": 2,
+        "sequence_length": 16
+      },
+      "src_c": {
+        "dtype": "floating",
+        "feature_length": 64,
+        "rank": 2
+      }
+    },
+    "task_curriculum": {
+      "base_seed": 0,
+      "completed_epoch": 3,
+      "completed_rollouts": 0,
+      "completed_steps": 0,
+      "episode_seed_formula": "seed + epoch_index * updates_per_epoch + update_index",
+      "global_step": 1800,
+      "next_episode_seed": null,
+      "next_epoch": null,
+      "next_update_index": null,
+      "observed_emulator_state_ids": [],
+      "observed_scenario_ids": [],
+      "observed_task_ids": [],
+      "rollout_ids": [],
+      "schedule_kind": "seeded_epoch_update_rollouts",
+      "schema_version": 1,
+      "target_epochs": 1,
+      "task_source": "stage_default",
+      "training_complete": true,
+      "updates_per_epoch": 1
+    },
+    "task_name": null,
+    "task_set": null,
+    "tracking": {
+      "backend": "none",
+      "log_dir": null,
+      "mode": null,
+      "project": "retroagi",
+      "run_name": null,
+      "structured_log_path": null
+    },
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "training_mode": "auto",
+    "training_source": {
+      "mode": "full_smb_real_emulator_imitation",
+      "script": "full_smb_opening_imitation_script",
+      "source_checkpoint": "data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_lstm_motor_transfer_long.pth"
+    },
+    "updates_per_epoch": 1,
+    "value_loss_weight": 0.0,
+    "vector_env_count": 1,
+    "world_model_weight": 0.05
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-124-generic",
+      "system": "Linux",
+      "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.7.0+cu126"
+    }
+  },
+  "epoch": 3,
+  "global_step": 1800,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "ad4705d4f53d9c5b08ff36d870658d3fd5c53aa1",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "ad4705d",
+      "system": "git"
+    },
+    "perception": {
+      "checkpoint_loaded": true,
+      "checkpoint_path": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth",
+      "encoder": "full_smb_vit",
+      "frozen": true,
+      "mode": "freeze",
+      "optimizer_updates_enabled": false,
+      "requested_checkpoint_path": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth",
+      "state_saved": false,
+      "trainable": false
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-124-generic",
+        "system": "Linux",
+        "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.7.0+cu126"
+      }
+    },
+    "training": {
+      "backend": {
+        "backend_adapter_class": null,
+        "buttons": [],
+        "content": {
+          "checksum_algorithm": "sha256",
+          "checksum_record_path": "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
+          "game": "SuperMarioBros-Nes",
+          "install_command": "python -m pip install -e '.[full-smb]'",
+          "legal_notice": "Use a legally obtained, user-provided ROM. Do not commit, bundle, or redistribute ROM content with RetroAGI artifacts.",
+          "rom_label": "Super Mario Bros NES ROM",
+          "stable_retro_import_command": "python -m retro.import local/full_smb/roms",
+          "stable_retro_import_dir": "local/full_smb/roms"
+        },
+        "env_class": null,
+        "env_config": {
+          "game": "SuperMarioBros-Nes"
+        },
+        "headless": true,
+        "observation": null,
+        "provider": "stable-retro",
+        "reward": {
+          "defaults_preserve_backend_reward": true,
+          "owner": "full_smb_adapter",
+          "schema": "full_smb_adapter",
+          "separated_from": "BlockSMBRewardConfig",
+          "term_signals": {
+            "coin": {
+              "description": "Reward weight for coin-count deltas",
+              "direction": "positive",
+              "signal": "full_smb_signals.coins"
+            },
+            "completion": {
+              "description": "Bonus for clearing a Full SMB task or level section",
+              "direction": "positive",
+              "signal": "full_smb_signals.completion"
+            },
+            "damage": {
+              "description": "Penalty for damage or unsafe collisions",
+              "direction": "negative",
+              "signal": "full_smb_signals.objectives.damage"
+            },
+            "death": {
+              "description": "Terminal penalty for death or game over",
+              "direction": "negative",
+              "signal": "full_smb_signals.death"
+            },
+            "emulator_progress": {
+              "description": "Scale applied to the stable-retro emulator progress reward",
+              "direction": "positive",
+              "signal": "stable_retro_reward"
+            },
+            "enemy": {
+              "description": "Reward for defeating enemies when the backend exposes it",
+              "direction": "positive",
+              "signal": "full_smb_signals.objectives.enemy"
+            },
+            "frame_penalty": {
+              "description": "Per-executed-backend-frame time cost",
+              "direction": "negative",
+              "signal": "time"
+            },
+            "score": {
+              "description": "Reward weight for score deltas exposed by the emulator",
+              "direction": "positive",
+              "signal": "full_smb_signals.score"
+            },
+            "survival": {
+              "description": "Per-transition or terminal bonus for staying alive",
+              "direction": "positive",
+              "signal": "full_smb_signals.terminated"
+            }
+          },
+          "terms": {
+            "coin": 0.0,
+            "completion": 0.0,
+            "damage": 0.0,
+            "death": 0.0,
+            "emulator_progress": 1.0,
+            "enemy": 0.0,
+            "frame_penalty": 0.0,
+            "score": 0.0,
+            "survival": 0.0
+          }
+        },
+        "schema_version": 1,
+        "signal_config": null,
+        "stage_class": null,
+        "stage_spec": {
+          "action_count": 6,
+          "action_space_name": "smb",
+          "name": "full_smb"
+        }
+      },
+      "deterministic": true,
+      "deterministic_actions": false,
+      "evaluation": {
+        "cadence": "periodic_deterministic",
+        "enabled": false,
+        "episodes": 0,
+        "evaluations": [],
+        "interval_epochs": 1,
+        "max_steps_per_episode": 0,
+        "schema_version": 1,
+        "separate_from_training_rollouts": true,
+        "stored_evaluations": 0
+      },
+      "loss_weights": {
+        "action_aux": 0.0,
+        "critic": 0.0,
+        "entropy": 0.01,
+        "policy": 1.0,
+        "representation": 0.0,
+        "reward": 0.0,
+        "value": 0.0,
+        "world_model": 0.05
+      },
+      "recording": {
+        "enabled": false,
+        "episode_artifact_format": "npz_compressed",
+        "episode_fields": [
+          "frames",
+          "actions",
+          "action_names",
+          "rewards",
+          "terminated",
+          "truncated",
+          "signals_json",
+          "task_ids",
+          "scenario_ids",
+          "emulator_state_ids",
+          "episode_metadata_json"
+        ],
+        "frames_are_initial_plus_post_step": true,
+        "optional_video_export": false,
+        "recording_dir": null,
+        "recording_path": null,
+        "schema_version": 1
+      },
+      "reward": {
+        "defaults_preserve_backend_reward": true,
+        "owner": "full_smb_adapter",
+        "schema": "full_smb_adapter",
+        "separated_from": "BlockSMBRewardConfig",
+        "term_signals": {
+          "coin": {
+            "description": "Reward weight for coin-count deltas",
+            "direction": "positive",
+            "signal": "full_smb_signals.coins"
+          },
+          "completion": {
+            "description": "Bonus for clearing a Full SMB task or level section",
+            "direction": "positive",
+            "signal": "full_smb_signals.completion"
+          },
+          "damage": {
+            "description": "Penalty for damage or unsafe collisions",
+            "direction": "negative",
+            "signal": "full_smb_signals.objectives.damage"
+          },
+          "death": {
+            "description": "Terminal penalty for death or game over",
+            "direction": "negative",
+            "signal": "full_smb_signals.death"
+          },
+          "emulator_progress": {
+            "description": "Scale applied to the stable-retro emulator progress reward",
+            "direction": "positive",
+            "signal": "stable_retro_reward"
+          },
+          "enemy": {
+            "description": "Reward for defeating enemies when the backend exposes it",
+            "direction": "positive",
+            "signal": "full_smb_signals.objectives.enemy"
+          },
+          "frame_penalty": {
+            "description": "Per-executed-backend-frame time cost",
+            "direction": "negative",
+            "signal": "time"
+          },
+          "score": {
+            "description": "Reward weight for score deltas exposed by the emulator",
+            "direction": "positive",
+            "signal": "full_smb_signals.score"
+          },
+          "survival": {
+            "description": "Per-transition or terminal bonus for staying alive",
+            "direction": "positive",
+            "signal": "full_smb_signals.terminated"
+          }
+        },
+        "terms": {
+          "coin": 0.0,
+          "completion": 0.0,
+          "damage": 0.0,
+          "death": 0.0,
+          "emulator_progress": 1.0,
+          "enemy": 0.0,
+          "frame_penalty": 0.0,
+          "score": 0.0,
+          "survival": 0.0
+        }
+      },
+      "rng_state": {
+        "deterministic_actions": false,
+        "deterministic_algorithms_requested": true,
+        "python_random_version": 3,
+        "saved_state_keys": [
+          "torch_rng",
+          "python_rng",
+          "numpy_rng"
+        ],
+        "schema_version": 1,
+        "torch_deterministic_algorithms_enabled": false
+      },
+      "rollout": {
+        "active_vector_env_count": 1,
+        "epochs": 1,
+        "recurrent_state_policy": "carry_until_full_smb_boundary",
+        "recurrent_state_reset_reasons": [
+          "manual_reset",
+          "terminated",
+          "truncated",
+          "death",
+          "timeout",
+          "level_completion",
+          "game_over"
+        ],
+        "rollout_length": 64,
+        "updates_per_epoch": 1,
+        "vector_env_count": 1,
+        "vectorized_training_enabled": false
+      },
+      "rollout_storage": {
+        "fields": [
+          "step_index",
+          "action",
+          "action_name",
+          "reward",
+          "done",
+          "terminated",
+          "truncated",
+          "episode_mask",
+          "boundary_reasons",
+          "scenario_id",
+          "task_id",
+          "emulator_state_id",
+          "signals"
+        ],
+        "rollouts": [],
+        "schema_version": 1,
+        "storage_kind": "compact_full_smb_rollout_replay",
+        "stored_rollouts": 0,
+        "stored_steps": 0
+      },
+      "safety": {
+        "early_stop_on_exploding_loss": true,
+        "early_stop_on_nonfinite": true,
+        "finite_checks_enabled": true,
+        "gradient_clip_norm": 1.0,
+        "max_abs_loss": 1000000.0,
+        "max_abs_prediction": 1000000.0,
+        "max_abs_scaled_reward": 1000.0,
+        "prediction_bounds": {
+          "fields": [
+            "value_prediction",
+            "reward_prediction"
+          ],
+          "max": 1000000.0,
+          "min": -1000000.0
+        },
+        "reward_scale": 1.0,
+        "tracked_metrics": [
+          "mean_entropy",
+          "min_entropy",
+          "max_entropy",
+          "mean_gradient_norm",
+          "max_gradient_norm",
+          "gradient_clip_events",
+          "mean_scaled_reward",
+          "max_abs_scaled_reward",
+          "mean_value_prediction_abs",
+          "max_value_prediction_abs",
+          "mean_reward_prediction_abs",
+          "max_reward_prediction_abs",
+          "max_abs_prediction"
+        ]
+      },
+      "source": {
+        "mode": "full_smb_real_emulator_imitation",
+        "script": "full_smb_opening_imitation_script",
+        "source_checkpoint": "data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_lstm_motor_transfer_long.pth"
+      },
+      "stage_batch_contract": {
+        "source": "FullSMBStage.encode_observation",
+        "src_a": {
+          "dtype": "long",
+          "rank": 2,
+          "sequence_length": 8
+        },
+        "src_b": {
+          "dtype": "long",
+          "rank": 2,
+          "sequence_length": 16
+        },
+        "src_c": {
+          "dtype": "floating",
+          "feature_length": 64,
+          "rank": 2
+        }
+      },
+      "task_curriculum": {
+        "base_seed": 0,
+        "completed_epoch": 3,
+        "completed_rollouts": 0,
+        "completed_steps": 0,
+        "episode_seed_formula": "seed + epoch_index * updates_per_epoch + update_index",
+        "global_step": 1800,
+        "next_episode_seed": null,
+        "next_epoch": null,
+        "next_update_index": null,
+        "observed_emulator_state_ids": [],
+        "observed_scenario_ids": [],
+        "observed_task_ids": [],
+        "rollout_ids": [],
+        "schedule_kind": "seeded_epoch_update_rollouts",
+        "schema_version": 1,
+        "target_epochs": 1,
+        "task_source": "stage_default",
+        "training_complete": true,
+        "updates_per_epoch": 1
+      },
+      "tracking": {
+        "backend": "none",
+        "log_dir": null,
+        "mode": null,
+        "project": "retroagi",
+        "run_name": null,
+        "structured_log_path": null
+      }
+    }
+  },
+  "metrics": {
+    "imitation_action_accuracy": 0.9583333730697632,
+    "imitation_dataset_max_progress": 729.0,
+    "imitation_loss": 0.201888307929039
+  },
+  "model_name": "full_smb_policy",
+  "specs": {
+    "stage": {
+      "name": "full_smb",
+      "ratio_bc": 4,
+      "seq_len_a": 8,
+      "seq_len_b": 16,
+      "seq_len_c": 64,
+      "vocab_size": 20
+    }
+  },
+  "stage": "full_smb",
+  "state_keys": [
+    "model",
+    "numpy_rng",
+    "optimizer",
+    "python_rng",
+    "torch_rng"
+  ]
+}

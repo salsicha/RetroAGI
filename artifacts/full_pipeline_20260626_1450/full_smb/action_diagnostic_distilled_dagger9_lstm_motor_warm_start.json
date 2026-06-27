@@ -1,0 +1,291 @@
+{
+  "block_smb_scripted_reference": {
+    "action_counts": {
+      "JUMP": 0,
+      "LEFT": 0,
+      "LEFT_JUMP": 0,
+      "NOOP": 0,
+      "RIGHT": 400,
+      "RIGHT_JUMP": 176
+    },
+    "action_fractions": {
+      "JUMP": 0.0,
+      "LEFT": 0.0,
+      "LEFT_JUMP": 0.0,
+      "NOOP": 0.0,
+      "RIGHT": 0.6944444444444444,
+      "RIGHT_JUMP": 0.3055555555555556
+    },
+    "max_steps": 64,
+    "scenario_count": 9,
+    "source": "fixed_scenario_action_scripts"
+  },
+  "bottleneck_reasons": [
+    "missing_right_jump_when_stalled"
+  ],
+  "canonical_policy": {
+    "deterministic": {
+      "counts": {
+        "JUMP": 0,
+        "LEFT": 0,
+        "LEFT_JUMP": 0,
+        "NOOP": 0,
+        "RIGHT": 64,
+        "RIGHT_JUMP": 0
+      },
+      "fractions": {
+        "JUMP": 0.0,
+        "LEFT": 0.0,
+        "LEFT_JUMP": 0.0,
+        "NOOP": 0.0,
+        "RIGHT": 1.0,
+        "RIGHT_JUMP": 0.0
+      },
+      "total": 64
+    },
+    "progress": {
+      "last": 123.0,
+      "max": 123.0,
+      "samples": 64
+    },
+    "sampled": {
+      "counts": {
+        "JUMP": 0,
+        "LEFT": 0,
+        "LEFT_JUMP": 0,
+        "NOOP": 0,
+        "RIGHT": 251,
+        "RIGHT_JUMP": 5
+      },
+      "fractions": {
+        "JUMP": 0.0,
+        "LEFT": 0.0,
+        "LEFT_JUMP": 0.0,
+        "NOOP": 0.0,
+        "RIGHT": 0.98046875,
+        "RIGHT_JUMP": 0.01953125
+      },
+      "total": 256
+    }
+  },
+  "config": {
+    "progress_gate": 512.0,
+    "recording_paths": [
+      "artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_warm_start"
+    ],
+    "sample_repeats": 4,
+    "samples": 64,
+    "seed": 0,
+    "temperature": 1.0
+  },
+  "flags": {
+    "missing_right_jump_when_stalled": true,
+    "overactive_right_jump_when_stalled": false
+  },
+  "motor_primitives": {
+    "mean_confidence": 1.0,
+    "mean_hold_duration": 1.0,
+    "mean_interrupt_logit": 56.71514159440994,
+    "mean_left_jump_bias": 0.5,
+    "mean_replan_probability": 1.0,
+    "mean_right_jump_bias": 5.5,
+    "samples": 64,
+    "snapshots": [
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 0,
+        "interrupt_logit": 56.56985092163086,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      },
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 1,
+        "interrupt_logit": 56.57101821899414,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      },
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 2,
+        "interrupt_logit": 56.57105255126953,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      },
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 3,
+        "interrupt_logit": 56.569068908691406,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      },
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 4,
+        "interrupt_logit": 56.57090759277344,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      },
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 5,
+        "interrupt_logit": 56.570045471191406,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      },
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 6,
+        "interrupt_logit": 56.57103729248047,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      },
+      {
+        "action": 1,
+        "action_name": "RIGHT",
+        "confidence": 1.0,
+        "hold_duration": 1.0,
+        "index": 7,
+        "interrupt_logit": 57.15172576904297,
+        "left_jump_bias": 0.5,
+        "replan_probability": 1.0,
+        "right_jump_bias": 5.5
+      }
+    ]
+  },
+  "recordings": {
+    "action_counts": {
+      "JUMP": 0,
+      "LEFT": 0,
+      "LEFT_JUMP": 0,
+      "NOOP": 0,
+      "RIGHT": 3648,
+      "RIGHT_JUMP": 918
+    },
+    "action_fractions": {
+      "JUMP": 0.0,
+      "LEFT": 0.0,
+      "LEFT_JUMP": 0.0,
+      "NOOP": 0.0,
+      "RIGHT": 0.7989487516425755,
+      "RIGHT_JUMP": 0.20105124835742444
+    },
+    "artifact_count": 3,
+    "artifacts": [
+      {
+        "action_counts": {
+          "JUMP": 0,
+          "LEFT": 0,
+          "LEFT_JUMP": 0,
+          "NOOP": 0,
+          "RIGHT": 1216,
+          "RIGHT_JUMP": 306
+        },
+        "action_fractions": {
+          "JUMP": 0.0,
+          "LEFT": 0.0,
+          "LEFT_JUMP": 0.0,
+          "NOOP": 0.0,
+          "RIGHT": 0.7989487516425755,
+          "RIGHT_JUMP": 0.20105124835742444
+        },
+        "last_progress": 226.0,
+        "max_progress": 398.0,
+        "missing_right_jump_when_stalled": false,
+        "path": "artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_warm_start/evaluation/evaluation_episode0000.npz",
+        "steps": 1522
+      },
+      {
+        "action_counts": {
+          "JUMP": 0,
+          "LEFT": 0,
+          "LEFT_JUMP": 0,
+          "NOOP": 0,
+          "RIGHT": 1216,
+          "RIGHT_JUMP": 306
+        },
+        "action_fractions": {
+          "JUMP": 0.0,
+          "LEFT": 0.0,
+          "LEFT_JUMP": 0.0,
+          "NOOP": 0.0,
+          "RIGHT": 0.7989487516425755,
+          "RIGHT_JUMP": 0.20105124835742444
+        },
+        "last_progress": 226.0,
+        "max_progress": 398.0,
+        "missing_right_jump_when_stalled": false,
+        "path": "artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_warm_start/evaluation/evaluation_episode0001.npz",
+        "steps": 1522
+      },
+      {
+        "action_counts": {
+          "JUMP": 0,
+          "LEFT": 0,
+          "LEFT_JUMP": 0,
+          "NOOP": 0,
+          "RIGHT": 1216,
+          "RIGHT_JUMP": 306
+        },
+        "action_fractions": {
+          "JUMP": 0.0,
+          "LEFT": 0.0,
+          "LEFT_JUMP": 0.0,
+          "NOOP": 0.0,
+          "RIGHT": 0.7989487516425755,
+          "RIGHT_JUMP": 0.20105124835742444
+        },
+        "last_progress": 226.0,
+        "max_progress": 398.0,
+        "missing_right_jump_when_stalled": false,
+        "path": "artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_warm_start/evaluation/evaluation_episode0002.npz",
+        "steps": 1522
+      }
+    ],
+    "max_progress": 398.0,
+    "missing_right_jump_when_stalled": false,
+    "steps": 4566
+  },
+  "schema_version": 1,
+  "transfer_action_comparison": {
+    "fraction_delta": {
+      "JUMP": 0.0,
+      "LEFT": 0.0,
+      "LEFT_JUMP": 0.0,
+      "NOOP": 0.0,
+      "RIGHT": 0.10450430719813109,
+      "RIGHT_JUMP": -0.10450430719813114
+    },
+    "observed_total": 4566,
+    "reference_total": 576,
+    "right_jump_delta": -0.10450430719813114
+  }
+}

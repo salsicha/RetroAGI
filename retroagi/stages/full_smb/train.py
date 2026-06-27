@@ -2242,7 +2242,7 @@ def _apply_full_smb_motor_primitive_bias(
     if combo_strength.ndim != 1 or combo_strength.size(0) != logits.size(0):
         return logits
 
-    max_boost = 12.0
+    max_boost = 5.0
     base_boost = (0.5 * combo_strength).clamp(min=0.0, max=max_boost)
     bias = torch.zeros_like(logits)
     bias = bias + _combined_full_smb_action_bias(

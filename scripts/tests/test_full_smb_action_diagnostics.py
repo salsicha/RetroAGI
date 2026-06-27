@@ -44,7 +44,7 @@ class StaticFullSMBPolicy(torch.nn.Module):
             device=src_A.device,
         )
         logits[..., int(SMBAction.RIGHT)] = 4.0
-        logits[..., int(SMBAction.RIGHT_JUMP)] = -8.0
+        logits[..., int(SMBAction.RIGHT_JUMP)] = -1.0
         controller = torch.ones((batch, src_B.size(1)), dtype=torch.float32, device=src_A.device)
         self.last_motor_primitives = MotorPrimitiveOutput(
             button_combo_logits=logits[:, :1].repeat(1, src_B.size(1), 1),

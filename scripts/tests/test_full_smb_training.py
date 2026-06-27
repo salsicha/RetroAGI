@@ -1112,9 +1112,9 @@ class TestFullSMBTraining(unittest.TestCase):
                 [
                     -4.0,
                     4.0,
-                    -8.0,
+                    -1.0,
                     -4.0,
-                    -8.0,
+                    -1.0,
                     -12.0,
                 ]
             ],

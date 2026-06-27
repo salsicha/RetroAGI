@@ -1,0 +1,87 @@
+{
+  "episodes": 3,
+  "fixed_task_results": {
+    "benchmark_1_1_start": {
+      "completion_rate": 0.0,
+      "death_count": 0.0,
+      "episodes": 3.0,
+      "max_progress": 398.0,
+      "mean_coins": 0.0,
+      "mean_progress": 398.0,
+      "mean_return": 798.0,
+      "mean_score": 0.0,
+      "survival_rate": 1.0,
+      "threshold": {
+        "max_deaths": 0,
+        "max_steps": 2400,
+        "min_completion_rate": 1.0,
+        "min_episodes": 3,
+        "min_mean_coins": 0.0,
+        "min_mean_return": 0.0,
+        "min_mean_score": 500.0,
+        "min_progress": 3200.0,
+        "min_survival_rate": 1.0,
+        "rationale": "Level 1-1 should be a solved baseline: complete every deterministic episode, survive, and reach the flag within the fixed budget.",
+        "task_name": "benchmark_1_1_start"
+      },
+      "threshold_diagnostics": {
+        "enough_episodes": true,
+        "evaluation_episodes": 3,
+        "evaluation_max_steps": 2400,
+        "meets_coins": true,
+        "meets_completion": false,
+        "meets_progress": false,
+        "meets_return": true,
+        "meets_score": false,
+        "meets_survival": true,
+        "observed": {
+          "completion_rate": 0.0,
+          "deaths": 0.0,
+          "mean_coins": 0.0,
+          "mean_return": 798.0,
+          "mean_score": 0.0,
+          "progress": 398.0,
+          "survival_rate": 1.0
+        },
+        "within_death_budget": true,
+        "within_step_budget": true
+      },
+      "threshold_met": false
+    }
+  },
+  "max_steps_per_episode": 2400,
+  "mean_return": 798.0,
+  "recording": {
+    "artifact_count": 0,
+    "artifacts": [],
+    "enabled": false,
+    "manifest_path": null,
+    "recording_dir": null,
+    "recording_path": null,
+    "recording_prefix": null,
+    "schema_version": 1,
+    "video_export": {
+      "artifacts": [],
+      "enabled": false
+    }
+  },
+  "returns": [
+    798.0,
+    798.0,
+    798.0
+  ],
+  "steps": 4566,
+  "success_rate": 1.0,
+  "success_thresholds_met": false,
+  "terminated_count": 3,
+  "truncated_count": 0,
+  "tuning_metrics": {
+    "mean_completion_rate": 0.0,
+    "mean_progress": 398.0,
+    "mean_return": 798.0,
+    "mean_survival_rate": 1.0,
+    "score": 2196.0,
+    "task_count": 1.0,
+    "threshold_pass_rate": 0.0
+  }
+}

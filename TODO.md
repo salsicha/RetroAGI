@@ -66,6 +66,10 @@ Current result:
       actions into combined jump actions. Re-evaluation improved mean return to
       798.0 and mean progress to 398.0, with every recorded step selecting
       `RIGHT_JUMP`, but Level 1-1 remains unsolved.
+- Real-emulator imitation warm start now generates a mixed `RIGHT`/`RIGHT_JUMP`
+      opening trajectory and trains the Full SMB policy/controller head on it.
+      The warm-started policy uses a mixed action contract in benchmark
+      rollouts, but still stalls at mean/max progress 398.0.
 
 Next steps:
 
@@ -251,14 +255,24 @@ Next steps:
       reports deterministic canonical `RIGHT_JUMP` fraction 1.0, recording
       `RIGHT_JUMP` fraction 1.0, no missing-`RIGHT_JUMP` stall, and an
       `overactive_right_jump_when_stalled` bottleneck.
-- [ ] Build a real-emulator Full SMB imitation warm start for Level 1-1 opening
+- [x] Build a real-emulator Full SMB imitation warm start for Level 1-1 opening
       movement and jump timing.
-  - [ ] Generate deterministic real-emulator trajectories using
+  - [x] Generate deterministic real-emulator trajectories using
         `RIGHT`/`RIGHT_JUMP` action scripts through the first hazard gates.
-  - [ ] Train or distill the Full SMB policy head on those trajectories before
+  - [x] Train or distill the Full SMB policy head on those trajectories before
         reinforcement fine-tuning.
-  - [ ] Evaluate the warm-started policy until progress reliably exceeds the
+  - [x] Evaluate the warm-started policy until progress reliably exceeds the
         early 20-pixel stall.
+      Result: `retroagi imitate --stage full` now collects a real-emulator
+      Level 1-1 opening dataset and trains the action/controller head. The first
+      run wrote
+      `data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_lstm_motor_warm_start.pth`;
+      its 600-step scripted dataset reached max progress 729.0, imitation final
+      action accuracy 0.958, and separate fixed-benchmark evaluation produced
+      mean return 798.0, mean progress 398.0, survival rate 1.0, completion rate
+      0.0, and threshold pass rate 0.0. Recordings show per-episode action
+      counts of `RIGHT=1216` and `RIGHT_JUMP=306`, so the action mix is no
+      longer collapsed, but behavior still needs staged curriculum gates.
 - [ ] Add short Full SMB curriculum gates before the full fixed benchmark.
   - [ ] Create progress gates for the opening movement segment, first pipe,
         first enemy, and first gap or stair transition.

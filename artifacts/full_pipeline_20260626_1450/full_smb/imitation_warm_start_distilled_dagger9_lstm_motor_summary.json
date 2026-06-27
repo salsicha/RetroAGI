@@ -1,0 +1,33 @@
+{
+  "checkpoint_summary": "data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_lstm_motor_warm_start.json",
+  "dataset": {
+    "last_progress": 729.0,
+    "max_progress": 729.0,
+    "return": 653.0,
+    "samples": 600.0,
+    "script_steps_requested": 600.0,
+    "terminated": false,
+    "truncated": false
+  },
+  "output_checkpoint": "data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_lstm_motor_warm_start.pth",
+  "policy_checkpoint": "data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_lstm_motor_transfer_long.pth",
+  "script": {
+    "right_count": 540,
+    "right_jump_count": 60,
+    "steps": 600
+  },
+  "training": {
+    "batch_size": 32.0,
+    "epochs": 3.0,
+    "final_action_accuracy": 0.9583333730697632,
+    "final_loss": 0.201888307929039,
+    "learning_rate": 0.0005,
+    "mean_action_accuracy": 0.8998538025638514,
+    "mean_loss": 0.5137970061531585,
+    "samples": 600.0,
+    "trainable_prefixes": [
+      "agent.fc_out_A",
+      "agent.fc_controller_params"
+    ]
+  }
+}
