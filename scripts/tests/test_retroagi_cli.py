@@ -729,6 +729,39 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_full_smb_architecture_benchmark_forwards_arguments(self):
+        with patch(
+            "retroagi.stages.full_smb.architecture_benchmark.main",
+            return_value=0,
+        ) as benchmark_main:
+            exit_code = cli.main(
+                [
+                    "benchmark-architecture",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "full",
+                    "--architecture-config",
+                    "hidden_dim=8",
+                    "--iterations",
+                    "2",
+                    "--output",
+                    "artifacts/full_smb/architecture_benchmark.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        benchmark_main.assert_called_once_with(
+            [
+                "--architecture-config",
+                "hidden_dim=8",
+                "--iterations",
+                "2",
+                "--output",
+                "artifacts/full_smb/architecture_benchmark.json",
+            ]
+        )
+
     def test_full_smb_imitate_forwards_arguments(self):
         with patch("retroagi.stages.full_smb.imitation.main", return_value=0) as imitation_main:
             exit_code = cli.main(

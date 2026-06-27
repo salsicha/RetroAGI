@@ -47,6 +47,11 @@ from .benchmark import (
     run_full_smb_throughput_benchmark,
     save_full_smb_throughput_benchmark,
 )
+from .architecture_benchmark import (
+    DEFAULT_FULL_SMB_ARCHITECTURE_BENCHMARK_ARCHITECTURES,
+    FULL_SMB_ARCHITECTURE_BENCHMARK_SCHEMA_VERSION,
+    benchmark_full_smb_policy_architectures,
+)
 from .capabilities import (
     FullSMBEnvironmentCapabilityResult,
     FullSMBEnvironmentCheckConfig,
@@ -178,7 +183,9 @@ __all__ = [
     "FULL_SMB_TASK_CATALOG",
     "FULL_SMB_TASK_SET_NAMES",
     "FULL_SMB_ACTION_DIAGNOSTIC_SCHEMA_VERSION",
+    "FULL_SMB_ARCHITECTURE_BENCHMARK_SCHEMA_VERSION",
     "FULL_SMB_CURRICULUM_GATE_SCHEMA_VERSION",
+    "DEFAULT_FULL_SMB_ARCHITECTURE_BENCHMARK_ARCHITECTURES",
     "DEFAULT_FULL_SMB_IMITATION_STEPS",
     "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
     "DEFAULT_FULL_SMB_ARTIFACT_ROOT",
@@ -237,6 +244,7 @@ __all__ = [
     "FullSMBStage",
     "build_full_smb_vit_checkpoint",
     "build_full_smb_policy_checkpoint",
+    "benchmark_full_smb_policy_architectures",
     "compare_full_smb_action_distribution",
     "create_full_smb_save_state_artifact",
     "create_full_smb_save_state_artifacts",

@@ -762,7 +762,7 @@ and playable end target.
       transfer checkpoint.
 - [x] Add recurrent-state and episode-boundary handling in Full SMB rollouts,
       including death, timeout, level completion, game over, and manual reset.
-- [ ] Make Full SMB LSTM/world-model learning explicit instead of relying on
+- [x] Make Full SMB LSTM/world-model learning explicit instead of relying on
       indirect policy-gradient updates.
   - [x] Refactor the baseline actor/world-model connection so the hierarchical
         transformer consumes the LSTM/world-model prediction as an input or
@@ -780,10 +780,18 @@ and playable end target.
         Full SMB trainers now accept the shared trainer-compatible policy tuple
         contract set, and tests verify two-pass shared state loads with only the
         new final action head initialized.
-  - [ ] Benchmark the single-pass LSTM-conditioned actor against the current
+  - [x] Benchmark the single-pass LSTM-conditioned actor against the current
         two-pass critic-feedback actor for training throughput, action quality,
         recurrent-state behavior, and transfer performance from Block SMB to
         Full SMB.
+        Result: `retroagi benchmark-architecture --stage full` now writes a
+        schema-v1 comparison report. The first CUDA report
+        `artifacts/full_pipeline_20260626_1450/full_smb/architecture_benchmark_single_pass_lstm_vs_two_pass.json`
+        loaded the preserved nine-scenario Block SMB checkpoint into both
+        Full SMB variants. The single-pass architecture reached 57.75
+        train steps/sec and 212.12 inference steps/sec versus 43.43 and 132.06
+        for the two-pass baseline, carried recurrent state successfully, and
+        migrated 88 shared keys with only the new final action head initialized.
   - [x] Add a motor-primitive controller where the short-term/B transformer
         emits button combo, hold duration, release/cancel behavior, and optional
         confidence or interrupt parameters instead of only model-space adaptive

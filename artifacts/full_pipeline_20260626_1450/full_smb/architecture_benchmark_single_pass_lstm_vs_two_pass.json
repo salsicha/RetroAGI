@@ -1,0 +1,138 @@
+{
+  "architectures": {
+    "agent_world_model_critic": {
+      "action_quality": {
+        "action_histogram": {
+          "2": 2
+        },
+        "logit_abs_max": 13.495173454284668,
+        "mean_entropy": 0.00213430542498827,
+        "mean_top1_margin": 0.9995455741882324,
+        "unique_actions": 1
+      },
+      "architecture": {
+        "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+        "checkpoint_model_name": "agent_world_model_critic",
+        "configurable_hyperparameters": {
+          "controller_schedule": "constant",
+          "hidden_dim": 64
+        },
+        "name": "agent_world_model_critic",
+        "output_contract": "agent_world_model_critic.forward.v1",
+        "supported_stage_names": [
+          "synthetic_1d",
+          "block_smb",
+          "full_smb",
+          "pong_block"
+        ]
+      },
+      "architecture_config": {
+        "hidden_dim": 64
+      },
+      "inference": {
+        "elapsed_seconds": 0.03028963800170459,
+        "samples_per_second": 264.11672531542933,
+        "steps_per_second": 132.05836265771467
+      },
+      "recurrent_state": {
+        "carried_logits_delta_mean_abs": 0.014652053825557232,
+        "next_state_hidden_norm": 5.270350456237793,
+        "state_available": true,
+        "state_hidden_norm": 5.270354270935059
+      },
+      "train_step": {
+        "elapsed_seconds": 0.09210555000026943,
+        "final_loss": 16.30668830871582,
+        "samples_per_second": 86.856872359772,
+        "steps_per_second": 43.428436179886
+      },
+      "transfer": {
+        "loaded": true,
+        "missing_keys": [],
+        "shared_key_count": 88,
+        "source": "block_smb_policy_checkpoint",
+        "unexpected_keys": []
+      }
+    },
+    "single_pass_lstm_conditioned_actor": {
+      "action_quality": {
+        "action_histogram": {
+          "2": 1,
+          "3": 1
+        },
+        "logit_abs_max": 8.187438011169434,
+        "mean_entropy": 0.6136640310287476,
+        "mean_top1_margin": 0.6024565696716309,
+        "unique_actions": 2
+      },
+      "architecture": {
+        "checkpoint_compatibility_policy": "strict_stage_spec_with_two_pass_shared_state_migration",
+        "checkpoint_model_name": "single_pass_lstm_conditioned_actor",
+        "configurable_hyperparameters": {
+          "controller_schedule": "constant",
+          "hidden_dim": 64,
+          "world_context_scale": 1.0
+        },
+        "name": "single_pass_lstm_conditioned_actor",
+        "output_contract": "single_pass_lstm_conditioned_actor.forward.v1",
+        "supported_stage_names": [
+          "synthetic_1d",
+          "block_smb",
+          "full_smb",
+          "pong_block"
+        ]
+      },
+      "architecture_config": {
+        "hidden_dim": 64,
+        "world_context_scale": 1.0
+      },
+      "inference": {
+        "elapsed_seconds": 0.01885754699833342,
+        "samples_per_second": 424.23333218827554,
+        "steps_per_second": 212.11666609413777
+      },
+      "recurrent_state": {
+        "carried_logits_delta_mean_abs": 0.2622750401496887,
+        "next_state_hidden_norm": 5.269979000091553,
+        "state_available": true,
+        "state_hidden_norm": 5.269872665405273
+      },
+      "train_step": {
+        "elapsed_seconds": 0.06926909799949499,
+        "final_loss": 4.52638578414917,
+        "samples_per_second": 115.49161503529791,
+        "steps_per_second": 57.745807517648956
+      },
+      "transfer": {
+        "loaded": true,
+        "missing_keys": [
+          "world_conditioned_action_head.weight",
+          "world_conditioned_action_head.bias"
+        ],
+        "shared_key_count": 88,
+        "source": "block_smb_policy_checkpoint",
+        "unexpected_keys": []
+      }
+    }
+  },
+  "comparison": {
+    "action_agreement": 0.5,
+    "baseline": "agent_world_model_critic",
+    "candidate": "single_pass_lstm_conditioned_actor",
+    "mean_abs_logit_delta": 8.462900161743164
+  },
+  "config": {
+    "architecture_config": {},
+    "architectures": [
+      "agent_world_model_critic",
+      "single_pass_lstm_conditioned_actor"
+    ],
+    "batch_size": 2,
+    "block_policy_checkpoint": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor_preserved.pth",
+    "device": "cuda",
+    "iterations": 4,
+    "seed": 0,
+    "warmup": 1
+  },
+  "schema_version": 1
+}
