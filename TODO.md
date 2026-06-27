@@ -38,10 +38,12 @@ Current result:
       checkpoint completed, but fixed-benchmark evaluation still failed the
       solved-Level-1-1 threshold: mean return 571.0, mean progress 20.0,
       survival rate 1.0, completion rate 0.0, and threshold pass rate 0.0.
-- Recorded Full SMB rollouts show the deterministic policy choosing mostly
-      `RIGHT` plus standalone `JUMP`, never `RIGHT_JUMP`, so the next blocker
-      is real-emulator action-contract and timing adaptation rather than Block
-      SMB scenario coverage.
+- Recorded Full SMB rollouts first showed the deterministic policy choosing
+      mostly `RIGHT` plus standalone `JUMP`, never `RIGHT_JUMP`; after the
+      LSTM/motor retrain, the latest fixed-benchmark recording chose only
+      `RIGHT` for every step. The next blocker is real-emulator action-contract,
+      motor-primitive activation, and timing adaptation rather than Block SMB
+      scenario coverage.
 - LSTM/world-model training is now explicit in Full SMB, and the B-stream motor
       primitive decoder feeds LSTM-predicted replan signals into Full SMB
       `RIGHT_JUMP`/`LEFT_JUMP` action selection.
@@ -49,6 +51,12 @@ Current result:
       `level_8_enemy_gap.json`, so the run preserved the prior all-threshold
       policy with a one-epoch low-learning-rate refresh; that checkpoint again
       passed all nine scenarios with threshold pass rate 1.0.
+- Full SMB LSTM/motor transfer and fine-tuning completed from the preserved
+      nine-scenario Block SMB checkpoint. The explicit dynamics loss trained
+      down during fine-tuning, but fixed-benchmark evaluation remained unsolved:
+      mean return 571.0, mean progress 20.0, survival rate 1.0, completion rate
+      0.0, threshold pass rate 0.0, and each recorded episode selected `RIGHT`
+      for all 1,522 steps.
 
 Next steps:
 
@@ -189,6 +197,23 @@ Next steps:
       return 571.0, mean progress 20.0, survival rate 1.0, completion rate 0.0,
       and threshold pass rate 0.0. Recordings are in
       `artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_transfer_long/`.
+- [x] Re-run Block SMB, Full SMB transfer, Full SMB fine-tuning, and fixed
+      benchmark evaluation after the LSTM/world-model and motor-primitive
+      improvements.
+      Result: the preserved current-code Block SMB refresh
+      `data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor_preserved.pth`
+      passed all nine Block SMB scenarios with threshold pass rate 1.0, then
+      transferred to
+      `data/full_pipeline_20260626_1450/full_smb/transferred_distilled_policy_dagger9_lstm_motor.pth`.
+      The Full SMB fine-tuned checkpoint
+      `data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_lstm_motor_transfer_long.pth`
+      trained for 4 curriculum epochs and 2,400 emulator steps with mean train
+      return 201.0, mean `loss_dynamics=0.0118`, and mean
+      `loss_world_model=0.000588`. Separate-process fixed-benchmark evaluation
+      over 3 episodes produced mean return 571.0, mean progress 20.0, survival
+      rate 1.0, completion rate 0.0, threshold pass rate 0.0, and recordings in
+      `artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_transfer_long/`
+      showed `RIGHT` for every step.
 - [ ] Add a Full SMB action-contract diagnostic for transferred policies.
   - [ ] Report deterministic and sampled action distributions on canonical
         real-emulator frames and recorded rollouts.
@@ -196,6 +221,9 @@ Next steps:
         Level 1-1 movement gate.
   - [ ] Compare Block SMB scripted action frequencies against Full SMB rollout
         action frequencies after transfer.
+  - [ ] Trace B-stream motor-primitive logits, replan probability, combined
+        action bias, and final action choice on real-emulator frames to
+        distinguish inactive primitives from an action-space mapping issue.
 - [ ] Build a real-emulator Full SMB imitation warm start for Level 1-1 opening
       movement and jump timing.
   - [ ] Generate deterministic real-emulator trajectories using
