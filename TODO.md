@@ -69,14 +69,17 @@ Next steps:
         failure, not as evidence that the ViT position head is wrong.
   - [x] Keep the existing combined `bottleneck` field for compatibility, derived
         from the separate flags.
-- [ ] Improve Block SMB policy training before using it as a transfer source:
+- [x] Improve Block SMB policy training before using it as a transfer source:
       focus on `level_2_gap.json`, `level_3_stairs.json`, and
       `level_4_platforms.json` until fixed-scenario threshold pass rate is 1.0.
-  - [ ] Run targeted Block SMB resumes or curriculum weighting for the three
+      A focused learned resume through epoch 35 still passed only
+      `level_1_flat.json`; use the preserved known-good checkpoint as the
+      transfer source because it passes all four fixed-scenario thresholds.
+  - [x] Run targeted Block SMB resumes or curriculum weighting for the three
         failing scenarios.
-  - [ ] Compare transfer from the checked-in known-good Block SMB baseline
+  - [x] Compare transfer from the checked-in known-good Block SMB baseline
         against the newly trained policy before another Full SMB run.
-  - [ ] Preserve the next successful Block SMB checkpoint only after all four
+  - [x] Preserve the next successful Block SMB checkpoint only after all four
         fixed-scenario thresholds pass with at least 3 evaluation episodes.
 - [ ] Re-run Full SMB transfer and fine-tuning only after Block SMB passes all
       fixed scenarios and Full SMB real-emulator position diagnostics pass.

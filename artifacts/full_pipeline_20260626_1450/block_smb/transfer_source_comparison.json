@@ -1,0 +1,95 @@
+{
+  "candidates": {
+    "focused_resume_policy": {
+      "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_focused_resume.pth",
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": -4.6549999999999985,
+          "success_rate": 0.0,
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": 13.345,
+          "success_rate": 0.0,
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.824999999999999,
+          "success_rate": 0.0,
+          "threshold_met": false
+        }
+      },
+      "mean_return": 18.532500000000002,
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "threshold_pass_rate": 0.25
+    },
+    "full_pipeline_trained_policy": {
+      "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy.pth",
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": -4.6549999999999985,
+          "success_rate": 0.0,
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": 13.345,
+          "success_rate": 0.0,
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.824999999999999,
+          "success_rate": 0.0,
+          "threshold_met": false
+        }
+      },
+      "mean_return": 18.532500000000002,
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "threshold_pass_rate": 0.25
+    },
+    "known_good_scripted_seed20260622": {
+      "checkpoint_path": "artifacts/block_smb/known_good_scripted_seed20260622/policy.pth",
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.26500000000001,
+          "success_rate": 1.0,
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 68.70500000000001,
+          "success_rate": 1.0,
+          "threshold_met": true
+        },
+        "level_3_stairs.json": {
+          "return": 68.70500000000003,
+          "success_rate": 1.0,
+          "threshold_met": true
+        },
+        "level_4_platforms.json": {
+          "return": 69.82500000000002,
+          "success_rate": 1.0,
+          "threshold_met": true
+        }
+      },
+      "mean_return": 69.12500000000003,
+      "preserved_path": "data/full_pipeline_20260626_1450/block_smb/known_good_transfer_source.pth",
+      "success_rate": 1.0,
+      "success_thresholds_met": true,
+      "threshold_pass_rate": 1.0
+    }
+  },
+  "date": "2026-06-26",
+  "selected_transfer_source": "data/full_pipeline_20260626_1450/block_smb/known_good_transfer_source.pth",
+  "selection_reason": "The focused learned resume still passes only level_1_flat.json, while the checked-in known-good Block SMB checkpoint passes all four fixed-scenario thresholds with 3 evaluation episodes and a 200 step budget."
+}
