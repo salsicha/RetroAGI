@@ -16,7 +16,9 @@ import retroagi.stages.full_smb.train as full_smb_train_module
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     CHECKPOINT_SCHEMA_KEY,
+    MotorPrimitiveOutput,
     SMB_ACTIONS,
+    SMBAction,
     StageBatch,
     WorldModelState,
     load_checkpoint,
@@ -162,7 +164,7 @@ class TestFullSMBTraining(unittest.TestCase):
             tmp = Path(tmpdir)
             block_policy_path = tmp / "block_policy.pth"
             full_vision_path = tmp / "full_smb_vit.pth"
-            _source_model, source_config = write_block_policy_checkpoint(block_policy_path)
+            source_model, source_config = write_block_policy_checkpoint(block_policy_path)
             write_full_smb_vision_checkpoint(full_vision_path)
             config = FullSMBTrainingConfig(
                 seed=8,
@@ -198,6 +200,14 @@ class TestFullSMBTraining(unittest.TestCase):
             checkpoint["metadata"]["training"]["source"],
             source,
         )
+        changed_world_model = any(
+            name.startswith("world_model.")
+            and not torch.equal(value, checkpoint["states"]["model"][name])
+            for name, value in source_model.state_dict().items()
+        )
+        self.assertTrue(changed_world_model)
+        self.assertGreater(result.history["loss_world_model"][0], 0.0)
+        self.assertGreater(checkpoint["metrics"]["mean_loss_world_model"], 0.0)
 
     def test_training_with_disabled_evaluation_writes_checkpoint_without_second_stage(self):
         stage_constructions = 0
@@ -833,6 +843,51 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(evaluation.tuning_metrics["threshold_pass_rate"], 1.0)
         self.assertEqual(evaluation.as_dict()["fixed_task_results"], evaluation.fixed_task_results)
 
+    def test_evaluation_and_play_do_not_mutate_policy_weights(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            architecture_config = {"hidden_dim": 8, "controller_schedule": "linear"}
+            model = full_smb_train_module.make_full_smb_policy_model(
+                architecture_name=BASELINE_ARCHITECTURE_NAME,
+                architecture_config=architecture_config,
+            )
+            config = FullSMBTrainingConfig(
+                seed=43,
+                architecture_config=architecture_config,
+                evaluation_episodes=1,
+                evaluation_max_steps=2,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            before = {
+                name: value.detach().clone()
+                for name, value in model.state_dict().items()
+            }
+
+            evaluate_full_smb_policy(model, config=config, make_stage=tiny_stage)
+            after_evaluation = {
+                name: value.detach().clone()
+                for name, value in model.state_dict().items()
+            }
+            play_full_smb_policy(
+                model,
+                config=config,
+                play_config=FullSMBPlayConfig(
+                    max_steps=2,
+                    render=False,
+                    fps=0.0,
+                    interactive_controls=False,
+                ),
+                make_stage=tiny_stage,
+            )
+            after_play = model.state_dict()
+
+        for name, value in before.items():
+            torch.testing.assert_close(after_evaluation[name], value)
+            torch.testing.assert_close(after_play[name], value)
+
     def test_resume_restores_rng_and_rejects_schedule_or_tracking_drift(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -948,6 +1003,108 @@ class TestFullSMBTraining(unittest.TestCase):
             not torch.equal(value, after_state[name]) for name, value in before.state_dict().items()
         )
         self.assertTrue(changed)
+
+    def test_training_updates_lstm_world_model_against_next_c_stream(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            model = full_smb_train_module.make_full_smb_policy_model(
+                architecture_name=BASELINE_ARCHITECTURE_NAME,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+            )
+            initial_world_model = {
+                name: value.detach().clone()
+                for name, value in model.state_dict().items()
+                if name.startswith("world_model.")
+            }
+            config = FullSMBTrainingConfig(
+                seed=19,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=1,
+                updates_per_epoch=1,
+                rollout_length=3,
+                evaluation_episodes=0,
+                evaluation_max_steps=0,
+                deterministic_actions=True,
+                policy_loss_weight=0.0,
+                entropy_weight=0.0,
+                world_model_weight=0.1,
+                learning_rate=1e-3,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            with patch.object(
+                full_smb_train_module,
+                "make_full_smb_policy_model",
+                return_value=model,
+            ):
+                result = train_full_smb_policy(config, make_stage=tiny_stage)
+
+        after_state = result.checkpoint["states"]["model"]
+        changed = [
+            name
+            for name, value in initial_world_model.items()
+            if not torch.equal(value, after_state[name])
+        ]
+        self.assertTrue(changed)
+        self.assertIn("loss_dynamics", result.history)
+        self.assertIn("loss_world_model", result.history)
+        self.assertGreater(result.history["loss_dynamics"][0], 0.0)
+        self.assertGreater(result.history["loss_world_model"][0], 0.0)
+        self.assertEqual(
+            result.checkpoint["config"]["loss_weights"]["world_model"],
+            0.1,
+        )
+        self.assertEqual(
+            result.checkpoint["metadata"]["training"]["loss_weights"]["world_model"],
+            0.1,
+        )
+        self.assertGreater(result.checkpoint["metrics"]["mean_loss_dynamics"], 0.0)
+        self.assertGreater(result.checkpoint["metrics"]["mean_loss_world_model"], 0.0)
+        self.assertGreater(result.checkpoint["metrics"]["max_abs_prediction"], 0.0)
+
+    def test_full_smb_motor_primitives_boost_combined_jump_actions(self):
+        logits = torch.tensor(
+            [
+                [
+                    -4.0,
+                    2.0,
+                    -3.0,
+                    -4.0,
+                    -3.0,
+                    1.5,
+                ]
+            ],
+            dtype=torch.float32,
+        )
+        motor = MotorPrimitiveOutput(
+            button_combo_logits=torch.zeros(1, 1, len(SMB_ACTIONS)),
+            hold_duration=torch.ones(1, 1),
+            release_logit=torch.zeros(1, 1),
+            cancel_logit=torch.zeros(1, 1),
+            confidence=torch.ones(1, 1),
+            interrupt_logit=torch.ones(1, 1),
+            replan_probability=torch.ones(1, 1),
+        )
+
+        adjusted = full_smb_train_module._apply_full_smb_motor_primitive_bias(
+            logits,
+            motor,
+        )
+
+        self.assertGreater(
+            adjusted[0, int(SMBAction.RIGHT_JUMP)].item(),
+            logits[0, int(SMBAction.RIGHT_JUMP)].item(),
+        )
+        self.assertGreater(
+            adjusted[0, int(SMBAction.RIGHT_JUMP)].item(),
+            logits[0, int(SMBAction.JUMP)].item(),
+        )
+        self.assertEqual(
+            adjusted[0, int(SMBAction.RIGHT)].item(),
+            logits[0, int(SMBAction.RIGHT)].item(),
+        )
 
     def test_training_config_normalizes_full_smb_contract_sections(self):
         config = FullSMBTrainingConfig(

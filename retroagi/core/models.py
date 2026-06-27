@@ -22,6 +22,30 @@ class WorldModelState:
         return WorldModelState(self.hidden.detach(), self.cell.detach())
 
 
+@dataclass(frozen=True)
+class MotorPrimitiveOutput:
+    """B-stream motor primitive parameters decoded for action selection."""
+
+    button_combo_logits: torch.Tensor
+    hold_duration: torch.Tensor
+    release_logit: torch.Tensor
+    cancel_logit: torch.Tensor
+    confidence: torch.Tensor
+    interrupt_logit: torch.Tensor
+    replan_probability: torch.Tensor
+
+    def detach(self):
+        return MotorPrimitiveOutput(
+            button_combo_logits=self.button_combo_logits.detach(),
+            hold_duration=self.hold_duration.detach(),
+            release_logit=self.release_logit.detach(),
+            cancel_logit=self.cancel_logit.detach(),
+            confidence=self.confidence.detach(),
+            interrupt_logit=self.interrupt_logit.detach(),
+            replan_probability=self.replan_probability.detach(),
+        )
+
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super().__init__()
@@ -91,6 +115,97 @@ class AdaptiveController(nn.Module):
     def forward(self, x_c, w, b):
         w_context, b_context = self.expand_context(x_c, w, b)
         return w_context * x_c + b_context
+
+
+class MotorPrimitiveController(nn.Module):
+    """Decodes B-stream controller outputs into motor primitive controls.
+
+    The existing B stream still emits the two controller channels used by the
+    C-stream adaptive controller. This decoder interprets those same channels
+    as primitive timing and replan controls so old checkpoints remain loadable.
+    """
+
+    def __init__(self, *, ratio_ab, ratio_bc, max_hold_duration=8.0):
+        super().__init__()
+        if int(ratio_ab) <= 0:
+            raise ValueError("ratio_ab must be positive")
+        if int(ratio_bc) <= 0:
+            raise ValueError("ratio_bc must be positive")
+        if float(max_hold_duration) < 1.0:
+            raise ValueError("max_hold_duration must be at least 1")
+        self.ratio_ab = int(ratio_ab)
+        self.ratio_bc = int(ratio_bc)
+        self.max_hold_duration = float(max_hold_duration)
+
+    def forward(
+        self,
+        logits_a,
+        w_pred,
+        b_pred,
+        *,
+        next_state_pred=None,
+        current_state=None,
+    ):
+        if logits_a.ndim != 3:
+            raise ValueError("logits_a must have shape [batch, seq_len_a, vocab]")
+        if w_pred.ndim != 2 or b_pred.ndim != 2:
+            raise ValueError("w_pred and b_pred must have shape [batch, seq_len_b]")
+        if w_pred.shape != b_pred.shape:
+            raise ValueError(
+                "w_pred and b_pred shapes must match, got "
+                f"{w_pred.shape} and {b_pred.shape}"
+            )
+        if logits_a.size(0) != w_pred.size(0):
+            raise ValueError(
+                "logits_a and B-stream controller batch sizes must match, got "
+                f"{logits_a.size(0)} and {w_pred.size(0)}"
+            )
+        if w_pred.size(1) != logits_a.size(1) * self.ratio_ab:
+            raise ValueError(
+                "B-stream length must equal A-stream length times ratio_ab, got "
+                f"{w_pred.size(1)} and {logits_a.size(1)} * {self.ratio_ab}"
+            )
+
+        button_combo_logits = logits_a.repeat_interleave(self.ratio_ab, dim=1)
+        confidence = torch.sigmoid(w_pred.abs() + b_pred.abs())
+        hold_duration = 1.0 + (self.max_hold_duration - 1.0) * torch.sigmoid(w_pred)
+        release_logit = -b_pred
+        cancel_logit = b_pred - w_pred
+
+        motion = self._predicted_motion(next_state_pred, current_state, w_pred)
+        interrupt_logit = cancel_logit + (0.05 - motion)
+        replan_probability = torch.sigmoid(interrupt_logit)
+        return MotorPrimitiveOutput(
+            button_combo_logits=button_combo_logits,
+            hold_duration=hold_duration,
+            release_logit=release_logit,
+            cancel_logit=cancel_logit,
+            confidence=confidence,
+            interrupt_logit=interrupt_logit,
+            replan_probability=replan_probability,
+        )
+
+    def _predicted_motion(self, next_state_pred, current_state, reference):
+        if next_state_pred is None or current_state is None:
+            return torch.zeros_like(reference)
+        if next_state_pred.shape != current_state.shape:
+            raise ValueError(
+                "next_state_pred and current_state must have the same shape for "
+                "motor primitive prediction, got "
+                f"{next_state_pred.shape} and {current_state.shape}"
+            )
+        if next_state_pred.ndim != 2:
+            raise ValueError(
+                "next_state_pred and current_state must have shape [batch, seq_len_c]"
+            )
+        usable = reference.size(1) * self.ratio_bc
+        if next_state_pred.size(1) < usable:
+            raise ValueError(
+                "C-stream length is too short for motor primitive grouping: "
+                f"{next_state_pred.size(1)} < {usable}"
+            )
+        delta = next_state_pred[:, :usable] - current_state[:, :usable]
+        return delta.reshape(delta.size(0), reference.size(1), self.ratio_bc).abs().mean(dim=-1)
 
 
 class HierarchicalAdaptiveModel(nn.Module):
@@ -375,6 +490,8 @@ class AgentWorldModelCritic(nn.Module):
         controller_schedule="constant",
     ):
         super().__init__()
+        seq_len_b = seq_len_c // ratio_bc
+        ratio_ab = seq_len_b // seq_len_a
         self.ratio_bc = ratio_bc
         self.agent = HierarchicalAdaptiveModel(
             vocab_size,
@@ -383,6 +500,11 @@ class AgentWorldModelCritic(nn.Module):
         )
         self.world_model = WorldModel(ratio_bc=ratio_bc)
         self.critic = Critic(seq_len_c, seq_len_a, d_model)
+        self.motor_controller = MotorPrimitiveController(
+            ratio_ab=ratio_ab,
+            ratio_bc=ratio_bc,
+        )
+        self.last_motor_primitives: MotorPrimitiveOutput | None = None
         self.transition_representation_head = nn.Sequential(
             nn.Linear(seq_len_c, d_model),
             nn.LayerNorm(d_model),
@@ -464,6 +586,13 @@ class AgentWorldModelCritic(nn.Module):
         actor_criticism = criticism if critic_feedback_enabled else None
         logits_a2, actions2, w_2, b_2 = self.agent(
             src_A, src_B, src_C, criticism=actor_criticism, tau=tau
+        )
+        self.last_motor_primitives = self.motor_controller(
+            logits_a2,
+            w_2,
+            b_2,
+            next_state_pred=next_state_pred,
+            current_state=src_C,
         )
 
         outputs = (actions1, next_state_pred, criticism, actions2, logits_a2, w_2, b_2)

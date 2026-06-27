@@ -14,12 +14,14 @@ from typing import Any, Callable, Mapping, Optional
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     CHECKPOINT_SCHEMA_KEY,
     SMB_ACTIONS,
+    SMBAction,
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
     StageBatch,
@@ -147,6 +149,7 @@ _FULL_SMB_SELECTED_SIGNAL_FIELDS = (
 _FULL_SMB_DEFAULT_MAX_ABS_LOSS = 1_000_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
+_FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT = 0.05
 _FULL_SMB_RECORDING_SCHEMA_VERSION = 1
 _FULL_SMB_VIDEO_SUFFIXES = (".avi", ".mkv", ".mov", ".mp4")
 DEFAULT_FULL_SMB_RECORDING_DIR = Path("artifacts/full_smb/recordings")
@@ -240,7 +243,7 @@ class FullSMBTrainingConfig:
     entropy_weight: float = 0.01
     policy_loss_weight: float = 1.0
     representation_weight: float = 0.0
-    world_model_weight: float = 0.0
+    world_model_weight: float = _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT
     reward_loss_weight: float = 0.0
     value_loss_weight: float = 0.0
     action_aux_weight: float = 0.0
@@ -620,6 +623,7 @@ class FullSMBPolicyForwardResult:
     next_world_model_state: WorldModelState | None
     next_state_pred: Optional[torch.Tensor] = None
     criticism: Optional[torch.Tensor] = None
+    motor_primitives: Any = None
 
     def __iter__(self):
         yield self.logits
@@ -716,6 +720,7 @@ def train_full_smb_policy(
                             reward_scale=config.reward_scale,
                             entropy_weight=config.entropy_weight,
                             policy_loss_weight=config.policy_loss_weight,
+                            world_model_weight=config.world_model_weight,
                             gradient_clip_norm=config.gradient_clip_norm,
                             max_abs_loss=config.max_abs_loss,
                             max_abs_scaled_reward=config.max_abs_scaled_reward,
@@ -819,6 +824,8 @@ def train_full_smb_policy(
             metrics={
                 "mean_train_return": _mean(history["episode_return"]),
                 "mean_policy_loss": _mean(history["policy_loss"]),
+                "mean_loss_dynamics": _mean(history.get("loss_dynamics", [])),
+                "mean_loss_world_model": _mean(history.get("loss_world_model", [])),
                 "mean_action_entropy": _mean(history.get("mean_entropy", [])),
                 "mean_gradient_norm": _mean(history.get("mean_gradient_norm", [])),
                 "max_gradient_norm": _max(history.get("max_gradient_norm", [])),
@@ -1977,6 +1984,7 @@ def _train_episode(
     reward_scale: float,
     entropy_weight: float,
     policy_loss_weight: float,
+    world_model_weight: float,
     gradient_clip_norm: float,
     max_abs_loss: float,
     max_abs_scaled_reward: float,
@@ -1995,6 +2003,9 @@ def _train_episode(
     scaled_rewards: list[float] = []
     value_prediction_abs_values: list[float] = []
     reward_prediction_abs_values: list[float] = []
+    next_state_prediction_abs_values: list[float] = []
+    dynamics_losses: list[float] = []
+    world_model_losses: list[float] = []
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
     recurrent_state_resets = 1
@@ -2021,6 +2032,9 @@ def _train_episode(
         )
         value_prediction_abs_values.append(prediction_metrics["value_prediction_abs_max"])
         reward_prediction_abs_values.append(prediction_metrics["reward_prediction_abs_max"])
+        next_state_prediction_abs_values.append(
+            prediction_metrics["next_state_prediction_abs_max"]
+        )
         distribution = torch.distributions.Categorical(logits=logits)
         if deterministic_actions:
             action_tensor = logits.argmax(dim=-1)
@@ -2034,6 +2048,22 @@ def _train_episode(
             truncated=truncated,
             info=info,
         )
+        loss_dynamics = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
+        if world_model_weight > 0.0 and forward.next_state_pred is not None:
+            with torch.no_grad():
+                next_batch = stage.encode_observation(observation, info)
+                next_state_target = next_batch.src_c.to(device).detach()
+            if tuple(forward.next_state_pred.shape) != tuple(next_state_target.shape):
+                raise ValueError(
+                    "Full SMB world-model target shape mismatch: "
+                    f"prediction={tuple(forward.next_state_pred.shape)}, "
+                    f"target={tuple(next_state_target.shape)}"
+                )
+            _finite_tensor_or_raise("next_state_target", next_state_target)
+            loss_dynamics = F.mse_loss(forward.next_state_pred, next_state_target)
+            _finite_tensor_or_raise("loss_dynamics", loss_dynamics)
+        loss_world_model = loss_dynamics * float(world_model_weight)
+        _finite_tensor_or_raise("loss_world_model", loss_world_model)
         action = int(action_tensor.item())
         identifiers = _full_smb_rollout_identifiers(stage, info)
         steps.append(
@@ -2066,7 +2096,7 @@ def _train_episode(
         entropy = distribution.entropy().mean()
         _finite_tensor_or_raise("action_entropy", entropy)
         policy_loss = -(log_prob.mean() * scaled_reward.detach())
-        loss = policy_loss_weight * policy_loss - entropy_weight * entropy
+        loss = policy_loss_weight * policy_loss + loss_world_model - entropy_weight * entropy
         _finite_tensor_or_raise("policy_loss", policy_loss)
         _finite_tensor_or_raise("loss", loss)
         _bounded_tensor_or_raise("loss", loss.detach(), max_abs_loss)
@@ -2081,6 +2111,8 @@ def _train_episode(
         optimizer.step()
         losses.append(float(loss.detach().cpu().item()))
         policy_losses.append(float(policy_loss.detach().cpu().item()))
+        dynamics_losses.append(float(loss_dynamics.detach().cpu().item()))
+        world_model_losses.append(float(loss_world_model.detach().cpu().item()))
         entropies.append(float(entropy.detach().cpu().item()))
         gradient_norm = float(grad_norm.detach().cpu().item())
         gradient_norms.append(gradient_norm)
@@ -2105,6 +2137,8 @@ def _train_episode(
         "steps": float(len(losses)),
         "recurrent_state_resets": float(recurrent_state_resets),
         "loss_policy": _mean(policy_losses),
+        "loss_dynamics": _mean(dynamics_losses),
+        "loss_world_model": _mean(world_model_losses),
         "mean_entropy": _mean(entropies),
         "min_entropy": min(entropies) if entropies else 0.0,
         "max_entropy": max(entropies) if entropies else 0.0,
@@ -2117,7 +2151,10 @@ def _train_episode(
         "max_value_prediction_abs": _max(value_prediction_abs_values),
         "mean_reward_prediction_abs": _mean(reward_prediction_abs_values),
         "max_reward_prediction_abs": _max(reward_prediction_abs_values),
+        "mean_next_state_prediction_abs": _mean(next_state_prediction_abs_values),
+        "max_next_state_prediction_abs": _max(next_state_prediction_abs_values),
         "max_abs_prediction": max(
+            _max(next_state_prediction_abs_values),
             _max(value_prediction_abs_values),
             _max(reward_prediction_abs_values),
         ),
@@ -2175,12 +2212,73 @@ def _policy_action_logits_and_state(
     criticism = outputs[2]
     logits_a = outputs[4]
     next_world_model_state = outputs[-1]
+    motor_primitives = getattr(model, "last_motor_primitives", None)
+    logits = logits_a[:, -1, :FULL_SMB_ACTION_COUNT]
+    logits = _apply_full_smb_motor_primitive_bias(logits, motor_primitives)
     return FullSMBPolicyForwardResult(
-        logits=logits_a[:, -1, :FULL_SMB_ACTION_COUNT],
+        logits=logits,
         next_world_model_state=next_world_model_state,
         next_state_pred=next_state_pred,
         criticism=criticism,
+        motor_primitives=motor_primitives,
     )
+
+
+def _apply_full_smb_motor_primitive_bias(
+    logits: torch.Tensor,
+    motor_primitives: Any,
+) -> torch.Tensor:
+    if motor_primitives is None or logits.size(-1) < FULL_SMB_ACTION_COUNT:
+        return logits
+    try:
+        confidence = motor_primitives.confidence[:, -1]
+        replan_probability = motor_primitives.replan_probability[:, -1]
+    except (AttributeError, IndexError, TypeError):
+        return logits
+    combo_strength = (confidence * replan_probability).to(
+        device=logits.device,
+        dtype=logits.dtype,
+    )
+    if combo_strength.ndim != 1 or combo_strength.size(0) != logits.size(0):
+        return logits
+
+    max_boost = 5.0
+    base_boost = (0.5 * combo_strength).clamp(min=0.0, max=max_boost)
+    bias = torch.zeros_like(logits)
+    bias = bias + _combined_full_smb_action_bias(
+        logits,
+        primary=int(SMBAction.RIGHT),
+        jump=int(SMBAction.JUMP),
+        combo=int(SMBAction.RIGHT_JUMP),
+        base_boost=base_boost,
+        max_boost=max_boost,
+    )
+    bias = bias + _combined_full_smb_action_bias(
+        logits,
+        primary=int(SMBAction.LEFT),
+        jump=int(SMBAction.JUMP),
+        combo=int(SMBAction.LEFT_JUMP),
+        base_boost=base_boost,
+        max_boost=max_boost,
+    )
+    return logits + bias
+
+
+def _combined_full_smb_action_bias(
+    logits: torch.Tensor,
+    *,
+    primary: int,
+    jump: int,
+    combo: int,
+    base_boost: torch.Tensor,
+    max_boost: float,
+) -> torch.Tensor:
+    pair_support = torch.minimum(logits[:, primary], logits[:, jump])
+    combo_gap = (pair_support - logits[:, combo]).clamp(min=0.0, max=max_boost)
+    boost = base_boost + combo_gap
+    one_hot = torch.zeros(logits.size(-1), dtype=logits.dtype, device=logits.device)
+    one_hot[combo] = 1.0
+    return boost.unsqueeze(-1) * one_hot.unsqueeze(0)
 
 
 def _coerce_policy_forward_result(value: Any) -> FullSMBPolicyForwardResult:
@@ -2203,7 +2301,16 @@ def _prediction_safety_metrics(
 ) -> dict[str, float]:
     value_prediction_abs_max = 0.0
     reward_prediction_abs_max = 0.0
+    next_state_prediction_abs_max = 0.0
     with torch.no_grad():
+        if forward.next_state_pred is not None:
+            _finite_tensor_or_raise("next_state_prediction", forward.next_state_pred)
+            _bounded_tensor_or_raise(
+                "next_state_prediction",
+                forward.next_state_pred,
+                max_abs_prediction,
+            )
+            next_state_prediction_abs_max = _tensor_abs_max(forward.next_state_pred)
         if hasattr(model, "predict_value"):
             value_pred = model.predict_value(batch.src_c.to(device).detach())
             _finite_tensor_or_raise("value_prediction", value_pred)
@@ -2225,6 +2332,7 @@ def _prediction_safety_metrics(
     return {
         "value_prediction_abs_max": value_prediction_abs_max,
         "reward_prediction_abs_max": reward_prediction_abs_max,
+        "next_state_prediction_abs_max": next_state_prediction_abs_max,
     }
 
 
@@ -3793,7 +3901,11 @@ def _add_training_update_args(
     parser.add_argument("--entropy-weight", type=float, default=0.01)
     parser.add_argument("--policy-loss-weight", type=float, default=1.0)
     parser.add_argument("--representation-weight", type=float, default=0.0)
-    parser.add_argument("--world-model-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--world-model-weight",
+        type=float,
+        default=_FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT,
+    )
     parser.add_argument("--reward-loss-weight", type=float, default=0.0)
     parser.add_argument("--value-loss-weight", type=float, default=0.0)
     parser.add_argument("--action-aux-weight", type=float, default=0.0)
@@ -4157,7 +4269,11 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         entropy_weight=getattr(args, "entropy_weight", 0.01),
         policy_loss_weight=getattr(args, "policy_loss_weight", 1.0),
         representation_weight=getattr(args, "representation_weight", 0.0),
-        world_model_weight=getattr(args, "world_model_weight", 0.0),
+        world_model_weight=getattr(
+            args,
+            "world_model_weight",
+            _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT,
+        ),
         reward_loss_weight=getattr(args, "reward_loss_weight", 0.0),
         value_loss_weight=getattr(args, "value_loss_weight", 0.0),
         action_aux_weight=getattr(args, "action_aux_weight", 0.0),

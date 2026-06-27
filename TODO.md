@@ -688,32 +688,32 @@ and playable end target.
         two-pass critic-feedback actor for training throughput, action quality,
         recurrent-state behavior, and transfer performance from Block SMB to
         Full SMB.
-  - [ ] Add a motor-primitive controller where the short-term/B transformer
+  - [x] Add a motor-primitive controller where the short-term/B transformer
         emits button combo, hold duration, release/cancel behavior, and optional
         confidence or interrupt parameters instead of only model-space adaptive
         gains.
-  - [ ] Feed the LSTM/world-model prediction into the motor-primitive controller
+  - [x] Feed the LSTM/world-model prediction into the motor-primitive controller
         so each primitive can continue, release, cancel, or replan based on
         predicted near-future state rather than fixed external action repeat.
-  - [ ] Encode the post-step Full SMB observation during training and compare
+  - [x] Encode the post-step Full SMB observation during training and compare
         `forward.next_state_pred` against `next_batch.src_c.detach()`.
-  - [ ] Wire `FullSMBTrainingConfig.world_model_weight` into the Full SMB
+  - [x] Wire `FullSMBTrainingConfig.world_model_weight` into the Full SMB
         trainer loss with a documented, tuned non-zero setting for continued
         world-model learning.
-  - [ ] Log `loss_dynamics` and `loss_world_model` for Full SMB alongside
+  - [x] Log `loss_dynamics` and `loss_world_model` for Full SMB alongside
         policy loss, entropy, reward/value prediction safety metrics, recurrent
         resets, and checkpoint metadata.
   - [ ] Add slot-aware C-stream dynamics metrics and optional loss weights for
         position, semantic probabilities, emulator state/signals, camera state,
         and pooled patch-token features so semantic prediction quality is not
         hidden by larger feature groups.
-  - [ ] Verify transferred Block SMB LSTM/world-model weights continue training
+  - [x] Verify transferred Block SMB LSTM/world-model weights continue training
         in Full SMB checkpoints, summaries, and resume flows.
-  - [ ] Keep `evaluate` and `play` read-only under `torch.no_grad()`; if online
+  - [x] Keep `evaluate` and `play` read-only under `torch.no_grad()`; if online
         adaptation is needed during benchmark-style runs, add a separate
         adaptive-evaluation or continue-training mode with distinct artifact
         labels.
-  - [ ] Add tests proving Full SMB training updates the world-model loss path
+  - [x] Add tests proving Full SMB training updates the world-model loss path
         against next C-stream targets, while evaluation/play do not mutate
         model weights.
 - [x] Add rollout/replay storage for Full SMB with saved actions, rewards,

@@ -9,6 +9,7 @@ from retroagi.core import (
     AdaptiveController,
     AgentWorldModelCritic,
     HierarchicalAdaptiveModel,
+    MotorPrimitiveController,
     WorldModel,
     WorldModelState,
 )
@@ -145,6 +146,51 @@ class TestAdaptiveControllerSchedules(unittest.TestCase):
                 torch.zeros(1, 2),
                 torch.zeros(1, 2),
             )
+
+
+class TestMotorPrimitiveController(unittest.TestCase):
+    def test_decodes_b_stream_primitives_with_lstm_prediction_context(self):
+        controller = MotorPrimitiveController(ratio_ab=2, ratio_bc=2, max_hold_duration=5.0)
+        logits_a = torch.tensor(
+            [
+                [
+                    [0.0, 1.0, -1.0],
+                    [2.0, -2.0, 0.5],
+                ]
+            ],
+            dtype=torch.float32,
+        )
+        w_pred = torch.tensor([[0.0, 1.0, -1.0, 0.5]])
+        b_pred = torch.tensor([[0.0, -1.0, 1.0, 0.25]])
+        current = torch.zeros(1, 8)
+        next_state = torch.zeros(1, 8)
+        next_state[:, 4:] = 2.0
+
+        output = controller(
+            logits_a,
+            w_pred,
+            b_pred,
+            current_state=current,
+            next_state_pred=next_state,
+        )
+
+        self.assertEqual(output.button_combo_logits.shape, (1, 4, 3))
+        torch.testing.assert_close(output.button_combo_logits[:, 0], logits_a[:, 0])
+        torch.testing.assert_close(output.button_combo_logits[:, 1], logits_a[:, 0])
+        torch.testing.assert_close(output.button_combo_logits[:, 2], logits_a[:, 1])
+        torch.testing.assert_close(output.button_combo_logits[:, 3], logits_a[:, 1])
+        self.assertEqual(output.hold_duration.shape, (1, 4))
+        self.assertTrue(torch.all(output.hold_duration >= 1.0))
+        self.assertTrue(torch.all(output.hold_duration <= 5.0))
+        self.assertEqual(output.release_logit.shape, (1, 4))
+        self.assertEqual(output.cancel_logit.shape, (1, 4))
+        self.assertEqual(output.confidence.shape, (1, 4))
+        self.assertEqual(output.interrupt_logit.shape, (1, 4))
+        self.assertEqual(output.replan_probability.shape, (1, 4))
+        self.assertGreater(
+            output.replan_probability[0, 0].item(),
+            output.replan_probability[0, 1].item(),
+        )
 
 
 class TestCriticFeedbackContract(unittest.TestCase):
