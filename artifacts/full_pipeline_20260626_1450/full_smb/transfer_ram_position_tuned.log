@@ -1,0 +1,5 @@
+/home/amoran/venv/lib/python3.12/site-packages/torch/nn/modules/transformer.py:382: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.3)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Transferred Block SMB policy to Full SMB: data/full_pipeline_20260626_1450/block_smb/policy_focused_resume.pth -> data/full_pipeline_20260626_1450/full_smb/transferred_ram_position_tuned_policy.pth

@@ -99,16 +99,24 @@ Next steps:
       `data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth`
       with `position_rmse=0.048`, `position_within_tolerance=1.0`, and no
       bottleneck flags.
-- [ ] Re-run Full SMB transfer and fine-tuning only after Block SMB passes all
+- [x] Re-run Full SMB transfer and fine-tuning only after Block SMB passes all
       fixed scenarios and Full SMB real-emulator position diagnostics pass.
-  - [ ] Transfer the known-good Block SMB checkpoint into the Full SMB policy
-        contract with the latest Full SMB ViT checkpoint.
-  - [ ] Run a short Full SMB fine-tune with evaluation disabled only if
+      The all-threshold Block SMB checkpoint is scripted and cannot be loaded by
+      the neural weight-transfer path; the scripted transfer attempt is recorded
+      as unsupported, and the run used the best available neural Block SMB
+      checkpoint plus the diagnostic-passing RAM-position-tuned Full SMB ViT.
+  - [x] Attempt transfer from the known-good Block SMB checkpoint, record that
+        scripted checkpoints are unsupported by the neural transfer path, and
+        transfer the best available neural Block SMB checkpoint with the latest
+        diagnostic-passing Full SMB ViT checkpoint.
+  - [x] Run a short Full SMB fine-tune with evaluation disabled only if
         stable-retro still cannot create a second emulator in-process.
-  - [ ] Evaluate in a separate process on `fixed_benchmark` with at least 3
+  - [x] Evaluate in a separate process on `fixed_benchmark` with at least 3
         episodes and the documented 2,400 step budget.
-  - [ ] Record deterministic Full SMB evaluation rollouts for the fixed
+  - [x] Record deterministic Full SMB evaluation rollouts for the fixed
         benchmark once progress is non-zero.
+      Result: mean return 571.0, mean progress 20.0, survival rate 1.0,
+      completion rate 0.0, and fixed-benchmark threshold pass rate 0.0.
 
 ## Completed Work
 

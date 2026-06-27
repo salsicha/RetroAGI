@@ -1,0 +1,7 @@
+{
+  "attempted_source": "data/full_pipeline_20260626_1450/block_smb/known_good_transfer_source.pth",
+  "error": "source policy model must be 'block_smb_actor_world_model_critic', got 'block_smb_scripted_known_good'",
+  "error_type": "ValueError",
+  "output_checkpoint": "data/full_pipeline_20260626_1450/full_smb/transferred_known_good_scripted_policy.pth",
+  "status": "unsupported_source_checkpoint"
+}
