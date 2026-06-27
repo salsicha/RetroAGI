@@ -576,6 +576,11 @@ class TestFullSMBStage(unittest.TestCase):
                 stage.last_info["vision_position_target"],
                 np.asarray([40.0 / 256.0, 176.0 / 240.0], dtype=np.float32),
             )
+            self.assertEqual(
+                stage.last_info["full_smb_signals"]["position"],
+                (40.0, 176.0),
+            )
+            self.assertEqual(stage.last_info["full_smb_signals"]["progress"], 40.0)
             _observation, _reward, _terminated, _truncated, info = stage.step(
                 SMBAction.RIGHT
             )
@@ -594,6 +599,10 @@ class TestFullSMBStage(unittest.TestCase):
             info["vision_position_target_raw"]["player_screen_y_address"],
             0xCE,
         )
+        self.assertEqual(info["player_screen_x"], 48.0)
+        self.assertEqual(info["player_screen_y"], 160.0)
+        self.assertEqual(info["full_smb_signals"]["position"], (60.0, 160.0))
+        self.assertEqual(info["full_smb_signals"]["progress"], 60.0)
 
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):
@@ -757,6 +766,26 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(signals.progress, 300.0)
         self.assertEqual(signals.score, 100)
         self.assertEqual(signals.coins, 7)
+
+    def test_signal_extractor_prefers_absolute_scroll_pair_over_coarse_scroll(self):
+        signals = extract_full_smb_signals(
+            {
+                "scrolling": 16,
+                "xscrollHi": 0,
+                "xscrollLo": 68,
+                "player_screen_x": 180,
+                "player_screen_y": 176,
+                "score": 0,
+                "coins": 0,
+                "lives": 2,
+            },
+            terminated=False,
+            truncated=False,
+        )
+
+        self.assertEqual(signals.position, (248.0, 176.0))
+        self.assertEqual(signals.progress, 248.0)
+        self.assertEqual(signals.screen, (180, 176))
 
     def test_frame_skip_resize_stack_and_continuing_episode_mask(self):
         env = FrameSkipRetroEnv()

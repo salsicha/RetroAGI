@@ -40,10 +40,12 @@ Current result:
       survival rate 1.0, completion rate 0.0, and threshold pass rate 0.0.
 - Recorded Full SMB rollouts first showed the deterministic policy choosing
       mostly `RIGHT` plus standalone `JUMP`, never `RIGHT_JUMP`; after the
-      LSTM/motor retrain, the latest fixed-benchmark recording chose only
-      `RIGHT` for every step. The next blocker is real-emulator action-contract,
-      motor-primitive activation, and timing adaptation rather than Block SMB
-      scenario coverage.
+      LSTM/motor retrain, fixed-benchmark recording chose only `RIGHT` for
+      every step. The action-contract fix now maps RAM-backed progress
+      correctly and activates `RIGHT_JUMP`, but the deterministic policy now
+      overuses `RIGHT_JUMP` for every step. The next blocker is real-emulator
+      timing adaptation and warm-start imitation rather than Block SMB scenario
+      coverage.
 - LSTM/world-model training is now explicit in Full SMB, and the B-stream motor
       primitive decoder feeds LSTM-predicted replan signals into Full SMB
       `RIGHT_JUMP`/`LEFT_JUMP` action selection.
@@ -57,6 +59,13 @@ Current result:
       mean return 571.0, mean progress 20.0, survival rate 1.0, completion rate
       0.0, threshold pass rate 0.0, and each recorded episode selected `RIGHT`
       for all 1,522 steps.
+- Full SMB action-contract and motor-activation plumbing is fixed. The
+      RAM-backed player screen position is injected before signal extraction,
+      absolute `xscrollHi/xscrollLo` progress takes precedence over the coarse
+      `scrolling` field, and motor primitives can promote primary movement
+      actions into combined jump actions. Re-evaluation improved mean return to
+      798.0 and mean progress to 398.0, with every recorded step selecting
+      `RIGHT_JUMP`, but Level 1-1 remains unsolved.
 
 Next steps:
 
@@ -214,6 +223,18 @@ Next steps:
       rate 1.0, completion rate 0.0, threshold pass rate 0.0, and recordings in
       `artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_transfer_long/`
       showed `RIGHT` for every step.
+- [x] Fix the Full SMB action-contract and motor-primitive activation path for
+      transferred policies.
+      Result: `retroagi/stages/full_smb/adapter.py` now extracts RAM-backed
+      player screen position before signal extraction and prefers
+      `xscrollHi/xscrollLo` over the coarse `scrolling` field. The Full SMB
+      motor bias can now promote primary movement into `RIGHT_JUMP` even when
+      standalone `JUMP` has low logit support. Re-evaluation of
+      `policy_distilled_dagger9_lstm_motor_transfer_long.pth` produced mean
+      return 798.0, mean progress 398.0, survival rate 1.0, completion rate
+      0.0, threshold pass rate 0.0, and recordings in
+      `artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_action_contract_fix/`
+      showed `RIGHT_JUMP` for all 1,519 steps per episode.
 - [ ] Add a Full SMB action-contract diagnostic for transferred policies.
   - [ ] Report deterministic and sampled action distributions on canonical
         real-emulator frames and recorded rollouts.

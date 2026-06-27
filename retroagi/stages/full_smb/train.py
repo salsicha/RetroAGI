@@ -2242,7 +2242,7 @@ def _apply_full_smb_motor_primitive_bias(
     if combo_strength.ndim != 1 or combo_strength.size(0) != logits.size(0):
         return logits
 
-    max_boost = 5.0
+    max_boost = 12.0
     base_boost = (0.5 * combo_strength).clamp(min=0.0, max=max_boost)
     bias = torch.zeros_like(logits)
     bias = bias + _combined_full_smb_action_bias(
@@ -2273,9 +2273,11 @@ def _combined_full_smb_action_bias(
     base_boost: torch.Tensor,
     max_boost: float,
 ) -> torch.Tensor:
-    pair_support = torch.minimum(logits[:, primary], logits[:, jump])
-    combo_gap = (pair_support - logits[:, combo]).clamp(min=0.0, max=max_boost)
-    boost = base_boost + combo_gap
+    del jump
+    primary_support = logits[:, primary]
+    combo_gap = (primary_support - logits[:, combo]).clamp(min=0.0, max=max_boost)
+    active = (base_boost > 0.0).to(dtype=logits.dtype, device=logits.device)
+    boost = (base_boost + combo_gap) * active
     one_hot = torch.zeros(logits.size(-1), dtype=logits.dtype, device=logits.device)
     one_hot[combo] = 1.0
     return boost.unsqueeze(-1) * one_hot.unsqueeze(0)

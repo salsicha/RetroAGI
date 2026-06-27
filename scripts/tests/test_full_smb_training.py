@@ -1106,6 +1106,44 @@ class TestFullSMBTraining(unittest.TestCase):
             logits[0, int(SMBAction.RIGHT)].item(),
         )
 
+    def test_full_smb_motor_primitives_promote_primary_motion_to_combo(self):
+        logits = torch.tensor(
+            [
+                [
+                    -4.0,
+                    4.0,
+                    -8.0,
+                    -4.0,
+                    -8.0,
+                    -12.0,
+                ]
+            ],
+            dtype=torch.float32,
+        )
+        motor = MotorPrimitiveOutput(
+            button_combo_logits=torch.zeros(1, 1, len(SMB_ACTIONS)),
+            hold_duration=torch.ones(1, 1),
+            release_logit=torch.zeros(1, 1),
+            cancel_logit=torch.zeros(1, 1),
+            confidence=torch.ones(1, 1),
+            interrupt_logit=torch.ones(1, 1),
+            replan_probability=torch.ones(1, 1),
+        )
+
+        adjusted = full_smb_train_module._apply_full_smb_motor_primitive_bias(
+            logits,
+            motor,
+        )
+
+        self.assertGreater(
+            adjusted[0, int(SMBAction.RIGHT_JUMP)].item(),
+            adjusted[0, int(SMBAction.RIGHT)].item(),
+        )
+        self.assertLess(
+            adjusted[0, int(SMBAction.JUMP)].item(),
+            adjusted[0, int(SMBAction.RIGHT)].item(),
+        )
+
     def test_training_config_normalizes_full_smb_contract_sections(self):
         config = FullSMBTrainingConfig(
             epochs=2,

@@ -416,8 +416,8 @@ SMB_RAM_PLAYER_SCREEN_X = 0x86
 SMB_RAM_PLAYER_SCREEN_Y = 0xCE
 SMB_SCREEN_WIDTH = 256.0
 SMB_SCREEN_HEIGHT = 240.0
-SCREEN_X_KEYS = ("screen_x", "screenX", "x_screen")
-SCREEN_Y_KEYS = ("screen_y", "screenY", "y_screen")
+SCREEN_X_KEYS = ("screen_x", "screenX", "x_screen", "player_screen_x", "mario_screen_x")
+SCREEN_Y_KEYS = ("screen_y", "screenY", "y_screen", "player_screen_y", "mario_screen_y")
 SCROLL_X_KEYS = ("xscroll", "x_scroll", "scroll_x", "camera_x", "scrolling")
 SCROLL_X_LO_KEYS = ("xscrollLo", "x_scroll_lo", "scroll_x_lo", "levelLo")
 SCROLL_X_HI_KEYS = ("xscrollHi", "x_scroll_hi", "scroll_x_hi", "levelHi")
@@ -833,6 +833,7 @@ class FullSMBStage:
 
     def _annotated_info(self, info: Any, *, terminated: bool, truncated: bool) -> dict[str, Any]:
         annotated = self._info(info)
+        self._annotate_vision_position_target(annotated)
         signals = extract_full_smb_signals(annotated, terminated=terminated, truncated=truncated)
         state_vec = signals.to_state_vec(self.signal_config)
         camera_vec = _camera_vec(annotated, signals, self.signal_config)
@@ -871,6 +872,8 @@ class FullSMBStage:
             "player_screen_x": screen_x,
             "player_screen_y": screen_y,
         }
+        info.setdefault("player_screen_x", screen_x)
+        info.setdefault("player_screen_y", screen_y)
 
     def _reward_terms(
         self,
@@ -1009,13 +1012,11 @@ def _scroll_position_x(info: Mapping[str, Any]) -> Optional[float]:
 
 
 def _raw_scroll_x(info: Mapping[str, Any]) -> Optional[float]:
-    scroll_x = _numeric_value(info, SCROLL_X_KEYS)
-    if scroll_x is None:
-        scroll_lo = _numeric_value(info, SCROLL_X_LO_KEYS)
-        scroll_hi = _numeric_value(info, SCROLL_X_HI_KEYS)
-        if scroll_lo is not None and scroll_hi is not None:
-            scroll_x = scroll_hi * 256.0 + scroll_lo
-    return scroll_x
+    scroll_lo = _numeric_value(info, SCROLL_X_LO_KEYS)
+    scroll_hi = _numeric_value(info, SCROLL_X_HI_KEYS)
+    if scroll_lo is not None and scroll_hi is not None:
+        return scroll_hi * 256.0 + scroll_lo
+    return _numeric_value(info, SCROLL_X_KEYS)
 
 
 def _camera_vec(
