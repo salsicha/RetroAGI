@@ -155,9 +155,16 @@ Next steps:
         thresholds, default Block SMB training/distillation lists, and scripted
         baseline actions.
   - [x] Update scenario, task-schema, success-threshold, and scripted-policy
-        tests for the expanded six-scenario gate.
-- [ ] Retrain or redistill Block SMB against the expanded six-scenario gate,
-      including `level_5_enemy_hop.json` and `level_6_enemy_patrol.json`.
+        tests for the then-expanded enemy-scenario gate.
+- [x] Add the remaining missing fixed-scenario mechanics before retraining:
+      moving-platform traversal, combined gap-plus-enemy timing, and explicit
+      enemy-stomp behavior.
+  - [x] Add `level_7_moving_bridge.json`, `level_8_enemy_gap.json`, and
+        `level_9_enemy_stomp.json`.
+  - [x] Include the new scenarios in task metadata, thresholds, default
+        training/distillation lists, scripted baselines, docs, and tests.
+- [ ] Retrain or redistill Block SMB against the expanded nine-scenario gate,
+      including `level_5_enemy_hop.json` through `level_9_enemy_stomp.json`.
 - [ ] Re-transfer the enemy-aware distilled Block SMB checkpoint into Full SMB,
       run a short fine-tune, then evaluate and record fixed-benchmark rollouts.
 

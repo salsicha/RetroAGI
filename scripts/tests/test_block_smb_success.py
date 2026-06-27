@@ -22,6 +22,9 @@ class TestBlockSMBSuccessThresholds(unittest.TestCase):
                 "level_4_platforms.json",
                 "level_5_enemy_hop.json",
                 "level_6_enemy_patrol.json",
+                "level_7_moving_bridge.json",
+                "level_8_enemy_gap.json",
+                "level_9_enemy_stomp.json",
             },
         )
         for threshold in FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS.values():

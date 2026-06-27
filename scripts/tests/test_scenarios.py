@@ -19,6 +19,7 @@ class TestMarioScenarios(unittest.TestCase):
         expected_coins,
         expected_goal,
         expected_enemies=0,
+        expected_moving_platforms=0,
     ):
         """Helper method to load a scenario and validate its instantiation."""
         filepath = self.scenarios_dir / filename
@@ -36,6 +37,10 @@ class TestMarioScenarios(unittest.TestCase):
         self.assertEqual(len(self.env.platforms), expected_platforms)
         self.assertEqual(len(self.env.coins), expected_coins)
         self.assertEqual(len(self.env.enemies), expected_enemies)
+        self.assertEqual(
+            sum(1 for platform in self.env.platforms if platform['moving']),
+            expected_moving_platforms,
+        )
         
         if expected_goal:
             self.assertIsNotNone(self.env.goal)
@@ -99,6 +104,36 @@ class TestMarioScenarios(unittest.TestCase):
             expected_coins=2,
             expected_goal=True,
             expected_enemies=2,
+        )
+
+    def test_level_7_moving_bridge(self):
+        self._test_scenario(
+            'level_7_moving_bridge.json',
+            expected_mario=[20, 200],
+            expected_platforms=3,
+            expected_coins=1,
+            expected_goal=True,
+            expected_moving_platforms=1,
+        )
+
+    def test_level_8_enemy_gap(self):
+        self._test_scenario(
+            'level_8_enemy_gap.json',
+            expected_mario=[20, 200],
+            expected_platforms=2,
+            expected_coins=2,
+            expected_goal=True,
+            expected_enemies=1,
+        )
+
+    def test_level_9_enemy_stomp(self):
+        self._test_scenario(
+            'level_9_enemy_stomp.json',
+            expected_mario=[20, 200],
+            expected_platforms=1,
+            expected_coins=1,
+            expected_goal=True,
+            expected_enemies=1,
         )
 
 if __name__ == '__main__':

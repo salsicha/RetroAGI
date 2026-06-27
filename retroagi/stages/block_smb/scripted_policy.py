@@ -40,6 +40,13 @@ def fixed_scenario_action_scripts(
         "level_6_enemy_patrol.json": (
             [1] * 12 + [2] * 18 + [1] * 18 + [2] * 18 + [1] * max_steps
         ),
+        "level_7_moving_bridge.json": (
+            [1] * 10 + [2] * 14 + [1] * 8 + [2] * 14 + [1] * max_steps
+        ),
+        "level_8_enemy_gap.json": (
+            [1] * 10 + [2] * 17 + [1] * 8 + [2] * 18 + [1] * max_steps
+        ),
+        "level_9_enemy_stomp.json": [1] * 8 + [2] * 14 + [1] * max_steps,
     }
     return {
         scenario_name: actions[:max_steps]

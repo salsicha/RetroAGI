@@ -105,6 +105,9 @@ class BlockSMBTrainingConfig:
         "level_4_platforms.json",
         "level_5_enemy_hop.json",
         "level_6_enemy_patrol.json",
+        "level_7_moving_bridge.json",
+        "level_8_enemy_gap.json",
+        "level_9_enemy_stomp.json",
     )
     generated_scenarios: int = 0
     generated_seed: int = 50_000

@@ -1,7 +1,7 @@
 # Block SMB Success Thresholds
 
 These thresholds define when a Block SMB policy is considered successful on the
-six fixed scenarios used by P3 evaluation. They are intentionally stricter
+nine fixed scenarios used by P3 evaluation. They are intentionally stricter
 than a single lucky goal collision: each scenario must be solved repeatedly,
 within a bounded time budget, and with enough return to show the policy is not
 paying avoidable penalties.
@@ -31,6 +31,9 @@ useful for debugging, but it does not qualify as a known-good Block SMB policy.
 | `level_4_platforms.json` | `1.0` | `55.0` | `3` | `200` |
 | `level_5_enemy_hop.json` | `1.0` | `55.0` | `3` | `200` |
 | `level_6_enemy_patrol.json` | `1.0` | `55.0` | `3` | `200` |
+| `level_7_moving_bridge.json` | `1.0` | `55.0` | `3` | `200` |
+| `level_8_enemy_gap.json` | `1.0` | `55.0` | `3` | `200` |
+| `level_9_enemy_stomp.json` | `1.0` | `55.0` | `3` | `200` |
 
 `success_rate` is the fraction of deterministic evaluation episodes that end by
 reaching the scenario goal. The minimum return floor is paired with the success
@@ -97,8 +100,9 @@ Separated objective weights can be tuned with `--policy-loss-weight`,
 ## Known-Good Baseline
 
 The repository includes deterministic scripted actions that pass these
-thresholds. The checked-in artifact below predates the enemy scenarios and
-should be regenerated before it is used as a six-scenario promotion artifact:
+thresholds. The checked-in artifact below predates the post-four fixed-scenario
+coverage and should be regenerated before it is used as a nine-scenario
+promotion artifact:
 
 - Checkpoint: `artifacts/block_smb/known_good_scripted_seed20260622/policy.pth`
 - Summary: `artifacts/block_smb/known_good_scripted_seed20260622/run_summary.json`

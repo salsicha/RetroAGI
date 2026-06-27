@@ -599,7 +599,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                     "final goal."
                 ),
             ),
-            description="Moving-platform fixed Block SMB scenario",
+            description="Separated-platform fixed Block SMB scenario",
         ),
         GameTaskSpec(
             name="level_5_enemy_hop.json",
@@ -640,12 +640,69 @@ SMB_TASK_SCHEMA = GameTaskSchema(
             description="Patrolling-enemy avoidance fixed Block SMB scenario",
         ),
         GameTaskSpec(
+            name="level_7_moving_bridge.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_7_moving_bridge.json",
+            reset_seed=101_007,
+            curriculum_stage=7,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Moving-bridge run: use the moving platform as the gap "
+                    "bridge and reach the goal."
+                ),
+            ),
+            description="Moving-platform traversal fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_8_enemy_gap.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_8_enemy_gap.json",
+            reset_seed=101_008,
+            curriculum_stage=8,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Enemy-gap run: combine a gap crossing with safe enemy "
+                    "avoidance or stomp timing before the goal."
+                ),
+            ),
+            description="Combined gap-and-enemy fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_9_enemy_stomp.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_9_enemy_stomp.json",
+            reset_seed=101_009,
+            curriculum_stage=9,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Enemy-stomp run: clear a blocking ground enemy with safe "
+                    "top contact and reach the goal."
+                ),
+            ),
+            description="Enemy-stomp fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
             name="generated_block_smb",
             stage_name="block_smb",
             task_type="procedural",
             source="MarioScenarioEnv.generate_scenario",
             reset_seed=150_000,
-            curriculum_stage=7,
+            curriculum_stage=10,
             generation_seed=50_000,
             generation_config={
                 "width_range": (256, 512),
@@ -740,6 +797,15 @@ SMB_BLOCK_GAME_SPEC = BlockGameSpec(
         ),
         "level_6_enemy_patrol.json": (
             "retroagi/stages/block_smb/scenarios/level_6_enemy_patrol.json"
+        ),
+        "level_7_moving_bridge.json": (
+            "retroagi/stages/block_smb/scenarios/level_7_moving_bridge.json"
+        ),
+        "level_8_enemy_gap.json": (
+            "retroagi/stages/block_smb/scenarios/level_8_enemy_gap.json"
+        ),
+        "level_9_enemy_stomp.json": (
+            "retroagi/stages/block_smb/scenarios/level_9_enemy_stomp.json"
         ),
     },
     procedural_scenario_generator="MarioScenarioEnv.generate_scenario",
