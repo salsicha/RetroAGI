@@ -163,8 +163,11 @@ Next steps:
         `level_9_enemy_stomp.json`.
   - [x] Include the new scenarios in task metadata, thresholds, default
         training/distillation lists, scripted baselines, docs, and tests.
-- [ ] Retrain or redistill Block SMB against the expanded nine-scenario gate,
+- [x] Retrain or redistill Block SMB against the expanded nine-scenario gate,
       including `level_5_enemy_hop.json` through `level_9_enemy_stomp.json`.
+      Result: `data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9.pth`
+      passed all nine fixed scenarios with mean return 69.319, success rate
+      1.0, and threshold pass rate 1.0 after five DAgger correction rounds.
 - [ ] Re-transfer the enemy-aware distilled Block SMB checkpoint into Full SMB,
       run a short fine-tune, then evaluate and record fixed-benchmark rollouts.
 
