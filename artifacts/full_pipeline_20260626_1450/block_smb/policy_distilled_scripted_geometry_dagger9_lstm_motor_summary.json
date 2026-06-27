@@ -1,0 +1,3144 @@
+{
+  "best_phase": "teacher_forced",
+  "checkpoint": {
+    "checkpoint_kind": "block_smb_trainer",
+    "epoch": 220,
+    "metrics": {
+      "accuracy": 0.998467225678478,
+      "epoch": 40.0,
+      "eval_mean_return": 63.45444444444446,
+      "eval_success_rate": 0.8888888888888888,
+      "eval_threshold_pass_rate": 0.8888888888888888,
+      "eval_tuning_score": 889841.2322222221,
+      "iteration": 5.0,
+      "loss": 0.0033699358923436826,
+      "phase": "dagger"
+    },
+    "model_name": "block_smb_actor_world_model_critic",
+    "stage": "block_smb"
+  },
+  "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor.pth",
+  "config": {
+    "batch_size": 64,
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor.pth",
+    "controller_schedule": "constant",
+    "dagger_epochs_per_iteration": 40,
+    "dagger_iterations": 5,
+    "deterministic": true,
+    "device": "cuda",
+    "episodes_per_scenario": 3,
+    "epochs": 20,
+    "evaluation_episodes": 3,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json",
+      "level_5_enemy_hop.json",
+      "level_6_enemy_patrol.json",
+      "level_7_moving_bridge.json",
+      "level_8_enemy_gap.json",
+      "level_9_enemy_stomp.json"
+    ],
+    "hidden_dim": 64,
+    "init_checkpoint": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9.pth",
+    "jump_weight_multiplier": 0.2,
+    "learning_rate": 0.001,
+    "log_path": "artifacts/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor_events.jsonl",
+    "output_summary": "artifacts/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor_summary.json",
+    "rollout_steps": 200,
+    "seed": 20260627,
+    "sequence_training": false,
+    "vision_checkpoint": "data/full_pipeline_20260626_1450/block_vit/block_vit.pth"
+  },
+  "dataset": {
+    "action_counts": {
+      "0": 0,
+      "1": 8037,
+      "2": 3054,
+      "3": 0,
+      "4": 0,
+      "5": 0
+    },
+    "examples": 11091,
+    "max_step_index": 79,
+    "scenario_examples": {
+      "level_1_flat.json": 1278,
+      "level_2_gap.json": 1230,
+      "level_3_stairs.json": 1206,
+      "level_4_platforms.json": 1242,
+      "level_5_enemy_hop.json": 1278,
+      "level_6_enemy_patrol.json": 1356,
+      "level_7_moving_bridge.json": 1278,
+      "level_8_enemy_gap.json": 945,
+      "level_9_enemy_stomp.json": 1278
+    }
+  },
+  "evaluation": {
+    "fixed_scenarios": {
+      "level_1_flat.json": {
+        "return": 69.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+          "scenario_name": "level_1_flat.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_2_gap.json": {
+        "return": 69.825,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+          "scenario_name": "level_2_gap.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_3_stairs.json": {
+        "return": 68.705,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+          "scenario_name": "level_3_stairs.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_4_platforms.json": {
+        "return": 69.825,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+          "scenario_name": "level_4_platforms.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_5_enemy_hop.json": {
+        "return": 74.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+          "scenario_name": "level_5_enemy_hop.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_6_enemy_patrol.json": {
+        "return": 70.3,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+          "scenario_name": "level_6_enemy_patrol.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_7_moving_bridge.json": {
+        "return": 69.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+          "scenario_name": "level_7_moving_bridge.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_8_enemy_gap.json": {
+        "return": 5.375000000000003,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+          "scenario_name": "level_8_enemy_gap.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      },
+      "level_9_enemy_stomp.json": {
+        "return": 74.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+          "scenario_name": "level_9_enemy_stomp.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      }
+    },
+    "iteration": 5,
+    "mean_return": 63.45444444444446,
+    "phase": "best_teacher_forced",
+    "success_rate": 0.8888888888888888,
+    "success_thresholds_met": false,
+    "tuning_metrics": {
+      "mean_return": 63.45444444444445,
+      "mean_success_rate": 0.8888888888888888,
+      "scenario_count": 9.0,
+      "score": 889841.2322222221,
+      "threshold_pass_rate": 0.8888888888888888
+    }
+  },
+  "evaluations": [
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 69.825,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_3_stairs.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_4_platforms.json": {
+          "return": 69.825,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_5_enemy_hop.json": {
+          "return": 74.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+            "scenario_name": "level_5_enemy_hop.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_6_enemy_patrol.json": {
+          "return": 70.3,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+            "scenario_name": "level_6_enemy_patrol.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_7_moving_bridge.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+            "scenario_name": "level_7_moving_bridge.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_8_enemy_gap.json": {
+          "return": 5.375000000000003,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+            "scenario_name": "level_8_enemy_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_9_enemy_stomp.json": {
+          "return": 74.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+            "scenario_name": "level_9_enemy_stomp.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        }
+      },
+      "iteration": 0,
+      "mean_return": 63.45444444444446,
+      "phase": "teacher_forced",
+      "success_rate": 0.8888888888888888,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 63.45444444444445,
+        "mean_success_rate": 0.8888888888888888,
+        "scenario_count": 9.0,
+        "score": 889841.2322222221,
+        "threshold_pass_rate": 0.8888888888888888
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_3_stairs.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_4_platforms.json": {
+          "return": 69.825,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_5_enemy_hop.json": {
+          "return": 74.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+            "scenario_name": "level_5_enemy_hop.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_6_enemy_patrol.json": {
+          "return": 70.3,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+            "scenario_name": "level_6_enemy_patrol.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_7_moving_bridge.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+            "scenario_name": "level_7_moving_bridge.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_8_enemy_gap.json": {
+          "return": -4.794999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+            "scenario_name": "level_8_enemy_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_9_enemy_stomp.json": {
+          "return": 64.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+            "scenario_name": "level_9_enemy_stomp.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        }
+      },
+      "iteration": 1,
+      "mean_return": 61.0888888888889,
+      "phase": "dagger",
+      "success_rate": 0.8888888888888888,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 61.08888888888888,
+        "mean_success_rate": 0.8888888888888888,
+        "scenario_count": 9.0,
+        "score": 889838.8666666667,
+        "threshold_pass_rate": 0.8888888888888888
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_3_stairs.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_4_platforms.json": {
+          "return": -3.9949999999999988,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_5_enemy_hop.json": {
+          "return": 74.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+            "scenario_name": "level_5_enemy_hop.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_6_enemy_patrol.json": {
+          "return": -2.974999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+            "scenario_name": "level_6_enemy_patrol.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_7_moving_bridge.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+            "scenario_name": "level_7_moving_bridge.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_8_enemy_gap.json": {
+          "return": -4.794999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+            "scenario_name": "level_8_enemy_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_9_enemy_stomp.json": {
+          "return": 74.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+            "scenario_name": "level_9_enemy_stomp.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        }
+      },
+      "iteration": 2,
+      "mean_return": 45.85611111111112,
+      "phase": "dagger",
+      "success_rate": 0.6666666666666666,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 45.85611111111111,
+        "mean_success_rate": 0.6666666666666666,
+        "scenario_count": 9.0,
+        "score": 667379.1894444444,
+        "threshold_pass_rate": 0.6666666666666666
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_3_stairs.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_4_platforms.json": {
+          "return": 69.825,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_5_enemy_hop.json": {
+          "return": 59.26500000000001,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+            "scenario_name": "level_5_enemy_hop.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_6_enemy_patrol.json": {
+          "return": 70.3,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+            "scenario_name": "level_6_enemy_patrol.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_7_moving_bridge.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+            "scenario_name": "level_7_moving_bridge.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_8_enemy_gap.json": {
+          "return": -4.794999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+            "scenario_name": "level_8_enemy_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_9_enemy_stomp.json": {
+          "return": 64.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+            "scenario_name": "level_9_enemy_stomp.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        }
+      },
+      "iteration": 3,
+      "mean_return": 59.42222222222223,
+      "phase": "dagger",
+      "success_rate": 0.8888888888888888,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 59.42222222222222,
+        "mean_success_rate": 0.8888888888888888,
+        "scenario_count": 9.0,
+        "score": 889837.2,
+        "threshold_pass_rate": 0.8888888888888888
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_3_stairs.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_4_platforms.json": {
+          "return": -3.9949999999999988,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_5_enemy_hop.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+            "scenario_name": "level_5_enemy_hop.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_6_enemy_patrol.json": {
+          "return": 70.245,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+            "scenario_name": "level_6_enemy_patrol.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_7_moving_bridge.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+            "scenario_name": "level_7_moving_bridge.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_8_enemy_gap.json": {
+          "return": 84.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+            "scenario_name": "level_8_enemy_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_9_enemy_stomp.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+            "scenario_name": "level_9_enemy_stomp.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        }
+      },
+      "iteration": 4,
+      "mean_return": 62.77611111111113,
+      "phase": "dagger",
+      "success_rate": 0.8888888888888888,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 62.77611111111111,
+        "mean_success_rate": 0.8888888888888888,
+        "scenario_count": 9.0,
+        "score": 889840.5538888889,
+        "threshold_pass_rate": 0.8888888888888888
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 68.705,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_3_stairs.json": {
+          "return": 11.345,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.9949999999999988,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_5_enemy_hop.json": {
+          "return": 59.26500000000001,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+            "scenario_name": "level_5_enemy_hop.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_6_enemy_patrol.json": {
+          "return": 70.31,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+            "scenario_name": "level_6_enemy_patrol.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_7_moving_bridge.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+            "scenario_name": "level_7_moving_bridge.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_8_enemy_gap.json": {
+          "return": 84.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+            "scenario_name": "level_8_enemy_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_9_enemy_stomp.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+            "scenario_name": "level_9_enemy_stomp.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        }
+      },
+      "iteration": 5,
+      "mean_return": 55.298888888888904,
+      "phase": "dagger",
+      "success_rate": 0.7777777777777778,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 55.29888888888889,
+        "mean_success_rate": 0.7777777777777778,
+        "scenario_count": 9.0,
+        "score": 778610.8544444444,
+        "threshold_pass_rate": 0.7777777777777778
+      }
+    }
+  ],
+  "history": [
+    {
+      "accuracy": 0.995334370139969,
+      "epoch": 1.0,
+      "iteration": 0.0,
+      "loss": 0.007883844242001743,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9989631933644375,
+      "epoch": 2.0,
+      "iteration": 0.0,
+      "loss": 0.000875619128878052,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9974079834110938,
+      "epoch": 3.0,
+      "iteration": 0.0,
+      "loss": 0.004908778185354505,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9922239502332815,
+      "epoch": 4.0,
+      "iteration": 0.0,
+      "loss": 0.0191694308922088,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.997926386728875,
+      "epoch": 5.0,
+      "iteration": 0.0,
+      "loss": 0.0018731296948250372,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 1.0,
+      "epoch": 6.0,
+      "iteration": 0.0,
+      "loss": 0.00032336081745784476,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9994815966822188,
+      "epoch": 7.0,
+      "iteration": 0.0,
+      "loss": 0.0005642225357875621,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9989631933644375,
+      "epoch": 8.0,
+      "iteration": 0.0,
+      "loss": 0.002723474372245908,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9994815966822188,
+      "epoch": 9.0,
+      "iteration": 0.0,
+      "loss": 0.0019137065445246515,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9984447900466563,
+      "epoch": 10.0,
+      "iteration": 0.0,
+      "loss": 0.004036494713286047,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9989631933644375,
+      "epoch": 11.0,
+      "iteration": 0.0,
+      "loss": 0.0031924354892848604,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9974079834110938,
+      "epoch": 12.0,
+      "iteration": 0.0,
+      "loss": 0.007410349127423248,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9984447900466563,
+      "epoch": 13.0,
+      "iteration": 0.0,
+      "loss": 0.0027639761625048095,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9958527734577501,
+      "epoch": 14.0,
+      "iteration": 0.0,
+      "loss": 0.00775302177443369,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.995334370139969,
+      "epoch": 15.0,
+      "iteration": 0.0,
+      "loss": 0.008411751666573151,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9974079834110938,
+      "epoch": 16.0,
+      "iteration": 0.0,
+      "loss": 0.004352242798347001,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9989631933644375,
+      "epoch": 17.0,
+      "iteration": 0.0,
+      "loss": 0.0008097887106286325,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9968895800933126,
+      "epoch": 18.0,
+      "iteration": 0.0,
+      "loss": 0.004499243546173694,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9984447900466563,
+      "epoch": 19.0,
+      "iteration": 0.0,
+      "loss": 0.006040690303901215,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9994815966822188,
+      "epoch": 20.0,
+      "iteration": 0.0,
+      "loss": 0.0013366577397369035,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9672174141096249,
+      "epoch": 1.0,
+      "iteration": 1.0,
+      "loss": 0.05150796170792194,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.971938106477839,
+      "epoch": 2.0,
+      "iteration": 1.0,
+      "loss": 0.03688726393633429,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.978494623655914,
+      "epoch": 3.0,
+      "iteration": 1.0,
+      "loss": 0.029110736916329708,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.980592709152898,
+      "epoch": 4.0,
+      "iteration": 1.0,
+      "loss": 0.026367488351615485,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.984002098085497,
+      "epoch": 5.0,
+      "iteration": 1.0,
+      "loss": 0.019905236355985772,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.982690794649882,
+      "epoch": 6.0,
+      "iteration": 1.0,
+      "loss": 0.021552292406221925,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.982166273275636,
+      "epoch": 7.0,
+      "iteration": 1.0,
+      "loss": 0.022327949492020962,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.982166273275636,
+      "epoch": 8.0,
+      "iteration": 1.0,
+      "loss": 0.024559246454805082,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.983477576711251,
+      "epoch": 9.0,
+      "iteration": 1.0,
+      "loss": 0.027241083432219527,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.98426435877262,
+      "epoch": 10.0,
+      "iteration": 1.0,
+      "loss": 0.018887803939393648,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.985837922895358,
+      "epoch": 11.0,
+      "iteration": 1.0,
+      "loss": 0.018990307199284375,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.985575662208235,
+      "epoch": 12.0,
+      "iteration": 1.0,
+      "loss": 0.017539753764843357,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.982690794649882,
+      "epoch": 13.0,
+      "iteration": 1.0,
+      "loss": 0.024220680109638727,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.985837922895358,
+      "epoch": 14.0,
+      "iteration": 1.0,
+      "loss": 0.017412538875413167,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.990296354576449,
+      "epoch": 15.0,
+      "iteration": 1.0,
+      "loss": 0.012924233387736567,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991083136637818,
+      "epoch": 16.0,
+      "iteration": 1.0,
+      "loss": 0.011718238995772998,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.989771833202203,
+      "epoch": 17.0,
+      "iteration": 1.0,
+      "loss": 0.01689047257343225,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.989247311827957,
+      "epoch": 18.0,
+      "iteration": 1.0,
+      "loss": 0.01727974788710053,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.993181222134802,
+      "epoch": 19.0,
+      "iteration": 1.0,
+      "loss": 0.008778209218846592,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.996852871754524,
+      "epoch": 20.0,
+      "iteration": 1.0,
+      "loss": 0.0048942140526063264,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994492525570417,
+      "epoch": 21.0,
+      "iteration": 1.0,
+      "loss": 0.00896483947176837,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991083136637818,
+      "epoch": 22.0,
+      "iteration": 1.0,
+      "loss": 0.013975093144831367,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.993968004196171,
+      "epoch": 23.0,
+      "iteration": 1.0,
+      "loss": 0.009475592372683994,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.992656700760556,
+      "epoch": 24.0,
+      "iteration": 1.0,
+      "loss": 0.010839513465034275,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991345397324941,
+      "epoch": 25.0,
+      "iteration": 1.0,
+      "loss": 0.012825826870065272,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991345397324941,
+      "epoch": 26.0,
+      "iteration": 1.0,
+      "loss": 0.011638999883410463,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994492525570417,
+      "epoch": 27.0,
+      "iteration": 1.0,
+      "loss": 0.00807981852954736,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994492525570417,
+      "epoch": 28.0,
+      "iteration": 1.0,
+      "loss": 0.007724934161802122,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.992918961447679,
+      "epoch": 29.0,
+      "iteration": 1.0,
+      "loss": 0.010221912989950314,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.993181222134802,
+      "epoch": 30.0,
+      "iteration": 1.0,
+      "loss": 0.010100899683836718,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991607658012064,
+      "epoch": 31.0,
+      "iteration": 1.0,
+      "loss": 0.012332616689955191,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.992918961447679,
+      "epoch": 32.0,
+      "iteration": 1.0,
+      "loss": 0.00930845192040387,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.993705743509048,
+      "epoch": 33.0,
+      "iteration": 1.0,
+      "loss": 0.010218958899187286,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991607658012064,
+      "epoch": 34.0,
+      "iteration": 1.0,
+      "loss": 0.01300057508787807,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.992656700760556,
+      "epoch": 35.0,
+      "iteration": 1.0,
+      "loss": 0.008366279782634057,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994230264883294,
+      "epoch": 36.0,
+      "iteration": 1.0,
+      "loss": 0.009816347957590442,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.993443482821925,
+      "epoch": 37.0,
+      "iteration": 1.0,
+      "loss": 0.009644602196046351,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991345397324941,
+      "epoch": 38.0,
+      "iteration": 1.0,
+      "loss": 0.013812469498719287,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991083136637818,
+      "epoch": 39.0,
+      "iteration": 1.0,
+      "loss": 0.01237535843299714,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.992394440073433,
+      "epoch": 40.0,
+      "iteration": 1.0,
+      "loss": 0.008699582831445535,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.986744432661718,
+      "epoch": 1.0,
+      "iteration": 2.0,
+      "loss": 0.022238839556291547,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9890420643336868,
+      "epoch": 2.0,
+      "iteration": 2.0,
+      "loss": 0.017026428638250636,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9886885825379993,
+      "epoch": 3.0,
+      "iteration": 2.0,
+      "loss": 0.01756766417941764,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9846235418875928,
+      "epoch": 4.0,
+      "iteration": 2.0,
+      "loss": 0.023654282471922562,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9890420643336868,
+      "epoch": 5.0,
+      "iteration": 2.0,
+      "loss": 0.014905864947724702,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9885118416401555,
+      "epoch": 6.0,
+      "iteration": 2.0,
+      "loss": 0.01599594020812182,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9916931778013433,
+      "epoch": 7.0,
+      "iteration": 2.0,
+      "loss": 0.010783425495636703,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9943442912689996,
+      "epoch": 8.0,
+      "iteration": 2.0,
+      "loss": 0.009332010630135003,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9872746553552492,
+      "epoch": 9.0,
+      "iteration": 2.0,
+      "loss": 0.020568373743095725,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9927536231884058,
+      "epoch": 10.0,
+      "iteration": 2.0,
+      "loss": 0.011596683261386596,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9906327324142806,
+      "epoch": 11.0,
+      "iteration": 2.0,
+      "loss": 0.014184729038997293,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991869918699187,
+      "epoch": 12.0,
+      "iteration": 2.0,
+      "loss": 0.014024843801387094,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9925768822905621,
+      "epoch": 13.0,
+      "iteration": 2.0,
+      "loss": 0.014532358945848091,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9939908094733121,
+      "epoch": 14.0,
+      "iteration": 2.0,
+      "loss": 0.009759218153172097,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9925768822905621,
+      "epoch": 15.0,
+      "iteration": 2.0,
+      "loss": 0.011448587016200041,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950512548603747,
+      "epoch": 16.0,
+      "iteration": 2.0,
+      "loss": 0.007407664312032052,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9916931778013433,
+      "epoch": 17.0,
+      "iteration": 2.0,
+      "loss": 0.012626751242406316,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9906327324142806,
+      "epoch": 18.0,
+      "iteration": 2.0,
+      "loss": 0.013817411403252539,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9920466595970308,
+      "epoch": 19.0,
+      "iteration": 2.0,
+      "loss": 0.013757423465145103,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950512548603747,
+      "epoch": 20.0,
+      "iteration": 2.0,
+      "loss": 0.007038368334034786,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950512548603747,
+      "epoch": 21.0,
+      "iteration": 2.0,
+      "loss": 0.007393967498874225,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9945210321668434,
+      "epoch": 22.0,
+      "iteration": 2.0,
+      "loss": 0.010271638168793036,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9948745139625309,
+      "epoch": 23.0,
+      "iteration": 2.0,
+      "loss": 0.00819788086130957,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9943442912689996,
+      "epoch": 24.0,
+      "iteration": 2.0,
+      "loss": 0.009629182072535184,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9961117002474372,
+      "epoch": 25.0,
+      "iteration": 2.0,
+      "loss": 0.006984060076972323,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9945210321668434,
+      "epoch": 26.0,
+      "iteration": 2.0,
+      "loss": 0.009128312230424231,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9934605867797809,
+      "epoch": 27.0,
+      "iteration": 2.0,
+      "loss": 0.01318304445376862,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966419229409685,
+      "epoch": 28.0,
+      "iteration": 2.0,
+      "loss": 0.006365022802042004,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9961117002474372,
+      "epoch": 29.0,
+      "iteration": 2.0,
+      "loss": 0.006526957859297151,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991869918699187,
+      "epoch": 30.0,
+      "iteration": 2.0,
+      "loss": 0.01422405598165659,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952279957582184,
+      "epoch": 31.0,
+      "iteration": 2.0,
+      "loss": 0.008596116983087798,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954047366560622,
+      "epoch": 32.0,
+      "iteration": 2.0,
+      "loss": 0.006027571353846559,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9964651820431247,
+      "epoch": 33.0,
+      "iteration": 2.0,
+      "loss": 0.0056044130818013035,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9927536231884058,
+      "epoch": 34.0,
+      "iteration": 2.0,
+      "loss": 0.012079850751053374,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.996995404736656,
+      "epoch": 35.0,
+      "iteration": 2.0,
+      "loss": 0.004136480158277201,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9943442912689996,
+      "epoch": 36.0,
+      "iteration": 2.0,
+      "loss": 0.00823203228849145,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950512548603747,
+      "epoch": 37.0,
+      "iteration": 2.0,
+      "loss": 0.007215735380899605,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9941675503711559,
+      "epoch": 38.0,
+      "iteration": 2.0,
+      "loss": 0.010752588024400121,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9948745139625309,
+      "epoch": 39.0,
+      "iteration": 2.0,
+      "loss": 0.005401691307714384,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9927536231884058,
+      "epoch": 40.0,
+      "iteration": 2.0,
+      "loss": 0.011023742641544858,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9880661784648765,
+      "epoch": 1.0,
+      "iteration": 3.0,
+      "loss": 0.021994410105936727,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9860320043395715,
+      "epoch": 2.0,
+      "iteration": 3.0,
+      "loss": 0.022356651891108803,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9884730132899376,
+      "epoch": 3.0,
+      "iteration": 3.0,
+      "loss": 0.01759970733243694,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9877949552481693,
+      "epoch": 4.0,
+      "iteration": 3.0,
+      "loss": 0.015749386643929872,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9872525088147546,
+      "epoch": 5.0,
+      "iteration": 3.0,
+      "loss": 0.019974865523030048,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9856251695145104,
+      "epoch": 6.0,
+      "iteration": 3.0,
+      "loss": 0.01887895626125588,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9910496338486574,
+      "epoch": 7.0,
+      "iteration": 3.0,
+      "loss": 0.011748781800068003,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.989151071331706,
+      "epoch": 8.0,
+      "iteration": 3.0,
+      "loss": 0.014985826440312242,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9901003525901817,
+      "epoch": 9.0,
+      "iteration": 3.0,
+      "loss": 0.014964953957625433,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9936262544073773,
+      "epoch": 10.0,
+      "iteration": 3.0,
+      "loss": 0.00790851467279574,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9913208570653648,
+      "epoch": 11.0,
+      "iteration": 3.0,
+      "loss": 0.01055035731944297,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9884730132899376,
+      "epoch": 12.0,
+      "iteration": 3.0,
+      "loss": 0.01649380206044215,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9929481963656089,
+      "epoch": 13.0,
+      "iteration": 3.0,
+      "loss": 0.009738262277203074,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9938974776240846,
+      "epoch": 14.0,
+      "iteration": 3.0,
+      "loss": 0.008192293065868947,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9951179820992677,
+      "epoch": 15.0,
+      "iteration": 3.0,
+      "loss": 0.00751703838209401,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9938974776240846,
+      "epoch": 16.0,
+      "iteration": 3.0,
+      "loss": 0.008597542701012087,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9933550311906699,
+      "epoch": 17.0,
+      "iteration": 3.0,
+      "loss": 0.011816196467404321,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957960401410361,
+      "epoch": 18.0,
+      "iteration": 3.0,
+      "loss": 0.006328445499919376,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9938974776240846,
+      "epoch": 19.0,
+      "iteration": 3.0,
+      "loss": 0.010241491584134229,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9918633034987795,
+      "epoch": 20.0,
+      "iteration": 3.0,
+      "loss": 0.01101329812282029,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9934906427990235,
+      "epoch": 21.0,
+      "iteration": 3.0,
+      "loss": 0.008979232513052347,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9947111472742066,
+      "epoch": 22.0,
+      "iteration": 3.0,
+      "loss": 0.009610519751706117,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9951179820992677,
+      "epoch": 23.0,
+      "iteration": 3.0,
+      "loss": 0.007915151850694241,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952535937076213,
+      "epoch": 24.0,
+      "iteration": 3.0,
+      "loss": 0.007210192779217107,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9956604285326824,
+      "epoch": 25.0,
+      "iteration": 3.0,
+      "loss": 0.0069673840644608135,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966097097911581,
+      "epoch": 26.0,
+      "iteration": 3.0,
+      "loss": 0.0060814643038719935,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9943043124491456,
+      "epoch": 27.0,
+      "iteration": 3.0,
+      "loss": 0.0100119009968636,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957960401410361,
+      "epoch": 28.0,
+      "iteration": 3.0,
+      "loss": 0.006664239973498362,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9960672633577434,
+      "epoch": 29.0,
+      "iteration": 3.0,
+      "loss": 0.005996922656536559,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9938974776240846,
+      "epoch": 30.0,
+      "iteration": 3.0,
+      "loss": 0.010384468661819754,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9915920802820721,
+      "epoch": 31.0,
+      "iteration": 3.0,
+      "loss": 0.012895674282106445,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9933550311906699,
+      "epoch": 32.0,
+      "iteration": 3.0,
+      "loss": 0.00956591498079189,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994575535665853,
+      "epoch": 33.0,
+      "iteration": 3.0,
+      "loss": 0.00842155097647635,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9959316517493898,
+      "epoch": 34.0,
+      "iteration": 3.0,
+      "loss": 0.005759947747260889,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966097097911581,
+      "epoch": 35.0,
+      "iteration": 3.0,
+      "loss": 0.006116756239912126,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994982370490914,
+      "epoch": 36.0,
+      "iteration": 3.0,
+      "loss": 0.009350774355392104,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9971521562245729,
+      "epoch": 37.0,
+      "iteration": 3.0,
+      "loss": 0.005681100153202074,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9982370490914022,
+      "epoch": 38.0,
+      "iteration": 3.0,
+      "loss": 0.003282548639151526,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952535937076213,
+      "epoch": 39.0,
+      "iteration": 3.0,
+      "loss": 0.007421476273513566,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9956604285326824,
+      "epoch": 40.0,
+      "iteration": 3.0,
+      "loss": 0.0057030176959980885,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9930578153812778,
+      "epoch": 1.0,
+      "iteration": 4.0,
+      "loss": 0.015043019222685375,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.993708645189283,
+      "epoch": 2.0,
+      "iteration": 4.0,
+      "loss": 0.011800717921157,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9924069855732726,
+      "epoch": 3.0,
+      "iteration": 4.0,
+      "loss": 0.012729856307772859,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9947933615359583,
+      "epoch": 4.0,
+      "iteration": 4.0,
+      "loss": 0.008619708518720601,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9930578153812778,
+      "epoch": 5.0,
+      "iteration": 4.0,
+      "loss": 0.012660657614934229,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958780778826337,
+      "epoch": 6.0,
+      "iteration": 4.0,
+      "loss": 0.005909138900743734,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954441913439636,
+      "epoch": 7.0,
+      "iteration": 4.0,
+      "loss": 0.008175021099476671,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9973966807679792,
+      "epoch": 8.0,
+      "iteration": 4.0,
+      "loss": 0.004553422146227697,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.996962794229309,
+      "epoch": 9.0,
+      "iteration": 4.0,
+      "loss": 0.006298330914435644,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.996962794229309,
+      "epoch": 10.0,
+      "iteration": 4.0,
+      "loss": 0.005334000195580855,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9921900423039375,
+      "epoch": 11.0,
+      "iteration": 4.0,
+      "loss": 0.01529780846007019,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9960950211519688,
+      "epoch": 12.0,
+      "iteration": 4.0,
+      "loss": 0.007836477156506864,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9970712658639765,
+      "epoch": 13.0,
+      "iteration": 4.0,
+      "loss": 0.0048705654954292075,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9968543225946415,
+      "epoch": 14.0,
+      "iteration": 4.0,
+      "loss": 0.0056513320250596005,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9955526629786311,
+      "epoch": 15.0,
+      "iteration": 4.0,
+      "loss": 0.008527283375520217,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954441913439636,
+      "epoch": 16.0,
+      "iteration": 4.0,
+      "loss": 0.006734167294540958,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952272480746285,
+      "epoch": 17.0,
+      "iteration": 4.0,
+      "loss": 0.00958585101232831,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957696062479662,
+      "epoch": 18.0,
+      "iteration": 4.0,
+      "loss": 0.007707619238729697,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9960950211519688,
+      "epoch": 19.0,
+      "iteration": 4.0,
+      "loss": 0.006286680309300433,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9963119644213039,
+      "epoch": 20.0,
+      "iteration": 4.0,
+      "loss": 0.006491892852410104,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9973966807679792,
+      "epoch": 21.0,
+      "iteration": 4.0,
+      "loss": 0.004492013176753565,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9946848899012908,
+      "epoch": 22.0,
+      "iteration": 4.0,
+      "loss": 0.009496401969613457,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9975051524026467,
+      "epoch": 23.0,
+      "iteration": 4.0,
+      "loss": 0.004799154332609274,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958780778826337,
+      "epoch": 24.0,
+      "iteration": 4.0,
+      "loss": 0.007601618952297713,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9947933615359583,
+      "epoch": 25.0,
+      "iteration": 4.0,
+      "loss": 0.010219994788694984,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.996962794229309,
+      "epoch": 26.0,
+      "iteration": 4.0,
+      "loss": 0.004676852678835952,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9976136240373142,
+      "epoch": 27.0,
+      "iteration": 4.0,
+      "loss": 0.004779929830997037,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9990237552879921,
+      "epoch": 28.0,
+      "iteration": 4.0,
+      "loss": 0.002076082944125497,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9985898687493221,
+      "epoch": 29.0,
+      "iteration": 4.0,
+      "loss": 0.004052608443263635,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9997830567306649,
+      "epoch": 30.0,
+      "iteration": 4.0,
+      "loss": 0.0003751701009083826,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9993491701919948,
+      "epoch": 31.0,
+      "iteration": 4.0,
+      "loss": 0.001327007686625535,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9970712658639765,
+      "epoch": 32.0,
+      "iteration": 4.0,
+      "loss": 0.004862113128297059,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9970712658639765,
+      "epoch": 33.0,
+      "iteration": 4.0,
+      "loss": 0.004487485421535753,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9959865495173013,
+      "epoch": 34.0,
+      "iteration": 4.0,
+      "loss": 0.008025949894843227,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9981559822106519,
+      "epoch": 35.0,
+      "iteration": 4.0,
+      "loss": 0.0031721511014678704,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9964204360559714,
+      "epoch": 36.0,
+      "iteration": 4.0,
+      "loss": 0.00766125297389502,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9967458509599739,
+      "epoch": 37.0,
+      "iteration": 4.0,
+      "loss": 0.006644215891545612,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9970712658639765,
+      "epoch": 38.0,
+      "iteration": 4.0,
+      "loss": 0.0059115759941824235,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9989152836533246,
+      "epoch": 39.0,
+      "iteration": 4.0,
+      "loss": 0.002449440522274694,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9942510033626206,
+      "epoch": 40.0,
+      "iteration": 4.0,
+      "loss": 0.010419177066427409,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9798034442340636,
+      "epoch": 1.0,
+      "iteration": 5.0,
+      "loss": 0.026248925404722068,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.989090253358579,
+      "epoch": 2.0,
+      "iteration": 5.0,
+      "loss": 0.016127759831678818,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954918402308178,
+      "epoch": 3.0,
+      "iteration": 5.0,
+      "loss": 0.007083666480834113,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9941393923000631,
+      "epoch": 4.0,
+      "iteration": 5.0,
+      "loss": 0.009680602468965275,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9943197186908304,
+      "epoch": 5.0,
+      "iteration": 5.0,
+      "loss": 0.010192401889499717,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9977459201154089,
+      "epoch": 6.0,
+      "iteration": 5.0,
+      "loss": 0.0048532033660781656,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9949508610585159,
+      "epoch": 7.0,
+      "iteration": 5.0,
+      "loss": 0.010411064900425867,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9939590659092958,
+      "epoch": 8.0,
+      "iteration": 5.0,
+      "loss": 0.00968404454726153,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957623298169687,
+      "epoch": 9.0,
+      "iteration": 5.0,
+      "loss": 0.007625974231355847,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9937787395185286,
+      "epoch": 10.0,
+      "iteration": 5.0,
+      "loss": 0.00987187650181395,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957623298169687,
+      "epoch": 11.0,
+      "iteration": 5.0,
+      "loss": 0.005963294280525161,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966639617708052,
+      "epoch": 12.0,
+      "iteration": 5.0,
+      "loss": 0.0059834039768198385,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954016770354341,
+      "epoch": 13.0,
+      "iteration": 5.0,
+      "loss": 0.008545114516443051,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994409881886214,
+      "epoch": 14.0,
+      "iteration": 5.0,
+      "loss": 0.010734089344775696,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9964836353800378,
+      "epoch": 15.0,
+      "iteration": 5.0,
+      "loss": 0.006944050571423005,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9971147777477234,
+      "epoch": 16.0,
+      "iteration": 5.0,
+      "loss": 0.004131909660003284,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9971147777477234,
+      "epoch": 17.0,
+      "iteration": 5.0,
+      "loss": 0.006939998834982348,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9979262465061762,
+      "epoch": 18.0,
+      "iteration": 5.0,
+      "loss": 0.005524461555878753,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9974754305292579,
+      "epoch": 19.0,
+      "iteration": 5.0,
+      "loss": 0.004671114185125952,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9955820034262014,
+      "epoch": 20.0,
+      "iteration": 5.0,
+      "loss": 0.008113638604319684,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9990983680461636,
+      "epoch": 21.0,
+      "iteration": 5.0,
+      "loss": 0.0015892336907636026,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9968442881615724,
+      "epoch": 22.0,
+      "iteration": 5.0,
+      "loss": 0.005918058390270223,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9980164097015598,
+      "epoch": 23.0,
+      "iteration": 5.0,
+      "loss": 0.0036837241546394555,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9941393923000631,
+      "epoch": 24.0,
+      "iteration": 5.0,
+      "loss": 0.011203810897308649,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954016770354341,
+      "epoch": 25.0,
+      "iteration": 5.0,
+      "loss": 0.007901418274703477,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9965737985754215,
+      "epoch": 26.0,
+      "iteration": 5.0,
+      "loss": 0.0052968218727739306,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9988278784600126,
+      "epoch": 27.0,
+      "iteration": 5.0,
+      "loss": 0.002370705624388601,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9990983680461636,
+      "epoch": 28.0,
+      "iteration": 5.0,
+      "loss": 0.0019382676731896846,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9975655937246416,
+      "epoch": 29.0,
+      "iteration": 5.0,
+      "loss": 0.004584812917655594,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9935082499323776,
+      "epoch": 30.0,
+      "iteration": 5.0,
+      "loss": 0.01246836633171163,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954918402308178,
+      "epoch": 31.0,
+      "iteration": 5.0,
+      "loss": 0.008572577025535467,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9976557569200253,
+      "epoch": 32.0,
+      "iteration": 5.0,
+      "loss": 0.003563076826305605,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9985573888738617,
+      "epoch": 33.0,
+      "iteration": 5.0,
+      "loss": 0.0031864919891372,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9937787395185286,
+      "epoch": 34.0,
+      "iteration": 5.0,
+      "loss": 0.010689005399351267,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.996213145793887,
+      "epoch": 35.0,
+      "iteration": 5.0,
+      "loss": 0.007453619174542215,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9945000450815977,
+      "epoch": 36.0,
+      "iteration": 5.0,
+      "loss": 0.009248653675396384,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994409881886214,
+      "epoch": 37.0,
+      "iteration": 5.0,
+      "loss": 0.011108455370849526,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9988278784600126,
+      "epoch": 38.0,
+      "iteration": 5.0,
+      "loss": 0.0023403648635640603,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9990082048507799,
+      "epoch": 39.0,
+      "iteration": 5.0,
+      "loss": 0.0016569467776918075,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.998467225678478,
+      "epoch": 40.0,
+      "iteration": 5.0,
+      "loss": 0.0033699358923436826,
+      "phase": "dagger"
+    }
+  ],
+  "metrics": {
+    "accuracy": 0.998467225678478,
+    "epoch": 40.0,
+    "eval_mean_return": 63.45444444444446,
+    "eval_success_rate": 0.8888888888888888,
+    "eval_threshold_pass_rate": 0.8888888888888888,
+    "eval_tuning_score": 889841.2322222221,
+    "iteration": 5.0,
+    "loss": 0.0033699358923436826,
+    "phase": "dagger"
+  },
+  "training_config": {
+    "ablation": {
+      "checkpoint_transfer_enabled": true,
+      "critic_feedback_enabled": true,
+      "hierarchy_enabled": true,
+      "recurrent_state_enabled": true,
+      "vision_enabled": true,
+      "world_model_enabled": true
+    },
+    "action_aux_weight": 0.01,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "architecture_name": "agent_world_model_critic",
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor.pth",
+    "controller_schedule": "constant",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cuda",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 27,
+    "epochs": 20,
+    "evaluation_episodes": 3,
+    "evaluation_interval_epochs": 1,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json",
+      "level_5_enemy_hop.json",
+      "level_6_enemy_patrol.json",
+      "level_7_moving_bridge.json",
+      "level_8_enemy_gap.json",
+      "level_9_enemy_stomp.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 0,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 64,
+    "imagined_rollout_horizon": 0,
+    "imagined_rollout_weight": 0.0,
+    "learning_rate": 0.001,
+    "log_path": null,
+    "num_envs": 1,
+    "policy_loss_weight": 1.0,
+    "record_videos": false,
+    "representation_weight": 0.05,
+    "resume_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9.pth",
+    "reward_config": {
+      "coin": 10.0,
+      "enemy_hit": -10.0,
+      "enemy_stomp": 5.0,
+      "fall_death": -10.0,
+      "frame_penalty": -0.01,
+      "goal": 50.0,
+      "progress_per_pixel": 0.05
+    },
+    "reward_loss_weight": 0.01,
+    "rollout_steps": 200,
+    "save_checkpoints": true,
+    "seed": 20260627,
+    "target_network_instability_threshold": 1.0,
+    "target_network_mode": "off",
+    "target_network_tau": 0.01,
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "value_loss_weight": 0.25,
+    "video_dir": null,
+    "world_model_weight": 0.1
+  }
+}

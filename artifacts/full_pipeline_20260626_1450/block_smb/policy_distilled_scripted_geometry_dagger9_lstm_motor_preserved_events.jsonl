@@ -1,0 +1,1 @@
+{"accuracy": 0.9958527734577501, "epoch": 1.0, "event": "distill_epoch", "iteration": 0.0, "loss": 0.00593124343137499, "phase": "teacher_forced"}

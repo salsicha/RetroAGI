@@ -1,0 +1,531 @@
+{
+  "architecture": {
+    "config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "name": "agent_world_model_critic",
+    "spec": {
+      "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+      "checkpoint_model_name": "agent_world_model_critic",
+      "configurable_hyperparameters": {
+        "controller_schedule": "constant",
+        "hidden_dim": 64
+      },
+      "name": "agent_world_model_critic",
+      "output_contract": "agent_world_model_critic.forward.v1",
+      "supported_stage_names": [
+        "synthetic_1d",
+        "block_smb",
+        "full_smb",
+        "pong_block"
+      ]
+    }
+  },
+  "config": {
+    "ablation": {
+      "checkpoint_transfer_enabled": true,
+      "critic_feedback_enabled": true,
+      "hierarchy_enabled": true,
+      "recurrent_state_enabled": true,
+      "vision_enabled": true,
+      "world_model_enabled": true
+    },
+    "action_aux_weight": 0.01,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "architecture_name": "agent_world_model_critic",
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9.pth",
+    "controller_schedule": "constant",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cuda",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 27,
+    "epochs": 220,
+    "evaluation_episodes": 3,
+    "evaluation_interval_epochs": 1,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json",
+      "level_5_enemy_hop.json",
+      "level_6_enemy_patrol.json",
+      "level_7_moving_bridge.json",
+      "level_8_enemy_gap.json",
+      "level_9_enemy_stomp.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 0,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 64,
+    "imagined_rollout_horizon": 0,
+    "imagined_rollout_weight": 0.0,
+    "learning_rate": 0.001,
+    "log_path": null,
+    "num_envs": 1,
+    "policy_loss_weight": 1.0,
+    "record_videos": false,
+    "representation_weight": 0.05,
+    "resume_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9.pth",
+    "reward_config": {
+      "coin": 10.0,
+      "enemy_hit": -10.0,
+      "enemy_stomp": 5.0,
+      "fall_death": -10.0,
+      "frame_penalty": -0.01,
+      "goal": 50.0,
+      "progress_per_pixel": 0.05
+    },
+    "reward_loss_weight": 0.01,
+    "rollout_steps": 200,
+    "save_checkpoints": false,
+    "seed": 20260627,
+    "target_network_instability_threshold": 1.0,
+    "target_network_mode": "off",
+    "target_network_tau": 0.01,
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "value_loss_weight": 0.25,
+    "video_dir": null,
+    "world_model_weight": 0.1
+  },
+  "curriculum": [
+    "level_1_flat.json",
+    "level_2_gap.json",
+    "level_3_stairs.json",
+    "level_4_platforms.json",
+    "level_5_enemy_hop.json",
+    "level_6_enemy_patrol.json",
+    "level_7_moving_bridge.json",
+    "level_8_enemy_gap.json",
+    "level_9_enemy_stomp.json"
+  ],
+  "evaluation": {
+    "fixed_scenarios": {
+      "level_1_flat.json": {
+        "return": 69.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+          "scenario_name": "level_1_flat.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_2_gap.json": {
+        "return": 68.705,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+          "scenario_name": "level_2_gap.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_3_stairs.json": {
+        "return": 68.705,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+          "scenario_name": "level_3_stairs.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_4_platforms.json": {
+        "return": 69.825,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+          "scenario_name": "level_4_platforms.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_5_enemy_hop.json": {
+        "return": 64.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+          "scenario_name": "level_5_enemy_hop.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_6_enemy_patrol.json": {
+        "return": 70.31,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+          "scenario_name": "level_6_enemy_patrol.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_7_moving_bridge.json": {
+        "return": 69.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+          "scenario_name": "level_7_moving_bridge.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_8_enemy_gap.json": {
+        "return": 84.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+          "scenario_name": "level_8_enemy_gap.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_9_enemy_stomp.json": {
+        "return": 59.26500000000001,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+          "scenario_name": "level_9_enemy_stomp.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      }
+    },
+    "mean_return": 69.3188888888889,
+    "success_rate": 1.0,
+    "success_thresholds_met": true,
+    "tuning_metrics": {
+      "mean_return": 69.31888888888889,
+      "mean_success_rate": 1.0,
+      "scenario_count": 9.0,
+      "score": 1001069.3188888889,
+      "threshold_pass_rate": 1.0
+    }
+  },
+  "evaluations": [
+    {
+      "epoch": 220,
+      "evaluation": {
+        "fixed_scenarios": {
+          "level_1_flat.json": {
+            "return": 69.265,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+              "scenario_name": "level_1_flat.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_2_gap.json": {
+            "return": 68.705,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+              "scenario_name": "level_2_gap.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_3_stairs.json": {
+            "return": 68.705,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+              "scenario_name": "level_3_stairs.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_4_platforms.json": {
+            "return": 69.825,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+              "scenario_name": "level_4_platforms.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_5_enemy_hop.json": {
+            "return": 64.265,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Enemy-hop run: clear the ground enemy and reach the goal without unsafe contact.",
+              "scenario_name": "level_5_enemy_hop.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_6_enemy_patrol.json": {
+            "return": 70.31,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Enemy-patrol run: time jumps over multiple patrolling enemies and reach the goal.",
+              "scenario_name": "level_6_enemy_patrol.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_7_moving_bridge.json": {
+            "return": 69.265,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Moving-bridge run: use the moving platform as the gap bridge and reach the goal.",
+              "scenario_name": "level_7_moving_bridge.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_8_enemy_gap.json": {
+            "return": 84.265,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Enemy-gap run: combine a gap crossing with safe enemy avoidance or stomp timing before the goal.",
+              "scenario_name": "level_8_enemy_gap.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          },
+          "level_9_enemy_stomp.json": {
+            "return": 59.26500000000001,
+            "success_rate": 1.0,
+            "threshold": {
+              "max_steps": 200,
+              "min_episodes": 3,
+              "min_mean_return": 55.0,
+              "min_success_rate": 1.0,
+              "rationale": "Enemy-stomp run: clear a blocking ground enemy with safe top contact and reach the goal.",
+              "scenario_name": "level_9_enemy_stomp.json"
+            },
+            "threshold_diagnostics": {
+              "enough_episodes": true,
+              "evaluation_episodes": 3,
+              "evaluation_max_steps": 200,
+              "meets_return": true,
+              "meets_success_rate": true,
+              "within_step_budget": true
+            },
+            "threshold_met": true
+          }
+        },
+        "mean_return": 69.3188888888889,
+        "success_rate": 1.0,
+        "success_thresholds_met": true,
+        "tuning_metrics": {
+          "mean_return": 69.31888888888889,
+          "mean_success_rate": 1.0,
+          "scenario_count": 9.0,
+          "score": 1001069.3188888889,
+          "threshold_pass_rate": 1.0
+        }
+      },
+      "global_step": 2605680
+    }
+  ],
+  "history": [],
+  "metrics": {},
+  "vision": {
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_vit/block_vit.pth",
+    "checkpoint_transfer": true,
+    "frozen": true
+  }
+}

@@ -42,6 +42,13 @@ Current result:
       `RIGHT` plus standalone `JUMP`, never `RIGHT_JUMP`, so the next blocker
       is real-emulator action-contract and timing adaptation rather than Block
       SMB scenario coverage.
+- LSTM/world-model training is now explicit in Full SMB, and the B-stream motor
+      primitive decoder feeds LSTM-predicted replan signals into Full SMB
+      `RIGHT_JUMP`/`LEFT_JUMP` action selection.
+- A full Block SMB dagger9 redistill under the LSTM/motor code regressed on
+      `level_8_enemy_gap.json`, so the run preserved the prior all-threshold
+      policy with a one-epoch low-learning-rate refresh; that checkpoint again
+      passed all nine scenarios with threshold pass rate 1.0.
 
 Next steps:
 

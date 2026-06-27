@@ -1,0 +1,209 @@
+{
+  "architecture": {
+    "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+    "checkpoint_model_name": "agent_world_model_critic",
+    "config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "extension_schema_version": 1,
+    "name": "agent_world_model_critic",
+    "output_contract": "agent_world_model_critic.forward.v1",
+    "supported_stage_names": [
+      "synthetic_1d",
+      "block_smb",
+      "full_smb",
+      "pong_block"
+    ]
+  },
+  "checkpoint_kind": "block_smb_trainer",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "bea309a497b24d8812eeeb014e32c2eae1170b1e",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "bea309a",
+    "system": "git"
+  },
+  "config": {
+    "ablation": {
+      "checkpoint_transfer_enabled": true,
+      "critic_feedback_enabled": true,
+      "hierarchy_enabled": true,
+      "recurrent_state_enabled": true,
+      "vision_enabled": true,
+      "world_model_enabled": true
+    },
+    "action_aux_weight": 0.01,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "architecture_name": "agent_world_model_critic",
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9_lstm_motor.pth",
+    "controller_schedule": "constant",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cuda",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 27,
+    "epochs": 20,
+    "evaluation_episodes": 3,
+    "evaluation_interval_epochs": 1,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json",
+      "level_5_enemy_hop.json",
+      "level_6_enemy_patrol.json",
+      "level_7_moving_bridge.json",
+      "level_8_enemy_gap.json",
+      "level_9_enemy_stomp.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 0,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 64,
+    "imagined_rollout_horizon": 0,
+    "imagined_rollout_weight": 0.0,
+    "learning_rate": 0.001,
+    "log_path": null,
+    "num_envs": 1,
+    "policy_loss_weight": 1.0,
+    "record_videos": false,
+    "representation_weight": 0.05,
+    "resume_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9.pth",
+    "reward_config": {
+      "coin": 10.0,
+      "enemy_hit": -10.0,
+      "enemy_stomp": 5.0,
+      "fall_death": -10.0,
+      "frame_penalty": -0.01,
+      "goal": 50.0,
+      "progress_per_pixel": 0.05
+    },
+    "reward_loss_weight": 0.01,
+    "rollout_steps": 200,
+    "save_checkpoints": true,
+    "seed": 20260627,
+    "target_network_instability_threshold": 1.0,
+    "target_network_mode": "off",
+    "target_network_tau": 0.01,
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "value_loss_weight": 0.25,
+    "video_dir": null,
+    "world_model_weight": 0.1
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-124-generic",
+      "system": "Linux",
+      "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.7.0+cu126"
+    }
+  },
+  "epoch": 220,
+  "global_step": 2440020,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "bea309a497b24d8812eeeb014e32c2eae1170b1e",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "bea309a",
+      "system": "git"
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-124-generic",
+        "system": "Linux",
+        "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.7.0+cu126"
+      }
+    }
+  },
+  "metrics": {
+    "accuracy": 0.998467225678478,
+    "epoch": 40.0,
+    "eval_mean_return": 63.45444444444446,
+    "eval_success_rate": 0.8888888888888888,
+    "eval_threshold_pass_rate": 0.8888888888888888,
+    "eval_tuning_score": 889841.2322222221,
+    "iteration": 5.0,
+    "loss": 0.0033699358923436826,
+    "phase": "dagger"
+  },
+  "model_name": "block_smb_actor_world_model_critic",
+  "specs": {
+    "architecture": {
+      "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+      "checkpoint_model_name": "agent_world_model_critic",
+      "configurable_hyperparameters": {
+        "controller_schedule": "constant",
+        "hidden_dim": 64
+      },
+      "name": "agent_world_model_critic",
+      "output_contract": "agent_world_model_critic.forward.v1",
+      "supported_stage_names": [
+        "synthetic_1d",
+        "block_smb",
+        "full_smb",
+        "pong_block"
+      ]
+    },
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "stage": {
+      "name": "block_smb",
+      "ratio_bc": 4,
+      "seq_len_a": 8,
+      "seq_len_b": 16,
+      "seq_len_c": 64,
+      "vocab_size": 20
+    }
+  },
+  "stage": "block_smb",
+  "state_keys": [
+    "model",
+    "numpy_rng",
+    "optimizer",
+    "python_rng",
+    "torch_rng"
+  ]
+}
