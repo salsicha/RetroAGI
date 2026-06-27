@@ -11,7 +11,15 @@ class TestMarioScenarios(unittest.TestCase):
         self.env = MarioScenarioEnv()
         self.scenarios_dir = Path(SCENARIOS_DIR)
 
-    def _test_scenario(self, filename, expected_mario, expected_platforms, expected_coins, expected_goal):
+    def _test_scenario(
+        self,
+        filename,
+        expected_mario,
+        expected_platforms,
+        expected_coins,
+        expected_goal,
+        expected_enemies=0,
+    ):
         """Helper method to load a scenario and validate its instantiation."""
         filepath = self.scenarios_dir / filename
         self.assertTrue(filepath.exists(), f"Scenario file not found: {filepath}")
@@ -27,6 +35,7 @@ class TestMarioScenarios(unittest.TestCase):
         self.assertEqual(self.env.mario['y'], expected_mario[1])
         self.assertEqual(len(self.env.platforms), expected_platforms)
         self.assertEqual(len(self.env.coins), expected_coins)
+        self.assertEqual(len(self.env.enemies), expected_enemies)
         
         if expected_goal:
             self.assertIsNotNone(self.env.goal)
@@ -37,16 +46,60 @@ class TestMarioScenarios(unittest.TestCase):
         _, _, _, _, _ = self.env.step(0) # NOOP action
 
     def test_level_1_flat(self):
-        self._test_scenario('level_1_flat.json', expected_mario=[20, 200], expected_platforms=1, expected_coins=1, expected_goal=True)
+        self._test_scenario(
+            'level_1_flat.json',
+            expected_mario=[20, 200],
+            expected_platforms=1,
+            expected_coins=1,
+            expected_goal=True,
+        )
 
     def test_level_2_gap(self):
-        self._test_scenario('level_2_gap.json', expected_mario=[20, 200], expected_platforms=2, expected_coins=1, expected_goal=True)
+        self._test_scenario(
+            'level_2_gap.json',
+            expected_mario=[20, 200],
+            expected_platforms=2,
+            expected_coins=1,
+            expected_goal=True,
+        )
 
     def test_level_3_stairs(self):
-        self._test_scenario('level_3_stairs.json', expected_mario=[20, 200], expected_platforms=4, expected_coins=2, expected_goal=True)
+        self._test_scenario(
+            'level_3_stairs.json',
+            expected_mario=[20, 200],
+            expected_platforms=4,
+            expected_coins=2,
+            expected_goal=True,
+        )
 
     def test_level_4_platforms(self):
-        self._test_scenario('level_4_platforms.json', expected_mario=[20, 100], expected_platforms=4, expected_coins=2, expected_goal=True)
+        self._test_scenario(
+            'level_4_platforms.json',
+            expected_mario=[20, 100],
+            expected_platforms=4,
+            expected_coins=2,
+            expected_goal=True,
+        )
+
+    def test_level_5_enemy_hop(self):
+        self._test_scenario(
+            'level_5_enemy_hop.json',
+            expected_mario=[20, 200],
+            expected_platforms=1,
+            expected_coins=1,
+            expected_goal=True,
+            expected_enemies=1,
+        )
+
+    def test_level_6_enemy_patrol(self):
+        self._test_scenario(
+            'level_6_enemy_patrol.json',
+            expected_mario=[20, 200],
+            expected_platforms=1,
+            expected_coins=2,
+            expected_goal=True,
+            expected_enemies=2,
+        )
 
 if __name__ == '__main__':
     unittest.main()

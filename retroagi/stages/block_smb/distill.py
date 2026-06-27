@@ -54,6 +54,8 @@ class BlockSMBDistillationConfig:
         "level_2_gap.json",
         "level_3_stairs.json",
         "level_4_platforms.json",
+        "level_5_enemy_hop.json",
+        "level_6_enemy_patrol.json",
     )
     device: str = "auto"
     deterministic: bool = True

@@ -254,7 +254,7 @@ Assessment:
 Choose one:
 
 - Implement the initial single-environment Block SMB policy-training loop.
-- Add deterministic evaluation reports for the four fixed Block SMB scenarios.
+- Add deterministic evaluation reports for the fixed Block SMB scenarios.
 - Add a replay buffer with correct episode-boundary handling.
 - Add a reward-model or value-model objective without changing environment
   reward semantics.

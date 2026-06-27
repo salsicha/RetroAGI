@@ -286,7 +286,7 @@ it now reports `perception.bottleneck=false`, `mean_iou=0.9802`,
 
 The trainer applies finite-loss and finite-gradient checks before each optimizer
 step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
-Curriculum order starts with the four fixed scenario files and can append seeded
+Curriculum order starts with the fixed scenario files and can append seeded
 procedural scenarios through `generated_scenarios`. Evaluation reports deterministic
 return and success rate for each fixed scenario. It also attaches the documented
 [Block SMB success thresholds](block-smb-success-thresholds.md), per-scenario

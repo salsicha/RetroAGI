@@ -25,7 +25,7 @@ SCRIPTED_BLOCK_SMB_EVALUATION_MAX_STEPS = 200
 def fixed_scenario_action_scripts(
     max_steps: int = SCRIPTED_BLOCK_SMB_EVALUATION_MAX_STEPS,
 ) -> dict[str, list[int]]:
-    """Return deterministic action scripts for the four fixed scenarios.
+    """Return deterministic action scripts for the fixed scenarios.
 
     Actions use the shared Block SMB IDs:
     1 = RIGHT, 2 = RIGHT_JUMP.
@@ -36,6 +36,10 @@ def fixed_scenario_action_scripts(
         "level_2_gap.json": [1] * 10 + [2] * 17 + [1] * max_steps,
         "level_3_stairs.json": [2] * 8 + [1] * 2 + [2] * 6 + [1] * max_steps,
         "level_4_platforms.json": [1] * 8 + [2] * 16 + [1] * max_steps,
+        "level_5_enemy_hop.json": [1] * 20 + [2] * 18 + [1] * max_steps,
+        "level_6_enemy_patrol.json": (
+            [1] * 12 + [2] * 18 + [1] * 18 + [2] * 18 + [1] * max_steps
+        ),
     }
     return {
         scenario_name: actions[:max_steps]

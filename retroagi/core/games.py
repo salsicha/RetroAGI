@@ -602,12 +602,50 @@ SMB_TASK_SCHEMA = GameTaskSchema(
             description="Moving-platform fixed Block SMB scenario",
         ),
         GameTaskSpec(
+            name="level_5_enemy_hop.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_5_enemy_hop.json",
+            reset_seed=101_005,
+            curriculum_stage=5,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Enemy-hop run: clear the ground enemy and reach the goal "
+                    "without unsafe contact."
+                ),
+            ),
+            description="Single-enemy avoidance fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_6_enemy_patrol.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_6_enemy_patrol.json",
+            reset_seed=101_006,
+            curriculum_stage=6,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Enemy-patrol run: time jumps over multiple patrolling "
+                    "enemies and reach the goal."
+                ),
+            ),
+            description="Patrolling-enemy avoidance fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
             name="generated_block_smb",
             stage_name="block_smb",
             task_type="procedural",
             source="MarioScenarioEnv.generate_scenario",
             reset_seed=150_000,
-            curriculum_stage=5,
+            curriculum_stage=7,
             generation_seed=50_000,
             generation_config={
                 "width_range": (256, 512),
@@ -696,6 +734,12 @@ SMB_BLOCK_GAME_SPEC = BlockGameSpec(
         "level_3_stairs.json": "retroagi/stages/block_smb/scenarios/level_3_stairs.json",
         "level_4_platforms.json": (
             "retroagi/stages/block_smb/scenarios/level_4_platforms.json"
+        ),
+        "level_5_enemy_hop.json": (
+            "retroagi/stages/block_smb/scenarios/level_5_enemy_hop.json"
+        ),
+        "level_6_enemy_patrol.json": (
+            "retroagi/stages/block_smb/scenarios/level_6_enemy_patrol.json"
         ),
     },
     procedural_scenario_generator="MarioScenarioEnv.generate_scenario",

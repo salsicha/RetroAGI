@@ -74,13 +74,15 @@ Next steps:
       `level_4_platforms.json` until fixed-scenario threshold pass rate is 1.0.
       A focused learned resume through epoch 35 still passed only
       `level_1_flat.json`; use the preserved known-good checkpoint as the
-      transfer source because it passes all four fixed-scenario thresholds.
+      transfer source because it passes the original four fixed-scenario
+      thresholds.
   - [x] Run targeted Block SMB resumes or curriculum weighting for the three
         failing scenarios.
   - [x] Compare transfer from the checked-in known-good Block SMB baseline
         against the newly trained policy before another Full SMB run.
-  - [x] Preserve the next successful Block SMB checkpoint only after all four
-        fixed-scenario thresholds pass with at least 3 evaluation episodes.
+  - [x] Preserve the next successful Block SMB checkpoint only after all
+        then-current fixed-scenario thresholds pass with at least 3 evaluation
+        episodes.
 - [x] Add a reliable Full SMB real-emulator visual-position target before the
       next transfer run.
   - [x] Re-run the Full SMB diagnostic after adapter signal extraction fixes.
@@ -99,8 +101,9 @@ Next steps:
       `data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth`
       with `position_rmse=0.048`, `position_within_tolerance=1.0`, and no
       bottleneck flags.
-- [x] Re-run Full SMB transfer and fine-tuning only after Block SMB passes all
-      fixed scenarios and Full SMB real-emulator position diagnostics pass.
+- [x] Re-run Full SMB transfer and fine-tuning only after Block SMB passes the
+      then-current fixed scenarios and Full SMB real-emulator position
+      diagnostics pass.
       The all-threshold Block SMB checkpoint is scripted and cannot be loaded by
       the neural weight-transfer path; the scripted transfer attempt is recorded
       as unsupported, and the run used the best available neural Block SMB
@@ -122,12 +125,12 @@ Next steps:
   - [x] Generate deterministic fixed-scenario trajectories from
         `fixed_scenario_action_scripts`.
   - [x] Train a neural Block SMB policy to imitate the scripted actions.
-  - [x] Evaluate the distilled neural checkpoint until all four fixed-scenario
-        thresholds pass with at least 3 evaluation episodes.
+  - [x] Evaluate the distilled neural checkpoint until the original four
+        fixed-scenario thresholds pass with at least 3 evaluation episodes.
       Result: `data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger.pth`
-      passed all four fixed scenarios with mean return 69.125, success rate
-      1.0, and threshold pass rate 1.0 after geometry-aware state features and
-      DAgger correction.
+      passed the original four fixed scenarios with mean return 69.125,
+      success rate 1.0, and threshold pass rate 1.0 after geometry-aware state
+      features and DAgger correction. It predates the enemy-scenario gate.
 - [x] Transfer the distilled neural Block SMB checkpoint into Full SMB with the
       RAM-position-tuned Full SMB ViT checkpoint.
       Result: `data/full_pipeline_20260626_1450/full_smb/transferred_distilled_policy.pth`
@@ -140,9 +143,23 @@ Next steps:
       trained from `transferred_distilled_policy.pth` for 4 curriculum epochs
       and 2,400 emulator steps on `curriculum_1_1_opening`; mean train return
       was 201.0 with separate-process evaluation still required.
-- [ ] Evaluate and record the distilled-transfer Full SMB policy on
+- [x] Evaluate and record the distilled-transfer Full SMB policy on
       `fixed_benchmark` with at least 3 episodes and the documented 2,400 step
       budget.
+      Result: mean return 571.0, mean progress 20.0, survival rate 1.0,
+      completion rate 0.0, and fixed-benchmark threshold pass rate 0.0.
+- [x] Add Block SMB enemy-avoidance fixed scenarios before treating the Block
+      SMB rung as fully covered.
+  - [x] Add one single-enemy hop scenario and one multi-enemy patrol scenario.
+  - [x] Include both enemy scenarios in the fixed task schema, success
+        thresholds, default Block SMB training/distillation lists, and scripted
+        baseline actions.
+  - [x] Update scenario, task-schema, success-threshold, and scripted-policy
+        tests for the expanded six-scenario gate.
+- [ ] Retrain or redistill Block SMB against the expanded six-scenario gate,
+      including `level_5_enemy_hop.json` and `level_6_enemy_patrol.json`.
+- [ ] Re-transfer the enemy-aware distilled Block SMB checkpoint into Full SMB,
+      run a short fine-tune, then evaluate and record fixed-benchmark rollouts.
 
 ## Completed Work
 
@@ -152,7 +169,7 @@ Next steps:
 - [x] Define `StageSpec`, `StageBatch`, and the common `StageAdapter` protocol.
 - [x] Define shared `VisionSpec`, `VisionOutput`, and `VisionEncoder` contracts.
 - [x] Implement synthetic 1D, Block SMB, and Full SMB vision implementations.
-- [x] Implement the scriptable Block SMB environment and four fixed scenarios.
+- [x] Implement the scriptable Block SMB environment and fixed scenarios.
 - [x] Add deterministic Block SMB scenario generation and environment seeding.
 - [x] Implement baseline Block SMB rewards for progress, coins, enemies, death,
       completion, and elapsed time.
@@ -246,7 +263,7 @@ uses it to complete scenarios.
 - [x] Implement the complete Block SMB actor/world-model/critic training loop.
 - [x] Add trajectory or replay storage with correct recurrent-state boundaries.
 - [x] Add numerical checks, gradient clipping, and NaN/exploding-loss detection.
-- [x] Add curriculum progression across the four fixed scenarios and generated
+- [x] Add curriculum progression across the fixed scenarios and generated
       scenarios.
 - [x] Report deterministic success rate and return for every fixed scenario.
 - [x] Record evaluation trajectories and videos.

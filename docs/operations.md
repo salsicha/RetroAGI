@@ -214,7 +214,7 @@ training unless a run explicitly opts into fine-tuning.
 ## Block SMB Policy
 
 Block SMB policy training is the main trainable simplified-game stage. It uses
-the four fixed scenarios plus optional generated scenarios and reports
+the fixed scenarios plus optional generated scenarios and reports
 deterministic evaluation against the fixed-scenario success thresholds.
 
 | Area | Operational Target |
