@@ -675,6 +675,29 @@ and playable end target.
       transfer checkpoint.
 - [x] Add recurrent-state and episode-boundary handling in Full SMB rollouts,
       including death, timeout, level completion, game over, and manual reset.
+- [ ] Make Full SMB LSTM/world-model learning explicit instead of relying on
+      indirect policy-gradient updates.
+  - [ ] Encode the post-step Full SMB observation during training and compare
+        `forward.next_state_pred` against `next_batch.src_c.detach()`.
+  - [ ] Wire `FullSMBTrainingConfig.world_model_weight` into the Full SMB
+        trainer loss with a documented, tuned non-zero setting for continued
+        world-model learning.
+  - [ ] Log `loss_dynamics` and `loss_world_model` for Full SMB alongside
+        policy loss, entropy, reward/value prediction safety metrics, recurrent
+        resets, and checkpoint metadata.
+  - [ ] Add slot-aware C-stream dynamics metrics and optional loss weights for
+        position, semantic probabilities, emulator state/signals, camera state,
+        and pooled patch-token features so semantic prediction quality is not
+        hidden by larger feature groups.
+  - [ ] Verify transferred Block SMB LSTM/world-model weights continue training
+        in Full SMB checkpoints, summaries, and resume flows.
+  - [ ] Keep `evaluate` and `play` read-only under `torch.no_grad()`; if online
+        adaptation is needed during benchmark-style runs, add a separate
+        adaptive-evaluation or continue-training mode with distinct artifact
+        labels.
+  - [ ] Add tests proving Full SMB training updates the world-model loss path
+        against next C-stream targets, while evaluation/play do not mutate
+        model weights.
 - [x] Add rollout/replay storage for Full SMB with saved actions, rewards,
       dones, truncations, episode masks, scenario/task IDs, emulator state IDs,
       and selected signal fields.
