@@ -117,6 +117,19 @@ Next steps:
         benchmark once progress is non-zero.
       Result: mean return 571.0, mean progress 20.0, survival rate 1.0,
       completion rate 0.0, and fixed-benchmark threshold pass rate 0.0.
+- [ ] Distill the scripted known-good Block SMB policy into a transferable
+      neural Block SMB checkpoint.
+  - [ ] Generate deterministic fixed-scenario trajectories from
+        `fixed_scenario_action_scripts`.
+  - [ ] Train a neural Block SMB policy to imitate the scripted actions.
+  - [ ] Evaluate the distilled neural checkpoint until all four fixed-scenario
+        thresholds pass with at least 3 evaluation episodes.
+- [ ] Transfer the distilled neural Block SMB checkpoint into Full SMB with the
+      RAM-position-tuned Full SMB ViT checkpoint.
+- [ ] Run longer Full SMB fine-tuning from the distilled transfer checkpoint.
+- [ ] Evaluate and record the distilled-transfer Full SMB policy on
+      `fixed_benchmark` with at least 3 episodes and the documented 2,400 step
+      budget.
 
 ## Completed Work
 
