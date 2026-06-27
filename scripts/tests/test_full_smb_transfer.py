@@ -12,6 +12,8 @@ import torch
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     BASELINE_ARCHITECTURE_SPEC,
+    SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
+    SINGLE_PASS_LSTM_ARCHITECTURE_SPEC,
     ArchitectureSpec,
     build_architecture,
     build_checkpoint,
@@ -180,6 +182,18 @@ def incompatible_transfer_architecture() -> ArchitectureSpec:
 
 
 class TestFullSMBTransfer(unittest.TestCase):
+    def test_full_smb_policy_builder_accepts_single_pass_lstm_contract(self):
+        model = make_full_smb_policy_model(
+            architecture_name=SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
+            architecture_config={"hidden_dim": 8, "world_context_scale": 0.5},
+        )
+
+        self.assertEqual(
+            get_architecture(SINGLE_PASS_LSTM_ARCHITECTURE_NAME).output_contract,
+            SINGLE_PASS_LSTM_ARCHITECTURE_SPEC.output_contract,
+        )
+        self.assertIn("world_conditioned_action_head.weight", model.state_dict())
+
     def test_block_policy_transfers_to_full_smb_checkpoint_and_stage_batch(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

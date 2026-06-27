@@ -12,6 +12,7 @@ import torch
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     BASELINE_ARCHITECTURE_SPEC,
+    POLICY_TUPLE_OUTPUT_CONTRACTS,
     SMB_ACTIONS,
     StageBatch,
     build_architecture,
@@ -89,11 +90,11 @@ def make_full_smb_policy_model(
     if architecture_name == BASELINE_ARCHITECTURE_NAME or "controller_schedule" in values:
         values.setdefault("controller_schedule", controller_schedule)
     architecture = get_architecture(architecture_name)
-    expected_contract = BASELINE_ARCHITECTURE_SPEC.output_contract
-    if architecture.output_contract != expected_contract:
+    if architecture.output_contract not in POLICY_TUPLE_OUTPUT_CONTRACTS:
         raise ValueError(
-            "Full SMB policy transfer requires architecture output contract "
-            f"{expected_contract!r}, got {architecture.output_contract!r}"
+            "Full SMB policy transfer requires a trainer-compatible architecture "
+            f"output contract in {POLICY_TUPLE_OUTPUT_CONTRACTS!r}, got "
+            f"{architecture.output_contract!r}"
         )
     return build_architecture(
         architecture_name,
@@ -304,11 +305,10 @@ def _validate_policy_checkpoint_architecture(
         required_states=("model",),
         context=context,
     )
-    expected_contract = BASELINE_ARCHITECTURE_SPEC.output_contract
-    if architecture.output_contract != expected_contract:
+    if architecture.output_contract not in POLICY_TUPLE_OUTPUT_CONTRACTS:
         raise ValueError(
-            f"{context} requires architecture output contract "
-            f"{expected_contract!r}, got {architecture.output_contract!r}"
+            f"{context} requires a trainer-compatible architecture output contract "
+            f"in {POLICY_TUPLE_OUTPUT_CONTRACTS!r}, got {architecture.output_contract!r}"
         )
     return architecture
 

@@ -16,7 +16,7 @@ import torch.optim as optim
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
-    BASELINE_ARCHITECTURE_SPEC,
+    POLICY_TUPLE_OUTPUT_CONTRACTS,
     SUPPORTED_CONTROLLER_SCHEDULES,
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
@@ -356,11 +356,11 @@ def block_smb_architecture_specs(config: BlockSMBTrainingConfig) -> dict[str, An
 
 def make_block_smb_model(config: BlockSMBTrainingConfig) -> torch.nn.Module:
     architecture = get_architecture(config.architecture_name)
-    expected_contract = BASELINE_ARCHITECTURE_SPEC.output_contract
-    if architecture.output_contract != expected_contract:
+    if architecture.output_contract not in POLICY_TUPLE_OUTPUT_CONTRACTS:
         raise ValueError(
-            "Block SMB training requires architecture output contract "
-            f"{expected_contract!r}, got {architecture.output_contract!r}"
+            "Block SMB training requires a trainer-compatible architecture output "
+            f"contract in {POLICY_TUPLE_OUTPUT_CONTRACTS!r}, got "
+            f"{architecture.output_contract!r}"
         )
     return build_architecture(
         config.architecture_name,

@@ -764,13 +764,22 @@ and playable end target.
       including death, timeout, level completion, game over, and manual reset.
 - [ ] Make Full SMB LSTM/world-model learning explicit instead of relying on
       indirect policy-gradient updates.
-  - [ ] Refactor the baseline actor/world-model connection so the hierarchical
+  - [x] Refactor the baseline actor/world-model connection so the hierarchical
         transformer consumes the LSTM/world-model prediction as an input or
         context feature for final action selection instead of running the actor
         a second time for critic feedback.
-  - [ ] Define a new single-pass architecture output contract that preserves
+        Result: added `SinglePassLSTMConditionedAgentWorldModel`, which runs the
+        actor transformer once, projects the LSTM-predicted C stream into
+        A-stream context, and uses a final action head without a second
+        transformer pass.
+  - [x] Define a new single-pass architecture output contract that preserves
         checkpoint compatibility or provides an explicit migration path from the
         current two-pass `AgentWorldModelCritic` contract.
+        Result: registered `single_pass_lstm_conditioned_actor` with output
+        contract `single_pass_lstm_conditioned_actor.forward.v1`; Block SMB and
+        Full SMB trainers now accept the shared trainer-compatible policy tuple
+        contract set, and tests verify two-pass shared state loads with only the
+        new final action head initialized.
   - [ ] Benchmark the single-pass LSTM-conditioned actor against the current
         two-pass critic-feedback actor for training throughput, action quality,
         recurrent-state behavior, and transfer performance from Block SMB to

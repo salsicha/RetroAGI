@@ -11,11 +11,19 @@ from .interfaces import StageSpec
 from .models import (
     SUPPORTED_CONTROLLER_SCHEDULES,
     AgentWorldModelCritic,
+    SinglePassLSTMConditionedAgentWorldModel,
 )
 
 BASELINE_ARCHITECTURE_NAME = "agent_world_model_critic"
 BASELINE_OUTPUT_CONTRACT = "agent_world_model_critic.forward.v1"
 BASELINE_CHECKPOINT_POLICY = "strict_stage_spec_and_model_state"
+SINGLE_PASS_LSTM_ARCHITECTURE_NAME = "single_pass_lstm_conditioned_actor"
+SINGLE_PASS_LSTM_OUTPUT_CONTRACT = "single_pass_lstm_conditioned_actor.forward.v1"
+SINGLE_PASS_LSTM_CHECKPOINT_POLICY = "strict_stage_spec_with_two_pass_shared_state_migration"
+POLICY_TUPLE_OUTPUT_CONTRACTS = (
+    BASELINE_OUTPUT_CONTRACT,
+    SINGLE_PASS_LSTM_OUTPUT_CONTRACT,
+)
 
 
 class ArchitectureFactory(Protocol):
@@ -142,6 +150,37 @@ def make_agent_world_model_critic(
     )
 
 
+def make_single_pass_lstm_conditioned_actor(
+    stage: StageSpec,
+    config: Mapping[str, Any] | None = None,
+) -> SinglePassLSTMConditionedAgentWorldModel:
+    values = dict(config or {})
+    unknown_keys = set(values) - {"hidden_dim", "controller_schedule", "world_context_scale"}
+    if unknown_keys:
+        raise ValueError(f"unknown architecture config keys: {sorted(unknown_keys)}")
+    hidden_dim = int(values.get("hidden_dim", 64))
+    controller_schedule = str(values.get("controller_schedule", "constant"))
+    world_context_scale = float(values.get("world_context_scale", 1.0))
+    if hidden_dim <= 0:
+        raise ValueError("hidden_dim must be positive")
+    if controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
+        raise ValueError(
+            "controller_schedule must be one of "
+            f"{SUPPORTED_CONTROLLER_SCHEDULES}, got {controller_schedule!r}"
+        )
+    if world_context_scale < 0:
+        raise ValueError("world_context_scale must be non-negative")
+    return SinglePassLSTMConditionedAgentWorldModel(
+        stage.vocab_size,
+        stage.seq_len_a,
+        stage.seq_len_c,
+        stage.ratio_bc,
+        d_model=hidden_dim,
+        controller_schedule=controller_schedule,
+        world_context_scale=world_context_scale,
+    )
+
+
 BASELINE_ARCHITECTURE_SPEC = ArchitectureSpec(
     name=BASELINE_ARCHITECTURE_NAME,
     factory=make_agent_world_model_critic,
@@ -155,8 +194,23 @@ BASELINE_ARCHITECTURE_SPEC = ArchitectureSpec(
     output_contract=BASELINE_OUTPUT_CONTRACT,
 )
 
+SINGLE_PASS_LSTM_ARCHITECTURE_SPEC = ArchitectureSpec(
+    name=SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
+    factory=make_single_pass_lstm_conditioned_actor,
+    supported_stage_names=("synthetic_1d", "block_smb", "full_smb", "pong_block"),
+    checkpoint_model_name=SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
+    checkpoint_compatibility_policy=SINGLE_PASS_LSTM_CHECKPOINT_POLICY,
+    configurable_hyperparameters={
+        "hidden_dim": 64,
+        "controller_schedule": "constant",
+        "world_context_scale": 1.0,
+    },
+    output_contract=SINGLE_PASS_LSTM_OUTPUT_CONTRACT,
+)
+
 ARCHITECTURE_REGISTRY = ArchitectureRegistry()
 ARCHITECTURE_REGISTRY.register(BASELINE_ARCHITECTURE_SPEC)
+ARCHITECTURE_REGISTRY.register(SINGLE_PASS_LSTM_ARCHITECTURE_SPEC)
 
 
 def register_architecture(spec: ArchitectureSpec, *, replace: bool = False) -> None:
