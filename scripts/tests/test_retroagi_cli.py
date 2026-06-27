@@ -692,6 +692,40 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_block_smb_diagnose_actions_forwards_arguments(self):
+        with patch(
+            "retroagi.stages.block_smb.cli.main",
+            return_value=0,
+        ) as diagnostics_main:
+            exit_code = cli.main(
+                [
+                    "diagnose-actions",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "block",
+                    "--checkpoint",
+                    "data/block_smb/policy.pth",
+                    "--scenario",
+                    "level_2_gap.json",
+                    "--output",
+                    "artifacts/block_smb/action_probe.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        diagnostics_main.assert_called_once_with(
+            [
+                "diagnose-actions",
+                "--checkpoint",
+                "data/block_smb/policy.pth",
+                "--scenario",
+                "level_2_gap.json",
+                "--output",
+                "artifacts/block_smb/action_probe.json",
+            ]
+        )
+
     def test_full_smb_gate_forwards_arguments(self):
         with patch(
             "retroagi.stages.full_smb.curriculum_gates.main",

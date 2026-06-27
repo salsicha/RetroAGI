@@ -27,6 +27,9 @@ from .train import (
     TARGET_NETWORK_MODES,
     BlockSMBAblationConfig,
     BlockSMBTrainingConfig,
+    block_smb_architecture_metadata,
+    make_block_smb_model,
+    restore_block_smb_checkpoint,
     train_and_evaluate_block_smb,
 )
 from .vision import (
@@ -38,6 +41,7 @@ from .vision import (
 DEFAULT_RECORD_DIR = Path("artifacts/block_smb/recordings")
 DEFAULT_VISION_DIAGNOSTIC_SAMPLES = 64
 DEFAULT_VISION_DIAGNOSTIC_ROLLOUT_STEPS = 32
+DEFAULT_ACTION_PROBE_OUTPUT = Path("artifacts/block_smb/action_probe.json")
 
 
 def _positive_int(value: str) -> int:
@@ -373,6 +377,38 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_VISION_DIAGNOSTIC_ROLLOUT_STEPS,
     )
     diagnose.add_argument("--batch-size", type=_positive_int, default=32)
+
+    diagnose_actions = subparsers.add_parser(
+        "diagnose-actions",
+        help="probe policy logits at canonical pre-gap and pre-stair states",
+    )
+    diagnose_actions.add_argument("--checkpoint", type=Path, required=True)
+    diagnose_actions.add_argument("--output", type=Path, default=DEFAULT_ACTION_PROBE_OUTPUT)
+    diagnose_actions.add_argument("--vision-checkpoint", type=Path)
+    diagnose_actions.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda", "mps"),
+        default="auto",
+    )
+    diagnose_actions.add_argument("--seed", type=int, default=0)
+    diagnose_actions.add_argument(
+        "--max-steps",
+        type=_positive_int,
+        default=None,
+        help="maximum scripted rollout steps used to reach probe states",
+    )
+    diagnose_actions.add_argument(
+        "--points-per-scenario",
+        type=_positive_int,
+        default=None,
+        help="number of scripted jump-transition states to log per scenario",
+    )
+    diagnose_actions.add_argument(
+        "--scenario",
+        dest="scenarios",
+        action="append",
+        help="fixed scenario to probe; may be repeated",
+    )
     return parser
 
 
@@ -694,6 +730,49 @@ def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _run_action_probe(args: argparse.Namespace) -> dict[str, Any]:
+    from retroagi.stages.block_smb.action_diagnostics import (
+        DEFAULT_BLOCK_SMB_ACTION_PROBE_MAX_STEPS,
+        DEFAULT_BLOCK_SMB_ACTION_PROBE_POINTS_PER_SCENARIO,
+        DEFAULT_BLOCK_SMB_ACTION_PROBE_SCENARIOS,
+        run_block_smb_action_probe,
+    )
+
+    config = _make_checkpoint_config(args, record=False)
+    device = select_device(config.device)
+    model = make_block_smb_model(config).to(device)
+    restore_block_smb_checkpoint(
+        args.checkpoint,
+        model,
+        map_location=device,
+        architecture_name=config.architecture_name,
+        architecture_config=config.architecture_config,
+    )
+    vision_factory, vision_info = _make_vision_factory(
+        config,
+        getattr(args, "vision_checkpoint", None),
+    )
+    result = run_block_smb_action_probe(
+        model,
+        device=device,
+        vision_factory=vision_factory,
+        scenarios=tuple(args.scenarios or DEFAULT_BLOCK_SMB_ACTION_PROBE_SCENARIOS),
+        seed=args.seed,
+        max_steps=args.max_steps or DEFAULT_BLOCK_SMB_ACTION_PROBE_MAX_STEPS,
+        points_per_scenario=(
+            args.points_per_scenario
+            or DEFAULT_BLOCK_SMB_ACTION_PROBE_POINTS_PER_SCENARIO
+        ),
+        ablation=config.ablation,
+    )
+    return {
+        "checkpoint": {"path": str(args.checkpoint)},
+        "architecture": block_smb_architecture_metadata(config),
+        "vision": vision_info,
+        **result,
+    }
+
+
 def _public_result(
     result: Mapping[str, Any],
     config: BlockSMBTrainingConfig,
@@ -721,6 +800,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         config = _make_checkpoint_config(args, record=True)
     elif args.command == "diagnose-vision":
         return _run_vision_diagnostic(args)
+    elif args.command == "diagnose-actions":
+        return _run_action_probe(args)
     else:
         raise ValueError(f"unknown command {args.command!r}")
     vision_factory, vision_info = _make_vision_factory(

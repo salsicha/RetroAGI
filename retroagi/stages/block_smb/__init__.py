@@ -6,6 +6,13 @@ from .adapter import (
     BlockSMBObservationConfig,
     BlockSMBStage,
 )
+from .action_diagnostics import (
+    BLOCK_SMB_ACTION_PROBE_SCHEMA_VERSION,
+    DEFAULT_BLOCK_SMB_ACTION_PROBE_MAX_STEPS,
+    DEFAULT_BLOCK_SMB_ACTION_PROBE_POINTS_PER_SCENARIO,
+    DEFAULT_BLOCK_SMB_ACTION_PROBE_SCENARIOS,
+    run_block_smb_action_probe,
+)
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .train import (
     BLOCK_SMB_CHECKPOINT_KIND,
@@ -58,6 +65,7 @@ from .vision import (
 __all__ = [
     "BLOCK_SMB_CHECKPOINT_KIND",
     "BLOCK_SMB_MODEL_NAME",
+    "BLOCK_SMB_ACTION_PROBE_SCHEMA_VERSION",
     "BlockSMBAblationConfig",
     "BlockSMBReplayBuffer",
     "BlockSMBTrainingConfig",
@@ -81,6 +89,9 @@ __all__ = [
     "BlockVITPerceptionThresholds",
     "BlockVisionTransformer",
     "DEFAULT_BLOCK_VIT_CHECKPOINT",
+    "DEFAULT_BLOCK_SMB_ACTION_PROBE_MAX_STEPS",
+    "DEFAULT_BLOCK_SMB_ACTION_PROBE_POINTS_PER_SCENARIO",
+    "DEFAULT_BLOCK_SMB_ACTION_PROBE_SCENARIOS",
     "FALLBACK_BLOCK_VIT_CHECKPOINT",
     "FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS",
     "MarioScenarioEnv",
@@ -98,6 +109,7 @@ __all__ = [
     "fixed_scenario_success_threshold",
     "load_scripted_block_smb_checkpoint",
     "load_block_vit_checkpoint",
+    "run_block_smb_action_probe",
     "save_scripted_block_smb_checkpoint",
     "set_block_vit_trainable",
     "summarize_fixed_success_metrics",

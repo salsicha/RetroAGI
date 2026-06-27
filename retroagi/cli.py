@@ -173,7 +173,7 @@ def _run_block_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         if args.save_checkpoint is not None:
             block_args.extend(["--checkpoint", str(args.save_checkpoint)])
         block_args.extend(stage_args)
-    elif args.command in {"train", "evaluate", "record", "diagnose-vision"}:
+    elif args.command in {"train", "evaluate", "record", "diagnose-vision", "diagnose-actions"}:
         block_args = [str(args.command), *stage_args]
     else:
         raise ValueError(f"Block SMB does not support retroagi {args.command!r}")
