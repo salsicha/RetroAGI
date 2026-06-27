@@ -93,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_stage_arg(diagnose)
 
+    diagnose_actions = subparsers.add_parser(
+        "diagnose-actions",
+        help="run policy action-contract diagnostics for stages that expose them",
+    )
+    _add_stage_arg(diagnose_actions)
+
     transfer = subparsers.add_parser("transfer", help="transfer checkpoints between stages")
     _add_stage_arg(transfer)
 
@@ -187,6 +193,10 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         from retroagi.stages.full_smb.diagnostics import main as diagnostics_main
 
         return int(diagnostics_main(list(stage_args)))
+    if command == "diagnose-actions":
+        from retroagi.stages.full_smb.action_diagnostics import main as diagnostics_main
+
+        return int(diagnostics_main(list(stage_args)))
     if command == "transfer":
         from retroagi.stages.full_smb.transfer import main as transfer_main
 
@@ -203,7 +213,8 @@ def _run_full_smb(args: argparse.Namespace, stage_args: Sequence[str]) -> int:
         return int(capabilities_main(list(stage_args)))
     raise ValueError(
         "Full SMB currently supports train, resume, evaluate, diagnose-vision, "
-        "record, play, transfer, compare, and check-env through the top-level CLI"
+        "diagnose-actions, record, play, transfer, compare, and check-env through "
+        "the top-level CLI"
     )
 
 

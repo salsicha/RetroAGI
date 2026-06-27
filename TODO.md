@@ -235,16 +235,22 @@ Next steps:
       0.0, threshold pass rate 0.0, and recordings in
       `artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_lstm_motor_action_contract_fix/`
       showed `RIGHT_JUMP` for all 1,519 steps per episode.
-- [ ] Add a Full SMB action-contract diagnostic for transferred policies.
-  - [ ] Report deterministic and sampled action distributions on canonical
+- [x] Add a Full SMB action-contract diagnostic for transferred policies.
+  - [x] Report deterministic and sampled action distributions on canonical
         real-emulator frames and recorded rollouts.
-  - [ ] Flag missing `RIGHT_JUMP` usage when progress stalls below the first
+  - [x] Flag missing `RIGHT_JUMP` usage when progress stalls below the first
         Level 1-1 movement gate.
-  - [ ] Compare Block SMB scripted action frequencies against Full SMB rollout
+  - [x] Compare Block SMB scripted action frequencies against Full SMB rollout
         action frequencies after transfer.
-  - [ ] Trace B-stream motor-primitive logits, replan probability, combined
+  - [x] Trace B-stream motor-primitive logits, replan probability, combined
         action bias, and final action choice on real-emulator frames to
         distinguish inactive primitives from an action-space mapping issue.
+      Result: `retroagi diagnose-actions --stage full` now writes schema-v1
+      action-contract diagnostics. The first artifact,
+      `artifacts/full_pipeline_20260626_1450/full_smb/action_diagnostic_distilled_dagger9_lstm_motor_action_contract_fix.json`,
+      reports deterministic canonical `RIGHT_JUMP` fraction 1.0, recording
+      `RIGHT_JUMP` fraction 1.0, no missing-`RIGHT_JUMP` stall, and an
+      `overactive_right_jump_when_stalled` bottleneck.
 - [ ] Build a real-emulator Full SMB imitation warm start for Level 1-1 opening
       movement and jump timing.
   - [ ] Generate deterministic real-emulator trajectories using
