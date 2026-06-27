@@ -1,0 +1,425 @@
+{
+  "config": {
+    "benchmark_max_steps": 2400,
+    "benchmark_task": "benchmark_1_1_start",
+    "episodes_override": null,
+    "min_gate_pass_rate": 1.0,
+    "seed": 0
+  },
+  "gates": {
+    "first_enemy": {
+      "action_counts": {
+        "JUMP": 0,
+        "LEFT": 0,
+        "LEFT_JUMP": 0,
+        "NOOP": 0,
+        "RIGHT": 503,
+        "RIGHT_JUMP": 147
+      },
+      "action_fractions": {
+        "JUMP": 0.0,
+        "LEFT": 0.0,
+        "LEFT_JUMP": 0.0,
+        "NOOP": 0.0,
+        "RIGHT": 0.7738461538461539,
+        "RIGHT_JUMP": 0.22615384615384615
+      },
+      "completion_rate": 0.0,
+      "death_count": 0.0,
+      "episode_pass_rate": 0.0,
+      "episodes": 1,
+      "episodes_detail": [
+        {
+          "action_counts": {
+            "JUMP": 0,
+            "LEFT": 0,
+            "LEFT_JUMP": 0,
+            "NOOP": 0,
+            "RIGHT": 503,
+            "RIGHT_JUMP": 147
+          },
+          "action_fractions": {
+            "JUMP": 0.0,
+            "LEFT": 0.0,
+            "LEFT_JUMP": 0.0,
+            "NOOP": 0.0,
+            "RIGHT": 0.7738461538461539,
+            "RIGHT_JUMP": 0.22615384615384615
+          },
+          "coins": 0.0,
+          "completion": 0.0,
+          "death": 0.0,
+          "episode_index": 0,
+          "last_progress": 201.0,
+          "max_progress": 398.0,
+          "mean_progress": 140.77846153846153,
+          "return": 395.0,
+          "score": 0.0,
+          "seed": 2000,
+          "steps": 650,
+          "survival": 1.0,
+          "terminated": false,
+          "threshold_met": false,
+          "truncated": false
+        }
+      ],
+      "gate": "first_enemy",
+      "max_progress": 398.0,
+      "max_steps_per_episode": 650,
+      "mean_coins": 0.0,
+      "mean_max_progress": 398.0,
+      "mean_return": 395.0,
+      "mean_score": 0.0,
+      "steps": 650,
+      "survival_rate": 1.0,
+      "threshold": {
+        "episodes": 1,
+        "max_steps": 650,
+        "min_episode_pass_rate": 1.0,
+        "min_mean_score": 0.0,
+        "min_progress": 640.0,
+        "min_right_jump_fraction": 0.01,
+        "min_survival_rate": 1.0,
+        "name": "first_enemy",
+        "rationale": "Policy must survive and progress beyond the first enemy encounter.",
+        "tags": [
+          "level_1_1",
+          "enemy",
+          "avoidance"
+        ]
+      },
+      "threshold_diagnostics": {
+        "enough_episodes": true,
+        "meets_episode_pass_rate": false,
+        "meets_progress": false,
+        "meets_right_jump_fraction": true,
+        "meets_score": true,
+        "meets_survival": true,
+        "observed": {
+          "episode_pass_rate": 0.0,
+          "episodes": 1,
+          "max_progress": 398.0,
+          "mean_score": 0.0,
+          "right_jump_fraction": 0.22615384615384615,
+          "survival_rate": 1.0
+        },
+        "within_step_budget": true
+      },
+      "threshold_met": false
+    },
+    "first_gap_or_stair": {
+      "action_counts": {
+        "JUMP": 0,
+        "LEFT": 0,
+        "LEFT_JUMP": 0,
+        "NOOP": 0,
+        "RIGHT": 812,
+        "RIGHT_JUMP": 188
+      },
+      "action_fractions": {
+        "JUMP": 0.0,
+        "LEFT": 0.0,
+        "LEFT_JUMP": 0.0,
+        "NOOP": 0.0,
+        "RIGHT": 0.812,
+        "RIGHT_JUMP": 0.188
+      },
+      "completion_rate": 0.0,
+      "death_count": 0.0,
+      "episode_pass_rate": 0.0,
+      "episodes": 1,
+      "episodes_detail": [
+        {
+          "action_counts": {
+            "JUMP": 0,
+            "LEFT": 0,
+            "LEFT_JUMP": 0,
+            "NOOP": 0,
+            "RIGHT": 812,
+            "RIGHT_JUMP": 188
+          },
+          "action_fractions": {
+            "JUMP": 0.0,
+            "LEFT": 0.0,
+            "LEFT_JUMP": 0.0,
+            "NOOP": 0.0,
+            "RIGHT": 0.812,
+            "RIGHT_JUMP": 0.188
+          },
+          "coins": 0.0,
+          "completion": 0.0,
+          "death": 0.0,
+          "episode_index": 0,
+          "last_progress": 0.0,
+          "max_progress": 398.0,
+          "mean_progress": 164.206,
+          "return": 532.0,
+          "score": 0.0,
+          "seed": 3000,
+          "steps": 1000,
+          "survival": 1.0,
+          "terminated": false,
+          "threshold_met": false,
+          "truncated": false
+        }
+      ],
+      "gate": "first_gap_or_stair",
+      "max_progress": 398.0,
+      "max_steps_per_episode": 1000,
+      "mean_coins": 0.0,
+      "mean_max_progress": 398.0,
+      "mean_return": 532.0,
+      "mean_score": 0.0,
+      "steps": 1000,
+      "survival_rate": 1.0,
+      "threshold": {
+        "episodes": 1,
+        "max_steps": 1000,
+        "min_episode_pass_rate": 1.0,
+        "min_mean_score": 0.0,
+        "min_progress": 1024.0,
+        "min_right_jump_fraction": 0.01,
+        "min_survival_rate": 1.0,
+        "name": "first_gap_or_stair",
+        "rationale": "Policy must reach the first gap or stair transition before full benchmark.",
+        "tags": [
+          "level_1_1",
+          "gap",
+          "stairs"
+        ]
+      },
+      "threshold_diagnostics": {
+        "enough_episodes": true,
+        "meets_episode_pass_rate": false,
+        "meets_progress": false,
+        "meets_right_jump_fraction": true,
+        "meets_score": true,
+        "meets_survival": true,
+        "observed": {
+          "episode_pass_rate": 0.0,
+          "episodes": 1,
+          "max_progress": 398.0,
+          "mean_score": 0.0,
+          "right_jump_fraction": 0.188,
+          "survival_rate": 1.0
+        },
+        "within_step_budget": true
+      },
+      "threshold_met": false
+    },
+    "first_pipe": {
+      "action_counts": {
+        "JUMP": 0,
+        "LEFT": 0,
+        "LEFT_JUMP": 0,
+        "NOOP": 0,
+        "RIGHT": 404,
+        "RIGHT_JUMP": 96
+      },
+      "action_fractions": {
+        "JUMP": 0.0,
+        "LEFT": 0.0,
+        "LEFT_JUMP": 0.0,
+        "NOOP": 0.0,
+        "RIGHT": 0.808,
+        "RIGHT_JUMP": 0.192
+      },
+      "completion_rate": 0.0,
+      "death_count": 0.0,
+      "episode_pass_rate": 0.0,
+      "episodes": 1,
+      "episodes_detail": [
+        {
+          "action_counts": {
+            "JUMP": 0,
+            "LEFT": 0,
+            "LEFT_JUMP": 0,
+            "NOOP": 0,
+            "RIGHT": 404,
+            "RIGHT_JUMP": 96
+          },
+          "action_fractions": {
+            "JUMP": 0.0,
+            "LEFT": 0.0,
+            "LEFT_JUMP": 0.0,
+            "NOOP": 0.0,
+            "RIGHT": 0.808,
+            "RIGHT_JUMP": 0.192
+          },
+          "coins": 0.0,
+          "completion": 0.0,
+          "death": 0.0,
+          "episode_index": 0,
+          "last_progress": 0.0,
+          "max_progress": 398.0,
+          "mean_progress": 164.126,
+          "return": 266.0,
+          "score": 0.0,
+          "seed": 1000,
+          "steps": 500,
+          "survival": 1.0,
+          "terminated": false,
+          "threshold_met": false,
+          "truncated": false
+        }
+      ],
+      "gate": "first_pipe",
+      "max_progress": 398.0,
+      "max_steps_per_episode": 500,
+      "mean_coins": 0.0,
+      "mean_max_progress": 398.0,
+      "mean_return": 266.0,
+      "mean_score": 0.0,
+      "steps": 500,
+      "survival_rate": 1.0,
+      "threshold": {
+        "episodes": 1,
+        "max_steps": 500,
+        "min_episode_pass_rate": 1.0,
+        "min_mean_score": 0.0,
+        "min_progress": 512.0,
+        "min_right_jump_fraction": 0.01,
+        "min_survival_rate": 1.0,
+        "name": "first_pipe",
+        "rationale": "Policy must pass the first pipe region with at least some jump timing.",
+        "tags": [
+          "level_1_1",
+          "pipe",
+          "obstacle"
+        ]
+      },
+      "threshold_diagnostics": {
+        "enough_episodes": true,
+        "meets_episode_pass_rate": false,
+        "meets_progress": false,
+        "meets_right_jump_fraction": true,
+        "meets_score": true,
+        "meets_survival": true,
+        "observed": {
+          "episode_pass_rate": 0.0,
+          "episodes": 1,
+          "max_progress": 398.0,
+          "mean_score": 0.0,
+          "right_jump_fraction": 0.192,
+          "survival_rate": 1.0
+        },
+        "within_step_budget": true
+      },
+      "threshold_met": false
+    },
+    "opening_movement": {
+      "action_counts": {
+        "JUMP": 0,
+        "LEFT": 0,
+        "LEFT_JUMP": 0,
+        "NOOP": 0,
+        "RIGHT": 260,
+        "RIGHT_JUMP": 0
+      },
+      "action_fractions": {
+        "JUMP": 0.0,
+        "LEFT": 0.0,
+        "LEFT_JUMP": 0.0,
+        "NOOP": 0.0,
+        "RIGHT": 1.0,
+        "RIGHT_JUMP": 0.0
+      },
+      "completion_rate": 0.0,
+      "death_count": 0.0,
+      "episode_pass_rate": 1.0,
+      "episodes": 1,
+      "episodes_detail": [
+        {
+          "action_counts": {
+            "JUMP": 0,
+            "LEFT": 0,
+            "LEFT_JUMP": 0,
+            "NOOP": 0,
+            "RIGHT": 260,
+            "RIGHT_JUMP": 0
+          },
+          "action_fractions": {
+            "JUMP": 0.0,
+            "LEFT": 0.0,
+            "LEFT_JUMP": 0.0,
+            "NOOP": 0.0,
+            "RIGHT": 1.0,
+            "RIGHT_JUMP": 0.0
+          },
+          "coins": 0.0,
+          "completion": 0.0,
+          "death": 0.0,
+          "episode_index": 0,
+          "last_progress": 226.0,
+          "max_progress": 398.0,
+          "mean_progress": 193.77692307692308,
+          "return": 266.0,
+          "score": 0.0,
+          "seed": 0,
+          "steps": 260,
+          "survival": 1.0,
+          "terminated": false,
+          "threshold_met": true,
+          "truncated": false
+        }
+      ],
+      "gate": "opening_movement",
+      "max_progress": 398.0,
+      "max_steps_per_episode": 260,
+      "mean_coins": 0.0,
+      "mean_max_progress": 398.0,
+      "mean_return": 266.0,
+      "mean_score": 0.0,
+      "steps": 260,
+      "survival_rate": 1.0,
+      "threshold": {
+        "episodes": 1,
+        "max_steps": 260,
+        "min_episode_pass_rate": 1.0,
+        "min_mean_score": 0.0,
+        "min_progress": 256.0,
+        "min_right_jump_fraction": 0.0,
+        "min_survival_rate": 1.0,
+        "name": "opening_movement",
+        "rationale": "Policy must leave the spawn area before full Level 1-1 evaluation.",
+        "tags": [
+          "level_1_1",
+          "opening",
+          "movement"
+        ]
+      },
+      "threshold_diagnostics": {
+        "enough_episodes": true,
+        "meets_episode_pass_rate": true,
+        "meets_progress": true,
+        "meets_right_jump_fraction": true,
+        "meets_score": true,
+        "meets_survival": true,
+        "observed": {
+          "episode_pass_rate": 1.0,
+          "episodes": 1,
+          "max_progress": 398.0,
+          "mean_score": 0.0,
+          "right_jump_fraction": 0.0,
+          "survival_rate": 1.0
+        },
+        "within_step_budget": true
+      },
+      "threshold_met": true
+    }
+  },
+  "schema_version": 1,
+  "summary": {
+    "blocking_gates": [
+      "first_pipe",
+      "first_enemy",
+      "first_gap_or_stair"
+    ],
+    "full_benchmark_allowed": false,
+    "full_benchmark_block_reason": "gate_pass_rate 0.250 is below required 1.000",
+    "full_benchmark_blocked": true,
+    "gate_count": 4,
+    "gate_pass_rate": 0.25,
+    "gates_passed": 1
+  }
+}

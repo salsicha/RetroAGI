@@ -692,6 +692,43 @@ class TestRetroAGICLI(unittest.TestCase):
             ]
         )
 
+    def test_full_smb_gate_forwards_arguments(self):
+        with patch(
+            "retroagi.stages.full_smb.curriculum_gates.main",
+            return_value=0,
+        ) as gate_main:
+            exit_code = cli.main(
+                [
+                    "gate",
+                    "--game",
+                    "smb",
+                    "--stage",
+                    "full",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--episodes",
+                    "2",
+                    "--min-gate-pass-rate",
+                    "0.75",
+                    "--output",
+                    "artifacts/full_smb/curriculum_gates.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        gate_main.assert_called_once_with(
+            [
+                "--checkpoint",
+                "data/full_smb/policy.pth",
+                "--episodes",
+                "2",
+                "--min-gate-pass-rate",
+                "0.75",
+                "--output",
+                "artifacts/full_smb/curriculum_gates.json",
+            ]
+        )
+
     def test_full_smb_imitate_forwards_arguments(self):
         with patch("retroagi.stages.full_smb.imitation.main", return_value=0) as imitation_main:
             exit_code = cli.main(

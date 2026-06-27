@@ -70,6 +70,10 @@ Current result:
       opening trajectory and trains the Full SMB policy/controller head on it.
       The warm-started policy uses a mixed action contract in benchmark
       rollouts, but still stalls at mean/max progress 398.0.
+- Short Full SMB curriculum gates now run before the fixed benchmark. The
+      warm-started policy passes only the opening-movement gate and is blocked
+      from another full `benchmark_1_1_start` run until it clears the first-pipe,
+      first-enemy, and first-gap/stair gates.
 
 Next steps:
 
@@ -273,13 +277,20 @@ Next steps:
       0.0, and threshold pass rate 0.0. Recordings show per-episode action
       counts of `RIGHT=1216` and `RIGHT_JUMP=306`, so the action mix is no
       longer collapsed, but behavior still needs staged curriculum gates.
-- [ ] Add short Full SMB curriculum gates before the full fixed benchmark.
-  - [ ] Create progress gates for the opening movement segment, first pipe,
+- [x] Add short Full SMB curriculum gates before the full fixed benchmark.
+  - [x] Create progress gates for the opening movement segment, first pipe,
         first enemy, and first gap or stair transition.
-  - [ ] Record per-gate progress, score, survival, action distribution, and
+  - [x] Record per-gate progress, score, survival, action distribution, and
         threshold diagnostics.
-  - [ ] Require gate pass rates before spending full 2,400-step evaluation
+  - [x] Require gate pass rates before spending full 2,400-step evaluation
         runs on `benchmark_1_1_start`.
+      Result: `retroagi gate --stage full` now writes schema-v1 short-gate
+      reports with four Level 1-1 progress gates and a
+      `full_benchmark_allowed` decision. The warm-started checkpoint report
+      `artifacts/full_pipeline_20260626_1450/full_smb/curriculum_gates_distilled_dagger9_lstm_motor_warm_start.json`
+      passed only `opening_movement`; `first_pipe`, `first_enemy`, and
+      `first_gap_or_stair` all stalled at max progress 398.0, so the gate pass
+      rate is 0.25 and another full 2,400-step benchmark is blocked.
 
 ## Completed Work
 
