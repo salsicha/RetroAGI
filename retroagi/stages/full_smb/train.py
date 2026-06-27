@@ -150,6 +150,33 @@ _FULL_SMB_DEFAULT_MAX_ABS_LOSS = 1_000_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
 _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT = 0.05
+_FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
+    "position",
+    "semantic_probabilities",
+    "emulator_state",
+    "camera_state",
+    "patch_tokens",
+)
+_FULL_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
+    "position": "position",
+    "semantic": "semantic_probabilities",
+    "semantics": "semantic_probabilities",
+    "semantic_probabilities": "semantic_probabilities",
+    "semantic-probabilities": "semantic_probabilities",
+    "emulator": "emulator_state",
+    "state": "emulator_state",
+    "emulator_state": "emulator_state",
+    "emulator-state": "emulator_state",
+    "camera": "camera_state",
+    "camera_state": "camera_state",
+    "camera-state": "camera_state",
+    "tokens": "patch_tokens",
+    "patch": "patch_tokens",
+    "patch_tokens": "patch_tokens",
+    "patch-tokens": "patch_tokens",
+}
+_FULL_SMB_SIGNAL_STATE_SLOT_COUNT = 9
+_FULL_SMB_CAMERA_STATE_SLOT_COUNT = 4
 _FULL_SMB_RECORDING_SCHEMA_VERSION = 1
 _FULL_SMB_VIDEO_SUFFIXES = (".avi", ".mkv", ".mov", ".mp4")
 DEFAULT_FULL_SMB_RECORDING_DIR = Path("artifacts/full_smb/recordings")
@@ -213,7 +240,7 @@ def _resolve_training_mode(mode: Optional[str]) -> str:
 
 
 def _loss_weight_metadata(config: Any) -> dict[str, float]:
-    return {
+    weights = {
         "policy": float(config.policy_loss_weight),
         "entropy": float(config.entropy_weight),
         "representation": float(config.representation_weight),
@@ -223,6 +250,31 @@ def _loss_weight_metadata(config: Any) -> dict[str, float]:
         "action_aux": float(config.action_aux_weight),
         "critic": float(config.critic_loss_weight),
     }
+    for slot_name, slot_weight in getattr(config, "world_model_slot_weights", {}).items():
+        weights[f"world_model_slot_{slot_name}"] = float(slot_weight)
+    return weights
+
+
+def _normalize_full_smb_world_model_slot_weights(
+    weights: Mapping[str, Any] | None,
+) -> dict[str, float]:
+    normalized: dict[str, float] = {}
+    for raw_name, raw_weight in dict(weights or {}).items():
+        slot_key = str(raw_name).strip().lower().replace(" ", "_")
+        slot_name = _FULL_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES.get(slot_key)
+        if slot_name is None:
+            choices = ", ".join(_FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES)
+            raise ValueError(
+                f"unknown Full SMB world-model C-stream slot {raw_name!r}; "
+                f"expected one of: {choices}"
+            )
+        weight = float(raw_weight)
+        if weight < 0.0 or not math.isfinite(weight):
+            raise ValueError("world_model_slot_weights must contain finite non-negative values")
+        normalized[slot_name] = weight
+    if normalized and all(weight == 0.0 for weight in normalized.values()):
+        raise ValueError("at least one world_model_slot_weight must be positive")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -244,6 +296,7 @@ class FullSMBTrainingConfig:
     policy_loss_weight: float = 1.0
     representation_weight: float = 0.0
     world_model_weight: float = _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT
+    world_model_slot_weights: Mapping[str, float] = field(default_factory=dict)
     reward_loss_weight: float = 0.0
     value_loss_weight: float = 0.0
     action_aux_weight: float = 0.0
@@ -299,6 +352,11 @@ class FullSMBTrainingConfig:
             )
         elif not isinstance(self.reward_config, FullSMBRewardConfig):
             raise TypeError("reward_config must be a FullSMBRewardConfig or mapping")
+        object.__setattr__(
+            self,
+            "world_model_slot_weights",
+            _normalize_full_smb_world_model_slot_weights(self.world_model_slot_weights),
+        )
         rollout_length = (
             self.max_steps_per_episode if self.rollout_length is None else self.rollout_length
         )
@@ -721,6 +779,7 @@ def train_full_smb_policy(
                             entropy_weight=config.entropy_weight,
                             policy_loss_weight=config.policy_loss_weight,
                             world_model_weight=config.world_model_weight,
+                            world_model_slot_weights=config.world_model_slot_weights,
                             gradient_clip_norm=config.gradient_clip_norm,
                             max_abs_loss=config.max_abs_loss,
                             max_abs_scaled_reward=config.max_abs_scaled_reward,
@@ -826,6 +885,12 @@ def train_full_smb_policy(
                 "mean_policy_loss": _mean(history["policy_loss"]),
                 "mean_loss_dynamics": _mean(history.get("loss_dynamics", [])),
                 "mean_loss_world_model": _mean(history.get("loss_world_model", [])),
+                **{
+                    f"mean_loss_dynamics_{slot_name}": _mean(
+                        history.get(f"loss_dynamics_{slot_name}", [])
+                    )
+                    for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
+                },
                 "mean_action_entropy": _mean(history.get("mean_entropy", [])),
                 "mean_gradient_norm": _mean(history.get("mean_gradient_norm", [])),
                 "max_gradient_norm": _max(history.get("max_gradient_norm", [])),
@@ -1985,6 +2050,7 @@ def _train_episode(
     entropy_weight: float,
     policy_loss_weight: float,
     world_model_weight: float,
+    world_model_slot_weights: Mapping[str, float],
     gradient_clip_norm: float,
     max_abs_loss: float,
     max_abs_scaled_reward: float,
@@ -2005,6 +2071,9 @@ def _train_episode(
     reward_prediction_abs_values: list[float] = []
     next_state_prediction_abs_values: list[float] = []
     dynamics_losses: list[float] = []
+    dynamics_slot_losses: dict[str, list[float]] = {
+        slot_name: [] for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
+    }
     world_model_losses: list[float] = []
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
@@ -2049,6 +2118,7 @@ def _train_episode(
             info=info,
         )
         loss_dynamics = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
+        slot_losses: dict[str, torch.Tensor] = {}
         if world_model_weight > 0.0 and forward.next_state_pred is not None:
             with torch.no_grad():
                 next_batch = stage.encode_observation(observation, info)
@@ -2058,9 +2128,19 @@ def _train_episode(
                     "Full SMB world-model target shape mismatch: "
                     f"prediction={tuple(forward.next_state_pred.shape)}, "
                     f"target={tuple(next_state_target.shape)}"
-                )
+            )
             _finite_tensor_or_raise("next_state_target", next_state_target)
-            loss_dynamics = F.mse_loss(forward.next_state_pred, next_state_target)
+            slot_losses = _full_smb_c_stream_dynamics_slot_losses(
+                forward.next_state_pred,
+                next_state_target,
+                next_batch,
+            )
+            loss_dynamics = _full_smb_dynamics_loss(
+                forward.next_state_pred,
+                next_state_target,
+                slot_losses,
+                world_model_slot_weights=world_model_slot_weights,
+            )
             _finite_tensor_or_raise("loss_dynamics", loss_dynamics)
         loss_world_model = loss_dynamics * float(world_model_weight)
         _finite_tensor_or_raise("loss_world_model", loss_world_model)
@@ -2112,6 +2192,13 @@ def _train_episode(
         losses.append(float(loss.detach().cpu().item()))
         policy_losses.append(float(policy_loss.detach().cpu().item()))
         dynamics_losses.append(float(loss_dynamics.detach().cpu().item()))
+        for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES:
+            slot_loss = slot_losses.get(slot_name)
+            if slot_loss is None:
+                slot_value = 0.0
+            else:
+                slot_value = float(slot_loss.detach().cpu().item())
+            dynamics_slot_losses[slot_name].append(slot_value)
         world_model_losses.append(float(loss_world_model.detach().cpu().item()))
         entropies.append(float(entropy.detach().cpu().item()))
         gradient_norm = float(grad_norm.detach().cpu().item())
@@ -2138,6 +2225,10 @@ def _train_episode(
         "recurrent_state_resets": float(recurrent_state_resets),
         "loss_policy": _mean(policy_losses),
         "loss_dynamics": _mean(dynamics_losses),
+        **{
+            f"loss_dynamics_{slot_name}": _mean(values)
+            for slot_name, values in dynamics_slot_losses.items()
+        },
         "loss_world_model": _mean(world_model_losses),
         "mean_entropy": _mean(entropies),
         "min_entropy": min(entropies) if entropies else 0.0,
@@ -2170,6 +2261,113 @@ def _train_episode(
             steps=tuple(steps),
         ),
     )
+
+
+def _full_smb_c_stream_dynamics_slot_losses(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    batch: StageBatch,
+) -> dict[str, torch.Tensor]:
+    spans = _full_smb_c_stream_slot_spans(batch)
+    losses: dict[str, torch.Tensor] = {}
+    for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES:
+        start, end = spans[slot_name]
+        if end <= start:
+            losses[slot_name] = prediction.new_zeros(())
+            continue
+        losses[slot_name] = F.mse_loss(prediction[:, start:end], target[:, start:end])
+    return losses
+
+
+def _full_smb_dynamics_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    slot_losses: Mapping[str, torch.Tensor],
+    *,
+    world_model_slot_weights: Mapping[str, float],
+) -> torch.Tensor:
+    if not world_model_slot_weights:
+        return F.mse_loss(prediction, target)
+    weighted_loss: torch.Tensor | None = None
+    total_weight = 0.0
+    for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES:
+        slot_loss = slot_losses.get(slot_name)
+        if slot_loss is None:
+            continue
+        slot_weight = float(world_model_slot_weights.get(slot_name, 1.0))
+        if slot_weight <= 0.0:
+            continue
+        weighted = slot_loss * slot_weight
+        weighted_loss = weighted if weighted_loss is None else weighted_loss + weighted
+        total_weight += slot_weight
+    if weighted_loss is None or total_weight <= 0.0:
+        return F.mse_loss(prediction, target)
+    return weighted_loss / total_weight
+
+
+def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int]]:
+    feature_length = int(batch.src_c.shape[1])
+    metadata = batch.metadata if isinstance(batch.metadata, Mapping) else {}
+    fusion = metadata.get("vision_fusion", {})
+    if not isinstance(fusion, Mapping):
+        fusion = {}
+    position = _full_smb_c_stream_span(fusion, "c_position", feature_length, default=(0, 0))
+    semantics = _full_smb_c_stream_span(
+        fusion,
+        "c_semantic_probabilities",
+        feature_length,
+        default=(position[1], position[1]),
+    )
+    state = _full_smb_c_stream_span(
+        fusion,
+        "c_state",
+        feature_length,
+        default=(semantics[1], semantics[1]),
+    )
+    patch_tokens = _full_smb_c_stream_span(
+        fusion,
+        "c_patch_tokens",
+        feature_length,
+        default=(state[1], feature_length),
+    )
+    observation = metadata.get("observation", {})
+    camera_enabled = (
+        bool(observation.get("camera_state_enabled"))
+        if isinstance(observation, Mapping)
+        else False
+    )
+    state_start, state_end = state
+    emulator_end = min(state_end, state_start + _FULL_SMB_SIGNAL_STATE_SLOT_COUNT)
+    if camera_enabled:
+        camera_start = emulator_end
+        camera_end = min(state_end, camera_start + _FULL_SMB_CAMERA_STATE_SLOT_COUNT)
+    else:
+        camera_start = emulator_end
+        camera_end = emulator_end
+    return {
+        "position": position,
+        "semantic_probabilities": semantics,
+        "emulator_state": (state_start, emulator_end),
+        "camera_state": (camera_start, camera_end),
+        "patch_tokens": patch_tokens,
+    }
+
+
+def _full_smb_c_stream_span(
+    fusion: Mapping[str, Any],
+    name: str,
+    feature_length: int,
+    *,
+    default: tuple[int, int],
+) -> tuple[int, int]:
+    raw = fusion.get(name, default)
+    try:
+        start, end = int(raw[0]), int(raw[1])
+    except (TypeError, ValueError, IndexError):
+        start, end = default
+    start = max(0, min(feature_length, start))
+    end = max(start, min(feature_length, end))
+    return start, end
 
 
 def _policy_action_logits(
@@ -3870,6 +4068,24 @@ def _parse_value(value: str) -> Any:
         return value
 
 
+def _world_model_slot_weight_item(value: str) -> tuple[str, float]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("world model slot weight must use SLOT=WEIGHT syntax")
+    key, raw_value = value.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise argparse.ArgumentTypeError("world model slot name must be non-empty")
+    try:
+        weight = float(raw_value.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("world model slot weight must be numeric") from exc
+    try:
+        normalized = _normalize_full_smb_world_model_slot_weights({key: weight})
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return next(iter(normalized.items()))
+
+
 def _add_training_update_args(
     parser: argparse.ArgumentParser,
     *,
@@ -3907,6 +4123,17 @@ def _add_training_update_args(
         "--world-model-weight",
         type=float,
         default=_FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT,
+    )
+    parser.add_argument(
+        "--world-model-slot-weight",
+        action="append",
+        type=_world_model_slot_weight_item,
+        default=[],
+        help=(
+            "optional C-stream dynamics slot weight as SLOT=WEIGHT; slots are "
+            "position, semantic_probabilities, emulator_state, camera_state, "
+            "and patch_tokens"
+        ),
     )
     parser.add_argument("--reward-loss-weight", type=float, default=0.0)
     parser.add_argument("--value-loss-weight", type=float, default=0.0)
@@ -4276,6 +4503,7 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
             "world_model_weight",
             _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT,
         ),
+        world_model_slot_weights=dict(getattr(args, "world_model_slot_weight", None) or ()),
         reward_loss_weight=getattr(args, "reward_loss_weight", 0.0),
         value_loss_weight=getattr(args, "value_loss_weight", 0.0),
         action_aux_weight=getattr(args, "action_aux_weight", 0.0),

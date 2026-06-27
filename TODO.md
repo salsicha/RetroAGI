@@ -790,10 +790,16 @@ and playable end target.
   - [x] Log `loss_dynamics` and `loss_world_model` for Full SMB alongside
         policy loss, entropy, reward/value prediction safety metrics, recurrent
         resets, and checkpoint metadata.
-  - [ ] Add slot-aware C-stream dynamics metrics and optional loss weights for
+  - [x] Add slot-aware C-stream dynamics metrics and optional loss weights for
         position, semantic probabilities, emulator state/signals, camera state,
         and pooled patch-token features so semantic prediction quality is not
         hidden by larger feature groups.
+        Result: Full SMB training now logs `loss_dynamics_position`,
+        `loss_dynamics_semantic_probabilities`, `loss_dynamics_emulator_state`,
+        `loss_dynamics_camera_state`, and `loss_dynamics_patch_tokens`, writes
+        matching checkpoint means, and accepts
+        `--world-model-slot-weight SLOT=WEIGHT` for optional slot-weighted
+        dynamics loss.
   - [x] Verify transferred Block SMB LSTM/world-model weights continue training
         in Full SMB checkpoints, summaries, and resume flows.
   - [x] Keep `evaluate` and `play` read-only under `torch.no_grad()`; if online

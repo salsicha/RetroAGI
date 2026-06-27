@@ -1030,6 +1030,7 @@ class TestFullSMBTraining(unittest.TestCase):
                 policy_loss_weight=0.0,
                 entropy_weight=0.0,
                 world_model_weight=0.1,
+                world_model_slot_weights={"position": 2.0, "patch_tokens": 0.5},
                 learning_rate=1e-3,
                 device="cpu",
                 full_smb_vision_checkpoint=full_vision_path,
@@ -1052,9 +1053,30 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertIn("loss_world_model", result.history)
         self.assertGreater(result.history["loss_dynamics"][0], 0.0)
         self.assertGreater(result.history["loss_world_model"][0], 0.0)
+        for slot_name in (
+            "position",
+            "semantic_probabilities",
+            "emulator_state",
+            "camera_state",
+            "patch_tokens",
+        ):
+            history_name = f"loss_dynamics_{slot_name}"
+            metric_name = f"mean_loss_dynamics_{slot_name}"
+            self.assertIn(history_name, result.history)
+            self.assertIn(metric_name, result.checkpoint["metrics"])
+            self.assertGreaterEqual(result.history[history_name][0], 0.0)
+            self.assertGreaterEqual(result.checkpoint["metrics"][metric_name], 0.0)
         self.assertEqual(
             result.checkpoint["config"]["loss_weights"]["world_model"],
             0.1,
+        )
+        self.assertEqual(
+            result.checkpoint["config"]["loss_weights"]["world_model_slot_position"],
+            2.0,
+        )
+        self.assertEqual(
+            result.checkpoint["config"]["loss_weights"]["world_model_slot_patch_tokens"],
+            0.5,
         )
         self.assertEqual(
             result.checkpoint["metadata"]["training"]["loss_weights"]["world_model"],
@@ -1157,6 +1179,7 @@ class TestFullSMBTraining(unittest.TestCase):
             policy_loss_weight=0.75,
             representation_weight=0.1,
             world_model_weight=0.2,
+            world_model_slot_weights={"semantic": 1.5, "camera-state": 0.25},
             reward_loss_weight=0.3,
             value_loss_weight=0.4,
             action_aux_weight=0.5,
@@ -1189,6 +1212,10 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.reward_config.emulator_progress, 0.5)
         self.assertEqual(config.reward_config.death, -7.0)
         self.assertEqual(config.policy_loss_weight, 0.75)
+        self.assertEqual(
+            config.world_model_slot_weights,
+            {"semantic_probabilities": 1.5, "camera_state": 0.25},
+        )
         self.assertEqual(config.value_loss_weight, 0.4)
         self.assertEqual(config.max_abs_loss, 123.0)
         self.assertEqual(config.max_abs_scaled_reward, 45.0)
@@ -1212,6 +1239,12 @@ class TestFullSMBTraining(unittest.TestCase):
             FullSMBTrainingConfig(evaluation_interval_epochs=0)
         with self.assertRaisesRegex(ValueError, "loss weights"):
             FullSMBTrainingConfig(value_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "C-stream slot"):
+            FullSMBTrainingConfig(world_model_slot_weights={"unknown": 1.0})
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            FullSMBTrainingConfig(world_model_slot_weights={"position": -1.0})
+        with self.assertRaisesRegex(ValueError, "positive"):
+            FullSMBTrainingConfig(world_model_slot_weights={"position": 0.0})
         with self.assertRaisesRegex(ValueError, "max_abs_loss"):
             FullSMBTrainingConfig(max_abs_loss=0)
         with self.assertRaisesRegex(ValueError, "max_abs_scaled_reward"):
@@ -1687,6 +1720,10 @@ class TestFullSMBTraining(unittest.TestCase):
                     "0.0007",
                     "--policy-loss-weight",
                     "0.8",
+                    "--world-model-slot-weight",
+                    "position=2.0",
+                    "--world-model-slot-weight",
+                    "patch-tokens=0.5",
                     "--value-loss-weight",
                     "0.2",
                     "--max-abs-loss",
@@ -1729,6 +1766,10 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.vector_env_count, 2)
         self.assertEqual(config.learning_rate, 0.0007)
         self.assertEqual(config.policy_loss_weight, 0.8)
+        self.assertEqual(
+            config.world_model_slot_weights,
+            {"position": 2.0, "patch_tokens": 0.5},
+        )
         self.assertEqual(config.value_loss_weight, 0.2)
         self.assertEqual(config.max_abs_loss, 123.0)
         self.assertEqual(config.max_abs_scaled_reward, 45.0)
