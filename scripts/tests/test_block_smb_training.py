@@ -220,6 +220,20 @@ class TestBlockSMBTraining(unittest.TestCase):
         ):
             self.assertTrue(torch.isfinite(imagined[key]).item())
             self.assertTrue(torch.isfinite(losses[key]).item())
+        for slot_name in (
+            "position",
+            "semantic_probabilities",
+            "state",
+            "patch_tokens",
+        ):
+            self.assertIn(f"loss_dynamics_{slot_name}", losses)
+            self.assertIn(f"dynamics_{slot_name}_rmse", losses)
+            self.assertIn(f"dynamics_{slot_name}_mae", losses)
+            self.assertGreaterEqual(losses[f"loss_dynamics_{slot_name}"].item(), 0.0)
+        self.assertIn("dynamics_semantic_prediction_accuracy", losses)
+        self.assertIn("dynamics_semantic_prediction_gate_met", losses)
+        self.assertGreaterEqual(losses["dynamics_semantic_prediction_accuracy"].item(), 0.0)
+        self.assertLessEqual(losses["dynamics_semantic_prediction_accuracy"].item(), 1.0)
         self.assertTrue(torch.isfinite(losses["loss_total"]).item())
 
     def test_world_model_ablation_bypasses_dynamics_and_imagination(self):

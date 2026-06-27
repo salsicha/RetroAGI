@@ -96,6 +96,19 @@ def _architecture_config_item(value: str) -> tuple[str, Any]:
     return key, _parse_architecture_config_value(raw_value.strip())
 
 
+def _slot_weight_item(value: str) -> tuple[str, float]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("must use SLOT=WEIGHT syntax")
+    key, raw_value = value.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise argparse.ArgumentTypeError("slot name must be non-empty")
+    weight = float(raw_value)
+    if weight <= 0:
+        raise argparse.ArgumentTypeError("slot weight must be positive")
+    return key, weight
+
+
 def _parse_architecture_config_value(value: str) -> Any:
     lowered = value.lower()
     if lowered == "true":
@@ -151,6 +164,17 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--policy-loss-weight", type=_non_negative_float)
     parser.add_argument("--representation-weight", type=_non_negative_float)
     parser.add_argument("--world-model-weight", type=_non_negative_float)
+    parser.add_argument(
+        "--world-model-slot-weight",
+        action="append",
+        default=None,
+        type=_slot_weight_item,
+        metavar="SLOT=WEIGHT",
+        help=(
+            "weight a Block SMB C-stream dynamics slot; slots: position, "
+            "semantic_probabilities, state, patch_tokens"
+        ),
+    )
     parser.add_argument("--reward-loss-weight", type=_non_negative_float)
     parser.add_argument("--value-loss-weight", type=_non_negative_float)
     parser.add_argument("--action-aux-weight", type=_non_negative_float)
@@ -198,6 +222,7 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--evaluation-episodes", type=_positive_int)
     parser.add_argument("--evaluation-max-steps", type=_positive_int)
     parser.add_argument("--evaluation-interval-epochs", type=_positive_int)
+    parser.add_argument("--semantic-prediction-accuracy-threshold", type=float)
     parser.add_argument("--log-path", type=Path)
     parser.add_argument("--tracking-backend", choices=TRACKING_BACKENDS)
     parser.add_argument("--tracking-log-dir", type=Path)
@@ -361,6 +386,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "policy_loss_weight",
         "representation_weight",
         "world_model_weight",
+        "world_model_slot_weight",
         "reward_loss_weight",
         "value_loss_weight",
         "action_aux_weight",
@@ -380,6 +406,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",
+        "semantic_prediction_accuracy_threshold",
         "log_path",
         "tracking_backend",
         "tracking_log_dir",
@@ -396,6 +423,8 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
     }
     if "fixed_scenarios" in overrides:
         overrides["fixed_scenarios"] = tuple(overrides["fixed_scenarios"])
+    if "world_model_slot_weight" in overrides:
+        overrides["world_model_slot_weights"] = dict(overrides.pop("world_model_slot_weight"))
     return overrides
 
 

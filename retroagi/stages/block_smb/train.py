@@ -42,6 +42,49 @@ BLOCK_SMB_MODEL_NAME = "block_smb_actor_world_model_critic"
 BLOCK_SMB_CHECKPOINT_KIND = "block_smb_trainer"
 BLOCK_SMB_ACTION_COUNT = 6
 TARGET_NETWORK_MODES = ("off", "on", "auto")
+BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
+    "position",
+    "semantic_probabilities",
+    "state",
+    "patch_tokens",
+)
+_BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
+    "position": "position",
+    "pos": "position",
+    "semantic": "semantic_probabilities",
+    "semantics": "semantic_probabilities",
+    "semantic_probabilities": "semantic_probabilities",
+    "semantic-probabilities": "semantic_probabilities",
+    "state": "state",
+    "symbolic": "state",
+    "symbolic_state": "state",
+    "symbolic-state": "state",
+    "tokens": "patch_tokens",
+    "patch": "patch_tokens",
+    "patch_tokens": "patch_tokens",
+    "patch-tokens": "patch_tokens",
+}
+DEFAULT_BLOCK_SMB_SEMANTIC_PREDICTION_ACCURACY_THRESHOLD = 0.8
+
+
+def normalize_block_smb_world_model_slot_weights(
+    weights: Mapping[str, Any] | None,
+) -> dict[str, float]:
+    """Normalize user-facing C-stream slot weight aliases."""
+
+    normalized: dict[str, float] = {}
+    for raw_name, raw_weight in dict(weights or {}).items():
+        slot_name = _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES.get(
+            str(raw_name).strip().lower()
+        )
+        if slot_name is None:
+            choices = ", ".join(BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES)
+            raise ValueError(f"unknown Block SMB world-model slot {raw_name!r}; expected {choices}")
+        slot_weight = float(raw_weight)
+        if not np.isfinite(slot_weight) or slot_weight <= 0.0:
+            raise ValueError("world_model_slot_weights must contain finite positive values")
+        normalized[slot_name] = slot_weight
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -84,6 +127,7 @@ class BlockSMBTrainingConfig:
     policy_loss_weight: float = 1.0
     representation_weight: float = 0.05
     world_model_weight: float = 0.1
+    world_model_slot_weights: Mapping[str, float] = field(default_factory=dict)
     reward_loss_weight: float = 0.01
     value_loss_weight: float = 0.25
     action_aux_weight: float = 0.01
@@ -126,6 +170,9 @@ class BlockSMBTrainingConfig:
     tracking_project: str = "retroagi"
     tracking_run_name: Optional[str] = None
     tracking_mode: Optional[str] = None
+    semantic_prediction_accuracy_threshold: float = (
+        DEFAULT_BLOCK_SMB_SEMANTIC_PREDICTION_ACCURACY_THRESHOLD
+    )
 
     def __post_init__(self) -> None:
         if not self.architecture_name:
@@ -154,6 +201,11 @@ class BlockSMBTrainingConfig:
             object.__setattr__(self, "ablation", BlockSMBAblationConfig(**self.ablation))
         elif not isinstance(self.ablation, BlockSMBAblationConfig):
             raise TypeError("ablation must be a BlockSMBAblationConfig or mapping")
+        object.__setattr__(
+            self,
+            "world_model_slot_weights",
+            normalize_block_smb_world_model_slot_weights(self.world_model_slot_weights),
+        )
         positive_ints = (
             "epochs",
             "episodes_per_epoch",
@@ -180,6 +232,8 @@ class BlockSMBTrainingConfig:
             raise ValueError("target_network_tau must be in (0, 1]")
         if self.target_network_instability_threshold < 0:
             raise ValueError("target_network_instability_threshold must be non-negative")
+        if not 0.0 <= self.semantic_prediction_accuracy_threshold <= 1.0:
+            raise ValueError("semantic_prediction_accuracy_threshold must be between 0 and 1")
         if self.controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
             raise ValueError(
                 "controller_schedule must be one of " f"{SUPPORTED_CONTROLLER_SCHEDULES}"
@@ -763,6 +817,139 @@ def measured_dynamics_instability(
     return torch.stack(terms).mean()
 
 
+def block_smb_c_stream_dynamics_slot_losses(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    batch: StageBatch,
+) -> dict[str, torch.Tensor]:
+    spans = block_smb_c_stream_slot_spans(batch)
+    losses: dict[str, torch.Tensor] = {}
+    for slot_name in BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES:
+        start, end = spans[slot_name]
+        if end <= start:
+            losses[slot_name] = prediction.new_zeros(())
+            continue
+        losses[slot_name] = F.mse_loss(prediction[:, start:end], target[:, start:end])
+    return losses
+
+
+def block_smb_dynamics_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    slot_losses: Mapping[str, torch.Tensor],
+    *,
+    world_model_slot_weights: Mapping[str, float],
+) -> torch.Tensor:
+    if not world_model_slot_weights:
+        return F.mse_loss(prediction, target)
+    weighted_loss: torch.Tensor | None = None
+    total_weight = 0.0
+    for slot_name in BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES:
+        slot_loss = slot_losses.get(slot_name)
+        if slot_loss is None:
+            continue
+        slot_weight = float(world_model_slot_weights.get(slot_name, 1.0))
+        if slot_weight <= 0.0:
+            continue
+        weighted = slot_loss * slot_weight
+        weighted_loss = weighted if weighted_loss is None else weighted_loss + weighted
+        total_weight += slot_weight
+    if weighted_loss is None or total_weight <= 0.0:
+        return F.mse_loss(prediction, target)
+    return weighted_loss / total_weight
+
+
+def block_smb_c_stream_dynamics_metrics(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    batch: StageBatch,
+    *,
+    semantic_accuracy_threshold: float,
+) -> dict[str, torch.Tensor]:
+    spans = block_smb_c_stream_slot_spans(batch)
+    metrics: dict[str, torch.Tensor] = {}
+    for slot_name in BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES:
+        start, end = spans[slot_name]
+        if end <= start:
+            metrics[f"dynamics_{slot_name}_rmse"] = prediction.new_zeros(())
+            metrics[f"dynamics_{slot_name}_mae"] = prediction.new_zeros(())
+            continue
+        diff = prediction[:, start:end] - target[:, start:end]
+        metrics[f"dynamics_{slot_name}_rmse"] = diff.pow(2).mean().sqrt()
+        metrics[f"dynamics_{slot_name}_mae"] = diff.abs().mean()
+    semantics_start, semantics_end = spans["semantic_probabilities"]
+    if semantics_end > semantics_start:
+        predicted_semantics = prediction[:, semantics_start:semantics_end]
+        target_semantics = target[:, semantics_start:semantics_end]
+        semantic_accuracy = (
+            predicted_semantics.argmax(dim=1) == target_semantics.argmax(dim=1)
+        ).float().mean()
+        semantic_cosine = F.cosine_similarity(
+            predicted_semantics.float(),
+            target_semantics.float(),
+            dim=1,
+        ).mean()
+    else:
+        semantic_accuracy = prediction.new_zeros(())
+        semantic_cosine = prediction.new_zeros(())
+    metrics["dynamics_semantic_prediction_accuracy"] = semantic_accuracy
+    metrics["dynamics_semantic_prediction_cosine"] = semantic_cosine
+    metrics["dynamics_semantic_prediction_gate_met"] = (
+        semantic_accuracy >= float(semantic_accuracy_threshold)
+    ).to(dtype=prediction.dtype)
+    return metrics
+
+
+def block_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int]]:
+    feature_length = int(batch.src_c.shape[1])
+    metadata = batch.metadata if isinstance(batch.metadata, Mapping) else {}
+    fusion = metadata.get("vision_fusion", {})
+    if not isinstance(fusion, Mapping):
+        fusion = {}
+    position = _block_smb_c_stream_span(fusion, "c_position", feature_length, default=(0, 0))
+    semantics = _block_smb_c_stream_span(
+        fusion,
+        "c_semantic_probabilities",
+        feature_length,
+        default=(position[1], position[1]),
+    )
+    state = _block_smb_c_stream_span(
+        fusion,
+        "c_state",
+        feature_length,
+        default=(semantics[1], semantics[1]),
+    )
+    patch_tokens = _block_smb_c_stream_span(
+        fusion,
+        "c_patch_tokens",
+        feature_length,
+        default=(state[1], feature_length),
+    )
+    return {
+        "position": position,
+        "semantic_probabilities": semantics,
+        "state": state,
+        "patch_tokens": patch_tokens,
+    }
+
+
+def _block_smb_c_stream_span(
+    fusion: Mapping[str, Any],
+    name: str,
+    feature_length: int,
+    *,
+    default: tuple[int, int],
+) -> tuple[int, int]:
+    raw = fusion.get(name, default)
+    try:
+        start, end = int(raw[0]), int(raw[1])
+    except (TypeError, ValueError, IndexError):
+        start, end = default
+    start = max(0, min(feature_length, start))
+    end = max(start, min(feature_length, end))
+    return start, end
+
+
 def target_network_is_active(
     config: BlockSMBTrainingConfig,
     target_model: Optional[torch.nn.Module],
@@ -798,6 +985,10 @@ def compute_block_smb_losses(
     entropy_terms = []
     representation_terms = []
     dynamics_terms = []
+    dynamics_slot_terms: dict[str, list[torch.Tensor]] = {
+        slot_name: [] for slot_name in BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
+    }
+    dynamics_metric_terms: dict[str, list[torch.Tensor]] = {}
     reward_terms = []
     value_terms = []
     critic_terms = []
@@ -816,7 +1007,30 @@ def compute_block_smb_losses(
         policy_terms.append(-step.log_prob * advantage.squeeze(0))
         entropy_terms.append(step.entropy)
         representation_terms.append(F.mse_loss(predicted_representation, target_representation))
-        dynamics_terms.append(F.mse_loss(step.next_state_pred, step.next_batch.src_c.detach()))
+        next_state_target = step.next_batch.src_c.detach()
+        slot_losses = block_smb_c_stream_dynamics_slot_losses(
+            step.next_state_pred,
+            next_state_target,
+            step.next_batch,
+        )
+        dynamics_terms.append(
+            block_smb_dynamics_loss(
+                step.next_state_pred,
+                next_state_target,
+                slot_losses,
+                world_model_slot_weights=config.world_model_slot_weights,
+            )
+        )
+        for slot_name, slot_loss in slot_losses.items():
+            dynamics_slot_terms.setdefault(slot_name, []).append(slot_loss)
+        dynamics_metrics = block_smb_c_stream_dynamics_metrics(
+            step.next_state_pred,
+            next_state_target,
+            step.next_batch,
+            semantic_accuracy_threshold=config.semantic_prediction_accuracy_threshold,
+        )
+        for metric_name, metric_value in dynamics_metrics.items():
+            dynamics_metric_terms.setdefault(metric_name, []).append(metric_value)
         reward_terms.append(F.mse_loss(reward_pred, reward_target))
         value_terms.append(F.mse_loss(value_pred, return_target.detach()))
         critic_terms.append(step.criticism.pow(2).mean())
@@ -845,6 +1059,17 @@ def compute_block_smb_losses(
     losses = {
         "loss_representation": loss_representation,
         "loss_dynamics": loss_dynamics,
+        **{
+            f"loss_dynamics_{slot_name}": (
+                torch.stack(values).mean() if values else loss_dynamics.new_zeros(())
+            )
+            for slot_name, values in dynamics_slot_terms.items()
+        },
+        **{
+            metric_name: torch.stack(values).mean()
+            for metric_name, values in dynamics_metric_terms.items()
+            if values
+        },
         "loss_reward": loss_reward,
         "loss_value": loss_value,
         "loss_policy": loss_policy,
@@ -866,6 +1091,13 @@ def compute_block_smb_losses(
         "loss_world_model": loss_dynamics,
         "loss_critic": loss_critic_feedback,
     }
+    if "dynamics_semantic_prediction_accuracy" in losses:
+        losses["dynamics_semantic_prediction_gate_met"] = (
+            losses["dynamics_semantic_prediction_accuracy"]
+            >= float(config.semantic_prediction_accuracy_threshold)
+        ).to(dtype=loss_dynamics.dtype)
+    else:
+        losses["dynamics_semantic_prediction_gate_met"] = loss_dynamics.new_zeros(())
     for name, value in losses.items():
         finite_or_raise(name, value)
     return losses
@@ -1330,6 +1562,11 @@ def train_and_evaluate_block_smb(
                 "evaluation": evaluation,
             }
         )
+    evaluation = apply_block_smb_semantic_prediction_gate(
+        evaluation,
+        last_metrics,
+        threshold=config.semantic_prediction_accuracy_threshold,
+    )
     _log_block_smb_event(
         config,
         "run_finished",
@@ -1348,3 +1585,43 @@ def train_and_evaluate_block_smb(
         "architecture": block_smb_architecture_metadata(config),
         "model": model,
     }
+
+
+def apply_block_smb_semantic_prediction_gate(
+    evaluation: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    """Gate scenario success on the learned dynamics semantic prediction metric."""
+
+    gated = copy.deepcopy(dict(evaluation))
+    semantic_accuracy = _optional_float(metrics.get("dynamics_semantic_prediction_accuracy"))
+    if semantic_accuracy is None:
+        gate_met = False
+    else:
+        gate_met = semantic_accuracy >= float(threshold)
+    tuning = dict(gated.get("tuning_metrics", {}))
+    tuning.update(
+        {
+            "semantic_prediction_accuracy": semantic_accuracy,
+            "semantic_prediction_accuracy_threshold": float(threshold),
+            "semantic_prediction_gate_met": bool(gate_met),
+        }
+    )
+    gated["tuning_metrics"] = tuning
+    gated["semantic_prediction_gate_met"] = bool(gate_met)
+    gated["semantic_prediction_accuracy"] = semantic_accuracy
+    gated["semantic_prediction_accuracy_threshold"] = float(threshold)
+    gated["success_thresholds_met"] = bool(gated.get("success_thresholds_met")) and bool(gate_met)
+    return gated
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return parsed

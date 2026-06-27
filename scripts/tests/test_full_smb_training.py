@@ -2148,6 +2148,59 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(play_config.overlay_top_actions, 2)
         self.assertEqual(payload["action_repeat"], 3)
 
+    def test_play_cli_enables_semantic_mask_render_mode(self):
+        playback = full_smb_train_module.FullSMBPlayResult(
+            steps=1,
+            resets=1,
+            completed_episodes=0,
+            total_return=0.0,
+            episode_returns=(0.0,),
+            actions=(1,),
+            action_names=("RIGHT",),
+            deterministic_policy=True,
+            sampling_temperature=1.0,
+            render=True,
+            fps=30.0,
+            semantic_mask=True,
+        )
+        with (
+            patch.object(
+                full_smb_train_module,
+                "load_full_smb_policy_checkpoint",
+                return_value=(object(), object(), {}),
+            ),
+            patch.object(
+                full_smb_train_module,
+                "policy_architecture_from_checkpoint",
+                return_value=(BASELINE_ARCHITECTURE_NAME, {"hidden_dim": 8}),
+            ),
+            patch.object(
+                full_smb_train_module,
+                "play_full_smb_policy",
+                return_value=playback,
+            ) as play,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            exit_code = full_smb_train_module.main(
+                [
+                    "play",
+                    "--checkpoint",
+                    "data/full_smb/policy.pth",
+                    "--steps",
+                    "1",
+                    "--render-mode",
+                    "semantic-mask",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        play_config = play.call_args.kwargs["play_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(play_config.render)
+        self.assertTrue(play_config.semantic_mask)
+        self.assertTrue(payload["render"])
+        self.assertTrue(payload["semantic_mask"])
+
     def test_play_cli_human_mode_does_not_require_checkpoint(self):
         playback = full_smb_train_module.FullSMBPlayResult(
             steps=2,

@@ -67,6 +67,7 @@ from retroagi.stages.full_smb.transfer import (
 )
 from retroagi.stages.full_smb.vision import (
     DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+    FULL_SMB_VIT_CLASSES,
     FullSMBSegmentationVision,
 )
 
@@ -189,7 +190,22 @@ _FULL_SMB_FIXED_LEVEL_TASK_NAMES = {
     "level2-1": "benchmark_2_1_start",
     "2-1": "benchmark_2_1_start",
 }
-_FULL_SMB_PLAY_RENDER_MODES = ("human", "none")
+_FULL_SMB_PLAY_RENDER_MODES = ("human", "semantic-mask", "none")
+_FULL_SMB_SEMANTIC_MASK_PALETTE = {
+    "sky": (92, 174, 255),
+    "ground": (170, 110, 42),
+    "brick": (188, 72, 38),
+    "question_block": (244, 191, 66),
+    "pipe": (44, 156, 72),
+    "coin": (255, 226, 64),
+    "goomba": (126, 64, 34),
+    "koopa": (72, 190, 78),
+    "mario": (228, 40, 40),
+    "mushroom": (255, 116, 116),
+    "hill": (92, 174, 78),
+    "cloud": (245, 245, 245),
+    "bush": (34, 132, 56),
+}
 
 
 def _validate_full_smb_action_id(action: Any) -> int:
@@ -493,6 +509,7 @@ class FullSMBPlayConfig:
     reset_on_done: bool = True
     pause_at_start: bool = False
     interactive_controls: bool = True
+    semantic_mask: bool = False
     recording_prefix: str = "play"
     inspection_overlay: bool = False
     overlay_interval_steps: int = 1
@@ -547,6 +564,7 @@ class FullSMBPlayResult:
     render: bool
     fps: float
     action_repeat: int = 1
+    semantic_mask: bool = False
     control_mode: str = "policy"
     quit_requested: bool = False
     recording: Mapping[str, Any] = field(default_factory=_empty_full_smb_recording_manifest)
@@ -1128,7 +1146,11 @@ def play_full_smb_policy(
         episode_seed = config.seed
         observation = stage.reset(seed=episode_seed)
         resets += 1
-        _render_full_smb_stage(stage, enabled=play_config.render)
+        _render_full_smb_stage(
+            stage,
+            enabled=play_config.render,
+            semantic_mask=play_config.semantic_mask,
+        )
         episode_return = 0.0
         episode_recording = _start_full_smb_episode_recording(
             episode_index=episode_index,
@@ -1177,7 +1199,11 @@ def play_full_smb_policy(
                     stage.last_info,
                 )
                 episode_open = True
-                _render_full_smb_stage(stage, enabled=play_config.render)
+                _render_full_smb_stage(
+                    stage,
+                    enabled=play_config.render,
+                    semantic_mask=play_config.semantic_mask,
+                )
             if paused:
                 _sleep_full_smb_play_frame(play_config.fps)
                 continue
@@ -1235,7 +1261,11 @@ def play_full_smb_policy(
                 action_names.append(SMB_ACTIONS[action].name)
                 total_return += float(reward)
                 episode_return += float(reward)
-                _render_full_smb_stage(stage, enabled=play_config.render)
+                _render_full_smb_stage(
+                    stage,
+                    enabled=play_config.render,
+                    semantic_mask=play_config.semantic_mask,
+                )
                 _update_full_smb_fixed_task_episode_metrics(
                     fixed_task_metrics,
                     stage,
@@ -1312,7 +1342,11 @@ def play_full_smb_policy(
                         stage.last_info,
                     )
                     episode_open = True
-                    _render_full_smb_stage(stage, enabled=play_config.render)
+                    _render_full_smb_stage(
+                        stage,
+                        enabled=play_config.render,
+                        semantic_mask=play_config.semantic_mask,
+                    )
                     break
                 _sleep_full_smb_play_frame(play_config.fps)
             if play_config.action_repeat > 1 and not (terminated or truncated):
@@ -1344,6 +1378,7 @@ def play_full_smb_policy(
             render=play_config.render,
             fps=play_config.fps,
             action_repeat=play_config.action_repeat,
+            semantic_mask=play_config.semantic_mask,
             control_mode=control_mode,
             quit_requested=quit_requested,
             recording=recording_manifest,
@@ -1686,12 +1721,104 @@ def _finish_full_smb_play_recording_episode(
     )
 
 
-def _render_full_smb_stage(stage: FullSMBStage, *, enabled: bool) -> None:
+def _render_full_smb_stage(
+    stage: FullSMBStage,
+    *,
+    enabled: bool,
+    semantic_mask: bool = False,
+) -> None:
     if not enabled:
+        return
+    if semantic_mask:
+        _render_full_smb_semantic_mask_view(stage)
         return
     render = getattr(stage.env, "render", None)
     if render is not None:
         render()
+
+
+def _render_full_smb_semantic_mask_view(stage: FullSMBStage) -> None:
+    observation = getattr(stage, "_last_observation", None)
+    if observation is None:
+        return
+    frame = np.asarray(observation)[..., :3]
+    if frame.dtype != np.uint8:
+        frame = np.asarray(np.clip(frame, 0, 255), dtype=np.uint8)
+    mask = _full_smb_semantic_mask_rgb(stage, frame.shape[:2])
+    _pygame_render_side_by_side("RetroAGI Full SMB semantic mask", frame, mask)
+
+
+def _full_smb_semantic_mask_rgb(
+    stage: FullSMBStage,
+    frame_shape: tuple[int, int],
+) -> np.ndarray:
+    observation = getattr(stage, "_last_observation", None)
+    if observation is None:
+        height, width = frame_shape
+        return np.zeros((height, width, 3), dtype=np.uint8)
+    preprocess = getattr(stage, "_preprocess_observation", None)
+    if callable(preprocess):
+        vision_input = preprocess(np.asarray(observation))
+    else:
+        vision_input = torch.as_tensor(observation, dtype=torch.float32)
+        if bool(vision_input.numel()) and float(vision_input.max()) > 1.0:
+            vision_input = vision_input / 255.0
+    with torch.no_grad():
+        vision = stage.vision.encode(vision_input)
+    semantic_ids = vision.semantic_ids.detach()
+    if semantic_ids.ndim == 3:
+        semantic_ids = semantic_ids[0]
+    semantic_ids = semantic_ids.to(torch.long).cpu()
+    palette = _full_smb_semantic_palette_tensor()
+    mask = palette[semantic_ids.clamp(0, palette.shape[0] - 1)]
+    mask = (
+        F.interpolate(
+            mask.permute(2, 0, 1).unsqueeze(0).float(),
+            size=frame_shape,
+            mode="nearest",
+        )
+        .squeeze(0)
+        .permute(1, 2, 0)
+        .byte()
+        .cpu()
+        .numpy()
+    )
+    return np.ascontiguousarray(mask)
+
+
+def _full_smb_semantic_palette_tensor() -> torch.Tensor:
+    colors = [
+        _FULL_SMB_SEMANTIC_MASK_PALETTE.get(class_name, (255, 0, 255))
+        for class_name in FULL_SMB_VIT_CLASSES
+    ]
+    return torch.tensor(colors, dtype=torch.uint8)
+
+
+def _pygame_render_side_by_side(title: str, left: np.ndarray, right: np.ndarray) -> None:
+    try:
+        import pygame
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "semantic-mask playback requires pygame-ce; install the project vision/runtime "
+            "dependencies or use --render-mode human"
+        ) from exc
+    if not pygame.get_init():
+        pygame.init()
+    left = np.ascontiguousarray(left[..., :3], dtype=np.uint8)
+    right = np.ascontiguousarray(right[..., :3], dtype=np.uint8)
+    if left.shape != right.shape:
+        raise ValueError(
+            "semantic-mask playback requires same-shaped RGB frame and mask, "
+            f"got {left.shape} and {right.shape}"
+        )
+    height, width = left.shape[:2]
+    window = pygame.display.set_mode((width * 2, height))
+    pygame.display.set_caption(title)
+    combined = np.concatenate((left, right), axis=1)
+    surface = pygame.surfarray.make_surface(np.transpose(combined, (1, 0, 2)))
+    window.blit(surface, (0, 0))
+    pygame.display.flip()
+    pygame.event.pump()
 
 
 def _sleep_full_smb_play_frame(fps: float) -> None:
@@ -4198,6 +4325,18 @@ def _add_play_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--render", action="store_true", dest="play_render")
     parser.add_argument("--no-render", action="store_false", dest="play_render")
     parser.add_argument("--render-mode", choices=_FULL_SMB_PLAY_RENDER_MODES)
+    parser.set_defaults(semantic_mask=False)
+    parser.add_argument(
+        "--semantic-mask",
+        action="store_true",
+        dest="semantic_mask",
+        help="render a side-by-side game frame and ViT semantic-mask diagnostic window",
+    )
+    parser.add_argument(
+        "--no-semantic-mask",
+        action="store_false",
+        dest="semantic_mask",
+    )
     parser.add_argument("--fps", type=float, default=30.0)
     parser.set_defaults(policy_deterministic=True)
     policy_mode = parser.add_mutually_exclusive_group()
@@ -4435,8 +4574,10 @@ def _reward_config_from_args(args: argparse.Namespace) -> FullSMBRewardConfig:
 
 def _play_config_from_args(args: argparse.Namespace) -> FullSMBPlayConfig:
     render = bool(args.play_render)
+    semantic_mask = bool(args.semantic_mask)
     if args.render_mode is not None:
         render = args.render_mode != "none"
+        semantic_mask = args.render_mode == "semantic-mask"
     return FullSMBPlayConfig(
         max_steps=args.play_max_steps,
         action_repeat=args.action_repeat,
@@ -4447,6 +4588,7 @@ def _play_config_from_args(args: argparse.Namespace) -> FullSMBPlayConfig:
         reset_on_done=args.reset_on_done,
         pause_at_start=args.pause_at_start,
         interactive_controls=args.interactive_controls,
+        semantic_mask=semantic_mask,
         recording_prefix=args.recording_prefix,
         inspection_overlay=args.inspection_overlay,
         overlay_interval_steps=args.overlay_interval_steps,
