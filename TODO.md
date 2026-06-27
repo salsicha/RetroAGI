@@ -128,8 +128,13 @@ Next steps:
       passed all four fixed scenarios with mean return 69.125, success rate
       1.0, and threshold pass rate 1.0 after geometry-aware state features and
       DAgger correction.
-- [ ] Transfer the distilled neural Block SMB checkpoint into Full SMB with the
+- [x] Transfer the distilled neural Block SMB checkpoint into Full SMB with the
       RAM-position-tuned Full SMB ViT checkpoint.
+      Result: `data/full_pipeline_20260626_1450/full_smb/transferred_distilled_policy.pth`
+      was created from
+      `data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger.pth`
+      and
+      `data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth`.
 - [ ] Run longer Full SMB fine-tuning from the distilled transfer checkpoint.
 - [ ] Evaluate and record the distilled-transfer Full SMB policy on
       `fixed_benchmark` with at least 3 episodes and the documented 2,400 step
