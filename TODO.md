@@ -29,15 +29,19 @@ Full SMB policy training for a few minutes, and preserve evaluation artifacts.
 Current result:
 
 - Block SMB perception passed diagnostic thresholds with no bottleneck flags.
-- Block SMB policy trained for 25 epochs but only passed `level_1_flat.json`;
-      overall fixed-scenario threshold pass rate is 0.25.
-- Full SMB ViT reached 99.23 percent validation mIoU on asset-mock data, but
-      real-emulator diagnostics still flagged position quality as a bottleneck.
-- Full SMB policy fine-tuning completed after a trainer patch that lets
-      explicit no-evaluation runs save a checkpoint before separate-process
-      evaluation.
-- Full SMB fixed-benchmark evaluation over 2,400 steps produced zero progress,
-      zero score, zero completion, and 0.0 success rate.
+- Block SMB now has a transferable distilled neural checkpoint that passes all
+      nine fixed scenarios, including enemy, moving-platform, enemy-gap, and
+      enemy-stomp coverage.
+- Full SMB ViT uses the RAM-position-tuned checkpoint with diagnostic-passing
+      semantic and position metrics.
+- Full SMB transfer and short fine-tuning from the nine-scenario Block SMB
+      checkpoint completed, but fixed-benchmark evaluation still failed the
+      solved-Level-1-1 threshold: mean return 571.0, mean progress 20.0,
+      survival rate 1.0, completion rate 0.0, and threshold pass rate 0.0.
+- Recorded Full SMB rollouts show the deterministic policy choosing mostly
+      `RIGHT` plus standalone `JUMP`, never `RIGHT_JUMP`, so the next blocker
+      is real-emulator action-contract and timing adaptation rather than Block
+      SMB scenario coverage.
 
 Next steps:
 
@@ -168,8 +172,38 @@ Next steps:
       Result: `data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger9.pth`
       passed all nine fixed scenarios with mean return 69.319, success rate
       1.0, and threshold pass rate 1.0 after five DAgger correction rounds.
-- [ ] Re-transfer the enemy-aware distilled Block SMB checkpoint into Full SMB,
+- [x] Re-transfer the enemy-aware distilled Block SMB checkpoint into Full SMB,
       run a short fine-tune, then evaluate and record fixed-benchmark rollouts.
+      Result: `data/full_pipeline_20260626_1450/full_smb/transferred_distilled_policy_dagger9.pth`
+      transferred from the nine-scenario Block SMB checkpoint, then
+      `data/full_pipeline_20260626_1450/full_smb/policy_distilled_dagger9_transfer_long.pth`
+      trained for 4 curriculum epochs and 2,400 emulator steps. Separate-process
+      fixed-benchmark evaluation and recording over 3 episodes produced mean
+      return 571.0, mean progress 20.0, survival rate 1.0, completion rate 0.0,
+      and threshold pass rate 0.0. Recordings are in
+      `artifacts/full_pipeline_20260626_1450/full_smb/recordings_distilled_dagger9_transfer_long/`.
+- [ ] Add a Full SMB action-contract diagnostic for transferred policies.
+  - [ ] Report deterministic and sampled action distributions on canonical
+        real-emulator frames and recorded rollouts.
+  - [ ] Flag missing `RIGHT_JUMP` usage when progress stalls below the first
+        Level 1-1 movement gate.
+  - [ ] Compare Block SMB scripted action frequencies against Full SMB rollout
+        action frequencies after transfer.
+- [ ] Build a real-emulator Full SMB imitation warm start for Level 1-1 opening
+      movement and jump timing.
+  - [ ] Generate deterministic real-emulator trajectories using
+        `RIGHT`/`RIGHT_JUMP` action scripts through the first hazard gates.
+  - [ ] Train or distill the Full SMB policy head on those trajectories before
+        reinforcement fine-tuning.
+  - [ ] Evaluate the warm-started policy until progress reliably exceeds the
+        early 20-pixel stall.
+- [ ] Add short Full SMB curriculum gates before the full fixed benchmark.
+  - [ ] Create progress gates for the opening movement segment, first pipe,
+        first enemy, and first gap or stair transition.
+  - [ ] Record per-gate progress, score, survival, action distribution, and
+        threshold diagnostics.
+  - [ ] Require gate pass rates before spending full 2,400-step evaluation
+        runs on `benchmark_1_1_start`.
 
 ## Completed Work
 
