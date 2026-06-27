@@ -190,6 +190,37 @@ class TestFullSMBPerceptionDiagnostics(unittest.TestCase):
         self.assertEqual(metrics["signal_extraction_bottleneck_reasons"], ["missing_position_targets"])
         self.assertIn("missing_position_targets", metrics["bottleneck_reasons"])
 
+    def test_explicit_vision_position_target_overrides_camera_fallback(self):
+        vision = StableDiagnosticVision()
+        frames = torch.zeros(2, 8, 8, 3, dtype=torch.uint8)
+        infos = [
+            {
+                "vision_position_target": np.asarray([0.25, 0.50], dtype=np.float32),
+                "state_vec": np.asarray([0.0, 0.0, 0.0], dtype=np.float32),
+                "camera_vec": np.asarray([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            }
+            for _ in range(2)
+        ]
+
+        metrics = evaluate_full_smb_perception(
+            vision,
+            frames,
+            infos,
+            thresholds=FullSMBPerceptionDiagnosticThresholds(
+                min_semantic_confidence=0.90,
+                min_class_coverage=1.0,
+                min_temporal_stability=1.0,
+                max_position_rmse=0.0,
+                min_position_within_tolerance=1.0,
+                position_tolerance=0.0,
+            ),
+        )
+
+        self.assertFalse(metrics["bottleneck"])
+        self.assertFalse(metrics["vision_position_bottleneck"])
+        self.assertEqual(metrics["position_samples"], 2.0)
+        self.assertEqual(metrics["position_rmse"], 0.0)
+
     def test_collect_full_smb_perception_diagnostic_frames_uses_stage_rollout(self):
         stage = DiagnosticStage()
         trace = collect_full_smb_perception_diagnostic_frames(

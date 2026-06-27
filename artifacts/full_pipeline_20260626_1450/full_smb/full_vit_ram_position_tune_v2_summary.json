@@ -1,0 +1,77 @@
+{
+  "checkpoint_path": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth",
+  "final": {
+    "bottleneck": false,
+    "bottleneck_reasons": [],
+    "class_coverage": 0.5384615384615384,
+    "covered_classes": [
+      "sky",
+      "pipe",
+      "coin",
+      "goomba",
+      "mario",
+      "hill",
+      "cloud"
+    ],
+    "missing_classes": [
+      "ground",
+      "brick",
+      "question_block",
+      "koopa",
+      "mushroom",
+      "bush"
+    ],
+    "patches": 15360.0,
+    "per_class_coverage": {
+      "brick": 0.0,
+      "bush": 0.0,
+      "cloud": 0.05800781399011612,
+      "coin": 0.15208333730697632,
+      "goomba": 0.00019531250291038305,
+      "ground": 0.0,
+      "hill": 0.02324218675494194,
+      "koopa": 0.0,
+      "mario": 0.0001302083401242271,
+      "mushroom": 0.0,
+      "pipe": 0.0001302083401242271,
+      "question_block": 0.0,
+      "sky": 0.7662109136581421
+    },
+    "position_mean_error": 0.06090422347187996,
+    "position_rmse": 0.04816232462730898,
+    "position_samples": 64.0,
+    "position_within_tolerance": 1.0,
+    "samples": 64.0,
+    "semantic_bottleneck": false,
+    "semantic_bottleneck_reasons": [],
+    "semantic_confidence": 0.9881584405899048,
+    "signal_extraction_bottleneck": false,
+    "signal_extraction_bottleneck_reasons": [],
+    "temporal_stability": 0.9978835999019562,
+    "thresholds": {
+      "max_position_rmse": 0.35,
+      "min_class_coverage": 0.15,
+      "min_position_within_tolerance": 0.3,
+      "min_semantic_confidence": 0.35,
+      "min_temporal_stability": 0.4,
+      "position_tolerance": 0.25
+    },
+    "vision_position_bottleneck": false,
+    "vision_position_bottleneck_reasons": []
+  },
+  "history": [
+    {
+      "bottleneck_reasons": [],
+      "class_coverage": 0.5384615384615384,
+      "epoch": 1,
+      "loss": 0.1572108462860342,
+      "position_rmse": 0.04816232462730898,
+      "position_within_tolerance": 1.0,
+      "semantic_confidence": 0.9881584405899048
+    }
+  ],
+  "runtime_seconds": 1.165367603302002,
+  "source_checkpoint": "data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned.pth",
+  "train_samples": 512,
+  "validation_samples": 64
+}

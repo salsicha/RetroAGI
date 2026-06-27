@@ -81,20 +81,24 @@ Next steps:
         against the newly trained policy before another Full SMB run.
   - [x] Preserve the next successful Block SMB checkpoint only after all four
         fixed-scenario thresholds pass with at least 3 evaluation episodes.
-- [ ] Add a reliable Full SMB real-emulator visual-position target before the
+- [x] Add a reliable Full SMB real-emulator visual-position target before the
       next transfer run.
   - [x] Re-run the Full SMB diagnostic after adapter signal extraction fixes.
   - [x] Confirm semantic confidence and class coverage are no longer the active
         diagnostic bottleneck.
   - [x] Confirm progress/signal extraction is populated from stable-retro RAM
         (`scrolling`/`xscroll*`) during real-emulator rollouts.
-  - [ ] Expose or derive an independent screen-space player x/y target; the
+  - [x] Expose or derive an independent screen-space player x/y target; the
         current stable-retro info has scroll/progress but not reliable player
         screen coordinates, so the ViT position head cannot be validated
         against a real-emulator target.
-  - [ ] Re-run the diagnostic until `vision_position_bottleneck` is false or
+  - [x] Re-run the diagnostic until `vision_position_bottleneck` is false or
         explicitly skipped as unsupported with a separate target-availability
         flag.
+      The diagnostic-passing checkpoint is
+      `data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth`
+      with `position_rmse=0.048`, `position_within_tolerance=1.0`, and no
+      bottleneck flags.
 - [ ] Re-run Full SMB transfer and fine-tuning only after Block SMB passes all
       fixed scenarios and Full SMB real-emulator position diagnostics pass.
   - [ ] Transfer the known-good Block SMB checkpoint into the Full SMB policy

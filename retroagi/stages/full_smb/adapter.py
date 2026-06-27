@@ -411,6 +411,11 @@ INFO_CONTAINER_KEYS = (
     "backend_info",
 )
 SCREEN_KEYS = ("screen", "screen_position", "screen_pos")
+
+SMB_RAM_PLAYER_SCREEN_X = 0x86
+SMB_RAM_PLAYER_SCREEN_Y = 0xCE
+SMB_SCREEN_WIDTH = 256.0
+SMB_SCREEN_HEIGHT = 240.0
 SCREEN_X_KEYS = ("screen_x", "screenX", "x_screen")
 SCREEN_Y_KEYS = ("screen_y", "screenY", "y_screen")
 SCROLL_X_KEYS = ("xscroll", "x_scroll", "scroll_x", "camera_x", "scrolling")
@@ -562,6 +567,7 @@ class FullSMBStage:
         result = self.backend.reset(seed=seed)
         observation = self._rgb_observation(result.observation)
         self.last_info = self._annotated_info(result.info, terminated=False, truncated=False)
+        self._annotate_vision_position_target(self.last_info)
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
@@ -595,6 +601,7 @@ class FullSMBStage:
         if observation is None:
             raise RuntimeError("Full SMB frame_skip must execute at least one frame")
         info = self._annotated_info(info, terminated=terminated, truncated=truncated)
+        self._annotate_vision_position_target(info)
         reward_terms = self._reward_terms(
             backend_reward=backend_reward,
             frame_count=len(frame_rewards),
@@ -834,6 +841,36 @@ class FullSMBStage:
         annotated["camera_vec"] = camera_vec
         annotated["reward_config"] = self.reward_config.to_manifest()
         return annotated
+
+    def _annotate_vision_position_target(self, info: dict[str, Any]) -> None:
+        """Attach screen-normalized Mario position from NES RAM when available."""
+
+        get_ram = getattr(self.env, "get_ram", None)
+        if get_ram is None:
+            return
+        try:
+            ram = np.asarray(get_ram(), dtype=np.uint8).flatten()
+        except (TypeError, ValueError):
+            return
+        if ram.size <= max(SMB_RAM_PLAYER_SCREEN_X, SMB_RAM_PLAYER_SCREEN_Y):
+            return
+        screen_x = float(ram[SMB_RAM_PLAYER_SCREEN_X])
+        screen_y = float(ram[SMB_RAM_PLAYER_SCREEN_Y])
+        target = np.asarray(
+            [
+                _normalize_feature(screen_x, SMB_SCREEN_WIDTH),
+                _normalize_feature(screen_y, SMB_SCREEN_HEIGHT),
+            ],
+            dtype=np.float32,
+        )
+        info["vision_position_target"] = target
+        info["vision_position_target_raw"] = {
+            "source": "nes_ram",
+            "player_screen_x_address": SMB_RAM_PLAYER_SCREEN_X,
+            "player_screen_y_address": SMB_RAM_PLAYER_SCREEN_Y,
+            "player_screen_x": screen_x,
+            "player_screen_y": screen_y,
+        }
 
     def _reward_terms(
         self,

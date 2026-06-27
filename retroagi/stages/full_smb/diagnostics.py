@@ -282,6 +282,11 @@ def _position_targets_from_infos(
     targets = []
     valid = []
     for info in infos:
+        explicit_target = _array_from_info(info, "vision_position_target")
+        if explicit_target is not None and explicit_target.size >= 2:
+            targets.append((float(explicit_target[0]), float(explicit_target[1])))
+            valid.append(True)
+            continue
         state = _array_from_info(info, "state_vec")
         camera = _array_from_info(info, "camera_vec")
         if state is not None and state.size >= 2:

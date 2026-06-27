@@ -157,6 +157,38 @@ class ZeroBackendProgressRetroEnv(GymnasiumRetroEnv):
         )
 
 
+class RamPositionRetroEnv(GymnasiumRetroEnv):
+    def __init__(self):
+        super().__init__()
+        self.ram = np.zeros(2048, dtype=np.uint8)
+        self.ram[0x86] = 40
+        self.ram[0xCE] = 176
+
+    def get_ram(self):
+        return self.ram.copy()
+
+    def reset(self, seed=None):
+        self.reset_seed = seed
+        self.ram[0x86] = 40
+        self.ram[0xCE] = 176
+        return (
+            np.zeros((224, 256, 3), dtype=np.uint8),
+            {"xscrollHi": 0, "xscrollLo": 0, "score": 0, "coins": 0, "lives": 3},
+        )
+
+    def step(self, action):
+        self.actions.append(np.asarray(action))
+        self.ram[0x86] = 48
+        self.ram[0xCE] = 160
+        return (
+            np.ones((224, 256, 3), dtype=np.uint8),
+            0.0,
+            False,
+            False,
+            {"xscrollHi": 0, "xscrollLo": 12, "score": 0, "coins": 0, "lives": 3},
+        )
+
+
 class PreprocessingRetroEnv(GymnasiumRetroEnv):
     def reset(self, seed=None):
         self.reset_seed = seed
@@ -535,6 +567,33 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(info["reward_terms"]["signal_progress"], 10.0)
         self.assertAlmostEqual(reward, 10.0)
         self.assert_reward_total_matches_terms(reward, info)
+
+    def test_stage_annotates_ram_backed_vision_position_target(self):
+        stage = FullSMBStage(env=RamPositionRetroEnv(), vision=StaticFullSMBVision())
+        try:
+            stage.reset(seed=3)
+            np.testing.assert_allclose(
+                stage.last_info["vision_position_target"],
+                np.asarray([40.0 / 256.0, 176.0 / 240.0], dtype=np.float32),
+            )
+            _observation, _reward, _terminated, _truncated, info = stage.step(
+                SMBAction.RIGHT
+            )
+        finally:
+            stage.close()
+
+        np.testing.assert_allclose(
+            info["vision_position_target"],
+            np.asarray([48.0 / 256.0, 160.0 / 240.0], dtype=np.float32),
+        )
+        self.assertEqual(
+            info["vision_position_target_raw"]["player_screen_x_address"],
+            0x86,
+        )
+        self.assertEqual(
+            info["vision_position_target_raw"]["player_screen_y_address"],
+            0xCE,
+        )
 
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):
