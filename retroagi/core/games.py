@@ -697,12 +697,72 @@ SMB_TASK_SCHEMA = GameTaskSchema(
             description="Enemy-stomp fixed Block SMB scenario",
         ),
         GameTaskSpec(
+            name="level_10_left_retreat.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_10_left_retreat.json",
+            reset_seed=101_010,
+            curriculum_stage=10,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Left-retreat run: move left from the start position, collect "
+                    "the retreat coin, and reach the left-side goal."
+                ),
+            ),
+            description="Leftward movement fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_11_left_jump_recovery.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source=(
+                "retroagi/stages/block_smb/scenarios/"
+                "level_11_left_jump_recovery.json"
+            ),
+            reset_seed=101_011,
+            curriculum_stage=11,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Left-jump recovery run: jump left to recover onto the "
+                    "elevated platform and reach the elevated goal."
+                ),
+            ),
+            description="Left-jump fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_12_wait_bridge.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_12_wait_bridge.json",
+            reset_seed=101_012,
+            curriculum_stage=12,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Wait-bridge run: wait for the moving bridge to enter the "
+                    "gap, then cross and reach the goal."
+                ),
+            ),
+            description="Wait/stall fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
             name="generated_block_smb",
             stage_name="block_smb",
             task_type="procedural",
             source="MarioScenarioEnv.generate_scenario",
             reset_seed=150_000,
-            curriculum_stage=10,
+            curriculum_stage=13,
             generation_seed=50_000,
             generation_config={
                 "width_range": (256, 512),
@@ -806,6 +866,15 @@ SMB_BLOCK_GAME_SPEC = BlockGameSpec(
         ),
         "level_9_enemy_stomp.json": (
             "retroagi/stages/block_smb/scenarios/level_9_enemy_stomp.json"
+        ),
+        "level_10_left_retreat.json": (
+            "retroagi/stages/block_smb/scenarios/level_10_left_retreat.json"
+        ),
+        "level_11_left_jump_recovery.json": (
+            "retroagi/stages/block_smb/scenarios/level_11_left_jump_recovery.json"
+        ),
+        "level_12_wait_bridge.json": (
+            "retroagi/stages/block_smb/scenarios/level_12_wait_bridge.json"
         ),
     },
     procedural_scenario_generator="MarioScenarioEnv.generate_scenario",

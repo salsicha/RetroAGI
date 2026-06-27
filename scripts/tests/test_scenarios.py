@@ -136,5 +136,33 @@ class TestMarioScenarios(unittest.TestCase):
             expected_enemies=1,
         )
 
+    def test_level_10_left_retreat(self):
+        self._test_scenario(
+            'level_10_left_retreat.json',
+            expected_mario=[190, 200],
+            expected_platforms=1,
+            expected_coins=1,
+            expected_goal=True,
+        )
+
+    def test_level_11_left_jump_recovery(self):
+        self._test_scenario(
+            'level_11_left_jump_recovery.json',
+            expected_mario=[205, 200],
+            expected_platforms=2,
+            expected_coins=1,
+            expected_goal=True,
+        )
+
+    def test_level_12_wait_bridge(self):
+        self._test_scenario(
+            'level_12_wait_bridge.json',
+            expected_mario=[20, 200],
+            expected_platforms=3,
+            expected_coins=1,
+            expected_goal=True,
+            expected_moving_platforms=1,
+        )
+
 if __name__ == '__main__':
     unittest.main()

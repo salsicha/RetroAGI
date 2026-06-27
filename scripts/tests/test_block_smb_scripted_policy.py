@@ -17,6 +17,7 @@ from retroagi.stages.block_smb import (
     evaluate_scripted_block_smb_policy,
     load_scripted_block_smb_checkpoint,
     save_scripted_block_smb_checkpoint,
+    fixed_scenario_action_scripts,
 )
 
 
@@ -66,6 +67,21 @@ class TestBlockSMBScriptedPolicy(unittest.TestCase):
                     data = np.load(recording)
                     self.assertEqual(data["frames"].shape[-3:], (240, 256, 3))
                     self.assertEqual(data["actions"].shape, data["rewards"].shape)
+
+    def test_scripted_policy_covers_directional_and_wait_actions(self):
+        scripts = fixed_scenario_action_scripts()
+
+        action_counts = {
+            action: sum(actions.count(action) for actions in scripts.values())
+            for action in range(6)
+        }
+
+        self.assertGreater(action_counts[0], 0)
+        self.assertGreater(action_counts[3], 0)
+        self.assertGreater(action_counts[4], 0)
+        self.assertIn("level_10_left_retreat.json", scripts)
+        self.assertIn("level_11_left_jump_recovery.json", scripts)
+        self.assertIn("level_12_wait_bridge.json", scripts)
 
 
 if __name__ == "__main__":

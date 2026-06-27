@@ -28,7 +28,7 @@ def fixed_scenario_action_scripts(
     """Return deterministic action scripts for the fixed scenarios.
 
     Actions use the shared Block SMB IDs:
-    1 = RIGHT, 2 = RIGHT_JUMP.
+    0 = NOOP, 1 = RIGHT, 2 = RIGHT_JUMP, 3 = LEFT, 4 = LEFT_JUMP.
     """
     right = [1] * max_steps
     scripts = {
@@ -47,6 +47,9 @@ def fixed_scenario_action_scripts(
             [1] * 10 + [2] * 17 + [1] * 8 + [2] * 18 + [1] * max_steps
         ),
         "level_9_enemy_stomp.json": [1] * 8 + [2] * 14 + [1] * max_steps,
+        "level_10_left_retreat.json": [3] * max_steps,
+        "level_11_left_jump_recovery.json": [4] * 22 + [3] * max_steps,
+        "level_12_wait_bridge.json": [0] * 20 + [1] * 20 + [2] * 16 + [1] * max_steps,
     }
     return {
         scenario_name: actions[:max_steps]
