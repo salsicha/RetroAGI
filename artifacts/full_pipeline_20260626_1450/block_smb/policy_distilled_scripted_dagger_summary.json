@@ -1,0 +1,3194 @@
+{
+  "best_phase": "dagger_1",
+  "checkpoint": {
+    "checkpoint_kind": "block_smb_trainer",
+    "epoch": 320,
+    "metrics": {
+      "accuracy": 0.9983794733288319,
+      "epoch": 40.0,
+      "eval_mean_return": 21.050833333333333,
+      "eval_success_rate": 0.25,
+      "eval_threshold_pass_rate": 0.25,
+      "eval_tuning_score": 250271.05083333334,
+      "iteration": 6.0,
+      "loss": 0.007662288105692026,
+      "phase": "dagger"
+    },
+    "model_name": "block_smb_actor_world_model_critic",
+    "stage": "block_smb"
+  },
+  "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_dagger.pth",
+  "config": {
+    "batch_size": 64,
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_dagger.pth",
+    "controller_schedule": "constant",
+    "dagger_epochs_per_iteration": 40,
+    "dagger_iterations": 6,
+    "deterministic": true,
+    "device": "cuda",
+    "episodes_per_scenario": 3,
+    "epochs": 80,
+    "evaluation_episodes": 3,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json"
+    ],
+    "hidden_dim": 64,
+    "init_checkpoint": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted.pth",
+    "jump_weight_multiplier": 1.0,
+    "learning_rate": 0.001,
+    "log_path": "artifacts/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_dagger_events.jsonl",
+    "output_summary": "artifacts/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_dagger_summary.json",
+    "rollout_steps": 200,
+    "seed": 20260627,
+    "sequence_training": false,
+    "vision_checkpoint": "data/full_pipeline_20260626_1450/block_vit/block_vit.pth"
+  },
+  "dataset": {
+    "action_counts": {
+      "0": 0,
+      "1": 6418,
+      "2": 987,
+      "3": 0,
+      "4": 0,
+      "5": 0
+    },
+    "examples": 7405,
+    "max_step_index": 199,
+    "scenario_examples": {
+      "level_1_flat.json": 1491,
+      "level_2_gap.json": 982,
+      "level_3_stairs.json": 3801,
+      "level_4_platforms.json": 1131
+    }
+  },
+  "evaluation": {
+    "fixed_scenarios": {
+      "level_1_flat.json": {
+        "return": 69.265,
+        "success_rate": 1.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+          "scenario_name": "level_1_flat.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": true,
+          "meets_success_rate": true,
+          "within_step_budget": true
+        },
+        "threshold_met": true
+      },
+      "level_2_gap.json": {
+        "return": 5.361666666666669,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+          "scenario_name": "level_2_gap.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      },
+      "level_3_stairs.json": {
+        "return": 13.345,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+          "scenario_name": "level_3_stairs.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      },
+      "level_4_platforms.json": {
+        "return": -3.768333333333332,
+        "success_rate": 0.0,
+        "threshold": {
+          "max_steps": 200,
+          "min_episodes": 3,
+          "min_mean_return": 55.0,
+          "min_success_rate": 1.0,
+          "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+          "scenario_name": "level_4_platforms.json"
+        },
+        "threshold_diagnostics": {
+          "enough_episodes": true,
+          "evaluation_episodes": 3,
+          "evaluation_max_steps": 200,
+          "meets_return": false,
+          "meets_success_rate": false,
+          "within_step_budget": true
+        },
+        "threshold_met": false
+      }
+    },
+    "iteration": 6,
+    "mean_return": 21.050833333333333,
+    "phase": "best_dagger_1",
+    "success_rate": 0.25,
+    "success_thresholds_met": false,
+    "tuning_metrics": {
+      "mean_return": 21.050833333333333,
+      "mean_success_rate": 0.25,
+      "scenario_count": 4.0,
+      "score": 250271.05083333334,
+      "threshold_pass_rate": 0.25
+    }
+  },
+  "evaluations": [
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": -4.6549999999999985,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": 11.345,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": 6.885000000000002,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        }
+      },
+      "iteration": 0,
+      "mean_return": 20.709999999999997,
+      "phase": "teacher_forced",
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 20.71,
+        "mean_success_rate": 0.25,
+        "scenario_count": 4.0,
+        "score": 250270.71,
+        "threshold_pass_rate": 0.25
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 5.360000000000002,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": 13.345,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.861666666666666,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        }
+      },
+      "iteration": 1,
+      "mean_return": 21.027083333333334,
+      "phase": "dagger",
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 21.027083333333334,
+        "mean_success_rate": 0.25,
+        "scenario_count": 4.0,
+        "score": 250271.02708333332,
+        "threshold_pass_rate": 0.25
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 5.365000000000002,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": -0.655,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.674999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        }
+      },
+      "iteration": 2,
+      "mean_return": 17.575,
+      "phase": "dagger",
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 17.575,
+        "mean_success_rate": 0.25,
+        "scenario_count": 4.0,
+        "score": 250267.575,
+        "threshold_pass_rate": 0.25
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": 5.365000000000002,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": 11.345,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.674999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        }
+      },
+      "iteration": 3,
+      "mean_return": 20.575,
+      "phase": "dagger",
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 20.575000000000003,
+        "mean_success_rate": 0.25,
+        "scenario_count": 4.0,
+        "score": 250270.575,
+        "threshold_pass_rate": 0.25
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": -4.934999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": -0.655,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -4.094999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        }
+      },
+      "iteration": 4,
+      "mean_return": 14.895000000000001,
+      "phase": "dagger",
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 14.895000000000001,
+        "mean_success_rate": 0.25,
+        "scenario_count": 4.0,
+        "score": 250264.895,
+        "threshold_pass_rate": 0.25
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": -4.794999999999999,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": -0.655,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.3949999999999982,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        }
+      },
+      "iteration": 5,
+      "mean_return": 15.104999999999997,
+      "phase": "dagger",
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 15.105,
+        "mean_success_rate": 0.25,
+        "scenario_count": 4.0,
+        "score": 250265.105,
+        "threshold_pass_rate": 0.25
+      }
+    },
+    {
+      "fixed_scenarios": {
+        "level_1_flat.json": {
+          "return": 69.265,
+          "success_rate": 1.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Flat run: reach the goal reliably without relying on one lucky rollout.",
+            "scenario_name": "level_1_flat.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": true,
+            "meets_success_rate": true,
+            "within_step_budget": true
+          },
+          "threshold_met": true
+        },
+        "level_2_gap.json": {
+          "return": -4.6549999999999985,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Gap run: cross the gap and reach the goal reliably within the time budget.",
+            "scenario_name": "level_2_gap.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_3_stairs.json": {
+          "return": -0.655,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Stair run: climb the stepped platforms and reach the elevated goal.",
+            "scenario_name": "level_3_stairs.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        },
+        "level_4_platforms.json": {
+          "return": -3.3949999999999982,
+          "success_rate": 0.0,
+          "threshold": {
+            "max_steps": 200,
+            "min_episodes": 3,
+            "min_mean_return": 55.0,
+            "min_success_rate": 1.0,
+            "rationale": "Platform run: traverse separated platforms and reach the final goal.",
+            "scenario_name": "level_4_platforms.json"
+          },
+          "threshold_diagnostics": {
+            "enough_episodes": true,
+            "evaluation_episodes": 3,
+            "evaluation_max_steps": 200,
+            "meets_return": false,
+            "meets_success_rate": false,
+            "within_step_budget": true
+          },
+          "threshold_met": false
+        }
+      },
+      "iteration": 6,
+      "mean_return": 15.139999999999995,
+      "phase": "dagger",
+      "success_rate": 0.25,
+      "success_thresholds_met": false,
+      "tuning_metrics": {
+        "mean_return": 15.14,
+        "mean_success_rate": 0.25,
+        "scenario_count": 4.0,
+        "score": 250265.14,
+        "threshold_pass_rate": 0.25
+      }
+    }
+  ],
+  "history": [
+    {
+      "accuracy": 0.986904761904762,
+      "epoch": 1.0,
+      "iteration": 0.0,
+      "loss": 0.05128770021408508,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 2.0,
+      "iteration": 0.0,
+      "loss": 0.06452838231177468,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9833333333333333,
+      "epoch": 3.0,
+      "iteration": 0.0,
+      "loss": 0.1084950442098835,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9880952380952381,
+      "epoch": 4.0,
+      "iteration": 0.0,
+      "loss": 0.07243916441996892,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9916666666666667,
+      "epoch": 5.0,
+      "iteration": 0.0,
+      "loss": 0.059264556646979015,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9880952380952381,
+      "epoch": 6.0,
+      "iteration": 0.0,
+      "loss": 0.03325680668155352,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9892857142857143,
+      "epoch": 7.0,
+      "iteration": 0.0,
+      "loss": 0.05796743952502895,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 8.0,
+      "iteration": 0.0,
+      "loss": 0.03510117077163332,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 9.0,
+      "iteration": 0.0,
+      "loss": 0.12274691028287635,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9904761904761905,
+      "epoch": 10.0,
+      "iteration": 0.0,
+      "loss": 0.03866878517326854,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9630952380952381,
+      "epoch": 11.0,
+      "iteration": 0.0,
+      "loss": 0.10115384292799891,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9666666666666667,
+      "epoch": 12.0,
+      "iteration": 0.0,
+      "loss": 0.04128016232778983,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9761904761904762,
+      "epoch": 13.0,
+      "iteration": 0.0,
+      "loss": 0.07405602965681325,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9619047619047619,
+      "epoch": 14.0,
+      "iteration": 0.0,
+      "loss": 0.08760223927951995,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9738095238095238,
+      "epoch": 15.0,
+      "iteration": 0.0,
+      "loss": 0.0641630997482155,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9892857142857143,
+      "epoch": 16.0,
+      "iteration": 0.0,
+      "loss": 0.0641023704920718,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9666666666666667,
+      "epoch": 17.0,
+      "iteration": 0.0,
+      "loss": 0.04041902159141111,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9666666666666667,
+      "epoch": 18.0,
+      "iteration": 0.0,
+      "loss": 0.039437845975182774,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9630952380952381,
+      "epoch": 19.0,
+      "iteration": 0.0,
+      "loss": 0.051538936368056704,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.986904761904762,
+      "epoch": 20.0,
+      "iteration": 0.0,
+      "loss": 0.05204323245035041,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9857142857142858,
+      "epoch": 21.0,
+      "iteration": 0.0,
+      "loss": 0.08575545508591902,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9738095238095238,
+      "epoch": 22.0,
+      "iteration": 0.0,
+      "loss": 0.04696224652496832,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 23.0,
+      "iteration": 0.0,
+      "loss": 0.1108413794920558,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9714285714285714,
+      "epoch": 24.0,
+      "iteration": 0.0,
+      "loss": 0.056265367283707575,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9892857142857143,
+      "epoch": 25.0,
+      "iteration": 0.0,
+      "loss": 0.042414303886748494,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9785714285714285,
+      "epoch": 26.0,
+      "iteration": 0.0,
+      "loss": 0.0673707474998775,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.969047619047619,
+      "epoch": 27.0,
+      "iteration": 0.0,
+      "loss": 0.04613778123000104,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9833333333333333,
+      "epoch": 28.0,
+      "iteration": 0.0,
+      "loss": 0.036141028917682845,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9678571428571429,
+      "epoch": 29.0,
+      "iteration": 0.0,
+      "loss": 0.03833006409806244,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9833333333333333,
+      "epoch": 30.0,
+      "iteration": 0.0,
+      "loss": 0.11792140801969384,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9916666666666667,
+      "epoch": 31.0,
+      "iteration": 0.0,
+      "loss": 0.09890889871333326,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 32.0,
+      "iteration": 0.0,
+      "loss": 0.04694927403858552,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9857142857142858,
+      "epoch": 33.0,
+      "iteration": 0.0,
+      "loss": 0.03881784732497874,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9714285714285714,
+      "epoch": 34.0,
+      "iteration": 0.0,
+      "loss": 0.08229661535338632,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9666666666666667,
+      "epoch": 35.0,
+      "iteration": 0.0,
+      "loss": 0.03244848940521479,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9880952380952381,
+      "epoch": 36.0,
+      "iteration": 0.0,
+      "loss": 0.0419891243423557,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9928571428571429,
+      "epoch": 37.0,
+      "iteration": 0.0,
+      "loss": 0.035926581036654255,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 38.0,
+      "iteration": 0.0,
+      "loss": 0.03234864799693848,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9833333333333333,
+      "epoch": 39.0,
+      "iteration": 0.0,
+      "loss": 0.10872823344543577,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9857142857142858,
+      "epoch": 40.0,
+      "iteration": 0.0,
+      "loss": 0.10365774796477385,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9904761904761905,
+      "epoch": 41.0,
+      "iteration": 0.0,
+      "loss": 0.06287298356404616,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9821428571428571,
+      "epoch": 42.0,
+      "iteration": 0.0,
+      "loss": 0.10538673895810331,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9833333333333333,
+      "epoch": 43.0,
+      "iteration": 0.0,
+      "loss": 0.1100280969270638,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9785714285714285,
+      "epoch": 44.0,
+      "iteration": 0.0,
+      "loss": 0.05790634164143176,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9642857142857143,
+      "epoch": 45.0,
+      "iteration": 0.0,
+      "loss": 0.03989471761243684,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9773809523809524,
+      "epoch": 46.0,
+      "iteration": 0.0,
+      "loss": 0.03247860458546451,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9833333333333333,
+      "epoch": 47.0,
+      "iteration": 0.0,
+      "loss": 0.03304938741604842,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9773809523809524,
+      "epoch": 48.0,
+      "iteration": 0.0,
+      "loss": 0.05019300700653167,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.986904761904762,
+      "epoch": 49.0,
+      "iteration": 0.0,
+      "loss": 0.0524230204572502,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9892857142857143,
+      "epoch": 50.0,
+      "iteration": 0.0,
+      "loss": 0.03474380403224911,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9845238095238096,
+      "epoch": 51.0,
+      "iteration": 0.0,
+      "loss": 0.07141183042216913,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9904761904761905,
+      "epoch": 52.0,
+      "iteration": 0.0,
+      "loss": 0.031691921186367315,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9797619047619047,
+      "epoch": 53.0,
+      "iteration": 0.0,
+      "loss": 0.031034787969353297,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9833333333333333,
+      "epoch": 54.0,
+      "iteration": 0.0,
+      "loss": 0.04810591818809155,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9797619047619047,
+      "epoch": 55.0,
+      "iteration": 0.0,
+      "loss": 0.03706790572642127,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9821428571428571,
+      "epoch": 56.0,
+      "iteration": 0.0,
+      "loss": 0.03070807263166422,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9761904761904762,
+      "epoch": 57.0,
+      "iteration": 0.0,
+      "loss": 0.03264177234072815,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.986904761904762,
+      "epoch": 58.0,
+      "iteration": 0.0,
+      "loss": 0.060690426171225095,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9916666666666667,
+      "epoch": 59.0,
+      "iteration": 0.0,
+      "loss": 0.03972256511194809,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9892857142857143,
+      "epoch": 60.0,
+      "iteration": 0.0,
+      "loss": 0.17636512096574908,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9845238095238096,
+      "epoch": 61.0,
+      "iteration": 0.0,
+      "loss": 0.04459367381586205,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9857142857142858,
+      "epoch": 62.0,
+      "iteration": 0.0,
+      "loss": 0.056176751867557564,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9857142857142858,
+      "epoch": 63.0,
+      "iteration": 0.0,
+      "loss": 0.028650794000852676,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9880952380952381,
+      "epoch": 64.0,
+      "iteration": 0.0,
+      "loss": 0.05416633248151768,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9880952380952381,
+      "epoch": 65.0,
+      "iteration": 0.0,
+      "loss": 0.06190975445899225,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 66.0,
+      "iteration": 0.0,
+      "loss": 0.16444742206062768,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9702380952380952,
+      "epoch": 67.0,
+      "iteration": 0.0,
+      "loss": 0.13362187118757338,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9809523809523809,
+      "epoch": 68.0,
+      "iteration": 0.0,
+      "loss": 0.16801808408261942,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9761904761904762,
+      "epoch": 69.0,
+      "iteration": 0.0,
+      "loss": 0.07345773024218423,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9666666666666667,
+      "epoch": 70.0,
+      "iteration": 0.0,
+      "loss": 0.046919440471988524,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.986904761904762,
+      "epoch": 71.0,
+      "iteration": 0.0,
+      "loss": 0.11233595009405344,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9797619047619047,
+      "epoch": 72.0,
+      "iteration": 0.0,
+      "loss": 0.043657525136534654,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9785714285714285,
+      "epoch": 73.0,
+      "iteration": 0.0,
+      "loss": 0.08872933836620567,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9845238095238096,
+      "epoch": 74.0,
+      "iteration": 0.0,
+      "loss": 0.043383245835346834,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9845238095238096,
+      "epoch": 75.0,
+      "iteration": 0.0,
+      "loss": 0.1497863718352857,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.969047619047619,
+      "epoch": 76.0,
+      "iteration": 0.0,
+      "loss": 0.06021728222480133,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9785714285714285,
+      "epoch": 77.0,
+      "iteration": 0.0,
+      "loss": 0.10825187819344657,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9821428571428571,
+      "epoch": 78.0,
+      "iteration": 0.0,
+      "loss": 0.09464095238862293,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9761904761904762,
+      "epoch": 79.0,
+      "iteration": 0.0,
+      "loss": 0.05736614246630953,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9738095238095238,
+      "epoch": 80.0,
+      "iteration": 0.0,
+      "loss": 0.0551867865912971,
+      "phase": "teacher_forced"
+    },
+    {
+      "accuracy": 0.9393004115226338,
+      "epoch": 1.0,
+      "iteration": 1.0,
+      "loss": 0.3889536026083393,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9490740740740741,
+      "epoch": 2.0,
+      "iteration": 1.0,
+      "loss": 0.18382137089415831,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.963477366255144,
+      "epoch": 3.0,
+      "iteration": 1.0,
+      "loss": 0.11953920729979566,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9691358024691358,
+      "epoch": 4.0,
+      "iteration": 1.0,
+      "loss": 0.12211954436521717,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9727366255144033,
+      "epoch": 5.0,
+      "iteration": 1.0,
+      "loss": 0.1359000870720349,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9819958847736625,
+      "epoch": 6.0,
+      "iteration": 1.0,
+      "loss": 0.07640874868741741,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9861111111111112,
+      "epoch": 7.0,
+      "iteration": 1.0,
+      "loss": 0.060484884694839515,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9825102880658436,
+      "epoch": 8.0,
+      "iteration": 1.0,
+      "loss": 0.07863301968148338,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9825102880658436,
+      "epoch": 9.0,
+      "iteration": 1.0,
+      "loss": 0.052792903683589076,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9814814814814815,
+      "epoch": 10.0,
+      "iteration": 1.0,
+      "loss": 0.11407458859997889,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.970679012345679,
+      "epoch": 11.0,
+      "iteration": 1.0,
+      "loss": 0.0869192506796048,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9711934156378601,
+      "epoch": 12.0,
+      "iteration": 1.0,
+      "loss": 0.12165706308842196,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9825102880658436,
+      "epoch": 13.0,
+      "iteration": 1.0,
+      "loss": 0.07614397447519848,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9835390946502057,
+      "epoch": 14.0,
+      "iteration": 1.0,
+      "loss": 0.10048075045225184,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.977366255144033,
+      "epoch": 15.0,
+      "iteration": 1.0,
+      "loss": 0.08498746811301129,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9845679012345679,
+      "epoch": 16.0,
+      "iteration": 1.0,
+      "loss": 0.053878523853948576,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9866255144032922,
+      "epoch": 17.0,
+      "iteration": 1.0,
+      "loss": 0.05984325012107813,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9891975308641975,
+      "epoch": 18.0,
+      "iteration": 1.0,
+      "loss": 0.04680529253656972,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9871399176954733,
+      "epoch": 19.0,
+      "iteration": 1.0,
+      "loss": 0.07264533001783882,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9876543209876543,
+      "epoch": 20.0,
+      "iteration": 1.0,
+      "loss": 0.04710515407718902,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9876543209876543,
+      "epoch": 21.0,
+      "iteration": 1.0,
+      "loss": 0.0732199753186217,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.98559670781893,
+      "epoch": 22.0,
+      "iteration": 1.0,
+      "loss": 0.03062816092230901,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9897119341563786,
+      "epoch": 23.0,
+      "iteration": 1.0,
+      "loss": 0.05346536599559548,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9897119341563786,
+      "epoch": 24.0,
+      "iteration": 1.0,
+      "loss": 0.07256422875403071,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9886831275720165,
+      "epoch": 25.0,
+      "iteration": 1.0,
+      "loss": 0.0635063824552368,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9891975308641975,
+      "epoch": 26.0,
+      "iteration": 1.0,
+      "loss": 0.04760308844926518,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9912551440329218,
+      "epoch": 27.0,
+      "iteration": 1.0,
+      "loss": 0.0321572074099394,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9881687242798354,
+      "epoch": 28.0,
+      "iteration": 1.0,
+      "loss": 0.04327316240143077,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9886831275720165,
+      "epoch": 29.0,
+      "iteration": 1.0,
+      "loss": 0.07016054723879377,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.98559670781893,
+      "epoch": 30.0,
+      "iteration": 1.0,
+      "loss": 0.061035980495390454,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9876543209876543,
+      "epoch": 31.0,
+      "iteration": 1.0,
+      "loss": 0.04703154078964527,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9866255144032922,
+      "epoch": 32.0,
+      "iteration": 1.0,
+      "loss": 0.07523922563852443,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9881687242798354,
+      "epoch": 33.0,
+      "iteration": 1.0,
+      "loss": 0.07301025825108061,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9850823045267489,
+      "epoch": 34.0,
+      "iteration": 1.0,
+      "loss": 0.05172553533446734,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.98559670781893,
+      "epoch": 35.0,
+      "iteration": 1.0,
+      "loss": 0.05146889268217509,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9861111111111112,
+      "epoch": 36.0,
+      "iteration": 1.0,
+      "loss": 0.08051375924406473,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9845679012345679,
+      "epoch": 37.0,
+      "iteration": 1.0,
+      "loss": 0.04383454446148112,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9861111111111112,
+      "epoch": 38.0,
+      "iteration": 1.0,
+      "loss": 0.08018127230375453,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9897119341563786,
+      "epoch": 39.0,
+      "iteration": 1.0,
+      "loss": 0.03255512440683025,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9922839506172839,
+      "epoch": 40.0,
+      "iteration": 1.0,
+      "loss": 0.06735852356964661,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9713533091866974,
+      "epoch": 1.0,
+      "iteration": 2.0,
+      "loss": 0.12418102329013612,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9756338491932829,
+      "epoch": 2.0,
+      "iteration": 2.0,
+      "loss": 0.08187296609266989,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9825485676654593,
+      "epoch": 3.0,
+      "iteration": 2.0,
+      "loss": 0.11043712477039351,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9772802107342773,
+      "epoch": 4.0,
+      "iteration": 2.0,
+      "loss": 0.09479515178691489,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9802436615080672,
+      "epoch": 5.0,
+      "iteration": 2.0,
+      "loss": 0.08809309154945179,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9776094830424761,
+      "epoch": 6.0,
+      "iteration": 2.0,
+      "loss": 0.09073335938183251,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9809022061244649,
+      "epoch": 7.0,
+      "iteration": 2.0,
+      "loss": 0.09325794254085874,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9845242015146526,
+      "epoch": 8.0,
+      "iteration": 2.0,
+      "loss": 0.06689916716770176,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.983536384590056,
+      "epoch": 9.0,
+      "iteration": 2.0,
+      "loss": 0.0727100955550999,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9841949292064537,
+      "epoch": 10.0,
+      "iteration": 2.0,
+      "loss": 0.0571845695370263,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9782680276588739,
+      "epoch": 11.0,
+      "iteration": 2.0,
+      "loss": 0.07644178848535774,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9881461969048403,
+      "epoch": 12.0,
+      "iteration": 2.0,
+      "loss": 0.03904335178216508,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9888047415212381,
+      "epoch": 13.0,
+      "iteration": 2.0,
+      "loss": 0.048109763554595765,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9888047415212381,
+      "epoch": 14.0,
+      "iteration": 2.0,
+      "loss": 0.057494293587698746,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9897925584458347,
+      "epoch": 15.0,
+      "iteration": 2.0,
+      "loss": 0.048586491974678465,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9911096476786302,
+      "epoch": 16.0,
+      "iteration": 2.0,
+      "loss": 0.04184993673122102,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9871583799802437,
+      "epoch": 17.0,
+      "iteration": 2.0,
+      "loss": 0.07330753630199517,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9901218307540336,
+      "epoch": 18.0,
+      "iteration": 2.0,
+      "loss": 0.0463570778229089,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9911096476786302,
+      "epoch": 19.0,
+      "iteration": 2.0,
+      "loss": 0.05935942609774505,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9878169245966414,
+      "epoch": 20.0,
+      "iteration": 2.0,
+      "loss": 0.0819396913213521,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9874876522884426,
+      "epoch": 21.0,
+      "iteration": 2.0,
+      "loss": 0.06752109295734722,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9894632861376358,
+      "epoch": 22.0,
+      "iteration": 2.0,
+      "loss": 0.03813340818183788,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9953901876852157,
+      "epoch": 23.0,
+      "iteration": 2.0,
+      "loss": 0.02834203842736641,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9911096476786302,
+      "epoch": 24.0,
+      "iteration": 2.0,
+      "loss": 0.04499628238875516,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9907803753704314,
+      "epoch": 25.0,
+      "iteration": 2.0,
+      "loss": 0.04810964898091297,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.991768192295028,
+      "epoch": 26.0,
+      "iteration": 2.0,
+      "loss": 0.04554733517096747,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9914389199868291,
+      "epoch": 27.0,
+      "iteration": 2.0,
+      "loss": 0.04095837269143953,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9920974646032269,
+      "epoch": 28.0,
+      "iteration": 2.0,
+      "loss": 0.05471849264900556,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9947316430688179,
+      "epoch": 29.0,
+      "iteration": 2.0,
+      "loss": 0.024152561526341994,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9930852815278235,
+      "epoch": 30.0,
+      "iteration": 2.0,
+      "loss": 0.04090066193665844,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9914389199868291,
+      "epoch": 31.0,
+      "iteration": 2.0,
+      "loss": 0.043793538700838894,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9914389199868291,
+      "epoch": 32.0,
+      "iteration": 2.0,
+      "loss": 0.04412074056679397,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.986170563055647,
+      "epoch": 33.0,
+      "iteration": 2.0,
+      "loss": 0.05572291020261646,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9884754692130392,
+      "epoch": 34.0,
+      "iteration": 2.0,
+      "loss": 0.052213642478573685,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9884754692130392,
+      "epoch": 35.0,
+      "iteration": 2.0,
+      "loss": 0.03578614119221171,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9930852815278235,
+      "epoch": 36.0,
+      "iteration": 2.0,
+      "loss": 0.03291472560377435,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9901218307540336,
+      "epoch": 37.0,
+      "iteration": 2.0,
+      "loss": 0.04347077134069125,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9937438261442213,
+      "epoch": 38.0,
+      "iteration": 2.0,
+      "loss": 0.023201432827534906,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9934145538360224,
+      "epoch": 39.0,
+      "iteration": 2.0,
+      "loss": 0.043799987692305566,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9967072769180112,
+      "epoch": 40.0,
+      "iteration": 2.0,
+      "loss": 0.01946179665633375,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.969770253929867,
+      "epoch": 1.0,
+      "iteration": 3.0,
+      "loss": 0.18439274692734503,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9874244256348247,
+      "epoch": 2.0,
+      "iteration": 3.0,
+      "loss": 0.0743530780203109,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9891172914147521,
+      "epoch": 3.0,
+      "iteration": 3.0,
+      "loss": 0.059671687139277015,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.985006045949214,
+      "epoch": 4.0,
+      "iteration": 3.0,
+      "loss": 0.08367571122719125,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9821039903264812,
+      "epoch": 5.0,
+      "iteration": 3.0,
+      "loss": 0.1166239199021374,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9876662636033857,
+      "epoch": 6.0,
+      "iteration": 3.0,
+      "loss": 0.07001535981497137,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9862152357920193,
+      "epoch": 7.0,
+      "iteration": 3.0,
+      "loss": 0.08342909566008519,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9864570737605804,
+      "epoch": 8.0,
+      "iteration": 3.0,
+      "loss": 0.08096399287701085,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9840386940749698,
+      "epoch": 9.0,
+      "iteration": 3.0,
+      "loss": 0.08154848956265358,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9905683192261185,
+      "epoch": 10.0,
+      "iteration": 3.0,
+      "loss": 0.0487803226353729,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.992261185006046,
+      "epoch": 11.0,
+      "iteration": 3.0,
+      "loss": 0.04580894196845204,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9898428053204353,
+      "epoch": 12.0,
+      "iteration": 3.0,
+      "loss": 0.04018344389129866,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9929866989117292,
+      "epoch": 13.0,
+      "iteration": 3.0,
+      "loss": 0.04368055766851539,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9898428053204353,
+      "epoch": 14.0,
+      "iteration": 3.0,
+      "loss": 0.0437854824030894,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9932285368802902,
+      "epoch": 15.0,
+      "iteration": 3.0,
+      "loss": 0.026959585566907005,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9932285368802902,
+      "epoch": 16.0,
+      "iteration": 3.0,
+      "loss": 0.04008244971585367,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9915356711003628,
+      "epoch": 17.0,
+      "iteration": 3.0,
+      "loss": 0.06176630377571268,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9920193470374848,
+      "epoch": 18.0,
+      "iteration": 3.0,
+      "loss": 0.03656710105038928,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9939540507859734,
+      "epoch": 19.0,
+      "iteration": 3.0,
+      "loss": 0.032225299927593515,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9946795646916566,
+      "epoch": 20.0,
+      "iteration": 3.0,
+      "loss": 0.037716396741782024,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9961305925030229,
+      "epoch": 21.0,
+      "iteration": 3.0,
+      "loss": 0.02044535246030163,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958887545344619,
+      "epoch": 22.0,
+      "iteration": 3.0,
+      "loss": 0.028655173701032582,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9910519951632406,
+      "epoch": 23.0,
+      "iteration": 3.0,
+      "loss": 0.04373267765410026,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9939540507859734,
+      "epoch": 24.0,
+      "iteration": 3.0,
+      "loss": 0.03747542922595063,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958887545344619,
+      "epoch": 25.0,
+      "iteration": 3.0,
+      "loss": 0.023744398080964856,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9963724304715841,
+      "epoch": 26.0,
+      "iteration": 3.0,
+      "loss": 0.029399804973670344,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9949214026602177,
+      "epoch": 27.0,
+      "iteration": 3.0,
+      "loss": 0.03256410855147875,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9949214026602177,
+      "epoch": 28.0,
+      "iteration": 3.0,
+      "loss": 0.025253085259425857,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9939540507859734,
+      "epoch": 29.0,
+      "iteration": 3.0,
+      "loss": 0.06232565946431049,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9881499395405079,
+      "epoch": 30.0,
+      "iteration": 3.0,
+      "loss": 0.07811502964791033,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9891172914147521,
+      "epoch": 31.0,
+      "iteration": 3.0,
+      "loss": 0.08351515422438913,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954050785973397,
+      "epoch": 32.0,
+      "iteration": 3.0,
+      "loss": 0.023271153962910806,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9956469165659009,
+      "epoch": 33.0,
+      "iteration": 3.0,
+      "loss": 0.030108151895848825,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9951632406287787,
+      "epoch": 34.0,
+      "iteration": 3.0,
+      "loss": 0.02638564728822068,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9949214026602177,
+      "epoch": 35.0,
+      "iteration": 3.0,
+      "loss": 0.020278555998818535,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966142684401451,
+      "epoch": 36.0,
+      "iteration": 3.0,
+      "loss": 0.025698252140314622,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9929866989117292,
+      "epoch": 37.0,
+      "iteration": 3.0,
+      "loss": 0.036519437410306756,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9905683192261185,
+      "epoch": 38.0,
+      "iteration": 3.0,
+      "loss": 0.03775632045003152,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9920193470374848,
+      "epoch": 39.0,
+      "iteration": 3.0,
+      "loss": 0.03859305852104064,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9941958887545345,
+      "epoch": 40.0,
+      "iteration": 3.0,
+      "loss": 0.026697495951009814,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9931205809287216,
+      "epoch": 1.0,
+      "iteration": 4.0,
+      "loss": 0.04606719489865222,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.992547296006115,
+      "epoch": 2.0,
+      "iteration": 4.0,
+      "loss": 0.0441666778487182,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9923562010319129,
+      "epoch": 3.0,
+      "iteration": 4.0,
+      "loss": 0.04166316578334481,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9912096311866998,
+      "epoch": 4.0,
+      "iteration": 4.0,
+      "loss": 0.05275231873024466,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9936938658513281,
+      "epoch": 5.0,
+      "iteration": 4.0,
+      "loss": 0.030666630467040098,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9933116759029238,
+      "epoch": 6.0,
+      "iteration": 4.0,
+      "loss": 0.028084174124437235,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950315306707433,
+      "epoch": 7.0,
+      "iteration": 4.0,
+      "loss": 0.03955861901234036,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950315306707433,
+      "epoch": 8.0,
+      "iteration": 4.0,
+      "loss": 0.025699543061733998,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9935027708771259,
+      "epoch": 9.0,
+      "iteration": 4.0,
+      "loss": 0.035796722505014186,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9933116759029238,
+      "epoch": 10.0,
+      "iteration": 4.0,
+      "loss": 0.03233892445260147,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954137206191477,
+      "epoch": 11.0,
+      "iteration": 4.0,
+      "loss": 0.023536080494345076,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957959105675521,
+      "epoch": 12.0,
+      "iteration": 4.0,
+      "loss": 0.02390966206392497,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9963691954901586,
+      "epoch": 13.0,
+      "iteration": 4.0,
+      "loss": 0.03135783227718334,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950315306707433,
+      "epoch": 14.0,
+      "iteration": 4.0,
+      "loss": 0.02553426126201388,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9929294859545194,
+      "epoch": 15.0,
+      "iteration": 4.0,
+      "loss": 0.024826743031656003,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9961781005159565,
+      "epoch": 16.0,
+      "iteration": 4.0,
+      "loss": 0.028229670021942814,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994649340722339,
+      "epoch": 17.0,
+      "iteration": 4.0,
+      "loss": 0.037678372322766975,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9875788266768584,
+      "epoch": 18.0,
+      "iteration": 4.0,
+      "loss": 0.06289673659693505,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950315306707433,
+      "epoch": 19.0,
+      "iteration": 4.0,
+      "loss": 0.03502555975885685,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9965602904643608,
+      "epoch": 20.0,
+      "iteration": 4.0,
+      "loss": 0.028748094568868357,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9935027708771259,
+      "epoch": 21.0,
+      "iteration": 4.0,
+      "loss": 0.037493067642561904,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9948404356965411,
+      "epoch": 22.0,
+      "iteration": 4.0,
+      "loss": 0.03589891528630814,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9933116759029238,
+      "epoch": 23.0,
+      "iteration": 4.0,
+      "loss": 0.04327708924573272,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9956048155933499,
+      "epoch": 24.0,
+      "iteration": 4.0,
+      "loss": 0.029456300436056897,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9936938658513281,
+      "epoch": 25.0,
+      "iteration": 4.0,
+      "loss": 0.05089796744594904,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9956048155933499,
+      "epoch": 26.0,
+      "iteration": 4.0,
+      "loss": 0.014458919480761926,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9942671507739347,
+      "epoch": 27.0,
+      "iteration": 4.0,
+      "loss": 0.01873013577496068,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9938849608255302,
+      "epoch": 28.0,
+      "iteration": 4.0,
+      "loss": 0.03156053556331156,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9975157653353717,
+      "epoch": 29.0,
+      "iteration": 4.0,
+      "loss": 0.012848546231638286,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9965602904643608,
+      "epoch": 30.0,
+      "iteration": 4.0,
+      "loss": 0.024715025309838472,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9915918211351041,
+      "epoch": 31.0,
+      "iteration": 4.0,
+      "loss": 0.07067338740040231,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954137206191477,
+      "epoch": 32.0,
+      "iteration": 4.0,
+      "loss": 0.03258099890558397,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9975157653353717,
+      "epoch": 33.0,
+      "iteration": 4.0,
+      "loss": 0.024170378804270563,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954137206191477,
+      "epoch": 34.0,
+      "iteration": 4.0,
+      "loss": 0.03616374367057958,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954137206191477,
+      "epoch": 35.0,
+      "iteration": 4.0,
+      "loss": 0.019493333136398287,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9980890502579782,
+      "epoch": 36.0,
+      "iteration": 4.0,
+      "loss": 0.018603487280089325,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952226256449456,
+      "epoch": 37.0,
+      "iteration": 4.0,
+      "loss": 0.03712684769676733,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9954137206191477,
+      "epoch": 38.0,
+      "iteration": 4.0,
+      "loss": 0.02661148108667969,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.994649340722339,
+      "epoch": 39.0,
+      "iteration": 4.0,
+      "loss": 0.025295609892601354,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9936938658513281,
+      "epoch": 40.0,
+      "iteration": 4.0,
+      "loss": 0.024237340106459764,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9904912836767037,
+      "epoch": 1.0,
+      "iteration": 5.0,
+      "loss": 0.07757432115014802,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9923930269413629,
+      "epoch": 2.0,
+      "iteration": 5.0,
+      "loss": 0.06171420643684674,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9920760697305864,
+      "epoch": 3.0,
+      "iteration": 5.0,
+      "loss": 0.07291259870077771,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9935023771790809,
+      "epoch": 4.0,
+      "iteration": 5.0,
+      "loss": 0.03551710833824519,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9911251980982567,
+      "epoch": 5.0,
+      "iteration": 5.0,
+      "loss": 0.04798189216500396,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9931854199683042,
+      "epoch": 6.0,
+      "iteration": 5.0,
+      "loss": 0.037377247934284284,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952456418383518,
+      "epoch": 7.0,
+      "iteration": 5.0,
+      "loss": 0.022173323489055142,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9941362916006339,
+      "epoch": 8.0,
+      "iteration": 5.0,
+      "loss": 0.026329320306829197,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9946117274167987,
+      "epoch": 9.0,
+      "iteration": 5.0,
+      "loss": 0.04015015126316677,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9928684627575277,
+      "epoch": 10.0,
+      "iteration": 5.0,
+      "loss": 0.03197675893723776,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9920760697305864,
+      "epoch": 11.0,
+      "iteration": 5.0,
+      "loss": 0.0376016743407408,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9955625990491284,
+      "epoch": 12.0,
+      "iteration": 5.0,
+      "loss": 0.03184235038533925,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9938193343898574,
+      "epoch": 13.0,
+      "iteration": 5.0,
+      "loss": 0.04552684352864554,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966719492868463,
+      "epoch": 14.0,
+      "iteration": 5.0,
+      "loss": 0.021722695451247706,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9974643423137877,
+      "epoch": 15.0,
+      "iteration": 5.0,
+      "loss": 0.014322625389545414,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9961965134706815,
+      "epoch": 16.0,
+      "iteration": 5.0,
+      "loss": 0.018624469798380026,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9960380348652932,
+      "epoch": 17.0,
+      "iteration": 5.0,
+      "loss": 0.024173954154171784,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9955625990491284,
+      "epoch": 18.0,
+      "iteration": 5.0,
+      "loss": 0.03499027067951662,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966719492868463,
+      "epoch": 19.0,
+      "iteration": 5.0,
+      "loss": 0.02170976045872723,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958795562599049,
+      "epoch": 20.0,
+      "iteration": 5.0,
+      "loss": 0.022886791938497325,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9955625990491284,
+      "epoch": 21.0,
+      "iteration": 5.0,
+      "loss": 0.028048823525357574,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9973058637083994,
+      "epoch": 22.0,
+      "iteration": 5.0,
+      "loss": 0.01470876591147821,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9969889064976228,
+      "epoch": 23.0,
+      "iteration": 5.0,
+      "loss": 0.018908358245911652,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9979397781299525,
+      "epoch": 24.0,
+      "iteration": 5.0,
+      "loss": 0.01470867587426783,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952456418383518,
+      "epoch": 25.0,
+      "iteration": 5.0,
+      "loss": 0.027037220593825427,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957210776545167,
+      "epoch": 26.0,
+      "iteration": 5.0,
+      "loss": 0.027035291902793343,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9941362916006339,
+      "epoch": 27.0,
+      "iteration": 5.0,
+      "loss": 0.042675791045546786,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9961965134706815,
+      "epoch": 28.0,
+      "iteration": 5.0,
+      "loss": 0.024316509390361375,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9977812995245642,
+      "epoch": 29.0,
+      "iteration": 5.0,
+      "loss": 0.011474622565981373,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9957210776545167,
+      "epoch": 30.0,
+      "iteration": 5.0,
+      "loss": 0.045529463923151665,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.99540412044374,
+      "epoch": 31.0,
+      "iteration": 5.0,
+      "loss": 0.053191507850325684,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958795562599049,
+      "epoch": 32.0,
+      "iteration": 5.0,
+      "loss": 0.028952332275520003,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9950871632329635,
+      "epoch": 33.0,
+      "iteration": 5.0,
+      "loss": 0.03964552474265369,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9969889064976228,
+      "epoch": 34.0,
+      "iteration": 5.0,
+      "loss": 0.01631554863681329,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.997147385103011,
+      "epoch": 35.0,
+      "iteration": 5.0,
+      "loss": 0.030860722443515436,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.997147385103011,
+      "epoch": 36.0,
+      "iteration": 5.0,
+      "loss": 0.019056483508562212,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966719492868463,
+      "epoch": 37.0,
+      "iteration": 5.0,
+      "loss": 0.02501793294973825,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9949286846275753,
+      "epoch": 38.0,
+      "iteration": 5.0,
+      "loss": 0.025250978829266642,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9961965134706815,
+      "epoch": 39.0,
+      "iteration": 5.0,
+      "loss": 0.02064643818505954,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9966719492868463,
+      "epoch": 40.0,
+      "iteration": 5.0,
+      "loss": 0.012407295743100162,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9916272788656313,
+      "epoch": 1.0,
+      "iteration": 6.0,
+      "loss": 0.0479267397962742,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9940580688723836,
+      "epoch": 2.0,
+      "iteration": 6.0,
+      "loss": 0.035128637192570235,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9932478055367995,
+      "epoch": 3.0,
+      "iteration": 6.0,
+      "loss": 0.04484696030279698,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9944632005401756,
+      "epoch": 4.0,
+      "iteration": 6.0,
+      "loss": 0.025962640007334944,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958136394328156,
+      "epoch": 5.0,
+      "iteration": 6.0,
+      "loss": 0.028038529399613415,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9981093855503038,
+      "epoch": 6.0,
+      "iteration": 6.0,
+      "loss": 0.013356610628129168,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9951384199864957,
+      "epoch": 7.0,
+      "iteration": 6.0,
+      "loss": 0.02876156462698541,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9971640783254557,
+      "epoch": 8.0,
+      "iteration": 6.0,
+      "loss": 0.014852551473204014,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9943281566509116,
+      "epoch": 9.0,
+      "iteration": 6.0,
+      "loss": 0.03281643103036176,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9940580688723836,
+      "epoch": 10.0,
+      "iteration": 6.0,
+      "loss": 0.030375527271687745,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9921674544226874,
+      "epoch": 11.0,
+      "iteration": 6.0,
+      "loss": 0.02857937062644022,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9955435516542877,
+      "epoch": 12.0,
+      "iteration": 6.0,
+      "loss": 0.031274365823865904,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9963538149898717,
+      "epoch": 13.0,
+      "iteration": 6.0,
+      "loss": 0.016423726641025874,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9951384199864957,
+      "epoch": 14.0,
+      "iteration": 6.0,
+      "loss": 0.03804338669809522,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9958136394328156,
+      "epoch": 15.0,
+      "iteration": 6.0,
+      "loss": 0.021983626719320835,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9972991222147198,
+      "epoch": 16.0,
+      "iteration": 6.0,
+      "loss": 0.012734787183160378,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9975692099932478,
+      "epoch": 17.0,
+      "iteration": 6.0,
+      "loss": 0.01219284149021373,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9990546927751519,
+      "epoch": 18.0,
+      "iteration": 6.0,
+      "loss": 0.006029068079957974,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9979743416610398,
+      "epoch": 19.0,
+      "iteration": 6.0,
+      "loss": 0.011670328994319478,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9972991222147198,
+      "epoch": 20.0,
+      "iteration": 6.0,
+      "loss": 0.02137716774509828,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9951384199864957,
+      "epoch": 21.0,
+      "iteration": 6.0,
+      "loss": 0.031740715470153065,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9968939905469277,
+      "epoch": 22.0,
+      "iteration": 6.0,
+      "loss": 0.02082158119863737,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9975692099932478,
+      "epoch": 23.0,
+      "iteration": 6.0,
+      "loss": 0.020889455815690128,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9967589466576637,
+      "epoch": 24.0,
+      "iteration": 6.0,
+      "loss": 0.02720597635113221,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9975692099932478,
+      "epoch": 25.0,
+      "iteration": 6.0,
+      "loss": 0.014166496176613624,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9991897366644159,
+      "epoch": 26.0,
+      "iteration": 6.0,
+      "loss": 0.005029691879722807,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9990546927751519,
+      "epoch": 27.0,
+      "iteration": 6.0,
+      "loss": 0.004671652367087432,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9972991222147198,
+      "epoch": 28.0,
+      "iteration": 6.0,
+      "loss": 0.017909815661627606,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9937879810938555,
+      "epoch": 29.0,
+      "iteration": 6.0,
+      "loss": 0.03484593975363371,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9960837272113436,
+      "epoch": 30.0,
+      "iteration": 6.0,
+      "loss": 0.028262083808289196,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9941931127616476,
+      "epoch": 31.0,
+      "iteration": 6.0,
+      "loss": 0.060633589613099205,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9952734638757597,
+      "epoch": 32.0,
+      "iteration": 6.0,
+      "loss": 0.028835874861062257,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9989196488858879,
+      "epoch": 33.0,
+      "iteration": 6.0,
+      "loss": 0.00879032641453046,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9963538149898717,
+      "epoch": 34.0,
+      "iteration": 6.0,
+      "loss": 0.01775907040952537,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9981093855503038,
+      "epoch": 35.0,
+      "iteration": 6.0,
+      "loss": 0.009610341468179875,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9979743416610398,
+      "epoch": 36.0,
+      "iteration": 6.0,
+      "loss": 0.010156368084565047,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9978392977717758,
+      "epoch": 37.0,
+      "iteration": 6.0,
+      "loss": 0.016261569188736696,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9987846049966239,
+      "epoch": 38.0,
+      "iteration": 6.0,
+      "loss": 0.010575073864268729,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9979743416610398,
+      "epoch": 39.0,
+      "iteration": 6.0,
+      "loss": 0.01754894972145922,
+      "phase": "dagger"
+    },
+    {
+      "accuracy": 0.9983794733288319,
+      "epoch": 40.0,
+      "iteration": 6.0,
+      "loss": 0.007662288105692026,
+      "phase": "dagger"
+    }
+  ],
+  "metrics": {
+    "accuracy": 0.9983794733288319,
+    "epoch": 40.0,
+    "eval_mean_return": 21.050833333333333,
+    "eval_success_rate": 0.25,
+    "eval_threshold_pass_rate": 0.25,
+    "eval_tuning_score": 250271.05083333334,
+    "iteration": 6.0,
+    "loss": 0.007662288105692026,
+    "phase": "dagger"
+  },
+  "training_config": {
+    "ablation": {
+      "checkpoint_transfer_enabled": true,
+      "critic_feedback_enabled": true,
+      "hierarchy_enabled": true,
+      "recurrent_state_enabled": true,
+      "vision_enabled": true,
+      "world_model_enabled": true
+    },
+    "action_aux_weight": 0.01,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "architecture_name": "agent_world_model_critic",
+    "checkpoint_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_dagger.pth",
+    "controller_schedule": "constant",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cuda",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 12,
+    "epochs": 80,
+    "evaluation_episodes": 3,
+    "evaluation_interval_epochs": 1,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 0,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 64,
+    "imagined_rollout_horizon": 0,
+    "imagined_rollout_weight": 0.0,
+    "learning_rate": 0.001,
+    "log_path": null,
+    "num_envs": 1,
+    "policy_loss_weight": 1.0,
+    "record_videos": false,
+    "representation_weight": 0.05,
+    "resume_path": "data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted.pth",
+    "reward_config": {
+      "coin": 10.0,
+      "enemy_hit": -10.0,
+      "enemy_stomp": 5.0,
+      "fall_death": -10.0,
+      "frame_penalty": -0.01,
+      "goal": 50.0,
+      "progress_per_pixel": 0.05
+    },
+    "reward_loss_weight": 0.01,
+    "rollout_steps": 200,
+    "save_checkpoints": true,
+    "seed": 20260627,
+    "target_network_instability_threshold": 1.0,
+    "target_network_mode": "off",
+    "target_network_tau": 0.01,
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "value_loss_weight": 0.25,
+    "video_dir": null,
+    "world_model_weight": 0.1
+  }
+}

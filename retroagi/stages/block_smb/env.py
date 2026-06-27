@@ -511,7 +511,7 @@ class MarioScenarioEnv:
         - camera_x, max_x_reached
         - nearest_coin, nearest_enemy : {dx, dy, dist}  (normalised 0-1)
         - platform_below_dist          : normalised 0-1
-        - state_vec                    : flat float32 array ready for RL (14 dims)
+        - state_vec                    : flat float32 array ready for RL (24 dims)
         - reward_terms                 : transition reward breakdown
         - reward_total                 : scalar transition reward
         - reward_config                : resolved reward configuration
@@ -553,6 +553,49 @@ class MarioScenarioEnv:
                     dist = (r.top - mario_bottom) / wh
                     plat_below = min(plat_below, dist)
 
+        mx, my = m['x'] + m['w'] / 2, m['y'] + m['h'] / 2
+        mario_right = m['x'] + m['w']
+        if self.goal is None:
+            goal_dx = goal_dy = goal_dist = 1.0
+        else:
+            goal_dx = (self.goal.centerx - mx) / ww
+            goal_dy = (self.goal.centery - my) / wh
+            goal_dist = min(math.hypot(goal_dx, goal_dy), 1.0)
+
+        support_candidates = []
+        for p in self.platforms:
+            r = p['rect']
+            if r.left <= mx <= r.right and (mario_bottom - 2.0) <= r.top <= (mario_bottom + 8.0):
+                support_candidates.append(r)
+        if support_candidates:
+            support = min(support_candidates, key=lambda r: abs(r.top - mario_bottom))
+            support_right_dx = (support.right - mario_right) / ww
+        else:
+            support_right_dx = 1.0
+
+        next_platform_dx = 1.0
+        next_platform_dy = 1.0
+        ahead_platforms = [
+            p['rect']
+            for p in self.platforms
+            if p['rect'].left > mario_right
+        ]
+        if ahead_platforms:
+            next_platform = min(ahead_platforms, key=lambda r: r.left - mario_right)
+            next_platform_dx = (next_platform.left - mario_right) / ww
+            next_platform_dy = (next_platform.top - mario_bottom) / wh
+
+        def _ground_ahead(offset: float) -> float:
+            probe_x = mario_right + offset
+            best: float | None = None
+            for p in self.platforms:
+                r = p['rect']
+                if r.left <= probe_x <= r.right:
+                    dy = (r.top - mario_bottom) / wh
+                    if best is None or abs(dy) < abs(best):
+                        best = dy
+            return 1.0 if best is None else best
+
         state_vec = np.array([
             m['x']  / ww,
             m['y']  / wh,
@@ -565,6 +608,13 @@ class MarioScenarioEnv:
             float(m['jump_buffer'])   / JUMP_BUFFER_FRAMES,
             nc['dx'], nc['dy'], nc['dist'],
             ne['dx'], ne['dist'],
+            min(float(self.steps) / 200.0, 1.0),
+            goal_dx, goal_dy, goal_dist,
+            support_right_dx,
+            next_platform_dx, next_platform_dy,
+            _ground_ahead(24.0),
+            _ground_ahead(48.0),
+            _ground_ahead(72.0),
         ], dtype=np.float32)
 
         return {
@@ -574,6 +624,14 @@ class MarioScenarioEnv:
             'nearest_coin':        nc,
             'nearest_enemy':       ne,
             'platform_below_dist': plat_below,
+            'goal_delta':          {'dx': goal_dx, 'dy': goal_dy, 'dist': goal_dist},
+            'support_right_dx':    support_right_dx,
+            'next_platform_delta': {'dx': next_platform_dx, 'dy': next_platform_dy},
+            'ground_ahead':        {
+                '24': _ground_ahead(24.0),
+                '48': _ground_ahead(48.0),
+                '72': _ground_ahead(72.0),
+            },
             'reward_terms':        dict(reward_terms),
             'reward_total':        reward_total,
             'reward_config':       asdict(self.reward_config),

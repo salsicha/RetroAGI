@@ -98,7 +98,9 @@ The native environment also returns `info` with:
 - camera position and maximum rightward position reached;
 - normalized nearest-coin and nearest-enemy features;
 - normalized distance to a platform below Mario;
-- a 14-element `float32` `state_vec`.
+- normalized short-horizon step progress, goal direction, support edge,
+  next-platform delta, and ground-ahead probes;
+- a 24-element `float32` `state_vec`.
 
 `BlockSMBStage.reset` returns only the RGB observation and retains `info` as
 `last_info`. `BlockSMBStage.encode_observation` combines the RGB vision output

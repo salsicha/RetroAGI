@@ -671,6 +671,11 @@ SMB_BLOCK_GAME_SPEC = BlockGameSpec(
         "nearest_coin",
         "nearest_enemy",
         "platform_below",
+        "step_progress",
+        "goal_delta",
+        "support_edge",
+        "next_platform_delta",
+        "ground_ahead",
     ),
     semantic_classes=(
         "background",

@@ -117,13 +117,17 @@ Next steps:
         benchmark once progress is non-zero.
       Result: mean return 571.0, mean progress 20.0, survival rate 1.0,
       completion rate 0.0, and fixed-benchmark threshold pass rate 0.0.
-- [ ] Distill the scripted known-good Block SMB policy into a transferable
+- [x] Distill the scripted known-good Block SMB policy into a transferable
       neural Block SMB checkpoint.
-  - [ ] Generate deterministic fixed-scenario trajectories from
+  - [x] Generate deterministic fixed-scenario trajectories from
         `fixed_scenario_action_scripts`.
-  - [ ] Train a neural Block SMB policy to imitate the scripted actions.
-  - [ ] Evaluate the distilled neural checkpoint until all four fixed-scenario
+  - [x] Train a neural Block SMB policy to imitate the scripted actions.
+  - [x] Evaluate the distilled neural checkpoint until all four fixed-scenario
         thresholds pass with at least 3 evaluation episodes.
+      Result: `data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger.pth`
+      passed all four fixed scenarios with mean return 69.125, success rate
+      1.0, and threshold pass rate 1.0 after geometry-aware state features and
+      DAgger correction.
 - [ ] Transfer the distilled neural Block SMB checkpoint into Full SMB with the
       RAM-position-tuned Full SMB ViT checkpoint.
 - [ ] Run longer Full SMB fine-tuning from the distilled transfer checkpoint.
