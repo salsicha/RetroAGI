@@ -677,6 +677,24 @@ and playable end target.
       including death, timeout, level completion, game over, and manual reset.
 - [ ] Make Full SMB LSTM/world-model learning explicit instead of relying on
       indirect policy-gradient updates.
+  - [ ] Refactor the baseline actor/world-model connection so the hierarchical
+        transformer consumes the LSTM/world-model prediction as an input or
+        context feature for final action selection instead of running the actor
+        a second time for critic feedback.
+  - [ ] Define a new single-pass architecture output contract that preserves
+        checkpoint compatibility or provides an explicit migration path from the
+        current two-pass `AgentWorldModelCritic` contract.
+  - [ ] Benchmark the single-pass LSTM-conditioned actor against the current
+        two-pass critic-feedback actor for training throughput, action quality,
+        recurrent-state behavior, and transfer performance from Block SMB to
+        Full SMB.
+  - [ ] Add a motor-primitive controller where the short-term/B transformer
+        emits button combo, hold duration, release/cancel behavior, and optional
+        confidence or interrupt parameters instead of only model-space adaptive
+        gains.
+  - [ ] Feed the LSTM/world-model prediction into the motor-primitive controller
+        so each primitive can continue, release, cancel, or replan based on
+        predicted near-future state rather than fixed external action repeat.
   - [ ] Encode the post-step Full SMB observation during training and compare
         `forward.next_state_pred` against `next_batch.src_c.detach()`.
   - [ ] Wire `FullSMBTrainingConfig.world_model_weight` into the Full SMB
