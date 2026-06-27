@@ -1,0 +1,244 @@
+{
+  "architecture": {
+    "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+    "checkpoint_model_name": "agent_world_model_critic",
+    "config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "extension_schema_version": 1,
+    "name": "agent_world_model_critic",
+    "output_contract": "agent_world_model_critic.forward.v1",
+    "supported_stage_names": [
+      "synthetic_1d",
+      "block_smb",
+      "full_smb",
+      "pong_block"
+    ]
+  },
+  "checkpoint_kind": "block_smb_trainer",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "92fa9bcd4324f57c0f06d8a53d9580adbe940286",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "92fa9bc",
+    "system": "git"
+  },
+  "config": {
+    "ablation": {
+      "checkpoint_transfer_enabled": true,
+      "critic_feedback_enabled": true,
+      "hierarchy_enabled": true,
+      "recurrent_state_enabled": true,
+      "vision_enabled": true,
+      "world_model_enabled": true
+    },
+    "action_aux_weight": 0.01,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "architecture_name": "agent_world_model_critic",
+    "checkpoint_path": "data/full_pipeline_20260627_directional_actions/block_smb/policy_gap_penalty_finetune.pth",
+    "controller_schedule": "constant",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cuda",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 6,
+    "epochs": 48,
+    "evaluation_episodes": 3,
+    "evaluation_interval_epochs": 2,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_2_gap.json",
+      "level_8_enemy_gap.json",
+      "level_3_stairs.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 0,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 64,
+    "imagined_rollout_horizon": 0,
+    "imagined_rollout_weight": 0.0,
+    "learning_rate": 0.0003,
+    "log_path": "artifacts/full_pipeline_20260627_directional_actions/block_smb/policy_gap_penalty_finetune_smallbatch_events.jsonl",
+    "num_envs": 1,
+    "policy_loss_weight": 1.0,
+    "record_videos": true,
+    "representation_weight": 0.05,
+    "resume_path": "data/full_pipeline_20260627_directional_actions/block_smb/policy_gap_penalty_finetune.pth",
+    "reward_config": {
+      "coin": 10.0,
+      "enemy_hit": -10.0,
+      "enemy_stomp": 5.0,
+      "fall_death": -10.0,
+      "frame_penalty": -0.01,
+      "gap_jump": -15.0,
+      "goal": 50.0,
+      "progress_per_pixel": 0.05
+    },
+    "reward_loss_weight": 0.01,
+    "rollout_steps": 200,
+    "save_checkpoints": true,
+    "seed": 20260627,
+    "semantic_prediction_accuracy_threshold": 0.8,
+    "target_network_instability_threshold": 1.0,
+    "target_network_mode": "off",
+    "target_network_tau": 0.01,
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "value_loss_weight": 0.25,
+    "video_dir": "artifacts/full_pipeline_20260627_directional_actions/block_smb/gap_penalty_finetune_npz",
+    "world_model_slot_weights": {
+      "patch_tokens": 0.5,
+      "position": 1.5,
+      "semantic_probabilities": 4.0,
+      "state": 1.0
+    },
+    "world_model_weight": 0.1
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-124-generic",
+      "system": "Linux",
+      "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.7.0+cu126"
+    }
+  },
+  "epoch": 48,
+  "global_step": 277078,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "92fa9bcd4324f57c0f06d8a53d9580adbe940286",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "92fa9bc",
+      "system": "git"
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-124-generic",
+        "system": "Linux",
+        "version": "#124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.7.0+cu126"
+      }
+    }
+  },
+  "metrics": {
+    "dynamics_patch_tokens_mae": 0.1338093876838684,
+    "dynamics_patch_tokens_rmse": 0.13620221614837646,
+    "dynamics_position_mae": 0.1119452640414238,
+    "dynamics_position_rmse": 0.11308396607637405,
+    "dynamics_semantic_prediction_accuracy": 1.0,
+    "dynamics_semantic_prediction_cosine": 0.9649287462234497,
+    "dynamics_semantic_prediction_gate_met": 1.0,
+    "dynamics_semantic_probabilities_mae": 0.10138008743524551,
+    "dynamics_semantic_probabilities_rmse": 0.10302390158176422,
+    "dynamics_state_mae": 0.17721223831176758,
+    "dynamics_state_rmse": 0.20892038941383362,
+    "episodes": 6.0,
+    "eval_mean_return": 28.171666666666667,
+    "eval_success_rate": 0.3333333333333333,
+    "eval_threshold_pass_rate": 0.3333333333333333,
+    "eval_tuning_score": 333694.8383333333,
+    "gradient_norm": 1.347938895225525,
+    "imagined_rollout_steps": 0.0,
+    "loss_actor_pass1": 0.020595543086528778,
+    "loss_actor_pass2": -0.02224777080118656,
+    "loss_critic": 3.428147554397583,
+    "loss_critic_feedback": 3.428147554397583,
+    "loss_dynamics": 0.01681135967373848,
+    "loss_dynamics_patch_tokens": 0.018568778410553932,
+    "loss_dynamics_position": 0.01307688094675541,
+    "loss_dynamics_semantic_probabilities": 0.010640008375048637,
+    "loss_dynamics_state": 0.046219758689403534,
+    "loss_entropy": 0.08649154752492905,
+    "loss_imagined_dynamics": 0.0,
+    "loss_imagined_reward": 0.0,
+    "loss_imagined_rollout": 0.0,
+    "loss_policy": -0.02224777080118656,
+    "loss_representation": 0.020595543086528778,
+    "loss_reward": 2.0738511085510254,
+    "loss_total": 0.2537318170070648,
+    "loss_value": 0.9998676776885986,
+    "loss_world_model": 0.01681135967373848,
+    "mean_return": -2.2649999999999992,
+    "target_network_active": 0.0,
+    "target_network_drift": 0.0,
+    "target_network_instability": 0.027899064123630524,
+    "target_network_tau": 0.009999999776482582
+  },
+  "model_name": "block_smb_actor_world_model_critic",
+  "specs": {
+    "architecture": {
+      "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+      "checkpoint_model_name": "agent_world_model_critic",
+      "configurable_hyperparameters": {
+        "controller_schedule": "constant",
+        "hidden_dim": 64
+      },
+      "name": "agent_world_model_critic",
+      "output_contract": "agent_world_model_critic.forward.v1",
+      "supported_stage_names": [
+        "synthetic_1d",
+        "block_smb",
+        "full_smb",
+        "pong_block"
+      ]
+    },
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "stage": {
+      "name": "block_smb",
+      "ratio_bc": 4,
+      "seq_len_a": 8,
+      "seq_len_b": 16,
+      "seq_len_c": 64,
+      "vocab_size": 20
+    }
+  },
+  "stage": "block_smb",
+  "state_keys": [
+    "model",
+    "numpy_rng",
+    "optimizer",
+    "python_rng",
+    "torch_rng"
+  ]
+}

@@ -87,6 +87,62 @@ class TestBlockSMBPhysics(unittest.TestCase):
         finally:
             env.close()
 
+    def test_jump_started_gap_fall_adds_gap_jump_penalty(self):
+        env = self.make_env(
+            {
+                "mario": [82, 204],
+                "platforms": [[0, 220, 92, 20]],
+                "world_width": 256,
+            }
+        )
+        try:
+            terminated = truncated = False
+            info = None
+            for step in range(100):
+                action = 2 if step == 0 else 1
+                _, _reward, terminated, truncated, info = env.step(action)
+                if terminated or truncated:
+                    break
+
+            self.assertTrue(terminated)
+            self.assertFalse(truncated)
+            self.assertIsNotNone(info)
+            assert info is not None
+            self.assertEqual(
+                info["reward_terms"]["gap_jump"],
+                env.reward_config.gap_jump,
+            )
+            self.assertEqual(
+                info["reward_terms"]["fall_death"],
+                env.reward_config.fall_death,
+            )
+        finally:
+            env.close()
+
+    def test_non_jump_gap_fall_does_not_add_gap_jump_penalty(self):
+        env = self.make_env(
+            {
+                "mario": [110, 180],
+                "platforms": [[0, 220, 80, 20], [170, 220, 86, 20]],
+                "world_width": 256,
+            }
+        )
+        try:
+            terminated = truncated = False
+            info = None
+            for _ in range(80):
+                _, _reward, terminated, truncated, info = env.step(0)
+                if terminated or truncated:
+                    break
+
+            self.assertTrue(terminated)
+            self.assertFalse(truncated)
+            self.assertIsNotNone(info)
+            assert info is not None
+            self.assertEqual(info["reward_terms"]["gap_jump"], 0.0)
+        finally:
+            env.close()
+
     def test_moving_platform_carries_mario(self):
         env = self.make_env(
             {
@@ -234,6 +290,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
                     "enemy_stomp",
                     "goal",
                     "fall_death",
+                    "gap_jump",
                     "enemy_hit",
                     "frame_penalty",
                     "total",
@@ -261,6 +318,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
             enemy_stomp=1.0,
             goal=5.0,
             fall_death=-3.0,
+            gap_jump=-2.0,
             enemy_hit=-4.0,
             frame_penalty=-0.5,
         )

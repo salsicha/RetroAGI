@@ -375,6 +375,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(defaults["coin"], 10.0)
         self.assertEqual(defaults["goal"], 50.0)
         self.assertEqual(defaults["fall_death"], -10.0)
+        self.assertEqual(defaults["gap_jump"], -5.0)
         self.assertEqual(set(defaults), set(SMB_GAME_SPEC.reward_terms))
         self.assertEqual(SMB_REWARD_SCHEMA.term("coin").signal, "collectibles.coins")
 

@@ -133,6 +133,7 @@ REWARD_CONFIG_ARGS = {
     "reward_enemy_stomp": "enemy_stomp",
     "reward_goal": "goal",
     "reward_fall_death": "fall_death",
+    "reward_gap_jump": "gap_jump",
     "reward_enemy_hit": "enemy_hit",
     "reward_frame_penalty": "frame_penalty",
 }
@@ -192,6 +193,7 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reward-enemy-stomp", type=_non_negative_float)
     parser.add_argument("--reward-goal", type=_non_negative_float)
     parser.add_argument("--reward-fall-death", type=_non_positive_float)
+    parser.add_argument("--reward-gap-jump", type=_non_positive_float)
     parser.add_argument("--reward-enemy-hit", type=_non_positive_float)
     parser.add_argument("--reward-frame-penalty", type=_non_positive_float)
     parser.add_argument("--gradient-clip-norm", type=_positive_float)

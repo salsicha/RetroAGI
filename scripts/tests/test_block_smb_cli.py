@@ -125,6 +125,8 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "0.08",
                     "--reward-goal",
                     "75",
+                    "--reward-gap-jump",
+                    "-7",
                     "--reward-frame-penalty",
                     "-0.02",
                     "--disable-vision",
@@ -171,6 +173,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.value_loss_weight, 0.4)
         self.assertEqual(config.reward_config.progress_per_pixel, 0.08)
         self.assertEqual(config.reward_config.goal, 75.0)
+        self.assertEqual(config.reward_config.gap_jump, -7.0)
         self.assertEqual(config.reward_config.frame_penalty, -0.02)
         self.assertFalse(config.ablation.vision_enabled)
         self.assertFalse(config.ablation.world_model_enabled)
@@ -200,6 +203,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["config"]["tracking_run_name"], "smoke")
         self.assertEqual(payload["config"]["tracking_mode"], "offline")
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
+        self.assertEqual(payload["config"]["reward_config"]["gap_jump"], -7.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
         self.assertFalse(payload["config"]["ablation"]["world_model_enabled"])
         self.assertFalse(payload["vision"]["checkpoint_transfer"])

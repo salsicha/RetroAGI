@@ -46,6 +46,7 @@ class BlockSMBRewardConfig:
     enemy_stomp: float = 5.0
     goal: float = 50.0
     fall_death: float = -10.0
+    gap_jump: float = -5.0
     enemy_hit: float = -10.0
     frame_penalty: float = -0.01
 
@@ -55,7 +56,7 @@ class BlockSMBRewardConfig:
         for name in ("coin", "enemy_stomp", "goal"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
-        for name in ("fall_death", "enemy_hit", "frame_penalty"):
+        for name in ("fall_death", "gap_jump", "enemy_hit", "frame_penalty"):
             if getattr(self, name) > 0:
                 raise ValueError(f"{name} must be non-positive")
 
@@ -66,6 +67,7 @@ class BlockSMBRewardConfig:
             "enemy_stomp": 0.0,
             "goal": 0.0,
             "fall_death": 0.0,
+            "gap_jump": 0.0,
             "enemy_hit": 0.0,
             "frame_penalty": 0.0,
         }
@@ -169,6 +171,7 @@ class MarioScenarioEnv:
         self.score          = 0
         self.camera_x       = 0.0
         self._max_x_reached = 0.0
+        self._airborne_started_with_jump = False
 
         if scenario is None:
             scenario = {
@@ -283,6 +286,7 @@ class MarioScenarioEnv:
             self.mario['on_ground']    = False
             self.mario['coyote_frames'] = 0
             self.mario['jump_buffer']   = 0
+            self._airborne_started_with_jump = True
 
         # ── 4. Gravity ────────────────────────────────────────────────────────
         self.mario['vy'] += self.gravity
@@ -358,6 +362,7 @@ class MarioScenarioEnv:
         # ── 9. Coyote time bookkeeping ────────────────────────────────────────
         if self.mario['on_ground']:
             self.mario['coyote_frames'] = COYOTE_FRAMES
+            self._airborne_started_with_jump = False
         else:
             self.mario['coyote_frames'] = max(0, self.mario['coyote_frames'] - 1)
 
@@ -389,6 +394,11 @@ class MarioScenarioEnv:
         # ── 13. Fall death ────────────────────────────────────────────────────
         if self.mario['y'] > self.height:
             terminated = True
+            if (
+                self._airborne_started_with_jump
+                and not self._has_horizontal_platform_support()
+            ):
+                reward_terms["gap_jump"] += self.reward_config.gap_jump
             reward_terms["fall_death"] += self.reward_config.fall_death
 
         # ── 14. Update enemies ────────────────────────────────────────────────
@@ -503,6 +513,16 @@ class MarioScenarioEnv:
         total = float(sum(terms.values()))
         terms["total"] = total
         return total, terms
+
+    def _has_horizontal_platform_support(self) -> bool:
+        """Return whether Mario horizontally overlaps any platform surface."""
+
+        left = self.mario['x']
+        right = self.mario['x'] + self.mario['w']
+        return any(
+            right > platform['rect'].left and left < platform['rect'].right
+            for platform in self.platforms
+        )
 
     def _build_info(self, reward_terms: dict[str, float] = None) -> dict:
         """

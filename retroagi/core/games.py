@@ -505,6 +505,13 @@ SMB_REWARD_SCHEMA = RewardConfigSchema(
             description="Penalty for falling below the viewport",
         ),
         RewardTermSpec(
+            name="gap_jump",
+            default=-5.0,
+            direction="negative",
+            signal="death",
+            description="Additional penalty for jump-started falls through unsupported gaps",
+        ),
+        RewardTermSpec(
             name="enemy_hit",
             default=-10.0,
             direction="negative",
@@ -928,6 +935,7 @@ SMB_GAME_SPEC = GameSpec(
         "enemy_stomp": "positive reward for safe enemy defeat",
         "enemy_hit": "negative reward for unsafe collision",
         "fall_death": "negative terminal reward for death",
+        "gap_jump": "additional negative reward for failed gap jumps",
         "goal": "positive terminal reward for completion",
         "frame_penalty": "small per-step cost",
     },
