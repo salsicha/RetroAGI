@@ -135,7 +135,11 @@ Next steps:
       `data/full_pipeline_20260626_1450/block_smb/policy_distilled_scripted_geometry_dagger.pth`
       and
       `data/full_pipeline_20260626_1450/full_vit/full_smb_vit_ram_position_tuned_v2.pth`.
-- [ ] Run longer Full SMB fine-tuning from the distilled transfer checkpoint.
+- [x] Run longer Full SMB fine-tuning from the distilled transfer checkpoint.
+      Result: `data/full_pipeline_20260626_1450/full_smb/policy_distilled_transfer_long.pth`
+      trained from `transferred_distilled_policy.pth` for 4 curriculum epochs
+      and 2,400 emulator steps on `curriculum_1_1_opening`; mean train return
+      was 201.0 with separate-process evaluation still required.
 - [ ] Evaluate and record the distilled-transfer Full SMB policy on
       `fixed_benchmark` with at least 3 episodes and the documented 2,400 step
       budget.
