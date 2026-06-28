@@ -140,7 +140,9 @@ interchangeable training targets:
 2. **Block SMB trains the simplified game models.** Use this rung to train the
    Block ViT and the hierarchical actor/world-model/critic policy on the fast
    synthetic SMB environment, fixed scenarios, generated scenarios, and
-   deterministic success thresholds.
+   deterministic success thresholds. Fixed scenarios are regression sentinels;
+   the next Block SMB training target is the versioned Monte Carlo distribution
+   described in [block-smb-monte-carlo-curriculum.md](block-smb-monte-carlo-curriculum.md).
 3. **Full SMB asset-mock perception bootstraps the ViT.** Before any transferred
    policy uses emulator observations, train or fine-tune the Full SMB ViT on
    synthetic scenarios built from full-game assets and gate that checkpoint on
@@ -453,6 +455,13 @@ retroagi evaluate --game smb --stage block \
   --output artifacts/block_smb/latest/evaluation.json
 ```
 
+Fixed-scenario success is necessary but not the intended final transfer gate.
+When the Monte Carlo curriculum is implemented, reproduce the distribution
+evaluation with a versioned distribution ID, deterministic split seeds, and
+held-out validation/test samples. The resulting artifact should report
+per-family pass rates, coverage histograms, rejected-sample counts, and failure
+bins in addition to the fixed-scenario `success_thresholds_met` result.
+
 Record deterministic evaluation artifacts:
 
 ```bash
@@ -472,6 +481,9 @@ Expected evidence:
   `run_finished` events,
 - `evaluation.success_thresholds_met` and per-scenario `threshold_met`
   diagnostics,
+- after Monte Carlo support lands: distribution ID, train/validation/test split
+  names, sample counts, per-family pass rates, coverage histograms, and
+  held-out distribution pass rates,
 - recording `.npz` files under the record directory.
 
 The scripted known-good baseline at

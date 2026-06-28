@@ -168,6 +168,27 @@ These diagnostics are for logging, tests, and ablations. They are not separate
 trainer rewards unless a future task explicitly defines a multi-objective
 training interface.
 
+### Parameterized Scenario Distribution
+
+Fixed Block SMB scenarios are regression probes and known-good sentinels. They
+should not be the only policy-training distribution. The simplified environment
+has exact semantic masks, exact symbolic state, deterministic physics, and fast
+reset, so it should provide the high-volume Monte Carlo training data before a
+policy is promoted to Full SMB.
+
+The target contract is a versioned parameterized distribution of scenario
+families: flat runs, gaps, stairs, platform chains, moving bridges, enemy hops,
+enemy patrols, enemy-gap combinations, enemy stomps, retreat/recovery states,
+wait-timing tasks, and mixed sections. Each sampled scenario should record its
+distribution ID, family, split, seed, sampled parameters, constraints, and
+oracle/reachability metadata.
+
+Training should sample from train splits, tune on held-out validation splits,
+and report final test-split results separately from fixed-scenario thresholds.
+Promotion to Full SMB should require both fixed-scenario success and
+distribution-level coverage metrics. The detailed implementation plan lives in
+[block-smb-monte-carlo-curriculum.md](block-smb-monte-carlo-curriculum.md).
+
 ### Training And Evaluation
 
 `train_and_evaluate_block_smb` is the supported P3 trainer entry point. It uses

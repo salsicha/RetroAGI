@@ -6,6 +6,13 @@ than a single lucky goal collision: each scenario must be solved repeatedly,
 within a bounded time budget, and with enough return to show the policy is not
 paying avoidable penalties.
 
+Fixed scenarios are deterministic sentinels, not the final training
+distribution. The Block SMB rung is expected to do most policy, world-model, and
+motor-controller training in the simplified ground-truth environment, so the
+next promotion gate is a parameterized Monte Carlo scenario distribution. See
+[block-smb-monte-carlo-curriculum.md](block-smb-monte-carlo-curriculum.md) for
+the implementation plan.
+
 The machine-readable source of truth is
 `retroagi.stages.block_smb.success.FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS`.
 
@@ -71,6 +78,12 @@ Each fixed scenario result includes:
 
 The top-level evaluation result includes `success_thresholds_met`, which is
 true only when every fixed scenario passes its threshold.
+
+After the Monte Carlo curriculum is implemented, fixed-scenario success remains
+required but no longer sufficient for promotion into Full SMB. A transfer-source
+checkpoint must also report held-out distribution metrics: validation/test pass
+rate, per-family pass rate, coverage histograms, and failure bins for the
+versioned Block SMB distribution it trained on.
 
 ## Tuning Reward And Training Settings
 

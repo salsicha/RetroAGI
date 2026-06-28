@@ -55,7 +55,9 @@ actor/world-model/critic flow.
 - **Block SMB** is the simplified synthetic game-training stage. It has a
   pygame-ce environment, fixed success thresholds, Block ViT perception, policy
   training, evaluation, resume, recording, ablations, structured logs, and
-  optional TensorBoard or W&B tracking.
+  optional TensorBoard or W&B tracking. The next Block SMB expansion is a
+  versioned Monte Carlo scenario distribution so most policy training happens
+  over parameterized ground-truth tasks rather than a small fixed-scenario set.
 - **Full SMB** has the asset-mock ViT bootstrapping rung, a stable-retro stage
   adapter, headless smoke evaluation, Block SMB policy transfer, continued Full
   SMB training, transfer-vs-scratch comparison tooling, and a documented local
@@ -79,6 +81,10 @@ rewards, episode endings, and resets across the curriculum.
 
 The [Block SMB success thresholds](docs/block-smb-success-thresholds.md) define
 the deterministic fixed-scenario bar for considering a policy known-good.
+The [Block SMB Monte Carlo curriculum plan](docs/block-smb-monte-carlo-curriculum.md)
+defines the next generalization gate: parameterized scenario families, sampled
+train/validation/test splits, coverage metrics, and distribution-level
+promotion criteria.
 The current known-good baseline is a scripted policy artifact at
 `artifacts/block_smb/known_good_scripted_seed20260622/`.
 Full SMB cannot commit ROM-derived emulator artifacts, so its checked-in

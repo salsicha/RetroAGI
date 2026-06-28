@@ -32,6 +32,11 @@ Current result:
 - Block SMB now has a transferable distilled neural checkpoint that passes all
       nine fixed scenarios, including enemy, moving-platform, enemy-gap, and
       enemy-stomp coverage.
+- Block SMB fixed-scenario coverage is no longer considered sufficient for
+      transfer-source quality by itself. The next Block SMB generalization task
+      is a versioned parameterized Monte Carlo scenario distribution, so most
+      simplified-game training happens over sampled ground-truth scenarios
+      rather than a small memorized scenario set.
 - Full SMB ViT uses the RAM-position-tuned checkpoint with diagnostic-passing
       semantic and position metrics.
 - Full SMB transfer and short fine-tuning from the nine-scenario Block SMB
@@ -424,6 +429,44 @@ uses it to complete scenarios.
 
 **Exit criteria:** a seeded Block SMB checkpoint resumes correctly and completes
 all fixed scenarios at a documented success threshold.
+
+## P3A: Parameterized Block SMB Monte Carlo Curriculum
+
+Fixed scenarios are now regression sentinels, not the complete Block SMB
+training distribution. The simplified Block SMB rung should generate most
+policy, world-model, and motor-controller training data from versioned
+parameterized scenario families with exact semantic and symbolic ground truth.
+
+- [x] Document the Monte Carlo curriculum design, including scenario families,
+      parameter schema, splits, coverage metrics, gates, artifacts, and
+      promotion requirements.
+- [ ] Define a versioned Block SMB scenario-family schema with distribution ID,
+      family name, split, seed, sampled parameters, constraints, and
+      oracle/reachability metadata.
+- [ ] Replace the loose `generated_scenarios` path with a deterministic sampler
+      keyed by `(distribution_id, split, seed, sample_index)`.
+- [ ] Add family specs for flat runs, single gaps, stair climbs, platform
+      chains, moving bridges, enemy hops, enemy patrols, enemy-gap combinations,
+      enemy stomps, retreat/recovery states, wait-timing tasks, and mixed
+      sections.
+- [ ] Add reachability/oracle validation that rejects impossible sampled levels
+      before they enter training or evaluation.
+- [ ] Add train/validation/test/stress splits with replayable scenario IDs and
+      deterministic seed manifests.
+- [ ] Add Monte Carlo training integration with family-balanced sampling,
+      curriculum weights, and adaptive replay of recent failure bins.
+- [ ] Add coverage histograms, rejected-sample counts, per-family pass rates,
+      per-bin failure summaries, and action-distribution diagnostics to Block
+      SMB summaries and structured logs.
+- [ ] Add held-out Monte Carlo validation and test evaluation commands.
+- [ ] Extend Block SMB distillation so teacher/oracle trajectories can be
+      generated from sampled scenarios, not only fixed scripted scenarios.
+- [ ] Require fixed-scenario pass rate `1.0` plus held-out Monte Carlo gates
+      before using a Block SMB checkpoint as a Full SMB transfer source.
+
+**Exit criteria:** a Block SMB checkpoint passes the fixed-scenario gate and a
+versioned held-out Monte Carlo distribution gate with documented per-family
+coverage, failure bins, sample counts, seeds, and replayable scenario IDs.
 
 ## P4: Complete the Learning System
 
