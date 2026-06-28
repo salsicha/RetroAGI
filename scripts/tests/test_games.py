@@ -6,39 +6,39 @@ import numpy as np
 
 from retroagi.core import (
     BACKEND_PROVIDER_KINDS,
-    GAME_SPECS,
     GAME_PLUGIN_REGISTRY,
+    GAME_SPECS,
+    OPTIONAL_STAGE_NAMES,
+    PERCEPTION_DATASET_SOURCE_KINDS,
     PONG_ACTION_SPECS,
     PONG_BLOCK_GAME_SPEC,
-    PONG_GAME_SPEC,
     PONG_GAME_PLUGIN,
+    PONG_GAME_SPEC,
     PONG_REWARD_SCHEMA,
     PONG_SYNTHETIC_DATA_SPECS,
     PONG_TASK_SCHEMA,
     SMB_ACTIONS,
     SMB_BLOCK_GAME_SPEC,
-    SMB_GAME_SPEC,
     SMB_GAME_PLUGIN,
+    SMB_GAME_SPEC,
     SMB_REWARD_SCHEMA,
     SMB_SYNTHETIC_DATA_SPECS,
     SMB_TASK_SCHEMA,
+    STANDARD_STAGE_NAMES,
     ActionSpec,
     AssetChecklistItem,
     AssetRequirement,
     BackendCapabilitySpec,
     BlockGameSpec,
+    GameBackendSpec,
     GamePluginRegistry,
     GamePluginSpec,
     GamePromotionGateSpec,
-    GameBackendSpec,
     GameSpec,
     GameTaskSchema,
     GameTaskSpec,
-    OPTIONAL_STAGE_NAMES,
-    PERCEPTION_DATASET_SOURCE_KINDS,
     PerceptionDatasetSourceSpec,
     PerceptionPipelineSpec,
-    STANDARD_STAGE_NAMES,
     RewardConfigSchema,
     RewardTermSpec,
     SemanticVocabularySpec,
@@ -210,9 +210,7 @@ class TestGameSpec(unittest.TestCase):
             "scripts.vit.extract_sprites",
         )
         block_perception = plugin.perception_pipeline("block")
-        full_asset_perception = GAME_PLUGIN_REGISTRY.perception_pipeline(
-            "smb", "full_asset_mock"
-        )
+        full_asset_perception = GAME_PLUGIN_REGISTRY.perception_pipeline("smb", "full_asset_mock")
         self.assertEqual(block_perception.stage_name, "block")
         self.assertEqual(
             block_perception.checkpoint_path,
@@ -221,10 +219,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(block_perception.semantic_vocabulary.class_index("mario"), 1)
         self.assertEqual(
             block_perception.asset_extraction,
-            (
-                "retroagi.stages.block_smb.vision.BlockVisionTransformer."
-                "semantic_targets"
-            ),
+            ("retroagi.stages.block_smb.vision.BlockVisionTransformer." "semantic_targets"),
         )
         self.assertEqual(
             block_perception.synthetic_frame_composition,
@@ -235,10 +230,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertFalse(block_perception.supports_source_kind("asset_synthetic"))
         self.assertEqual(
             block_perception.dataset_sources[0].label_source,
-            (
-                "MarioScenarioEnv symbolic state and "
-                "BlockVisionTransformer palette targets"
-            ),
+            ("MarioScenarioEnv symbolic state and " "BlockVisionTransformer palette targets"),
         )
         self.assertEqual(full_asset_perception.stage_name, "full_asset_mock")
         self.assertEqual(
@@ -507,11 +499,7 @@ class TestGameSpec(unittest.TestCase):
                 "level_12_wait_bridge.json",
             ),
         )
-        self.assertTrue(
-            spec.fixed_scenario_source("level_2_gap.json").endswith(
-                "level_2_gap.json"
-            )
-        )
+        self.assertTrue(spec.fixed_scenario_source("level_2_gap.json").endswith("level_2_gap.json"))
         self.assertEqual(
             tuple(task.name for task in SMB_GAME_SPEC.fixed_tasks),
             spec.fixed_scenario_names,
@@ -523,9 +511,7 @@ class TestGameSpec(unittest.TestCase):
 
     def test_smb_asset_checklist_covers_assets_and_generated_data(self):
         spec = SMB_GAME_SPEC
-        required_targets = {
-            item.target for item in spec.asset_checklist if item.required
-        }
+        required_targets = {item.target for item in spec.asset_checklist if item.required}
 
         self.assertIn("smb_sprites", required_targets)
         self.assertIn("smb_rom", required_targets)
@@ -929,9 +915,7 @@ class TestGameSpec(unittest.TestCase):
                 game=SMB_GAME_SPEC,
                 stage_adapters={"block": "unit.Adapter"},
                 vision_encoders={"block": "unit.Vision"},
-                success_thresholds={
-                    "missing.json": TaskSuccessThreshold(1.0, 0.0, 1, 10, "unit")
-                },
+                success_thresholds={"missing.json": TaskSuccessThreshold(1.0, 0.0, 1, 10, "unit")},
             )
 
         with self.assertRaisesRegex(ValueError, "promotion gate keys"):
@@ -940,9 +924,7 @@ class TestGameSpec(unittest.TestCase):
                 game=SMB_GAME_SPEC,
                 stage_adapters={"block": "unit.Adapter"},
                 vision_encoders={"block": "unit.Vision"},
-                promotion_gates={
-                    "block-smb-smoke": GamePromotionGateSpec("synthetic-concept")
-                },
+                promotion_gates={"block-smb-smoke": GamePromotionGateSpec("synthetic-concept")},
             )
 
         with self.assertRaisesRegex(ValueError, "unknown stage"):

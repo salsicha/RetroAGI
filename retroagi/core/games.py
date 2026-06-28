@@ -8,7 +8,11 @@ from typing import Any, Mapping, Sequence
 from .actions import (
     SMB_ACTION_SPECS,
     ActionSpec,
+)
+from .actions import (
     action_backend_id as _action_backend_id,
+)
+from .actions import (
     action_button_vector as _action_button_vector,
 )
 from .backends import BackendCapabilitySpec, GameBackendSpec
@@ -55,31 +59,19 @@ class AssetChecklistItem:
         if not self.name:
             raise ValueError("asset checklist item name must be non-empty")
         if not self.target:
-            raise ValueError(
-                f"asset checklist item {self.name!r} must define target"
-            )
+            raise ValueError(f"asset checklist item {self.name!r} must define target")
         if not self.stage_names:
-            raise ValueError(
-                f"asset checklist item {self.name!r} must define stage_names"
-            )
+            raise ValueError(f"asset checklist item {self.name!r} must define stage_names")
         empty_stages = [stage for stage in self.stage_names if not stage]
         if empty_stages:
-            raise ValueError(
-                f"asset checklist item {self.name!r} stage_names must be non-empty"
-            )
+            raise ValueError(f"asset checklist item {self.name!r} stage_names must be non-empty")
         if not self.evidence:
-            raise ValueError(
-                f"asset checklist item {self.name!r} must define evidence"
-            )
+            raise ValueError(f"asset checklist item {self.name!r} must define evidence")
         empty_evidence = [item for item in self.evidence if not item]
         if empty_evidence:
-            raise ValueError(
-                f"asset checklist item {self.name!r} evidence must be non-empty"
-            )
+            raise ValueError(f"asset checklist item {self.name!r} evidence must be non-empty")
         if not self.policy:
-            raise ValueError(
-                f"asset checklist item {self.name!r} must define policy"
-            )
+            raise ValueError(f"asset checklist item {self.name!r} must define policy")
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -145,25 +137,15 @@ class BlockGameSpec:
         if not self.physics:
             raise ValueError(f"block game spec {self.name!r} must define physics")
         if not self.observation_kind:
-            raise ValueError(
-                f"block game spec {self.name!r} must define observation_kind"
-            )
+            raise ValueError(f"block game spec {self.name!r} must define observation_kind")
         if not self.symbolic_state:
-            raise ValueError(
-                f"block game spec {self.name!r} must define symbolic_state"
-            )
+            raise ValueError(f"block game spec {self.name!r} must define symbolic_state")
         if not self.semantic_classes:
-            raise ValueError(
-                f"block game spec {self.name!r} must define semantic_classes"
-            )
+            raise ValueError(f"block game spec {self.name!r} must define semantic_classes")
         if not self.exact_label_sources:
-            raise ValueError(
-                f"block game spec {self.name!r} must define exact_label_sources"
-            )
+            raise ValueError(f"block game spec {self.name!r} must define exact_label_sources")
         if not self.fixed_scenarios:
-            raise ValueError(
-                f"block game spec {self.name!r} must define fixed_scenarios"
-            )
+            raise ValueError(f"block game spec {self.name!r} must define fixed_scenarios")
         if not self.procedural_scenario_generator:
             raise ValueError(
                 f"block game spec {self.name!r} must define procedural_scenario_generator"
@@ -179,17 +161,13 @@ class BlockGameSpec:
         try:
             return self.fixed_scenarios[name]
         except KeyError as exc:
-            raise KeyError(
-                f"unknown fixed block scenario {name!r} for {self.name!r}"
-            ) from exc
+            raise KeyError(f"unknown fixed block scenario {name!r} for {self.name!r}") from exc
 
     def exact_label_source(self, name: str) -> str:
         try:
             return self.exact_label_sources[name]
         except KeyError as exc:
-            raise KeyError(
-                f"unknown exact label source {name!r} for {self.name!r}"
-            ) from exc
+            raise KeyError(f"unknown exact label source {name!r} for {self.name!r}") from exc
 
 
 @dataclass(frozen=True)
@@ -253,8 +231,7 @@ class GameSpec:
         expected = list(range(len(ids)))
         if ids != expected:
             raise ValueError(
-                f"game {self.name!r} action stable IDs must be contiguous from zero; "
-                f"got {ids}"
+                f"game {self.name!r} action stable IDs must be contiguous from zero; " f"got {ids}"
             )
         names = [action.name for action in self.action_space]
         if len(set(names)) != len(names):
@@ -266,9 +243,7 @@ class GameSpec:
             raise ValueError(f"game {self.name!r} stage ladder names must be unique")
         unknown = sorted(set(names).difference(STANDARD_STAGE_NAMES))
         if unknown:
-            raise ValueError(
-                f"game {self.name!r} stage ladder uses non-standard names: {unknown}"
-            )
+            raise ValueError(f"game {self.name!r} stage ladder uses non-standard names: {unknown}")
         if self.stage_ladder[0].name != "synthetic":
             raise ValueError(f"game {self.name!r} stage ladder must start with synthetic")
         if self.stage_ladder[-1].name != "full":
@@ -279,8 +254,7 @@ class GameSpec:
             return
         if self.reward_schema.game_name != self.name:
             raise ValueError(
-                f"game {self.name!r} reward schema is for "
-                f"{self.reward_schema.game_name!r}"
+                f"game {self.name!r} reward schema is for " f"{self.reward_schema.game_name!r}"
             )
         schema_terms = set(self.reward_schema.term_names)
         described_terms = set(self.reward_terms)
@@ -314,8 +288,7 @@ class GameSpec:
         for spec in self.synthetic_data:
             if spec.game_name != self.name:
                 raise ValueError(
-                    f"game {self.name!r} synthetic data {spec.name!r} is for "
-                    f"{spec.game_name!r}"
+                    f"game {self.name!r} synthetic data {spec.name!r} is for " f"{spec.game_name!r}"
                 )
             if spec.stage_name not in stage_names:
                 raise ValueError(
@@ -348,9 +321,7 @@ class GameSpec:
 
         names = [item.name for item in self.asset_checklist]
         if len(set(names)) != len(names):
-            raise ValueError(
-                f"game {self.name!r} asset checklist item names must be unique"
-            )
+            raise ValueError(f"game {self.name!r} asset checklist item names must be unique")
 
         asset_names = {asset.name for asset in self.asset_requirements}
         synthetic_names = {spec.name for spec in self.synthetic_data}
@@ -369,9 +340,7 @@ class GameSpec:
                     f"references unknown stages: {unknown_stages}"
                 )
 
-        required_targets = {
-            item.target for item in self.asset_checklist if item.required
-        }
+        required_targets = {item.target for item in self.asset_checklist if item.required}
         missing_assets = sorted(
             asset.name
             for asset in self.asset_requirements
@@ -383,12 +352,9 @@ class GameSpec:
                 f"assets: {missing_assets}"
             )
         if self.synthetic_data and not (
-            "generated_data" in required_targets
-            or required_targets.intersection(synthetic_names)
+            "generated_data" in required_targets or required_targets.intersection(synthetic_names)
         ):
-            raise ValueError(
-                f"game {self.name!r} asset checklist must cover generated data"
-            )
+            raise ValueError(f"game {self.name!r} asset checklist must cover generated data")
 
     @property
     def action_count(self) -> int:
@@ -545,8 +511,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_episodes=3,
                 max_steps=200,
                 rationale=(
-                    "Flat run: reach the goal reliably without relying on one "
-                    "lucky rollout."
+                    "Flat run: reach the goal reliably without relying on one " "lucky rollout."
                 ),
             ),
             description="Flat fixed Block SMB scenario",
@@ -564,8 +529,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_episodes=3,
                 max_steps=200,
                 rationale=(
-                    "Gap run: cross the gap and reach the goal reliably within "
-                    "the time budget."
+                    "Gap run: cross the gap and reach the goal reliably within " "the time budget."
                 ),
             ),
             description="Gap fixed Block SMB scenario",
@@ -583,8 +547,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_episodes=3,
                 max_steps=200,
                 rationale=(
-                    "Stair run: climb the stepped platforms and reach the "
-                    "elevated goal."
+                    "Stair run: climb the stepped platforms and reach the " "elevated goal."
                 ),
             ),
             description="Stairs fixed Block SMB scenario",
@@ -602,8 +565,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_episodes=3,
                 max_steps=200,
                 rationale=(
-                    "Platform run: traverse separated platforms and reach the "
-                    "final goal."
+                    "Platform run: traverse separated platforms and reach the " "final goal."
                 ),
             ),
             description="Separated-platform fixed Block SMB scenario",
@@ -726,10 +688,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
             name="level_11_left_jump_recovery.json",
             stage_name="block_smb",
             task_type="fixed",
-            source=(
-                "retroagi/stages/block_smb/scenarios/"
-                "level_11_left_jump_recovery.json"
-            ),
+            source=("retroagi/stages/block_smb/scenarios/" "level_11_left_jump_recovery.json"),
             reset_seed=101_011,
             curriculum_stage=11,
             success_threshold=TaskSuccessThreshold(
@@ -856,21 +815,15 @@ SMB_BLOCK_GAME_SPEC = BlockGameSpec(
         "level_1_flat.json": "retroagi/stages/block_smb/scenarios/level_1_flat.json",
         "level_2_gap.json": "retroagi/stages/block_smb/scenarios/level_2_gap.json",
         "level_3_stairs.json": "retroagi/stages/block_smb/scenarios/level_3_stairs.json",
-        "level_4_platforms.json": (
-            "retroagi/stages/block_smb/scenarios/level_4_platforms.json"
-        ),
-        "level_5_enemy_hop.json": (
-            "retroagi/stages/block_smb/scenarios/level_5_enemy_hop.json"
-        ),
+        "level_4_platforms.json": ("retroagi/stages/block_smb/scenarios/level_4_platforms.json"),
+        "level_5_enemy_hop.json": ("retroagi/stages/block_smb/scenarios/level_5_enemy_hop.json"),
         "level_6_enemy_patrol.json": (
             "retroagi/stages/block_smb/scenarios/level_6_enemy_patrol.json"
         ),
         "level_7_moving_bridge.json": (
             "retroagi/stages/block_smb/scenarios/level_7_moving_bridge.json"
         ),
-        "level_8_enemy_gap.json": (
-            "retroagi/stages/block_smb/scenarios/level_8_enemy_gap.json"
-        ),
+        "level_8_enemy_gap.json": ("retroagi/stages/block_smb/scenarios/level_8_enemy_gap.json"),
         "level_9_enemy_stomp.json": (
             "retroagi/stages/block_smb/scenarios/level_9_enemy_stomp.json"
         ),
@@ -1005,8 +958,7 @@ SMB_GAME_SPEC = GameSpec(
             required=True,
             local_path="assets/sprites/",
             provenance=(
-                "Extracted by scripts/vit/extract_sprites.py from documented "
-                "SMB sprite sources"
+                "Extracted by scripts/vit/extract_sprites.py from documented " "SMB sprite sources"
             ),
             license_notes="Record upstream source and usage terms before committing assets",
         ),
@@ -1276,12 +1228,8 @@ PONG_BLOCK_GAME_SPEC = BlockGameSpec(
         "position": "PongBlockEnv.ball_and_paddle_targets",
     },
     fixed_scenarios={
-        "centered_return": (
-            "retroagi/stages/pong_block/scenarios/centered_return.json"
-        ),
-        "angled_return": (
-            "retroagi/stages/pong_block/scenarios/angled_return.json"
-        ),
+        "centered_return": ("retroagi/stages/pong_block/scenarios/centered_return.json"),
+        "angled_return": ("retroagi/stages/pong_block/scenarios/angled_return.json"),
     },
     procedural_scenario_generator="PongBlockEnv.generate_rally",
     reset_modes=("fixed_scenario", "procedural_seed"),
