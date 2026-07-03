@@ -161,6 +161,7 @@ class RamPositionRetroEnv(GymnasiumRetroEnv):
     def __init__(self):
         super().__init__()
         self.ram = np.zeros(2048, dtype=np.uint8)
+        self.ram[0x6D] = 0
         self.ram[0x86] = 40
         self.ram[0xCE] = 176
 
@@ -169,6 +170,7 @@ class RamPositionRetroEnv(GymnasiumRetroEnv):
 
     def reset(self, seed=None):
         self.reset_seed = seed
+        self.ram[0x6D] = 0
         self.ram[0x86] = 40
         self.ram[0xCE] = 176
         return (
@@ -178,6 +180,7 @@ class RamPositionRetroEnv(GymnasiumRetroEnv):
 
     def step(self, action):
         self.actions.append(np.asarray(action))
+        self.ram[0x6D] = 1
         self.ram[0x86] = 48
         self.ram[0xCE] = 160
         return (
@@ -618,10 +621,16 @@ class TestFullSMBStage(unittest.TestCase):
             info["vision_position_target_raw"]["player_screen_y_address"],
             0xCE,
         )
+        self.assertEqual(
+            info["vision_position_target_raw"]["player_level_page_address"],
+            0x6D,
+        )
         self.assertEqual(info["player_screen_x"], 48.0)
         self.assertEqual(info["player_screen_y"], 160.0)
-        self.assertEqual(info["full_smb_signals"]["position"], (60.0, 160.0))
-        self.assertEqual(info["full_smb_signals"]["progress"], 60.0)
+        self.assertEqual(info["player_level_page"], 1.0)
+        self.assertEqual(info["player_level_x"], 304.0)
+        self.assertEqual(info["full_smb_signals"]["position"], (304.0, 160.0))
+        self.assertEqual(info["full_smb_signals"]["progress"], 304.0)
 
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):

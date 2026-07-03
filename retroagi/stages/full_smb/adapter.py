@@ -418,8 +418,16 @@ SCREEN_KEYS = ("screen", "screen_position", "screen_pos")
 
 SMB_RAM_PLAYER_SCREEN_X = 0x86
 SMB_RAM_PLAYER_SCREEN_Y = 0xCE
+SMB_RAM_PLAYER_LEVEL_PAGE = 0x6D
 SMB_SCREEN_WIDTH = 256.0
 SMB_SCREEN_HEIGHT = 240.0
+PLAYER_LEVEL_X_KEYS = (
+    "player_level_x",
+    "mario_level_x",
+    "level_x",
+    "absolute_x",
+    "abs_x",
+)
 SCREEN_X_KEYS = ("screen_x", "screenX", "x_screen", "player_screen_x", "mario_screen_x")
 SCREEN_Y_KEYS = ("screen_y", "screenY", "y_screen", "player_screen_y", "mario_screen_y")
 SCROLL_X_KEYS = ("xscroll", "x_scroll", "scroll_x", "camera_x", "scrolling")
@@ -898,6 +906,8 @@ class FullSMBStage:
             return
         screen_x = float(ram[SMB_RAM_PLAYER_SCREEN_X])
         screen_y = float(ram[SMB_RAM_PLAYER_SCREEN_Y])
+        level_page = float(ram[SMB_RAM_PLAYER_LEVEL_PAGE]) if ram.size > SMB_RAM_PLAYER_LEVEL_PAGE else 0.0
+        level_x = level_page * SMB_SCREEN_WIDTH + screen_x
         target = np.asarray(
             [
                 _normalize_feature(screen_x, SMB_SCREEN_WIDTH),
@@ -912,9 +922,14 @@ class FullSMBStage:
             "player_screen_y_address": SMB_RAM_PLAYER_SCREEN_Y,
             "player_screen_x": screen_x,
             "player_screen_y": screen_y,
+            "player_level_page_address": SMB_RAM_PLAYER_LEVEL_PAGE,
+            "player_level_page": level_page,
+            "player_level_x": level_x,
         }
         info.setdefault("player_screen_x", screen_x)
         info.setdefault("player_screen_y", screen_y)
+        info.setdefault("player_level_page", level_page)
+        info.setdefault("player_level_x", level_x)
 
     def _reward_terms(
         self,
@@ -1054,6 +1069,11 @@ def _death_boundary_reason(
 
 
 def _position_value(info: Mapping[str, Any]) -> Optional[tuple[float, float]]:
+    level_x = _numeric_value(info, PLAYER_LEVEL_X_KEYS)
+    if level_x is not None:
+        y = _numeric_value(info, POSITION_Y_KEYS)
+        return (level_x, y if y is not None else _fallback_position_y(info))
+
     direct = _value_for_keys(info, ("position",))
     if isinstance(direct, Mapping):
         x = _numeric_value(direct, POSITION_X_KEYS)
