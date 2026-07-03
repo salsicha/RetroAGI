@@ -29,6 +29,7 @@ from .train import (
     BlockSMBAblationConfig,
     BlockSMBTrainingConfig,
     block_smb_architecture_metadata,
+    evaluate_block_smb_monte_carlo,
     make_block_smb_model,
     restore_block_smb_checkpoint,
     train_and_evaluate_block_smb,
@@ -268,6 +269,26 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         type=_non_negative_int,
         help="maximum unreachable samples to reject per Monte Carlo sample index",
     )
+    parser.add_argument(
+        "--monte-carlo-validation-samples",
+        type=_non_negative_int,
+        help="held-out validation samples to attach to Block SMB evaluation",
+    )
+    parser.add_argument(
+        "--monte-carlo-test-samples",
+        type=_non_negative_int,
+        help="held-out test samples to attach to Block SMB evaluation",
+    )
+    parser.add_argument(
+        "--monte-carlo-pass-rate-gate",
+        type=float,
+        help="minimum held-out Monte Carlo pass rate for promotion gating",
+    )
+    parser.add_argument(
+        "--monte-carlo-family-pass-rate-gate",
+        type=float,
+        help="minimum per-family Monte Carlo pass rate for promotion gating",
+    )
     parser.set_defaults(monte_carlo_validate_reachability=None)
     parser.add_argument(
         "--validate-monte-carlo-reachability",
@@ -414,6 +435,24 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--checkpoint", type=Path, required=True)
     record.add_argument("--record-dir", type=Path, default=DEFAULT_RECORD_DIR)
 
+    evaluate_monte_carlo = subparsers.add_parser(
+        "evaluate-monte-carlo",
+        help="evaluate a saved Block SMB checkpoint on a held-out Monte Carlo split",
+    )
+    _add_common_config_args(evaluate_monte_carlo)
+    evaluate_monte_carlo.add_argument("--checkpoint", type=Path, required=True)
+    evaluate_monte_carlo.add_argument(
+        "--split",
+        choices=("train", "validation", "test", "stress"),
+        default="validation",
+    )
+    evaluate_monte_carlo.add_argument(
+        "--samples",
+        type=_positive_int,
+        help="number of sampled scenarios to evaluate; defaults to split config",
+    )
+    evaluate_monte_carlo.add_argument("--record-dir", type=Path)
+
     diagnose = subparsers.add_parser(
         "diagnose-vision",
         help="measure Block ViT semantic and position quality on procedural frames",
@@ -501,6 +540,10 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "monte_carlo_family_weight",
         "monte_carlo_validate_reachability",
         "monte_carlo_max_rejections",
+        "monte_carlo_validation_samples",
+        "monte_carlo_test_samples",
+        "monte_carlo_pass_rate_gate",
+        "monte_carlo_family_pass_rate_gate",
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",
@@ -619,6 +662,11 @@ def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(architecture_config, Mapping):
             raise TypeError("architecture_config must be a mapping")
         normalized["architecture_config"] = dict(architecture_config)
+    if normalized.get("monte_carlo_family_weights") is not None:
+        family_weights = normalized["monte_carlo_family_weights"]
+        if not isinstance(family_weights, Mapping):
+            raise TypeError("monte_carlo_family_weights must be a mapping")
+        normalized["monte_carlo_family_weights"] = dict(family_weights)
     return normalized
 
 
@@ -837,6 +885,62 @@ def _run_action_probe(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _monte_carlo_cli_sample_count(
+    config: BlockSMBTrainingConfig,
+    *,
+    split: str,
+    explicit_samples: int | None,
+) -> int:
+    if explicit_samples is not None:
+        return explicit_samples
+    if split == "validation" and config.monte_carlo_validation_samples > 0:
+        return config.monte_carlo_validation_samples
+    if split == "test" and config.monte_carlo_test_samples > 0:
+        return config.monte_carlo_test_samples
+    if config.monte_carlo_train_samples_per_epoch > 0:
+        return config.monte_carlo_train_samples_per_epoch
+    if config.generated_scenarios > 0:
+        return config.generated_scenarios
+    return len(BLOCK_SMB_MC_FAMILIES)
+
+
+def _run_monte_carlo_evaluation(args: argparse.Namespace) -> dict[str, Any]:
+    config = _make_checkpoint_config(args, record=False)
+    device = select_device(config.device)
+    model = make_block_smb_model(config).to(device)
+    restore_block_smb_checkpoint(
+        args.checkpoint,
+        model,
+        map_location=device,
+        architecture_name=config.architecture_name,
+        architecture_config=config.architecture_config,
+    )
+    vision_factory, vision_info = _make_vision_factory(
+        config,
+        getattr(args, "vision_checkpoint", None),
+    )
+    evaluation = evaluate_block_smb_monte_carlo(
+        model,
+        config,
+        split=args.split,
+        sample_count=_monte_carlo_cli_sample_count(
+            config,
+            split=args.split,
+            explicit_samples=args.samples,
+        ),
+        device=device,
+        vision_factory=vision_factory,
+        record_dir=args.record_dir,
+    )
+    return {
+        "config": to_plain_data(config),
+        "checkpoint": {"path": str(args.checkpoint)},
+        "architecture": block_smb_architecture_metadata(config),
+        "vision": vision_info,
+        "evaluation": evaluation,
+    }
+
+
 def _public_result(
     result: Mapping[str, Any],
     config: BlockSMBTrainingConfig,
@@ -863,6 +967,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         config = _make_checkpoint_config(args, record=False)
     elif args.command == "record":
         config = _make_checkpoint_config(args, record=True)
+    elif args.command == "evaluate-monte-carlo":
+        return _run_monte_carlo_evaluation(args)
     elif args.command == "diagnose-vision":
         return _run_vision_diagnostic(args)
     elif args.command == "diagnose-actions":

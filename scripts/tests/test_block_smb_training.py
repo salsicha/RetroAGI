@@ -29,6 +29,8 @@ from retroagi.stages.block_smb import (
     BlockSMBTrainingConfig,
     SequentialBlockSMBVectorEnv,
     build_curriculum,
+    evaluate_block_smb,
+    evaluate_block_smb_monte_carlo,
     summarize_block_smb_curriculum,
     restore_block_smb_checkpoint,
     train_and_evaluate_block_smb,
@@ -472,6 +474,47 @@ class TestBlockSMBTraining(unittest.TestCase):
             optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
             restored = restore_block_smb_checkpoint(checkpoint, model, optimizer)
             self.assertEqual(restored["epoch"], 2)
+
+    def test_monte_carlo_evaluation_reports_coverage_bins_and_gates(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            monte_carlo_validation_samples=len(BLOCK_SMB_MC_FAMILIES),
+            monte_carlo_pass_rate_gate=0.1,
+            monte_carlo_family_pass_rate_gate=0.1,
+        )
+        model = make_block_smb_model(config)
+
+        evaluation = evaluate_block_smb_monte_carlo(
+            model,
+            config,
+            split="validation",
+            sample_count=len(BLOCK_SMB_MC_FAMILIES),
+            device=torch.device("cpu"),
+            vision_factory=static_vision_factory,
+        )
+
+        self.assertEqual(evaluation["sample_count"], len(BLOCK_SMB_MC_FAMILIES))
+        self.assertEqual(set(evaluation["families"]), set(BLOCK_SMB_MC_FAMILIES))
+        self.assertFalse(evaluation["coverage"]["missing_families"])
+        self.assertIn("action_counts", evaluation)
+        self.assertIn("failure_bins", evaluation)
+        self.assertIn("gates", evaluation)
+        self.assertFalse(evaluation["gates"]["gate_met"])
+        for family in BLOCK_SMB_MC_FAMILIES:
+            self.assertIn("success_rate", evaluation["families"][family])
+            self.assertIn("action_counts", evaluation["families"][family])
+
+        full_evaluation = evaluate_block_smb(
+            model,
+            config,
+            device=torch.device("cpu"),
+            vision_factory=static_vision_factory,
+        )
+        self.assertIn("monte_carlo_validation", full_evaluation)
+        self.assertEqual(
+            full_evaluation["monte_carlo_validation"]["sample_count"],
+            len(BLOCK_SMB_MC_FAMILIES),
+        )
 
     def test_periodic_evaluation_writes_structured_log(self):
         with TemporaryDirectory() as tmpdir:

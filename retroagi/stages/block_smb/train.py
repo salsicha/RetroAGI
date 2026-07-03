@@ -39,7 +39,9 @@ from .monte_carlo import (
     BLOCK_SMB_MC_FAMILIES,
     DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     block_smb_monte_carlo_metadata,
+    evaluate_block_smb_monte_carlo_gates,
     sample_block_smb_monte_carlo_split,
+    summarize_block_smb_monte_carlo_action_counts,
     summarize_block_smb_monte_carlo_samples,
 )
 from .success import evaluate_fixed_success_thresholds, summarize_fixed_success_metrics
@@ -171,6 +173,10 @@ class BlockSMBTrainingConfig:
     monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
     monte_carlo_validate_reachability: bool = True
     monte_carlo_max_rejections: int = 32
+    monte_carlo_validation_samples: int = 0
+    monte_carlo_test_samples: int = 0
+    monte_carlo_pass_rate_gate: float = 0.95
+    monte_carlo_family_pass_rate_gate: float = 0.90
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     checkpoint_path: Optional[Path] = None
@@ -244,6 +250,10 @@ class BlockSMBTrainingConfig:
             raise ValueError("monte_carlo_train_samples_per_epoch must be non-negative")
         if self.monte_carlo_max_rejections < 0:
             raise ValueError("monte_carlo_max_rejections must be non-negative")
+        if self.monte_carlo_validation_samples < 0:
+            raise ValueError("monte_carlo_validation_samples must be non-negative")
+        if self.monte_carlo_test_samples < 0:
+            raise ValueError("monte_carlo_test_samples must be non-negative")
         if not self.monte_carlo_distribution_id:
             raise ValueError("monte_carlo_distribution_id must be non-empty")
         object.__setattr__(
@@ -255,6 +265,10 @@ class BlockSMBTrainingConfig:
         )
         if not isinstance(self.monte_carlo_validate_reachability, bool):
             raise TypeError("monte_carlo_validate_reachability must be a bool")
+        if not 0.0 <= self.monte_carlo_pass_rate_gate <= 1.0:
+            raise ValueError("monte_carlo_pass_rate_gate must be between 0 and 1")
+        if not 0.0 <= self.monte_carlo_family_pass_rate_gate <= 1.0:
+            raise ValueError("monte_carlo_family_pass_rate_gate must be between 0 and 1")
         if self.imagined_rollout_horizon < 0:
             raise ValueError("imagined_rollout_horizon must be non-negative")
         if self.target_network_mode not in TARGET_NETWORK_MODES:
@@ -1275,6 +1289,217 @@ def train_block_smb_epoch(
     return epoch_losses, replay
 
 
+def evaluate_block_smb_monte_carlo(
+    model: torch.nn.Module,
+    config: BlockSMBTrainingConfig,
+    *,
+    split: str,
+    sample_count: int,
+    device: torch.device,
+    vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
+    record_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Evaluate a policy on a held-out Monte Carlo split."""
+
+    if sample_count <= 0:
+        raise ValueError("sample_count must be positive")
+    sample_set = sample_block_smb_monte_carlo_split(
+        distribution_id=config.monte_carlo_distribution_id,
+        split=split,
+        seed=int(config.monte_carlo_seed),
+        sample_count=int(sample_count),
+        family_weights=config.monte_carlo_family_weights,
+        validate_reachability=config.monte_carlo_validate_reachability,
+        max_rejections=config.monte_carlo_max_rejections,
+    )
+    model.eval()
+    scenario_results: dict[str, dict[str, Any]] = {}
+    family_rollups: dict[str, dict[str, Any]] = {}
+    bin_rollups: dict[str, dict[str, Any]] = {}
+    returns: list[float] = []
+    successes: list[float] = []
+    all_actions: list[int] = []
+    with torch.no_grad():
+        for sample_index, sample in enumerate(sample_set.samples):
+            scenario_returns: list[float] = []
+            scenario_successes: list[float] = []
+            scenario_actions: list[int] = []
+            scenario_max_progress: list[float] = []
+            for episode in range(config.evaluation_episodes):
+                stage = BlockSMBStage(
+                    env=MarioScenarioEnv(reward_config=config.reward_config),
+                    scenario=copy.deepcopy(dict(sample.scenario)),
+                    vision=vision_factory(),
+                )
+                try:
+                    trajectory = collect_trajectory(
+                        model,
+                        stage,
+                        sample.scenario_id,
+                        rollout_steps=config.evaluation_max_steps,
+                        seed=int(sample.sample_seed % (2**31)) + episode,
+                        deterministic=True,
+                        device=device,
+                        record_frames=record_dir is not None,
+                        ablation=config.ablation,
+                    )
+                finally:
+                    stage.env.close()
+                actions = [step.action for step in trajectory.transitions]
+                max_progress = (
+                    max(
+                        float(step.info.get("max_x_reached", 0.0))
+                        for step in trajectory.transitions
+                    )
+                    if trajectory.transitions
+                    else 0.0
+                )
+                scenario_returns.append(trajectory.total_return)
+                scenario_successes.append(float(trajectory.success))
+                scenario_actions.extend(actions)
+                scenario_max_progress.append(max_progress)
+                if record_dir is not None:
+                    split_record_dir = record_dir / f"monte_carlo_{split}"
+                    split_record_dir.mkdir(parents=True, exist_ok=True)
+                    frames = np.stack(trajectory.frames) if trajectory.frames else np.empty((0,))
+                    np.savez_compressed(
+                        split_record_dir / f"{sample.scenario_id}_episode{episode}.npz",
+                        frames=frames,
+                        actions=np.array(actions, dtype=np.int64),
+                        rewards=np.array(
+                            [step.reward for step in trajectory.transitions],
+                            dtype=np.float32,
+                        ),
+                    )
+            success_rate = float(np.mean(scenario_successes)) if scenario_successes else 0.0
+            mean_return = float(np.mean(scenario_returns)) if scenario_returns else 0.0
+            max_progress = float(max(scenario_max_progress)) if scenario_max_progress else 0.0
+            action_counts = summarize_block_smb_monte_carlo_action_counts(scenario_actions)
+            result = {
+                "scenario_id": sample.scenario_id,
+                "family": sample.family,
+                "split": sample.split,
+                "sample_index": sample.sample_index,
+                "difficulty_bin": sample.difficulty_bin,
+                "parameters": dict(sample.parameters),
+                "return": mean_return,
+                "success_rate": success_rate,
+                "episodes": config.evaluation_episodes,
+                "max_progress": max_progress,
+                "action_counts": action_counts,
+            }
+            scenario_results[sample.scenario_id] = result
+            returns.extend(scenario_returns)
+            successes.extend(scenario_successes)
+            all_actions.extend(scenario_actions)
+            _add_monte_carlo_rollup(
+                family_rollups,
+                sample.family,
+                result,
+                scenario_actions,
+            )
+            _add_monte_carlo_rollup(
+                bin_rollups,
+                f"{sample.family}:{sample.difficulty_bin}",
+                result,
+                scenario_actions,
+            )
+
+    families = _finalize_monte_carlo_rollups(family_rollups)
+    bins = _finalize_monte_carlo_rollups(bin_rollups)
+    failure_bins = {
+        bin_name: {
+            "sample_count": rollup["sample_count"],
+            "failure_count": rollup["failure_count"],
+            "success_rate": rollup["success_rate"],
+            "failures": rollup["failures"],
+        }
+        for bin_name, rollup in bins.items()
+        if int(rollup["failure_count"]) > 0
+    }
+    evaluation: dict[str, Any] = {
+        "schema_version": sample_set.schema_version,
+        "distribution_id": sample_set.distribution_id,
+        "split": sample_set.split,
+        "seed": sample_set.seed,
+        "sample_count": sample_set.sample_count,
+        "evaluation_episodes": config.evaluation_episodes,
+        "evaluation_max_steps": config.evaluation_max_steps,
+        "scenarios": scenario_results,
+        "mean_return": float(np.mean(returns)) if returns else 0.0,
+        "success_rate": float(np.mean(successes)) if successes else 0.0,
+        "coverage": sample_set.manifest()["coverage"],
+        "rejected_counts": dict(sample_set.rejected_counts),
+        "rejected_sample_count": int(sum(sample_set.rejected_counts.values())),
+        "families": families,
+        "difficulty_bins": bins,
+        "failure_bins": failure_bins,
+        "action_counts": summarize_block_smb_monte_carlo_action_counts(all_actions),
+        "scenario_ids": [sample.scenario_id for sample in sample_set.samples],
+    }
+    evaluation["gates"] = evaluate_block_smb_monte_carlo_gates(
+        evaluation,
+        pass_rate_gate=config.monte_carlo_pass_rate_gate,
+        family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
+    )
+    return evaluation
+
+
+def _add_monte_carlo_rollup(
+    rollups: dict[str, dict[str, Any]],
+    key: str,
+    result: Mapping[str, Any],
+    actions: list[int],
+) -> None:
+    rollup = rollups.setdefault(
+        key,
+        {
+            "returns": [],
+            "success_rates": [],
+            "scenario_ids": [],
+            "failures": [],
+            "actions": [],
+        },
+    )
+    rollup["returns"].append(float(result.get("return", 0.0)))
+    success_rate = float(result.get("success_rate", 0.0))
+    rollup["success_rates"].append(success_rate)
+    scenario_id = str(result.get("scenario_id", ""))
+    rollup["scenario_ids"].append(scenario_id)
+    rollup["actions"].extend(actions)
+    if success_rate < 1.0:
+        rollup["failures"].append(
+            {
+                "scenario_id": scenario_id,
+                "success_rate": success_rate,
+                "return": float(result.get("return", 0.0)),
+                "max_progress": float(result.get("max_progress", 0.0)),
+                "action_counts": dict(result.get("action_counts", {})),
+            }
+        )
+
+
+def _finalize_monte_carlo_rollups(
+    rollups: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    finalized: dict[str, dict[str, Any]] = {}
+    for key, rollup in rollups.items():
+        returns = [float(value) for value in rollup.get("returns", [])]
+        success_rates = [float(value) for value in rollup.get("success_rates", [])]
+        failures = list(rollup.get("failures", []))
+        actions = [int(action) for action in rollup.get("actions", [])]
+        finalized[str(key)] = {
+            "sample_count": len(success_rates),
+            "scenario_ids": list(rollup.get("scenario_ids", [])),
+            "mean_return": float(np.mean(returns)) if returns else 0.0,
+            "success_rate": float(np.mean(success_rates)) if success_rates else 0.0,
+            "failure_count": len(failures),
+            "failures": failures,
+            "action_counts": summarize_block_smb_monte_carlo_action_counts(actions),
+        }
+    return finalized
+
+
 def evaluate_block_smb(
     model: torch.nn.Module,
     config: BlockSMBTrainingConfig,
@@ -1350,7 +1575,7 @@ def evaluate_block_smb(
             for key, value in threshold_result.items()
             if key not in {"threshold", "threshold_met"}
         }
-    return {
+    evaluation: dict[str, Any] = {
         "fixed_scenarios": results,
         "mean_return": float(np.mean(returns)) if returns else 0.0,
         "success_rate": float(np.mean(successes)) if successes else 0.0,
@@ -1363,6 +1588,29 @@ def evaluate_block_smb(
         ),
         "tuning_metrics": tuning_metrics,
     }
+    if config.monte_carlo_validation_samples > 0:
+        validation_record_dir = record_dir / "monte_carlo" if record_dir is not None else None
+        evaluation["monte_carlo_validation"] = evaluate_block_smb_monte_carlo(
+            model,
+            config,
+            split="validation",
+            sample_count=config.monte_carlo_validation_samples,
+            device=device,
+            vision_factory=vision_factory,
+            record_dir=validation_record_dir,
+        )
+    if config.monte_carlo_test_samples > 0:
+        test_record_dir = record_dir / "monte_carlo" if record_dir is not None else None
+        evaluation["monte_carlo_test"] = evaluate_block_smb_monte_carlo(
+            model,
+            config,
+            split="test",
+            sample_count=config.monte_carlo_test_samples,
+            device=device,
+            vision_factory=vision_factory,
+            record_dir=test_record_dir,
+        )
+    return evaluation
 
 
 def save_block_smb_checkpoint(
@@ -1620,6 +1868,7 @@ def train_and_evaluate_block_smb(
                 ),
                 "eval_tuning_score": float(evaluation["tuning_metrics"]["score"]),
             }
+            last_metrics.update(_monte_carlo_eval_metrics(evaluation))
             _log_block_smb_event(
                 config,
                 "deterministic_evaluation",
@@ -1696,6 +1945,29 @@ def train_and_evaluate_block_smb(
         "architecture": block_smb_architecture_metadata(config),
         "model": model,
     }
+
+
+def _monte_carlo_eval_metrics(evaluation: Mapping[str, Any]) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for key, prefix in (
+        ("monte_carlo_validation", "eval_monte_carlo_validation"),
+        ("monte_carlo_test", "eval_monte_carlo_test"),
+    ):
+        result = evaluation.get(key)
+        if not isinstance(result, Mapping):
+            continue
+        gates = result.get("gates", {})
+        metrics[f"{prefix}_success_rate"] = float(result.get("success_rate", 0.0))
+        metrics[f"{prefix}_mean_return"] = float(result.get("mean_return", 0.0))
+        metrics[f"{prefix}_gate_met"] = float(
+            bool(gates.get("gate_met", False)) if isinstance(gates, Mapping) else False
+        )
+        metrics[f"{prefix}_family_gate_met"] = float(
+            bool(gates.get("family_pass_rate_gate_met", False))
+            if isinstance(gates, Mapping)
+            else False
+        )
+    return metrics
 
 
 def apply_block_smb_semantic_prediction_gate(

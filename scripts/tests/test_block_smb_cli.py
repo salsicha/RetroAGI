@@ -448,6 +448,80 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.video_dir, Path("artifacts/records"))
         self.assertEqual(payload["config"]["video_dir"], "artifacts/records")
 
+    def test_evaluate_monte_carlo_command_restores_checkpoint_and_reports_gates(self):
+        class FakeModel:
+            def to(self, _device):
+                return self
+
+        checkpoint = {
+            "epoch": 3,
+            "global_step": 9,
+            "config": {
+                "seed": 5,
+                "epochs": 3,
+                "hidden_dim": 8,
+                "architecture_config": {
+                    "hidden_dim": 8,
+                    "controller_schedule": "constant",
+                },
+                "monte_carlo_validation_samples": 4,
+                "monte_carlo_test_samples": 6,
+            },
+        }
+        fake_evaluation = {
+            "split": "test",
+            "sample_count": 5,
+            "success_rate": 0.0,
+            "gates": {"gate_met": False},
+        }
+        with patch("retroagi.stages.block_smb.cli.load_checkpoint", return_value=checkpoint):
+            with patch(
+                "retroagi.stages.block_smb.cli.make_block_smb_model",
+                return_value=FakeModel(),
+            ) as make_model:
+                with patch(
+                    "retroagi.stages.block_smb.cli.restore_block_smb_checkpoint",
+                    return_value=checkpoint,
+                ) as restore:
+                    with patch(
+                        "retroagi.stages.block_smb.cli.evaluate_block_smb_monte_carlo",
+                        return_value=fake_evaluation,
+                    ) as evaluate:
+                        exit_code, payload = self.run_main(
+                            [
+                                "evaluate-monte-carlo",
+                                "--checkpoint",
+                                "data/block_smb/policy.pth",
+                                "--split",
+                                "test",
+                                "--samples",
+                                "5",
+                                "--device",
+                                "cpu",
+                                "--monte-carlo-pass-rate-gate",
+                                "0.8",
+                                "--monte-carlo-family-pass-rate-gate",
+                                "0.7",
+                                "--record-dir",
+                                "artifacts/block_smb/mc_eval",
+                            ]
+                        )
+
+        self.assertEqual(exit_code, 0)
+        make_model.assert_called_once()
+        restore.assert_called_once()
+        config = evaluate.call_args.args[1]
+        self.assertEqual(config.monte_carlo_pass_rate_gate, 0.8)
+        self.assertEqual(config.monte_carlo_family_pass_rate_gate, 0.7)
+        self.assertEqual(evaluate.call_args.kwargs["split"], "test")
+        self.assertEqual(evaluate.call_args.kwargs["sample_count"], 5)
+        self.assertEqual(
+            evaluate.call_args.kwargs["record_dir"],
+            Path("artifacts/block_smb/mc_eval"),
+        )
+        self.assertEqual(payload["evaluation"], fake_evaluation)
+        self.assertEqual(payload["checkpoint"]["path"], "data/block_smb/policy.pth")
+
     def test_diagnose_vision_command_reports_perception_metrics(self):
         loaded_model = object()
         fake_metrics = {
