@@ -128,6 +128,8 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "single_gap=1",
                     "--monte-carlo-max-rejections",
                     "5",
+                    "--monte-carlo-failure-replay-samples-per-epoch",
+                    "3",
                     "--skip-monte-carlo-reachability-validation",
                     "--policy-loss-weight",
                     "0.8",
@@ -189,6 +191,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.monte_carlo_seed, 60001)
         self.assertEqual(config.monte_carlo_family_weights, {"flat_run": 2.0, "single_gap": 1.0})
         self.assertEqual(config.monte_carlo_max_rejections, 5)
+        self.assertEqual(config.monte_carlo_failure_replay_samples_per_epoch, 3)
         self.assertFalse(config.monte_carlo_validate_reachability)
         self.assertEqual(config.policy_loss_weight, 0.8)
         self.assertEqual(config.representation_weight, 0.07)
@@ -231,6 +234,7 @@ class TestBlockSMBCLI(unittest.TestCase):
             payload["config"]["monte_carlo_family_weights"],
             {"flat_run": 2.0, "single_gap": 1.0},
         )
+        self.assertEqual(payload["config"]["monte_carlo_failure_replay_samples_per_epoch"], 3)
         self.assertFalse(payload["config"]["monte_carlo_validate_reachability"])
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertEqual(payload["config"]["reward_config"]["gap_jump"], -7.0)

@@ -12,18 +12,23 @@ distribution. Training should draw Monte Carlo samples from that distribution;
 promotion should require both fixed-scenario success and held-out distribution
 success.
 
-## Current Limitation
+## Implementation Status
 
-The current code has two scenario sources:
+P3A is implemented for `block_smb_mc_v1`.
 
-- checked-in fixed JSON scenarios under `retroagi/stages/block_smb/scenarios/`;
-- `MarioScenarioEnv.generate_scenario(...)`, which samples a loose random level
-  from a few scalar ranges.
+- checked-in fixed JSON scenarios remain regression sentinels;
+- generated Block SMB scenarios now come from
+  `retroagi.stages.block_smb.monte_carlo`;
+- `--generated-scenarios` is preserved as a compatibility alias for Monte Carlo
+  train samples;
+- `retroagi-block-smb evaluate-monte-carlo` evaluates replayable held-out
+  `train`, `validation`, `test`, or `stress` splits;
+- Full SMB transfer requires fixed-scenario pass rate `1.0` and a passing
+  held-out Monte Carlo validation gate in the source checkpoint metrics.
 
-That is not yet a sufficient distribution contract. It lacks named scenario
-families, train/validation/test splits, coverage reporting, difficulty bins,
-held-out seeds, per-family thresholds, and artifact metadata that proves what
-distribution a checkpoint saw.
+The legacy `MarioScenarioEnv.generate_scenario(...)` helper remains available
+for low-level environment tests, but trainer-facing generated scenarios should
+use the versioned sampler so checkpoints carry distribution evidence.
 
 ## Design Goals
 
@@ -67,7 +72,7 @@ as named distribution versions instead of silently changing the old one.
 
 ## Parameter Schema
 
-Add a `BlockSMBScenarioFamilySpec` style contract with:
+`BlockSMBScenarioFamilySpec` and `BlockSMBScenarioSample` provide:
 
 - `schema_version`;
 - `distribution_id`, for example `block_smb_mc_v1`;
@@ -83,9 +88,11 @@ Add a `BlockSMBScenarioFamilySpec` style contract with:
 - oracle metadata: scripted action source, expected completion range, expected
   minimum progress.
 
-Generated scenario JSON should include the sampled parameters and the generated
-world. Training summaries should store compact manifests, not full generated
-datasets unless an experiment intentionally preserves samples for debugging.
+Generated scenario dictionaries include the sampled parameters, generated world,
+oracle actions, reachability result, and replay metadata under
+`metadata.block_smb_monte_carlo`. Training summaries store compact manifests;
+full generated scenarios are only preserved when an evaluation or debugging run
+records them.
 
 ## Sampler And Splits
 
@@ -98,13 +105,18 @@ sample_index)`.
 - `stress`: intentionally difficult edge bins, reported separately from the main
   distribution score.
 
-The sampler should support:
+The sampler supports:
 
 - uniform per-family sampling;
 - weighted family sampling for curriculum stages;
 - adaptive replay of recent failure bins;
 - minimum coverage per family and difficulty bin;
 - deterministic replay by scenario ID.
+
+Training can enable failure replay with
+`--monte-carlo-failure-replay-samples-per-epoch N`. After a Monte Carlo
+validation run produces failure bins, later epochs sample additional train
+scenarios weighted by the failing families.
 
 ## Curriculum Schedule
 
@@ -146,8 +158,40 @@ Suggested initial gates for `block_smb_mc_v1`:
 - per-family pass rate: at least `0.90`;
 - fixed-scenario pass rate: exactly `1.0`.
 
-These numbers are starting points. They should be tuned after the first full
-Monte Carlo implementation produces failure histograms.
+These numbers are starting points. The default code gates are configurable with
+`--monte-carlo-pass-rate-gate` and `--monte-carlo-family-pass-rate-gate`.
+
+## Commands
+
+Train with versioned Monte Carlo samples:
+
+```bash
+retroagi-block-smb train \
+  --generated-scenarios 512 \
+  --monte-carlo-validation-samples 128 \
+  --monte-carlo-failure-replay-samples-per-epoch 64 \
+  --checkpoint data/block_smb/policy.pth \
+  --output artifacts/block_smb/latest/run_summary.json
+```
+
+Evaluate a held-out split directly:
+
+```bash
+retroagi-block-smb evaluate-monte-carlo \
+  --checkpoint data/block_smb/policy.pth \
+  --split validation \
+  --samples 128 \
+  --output artifacts/block_smb/latest/mc_validation.json
+```
+
+Distill from sampled oracle trajectories:
+
+```bash
+retroagi-block-smb-distill \
+  --checkpoint data/block_smb/distilled_mc.pth \
+  --monte-carlo-samples 512 \
+  --monte-carlo-validation-samples 128
+```
 
 ## Implementation Steps
 

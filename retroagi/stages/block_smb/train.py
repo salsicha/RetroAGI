@@ -175,6 +175,7 @@ class BlockSMBTrainingConfig:
     monte_carlo_max_rejections: int = 32
     monte_carlo_validation_samples: int = 0
     monte_carlo_test_samples: int = 0
+    monte_carlo_failure_replay_samples_per_epoch: int = 0
     monte_carlo_pass_rate_gate: float = 0.95
     monte_carlo_family_pass_rate_gate: float = 0.90
     evaluation_episodes: int = 1
@@ -254,6 +255,8 @@ class BlockSMBTrainingConfig:
             raise ValueError("monte_carlo_validation_samples must be non-negative")
         if self.monte_carlo_test_samples < 0:
             raise ValueError("monte_carlo_test_samples must be non-negative")
+        if self.monte_carlo_failure_replay_samples_per_epoch < 0:
+            raise ValueError("monte_carlo_failure_replay_samples_per_epoch must be non-negative")
         if not self.monte_carlo_distribution_id:
             raise ValueError("monte_carlo_distribution_id must be non-empty")
         object.__setattr__(
@@ -462,6 +465,8 @@ def build_monte_carlo_curriculum(
     *,
     split: str = "train",
     sample_count: int | None = None,
+    seed: int | None = None,
+    family_weights: Mapping[str, float] | None = None,
 ) -> list[tuple[str, dict]]:
     """Build replayable Monte Carlo scenarios for a Block SMB split."""
 
@@ -475,9 +480,9 @@ def build_monte_carlo_curriculum(
     sample_set = sample_block_smb_monte_carlo_split(
         distribution_id=config.monte_carlo_distribution_id,
         split=split,
-        seed=int(config.monte_carlo_seed),
+        seed=int(config.monte_carlo_seed if seed is None else seed),
         sample_count=resolved_count,
-        family_weights=config.monte_carlo_family_weights,
+        family_weights=config.monte_carlo_family_weights if family_weights is None else family_weights,
         validate_reachability=config.monte_carlo_validate_reachability,
         max_rejections=config.monte_carlo_max_rejections,
     )
@@ -488,6 +493,59 @@ def build_curriculum(config: BlockSMBTrainingConfig) -> list[tuple[str, dict]]:
     scenarios = load_fixed_scenarios(config.fixed_scenarios)
     scenarios.extend(build_monte_carlo_curriculum(config))
     return scenarios
+
+
+def build_adaptive_monte_carlo_replay_curriculum(
+    config: BlockSMBTrainingConfig,
+    failure_bins: Mapping[str, Any],
+    *,
+    epoch: int,
+) -> list[tuple[str, dict]]:
+    """Sample train scenarios weighted by recent held-out failure families."""
+
+    sample_count = int(config.monte_carlo_failure_replay_samples_per_epoch)
+    if sample_count <= 0 or not failure_bins:
+        return []
+    family_weights: dict[str, float] = {}
+    for bin_name, bin_result in failure_bins.items():
+        family = str(bin_name).split(":", 1)[0]
+        if family not in BLOCK_SMB_MC_FAMILIES:
+            continue
+        failure_count = 1.0
+        if isinstance(bin_result, Mapping):
+            try:
+                failure_count = max(1.0, float(bin_result.get("failure_count", 1.0)))
+            except (TypeError, ValueError):
+                failure_count = 1.0
+        family_weights[family] = family_weights.get(family, 0.0) + failure_count
+    if not family_weights:
+        return []
+    return build_monte_carlo_curriculum(
+        config,
+        split="train",
+        sample_count=sample_count,
+        seed=int(config.monte_carlo_seed) + 900_000 + int(epoch),
+        family_weights=family_weights,
+    )
+
+
+def build_epoch_curriculum(
+    base_curriculum: list[tuple[str, dict]],
+    replay_curriculum: list[tuple[str, dict]],
+) -> list[tuple[str, dict]]:
+    if not replay_curriculum:
+        return list(base_curriculum)
+    fixed = [
+        (name, scenario)
+        for name, scenario in base_curriculum
+        if not block_smb_monte_carlo_metadata(scenario)
+    ]
+    monte_carlo = [
+        (name, scenario)
+        for name, scenario in base_curriculum
+        if block_smb_monte_carlo_metadata(scenario)
+    ]
+    return [*fixed, *replay_curriculum, *monte_carlo]
 
 
 def summarize_block_smb_curriculum(
@@ -1822,17 +1880,25 @@ def train_and_evaluate_block_smb(
     history: list[dict[str, float]] = []
     evaluations: list[dict[str, Any]] = []
     last_metrics: dict[str, float] = {}
+    recent_monte_carlo_failure_bins: Mapping[str, Any] = {}
     for epoch in range(start_epoch, config.epochs):
+        replay_curriculum = build_adaptive_monte_carlo_replay_curriculum(
+            config,
+            recent_monte_carlo_failure_bins,
+            epoch=epoch,
+        )
+        epoch_curriculum = build_epoch_curriculum(curriculum, replay_curriculum)
         losses, _replay = train_block_smb_epoch(
             model,
             optimizer,
-            curriculum,
+            epoch_curriculum,
             config,
             epoch,
             device=device,
             vision_factory=vision_factory,
             target_model=target_model,
         )
+        losses["adaptive_replay_samples"] = float(len(replay_curriculum))
         global_step += int(losses["episodes"])
         completed_epoch = epoch + 1
         last_metrics = dict(losses)
@@ -1842,6 +1908,7 @@ def train_and_evaluate_block_smb(
             epoch=completed_epoch,
             global_step=global_step,
             metrics=last_metrics,
+            curriculum_summary=summarize_block_smb_curriculum(epoch_curriculum),
         )
         tracker.log_metrics(last_metrics, step=global_step, prefix="train")
         if _should_evaluate_epoch(config, completed_epoch):
@@ -1869,6 +1936,11 @@ def train_and_evaluate_block_smb(
                 "eval_tuning_score": float(evaluation["tuning_metrics"]["score"]),
             }
             last_metrics.update(_monte_carlo_eval_metrics(evaluation))
+            monte_carlo_validation = evaluation.get("monte_carlo_validation", {})
+            if isinstance(monte_carlo_validation, Mapping):
+                failure_bins = monte_carlo_validation.get("failure_bins", {})
+                if isinstance(failure_bins, Mapping):
+                    recent_monte_carlo_failure_bins = failure_bins
             _log_block_smb_event(
                 config,
                 "deterministic_evaluation",

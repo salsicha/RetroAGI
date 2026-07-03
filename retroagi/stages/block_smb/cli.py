@@ -280,6 +280,11 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         help="held-out test samples to attach to Block SMB evaluation",
     )
     parser.add_argument(
+        "--monte-carlo-failure-replay-samples-per-epoch",
+        type=_non_negative_int,
+        help="additional train samples weighted by recent Monte Carlo validation failures",
+    )
+    parser.add_argument(
         "--monte-carlo-pass-rate-gate",
         type=float,
         help="minimum held-out Monte Carlo pass rate for promotion gating",
@@ -542,6 +547,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "monte_carlo_max_rejections",
         "monte_carlo_validation_samples",
         "monte_carlo_test_samples",
+        "monte_carlo_failure_replay_samples_per_epoch",
         "monte_carlo_pass_rate_gate",
         "monte_carlo_family_pass_rate_gate",
         "evaluation_episodes",

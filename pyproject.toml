@@ -59,6 +59,7 @@ dev = [
 [project.scripts]
 retroagi = "retroagi.cli:main"
 retroagi-block-smb = "retroagi.stages.block_smb.cli:main"
+retroagi-block-smb-distill = "retroagi.stages.block_smb.distill:main"
 
 [tool.setuptools.packages.find]
 include = ["retroagi*"]

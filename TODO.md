@@ -440,29 +440,41 @@ parameterized scenario families with exact semantic and symbolic ground truth.
 - [x] Document the Monte Carlo curriculum design, including scenario families,
       parameter schema, splits, coverage metrics, gates, artifacts, and
       promotion requirements.
-- [ ] Define a versioned Block SMB scenario-family schema with distribution ID,
+- [x] Define a versioned Block SMB scenario-family schema with distribution ID,
       family name, split, seed, sampled parameters, constraints, and
       oracle/reachability metadata.
-- [ ] Replace the loose `generated_scenarios` path with a deterministic sampler
+- [x] Replace the loose `generated_scenarios` path with a deterministic sampler
       keyed by `(distribution_id, split, seed, sample_index)`.
-- [ ] Add family specs for flat runs, single gaps, stair climbs, platform
+- [x] Add family specs for flat runs, single gaps, stair climbs, platform
       chains, moving bridges, enemy hops, enemy patrols, enemy-gap combinations,
       enemy stomps, retreat/recovery states, wait-timing tasks, and mixed
       sections.
-- [ ] Add reachability/oracle validation that rejects impossible sampled levels
+- [x] Add reachability/oracle validation that rejects impossible sampled levels
       before they enter training or evaluation.
-- [ ] Add train/validation/test/stress splits with replayable scenario IDs and
+- [x] Add train/validation/test/stress splits with replayable scenario IDs and
       deterministic seed manifests.
-- [ ] Add Monte Carlo training integration with family-balanced sampling,
+- [x] Add Monte Carlo training integration with family-balanced sampling,
       curriculum weights, and adaptive replay of recent failure bins.
-- [ ] Add coverage histograms, rejected-sample counts, per-family pass rates,
+- [x] Add coverage histograms, rejected-sample counts, per-family pass rates,
       per-bin failure summaries, and action-distribution diagnostics to Block
       SMB summaries and structured logs.
-- [ ] Add held-out Monte Carlo validation and test evaluation commands.
-- [ ] Extend Block SMB distillation so teacher/oracle trajectories can be
+- [x] Add held-out Monte Carlo validation and test evaluation commands.
+- [x] Extend Block SMB distillation so teacher/oracle trajectories can be
       generated from sampled scenarios, not only fixed scripted scenarios.
-- [ ] Require fixed-scenario pass rate `1.0` plus held-out Monte Carlo gates
+- [x] Require fixed-scenario pass rate `1.0` plus held-out Monte Carlo gates
       before using a Block SMB checkpoint as a Full SMB transfer source.
+
+Result: `retroagi/stages/block_smb/monte_carlo.py` defines
+`block_smb_mc_v1`, deterministic train/validation/test/stress sampling, exact
+oracle action metadata, reachability validation, coverage summaries, held-out
+gates, and transfer-source gate helpers. Block SMB training now uses the
+versioned sampler for generated scenarios, can add failure-family replay samples
+after Monte Carlo validation failures, and records curriculum coverage in logs
+and summaries. `retroagi-block-smb evaluate-monte-carlo` evaluates held-out
+splits with per-family, per-bin, action-count, and gate diagnostics. Distillation
+can train from sampled oracle trajectories. Full SMB transfer now rejects Block
+SMB sources without fixed pass rate `1.0` plus passing held-out Monte Carlo
+validation evidence unless explicitly bypassed for debugging.
 
 **Exit criteria:** a Block SMB checkpoint passes the fixed-scenario gate and a
 versioned held-out Monte Carlo distribution gate with documented per-family

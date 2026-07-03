@@ -79,11 +79,13 @@ Each fixed scenario result includes:
 The top-level evaluation result includes `success_thresholds_met`, which is
 true only when every fixed scenario passes its threshold.
 
-After the Monte Carlo curriculum is implemented, fixed-scenario success remains
-required but no longer sufficient for promotion into Full SMB. A transfer-source
-checkpoint must also report held-out distribution metrics: validation/test pass
-rate, per-family pass rate, coverage histograms, and failure bins for the
-versioned Block SMB distribution it trained on.
+Fixed-scenario success remains required but is no longer sufficient for
+promotion into Full SMB. A transfer-source checkpoint must also report a passing
+held-out Monte Carlo validation gate: validation pass rate, per-family pass
+rate, coverage histograms, and failure bins for the versioned Block SMB
+distribution it trained on. Full SMB transfer rejects sources missing fixed pass
+rate `1.0` or held-out Monte Carlo validation evidence unless the transfer is
+explicitly run with the debug bypass flag.
 
 ## Tuning Reward And Training Settings
 

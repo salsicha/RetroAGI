@@ -28,7 +28,9 @@ from retroagi.stages.block_smb import (
     BlockSMBStage,
     BlockSMBTrainingConfig,
     SequentialBlockSMBVectorEnv,
+    build_adaptive_monte_carlo_replay_curriculum,
     build_curriculum,
+    build_epoch_curriculum,
     evaluate_block_smb,
     evaluate_block_smb_monte_carlo,
     summarize_block_smb_curriculum,
@@ -515,6 +517,28 @@ class TestBlockSMBTraining(unittest.TestCase):
             full_evaluation["monte_carlo_validation"]["sample_count"],
             len(BLOCK_SMB_MC_FAMILIES),
         )
+
+    def test_adaptive_monte_carlo_replay_samples_recent_failure_families(self):
+        config = tiny_config(
+            generated_scenarios=2,
+            monte_carlo_failure_replay_samples_per_epoch=3,
+        )
+        base_curriculum = build_curriculum(config)
+        replay = build_adaptive_monte_carlo_replay_curriculum(
+            config,
+            {
+                "enemy_gap:hard": {"failure_count": 2},
+                "wait_timing:medium": {"failure_count": 1},
+            },
+            epoch=1,
+        )
+        epoch_curriculum = build_epoch_curriculum(base_curriculum, replay)
+        replay_names = [name for name, _scenario in replay]
+
+        self.assertEqual(len(replay), 3)
+        self.assertTrue(all(".enemy_gap" in name or ".wait_timing" in name for name in replay_names))
+        self.assertEqual(epoch_curriculum[0][0], "level_1_flat.json")
+        self.assertEqual(epoch_curriculum[1:4], replay)
 
     def test_periodic_evaluation_writes_structured_log(self):
         with TemporaryDirectory() as tmpdir:
