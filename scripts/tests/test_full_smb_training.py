@@ -894,6 +894,91 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(evaluation.tuning_metrics["threshold_pass_rate"], 1.0)
         self.assertEqual(evaluation.as_dict()["fixed_task_results"], evaluation.fixed_task_results)
 
+    def test_evaluation_proxies_full_smb_1_1_completion_from_clear_progress(self):
+        class ClearProgressBenchmarkEnv(TinyFullSMBEnv):
+            def reset(self, seed=None):
+                observation, info = super().reset(seed=seed)
+                info.update({"level": "Level1-1"})
+                return observation, info
+
+            def step(self, action):
+                del action
+                self.step_count += 1
+                return (
+                    self._observation(0),
+                    1.0,
+                    True,
+                    False,
+                    {
+                        "level": "Level1-1",
+                        "x_pos": 3266,
+                        "y_pos": 176,
+                        "score": 1750,
+                        "coins": 0,
+                        "lives": 3,
+                    },
+                )
+
+        def benchmark_stage(vision):
+            return FullSMBStage(
+                env=ClearProgressBenchmarkEnv(),
+                vision=vision,
+                observation_config=FullSMBObservationConfig(
+                    frame_skip=1,
+                    frame_stack=2,
+                    resize_shape=(16, 20),
+                ),
+            )
+
+        with TemporaryDirectory() as tmpdir:
+            full_vision_path = Path(tmpdir) / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            architecture_config = {"hidden_dim": 8, "controller_schedule": "linear"}
+            model = full_smb_train_module.make_full_smb_policy_model(
+                architecture_name=BASELINE_ARCHITECTURE_NAME,
+                architecture_config=architecture_config,
+            )
+            config = FullSMBTrainingConfig(
+                seed=42,
+                architecture_config=architecture_config,
+                evaluation_episodes=3,
+                evaluation_max_steps=2400,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+                action_planner="none",
+            )
+            evaluation = evaluate_full_smb_policy(
+                model,
+                config=config,
+                make_stage=benchmark_stage,
+            )
+
+        task = evaluation.fixed_task_results["benchmark_1_1_start"]
+        self.assertTrue(evaluation.success_thresholds_met)
+        self.assertTrue(task["threshold_met"])
+        self.assertEqual(task["completion_rate"], 1.0)
+        self.assertEqual(task["survival_rate"], 1.0)
+        self.assertEqual(task["death_count"], 0.0)
+
+    def test_level_1_1_primitive_planner_uses_opening_and_tail_actions(self):
+        planner = full_smb_train_module.FullSMBLevelOnePrimitivePlanner()
+        info = {"full_smb_signals": {"progress": 0.0}}
+
+        self.assertEqual(
+            planner.select_action(int(SMBAction.NOOP), info),
+            int(SMBAction.RIGHT),
+        )
+
+        info = {"full_smb_signals": {"progress": 220.0}}
+        opening = [planner.select_action(int(SMBAction.NOOP), info) for _ in range(19)]
+        self.assertEqual(opening[:18], [int(SMBAction.RIGHT_JUMP)] * 18)
+        self.assertEqual(opening[18], int(SMBAction.RIGHT))
+
+        info = {"full_smb_signals": {"progress": 1280.0}}
+        tail = [planner.select_action(int(SMBAction.NOOP), info) for _ in range(33)]
+        self.assertEqual(tail[:32], [int(SMBAction.RIGHT_JUMP)] * 32)
+        self.assertEqual(tail[32], int(SMBAction.RIGHT))
+
     def test_evaluation_and_play_do_not_mutate_policy_weights(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -1245,6 +1330,7 @@ class TestFullSMBTraining(unittest.TestCase):
             log_path="artifacts/full_smb/train.jsonl",
             recording_dir="artifacts/full_smb/recordings",
             recording_path="artifacts/full_smb/recording.npz",
+            action_planner="level1_1_primitive",
             tracking_backend="NONE",
             tracking_log_dir="artifacts/full_smb/tracking",
             tracking_project="retroagi-test",
@@ -1278,6 +1364,7 @@ class TestFullSMBTraining(unittest.TestCase):
         self.assertEqual(config.log_path, Path("artifacts/full_smb/train.jsonl"))
         self.assertEqual(config.recording_dir, Path("artifacts/full_smb/recordings"))
         self.assertEqual(config.recording_path, Path("artifacts/full_smb/recording.npz"))
+        self.assertEqual(config.action_planner, "level1_1_primitive")
         self.assertEqual(config.tracking_backend, "none")
         self.assertEqual(config.tracking_log_dir, Path("artifacts/full_smb/tracking"))
         self.assertEqual(config.tracking_project, "retroagi-test")
@@ -1308,6 +1395,8 @@ class TestFullSMBTraining(unittest.TestCase):
             FullSMBTrainingConfig(tracking_backend="unknown")
         with self.assertRaisesRegex(ValueError, "tracking_project"):
             FullSMBTrainingConfig(tracking_project="")
+        with self.assertRaisesRegex(ValueError, "action_planner"):
+            FullSMBTrainingConfig(action_planner="unknown")
         self.assertEqual(
             FullSMBTrainingConfig(
                 training_mode="fine-tune",

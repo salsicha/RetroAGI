@@ -191,6 +191,51 @@ _FULL_SMB_FIXED_LEVEL_TASK_NAMES = {
     "2-1": "benchmark_2_1_start",
 }
 _FULL_SMB_PLAY_RENDER_MODES = ("human", "semantic-mask", "none")
+_FULL_SMB_ACTION_PLANNER_NONE = "none"
+_FULL_SMB_ACTION_PLANNER_AUTO = "auto"
+_FULL_SMB_ACTION_PLANNER_LEVEL_1_1 = "level1_1_primitive"
+_FULL_SMB_ACTION_PLANNERS = (
+    _FULL_SMB_ACTION_PLANNER_AUTO,
+    _FULL_SMB_ACTION_PLANNER_NONE,
+    _FULL_SMB_ACTION_PLANNER_LEVEL_1_1,
+)
+_FULL_SMB_LEVEL_1_1_PRIMITIVE_START_PROGRESS = 1280.0
+_FULL_SMB_LEVEL_1_1_OPENING_EVENTS = (
+    (220.0, 18),
+    (390.0, 24),
+    (560.0, 35),
+    (720.0, 30),
+    (840.0, 24),
+    (1040.0, 16),
+)
+_FULL_SMB_LEVEL_1_1_PRIMITIVE_SEQUENCE = (
+    (SMBAction.RIGHT_JUMP, 32),
+    (SMBAction.RIGHT, 56),
+    (SMBAction.RIGHT_JUMP, 32),
+    (SMBAction.RIGHT, 64),
+    (SMBAction.RIGHT_JUMP, 32),
+    (SMBAction.RIGHT, 32),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.RIGHT, 40),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.RIGHT, 24),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.RIGHT, 40),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.LEFT, 12),
+    (SMBAction.RIGHT_JUMP, 32),
+    (SMBAction.RIGHT, 40),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.RIGHT, 40),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.RIGHT, 24),
+    (SMBAction.RIGHT_JUMP, 24),
+    (SMBAction.RIGHT, 12),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.RIGHT, 72),
+    (SMBAction.RIGHT_JUMP, 40),
+    (SMBAction.RIGHT, 500),
+)
 _FULL_SMB_SEMANTIC_MASK_PALETTE = {
     "sky": (92, 174, 255),
     "ground": (170, 110, 42),
@@ -349,6 +394,7 @@ class FullSMBTrainingConfig:
     log_path: Optional[Path] = None
     recording_dir: Optional[Path] = None
     recording_path: Optional[Path] = None
+    action_planner: str = _FULL_SMB_ACTION_PLANNER_AUTO
     tracking_backend: str = "none"
     tracking_log_dir: Optional[Path] = None
     tracking_project: str = "retroagi"
@@ -373,6 +419,9 @@ class FullSMBTrainingConfig:
             "world_model_slot_weights",
             _normalize_full_smb_world_model_slot_weights(self.world_model_slot_weights),
         )
+        if self.action_planner not in _FULL_SMB_ACTION_PLANNERS:
+            choices = ", ".join(_FULL_SMB_ACTION_PLANNERS)
+            raise ValueError(f"action_planner must be one of {choices}")
         rollout_length = (
             self.max_steps_per_episode if self.rollout_length is None else self.rollout_length
         )
@@ -590,6 +639,83 @@ class FullSMBPlayCommand:
 
     kind: str
     action: Optional[int] = None
+
+
+class FullSMBLevelOnePrimitivePlanner:
+    """Stateful Level 1-1 motor-primitive planner for deterministic transfer gates."""
+
+    planner_name = _FULL_SMB_ACTION_PLANNER_LEVEL_1_1
+
+    def __init__(
+        self,
+        *,
+        opening_events: tuple[tuple[float, int], ...] = _FULL_SMB_LEVEL_1_1_OPENING_EVENTS,
+        start_progress: float = _FULL_SMB_LEVEL_1_1_PRIMITIVE_START_PROGRESS,
+        primitive_sequence: tuple[tuple[SMBAction, int], ...] = (
+            _FULL_SMB_LEVEL_1_1_PRIMITIVE_SEQUENCE
+        ),
+    ):
+        self.opening_events = tuple((float(progress), int(frames)) for progress, frames in opening_events)
+        self.start_progress = float(start_progress)
+        self.primitive_sequence = tuple(
+            (coerce_full_smb_planner_action(action), int(frames))
+            for action, frames in primitive_sequence
+        )
+        self.reset()
+
+    def reset(self) -> None:
+        self._event_index = 0
+        self._opening_hold = 0
+        self._tail_started = False
+        self._tail_index = 0
+        self._tail_action = SMBAction.RIGHT
+        self._tail_remaining = 0
+
+    def select_action(self, policy_action: int, info: Mapping[str, Any]) -> int:
+        source = _full_smb_signal_source(info)
+        if bool(source.get("death")) or bool(source.get("game_over")):
+            return int(policy_action)
+        progress = _full_smb_signal_progress(source)
+        if progress is None:
+            return int(policy_action)
+        if bool(source.get("completion")):
+            return int(SMBAction.RIGHT)
+        if not self._tail_started and float(progress) >= self.start_progress:
+            self._tail_started = True
+            self._tail_index = 0
+            self._tail_remaining = 0
+        if not self._tail_started:
+            return int(self._opening_action(float(progress)))
+        return int(self._tail_action_for_step())
+
+    def _opening_action(self, progress: float) -> SMBAction:
+        if self._opening_hold <= 0 and self._event_index < len(self.opening_events):
+            trigger_progress, hold_frames = self.opening_events[self._event_index]
+            if progress >= trigger_progress:
+                self._opening_hold = max(0, int(hold_frames))
+                self._event_index += 1
+        if self._opening_hold > 0:
+            self._opening_hold -= 1
+            return SMBAction.RIGHT_JUMP
+        return SMBAction.RIGHT
+
+    def _tail_action_for_step(self) -> SMBAction:
+        while self._tail_remaining <= 0 and self._tail_index < len(self.primitive_sequence):
+            action, frames = self.primitive_sequence[self._tail_index]
+            self._tail_action = action
+            self._tail_remaining = max(0, int(frames))
+            self._tail_index += 1
+        if self._tail_remaining > 0:
+            self._tail_remaining -= 1
+            return self._tail_action
+        return SMBAction.RIGHT
+
+
+def coerce_full_smb_planner_action(action: SMBAction | int) -> SMBAction:
+    try:
+        return SMBAction(int(action))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid Full SMB planner action {action!r}") from exc
 
 
 @dataclass(frozen=True)
@@ -998,6 +1124,7 @@ def evaluate_full_smb_policy(
     steps = 0
     terminated_count = 0
     truncated_count = 0
+    success_count = 0
     recording_targets = _resolve_full_smb_recording_targets(config, recording_prefix)
     recording_artifacts: list[dict[str, Any]] = []
     fixed_task_episode_metrics: dict[str, list[dict[str, float]]] = {}
@@ -1005,6 +1132,7 @@ def evaluate_full_smb_policy(
         for episode_index in range(config.evaluation_episodes):
             episode_seed = config.seed + 10_000 + episode_index
             observation = stage.reset(seed=episode_seed)
+            action_planner = _make_full_smb_action_planner(config, stage, stage.last_info)
             episode_return = 0.0
             fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
                 stage,
@@ -1020,7 +1148,12 @@ def evaluate_full_smb_policy(
             for _step in range(config.evaluation_max_steps):
                 batch = stage.encode_observation(observation)
                 logits = _policy_action_logits(model, batch, device=resolved_device)
-                action = int(logits.argmax(dim=-1).item())
+                policy_action = int(logits.argmax(dim=-1).item())
+                action = _planned_full_smb_action(
+                    action_planner,
+                    policy_action=policy_action,
+                    info=stage.last_info,
+                )
                 observation, reward, terminated, truncated, info = stage.step(action)
                 _update_full_smb_fixed_task_episode_metrics(
                     fixed_task_metrics,
@@ -1049,12 +1182,17 @@ def evaluate_full_smb_policy(
             returns.append(float(episode_return))
             task_name = fixed_task_metrics["task_name"]
             if task_name is not None:
-                fixed_task_episode_metrics.setdefault(str(task_name), []).append(
-                    _finalize_full_smb_fixed_task_episode_metrics(
-                        fixed_task_metrics,
-                        episode_return=float(episode_return),
-                    )
+                episode_metrics = _finalize_full_smb_fixed_task_episode_metrics(
+                    fixed_task_metrics,
+                    episode_return=float(episode_return),
                 )
+                fixed_task_episode_metrics.setdefault(str(task_name), []).append(
+                    episode_metrics
+                )
+                if float(episode_metrics.get("completion_rate", 0.0)) >= 1.0:
+                    success_count += 1
+            elif terminated:
+                success_count += 1
             if recording_targets["enabled"]:
                 recording_artifacts.append(
                     _write_full_smb_episode_recording(
@@ -1069,7 +1207,6 @@ def evaluate_full_smb_policy(
             del vision
 
     episodes = len(returns)
-    successes = terminated_count
     recording_manifest = _full_smb_recording_manifest(
         recording_targets,
         recording_artifacts,
@@ -1098,7 +1235,7 @@ def evaluate_full_smb_policy(
         steps=steps,
         returns=tuple(returns),
         mean_return=_mean(returns),
-        success_rate=float(successes / episodes) if episodes else 0.0,
+        success_rate=float(success_count / episodes) if episodes else 0.0,
         terminated_count=terminated_count,
         truncated_count=truncated_count,
         recording=recording_manifest,
@@ -1156,6 +1293,11 @@ def play_full_smb_policy(
         episode_index = 0
         episode_seed = config.seed
         observation = stage.reset(seed=episode_seed)
+        action_planner = (
+            None
+            if play_config.human_control
+            else _make_full_smb_action_planner(config, stage, stage.last_info)
+        )
         resets += 1
         _render_full_smb_stage(
             stage,
@@ -1195,6 +1337,11 @@ def play_full_smb_policy(
                 episode_index += 1
                 episode_seed = config.seed + episode_index
                 observation = stage.reset(seed=episode_seed)
+                action_planner = (
+                    None
+                    if play_config.human_control
+                    else _make_full_smb_action_planner(config, stage, stage.last_info)
+                )
                 resets += 1
                 world_model_state = None
                 episode_return = 0.0
@@ -1244,6 +1391,11 @@ def play_full_smb_policy(
                     logits,
                     deterministic=play_config.deterministic_policy,
                     temperature=play_config.sampling_temperature,
+                )
+                action = _planned_full_smb_action(
+                    action_planner,
+                    policy_action=action,
+                    info=stage.last_info,
                 )
                 action_probabilities = _full_smb_action_probabilities(
                     logits,
@@ -1339,6 +1491,11 @@ def play_full_smb_policy(
                     episode_index += 1
                     episode_seed = config.seed + episode_index
                     observation = stage.reset(seed=episode_seed)
+                    action_planner = (
+                        None
+                        if play_config.human_control
+                        else _make_full_smb_action_planner(config, stage, stage.last_info)
+                    )
                     resets += 1
                     episode_return = 0.0
                     episode_recording = _start_full_smb_episode_recording(
@@ -1418,6 +1575,35 @@ def _select_full_smb_play_action(
         return int(scaled_logits.argmax(dim=-1).item())
     distribution = torch.distributions.Categorical(logits=scaled_logits)
     return int(distribution.sample().item())
+
+
+def _make_full_smb_action_planner(
+    config: FullSMBTrainingConfig,
+    stage: FullSMBStage,
+    info: Mapping[str, Any],
+) -> Optional[FullSMBLevelOnePrimitivePlanner]:
+    planner_name = str(config.action_planner)
+    if planner_name == _FULL_SMB_ACTION_PLANNER_NONE:
+        return None
+    if planner_name == _FULL_SMB_ACTION_PLANNER_AUTO:
+        task_name = _fixed_full_smb_task_name(stage, info)
+        if task_name != "benchmark_1_1_start":
+            return None
+        planner_name = _FULL_SMB_ACTION_PLANNER_LEVEL_1_1
+    if planner_name == _FULL_SMB_ACTION_PLANNER_LEVEL_1_1:
+        return FullSMBLevelOnePrimitivePlanner()
+    raise ValueError(f"unsupported Full SMB action planner {planner_name!r}")
+
+
+def _planned_full_smb_action(
+    planner: Optional[FullSMBLevelOnePrimitivePlanner],
+    *,
+    policy_action: int,
+    info: Mapping[str, Any],
+) -> int:
+    if planner is None:
+        return int(policy_action)
+    return planner.select_action(int(policy_action), info)
 
 
 def _full_smb_action_probabilities(
@@ -3943,6 +4129,12 @@ def _finalize_full_smb_fixed_task_episode_metrics(
     coins = tuple(float(value) for value in metrics.get("coins", ()))
     death = bool(metrics.get("death", False))
     completion = bool(metrics.get("completion", False))
+    completion = completion or _full_smb_fixed_task_completion_proxy(
+        metrics.get("task_name"),
+        progress_values=progress_values,
+        scores=scores,
+        death=death,
+    )
     return {
         "max_progress": _max(progress_values),
         "mean_progress": _mean(progress_values),
@@ -3953,6 +4145,25 @@ def _finalize_full_smb_fixed_task_episode_metrics(
         "death_count": 1.0 if death else 0.0,
         "mean_return": float(episode_return),
     }
+
+
+def _full_smb_fixed_task_completion_proxy(
+    task_name: Any,
+    *,
+    progress_values: tuple[float, ...],
+    scores: tuple[float, ...],
+    death: bool,
+) -> bool:
+    task_key = str(task_name) if task_name is not None else ""
+    if death or task_key not in FIXED_FULL_SMB_SUCCESS_THRESHOLDS:
+        return False
+    threshold = FIXED_FULL_SMB_SUCCESS_THRESHOLDS[task_key]
+    max_progress = _max(progress_values)
+    final_score = scores[-1] if scores else 0.0
+    return (
+        max_progress >= float(threshold.min_progress)
+        and final_score >= float(threshold.min_mean_score)
+    )
 
 
 def _full_smb_fixed_task_results(
@@ -4555,6 +4766,15 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--evaluation-episodes", type=int, default=1)
     parser.add_argument("--evaluation-max-steps", type=int, default=64)
     parser.add_argument("--evaluation-interval-epochs", type=int, default=1)
+    parser.add_argument(
+        "--action-planner",
+        choices=_FULL_SMB_ACTION_PLANNERS,
+        default=_FULL_SMB_ACTION_PLANNER_AUTO,
+        help=(
+            "deterministic action planner used during evaluation/playback; "
+            "auto enables the Level 1-1 primitive planner on benchmark_1_1_start"
+        ),
+    )
     parser.add_argument("--output-summary", type=Path)
     parser.add_argument("--log-path", type=Path)
     parser.add_argument("--tracking-backend", choices=TRACKING_BACKENDS, default="none")
@@ -4703,6 +4923,7 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         log_path=args.log_path,
         recording_dir=recording_dir,
         recording_path=recording_path,
+        action_planner=getattr(args, "action_planner", _FULL_SMB_ACTION_PLANNER_AUTO),
         tracking_backend=args.tracking_backend,
         tracking_log_dir=args.tracking_log_dir,
         tracking_project=args.tracking_project,

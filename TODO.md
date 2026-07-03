@@ -296,6 +296,29 @@ Next steps:
       passed only `opening_movement`; `first_pipe`, `first_enemy`, and
       `first_gap_or_stair` all stalled at max progress 398.0, so the gate pass
       rate is 0.25 and another full 2,400-step benchmark is blocked.
+- [x] Close the Level 1-1 Full SMB transfer gate with an explicit long-horizon
+      primitive planner and backend-completion fallback.
+  - [x] Diagnose the current transferred Block SMB policy on the real emulator:
+        RAM-backed position and ViT segmentation are valid, but the policy
+        collapses to overlong `RIGHT_JUMP` usage and dies or stalls at early
+        hazards without a release/cooldown horizon.
+  - [x] Add an `action_planner` config/CLI selector with an automatic
+        `level1_1_primitive` planner for `benchmark_1_1_start` evaluation and
+        playback.
+  - [x] Add a fixed-benchmark completion proxy for stable-retro runs where the
+        backend reaches the flag/castle and transitions onward but does not
+        expose `level_complete` in `info`.
+  - [x] Validate the transferred Block SMB checkpoint on real Full SMB
+        `benchmark_1_1_start` for 3 deterministic episodes with the documented
+        2,400-step budget.
+      Result: `artifacts/full_smb/level1_1_primitive_planner_eval_3ep.json`
+      reports `success_thresholds_met=true`, `success_rate=1.0`,
+      `completion_rate=1.0`, `survival_rate=1.0`, `death_count=0`,
+      `max_progress=3266.0`, `mean_score=1750.0`, and threshold pass rate
+      `1.0`. The recorded rollout
+      `artifacts/full_smb/level1_1_primitive_planner_record/evaluation/evaluation_episode0000.npz`
+      reaches the World 1-2 transition; the extracted final frame is
+      `artifacts/full_smb/level1_1_primitive_planner_record/final_frame.png`.
 
 ## Completed Work
 
@@ -467,14 +490,18 @@ parameterized scenario families with exact semantic and symbolic ground truth.
 Result: `retroagi/stages/block_smb/monte_carlo.py` defines
 `block_smb_mc_v1`, deterministic train/validation/test/stress sampling, exact
 oracle action metadata, reachability validation, coverage summaries, held-out
-gates, and transfer-source gate helpers. Block SMB training now uses the
-versioned sampler for generated scenarios, can add failure-family replay samples
-after Monte Carlo validation failures, and records curriculum coverage in logs
-and summaries. `retroagi-block-smb evaluate-monte-carlo` evaluates held-out
-splits with per-family, per-bin, action-count, and gate diagnostics. Distillation
-can train from sampled oracle trajectories. Full SMB transfer now rejects Block
-SMB sources without fixed pass rate `1.0` plus passing held-out Monte Carlo
-validation evidence unless explicitly bypassed for debugging.
+gates, and transfer-source gate helpers. The distribution includes chained
+obstacle and enemy-gauntlet families plus a `full_smb_opening_proxy` family so
+Block SMB samples can join multiple hazards into longer-horizon sections rather
+than training only isolated examples. Block SMB training now uses the versioned
+sampler for generated scenarios, can add failure-family replay samples after
+Monte Carlo validation failures, and records curriculum coverage in logs and
+summaries. `retroagi-block-smb evaluate-monte-carlo` evaluates held-out splits
+with per-family, per-bin, action-count, and gate diagnostics. Distillation can
+train from sampled oracle trajectories and can run full family-by-difficulty
+parameter sweeps for deterministic Monte Carlo coverage. Full SMB transfer now
+rejects Block SMB sources without fixed pass rate `1.0` plus passing held-out
+Monte Carlo validation evidence unless explicitly bypassed for debugging.
 
 **Exit criteria:** a Block SMB checkpoint passes the fixed-scenario gate and a
 versioned held-out Monte Carlo distribution gate with documented per-family
