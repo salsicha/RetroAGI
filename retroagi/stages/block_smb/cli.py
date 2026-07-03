@@ -23,6 +23,7 @@ from retroagi.core import (
 )
 
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
+from .monte_carlo import BLOCK_SMB_MC_FAMILIES, DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
 from .train import (
     TARGET_NETWORK_MODES,
     BlockSMBAblationConfig,
@@ -111,6 +112,20 @@ def _slot_weight_item(value: str) -> tuple[str, float]:
     if weight <= 0:
         raise argparse.ArgumentTypeError("slot weight must be positive")
     return key, weight
+
+
+def _family_weight_item(value: str) -> tuple[str, float]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("must use FAMILY=WEIGHT syntax")
+    family, raw_weight = value.split("=", 1)
+    family = family.strip()
+    if family not in BLOCK_SMB_MC_FAMILIES:
+        choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+        raise argparse.ArgumentTypeError(f"unknown family {family!r}; expected one of: {choices}")
+    weight = float(raw_weight)
+    if weight < 0:
+        raise argparse.ArgumentTypeError("family weight must be non-negative")
+    return family, weight
 
 
 def _parse_architecture_config_value(value: str) -> Any:
@@ -225,6 +240,45 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fixed-scenario", action="append", dest="fixed_scenarios")
     parser.add_argument("--generated-scenarios", type=_non_negative_int)
     parser.add_argument("--generated-seed", type=int)
+    parser.add_argument(
+        "--monte-carlo-distribution",
+        dest="monte_carlo_distribution_id",
+        default=None,
+        help=(
+            "Block SMB Monte Carlo distribution ID; defaults to "
+            f"{DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID}"
+        ),
+    )
+    parser.add_argument(
+        "--monte-carlo-train-samples-per-epoch",
+        type=_non_negative_int,
+        help="number of replayable Monte Carlo train samples in each curriculum epoch",
+    )
+    parser.add_argument("--monte-carlo-seed", type=int)
+    parser.add_argument(
+        "--monte-carlo-family-weight",
+        action="append",
+        default=None,
+        type=_family_weight_item,
+        metavar="FAMILY=WEIGHT",
+        help="weighted family sampler override; may be repeated",
+    )
+    parser.add_argument(
+        "--monte-carlo-max-rejections",
+        type=_non_negative_int,
+        help="maximum unreachable samples to reject per Monte Carlo sample index",
+    )
+    parser.set_defaults(monte_carlo_validate_reachability=None)
+    parser.add_argument(
+        "--validate-monte-carlo-reachability",
+        action="store_true",
+        dest="monte_carlo_validate_reachability",
+    )
+    parser.add_argument(
+        "--skip-monte-carlo-reachability-validation",
+        action="store_false",
+        dest="monte_carlo_validate_reachability",
+    )
     parser.add_argument("--evaluation-episodes", type=_positive_int)
     parser.add_argument("--evaluation-max-steps", type=_positive_int)
     parser.add_argument("--evaluation-interval-epochs", type=_positive_int)
@@ -441,6 +495,12 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "fixed_scenarios",
         "generated_scenarios",
         "generated_seed",
+        "monte_carlo_distribution_id",
+        "monte_carlo_train_samples_per_epoch",
+        "monte_carlo_seed",
+        "monte_carlo_family_weight",
+        "monte_carlo_validate_reachability",
+        "monte_carlo_max_rejections",
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",
@@ -463,6 +523,10 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         overrides["fixed_scenarios"] = tuple(overrides["fixed_scenarios"])
     if "world_model_slot_weight" in overrides:
         overrides["world_model_slot_weights"] = dict(overrides.pop("world_model_slot_weight"))
+    if "monte_carlo_family_weight" in overrides:
+        overrides["monte_carlo_family_weights"] = dict(
+            overrides.pop("monte_carlo_family_weight")
+        )
     return overrides
 
 
@@ -787,6 +851,7 @@ def _public_result(
         "metrics": result.get("metrics", {}),
         "evaluation": result.get("evaluation", {}),
         "curriculum": result.get("curriculum", []),
+        "curriculum_summary": result.get("curriculum_summary", {}),
         "architecture": result.get("architecture", {}),
     }
 

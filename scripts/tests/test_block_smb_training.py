@@ -19,6 +19,7 @@ from retroagi.core import (
     save_checkpoint,
 )
 from retroagi.stages.block_smb import (
+    BLOCK_SMB_MC_FAMILIES,
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
     BLOCK_SMB_SPEC,
@@ -28,6 +29,7 @@ from retroagi.stages.block_smb import (
     BlockSMBTrainingConfig,
     SequentialBlockSMBVectorEnv,
     build_curriculum,
+    summarize_block_smb_curriculum,
     restore_block_smb_checkpoint,
     train_and_evaluate_block_smb,
 )
@@ -97,9 +99,17 @@ class TestBlockSMBTraining(unittest.TestCase):
     def test_curriculum_and_sequential_vector_env_are_deterministic(self):
         config = tiny_config(generated_scenarios=2)
         curriculum = build_curriculum(config)
+        names = [name for name, _scenario in curriculum]
+        self.assertEqual(names[0], "level_1_flat.json")
+        self.assertEqual(len(names), 3)
+        self.assertTrue(names[1].startswith("block_smb_mc_v1.train.50000.000000."))
+        self.assertTrue(names[2].startswith("block_smb_mc_v1.train.50000.000001."))
+        summary = summarize_block_smb_curriculum(curriculum)
+        self.assertEqual(summary["fixed_scenario_count"], 1)
+        self.assertEqual(summary["monte_carlo_sample_count"], 2)
         self.assertEqual(
-            [name for name, _scenario in curriculum],
-            ["level_1_flat.json", "generated_000", "generated_001"],
+            summary["monte_carlo"]["family_counts"],
+            {BLOCK_SMB_MC_FAMILIES[0]: 1, BLOCK_SMB_MC_FAMILIES[1]: 1},
         )
 
         vector_env = SequentialBlockSMBVectorEnv(curriculum, num_envs=2)
@@ -408,6 +418,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                 result["architecture"]["config"],
                 {"hidden_dim": 8, "controller_schedule": "constant"},
             )
+            self.assertEqual(result["curriculum_summary"]["monte_carlo_sample_count"], 1)
             evaluation = result["evaluation"]
             self.assertIn("level_1_flat.json", evaluation["fixed_scenarios"])
             self.assertIn("tuning_metrics", evaluation)

@@ -35,6 +35,13 @@ from retroagi.core import (
 
 from .adapter import BLOCK_SMB_SPEC, SCENARIOS_DIR, BlockSMBStage
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
+from .monte_carlo import (
+    BLOCK_SMB_MC_FAMILIES,
+    DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
+    block_smb_monte_carlo_metadata,
+    sample_block_smb_monte_carlo_split,
+    summarize_block_smb_monte_carlo_samples,
+)
 from .success import evaluate_fixed_success_thresholds, summarize_fixed_success_metrics
 from .vision import BlockVisionTransformer
 
@@ -158,6 +165,12 @@ class BlockSMBTrainingConfig:
     )
     generated_scenarios: int = 0
     generated_seed: int = 50_000
+    monte_carlo_distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
+    monte_carlo_train_samples_per_epoch: int = 0
+    monte_carlo_seed: int = 50_000
+    monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
+    monte_carlo_validate_reachability: bool = True
+    monte_carlo_max_rejections: int = 32
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     checkpoint_path: Optional[Path] = None
@@ -227,6 +240,21 @@ class BlockSMBTrainingConfig:
                 raise ValueError(f"{name} must be positive")
         if self.generated_scenarios < 0:
             raise ValueError("generated_scenarios must be non-negative")
+        if self.monte_carlo_train_samples_per_epoch < 0:
+            raise ValueError("monte_carlo_train_samples_per_epoch must be non-negative")
+        if self.monte_carlo_max_rejections < 0:
+            raise ValueError("monte_carlo_max_rejections must be non-negative")
+        if not self.monte_carlo_distribution_id:
+            raise ValueError("monte_carlo_distribution_id must be non-empty")
+        object.__setattr__(
+            self,
+            "monte_carlo_family_weights",
+            normalize_block_smb_monte_carlo_family_weights(
+                self.monte_carlo_family_weights
+            ),
+        )
+        if not isinstance(self.monte_carlo_validate_reachability, bool):
+            raise TypeError("monte_carlo_validate_reachability must be a bool")
         if self.imagined_rollout_horizon < 0:
             raise ValueError("imagined_rollout_horizon must be non-negative")
         if self.target_network_mode not in TARGET_NETWORK_MODES:
@@ -386,12 +414,90 @@ def load_fixed_scenarios(names: tuple[str, ...]) -> list[tuple[str, dict]]:
     return scenarios
 
 
+def normalize_block_smb_monte_carlo_family_weights(
+    weights: Mapping[str, Any] | None,
+) -> dict[str, float]:
+    """Validate optional Monte Carlo family sampling weights."""
+
+    normalized: dict[str, float] = {}
+    for raw_family, raw_weight in dict(weights or {}).items():
+        family = str(raw_family)
+        if family not in BLOCK_SMB_MC_FAMILIES:
+            choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+            raise ValueError(
+                f"unknown Block SMB Monte Carlo family {raw_family!r}; expected {choices}"
+            )
+        weight = float(raw_weight)
+        if not np.isfinite(weight) or weight < 0.0:
+            raise ValueError("monte_carlo_family_weights must be finite non-negative values")
+        if weight > 0.0:
+            normalized[family] = weight
+    return normalized
+
+
+def block_smb_monte_carlo_train_sample_count(config: BlockSMBTrainingConfig) -> int:
+    """Return the requested Monte Carlo train samples for one curriculum epoch."""
+
+    explicit = int(config.monte_carlo_train_samples_per_epoch)
+    legacy = int(config.generated_scenarios)
+    return explicit if explicit > 0 else legacy
+
+
+def build_monte_carlo_curriculum(
+    config: BlockSMBTrainingConfig,
+    *,
+    split: str = "train",
+    sample_count: int | None = None,
+) -> list[tuple[str, dict]]:
+    """Build replayable Monte Carlo scenarios for a Block SMB split."""
+
+    resolved_count = (
+        block_smb_monte_carlo_train_sample_count(config)
+        if sample_count is None
+        else int(sample_count)
+    )
+    if resolved_count <= 0:
+        return []
+    sample_set = sample_block_smb_monte_carlo_split(
+        distribution_id=config.monte_carlo_distribution_id,
+        split=split,
+        seed=int(config.monte_carlo_seed),
+        sample_count=resolved_count,
+        family_weights=config.monte_carlo_family_weights,
+        validate_reachability=config.monte_carlo_validate_reachability,
+        max_rejections=config.monte_carlo_max_rejections,
+    )
+    return sample_set.scenarios()
+
+
 def build_curriculum(config: BlockSMBTrainingConfig) -> list[tuple[str, dict]]:
     scenarios = load_fixed_scenarios(config.fixed_scenarios)
-    for index in range(config.generated_scenarios):
-        seed = config.generated_seed + index
-        scenarios.append((f"generated_{index:03d}", MarioScenarioEnv.generate_scenario(seed=seed)))
+    scenarios.extend(build_monte_carlo_curriculum(config))
     return scenarios
+
+
+def summarize_block_smb_curriculum(
+    curriculum: list[tuple[str, dict]],
+) -> dict[str, Any]:
+    fixed_names: list[str] = []
+    monte_carlo_scenarios: list[Mapping[str, Any]] = []
+    for scenario_name, scenario in curriculum:
+        metadata = block_smb_monte_carlo_metadata(scenario)
+        if metadata:
+            monte_carlo_scenarios.append(scenario)
+        else:
+            fixed_names.append(scenario_name)
+    return {
+        "scenario_count": len(curriculum),
+        "fixed_scenario_count": len(fixed_names),
+        "fixed_scenarios": fixed_names,
+        "monte_carlo_sample_count": len(monte_carlo_scenarios),
+        "monte_carlo": (
+            summarize_block_smb_monte_carlo_samples(monte_carlo_scenarios)
+            if monte_carlo_scenarios
+            else {}
+        ),
+    }
 
 
 def block_smb_architecture_metadata(config: BlockSMBTrainingConfig) -> dict[str, Any]:
@@ -1463,6 +1569,7 @@ def train_and_evaluate_block_smb(
         global_step=global_step,
         resumed_from=str(config.resume_path) if config.resume_path is not None else None,
         curriculum=[name for name, _scenario in curriculum],
+        curriculum_summary=summarize_block_smb_curriculum(curriculum),
     )
     history: list[dict[str, float]] = []
     evaluations: list[dict[str, Any]] = []
@@ -1585,6 +1692,7 @@ def train_and_evaluate_block_smb(
         "metrics": last_metrics,
         "evaluation": evaluation,
         "curriculum": [name for name, _scenario in curriculum],
+        "curriculum_summary": summarize_block_smb_curriculum(curriculum),
         "architecture": block_smb_architecture_metadata(config),
         "model": model,
     }

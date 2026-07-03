@@ -44,6 +44,7 @@ def fake_result():
             "fixed_scenarios": {"level_1_flat.json": {"return": 2.0}},
         },
         "curriculum": ["level_1_flat.json"],
+        "curriculum_summary": {"fixed_scenario_count": 1, "monte_carlo_sample_count": 0},
         "architecture": {
             "name": BASELINE_ARCHITECTURE_NAME,
             "config": {"hidden_dim": 32, "controller_schedule": "constant"},
@@ -113,6 +114,21 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "artifacts/block_smb/videos",
                     "--fixed-scenario",
                     "level_1_flat.json",
+                    "--generated-scenarios",
+                    "2",
+                    "--monte-carlo-distribution",
+                    "block_smb_mc_v1",
+                    "--monte-carlo-train-samples-per-epoch",
+                    "12",
+                    "--monte-carlo-seed",
+                    "60001",
+                    "--monte-carlo-family-weight",
+                    "flat_run=2",
+                    "--monte-carlo-family-weight",
+                    "single_gap=1",
+                    "--monte-carlo-max-rejections",
+                    "5",
+                    "--skip-monte-carlo-reachability-validation",
                     "--policy-loss-weight",
                     "0.8",
                     "--representation-weight",
@@ -167,6 +183,13 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertTrue(config.record_videos)
         self.assertEqual(config.video_dir, Path("artifacts/block_smb/videos"))
         self.assertEqual(config.fixed_scenarios, ("level_1_flat.json",))
+        self.assertEqual(config.generated_scenarios, 2)
+        self.assertEqual(config.monte_carlo_distribution_id, "block_smb_mc_v1")
+        self.assertEqual(config.monte_carlo_train_samples_per_epoch, 12)
+        self.assertEqual(config.monte_carlo_seed, 60001)
+        self.assertEqual(config.monte_carlo_family_weights, {"flat_run": 2.0, "single_gap": 1.0})
+        self.assertEqual(config.monte_carlo_max_rejections, 5)
+        self.assertFalse(config.monte_carlo_validate_reachability)
         self.assertEqual(config.policy_loss_weight, 0.8)
         self.assertEqual(config.representation_weight, 0.07)
         self.assertEqual(config.reward_loss_weight, 0.03)
@@ -202,6 +225,13 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["config"]["tracking_project"], "retroagi-test")
         self.assertEqual(payload["config"]["tracking_run_name"], "smoke")
         self.assertEqual(payload["config"]["tracking_mode"], "offline")
+        self.assertEqual(payload["config"]["monte_carlo_train_samples_per_epoch"], 12)
+        self.assertEqual(payload["config"]["monte_carlo_seed"], 60001)
+        self.assertEqual(
+            payload["config"]["monte_carlo_family_weights"],
+            {"flat_run": 2.0, "single_gap": 1.0},
+        )
+        self.assertFalse(payload["config"]["monte_carlo_validate_reachability"])
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertEqual(payload["config"]["reward_config"]["gap_jump"], -7.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])
@@ -258,6 +288,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
         self.assertEqual(written["vision"], payload["vision"])
         self.assertEqual(written["architecture"], payload["architecture"])
+        self.assertEqual(written["curriculum_summary"], payload["curriculum_summary"])
 
     def test_train_command_can_disable_checkpoint_transfer(self):
         fresh_vision = FreshVision()
