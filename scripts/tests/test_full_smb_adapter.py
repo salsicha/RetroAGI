@@ -283,6 +283,25 @@ class FrameSkipRetroEnv(GymnasiumRetroEnv):
         )
 
 
+class LifeLossRetroEnv(GymnasiumRetroEnv):
+    def reset(self, seed=None):
+        self.reset_seed = seed
+        return (
+            np.zeros((16, 20, 3), dtype=np.uint8),
+            {"xscrollHi": 0, "xscrollLo": 200, "score": 0, "coins": 0, "lives": 2},
+        )
+
+    def step(self, action):
+        self.actions.append(np.asarray(action))
+        return (
+            np.ones((16, 20, 3), dtype=np.uint8),
+            0.0,
+            False,
+            False,
+            {"xscrollHi": 0, "xscrollLo": 0, "score": 0, "coins": 0, "lives": 1},
+        )
+
+
 class EmulatorStateProxy:
     def __init__(self, env):
         self.env = env
@@ -715,6 +734,23 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertTrue(signals.timeout)
         self.assertEqual(signals.power_state, "small")
 
+    def test_signal_extractor_marks_negative_lives_as_death(self):
+        signals = extract_full_smb_signals(
+            {
+                "xscrollHi": 0,
+                "xscrollLo": 0,
+                "score": 0,
+                "coins": 0,
+                "lives": -1,
+            },
+            terminated=True,
+            truncated=False,
+        )
+
+        self.assertEqual(signals.lives, -1)
+        self.assertTrue(signals.death)
+        self.assertFalse(signals.completion)
+
     def test_full_smb_signal_extractor_satisfies_game_signal_contract(self):
         extractor = FullSMBSignalExtractor()
         signals = extractor.extract(
@@ -1045,6 +1081,38 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (8, 17))
         finally:
             stage.close()
+
+    def test_stage_marks_life_loss_as_terminal_death_boundary(self):
+        env = LifeLossRetroEnv()
+        stage = FullSMBStage(
+            env=env,
+            vision=StaticFullSMBVision(),
+            observation_config=FullSMBObservationConfig(
+                frame_skip=1,
+                frame_stack=2,
+                resize_shape=(16, 20),
+            ),
+            reward_config=FullSMBRewardConfig(death=-7.0),
+        )
+        try:
+            observation = stage.reset(seed=123)
+            next_observation, reward, terminated, truncated, info = stage.step(
+                SMBAction.RIGHT
+            )
+            signals = info["full_smb_signals"]
+            self.assertTrue(terminated)
+            self.assertFalse(truncated)
+            self.assertTrue(signals["death"])
+            self.assertTrue(signals["terminated"])
+            self.assertEqual(signals["termination_reason"], "life_lost")
+            self.assertEqual(reward, -7.0)
+            self.assertEqual(info["reward_terms"]["death"], -7.0)
+            batch = stage.encode_observation(next_observation, info)
+            self.assertEqual(batch.metadata["episode"]["mask"].item(), 0.0)
+            self.assertEqual(observation.shape, next_observation.shape)
+        finally:
+            stage.close()
+        self.assertTrue(env.closed)
 
     def test_stage_can_disable_run_button_augmentation(self):
         env = GymnasiumRetroEnv()

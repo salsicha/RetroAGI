@@ -2,7 +2,7 @@
 
 import copy
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Optional
 
 import numpy as np
@@ -605,7 +605,15 @@ class FullSMBStage:
                 break
         if observation is None:
             raise RuntimeError("Full SMB frame_skip must execute at least one frame")
-        info = self._annotated_info(info, terminated=terminated, truncated=truncated)
+        info = self._annotated_info(
+            info,
+            terminated=terminated,
+            truncated=truncated,
+            previous_info=previous_info,
+        )
+        signal_info = _signal_mapping(info)
+        if bool(signal_info.get("death")):
+            terminated = True
         self._annotate_vision_position_target(info)
         reward_terms = self._reward_terms(
             backend_reward=backend_reward,
@@ -853,10 +861,21 @@ class FullSMBStage:
             raise ValueError("stable-retro info must be a mapping")
         return dict(info)
 
-    def _annotated_info(self, info: Any, *, terminated: bool, truncated: bool) -> dict[str, Any]:
+    def _annotated_info(
+        self,
+        info: Any,
+        *,
+        terminated: bool,
+        truncated: bool,
+        previous_info: Optional[Mapping[str, Any]] = None,
+    ) -> dict[str, Any]:
         annotated = self._info(info)
         self._annotate_vision_position_target(annotated)
         signals = extract_full_smb_signals(annotated, terminated=terminated, truncated=truncated)
+        signals = _apply_full_smb_transition_boundaries(
+            previous_info,
+            signals,
+        )
         state_vec = signals.to_state_vec(self.signal_config)
         camera_vec = _camera_vec(annotated, signals, self.signal_config)
         annotated["full_smb_signals"] = signals.as_dict()
@@ -956,6 +975,7 @@ def extract_full_smb_signals(
     stage = _int_value(info, STAGE_KEYS)
     level = _level_value(info, world=world, stage=stage)
     coins = _int_value(info, COIN_KEYS)
+    lives = _int_value(info, LIFE_KEYS)
     power_state = _power_state_value(info)
     game_over = _bool_value(info, GAME_OVER_KEYS, default=False) or _reason_matches(
         reason, ("game_over", "game over")
@@ -965,6 +985,7 @@ def extract_full_smb_signals(
     )
     death = (
         game_over
+        or (lives is not None and lives < 0)
         or _bool_value(info, DEATH_KEYS, default=False)
         or _reason_matches(reason, ("death", "dead", "died", "game_over", "game over"))
     )
@@ -978,7 +999,7 @@ def extract_full_smb_signals(
         position=position,
         progress=position[0] if position is not None else None,
         score=_int_value(info, SCORE_KEYS),
-        lives=_int_value(info, LIFE_KEYS),
+        lives=lives,
         collectibles={} if coins is None else {"coins": coins},
         coins=coins,
         screen=screen,
@@ -995,6 +1016,41 @@ def extract_full_smb_signals(
         truncated=bool(truncated),
         termination_reason=reason,
     )
+
+
+def _apply_full_smb_transition_boundaries(
+    previous_info: Optional[Mapping[str, Any]],
+    signals: FullSMBSignals,
+) -> FullSMBSignals:
+    reason = _death_boundary_reason(previous_info, signals)
+    if reason is None:
+        return signals
+    return replace(
+        signals,
+        death=True,
+        game_over=bool(signals.game_over or (signals.lives is not None and signals.lives < 0)),
+        terminated=True,
+        termination_reason=signals.termination_reason or reason,
+    )
+
+
+def _death_boundary_reason(
+    previous_info: Optional[Mapping[str, Any]],
+    signals: FullSMBSignals,
+) -> Optional[str]:
+    if signals.completion:
+        return None
+    if signals.death:
+        return signals.termination_reason or "death"
+    if signals.lives is not None and signals.lives < 0:
+        return "life_underflow"
+    previous = _signal_mapping(previous_info or {})
+    previous_lives = _numeric_from_value(previous.get("lives"))
+    if previous_lives is None or signals.lives is None:
+        return None
+    if float(signals.lives) < float(previous_lives):
+        return "life_lost"
+    return None
 
 
 def _position_value(info: Mapping[str, Any]) -> Optional[tuple[float, float]]:
