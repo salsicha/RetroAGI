@@ -975,15 +975,22 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertEqual(observation.shape, (224, 256, 3))
 
             next_observation, reward, terminated, truncated, info = stage.step(SMBAction.RIGHT_JUMP)
+            expected_action = full_smb_action(SMBAction.RIGHT_JUMP, env.buttons)
+            expected_action[env.buttons.index("B")] = 1
             np.testing.assert_array_equal(
                 env.actions[-1],
-                full_smb_action(SMBAction.RIGHT_JUMP, env.buttons),
+                expected_action,
             )
             self.assertEqual(next_observation.dtype, np.uint8)
             self.assertEqual(reward, 3.5)
             self.assertTrue(terminated)
             self.assertFalse(truncated)
             self.assertEqual(info["action"]["shared_name"], "RIGHT_JUMP")
+            self.assertTrue(info["action"]["hold_run_button"])
+            self.assertEqual(
+                info["action"]["button_vector"][env.buttons.index("B")],
+                1,
+            )
             self.assertEqual(
                 info["full_smb_signals"],
                 {
@@ -1036,6 +1043,26 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertEqual(batch.src_c.shape, (1, FULL_SMB_SPEC.seq_len_c))
             self.assertEqual(batch.metadata["episode"]["mask"].item(), 0.0)
             self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (8, 17))
+        finally:
+            stage.close()
+
+    def test_stage_can_disable_run_button_augmentation(self):
+        env = GymnasiumRetroEnv()
+        stage = FullSMBStage(
+            env=env,
+            vision=StaticFullSMBVision(),
+            observation_config=FullSMBObservationConfig(hold_run_button=False),
+        )
+        try:
+            stage.reset(seed=123)
+            _observation, _reward, _terminated, _truncated, info = stage.step(
+                SMBAction.RIGHT_JUMP
+            )
+            np.testing.assert_array_equal(
+                env.actions[-1],
+                full_smb_action(SMBAction.RIGHT_JUMP, env.buttons),
+            )
+            self.assertFalse(info["action"]["hold_run_button"])
         finally:
             stage.close()
         self.assertTrue(env.closed)

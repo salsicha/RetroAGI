@@ -264,6 +264,7 @@ class FullSMBObservationConfig:
     normalization_mean: tuple[float, float, float] = (0.0, 0.0, 0.0)
     normalization_std: tuple[float, float, float] = (1.0, 1.0, 1.0)
     include_camera_state: bool = False
+    hold_run_button: bool = True
 
     def __post_init__(self) -> None:
         if self.frame_skip <= 0:
@@ -290,6 +291,8 @@ class FullSMBObservationConfig:
             raise ValueError("normalization_mean/std must contain three RGB values")
         if any(float(value) <= 0.0 for value in self.normalization_std):
             raise ValueError("normalization_std values must be positive")
+        if not isinstance(self.hold_run_button, bool):
+            raise TypeError("hold_run_button must be a bool")
 
     def effective_crop_margins(self) -> tuple[int, int, int, int]:
         top, right, bottom, left = (int(value) for value in self.crop_margins)
@@ -310,6 +313,7 @@ class FullSMBObservationConfig:
             "normalization_mean": self.normalization_mean,
             "normalization_std": self.normalization_std,
             "include_camera_state": self.include_camera_state,
+            "hold_run_button": self.hold_run_button,
         }
 
 
@@ -580,6 +584,7 @@ class FullSMBStage:
     ) -> tuple[np.ndarray, float, bool, bool, Mapping[str, Any]]:
         shared_action = coerce_smb_action(action)
         button_action = full_smb_action(shared_action, self.buttons)
+        button_action = self._augment_run_button(shared_action, button_action)
         previous_info = self.last_info
         backend_reward = 0.0
         frame_rewards: list[float] = []
@@ -616,6 +621,7 @@ class FullSMBStage:
             "shared_name": shared_action.name,
             "buttons": self.buttons,
             "button_vector": button_action.tolist(),
+            "hold_run_button": self.observation_config.hold_run_button,
             "frame_skip": self.observation_config.frame_skip,
             "frames_executed": len(frame_rewards),
             "frame_rewards": frame_rewards,
@@ -626,6 +632,22 @@ class FullSMBStage:
         self._last_truncated = truncated
         self._last_observation = observation.copy()
         return observation, reward, terminated, truncated, info
+
+    def _augment_run_button(
+        self,
+        shared_action: SMBAction,
+        button_action: np.ndarray,
+    ) -> np.ndarray:
+        if not self.observation_config.hold_run_button:
+            return button_action
+        if shared_action not in {SMBAction.RIGHT, SMBAction.RIGHT_JUMP}:
+            return button_action
+        button_names = tuple(str(button).upper() for button in self.buttons)
+        if "B" not in button_names:
+            return button_action
+        augmented = np.asarray(button_action, dtype=np.int8).copy()
+        augmented[button_names.index("B")] = 1
+        return augmented
 
     def save_emulator_state(self) -> FullSMBEmulatorState:
         """Snapshot backend emulator state and adapter metadata."""
