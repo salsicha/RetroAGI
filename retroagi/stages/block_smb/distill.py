@@ -1108,6 +1108,7 @@ def _training_config_from_distillation(
         resume_path=config.init_checkpoint,
         device=config.device,
         deterministic=config.deterministic,
+        vision_checkpoint_path=config.vision_checkpoint,
         tracking_backend="none",
         semantic_prediction_accuracy_threshold=config.semantic_prediction_accuracy_threshold,
     )

@@ -250,7 +250,8 @@ class TestBlockSMBCLI(unittest.TestCase):
     def test_train_command_loads_frozen_vision_checkpoint_and_writes_summary(self):
         loaded_model = object()
 
-        def fake_train(_config, *, vision_factory):
+        def fake_train(config, *, vision_factory):
+            self.assertEqual(config.vision_checkpoint_path, Path("data/block_vit/block_vit.pth"))
             self.assertIs(vision_factory(), loaded_model)
             return fake_result()
 
@@ -293,6 +294,54 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(written["vision"], payload["vision"])
         self.assertEqual(written["architecture"], payload["architecture"])
         self.assertEqual(written["curriculum_summary"], payload["curriculum_summary"])
+
+    def test_evaluate_command_reuses_checkpoint_vision_path(self):
+        loaded_model = object()
+        checkpoint = {
+            "epoch": 1,
+            "config": {
+                "seed": 5,
+                "epochs": 1,
+                "hidden_dim": 8,
+                "architecture_config": {
+                    "hidden_dim": 8,
+                    "controller_schedule": "constant",
+                },
+                "vision_checkpoint_path": "data/pipeline/block_vit.pth",
+            },
+        }
+
+        def fake_train(config, *, vision_factory):
+            self.assertEqual(config.vision_checkpoint_path, Path("data/pipeline/block_vit.pth"))
+            self.assertIs(vision_factory(), loaded_model)
+            return fake_result()
+
+        with patch("retroagi.stages.block_smb.cli.load_checkpoint", return_value=checkpoint):
+            with patch(
+                "retroagi.stages.block_smb.cli.load_block_vit_checkpoint",
+                return_value=SimpleNamespace(
+                    model=loaded_model,
+                    path=Path("data/pipeline/block_vit.pth"),
+                    frozen=True,
+                ),
+            ) as load_vision:
+                with patch(
+                    "retroagi.stages.block_smb.cli.train_and_evaluate_block_smb",
+                    side_effect=fake_train,
+                ):
+                    exit_code, payload = self.run_main(
+                        [
+                            "evaluate",
+                            "--checkpoint",
+                            "data/block_smb/policy.pth",
+                            "--device",
+                            "cpu",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(load_vision.call_args.args[0], Path("data/pipeline/block_vit.pth"))
+        self.assertEqual(payload["vision"]["checkpoint_path"], "data/pipeline/block_vit.pth")
 
     def test_train_command_can_disable_checkpoint_transfer(self):
         fresh_vision = FreshVision()

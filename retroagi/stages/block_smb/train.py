@@ -192,6 +192,7 @@ class BlockSMBTrainingConfig:
     num_envs: int = 1
     evaluation_interval_epochs: int = 1
     log_path: Optional[Path] = None
+    vision_checkpoint_path: Optional[Path] = None
     tracking_backend: str = "none"
     tracking_log_dir: Optional[Path] = None
     tracking_project: str = "retroagi"
@@ -317,6 +318,7 @@ class BlockSMBTrainingConfig:
             "resume_path",
             "video_dir",
             "log_path",
+            "vision_checkpoint_path",
             "tracking_log_dir",
         ):
             path_value = getattr(self, path_name)

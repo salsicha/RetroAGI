@@ -10,6 +10,7 @@ from unittest.mock import patch
 import torch
 
 from retroagi.core import VisionOutput, VisionSpec
+from retroagi.stages.block_smb import distill as distill_module
 from retroagi.stages.block_smb.distill import (
     BlockSMBDistillationConfig,
     build_block_smb_distillation_scenarios,
@@ -91,6 +92,8 @@ class TestBlockSMBDistillation(unittest.TestCase):
                     [
                         "--checkpoint",
                         "data/block_smb/distilled.pth",
+                        "--vision-checkpoint",
+                        "data/pipeline/block_vit.pth",
                         "--epochs",
                         "1",
                         "--monte-carlo-samples",
@@ -117,6 +120,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(json.loads(stream.getvalue()), {"ok": True})
         config = train.call_args.args[0]
         self.assertEqual(config.checkpoint_path, Path("data/block_smb/distilled.pth"))
+        self.assertEqual(config.vision_checkpoint, Path("data/pipeline/block_vit.pth"))
         self.assertEqual(config.monte_carlo_samples, 3)
         self.assertEqual(config.monte_carlo_seed, 60002)
         self.assertEqual(config.monte_carlo_family_weights, {"flat_run": 1.0})
@@ -126,6 +130,18 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(config.monte_carlo_test_samples, 5)
         self.assertEqual(config.monte_carlo_pass_rate_gate, 0.8)
         self.assertEqual(config.monte_carlo_family_pass_rate_gate, 0.7)
+
+    def test_training_config_preserves_distillation_vision_checkpoint(self):
+        config = BlockSMBDistillationConfig(
+            vision_checkpoint=Path("data/pipeline/block_vit.pth")
+        )
+
+        training_config = distill_module._training_config_from_distillation(config)
+
+        self.assertEqual(
+            training_config.vision_checkpoint_path,
+            Path("data/pipeline/block_vit.pth"),
+        )
 
 
 if __name__ == "__main__":

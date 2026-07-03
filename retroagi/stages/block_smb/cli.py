@@ -670,6 +670,7 @@ def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
         "resume_path",
         "video_dir",
         "log_path",
+        "vision_checkpoint_path",
         "tracking_log_dir",
     ):
         if normalized.get(name) is not None:
@@ -723,6 +724,8 @@ def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
         values["save_checkpoints"] = True
     if args.resume is not None:
         values["resume_path"] = args.resume
+    if args.vision_checkpoint is not None:
+        values["vision_checkpoint_path"] = args.vision_checkpoint
     record_dir = args.record_dir
     if args.record and record_dir is None:
         record_dir = DEFAULT_RECORD_DIR
@@ -736,6 +739,8 @@ def _make_checkpoint_config(args: argparse.Namespace, *, record: bool) -> BlockS
     values = _checkpoint_config(args.checkpoint)
     overrides = _config_overrides(args)
     values.update(overrides)
+    if getattr(args, "vision_checkpoint", None) is not None:
+        values["vision_checkpoint_path"] = args.vision_checkpoint
     _apply_reward_config_overrides(values, args)
     _apply_ablation_config_overrides(values, args)
     _apply_architecture_overrides(values, args)
@@ -762,10 +767,11 @@ def _make_vision_factory(
 ) -> tuple[Any, dict[str, Any]]:
     device = select_device(config.device)
     cache: dict[str, Any] = {}
+    resolved_checkpoint_path = checkpoint_path or config.vision_checkpoint_path
     vision_info: dict[str, Any] = {
         "checkpoint_path": (
-            str(checkpoint_path)
-            if checkpoint_path is not None and config.ablation.checkpoint_transfer_enabled
+            str(resolved_checkpoint_path)
+            if resolved_checkpoint_path is not None and config.ablation.checkpoint_transfer_enabled
             else None
         ),
         "frozen": True,
@@ -776,7 +782,7 @@ def _make_vision_factory(
         if "model" not in cache:
             if config.ablation.checkpoint_transfer_enabled:
                 loaded = load_block_vit_checkpoint(
-                    checkpoint_path,
+                    resolved_checkpoint_path,
                     device=device,
                     freeze=True,
                 )
