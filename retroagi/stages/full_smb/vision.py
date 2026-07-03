@@ -16,7 +16,7 @@ from retroagi.core import (
     is_versioned_checkpoint,
     load_checkpoint,
 )
-from retroagi.core.vision import image_tensor
+from retroagi.core.vision import image_tensor, infer_agent_support_logits
 
 FULL_SMB_VIT_MODEL_NAME = "full_smb_vit"
 FULL_SMB_VIT_CHECKPOINT_KIND = "vision_encoder"
@@ -76,6 +76,8 @@ class FullSMBVisionTransformer(PatchVisionTransformer):
             mlp_ratio=mlp_ratio,
             drop=drop,
             position_class="mario",
+            support_ground_classes=("ground",),
+            support_platform_classes=("pipe", "brick", "question_block"),
             name=FULL_SMB_VIT_MODEL_NAME,
         )
 
@@ -184,6 +186,14 @@ class FullSMBDeepLabSegmentationVision(nn.Module):
 
         token_logits = F.adaptive_avg_pool2d(logits, (15, 16))
         tokens = token_logits.flatten(2).transpose(1, 2)
+        support_logits = infer_agent_support_logits(
+            logits,
+            semantic_classes=self.spec.semantic_classes,
+            agent_class="mario",
+            ground_classes=("floor",),
+            platform_classes=("box", "brick"),
+            support_classes=self.spec.support_classes,
+        )
         return VisionOutput(
             position=position,
             semantic_logits=logits,
@@ -192,7 +202,10 @@ class FullSMBDeepLabSegmentationVision(nn.Module):
             metadata={
                 "checkpoint_classes": self.spec.semantic_classes,
                 "legacy_encoder": "deeplabv3_resnet50",
+                "support_source": "semantic_contact",
             },
+            support_logits=support_logits,
+            support_ids=support_logits.argmax(dim=1) if support_logits is not None else None,
         )
 
     def encode(self, observation: Any) -> VisionOutput:

@@ -23,6 +23,8 @@ from retroagi.core import (
     StageBatch,
     VisionEncoder,
     WorldModelState,
+    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    action_level_world_model_state_dict,
     build_architecture,
     build_checkpoint,
     get_architecture,
@@ -56,6 +58,7 @@ TARGET_NETWORK_MODES = ("off", "on", "auto")
 BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
     "position",
     "semantic_probabilities",
+    "support_state",
     "state",
     "patch_tokens",
 )
@@ -66,6 +69,12 @@ _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
     "semantics": "semantic_probabilities",
     "semantic_probabilities": "semantic_probabilities",
     "semantic-probabilities": "semantic_probabilities",
+    "support": "support_state",
+    "support_state": "support_state",
+    "support-state": "support_state",
+    "grounded": "support_state",
+    "ground_state": "support_state",
+    "ground-state": "support_state",
     "state": "state",
     "symbolic": "state",
     "symbolic_state": "state",
@@ -773,6 +782,7 @@ def apply_block_smb_ablations(
                 (
                     "c_position",
                     "c_semantic_probabilities",
+                    "c_support_state",
                     "c_patch_tokens",
                 ),
             )
@@ -1126,11 +1136,17 @@ def block_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         feature_length,
         default=(position[1], position[1]),
     )
+    support = _block_smb_c_stream_span(
+        fusion,
+        "c_support_state",
+        feature_length,
+        default=(semantics[1], semantics[1]),
+    )
     state = _block_smb_c_stream_span(
         fusion,
         "c_state",
         feature_length,
-        default=(semantics[1], semantics[1]),
+        default=(support[1], support[1]),
     )
     patch_tokens = _block_smb_c_stream_span(
         fusion,
@@ -1141,6 +1157,7 @@ def block_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
     return {
         "position": position,
         "semantic_probabilities": semantics,
+        "support_state": support,
         "state": state,
         "patch_tokens": patch_tokens,
     }
@@ -1835,11 +1852,16 @@ def restore_block_smb_checkpoint(
                 f"{dict(architecture_config)!r}"
             )
     states = checkpoint["states"]
-    load_result = model.load_state_dict(states["model"], strict=False)
+    model_state, skipped_world_model_keys = action_level_world_model_state_dict(
+        model,
+        states["model"],
+    )
+    load_result = model.load_state_dict(model_state, strict=False)
     allowed_missing_prefixes = (
         "transition_representation_head.",
         "reward_head.",
         "value_head.",
+        *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     )
     unexpected = list(load_result.unexpected_keys)
     unsupported_missing = [
@@ -1854,10 +1876,16 @@ def restore_block_smb_checkpoint(
         try:
             optimizer.load_state_dict(states["optimizer"])
         except ValueError:
-            if unsupported_missing or not load_result.missing_keys:
+            if unsupported_missing or (
+                not load_result.missing_keys and not skipped_world_model_keys
+            ):
                 raise
     if target_model is not None:
         target_state = states.get("target_model", states["model"])
+        target_state, _skipped_target_world_model_keys = action_level_world_model_state_dict(
+            target_model,
+            target_state,
+        )
         target_model.load_state_dict(target_state, strict=False)
         target_model.eval()
     if "torch_rng" in states:

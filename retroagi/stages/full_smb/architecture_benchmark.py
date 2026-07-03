@@ -18,6 +18,7 @@ from retroagi.core import (
     SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
     StageBatch,
     WorldModelState,
+    action_level_world_model_state_dict,
     get_architecture,
     load_checkpoint,
     select_device,
@@ -191,12 +192,16 @@ def _load_source_state(
             "unexpected_keys": [],
             "shared_key_count": 0,
         }
-    load_result = model.load_state_dict(source_state, strict=False)
+    migrated_state, skipped_world_model_keys = action_level_world_model_state_dict(
+        model,
+        source_state,
+    )
+    load_result = model.load_state_dict(migrated_state, strict=False)
     shared_key_count = sum(1 for key in source_state if key in model.state_dict())
     return {
         "source": "block_smb_policy_checkpoint",
         "loaded": True,
-        "missing_keys": list(load_result.missing_keys),
+        "missing_keys": list(load_result.missing_keys) + list(skipped_world_model_keys),
         "unexpected_keys": list(load_result.unexpected_keys),
         "shared_key_count": int(shared_key_count),
     }

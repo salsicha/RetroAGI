@@ -52,6 +52,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
 
         self.assertEqual(fusion["c_position"], (0, 2))
         self.assertEqual(fusion["c_semantic_probabilities"], (2, 9))
+        self.assertEqual(fusion["c_support_state"], (9, 9))
         self.assertEqual(fusion["c_state"], (9, 23))
         self.assertEqual(fusion["c_patch_tokens"], (23, 64))
         torch.testing.assert_close(batch.src_c[:, :2], torch.tensor([[0.25, 0.75]]))
@@ -75,6 +76,20 @@ class TestVisionHierarchyProjector(unittest.TestCase):
         self.assertFalse(torch.equal(baseline.src_c[:, 23:], changed_tokens.src_c[:, 23:]))
         torch.testing.assert_close(baseline.src_a, changed_tokens.src_a)
         torch.testing.assert_close(baseline.src_b, changed_tokens.src_b)
+
+    def test_support_logits_feed_declared_c_section(self):
+        vision = self.make_vision()
+        vision.support_logits = torch.tensor([[-4.0, 4.0, -4.0]])
+        vision.support_ids = torch.tensor([1])
+        batch = self.projector.project(vision, state=torch.zeros(14))
+        fusion = batch.metadata["vision_fusion"]
+
+        self.assertEqual(fusion["c_support_state"], (9, 12))
+        self.assertEqual(fusion["c_state"], (12, 26))
+        self.assertEqual(fusion["c_patch_tokens"], (26, 64))
+        support = batch.src_c[:, 9:12]
+        self.assertEqual(int(support.argmax(dim=1).item()), 1)
+        self.assertGreater(float(support[0, 1]), 0.99)
 
     def test_block_stage_normalizes_stacks_and_masks_observations(self):
         vision = self.make_vision()
@@ -177,6 +192,12 @@ class TestVisionHierarchyProjector(unittest.TestCase):
         vision = self.make_vision()
         vision.semantic_logits = torch.zeros(1, 21, 2, 16)
         with self.assertRaisesRegex(ValueError, "exceed vocab_size"):
+            self.projector.project(vision)
+
+    def test_rejects_invalid_support_shape(self):
+        vision = self.make_vision()
+        vision.support_logits = torch.zeros(2, 3)
+        with self.assertRaisesRegex(ValueError, "support_logits"):
             self.projector.project(vision)
 
     def test_block_stage_uses_shared_projector_contract(self):

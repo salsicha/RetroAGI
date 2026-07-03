@@ -6,12 +6,14 @@ import torch
 import torch.nn as nn
 
 from retroagi.core import (
+    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     AdaptiveController,
     AgentWorldModelCritic,
     HierarchicalAdaptiveModel,
     MotorPrimitiveController,
     WorldModel,
     WorldModelState,
+    action_level_world_model_state_dict,
 )
 
 
@@ -398,6 +400,33 @@ class TestCriticFeedbackContract(unittest.TestCase):
 
 
 class TestWorldModelRecurrentBoundaries(unittest.TestCase):
+    def test_migrates_token_level_world_model_checkpoint_keys(self):
+        model = AgentWorldModelCritic(
+            vocab_size=7,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+        )
+        old_state = dict(model.state_dict())
+        old_state["world_model.lstm.weight_ih_l0"] = torch.zeros(128, 12)
+        old_state["world_model.fc.weight"] = torch.zeros(1, 32)
+        old_state["world_model.fc.bias"] = torch.zeros(1)
+
+        migrated, skipped = action_level_world_model_state_dict(model, old_state)
+        load_result = model.load_state_dict(migrated, strict=False)
+        unsupported_missing = tuple(
+            key
+            for key in load_result.missing_keys
+            if not key.startswith(ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES)
+        )
+
+        self.assertIn("world_model.lstm.weight_ih_l0", skipped)
+        self.assertIn("world_model.fc.weight", skipped)
+        self.assertIn("world_model.fc.bias", skipped)
+        self.assertEqual(unsupported_missing, ())
+        self.assertEqual(tuple(load_result.unexpected_keys), ())
+
     def test_episode_mask_resets_initial_recurrent_state(self):
         torch.manual_seed(123)
         model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)
@@ -439,7 +468,7 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
             1e-6,
         )
 
-    def test_chunk_episode_mask_resets_state_inside_sequence(self):
+    def test_chunk_episode_masks_are_not_supported_for_action_level_lstm(self):
         torch.manual_seed(456)
         model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)
         state = torch.arange(4, dtype=torch.float32).view(1, 4)
@@ -451,30 +480,15 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
             cell=torch.randn(1, 1, 4),
         )
 
-        chunk_reset_prediction = model(
-            state,
-            action,
-            w_context,
-            b_context,
-            initial_state=carried,
-            episode_mask=torch.tensor([[1.0, 0.0]]),
-        )
-        first_chunk = model(
-            state[:, :2],
-            action[:, :2],
-            w_context[:, :2],
-            b_context[:, :2],
-            initial_state=carried,
-        )
-        second_chunk = model(
-            state[:, 2:],
-            action[:, 2:],
-            w_context[:, 2:],
-            b_context[:, 2:],
-        )
-
-        torch.testing.assert_close(chunk_reset_prediction[:, :2], first_chunk)
-        torch.testing.assert_close(chunk_reset_prediction[:, 2:], second_chunk)
+        with self.assertRaisesRegex(ValueError, "episode_mask"):
+            model(
+                state,
+                action,
+                w_context,
+                b_context,
+                initial_state=carried,
+                episode_mask=torch.tensor([[1.0, 0.0]]),
+            )
 
 
 if __name__ == "__main__":

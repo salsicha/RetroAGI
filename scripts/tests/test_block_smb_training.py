@@ -238,6 +238,7 @@ class TestBlockSMBTraining(unittest.TestCase):
         for slot_name in (
             "position",
             "semantic_probabilities",
+            "support_state",
             "state",
             "patch_tokens",
         ):
@@ -362,7 +363,12 @@ class TestBlockSMBTraining(unittest.TestCase):
 
         self.assertTrue(torch.equal(visual.src_a, torch.zeros_like(batch.src_a)))
         self.assertTrue(torch.equal(visual.src_b, torch.zeros_like(batch.src_b)))
-        for slot in ("c_position", "c_semantic_probabilities", "c_patch_tokens"):
+        for slot in (
+            "c_position",
+            "c_semantic_probabilities",
+            "c_support_state",
+            "c_patch_tokens",
+        ):
             start, end = fusion[slot]
             torch.testing.assert_close(
                 visual.src_c[:, start:end],

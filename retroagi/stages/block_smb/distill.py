@@ -687,7 +687,13 @@ def _train_behavior_cloning_epoch_recurrent(
     total_semantic_accuracy = 0.0
     total_semantic_gate = 0.0
     total_slot_losses = {slot_name: 0.0 for slot_name in config.world_model_slot_weights}
-    for slot_name in ("position", "semantic_probabilities", "state", "patch_tokens"):
+    for slot_name in (
+        "position",
+        "semantic_probabilities",
+        "support_state",
+        "state",
+        "patch_tokens",
+    ):
         total_slot_losses.setdefault(slot_name, 0.0)
     total_correct = 0
     total_seen = 0
@@ -790,7 +796,13 @@ def _train_behavior_cloning_epoch_independent(
     total_semantic_accuracy = 0.0
     total_semantic_gate = 0.0
     total_slot_losses = {slot_name: 0.0 for slot_name in config.world_model_slot_weights}
-    for slot_name in ("position", "semantic_probabilities", "state", "patch_tokens"):
+    for slot_name in (
+        "position",
+        "semantic_probabilities",
+        "support_state",
+        "state",
+        "patch_tokens",
+    ):
         total_slot_losses.setdefault(slot_name, 0.0)
     total_correct = 0
     total_seen = 0
@@ -1236,7 +1248,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SLOT=WEIGHT",
         help=(
             "weight a Block SMB C-stream dynamics slot; slots: position, "
-            "semantic_probabilities, state, patch_tokens"
+            "semantic_probabilities, support_state, state, patch_tokens"
         ),
     )
     parser.add_argument(

@@ -120,6 +120,8 @@ class TestVisionInterface(unittest.TestCase):
             self.assertEqual(output.semantic_logits.shape, (1, 7, 15, 16))
             self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
             self.assertEqual(output.tokens.shape, (1, 240, 32))
+            self.assertEqual(output.support_logits.shape, (1, 3))
+            self.assertEqual(output.support_ids.shape, (1,))
             self.assertEqual(targets.shape, (1, 240, 256))
             self.assertEqual(encoder.patch_targets(observation).shape, (1, 15, 16))
             self.assertTrue(torch.isfinite(loss))
@@ -318,6 +320,7 @@ class TestVisionInterface(unittest.TestCase):
         output = result.model.encode(torch.zeros(1, 3, 240, 256))
         self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
         self.assertEqual(output.position.shape, (1, 2))
+        self.assertEqual(output.support_logits.shape, (1, 3))
 
     def test_full_smb_vit_loader_reports_git_lfs_pointer_without_blob(self):
         with TemporaryDirectory() as tmpdir:
@@ -358,6 +361,8 @@ class TestFullSMBVision(unittest.TestCase):
         self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
         self.assertEqual(output.position.shape, (1, 2))
         self.assertEqual(output.tokens.shape, (1, 240, 16))
+        self.assertEqual(output.support_logits.shape, (1, 3))
+        self.assertEqual(output.support_ids.shape, (1,))
 
     def test_existing_full_smb_vit_checkpoint_loads(self):
         from retroagi.stages.full_smb import FullSMBSegmentationVision
@@ -374,6 +379,7 @@ class TestFullSMBVision(unittest.TestCase):
         self.assertEqual(model.spec.name, "full_smb_vit")
         self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
         self.assertEqual(output.position.shape, (1, 2))
+        self.assertEqual(output.support_logits.shape, (1, 3))
 
     def test_legacy_full_smb_vit_state_dict_loads(self):
         from retroagi.stages.full_smb import FullSMBSegmentationVision
@@ -387,6 +393,7 @@ class TestFullSMBVision(unittest.TestCase):
         self.assertTrue(model.checkpoint["metadata"]["legacy_checkpoint"])
         self.assertEqual(model.spec.name, "full_smb_vit")
         self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
+        self.assertEqual(output.support_logits.shape, (1, 3))
 
     def test_existing_deeplab_checkpoint_loads(self):
         from retroagi.stages.full_smb import FullSMBDeepLabSegmentationVision

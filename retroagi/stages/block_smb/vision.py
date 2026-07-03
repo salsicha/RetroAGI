@@ -349,6 +349,8 @@ class BlockVisionTransformer(PatchVisionTransformer):
             heads=heads,
             drop=drop,
             position_class="mario",
+            support_ground_classes=("platform",),
+            support_platform_classes=("platform", "moving_platform"),
             name="block_smb_vit",
         )
 

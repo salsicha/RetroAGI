@@ -28,8 +28,9 @@ class VisionHierarchyProjector:
         batch_size = probabilities.shape[0]
         position = vision.position.float()
         global_semantics = probabilities.mean(dim=(-2, -1))
+        support_state = self._support_tensor(vision, batch_size, position.device)
         state = self._state_tensor(state, batch_size, position.device)
-        fixed = torch.cat((position, global_semantics, state), dim=1)
+        fixed = torch.cat((position, global_semantics, support_state, state), dim=1)
 
         token_slots = self.stage_spec.seq_len_c - fixed.shape[1]
         if token_slots <= 0:
@@ -44,13 +45,15 @@ class VisionHierarchyProjector:
 
         position_end = position.shape[1]
         semantics_end = position_end + global_semantics.shape[1]
-        state_end = semantics_end + state.shape[1]
+        support_end = semantics_end + support_state.shape[1]
+        state_end = support_end + state.shape[1]
         fusion = {
             "a_semantic_regions": (1, self.stage_spec.seq_len_a),
             "b_semantic_regions": (1, self.stage_spec.seq_len_b),
             "c_position": (0, position_end),
             "c_semantic_probabilities": (position_end, semantics_end),
-            "c_state": (semantics_end, state_end),
+            "c_support_state": (semantics_end, support_end),
+            "c_state": (support_end, state_end),
             "c_patch_tokens": (state_end, self.stage_spec.seq_len_c),
         }
         batch_metadata = dict(metadata or {})
@@ -75,6 +78,18 @@ class VisionHierarchyProjector:
             )
         if vision.position.ndim != 2 or vision.position.shape[0] != batch_size:
             raise ValueError("position must have shape [B, P]")
+        if vision.support_logits is not None:
+            if (
+                vision.support_logits.ndim != 2
+                or vision.support_logits.shape[0] != batch_size
+            ):
+                raise ValueError("support_logits must have shape [B, S]")
+        if vision.support_ids is not None:
+            if (
+                vision.support_ids.ndim != 1
+                or vision.support_ids.shape[0] != batch_size
+            ):
+                raise ValueError("support_ids must have shape [B]")
         if vision.tokens.ndim != 3 or vision.tokens.shape[0] != batch_size:
             raise ValueError("tokens must have shape [B, N, D]")
 
@@ -106,3 +121,14 @@ class VisionHierarchyProjector:
         if state.ndim != 2 or state.shape[0] != batch_size:
             raise ValueError(f"state must have shape [B, S], got {tuple(state.shape)}")
         return state
+
+    @staticmethod
+    def _support_tensor(
+        vision: VisionOutput, batch_size: int, device: torch.device
+    ) -> torch.Tensor:
+        if vision.support_logits is None:
+            return torch.empty((batch_size, 0), dtype=torch.float32, device=device)
+        support_logits = torch.as_tensor(
+            vision.support_logits, dtype=torch.float32, device=device
+        )
+        return support_logits.softmax(dim=1)

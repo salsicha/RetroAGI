@@ -15,6 +15,8 @@ from retroagi.core import (
     POLICY_TUPLE_OUTPUT_CONTRACTS,
     SMB_ACTIONS,
     StageBatch,
+    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    action_level_world_model_state_dict,
     build_architecture,
     build_checkpoint,
     get_architecture,
@@ -137,8 +139,14 @@ def transfer_block_smb_checkpoint_to_full_smb(
         architecture_name=architecture_name,
         architecture_config=architecture_config,
     ).to(device)
-    load_result = model.load_state_dict(source_checkpoint["states"]["model"], strict=False)
+    model_state, skipped_world_model_keys = action_level_world_model_state_dict(
+        model,
+        source_checkpoint["states"]["model"],
+    )
+    load_result = model.load_state_dict(model_state, strict=False)
     missing_keys = _validate_policy_load_result(load_result)
+    if skipped_world_model_keys:
+        missing_keys = tuple((*missing_keys, *skipped_world_model_keys))
     model.eval()
 
     source_vision_path = None
@@ -203,8 +211,14 @@ def load_transferred_full_smb_policy(
         architecture_name=architecture_name,
         architecture_config=architecture_config,
     ).to(device)
-    load_result = model.load_state_dict(checkpoint["states"]["model"], strict=False)
+    model_state, skipped_world_model_keys = action_level_world_model_state_dict(
+        model,
+        checkpoint["states"]["model"],
+    )
+    load_result = model.load_state_dict(model_state, strict=False)
     missing_keys = _validate_policy_load_result(load_result)
+    if skipped_world_model_keys:
+        missing_keys = tuple((*missing_keys, *skipped_world_model_keys))
     model.eval()
     vision = FullSMBSegmentationVision(
         checkpoint=full_smb_vision_checkpoint,
@@ -507,6 +521,7 @@ def _validate_policy_load_result(load_result: Any) -> tuple[str, ...]:
         "transition_representation_head.",
         "reward_head.",
         "value_head.",
+        *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     )
     unexpected = tuple(load_result.unexpected_keys)
     unsupported_missing = tuple(

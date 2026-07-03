@@ -2,6 +2,7 @@
 
 import math
 from dataclasses import dataclass
+from typing import Mapping
 
 import torch
 import torch.nn as nn
@@ -9,6 +10,36 @@ import torch.nn.functional as F
 
 
 SUPPORTED_CONTROLLER_SCHEDULES = ("constant", "linear")
+ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES = (
+    "world_model.decoder.",
+    "world_model.lstm.weight_ih",
+)
+ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES = ("world_model.fc.",)
+
+
+def action_level_world_model_state_dict(
+    model: nn.Module,
+    state_dict: Mapping[str, torch.Tensor],
+) -> tuple[dict[str, torch.Tensor], tuple[str, ...]]:
+    """Drop obsolete token-level world-model tensors before policy loading."""
+
+    current = model.state_dict()
+    migrated: dict[str, torch.Tensor] = {}
+    skipped: list[str] = []
+    for key, value in state_dict.items():
+        if key.startswith(ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES):
+            skipped.append(key)
+            continue
+        expected = current.get(key)
+        if (
+            expected is not None
+            and key.startswith("world_model.")
+            and tuple(value.shape) != tuple(expected.shape)
+        ):
+            skipped.append(key)
+            continue
+        migrated[key] = value
+    return migrated, tuple(skipped)
 
 
 @dataclass(frozen=True)
@@ -313,8 +344,10 @@ class HierarchicalAdaptiveModel(nn.Module):
 
 class WorldModel(nn.Module):
     """
-    Predicts the next state using episodic LSTM memory plus multi-frequency
-    sinusoidal position features.
+    Predicts the state at the end of the selected action.
+
+    The LSTM advances once per actor decision. A position-wise decoder then
+    expands that action-level recurrent state back to the C-stream contract.
     """
 
     def __init__(self, hidden_size=32, num_layers=1, num_freqs=4, ratio_bc=4):
@@ -323,9 +356,19 @@ class WorldModel(nn.Module):
         self.num_layers = num_layers
         self.num_freqs = num_freqs
         self.ratio_bc = ratio_bc
-        input_size = 4 + num_freqs * 2
-        self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, 1)
+        input_size = 16
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+        )
+        decoder_input_size = hidden_size + 4 + num_freqs * 2
+        self.decoder = nn.Sequential(
+            nn.Linear(decoder_input_size, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, 1),
+        )
 
     def initial_state(self, batch_size, device, dtype=torch.float32):
         hidden = torch.zeros(
@@ -369,24 +412,22 @@ class WorldModel(nn.Module):
                 mask = mask.expand(batch_size)
             if tuple(mask.shape) != (batch_size,):
                 raise ValueError(
-                    "episode_mask must have shape [batch] or "
-                    f"[batch, chunks], got {tuple(mask.shape)}"
+                    "episode_mask must have shape [batch] or [batch, 1], "
+                    f"got {tuple(mask.shape)}"
                 )
             chunk_masks[:, 0] = mask
         elif mask.ndim == 2:
             if tuple(mask.shape) == (batch_size, 1):
                 chunk_masks[:, 0] = mask[:, 0]
-            elif tuple(mask.shape) == (batch_size, chunk_count):
-                chunk_masks = mask
             else:
                 raise ValueError(
-                    "episode_mask must have shape [batch] or "
-                    f"[batch, {chunk_count}], got {tuple(mask.shape)}"
+                    "episode_mask must have shape [batch] or [batch, 1], "
+                    f"got {tuple(mask.shape)}"
                 )
         else:
             raise ValueError(
-                "episode_mask must have shape [batch] or "
-                f"[batch, {chunk_count}], got {tuple(mask.shape)}"
+                "episode_mask must have shape [batch] or [batch, 1], "
+                f"got {tuple(mask.shape)}"
             )
         if not torch.isfinite(chunk_masks).all().item():
             raise ValueError("episode_mask must contain only finite values")
@@ -408,6 +449,18 @@ class WorldModel(nn.Module):
             phases.append(step_phases)
         return torch.tensor(phases, dtype=dtype, device=device)
 
+    @staticmethod
+    def _summary_features(values):
+        return torch.stack(
+            (
+                values.mean(dim=1),
+                values.std(dim=1, unbiased=False),
+                values.amin(dim=1),
+                values.amax(dim=1),
+            ),
+            dim=1,
+        )
+
     def forward(
         self,
         state,
@@ -423,36 +476,48 @@ class WorldModel(nn.Module):
         seq_len_c = state.size(1)
         device = state.device
         dtype = state.dtype
-        chunk_count = (seq_len_c + self.ratio_bc - 1) // self.ratio_bc
+        if state.ndim != 2:
+            raise ValueError("state must have shape [batch, seq_len_c]")
+        if (
+            action.shape != state.shape
+            or w_context.shape != state.shape
+            or b_context.shape != state.shape
+        ):
+            raise ValueError(
+                "state, action, w_context, and b_context must all have shape "
+                f"{tuple(state.shape)}"
+            )
 
         phases = (
             self._make_phases(seq_len_c, device, dtype=dtype)
             .unsqueeze(0)
             .expand(batch_size, -1, -1)
         )
-        x = torch.stack([state, action, w_context, b_context], dim=-1)
-        x = torch.cat([x, phases], dim=-1)
+        action_features = torch.cat(
+            (
+                self._summary_features(state),
+                self._summary_features(action),
+                self._summary_features(w_context),
+                self._summary_features(b_context),
+            ),
+            dim=1,
+        ).unsqueeze(1)
 
         recurrent_state = self._coerce_state(initial_state, batch_size, device, dtype)
         chunk_masks = self._normalize_episode_mask(
-            episode_mask, batch_size, chunk_count, device, dtype
+            episode_mask, batch_size, 1, device, dtype
         )
 
-        outputs = []
-        for chunk_index, ep_start in enumerate(range(0, seq_len_c, self.ratio_bc)):
-            ep_end = ep_start + self.ratio_bc
-            recurrent_state = self._mask_state(
-                recurrent_state, chunk_masks[:, chunk_index]
-            )
-            out, (hidden, cell) = self.lstm(
-                x[:, ep_start:ep_end, :],
-                (recurrent_state.hidden, recurrent_state.cell),
-            )
-            recurrent_state = WorldModelState(hidden, cell)
-            outputs.append(out)
-
-        all_out = torch.cat(outputs, dim=1)
-        prediction = self.fc(all_out).squeeze(-1)
+        recurrent_state = self._mask_state(recurrent_state, chunk_masks[:, 0])
+        out, (hidden, cell) = self.lstm(
+            action_features,
+            (recurrent_state.hidden, recurrent_state.cell),
+        )
+        recurrent_state = WorldModelState(hidden, cell)
+        action_hidden = out[:, -1, :].unsqueeze(1).expand(-1, seq_len_c, -1)
+        slot_features = torch.stack([state, action, w_context, b_context], dim=-1)
+        decoder_input = torch.cat([slot_features, phases, action_hidden], dim=-1)
+        prediction = self.decoder(decoder_input).squeeze(-1)
         if return_state:
             return prediction, recurrent_state
         return prediction

@@ -133,11 +133,14 @@ from .interfaces import (
     AgentStep,
     StageBatch,
     StageSpec,
+    VISION_SUPPORT_CLASSES,
     VisionEncoder,
     VisionOutput,
     VisionSpec,
 )
 from .models import (
+    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES,
     SUPPORTED_CONTROLLER_SCHEDULES,
     AdaptiveController,
     AgentWorldModelCritic,
@@ -149,6 +152,7 @@ from .models import (
     SinglePassLSTMConditionedAgentWorldModel,
     WorldModel,
     WorldModelState,
+    action_level_world_model_state_dict,
 )
 from .perception import (
     PERCEPTION_DATASET_SOURCE_KINDS,
@@ -208,6 +212,8 @@ __all__ = [
     "SINGLE_PASS_LSTM_ARCHITECTURE_NAME",
     "SINGLE_PASS_LSTM_ARCHITECTURE_SPEC",
     "SINGLE_PASS_LSTM_OUTPUT_CONTRACT",
+    "ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES",
+    "ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES",
     "BackendAdapter",
     "BackendCapabilityProbeConfig",
     "BackendCapabilityReport",
@@ -288,6 +294,7 @@ __all__ = [
     "StageResolution",
     "StageBatch",
     "StageSpec",
+    "VISION_SUPPORT_CLASSES",
     "BlockGameSpec",
     "SyntheticDataGenerator",
     "SyntheticDataSpec",
@@ -300,6 +307,7 @@ __all__ = [
     "VisionSpec",
     "WorldModel",
     "WorldModelState",
+    "action_level_world_model_state_dict",
     "action_backend_id",
     "action_button_vector",
     "architecture_names",

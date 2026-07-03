@@ -1192,6 +1192,7 @@ class TestFullSMBTraining(unittest.TestCase):
         for slot_name in (
             "position",
             "semantic_probabilities",
+            "support_state",
             "emulator_state",
             "camera_state",
             "patch_tokens",

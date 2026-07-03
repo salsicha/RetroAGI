@@ -5,6 +5,8 @@ from typing import Any, Mapping, Optional, Protocol
 
 import torch
 
+VISION_SUPPORT_CLASSES = ("air", "ground", "platform")
+
 
 @dataclass(frozen=True)
 class StageSpec:
@@ -64,10 +66,15 @@ class VisionSpec:
     semantic_classes: tuple[str, ...]
     token_dim: int
     position_dim: int = 2
+    support_classes: tuple[str, ...] = VISION_SUPPORT_CLASSES
 
     @property
     def num_classes(self) -> int:
         return len(self.semantic_classes)
+
+    @property
+    def num_support_classes(self) -> int:
+        return len(self.support_classes)
 
 
 @dataclass
@@ -79,6 +86,8 @@ class VisionOutput:
     semantic_ids: torch.Tensor
     tokens: torch.Tensor
     metadata: Optional[Mapping[str, Any]] = None
+    support_logits: Optional[torch.Tensor] = None
+    support_ids: Optional[torch.Tensor] = None
 
 
 class VisionEncoder(Protocol):

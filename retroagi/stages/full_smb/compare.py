@@ -12,7 +12,13 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 import torch
 
-from retroagi.core import SMB_ACTIONS, StageBatch, load_checkpoint
+from retroagi.core import (
+    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    SMB_ACTIONS,
+    StageBatch,
+    action_level_world_model_state_dict,
+    load_checkpoint,
+)
 from retroagi.stages.full_smb.adapter import FullSMBEnvConfig, FullSMBStage
 from retroagi.stages.full_smb.tasks import (
     FULL_SMB_TASK_SET_NAMES,
@@ -578,11 +584,20 @@ def _load_comparison_policy_from_checkpoint(
         architecture_name=architecture_name,
         architecture_config=architecture_config,
     ).to(device)
-    load_result = model.load_state_dict(checkpoint["states"]["model"], strict=False)
-    if load_result.unexpected_keys or load_result.missing_keys:
+    model_state, _skipped_world_model_keys = action_level_world_model_state_dict(
+        model,
+        checkpoint["states"]["model"],
+    )
+    load_result = model.load_state_dict(model_state, strict=False)
+    unsupported_missing = tuple(
+        key
+        for key in load_result.missing_keys
+        if not key.startswith(ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES)
+    )
+    if load_result.unexpected_keys or unsupported_missing:
         raise ValueError(
             f"{name} checkpoint is incompatible with Full SMB policy model; "
-            f"missing={tuple(load_result.missing_keys)}, "
+            f"missing={unsupported_missing}, "
             f"unexpected={tuple(load_result.unexpected_keys)}"
         )
     model.eval()
@@ -646,11 +661,20 @@ def _scratch_model_for_transfer(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         ).to(device)
-        load_result = model.load_state_dict(checkpoint["states"]["model"], strict=False)
-        if load_result.unexpected_keys or load_result.missing_keys:
+        model_state, _skipped_world_model_keys = action_level_world_model_state_dict(
+            model,
+            checkpoint["states"]["model"],
+        )
+        load_result = model.load_state_dict(model_state, strict=False)
+        unsupported_missing = tuple(
+            key
+            for key in load_result.missing_keys
+            if not key.startswith(ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES)
+        )
+        if load_result.unexpected_keys or unsupported_missing:
             raise ValueError(
                 "scratch checkpoint is incompatible with Full SMB policy model; "
-                f"missing={tuple(load_result.missing_keys)}, "
+                f"missing={unsupported_missing}, "
                 f"unexpected={tuple(load_result.unexpected_keys)}"
             )
         model.eval()

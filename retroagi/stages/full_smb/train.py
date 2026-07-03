@@ -22,10 +22,12 @@ from retroagi.core import (
     CHECKPOINT_SCHEMA_KEY,
     SMB_ACTIONS,
     TRACKING_BACKENDS,
+    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     ExperimentTrackerConfig,
     SMBAction,
     StageBatch,
     WorldModelState,
+    action_level_world_model_state_dict,
     build_checkpoint,
     load_checkpoint,
     make_experiment_tracker,
@@ -154,6 +156,7 @@ _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT = 0.05
 _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
     "position",
     "semantic_probabilities",
+    "support_state",
     "emulator_state",
     "camera_state",
     "patch_tokens",
@@ -164,6 +167,12 @@ _FULL_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
     "semantics": "semantic_probabilities",
     "semantic_probabilities": "semantic_probabilities",
     "semantic-probabilities": "semantic_probabilities",
+    "support": "support_state",
+    "support_state": "support_state",
+    "support-state": "support_state",
+    "grounded": "support_state",
+    "ground_state": "support_state",
+    "ground-state": "support_state",
     "emulator": "emulator_state",
     "state": "emulator_state",
     "emulator_state": "emulator_state",
@@ -870,7 +879,11 @@ def train_full_smb_policy(
         vision = _build_full_smb_perception(config, device)
     _restore_perception_state(vision, checkpoint)
     optimizer = _make_training_optimizer(model, vision, config)
-    _restore_optimizer_state(optimizer, checkpoint, strict=True)
+    _restore_optimizer_state(
+        optimizer,
+        checkpoint,
+        strict="world_model_migration" not in training_source,
+    )
     if config.resume_path is not None and checkpoint is not None:
         training_source["restored_rng_state"] = _restore_resume_rng_state(checkpoint)
     history: dict[str, list[float]] = {"episode_return": [], "policy_loss": []}
@@ -2084,11 +2097,35 @@ def load_full_smb_policy_checkpoint(
         architecture_name=architecture_name,
         architecture_config=architecture_config,
     ).to(device)
-    model.load_state_dict(checkpoint["states"]["model"])
+    _load_full_smb_policy_state(model, checkpoint["states"]["model"])
     optimizer = optim.AdamW(model.parameters())
     if "optimizer" in checkpoint["states"]:
         _restore_optimizer_state(optimizer, checkpoint, strict=False)
     return model, optimizer, checkpoint
+
+
+def _load_full_smb_policy_state(
+    model: torch.nn.Module,
+    state_dict: Mapping[str, torch.Tensor],
+) -> tuple[str, ...]:
+    migrated_state, skipped_world_model_keys = action_level_world_model_state_dict(
+        model,
+        state_dict,
+    )
+    load_result = model.load_state_dict(migrated_state, strict=False)
+    unexpected = tuple(load_result.unexpected_keys)
+    allowed_missing_prefixes = ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES
+    unsupported_missing = tuple(
+        key
+        for key in load_result.missing_keys
+        if not key.startswith(allowed_missing_prefixes)
+    )
+    if unexpected or unsupported_missing:
+        raise ValueError(
+            "Full SMB policy state is incompatible with policy model; "
+            f"missing={unsupported_missing}, unexpected={unexpected}"
+        )
+    return skipped_world_model_keys
 
 
 def build_full_smb_policy_checkpoint(
@@ -2233,7 +2270,10 @@ def _load_training_state(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         ).to(device)
-        model.load_state_dict(checkpoint["states"]["model"])
+        skipped_world_model_keys = _load_full_smb_policy_state(
+            model,
+            checkpoint["states"]["model"],
+        )
         source = _training_source_metadata(
             FULL_SMB_TRAINING_SOURCE_RESUME_CHECKPOINT,
             checkpoint_path=config.resume_path,
@@ -2242,6 +2282,11 @@ def _load_training_state(
             architecture_config=architecture_config,
         )
         source["resume_contract"] = resume_contract
+        if skipped_world_model_keys:
+            source["world_model_migration"] = {
+                "kind": "action_level_lstm_reinitialized",
+                "skipped_keys": skipped_world_model_keys,
+            }
         return (
             model,
             int(checkpoint.get("epoch", 0)),
@@ -2642,11 +2687,17 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         feature_length,
         default=(position[1], position[1]),
     )
+    support = _full_smb_c_stream_span(
+        fusion,
+        "c_support_state",
+        feature_length,
+        default=(semantics[1], semantics[1]),
+    )
     state = _full_smb_c_stream_span(
         fusion,
         "c_state",
         feature_length,
-        default=(semantics[1], semantics[1]),
+        default=(support[1], support[1]),
     )
     patch_tokens = _full_smb_c_stream_span(
         fusion,
@@ -2671,6 +2722,7 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
     return {
         "position": position,
         "semantic_probabilities": semantics,
+        "support_state": support,
         "emulator_state": (state_start, emulator_end),
         "camera_state": (camera_start, camera_end),
         "patch_tokens": patch_tokens,
@@ -4480,8 +4532,8 @@ def _add_training_update_args(
         default=[],
         help=(
             "optional C-stream dynamics slot weight as SLOT=WEIGHT; slots are "
-            "position, semantic_probabilities, emulator_state, camera_state, "
-            "and patch_tokens"
+            "position, semantic_probabilities, support_state, emulator_state, "
+            "camera_state, and patch_tokens"
         ),
     )
     parser.add_argument("--reward-loss-weight", type=float, default=0.0)
