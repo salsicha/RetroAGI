@@ -18,6 +18,7 @@ from retroagi.core import (
     build_architecture,
     build_checkpoint,
     get_architecture,
+    load_checkpoint,
     register_architecture,
     save_checkpoint,
 )
@@ -45,6 +46,7 @@ from retroagi.stages.full_smb.compare import (
 from retroagi.stages.full_smb.transfer import (
     FULL_SMB_TRANSFER_CHECKPOINT_KIND,
     FULL_SMB_TRANSFER_MODEL_NAME,
+    block_smb_checkpoint_transfer_source_gate,
     load_transferred_full_smb_policy,
     make_full_smb_policy_model,
     select_transferred_full_smb_action,
@@ -117,6 +119,7 @@ def tiny_block_config(**overrides):
         fixed_scenarios=("level_1_flat.json",),
         evaluation_episodes=1,
         evaluation_max_steps=1,
+        monte_carlo_validation_samples=12,
         device="cpu",
     )
     values.update(overrides)
@@ -156,7 +159,13 @@ def write_block_policy_checkpoint(path: Path):
         epoch=2,
         global_step=5,
         config=config,
-        metrics={"loss_total": 0.25},
+        metrics={
+            "loss_total": 0.25,
+            "eval_threshold_pass_rate": 1.0,
+            "semantic_prediction_gate_met": 1.0,
+            "eval_monte_carlo_validation_success_rate": 1.0,
+            "eval_monte_carlo_validation_gate_met": 1.0,
+        },
     )
     return model, config
 
@@ -257,10 +266,17 @@ class TestFullSMBTransfer(unittest.TestCase):
                 result.source_checkpoint["architecture"]["name"],
                 BASELINE_ARCHITECTURE_NAME,
             )
+            self.assertTrue(result.source_transfer_gate["transfer_source_gate_met"])
+            self.assertTrue(
+                result.checkpoint["metadata"]["source_transfer_gate"][
+                    "transfer_source_gate_met"
+                ]
+            )
             self.assertEqual(
                 result.checkpoint["architecture"]["name"],
                 BASELINE_ARCHITECTURE_NAME,
             )
+            self.assertTrue(loaded.source_transfer_gate["transfer_source_gate_met"])
             self.assertEqual(
                 loaded.checkpoint["architecture"]["output_contract"],
                 BASELINE_ARCHITECTURE_SPEC.output_contract,
@@ -340,6 +356,68 @@ class TestFullSMBTransfer(unittest.TestCase):
                     block_vision_checkpoint=None,
                     device="cpu",
                 )
+
+    def test_transfer_rejects_block_checkpoint_without_promotion_gate_metrics(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "ungated_block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            config = tiny_block_config(monte_carlo_validation_samples=0)
+            model = make_block_smb_model(config)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            save_block_smb_checkpoint(
+                source_policy_path,
+                model,
+                optimizer,
+                epoch=1,
+                global_step=1,
+                config=config,
+                metrics={"loss_total": 0.5},
+            )
+            checkpoint = load_checkpoint(source_policy_path, map_location="cpu")
+            gate = block_smb_checkpoint_transfer_source_gate(checkpoint)
+
+            self.assertFalse(gate["transfer_source_gate_met"])
+            with self.assertRaisesRegex(ValueError, "held-out Monte Carlo validation gate"):
+                transfer_block_smb_checkpoint_to_full_smb(
+                    source_policy_path,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    block_vision_checkpoint=None,
+                    device="cpu",
+                )
+
+    def test_transfer_can_explicitly_bypass_source_gate_for_debugging(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "ungated_block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            output_path = tmp / "full_smb_transfer.pth"
+            config = tiny_block_config(monte_carlo_validation_samples=0)
+            model = make_block_smb_model(config)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            save_block_smb_checkpoint(
+                source_policy_path,
+                model,
+                optimizer,
+                epoch=1,
+                global_step=1,
+                config=config,
+                metrics={"loss_total": 0.5},
+            )
+
+            result = transfer_block_smb_checkpoint_to_full_smb(
+                source_policy_path,
+                output_checkpoint=output_path,
+                full_smb_vision_checkpoint=full_vision_path,
+                block_vision_checkpoint=None,
+                device="cpu",
+                require_transfer_source_gate=False,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertFalse(result.source_transfer_gate["transfer_source_gate_met"])
 
     def test_transfer_rejects_incompatible_architecture_contract_before_state_load(self):
         with TemporaryDirectory() as tmpdir:

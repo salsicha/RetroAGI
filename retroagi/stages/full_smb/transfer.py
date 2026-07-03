@@ -27,6 +27,7 @@ from retroagi.stages.block_smb.train import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
 )
+from retroagi.stages.block_smb.monte_carlo import DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
 from retroagi.stages.block_smb.vision import (
     DEFAULT_BLOCK_VIT_CHECKPOINT,
     load_block_vit_checkpoint,
@@ -51,6 +52,7 @@ class FullSMBTransferConfig:
     block_vision_checkpoint: Optional[Path] = DEFAULT_BLOCK_VIT_CHECKPOINT
     device: str = "cpu"
     freeze_vision: bool = True
+    require_transfer_source_gate: bool = True
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ class FullSMBTransferResult:
     full_smb_vision_path: Optional[Path]
     output_path: Optional[Path]
     missing_model_keys: tuple[str, ...]
+    source_transfer_gate: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
     block_vision_checkpoint: Optional[Path] = DEFAULT_BLOCK_VIT_CHECKPOINT,
     device: str | torch.device = "cpu",
     freeze_vision: bool = True,
+    require_transfer_source_gate: bool = True,
 ) -> FullSMBTransferResult:
     """Load Block SMB policy weights and save a Full SMB transfer checkpoint.
 
@@ -122,7 +126,12 @@ def transfer_block_smb_checkpoint_to_full_smb(
     """
 
     source_path = Path(block_policy_checkpoint)
-    source_checkpoint = _load_block_policy_source(source_path, map_location=device)
+    source_checkpoint = _load_block_policy_source(
+        source_path,
+        map_location=device,
+        require_transfer_source_gate=require_transfer_source_gate,
+    )
+    source_transfer_gate = block_smb_checkpoint_transfer_source_gate(source_checkpoint)
     architecture_name, architecture_config = policy_architecture_from_checkpoint(source_checkpoint)
     model = make_full_smb_policy_model(
         architecture_name=architecture_name,
@@ -156,6 +165,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
         architecture_name=architecture_name,
         architecture_config=architecture_config,
         missing_keys=missing_keys,
+        source_transfer_gate=source_transfer_gate,
     )
 
     output_path = Path(output_checkpoint) if output_checkpoint is not None else None
@@ -172,6 +182,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
         full_smb_vision_path=vision.checkpoint_path,
         output_path=output_path,
         missing_model_keys=missing_keys,
+        source_transfer_gate=source_transfer_gate,
     )
 
 
@@ -212,6 +223,7 @@ def load_transferred_full_smb_policy(
         full_smb_vision_path=vision.checkpoint_path,
         output_path=path,
         missing_model_keys=missing_keys,
+        source_transfer_gate=dict(metadata.get("source_transfer_gate", {})),
     )
 
 
@@ -258,6 +270,7 @@ def _load_block_policy_source(
     path: Path,
     *,
     map_location: str | torch.device,
+    require_transfer_source_gate: bool = True,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
@@ -286,7 +299,66 @@ def _load_block_policy_source(
             f"{architecture.name!r} does not support transfer to {FULL_SMB_SPEC.name!r}"
         )
     _validate_transfer_dimensions(checkpoint)
+    transfer_gate = block_smb_checkpoint_transfer_source_gate(checkpoint)
+    if require_transfer_source_gate and not transfer_gate["transfer_source_gate_met"]:
+        reasons = ", ".join(transfer_gate["failure_reasons"])
+        raise ValueError(
+            "Block SMB checkpoint is not eligible for Full SMB transfer: "
+            f"{reasons or 'transfer source gate failed'}"
+        )
     return checkpoint
+
+
+def block_smb_checkpoint_transfer_source_gate(
+    checkpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return fixed plus Monte Carlo transfer-source gate diagnostics."""
+
+    metrics = checkpoint.get("metrics", {})
+    if not isinstance(metrics, Mapping):
+        metrics = {}
+    config = checkpoint.get("config", {})
+    if not isinstance(config, Mapping):
+        config = {}
+    fixed_pass_rate = _optional_float(metrics.get("eval_threshold_pass_rate"))
+    fixed_gate_met = fixed_pass_rate is not None and fixed_pass_rate >= 1.0
+    semantic_gate = _optional_float(metrics.get("semantic_prediction_gate_met"))
+    if semantic_gate is None:
+        semantic_gate = _optional_float(
+            metrics.get("eval_success_thresholds_met_after_semantic_gate")
+        )
+    semantic_gate_met = semantic_gate is None or semantic_gate >= 1.0
+    monte_carlo_validation_samples = int(config.get("monte_carlo_validation_samples", 0) or 0)
+    monte_carlo_gate_metric = _optional_float(metrics.get("eval_monte_carlo_validation_gate_met"))
+    monte_carlo_gate_met = (
+        monte_carlo_validation_samples > 0
+        and monte_carlo_gate_metric is not None
+        and monte_carlo_gate_metric >= 1.0
+    )
+    failure_reasons: list[str] = []
+    if not fixed_gate_met:
+        failure_reasons.append("fixed scenario threshold pass rate is missing or below 1.0")
+    if not semantic_gate_met:
+        failure_reasons.append("Block SMB semantic prediction gate is not met")
+    if not monte_carlo_gate_met:
+        failure_reasons.append("held-out Monte Carlo validation gate is missing or failed")
+    return {
+        "fixed_threshold_pass_rate": fixed_pass_rate,
+        "fixed_gate_met": bool(fixed_gate_met),
+        "semantic_prediction_gate_met": bool(semantic_gate_met),
+        "monte_carlo_distribution_id": str(
+            config.get("monte_carlo_distribution_id", DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID)
+        ),
+        "monte_carlo_validation_samples": monte_carlo_validation_samples,
+        "monte_carlo_validation_success_rate": _optional_float(
+            metrics.get("eval_monte_carlo_validation_success_rate")
+        ),
+        "monte_carlo_validation_gate_met": bool(monte_carlo_gate_met),
+        "transfer_source_gate_met": bool(
+            fixed_gate_met and semantic_gate_met and monte_carlo_gate_met
+        ),
+        "failure_reasons": failure_reasons,
+    }
 
 
 def _validate_policy_checkpoint_architecture(
@@ -459,6 +531,7 @@ def _build_transfer_checkpoint(
     architecture_name: str,
     architecture_config: Mapping[str, Any],
     missing_keys: tuple[str, ...],
+    source_transfer_gate: Mapping[str, Any],
 ) -> dict[str, Any]:
     hidden_dim = architecture_config.get("hidden_dim")
     controller_schedule = architecture_config.get("controller_schedule")
@@ -516,6 +589,7 @@ def _build_transfer_checkpoint(
                 ),
             },
             "source_metrics": source_checkpoint.get("metrics", {}),
+            "source_transfer_gate": dict(source_transfer_gate),
             "missing_model_keys": missing_keys,
             "transfer_note": (
                 "Actor/world-model/critic weights are reused because the Full SMB "
@@ -547,6 +621,16 @@ def _optional_path(value: Any) -> Optional[Path]:
     return Path(str(value))
 
 
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not torch.isfinite(torch.tensor(parsed)).item():
+        return None
+    return parsed
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--block-policy-checkpoint", type=Path, required=True)
@@ -563,6 +647,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--fine-tune-vision", action="store_true")
+    parser.add_argument(
+        "--allow-ungated-block-source",
+        action="store_true",
+        help="bypass fixed plus Monte Carlo Block SMB transfer-source gates",
+    )
     args = parser.parse_args(argv)
 
     result = transfer_block_smb_checkpoint_to_full_smb(
@@ -572,6 +661,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         block_vision_checkpoint=args.block_vision_checkpoint,
         device=args.device,
         freeze_vision=not args.fine_tune_vision,
+        require_transfer_source_gate=not args.allow_ungated_block_source,
     )
     print(
         "Transferred Block SMB policy to Full SMB: "
