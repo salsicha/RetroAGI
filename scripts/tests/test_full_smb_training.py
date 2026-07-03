@@ -16,8 +16,8 @@ import retroagi.stages.full_smb.train as full_smb_train_module
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     CHECKPOINT_SCHEMA_KEY,
-    MotorPrimitiveOutput,
     SMB_ACTIONS,
+    MotorPrimitiveOutput,
     SMBAction,
     StageBatch,
     WorldModelState,
@@ -249,6 +249,57 @@ class TestFullSMBTraining(unittest.TestCase):
             result.checkpoint["metrics"]["periodic_evaluation_count"],
             0.0,
         )
+
+    def test_final_evaluation_closes_training_stage_before_opening_evaluator(self):
+        active_envs = 0
+        constructions = 0
+        closed = 0
+
+        class SingleInstanceTinyEnv(TinyFullSMBEnv):
+            def __init__(self):
+                nonlocal active_envs, constructions
+                if active_envs:
+                    raise RuntimeError("second Full SMB emulator opened before close")
+                active_envs += 1
+                constructions += 1
+                super().__init__()
+
+            def close(self):
+                nonlocal active_envs, closed
+                if not self.closed:
+                    active_envs -= 1
+                    closed += 1
+                super().close()
+
+        def single_instance_stage(vision):
+            return FullSMBStage(
+                env=SingleInstanceTinyEnv(),
+                vision=vision,
+                observation_config=FullSMBObservationConfig(
+                    frame_skip=1,
+                    frame_stack=2,
+                    resize_shape=(16, 20),
+                ),
+            )
+
+        with TemporaryDirectory() as tmpdir:
+            full_vision_path = Path(tmpdir) / "full_smb_vit.pth"
+            write_full_smb_vision_checkpoint(full_vision_path)
+            config = FullSMBTrainingConfig(
+                seed=19,
+                architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
+                epochs=0,
+                evaluation_episodes=1,
+                evaluation_max_steps=2,
+                device="cpu",
+                full_smb_vision_checkpoint=full_vision_path,
+            )
+            result = train_full_smb_policy(config, make_stage=single_instance_stage)
+
+        self.assertEqual(result.evaluation.episodes, 1)
+        self.assertEqual(constructions, 2)
+        self.assertEqual(closed, 2)
+        self.assertEqual(active_envs, 0)
 
     def test_full_smb_rollout_boundary_classifies_terminal_signals(self):
         cases = (

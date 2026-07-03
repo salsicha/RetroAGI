@@ -21,9 +21,9 @@ from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     CHECKPOINT_SCHEMA_KEY,
     SMB_ACTIONS,
-    SMBAction,
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
+    SMBAction,
     StageBatch,
     WorldModelState,
     build_checkpoint,
@@ -775,7 +775,7 @@ def train_full_smb_policy(
                 str(config.init_checkpoint) if config.init_checkpoint is not None else None
             ),
         )
-        stage = _make_stage(make_stage, vision, config)
+        stage: Optional[FullSMBStage] = _make_stage(make_stage, vision, config)
         backend_metadata = _full_smb_backend_metadata(stage, config)
         try:
             model.train()
@@ -784,6 +784,8 @@ def train_full_smb_policy(
             final_evaluation: Optional[FullSMBEvaluationResult] = None
             for epoch in range(start_epoch, config.epochs):
                 for update_index in range(config.updates_per_epoch):
+                    if stage is None:
+                        stage = _make_stage(make_stage, vision, config)
                     episode_seed = config.seed + epoch * config.updates_per_epoch + update_index
                     try:
                         episode = _train_episode(
@@ -836,6 +838,9 @@ def train_full_smb_policy(
                     )
                 completed_epoch = epoch + 1
                 if _should_evaluate_epoch(config, completed_epoch):
+                    if stage is not None:
+                        stage.close()
+                        stage = None
                     evaluation = evaluate_full_smb_policy(
                         model,
                         config=config,
@@ -868,8 +873,13 @@ def train_full_smb_policy(
                     _set_perception_training_mode(vision, config)
                     if completed_epoch == config.epochs:
                         final_evaluation = evaluation
+                    else:
+                        stage = _make_stage(make_stage, vision, config)
             if final_evaluation is None:
                 if config.evaluation_episodes > 0 and config.evaluation_max_steps > 0:
+                    if stage is not None:
+                        stage.close()
+                        stage = None
                     final_evaluation = evaluate_full_smb_policy(
                         model,
                         config=config,
@@ -890,7 +900,8 @@ def train_full_smb_policy(
                         truncated_count=0,
                     )
         finally:
-            stage.close()
+            if stage is not None:
+                stage.close()
 
         checkpoint = build_full_smb_policy_checkpoint(
             model,
