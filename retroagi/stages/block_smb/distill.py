@@ -19,6 +19,12 @@ from retroagi.core import StageBatch, VisionEncoder, select_device, to_plain_dat
 
 from .adapter import BlockSMBStage
 from .env import MarioScenarioEnv
+from .monte_carlo import (
+    BLOCK_SMB_MC_FAMILIES,
+    DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
+    block_smb_monte_carlo_oracle_actions,
+    sample_block_smb_monte_carlo_split,
+)
 from .scripted_policy import BlockSMBScriptedPolicy, fixed_scenario_action_scripts
 from .train import (
     BLOCK_SMB_ACTION_COUNT,
@@ -63,6 +69,14 @@ class BlockSMBDistillationConfig:
     episodes_per_scenario: int = 3
     evaluation_episodes: int = 3
     evaluation_max_steps: int = 200
+    monte_carlo_distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
+    monte_carlo_samples: int = 0
+    monte_carlo_seed: int = 50_000
+    monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
+    monte_carlo_validation_samples: int = 0
+    monte_carlo_test_samples: int = 0
+    monte_carlo_pass_rate_gate: float = 0.95
+    monte_carlo_family_pass_rate_gate: float = 0.90
     fixed_scenarios: tuple[str, ...] = (
         "level_1_flat.json",
         "level_2_gap.json",
@@ -111,6 +125,25 @@ class BlockSMBDistillationConfig:
             raise ValueError("jump_weight_multiplier must be positive")
         if self.dynamics_loss_weight < 0:
             raise ValueError("dynamics_loss_weight must be non-negative")
+        if self.monte_carlo_samples < 0:
+            raise ValueError("monte_carlo_samples must be non-negative")
+        if self.monte_carlo_validation_samples < 0:
+            raise ValueError("monte_carlo_validation_samples must be non-negative")
+        if self.monte_carlo_test_samples < 0:
+            raise ValueError("monte_carlo_test_samples must be non-negative")
+        if not self.monte_carlo_distribution_id:
+            raise ValueError("monte_carlo_distribution_id must be non-empty")
+        object.__setattr__(
+            self,
+            "monte_carlo_family_weights",
+            _normalize_distillation_monte_carlo_family_weights(
+                self.monte_carlo_family_weights
+            ),
+        )
+        if not 0.0 <= self.monte_carlo_pass_rate_gate <= 1.0:
+            raise ValueError("monte_carlo_pass_rate_gate must be between 0 and 1")
+        if not 0.0 <= self.monte_carlo_family_pass_rate_gate <= 1.0:
+            raise ValueError("monte_carlo_family_pass_rate_gate must be between 0 and 1")
         object.__setattr__(
             self,
             "world_model_slot_weights",
@@ -149,6 +182,23 @@ class BlockSMBDistillationExample:
     step_index: int
 
 
+def _normalize_distillation_monte_carlo_family_weights(
+    weights: Mapping[str, Any] | None,
+) -> dict[str, float]:
+    normalized: dict[str, float] = {}
+    for raw_family, raw_weight in dict(weights or {}).items():
+        family = str(raw_family)
+        if family not in BLOCK_SMB_MC_FAMILIES:
+            choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+            raise ValueError(f"unknown Block SMB Monte Carlo family {raw_family!r}; expected {choices}")
+        weight = float(raw_weight)
+        if weight < 0.0:
+            raise ValueError("monte_carlo_family_weights must be non-negative")
+        if weight > 0.0:
+            normalized[family] = weight
+    return normalized
+
+
 def train_distilled_block_smb_policy(
     config: Optional[BlockSMBDistillationConfig] = None,
     *,
@@ -175,6 +225,9 @@ def train_distilled_block_smb_policy(
     dataset = collect_scripted_distillation_examples(
         config,
         vision_factory=vision_factory,
+    )
+    _source_scenarios, _source_scripts, distillation_sources = (
+        build_block_smb_distillation_scenarios(config)
     )
     all_history: list[dict[str, float]] = []
     evaluations: list[dict[str, Any]] = []
@@ -320,6 +373,7 @@ def train_distilled_block_smb_policy(
     result = {
         "config": to_plain_data(config),
         "training_config": to_plain_data(training_config),
+        "distillation_sources": distillation_sources,
         "dataset": _dataset_summary(dataset),
         "history": all_history,
         "evaluations": evaluations,
@@ -333,6 +387,50 @@ def train_distilled_block_smb_policy(
     return result
 
 
+def build_block_smb_distillation_scenarios(
+    config: BlockSMBDistillationConfig,
+) -> tuple[list[tuple[str, dict]], dict[str, list[int]], dict[str, Any]]:
+    """Return distillation scenarios and teacher/oracle action scripts."""
+
+    scenarios: list[tuple[str, dict]] = []
+    action_scripts: dict[str, list[int]] = {}
+    fixed_scripts = fixed_scenario_action_scripts(max_steps=config.rollout_steps)
+    for scenario_name, scenario in load_fixed_scenarios(config.fixed_scenarios):
+        if scenario_name not in fixed_scripts:
+            raise ValueError(f"fixed scenario {scenario_name!r} does not have a scripted oracle")
+        scenarios.append((scenario_name, scenario))
+        action_scripts[scenario_name] = list(fixed_scripts[scenario_name])
+
+    monte_carlo_manifest: dict[str, Any] = {}
+    if config.monte_carlo_samples > 0:
+        sample_set = sample_block_smb_monte_carlo_split(
+            distribution_id=config.monte_carlo_distribution_id,
+            split="train",
+            seed=config.monte_carlo_seed,
+            sample_count=config.monte_carlo_samples,
+            family_weights=config.monte_carlo_family_weights,
+        )
+        for sample in sample_set.samples:
+            scenarios.append((sample.scenario_id, copy.deepcopy(dict(sample.scenario))))
+            action_scripts[sample.scenario_id] = block_smb_monte_carlo_oracle_actions(
+                sample.scenario,
+                max_steps=config.rollout_steps,
+            )
+        monte_carlo_manifest = sample_set.manifest(include_scenarios=False)
+
+    if not scenarios:
+        raise ValueError("distillation requires at least one fixed or Monte Carlo scenario")
+
+    summary = {
+        "fixed_scenarios": list(config.fixed_scenarios),
+        "fixed_scenario_count": len(config.fixed_scenarios),
+        "monte_carlo": monte_carlo_manifest,
+        "monte_carlo_coverage": monte_carlo_manifest.get("coverage", {}),
+        "scenario_count": len(scenarios),
+    }
+    return scenarios, action_scripts, summary
+
+
 def collect_scripted_distillation_examples(
     config: BlockSMBDistillationConfig,
     *,
@@ -340,10 +438,8 @@ def collect_scripted_distillation_examples(
 ) -> list[BlockSMBDistillationExample]:
     """Collect teacher-forced observations from the scripted fixed scenarios."""
 
-    policy = BlockSMBScriptedPolicy(
-        fixed_scenario_action_scripts(max_steps=config.rollout_steps)
-    )
-    scenarios = load_fixed_scenarios(config.fixed_scenarios)
+    scenarios, action_scripts, _summary = build_block_smb_distillation_scenarios(config)
+    policy = BlockSMBScriptedPolicy(action_scripts)
     examples: list[BlockSMBDistillationExample] = []
     for scenario_index, (scenario_name, scenario) in enumerate(scenarios):
         for episode in range(config.episodes_per_scenario):
@@ -390,10 +486,8 @@ def collect_dagger_distillation_examples(
 ) -> list[BlockSMBDistillationExample]:
     """Collect corrective labels from states visited by the current neural policy."""
 
-    policy = BlockSMBScriptedPolicy(
-        fixed_scenario_action_scripts(max_steps=config.rollout_steps)
-    )
-    scenarios = load_fixed_scenarios(config.fixed_scenarios)
+    scenarios, action_scripts, _summary = build_block_smb_distillation_scenarios(config)
+    policy = BlockSMBScriptedPolicy(action_scripts)
     examples: list[BlockSMBDistillationExample] = []
     model.eval()
     with torch.no_grad():
@@ -959,6 +1053,7 @@ def _action_class_weights(
 def _training_config_from_distillation(
     config: BlockSMBDistillationConfig,
 ) -> BlockSMBTrainingConfig:
+    scenario_count = len(config.fixed_scenarios) + int(config.monte_carlo_samples)
     return BlockSMBTrainingConfig(
         seed=config.seed,
         architecture_config={
@@ -966,12 +1061,20 @@ def _training_config_from_distillation(
             "controller_schedule": config.controller_schedule,
         },
         epochs=config.epochs,
-        episodes_per_epoch=max(1, len(config.fixed_scenarios) * config.episodes_per_scenario),
+        episodes_per_epoch=max(1, scenario_count * config.episodes_per_scenario),
         rollout_steps=config.rollout_steps,
         learning_rate=config.learning_rate,
         world_model_slot_weights=config.world_model_slot_weights,
         fixed_scenarios=config.fixed_scenarios,
         generated_scenarios=0,
+        monte_carlo_distribution_id=config.monte_carlo_distribution_id,
+        monte_carlo_train_samples_per_epoch=config.monte_carlo_samples,
+        monte_carlo_seed=config.monte_carlo_seed,
+        monte_carlo_family_weights=config.monte_carlo_family_weights,
+        monte_carlo_validation_samples=config.monte_carlo_validation_samples,
+        monte_carlo_test_samples=config.monte_carlo_test_samples,
+        monte_carlo_pass_rate_gate=config.monte_carlo_pass_rate_gate,
+        monte_carlo_family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
         evaluation_episodes=config.evaluation_episodes,
         evaluation_max_steps=config.evaluation_max_steps,
         checkpoint_path=config.checkpoint_path,
@@ -1060,6 +1163,20 @@ def _slot_weight_arg(value: str) -> tuple[str, float]:
     return key, weight
 
 
+def _family_weight_arg(value: str) -> tuple[str, float]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("must use FAMILY=WEIGHT syntax")
+    key, raw_value = value.split("=", 1)
+    key = key.strip()
+    if key not in BLOCK_SMB_MC_FAMILIES:
+        choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+        raise argparse.ArgumentTypeError(f"unknown family {key!r}; expected one of: {choices}")
+    weight = float(raw_value)
+    if weight < 0.0:
+        raise argparse.ArgumentTypeError("family weight must be non-negative")
+    return key, weight
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="retroagi-block-smb-distill",
@@ -1139,6 +1256,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evaluation-episodes", type=int, default=3)
     parser.add_argument("--evaluation-max-steps", type=int, default=200)
     parser.add_argument("--fixed-scenario", action="append", dest="fixed_scenarios")
+    parser.add_argument(
+        "--monte-carlo-distribution",
+        default=BlockSMBDistillationConfig.monte_carlo_distribution_id,
+    )
+    parser.add_argument(
+        "--monte-carlo-samples",
+        type=int,
+        default=BlockSMBDistillationConfig.monte_carlo_samples,
+    )
+    parser.add_argument("--monte-carlo-seed", type=int, default=50_000)
+    parser.add_argument(
+        "--monte-carlo-family-weight",
+        action="append",
+        default=None,
+        type=_family_weight_arg,
+        metavar="FAMILY=WEIGHT",
+    )
+    parser.add_argument("--monte-carlo-validation-samples", type=int, default=0)
+    parser.add_argument("--monte-carlo-test-samples", type=int, default=0)
+    parser.add_argument("--monte-carlo-pass-rate-gate", type=float, default=0.95)
+    parser.add_argument("--monte-carlo-family-pass-rate-gate", type=float, default=0.90)
     parser.add_argument("--hidden-dim", type=int, default=32)
     parser.add_argument("--controller-schedule", default="constant")
     parser.set_defaults(deterministic=True)
@@ -1177,6 +1315,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         episodes_per_scenario=args.episodes_per_scenario,
         evaluation_episodes=args.evaluation_episodes,
         evaluation_max_steps=args.evaluation_max_steps,
+        monte_carlo_distribution_id=args.monte_carlo_distribution,
+        monte_carlo_samples=args.monte_carlo_samples,
+        monte_carlo_seed=args.monte_carlo_seed,
+        monte_carlo_family_weights=dict(args.monte_carlo_family_weight or ()),
+        monte_carlo_validation_samples=args.monte_carlo_validation_samples,
+        monte_carlo_test_samples=args.monte_carlo_test_samples,
+        monte_carlo_pass_rate_gate=args.monte_carlo_pass_rate_gate,
+        monte_carlo_family_pass_rate_gate=args.monte_carlo_family_pass_rate_gate,
         fixed_scenarios=tuple(
             args.fixed_scenarios
             or BlockSMBDistillationConfig.__dataclass_fields__["fixed_scenarios"].default
