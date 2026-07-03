@@ -502,6 +502,9 @@ class TestBlockSMBCLI(unittest.TestCase):
                                 "5",
                                 "--device",
                                 "cpu",
+                                "--monte-carlo-parameter-sweep",
+                                "--monte-carlo-sweep-repeats-per-difficulty",
+                                "2",
                                 "--monte-carlo-pass-rate-gate",
                                 "0.8",
                                 "--monte-carlo-family-pass-rate-gate",
@@ -515,6 +518,8 @@ class TestBlockSMBCLI(unittest.TestCase):
         make_model.assert_called_once()
         restore.assert_called_once()
         config = evaluate.call_args.args[1]
+        self.assertTrue(config.monte_carlo_parameter_sweep)
+        self.assertEqual(config.monte_carlo_sweep_repeats_per_difficulty, 2)
         self.assertEqual(config.monte_carlo_pass_rate_gate, 0.8)
         self.assertEqual(config.monte_carlo_family_pass_rate_gate, 0.7)
         self.assertEqual(evaluate.call_args.kwargs["split"], "test")

@@ -3,15 +3,18 @@
 import unittest
 
 from retroagi.stages.block_smb import (
+    BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
     BLOCK_SMB_MC_SCHEMA_VERSION,
     DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     block_smb_monte_carlo_family_specs,
     block_smb_monte_carlo_metadata,
     block_smb_monte_carlo_oracle_actions,
+    sample_block_smb_monte_carlo_parameter_sweep,
     sample_block_smb_monte_carlo_scenario,
     sample_block_smb_monte_carlo_split,
     stable_block_smb_monte_carlo_seed,
+    validate_block_smb_monte_carlo_oracle,
 )
 
 
@@ -101,6 +104,59 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         self.assertEqual(
             sample_set.manifest()["coverage"]["family_counts"],
             {"flat_run": 4},
+        )
+
+    def test_mixed_section_chains_multiple_obstacles_and_enemies(self):
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="validation",
+            seed=123,
+            sample_index=0,
+            family="mixed_section",
+            difficulty="hard",
+        )
+
+        self.assertEqual(sample.family, "mixed_section")
+        self.assertGreaterEqual(sample.scenario["world_width"], 512)
+        self.assertGreaterEqual(len(sample.scenario.get("platforms", [])), 3)
+        self.assertGreaterEqual(len(sample.scenario.get("enemies", [])), 2)
+        self.assertEqual(sample.parameters["section_count"], 5)
+        self.assertIn("single_gap", sample.parameters["families"])
+        self.assertTrue(sample.reachability["reachable"])
+        actions = sample.oracle["actions"]
+        self.assertGreaterEqual(actions.count(2), 60)
+        self.assertGreaterEqual(actions.count(1), 100)
+        reachability = validate_block_smb_monte_carlo_oracle(
+            sample.scenario,
+            actions,
+        )
+        self.assertTrue(reachability["reachable"])
+
+    def test_parameter_sweep_covers_every_family_and_difficulty(self):
+        sample_set = sample_block_smb_monte_carlo_parameter_sweep(
+            split="validation",
+            seed=42,
+            repeats_per_difficulty=1,
+        )
+        manifest = sample_set.manifest()
+
+        self.assertEqual(
+            sample_set.sample_count,
+            len(BLOCK_SMB_MC_FAMILIES) * len(BLOCK_SMB_MC_DIFFICULTY_BINS),
+        )
+        self.assertEqual(
+            manifest["coverage"]["family_counts"],
+            {family: len(BLOCK_SMB_MC_DIFFICULTY_BINS) for family in BLOCK_SMB_MC_FAMILIES},
+        )
+        self.assertFalse(manifest["coverage"]["missing_families"])
+        for family in BLOCK_SMB_MC_FAMILIES:
+            for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+                self.assertEqual(
+                    manifest["coverage"]["difficulty_bin_counts"][f"{family}:{difficulty}"],
+                    1,
+                )
+        self.assertTrue(all(sample.reachability["reachable"] for sample in sample_set.samples))
+        self.assertTrue(
+            all(sample.parameters["parameter_sweep"] for sample in sample_set.samples)
         )
 
 

@@ -36,10 +36,12 @@ from retroagi.core import (
 from .adapter import BLOCK_SMB_SPEC, SCENARIOS_DIR, BlockSMBStage
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .monte_carlo import (
+    BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
     DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     block_smb_monte_carlo_metadata,
     evaluate_block_smb_monte_carlo_gates,
+    sample_block_smb_monte_carlo_parameter_sweep,
     sample_block_smb_monte_carlo_split,
     summarize_block_smb_monte_carlo_action_counts,
     summarize_block_smb_monte_carlo_samples,
@@ -171,6 +173,8 @@ class BlockSMBTrainingConfig:
     monte_carlo_train_samples_per_epoch: int = 0
     monte_carlo_seed: int = 50_000
     monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
+    monte_carlo_parameter_sweep: bool = False
+    monte_carlo_sweep_repeats_per_difficulty: int = 1
     monte_carlo_validate_reachability: bool = True
     monte_carlo_max_rejections: int = 32
     monte_carlo_validation_samples: int = 0
@@ -249,6 +253,10 @@ class BlockSMBTrainingConfig:
             raise ValueError("generated_scenarios must be non-negative")
         if self.monte_carlo_train_samples_per_epoch < 0:
             raise ValueError("monte_carlo_train_samples_per_epoch must be non-negative")
+        if not isinstance(self.monte_carlo_parameter_sweep, bool):
+            raise TypeError("monte_carlo_parameter_sweep must be a bool")
+        if self.monte_carlo_sweep_repeats_per_difficulty <= 0:
+            raise ValueError("monte_carlo_sweep_repeats_per_difficulty must be positive")
         if self.monte_carlo_max_rejections < 0:
             raise ValueError("monte_carlo_max_rejections must be non-negative")
         if self.monte_carlo_validation_samples < 0:
@@ -460,6 +468,18 @@ def block_smb_monte_carlo_train_sample_count(config: BlockSMBTrainingConfig) -> 
     return explicit if explicit > 0 else legacy
 
 
+def block_smb_monte_carlo_sweep_sample_count(
+    config: BlockSMBTrainingConfig,
+) -> int:
+    """Return the number of scenarios in one full family/difficulty sweep."""
+
+    return (
+        len(BLOCK_SMB_MC_FAMILIES)
+        * len(BLOCK_SMB_MC_DIFFICULTY_BINS)
+        * int(config.monte_carlo_sweep_repeats_per_difficulty)
+    )
+
+
 def build_monte_carlo_curriculum(
     config: BlockSMBTrainingConfig,
     *,
@@ -475,6 +495,16 @@ def build_monte_carlo_curriculum(
         if sample_count is None
         else int(sample_count)
     )
+    if config.monte_carlo_parameter_sweep and family_weights is None:
+        sample_set = sample_block_smb_monte_carlo_parameter_sweep(
+            distribution_id=config.monte_carlo_distribution_id,
+            split=split,
+            seed=int(config.monte_carlo_seed if seed is None else seed),
+            repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
+            validate_reachability=config.monte_carlo_validate_reachability,
+            max_rejections=config.monte_carlo_max_rejections,
+        )
+        return sample_set.scenarios()
     if resolved_count <= 0:
         return []
     sample_set = sample_block_smb_monte_carlo_split(
@@ -1359,17 +1389,27 @@ def evaluate_block_smb_monte_carlo(
 ) -> dict[str, Any]:
     """Evaluate a policy on a held-out Monte Carlo split."""
 
-    if sample_count <= 0:
+    if sample_count <= 0 and not config.monte_carlo_parameter_sweep:
         raise ValueError("sample_count must be positive")
-    sample_set = sample_block_smb_monte_carlo_split(
-        distribution_id=config.monte_carlo_distribution_id,
-        split=split,
-        seed=int(config.monte_carlo_seed),
-        sample_count=int(sample_count),
-        family_weights=config.monte_carlo_family_weights,
-        validate_reachability=config.monte_carlo_validate_reachability,
-        max_rejections=config.monte_carlo_max_rejections,
-    )
+    if config.monte_carlo_parameter_sweep:
+        sample_set = sample_block_smb_monte_carlo_parameter_sweep(
+            distribution_id=config.monte_carlo_distribution_id,
+            split=split,
+            seed=int(config.monte_carlo_seed),
+            repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
+            validate_reachability=config.monte_carlo_validate_reachability,
+            max_rejections=config.monte_carlo_max_rejections,
+        )
+    else:
+        sample_set = sample_block_smb_monte_carlo_split(
+            distribution_id=config.monte_carlo_distribution_id,
+            split=split,
+            seed=int(config.monte_carlo_seed),
+            sample_count=int(sample_count),
+            family_weights=config.monte_carlo_family_weights,
+            validate_reachability=config.monte_carlo_validate_reachability,
+            max_rejections=config.monte_carlo_max_rejections,
+        )
     model.eval()
     scenario_results: dict[str, dict[str, Any]] = {}
     family_rollups: dict[str, dict[str, Any]] = {}
@@ -1481,6 +1521,11 @@ def evaluate_block_smb_monte_carlo(
         "split": sample_set.split,
         "seed": sample_set.seed,
         "sample_count": sample_set.sample_count,
+        "requested_sample_count": int(sample_count),
+        "parameter_sweep": bool(config.monte_carlo_parameter_sweep),
+        "sweep_repeats_per_difficulty": int(
+            config.monte_carlo_sweep_repeats_per_difficulty
+        ),
         "evaluation_episodes": config.evaluation_episodes,
         "evaluation_max_steps": config.evaluation_max_steps,
         "scenarios": scenario_results,
@@ -1646,13 +1691,17 @@ def evaluate_block_smb(
         ),
         "tuning_metrics": tuning_metrics,
     }
-    if config.monte_carlo_validation_samples > 0:
+    if config.monte_carlo_validation_samples > 0 or config.monte_carlo_parameter_sweep:
         validation_record_dir = record_dir / "monte_carlo" if record_dir is not None else None
         evaluation["monte_carlo_validation"] = evaluate_block_smb_monte_carlo(
             model,
             config,
             split="validation",
-            sample_count=config.monte_carlo_validation_samples,
+            sample_count=(
+                config.monte_carlo_validation_samples
+                if config.monte_carlo_validation_samples > 0
+                else block_smb_monte_carlo_sweep_sample_count(config)
+            ),
             device=device,
             vision_factory=vision_factory,
             record_dir=validation_record_dir,

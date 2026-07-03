@@ -15,6 +15,7 @@ from .action_diagnostics import (
 )
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .monte_carlo import (
+    BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
     BLOCK_SMB_MC_SCHEMA_VERSION,
     BLOCK_SMB_MC_SPLITS,
@@ -28,6 +29,7 @@ from .monte_carlo import (
     block_smb_monte_carlo_oracle_actions,
     evaluate_block_smb_monte_carlo_gates,
     sample_block_smb_monte_carlo_scenario,
+    sample_block_smb_monte_carlo_parameter_sweep,
     sample_block_smb_monte_carlo_split,
     stable_block_smb_monte_carlo_seed,
     summarize_block_smb_monte_carlo_action_counts,
@@ -46,6 +48,7 @@ from .train import (
     build_adaptive_monte_carlo_replay_curriculum,
     build_epoch_curriculum,
     build_monte_carlo_curriculum,
+    block_smb_monte_carlo_sweep_sample_count,
     build_curriculum,
     evaluate_block_smb,
     evaluate_block_smb_monte_carlo,
@@ -90,6 +93,7 @@ from .vision import (
 __all__ = [
     "BLOCK_SMB_CHECKPOINT_KIND",
     "BLOCK_SMB_MC_FAMILIES",
+    "BLOCK_SMB_MC_DIFFICULTY_BINS",
     "BLOCK_SMB_MC_SCHEMA_VERSION",
     "BLOCK_SMB_MC_SPLITS",
     "BLOCK_SMB_MODEL_NAME",
@@ -106,6 +110,7 @@ __all__ = [
     "build_adaptive_monte_carlo_replay_curriculum",
     "build_epoch_curriculum",
     "build_monte_carlo_curriculum",
+    "block_smb_monte_carlo_sweep_sample_count",
     "build_curriculum",
     "evaluate_block_smb",
     "evaluate_block_smb_monte_carlo",
@@ -149,6 +154,7 @@ __all__ = [
     "fixed_scenario_action_scripts",
     "fixed_scenario_success_threshold",
     "sample_block_smb_monte_carlo_scenario",
+    "sample_block_smb_monte_carlo_parameter_sweep",
     "sample_block_smb_monte_carlo_split",
     "stable_block_smb_monte_carlo_seed",
     "load_scripted_block_smb_checkpoint",

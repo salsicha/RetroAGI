@@ -19,8 +19,9 @@ from retroagi.core import (
     save_checkpoint,
 )
 from retroagi.stages.block_smb import (
-    BLOCK_SMB_MC_FAMILIES,
     BLOCK_SMB_CHECKPOINT_KIND,
+    BLOCK_SMB_MC_DIFFICULTY_BINS,
+    BLOCK_SMB_MC_FAMILIES,
     BLOCK_SMB_MODEL_NAME,
     BLOCK_SMB_SPEC,
     BlockSMBAblationConfig,
@@ -33,8 +34,8 @@ from retroagi.stages.block_smb import (
     build_epoch_curriculum,
     evaluate_block_smb,
     evaluate_block_smb_monte_carlo,
-    summarize_block_smb_curriculum,
     restore_block_smb_checkpoint,
+    summarize_block_smb_curriculum,
     train_and_evaluate_block_smb,
 )
 from retroagi.stages.block_smb.train import (
@@ -517,6 +518,32 @@ class TestBlockSMBTraining(unittest.TestCase):
             full_evaluation["monte_carlo_validation"]["sample_count"],
             len(BLOCK_SMB_MC_FAMILIES),
         )
+
+    def test_monte_carlo_evaluation_can_use_full_parameter_sweep(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            monte_carlo_parameter_sweep=True,
+            monte_carlo_sweep_repeats_per_difficulty=1,
+            monte_carlo_validation_samples=0,
+        )
+        model = make_block_smb_model(config)
+
+        evaluation = evaluate_block_smb_monte_carlo(
+            model,
+            config,
+            split="validation",
+            sample_count=0,
+            device=torch.device("cpu"),
+            vision_factory=static_vision_factory,
+        )
+
+        self.assertTrue(evaluation["parameter_sweep"])
+        self.assertEqual(
+            evaluation["sample_count"],
+            len(BLOCK_SMB_MC_FAMILIES) * len(BLOCK_SMB_MC_DIFFICULTY_BINS),
+        )
+        self.assertEqual(set(evaluation["families"]), set(BLOCK_SMB_MC_FAMILIES))
+        self.assertFalse(evaluation["coverage"]["missing_families"])
 
     def test_adaptive_monte_carlo_replay_samples_recent_failure_families(self):
         config = tiny_config(

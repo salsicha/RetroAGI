@@ -29,6 +29,7 @@ from .train import (
     BlockSMBAblationConfig,
     BlockSMBTrainingConfig,
     block_smb_architecture_metadata,
+    block_smb_monte_carlo_sweep_sample_count,
     evaluate_block_smb_monte_carlo,
     make_block_smb_model,
     restore_block_smb_checkpoint,
@@ -263,6 +264,24 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         type=_family_weight_item,
         metavar="FAMILY=WEIGHT",
         help="weighted family sampler override; may be repeated",
+    )
+    parser.set_defaults(monte_carlo_parameter_sweep=None)
+    parser.add_argument(
+        "--monte-carlo-parameter-sweep",
+        action="store_true",
+        dest="monte_carlo_parameter_sweep",
+        help="use the deterministic full family x difficulty Monte Carlo sweep",
+    )
+    parser.add_argument(
+        "--random-monte-carlo-sampling",
+        action="store_false",
+        dest="monte_carlo_parameter_sweep",
+        help="use weighted/random Monte Carlo sampling instead of the full sweep",
+    )
+    parser.add_argument(
+        "--monte-carlo-sweep-repeats-per-difficulty",
+        type=_positive_int,
+        help="number of deterministic sweep variants per family/difficulty bin",
     )
     parser.add_argument(
         "--monte-carlo-max-rejections",
@@ -543,6 +562,8 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "monte_carlo_train_samples_per_epoch",
         "monte_carlo_seed",
         "monte_carlo_family_weight",
+        "monte_carlo_parameter_sweep",
+        "monte_carlo_sweep_repeats_per_difficulty",
         "monte_carlo_validate_reachability",
         "monte_carlo_max_rejections",
         "monte_carlo_validation_samples",
@@ -899,6 +920,8 @@ def _monte_carlo_cli_sample_count(
 ) -> int:
     if explicit_samples is not None:
         return explicit_samples
+    if config.monte_carlo_parameter_sweep:
+        return block_smb_monte_carlo_sweep_sample_count(config)
     if split == "validation" and config.monte_carlo_validation_samples > 0:
         return config.monte_carlo_validation_samples
     if split == "test" and config.monte_carlo_test_samples > 0:

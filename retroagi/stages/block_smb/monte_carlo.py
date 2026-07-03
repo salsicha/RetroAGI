@@ -9,7 +9,6 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
-import numpy as np
 import pygame
 
 from .env import MarioScenarioEnv
@@ -17,6 +16,7 @@ from .env import MarioScenarioEnv
 BLOCK_SMB_MC_SCHEMA_VERSION = "block_smb_monte_carlo.v1"
 DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID = "block_smb_mc_v1"
 BLOCK_SMB_MC_SPLITS = ("train", "validation", "test", "stress")
+BLOCK_SMB_MC_DIFFICULTY_BINS = ("easy", "medium", "hard")
 BLOCK_SMB_MC_FAMILIES = (
     "flat_run",
     "single_gap",
@@ -29,6 +29,9 @@ BLOCK_SMB_MC_FAMILIES = (
     "enemy_stomp",
     "retreat_recovery",
     "wait_timing",
+    "chained_obstacles",
+    "chained_enemy_gauntlet",
+    "full_smb_opening_proxy",
     "mixed_section",
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 200
@@ -236,9 +239,35 @@ def block_smb_monte_carlo_family_specs(
             "moving_platform_phase": [0, 0],
             "jump_window": [14, 18],
         },
+        "chained_obstacles": {
+            "section_count": [3, 4],
+            "world_width": [480, 544],
+            "enemy_count": [1, 2],
+            "pipe_count": [2, 2],
+            "pipe_height": [38, 54],
+        },
+        "chained_enemy_gauntlet": {
+            "section_count": [4, 5],
+            "world_width": [512, 576],
+            "enemy_count": [2, 3],
+            "gap_count": [1, 1],
+            "pipe_count": [1, 2],
+        },
+        "full_smb_opening_proxy": {
+            "section_count": [4, 5],
+            "world_width": [512, 576],
+            "enemy_count": [2, 2],
+            "pipe_count": [2, 3],
+            "pipe_height": [38, 58],
+        },
         "mixed_section": {
-            "section_count": [2, 3],
-            "families": ["single_gap", "enemy_hop", "moving_bridge"],
+            "section_count": [4, 5],
+            "families": [
+                "enemy_hop",
+                "single_gap",
+                "enemy_patrol",
+                "pipe_jump",
+            ],
         },
     }
     return {
@@ -278,6 +307,7 @@ def sample_block_smb_monte_carlo_scenario(
     seed: int,
     sample_index: int,
     family: Optional[str] = None,
+    difficulty: Optional[str] = None,
     family_weights: Optional[Mapping[str, float]] = None,
     validate_reachability: bool = True,
     max_rejections: int = 32,
@@ -288,6 +318,8 @@ def sample_block_smb_monte_carlo_scenario(
         raise ValueError(f"split must be one of {BLOCK_SMB_MC_SPLITS}")
     if sample_index < 0:
         raise ValueError("sample_index must be non-negative")
+    if difficulty is not None and difficulty not in BLOCK_SMB_MC_DIFFICULTY_BINS:
+        raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
     if max_rejections < 0:
         raise ValueError("max_rejections must be non-negative")
     specs = block_smb_monte_carlo_family_specs(distribution_id)
@@ -308,6 +340,7 @@ def sample_block_smb_monte_carlo_scenario(
             selected_family,
             rng,
             split=split,
+            difficulty=difficulty,
         )
         constraints = specs[selected_family].constraints
         scenario_id = _scenario_id(
@@ -406,6 +439,64 @@ def sample_block_smb_monte_carlo_split(
         samples.append(sample)
         if len(samples) == before:
             rejected_counts["unknown"] += 1
+    return BlockSMBMonteCarloSampleSet(
+        schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
+        distribution_id=distribution_id,
+        split=split,
+        seed=int(seed),
+        samples=tuple(samples),
+        rejected_counts=dict(rejected_counts),
+    )
+
+
+def sample_block_smb_monte_carlo_parameter_sweep(
+    *,
+    distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
+    split: str,
+    seed: int,
+    repeats_per_difficulty: int = 1,
+    families: Optional[Iterable[str]] = None,
+    validate_reachability: bool = True,
+    max_rejections: int = 32,
+) -> BlockSMBMonteCarloSampleSet:
+    """Return a deterministic family x difficulty Monte Carlo sweep."""
+
+    if split not in BLOCK_SMB_MC_SPLITS:
+        raise ValueError(f"split must be one of {BLOCK_SMB_MC_SPLITS}")
+    if repeats_per_difficulty <= 0:
+        raise ValueError("repeats_per_difficulty must be positive")
+    specs = block_smb_monte_carlo_family_specs(distribution_id)
+    selected_families = tuple(str(family) for family in (families or BLOCK_SMB_MC_FAMILIES))
+    if not selected_families:
+        raise ValueError("families must be non-empty")
+    unknown = sorted(set(selected_families) - set(specs))
+    if unknown:
+        choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+        raise ValueError(f"unknown Block SMB Monte Carlo family {unknown!r}; expected {choices}")
+
+    samples: list[BlockSMBScenarioSample] = []
+    rejected_counts: Counter[str] = Counter()
+    sample_index = 0
+    for family in selected_families:
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+            for repeat in range(int(repeats_per_difficulty)):
+                try:
+                    candidate = sample_block_smb_monte_carlo_scenario(
+                        distribution_id=distribution_id,
+                        split=split,
+                        seed=seed,
+                        sample_index=sample_index,
+                        family=family,
+                        difficulty=difficulty,
+                        validate_reachability=validate_reachability,
+                        max_rejections=max_rejections,
+                    )
+                except ValueError as exc:
+                    rejected_counts[str(exc)] += 1
+                    raise
+                sample = _with_sweep_metadata(candidate, repeat=repeat)
+                samples.append(sample)
+                sample_index += 1
     return BlockSMBMonteCarloSampleSet(
         schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
         distribution_id=distribution_id,
@@ -646,6 +737,57 @@ def _with_sample_metadata(
     return enriched
 
 
+def _with_sweep_metadata(
+    sample: BlockSMBScenarioSample,
+    *,
+    repeat: int,
+) -> BlockSMBScenarioSample:
+    scenario_id = (
+        f"{sample.scenario_id}.{sample.difficulty_bin}.sweep_r{int(repeat):02d}"
+    )
+    parameters = {
+        **dict(sample.parameters),
+        "parameter_sweep": True,
+        "sweep_repeat": int(repeat),
+    }
+    constraints = {**dict(sample.constraints), "parameter_sweep": True}
+    oracle = {
+        **dict(sample.oracle),
+        "action_source": f"{sample.distribution_id}:{sample.family}:sweep_oracle_v1",
+    }
+    reachability = dict(sample.reachability)
+    scenario = _with_sample_metadata(
+        sample.scenario,
+        schema_version=sample.schema_version,
+        distribution_id=sample.distribution_id,
+        family=sample.family,
+        split=sample.split,
+        seed=sample.seed,
+        sample_seed=sample.sample_seed,
+        sample_index=sample.sample_index,
+        scenario_id=scenario_id,
+        parameters=parameters,
+        constraints=constraints,
+        oracle=oracle,
+        reachability=reachability,
+    )
+    return BlockSMBScenarioSample(
+        schema_version=sample.schema_version,
+        distribution_id=sample.distribution_id,
+        family=sample.family,
+        split=sample.split,
+        seed=sample.seed,
+        sample_seed=sample.sample_seed,
+        sample_index=sample.sample_index,
+        scenario_id=scenario_id,
+        parameters=parameters,
+        constraints=constraints,
+        oracle=oracle,
+        reachability=reachability,
+        scenario=scenario,
+    )
+
+
 def _goal_reached(env: MarioScenarioEnv) -> bool:
     if env.goal is None:
         return False
@@ -674,8 +816,11 @@ def _generate_family_scenario(
     rng: random.Random,
     *,
     split: str,
+    difficulty: Optional[str] = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    difficulty = _difficulty_bin(rng, split)
+    difficulty = difficulty or _difficulty_bin(rng, split)
+    if difficulty not in BLOCK_SMB_MC_DIFFICULTY_BINS:
+        raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
     if family == "flat_run":
         return _flat_run(rng, difficulty)
     if family == "single_gap":
@@ -698,6 +843,12 @@ def _generate_family_scenario(
         return _retreat_recovery(rng, difficulty)
     if family == "wait_timing":
         return _wait_timing(rng, difficulty)
+    if family == "chained_obstacles":
+        return _chained_obstacles(rng, difficulty)
+    if family == "chained_enemy_gauntlet":
+        return _chained_enemy_gauntlet(rng, difficulty)
+    if family == "full_smb_opening_proxy":
+        return _full_smb_opening_proxy(rng, difficulty)
     if family == "mixed_section":
         return _mixed_section(rng, difficulty)
     raise ValueError(f"unknown Block SMB Monte Carlo family {family!r}")
@@ -892,15 +1043,149 @@ def _wait_timing(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], d
     return scenario, {"wait_window": wait, "platform_speed": speed, "difficulty_bin": difficulty}, actions
 
 
-def _mixed_section(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # Conservative first version: a combined enemy-gap timing task with the
-    # mixed-section family label. Harder multi-screen compositions should be
-    # introduced under a new distribution ID.
-    scenario, params, actions = _enemy_gap(rng, difficulty)
+def _chained_obstacles(
+    rng: random.Random,
+    difficulty: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    enemy_x = {"easy": 94, "medium": 96, "hard": 98}[difficulty]
+    pipe_a_h = {"easy": 34, "medium": 38, "hard": 42}[difficulty]
+    pipe_b_h = {"easy": 48, "medium": 54, "hard": 58}[difficulty]
+    second_enemy_speed = {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty]
+    scenario = {
+        "world_width": 512,
+        "mario": [20, 200],
+        "platforms": [
+            [0, 220, 512, 20],
+            [180, 220 - pipe_a_h, 28, pipe_a_h],
+            [318, 220 - pipe_b_h, 32, pipe_b_h],
+        ],
+        "enemies": [
+            [enemy_x, 206, enemy_x, enemy_x, 0],
+            {
+                "x": 386,
+                "y": 206,
+                "patrol_min": 374,
+                "patrol_max": 414,
+                "speed": second_enemy_speed,
+            },
+        ],
+        "coins": [
+            [132, 190, 10, 10],
+            [220, 176, 10, 10],
+            [356, 156, 10, 10],
+            [430, 190, 10, 10],
+        ],
+        "goal": [482, 200, 16, 20],
+    }
+    actions = _pad(
+        [1] * 16
+        + [2] * 18
+        + [1] * 30
+        + [2] * 20
+        + [1] * 44
+        + [2] * 20
+        + [1] * 90
+    )
+    return (
+        scenario,
+        {
+            "section_count": 4,
+            "world_width": 512,
+            "enemy_count": 2,
+            "pipe_count": 2,
+            "pipe_heights": [pipe_a_h, pipe_b_h],
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
+
+
+def _chained_enemy_gauntlet(
+    rng: random.Random,
+    difficulty: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    gap_width = {"easy": 48, "medium": 50, "hard": 52}[difficulty]
+    landing_x = 180 + gap_width
+    pipe_h = {"easy": 40, "medium": 44, "hard": 48}[difficulty]
+    patrol_speed = {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty]
+    scenario = {
+        "world_width": 544,
+        "mario": [20, 200],
+        "platforms": [
+            [0, 220, 180, 20],
+            [landing_x, 220, 544 - landing_x, 20],
+            [370, 220 - pipe_h, 30, pipe_h],
+        ],
+        "enemies": [
+            [96, 206, 96, 96, 0],
+            {
+                "x": 294,
+                "y": 206,
+                "patrol_min": 284,
+                "patrol_max": 314,
+                "speed": patrol_speed,
+            },
+        ],
+        "coins": [
+            [132, 190, 10, 10],
+            [204, 170, 10, 10],
+            [330, 190, 10, 10],
+            [430, 190, 10, 10],
+        ],
+        "goal": [508, 200, 16, 20],
+    }
+    actions = _pad(
+        [1] * 16
+        + [2] * 18
+        + [1] * 8
+        + [2] * 20
+        + [1] * 8
+        + [2] * 20
+        + [1] * 40
+        + [2] * 20
+        + [1] * 110
+    )
+    return (
+        scenario,
+        {
+            "section_count": 5,
+            "world_width": 544,
+            "enemy_count": 2,
+            "gap_count": 1,
+            "gap_width": gap_width,
+            "pipe_count": 1,
+            "pipe_height": pipe_h,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
+
+
+def _full_smb_opening_proxy(
+    rng: random.Random,
+    difficulty: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # Mirrors the early Full SMB demands that were failing: first enemy, pipe,
+    # taller pipe, and another enemy before the level can stabilize.
+    scenario, params, actions = _chained_obstacles(rng, difficulty)
+    scenario = copy.deepcopy(scenario)
+    tall_pipe_h = {"easy": 50, "medium": 56, "hard": 60}[difficulty]
+    scenario["platforms"][2] = [318, 220 - tall_pipe_h, 32, tall_pipe_h]
     params = {
         **params,
-        "section_count": 2,
-        "families": ["single_gap", "enemy_hop"],
+        "section_count": 5,
+        "families": ["enemy_hop", "pipe_jump", "tall_pipe_jump", "enemy_patrol"],
+        "pipe_heights": [params["pipe_heights"][0], tall_pipe_h],
+        "difficulty_bin": difficulty,
+    }
+    return scenario, params, actions
+
+
+def _mixed_section(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    scenario, params, actions = _chained_enemy_gauntlet(rng, difficulty)
+    params = {
+        **params,
+        "families": ["enemy_hop", "single_gap", "enemy_patrol", "pipe_jump"],
         "difficulty_bin": difficulty,
     }
     return scenario, params, actions

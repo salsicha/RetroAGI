@@ -14,6 +14,8 @@ from retroagi.stages.block_smb.distill import (
     BlockSMBDistillationConfig,
     build_block_smb_distillation_scenarios,
     collect_scripted_distillation_examples,
+)
+from retroagi.stages.block_smb.distill import (
     main as distill_main,
 )
 
@@ -97,6 +99,9 @@ class TestBlockSMBDistillation(unittest.TestCase):
                         "60002",
                         "--monte-carlo-family-weight",
                         "flat_run=1",
+                        "--monte-carlo-parameter-sweep",
+                        "--monte-carlo-sweep-repeats-per-difficulty",
+                        "2",
                         "--monte-carlo-validation-samples",
                         "4",
                         "--monte-carlo-test-samples",
@@ -115,6 +120,8 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(config.monte_carlo_samples, 3)
         self.assertEqual(config.monte_carlo_seed, 60002)
         self.assertEqual(config.monte_carlo_family_weights, {"flat_run": 1.0})
+        self.assertTrue(config.monte_carlo_parameter_sweep)
+        self.assertEqual(config.monte_carlo_sweep_repeats_per_difficulty, 2)
         self.assertEqual(config.monte_carlo_validation_samples, 4)
         self.assertEqual(config.monte_carlo_test_samples, 5)
         self.assertEqual(config.monte_carlo_pass_rate_gate, 0.8)
