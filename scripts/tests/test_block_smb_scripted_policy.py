@@ -82,6 +82,12 @@ class TestBlockSMBScriptedPolicy(unittest.TestCase):
         self.assertIn("level_10_left_retreat.json", scripts)
         self.assertIn("level_11_left_jump_recovery.json", scripts)
         self.assertIn("level_12_wait_bridge.json", scripts)
+        self.assertIn("level_13_variable_pits.json", scripts)
+        self.assertIn("level_14_under_enemy_platform.json", scripts)
+        self.assertIn("level_15_wait_long_bridge.json", scripts)
+        self.assertIn("level_16_wait_enemy_gate.json", scripts)
+        self.assertEqual(scripts["level_15_wait_long_bridge.json"][:28], [0] * 28)
+        self.assertEqual(scripts["level_16_wait_enemy_gate.json"][:50], [0] * 50)
 
 
 if __name__ == "__main__":

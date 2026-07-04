@@ -723,12 +723,88 @@ SMB_TASK_SCHEMA = GameTaskSchema(
             description="Wait/stall fixed Block SMB scenario",
         ),
         GameTaskSpec(
+            name="level_13_variable_pits.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_13_variable_pits.json",
+            reset_seed=101_013,
+            curriculum_stage=13,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Variable-pit run: chain jumps over pits with different "
+                    "widths and reach the extended goal."
+                ),
+            ),
+            description="Variable-size pit fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_14_under_enemy_platform.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_14_under_enemy_platform.json",
+            reset_seed=101_014,
+            curriculum_stage=14,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Underpass run: stay low and run beneath an overhead "
+                    "platform packed with enemies."
+                ),
+            ),
+            description="Enemy-platform underpass fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_15_wait_long_bridge.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_15_wait_long_bridge.json",
+            reset_seed=101_015,
+            curriculum_stage=15,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Long-wait bridge run: delay until the moving bridge enters "
+                    "range, then cross and finish."
+                ),
+            ),
+            description="Long-delay moving-bridge fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
+            name="level_16_wait_enemy_gate.json",
+            stage_name="block_smb",
+            task_type="fixed",
+            source="retroagi/stages/block_smb/scenarios/level_16_wait_enemy_gate.json",
+            reset_seed=101_016,
+            curriculum_stage=16,
+            success_threshold=TaskSuccessThreshold(
+                min_success_rate=1.0,
+                min_mean_return=55.0,
+                min_episodes=3,
+                max_steps=200,
+                rationale=(
+                    "Enemy-gate run: wait for a blocking patrol to move, then "
+                    "time the crossing and reach the goal."
+                ),
+            ),
+            description="Delay-and-enemy-gate fixed Block SMB scenario",
+        ),
+        GameTaskSpec(
             name="generated_block_smb",
             stage_name="block_smb",
             task_type="procedural",
             source="MarioScenarioEnv.generate_scenario",
             reset_seed=150_000,
-            curriculum_stage=13,
+            curriculum_stage=17,
             generation_seed=50_000,
             generation_config={
                 "width_range": (256, 512),
@@ -835,6 +911,18 @@ SMB_BLOCK_GAME_SPEC = BlockGameSpec(
         ),
         "level_12_wait_bridge.json": (
             "retroagi/stages/block_smb/scenarios/level_12_wait_bridge.json"
+        ),
+        "level_13_variable_pits.json": (
+            "retroagi/stages/block_smb/scenarios/level_13_variable_pits.json"
+        ),
+        "level_14_under_enemy_platform.json": (
+            "retroagi/stages/block_smb/scenarios/level_14_under_enemy_platform.json"
+        ),
+        "level_15_wait_long_bridge.json": (
+            "retroagi/stages/block_smb/scenarios/level_15_wait_long_bridge.json"
+        ),
+        "level_16_wait_enemy_gate.json": (
+            "retroagi/stages/block_smb/scenarios/level_16_wait_enemy_gate.json"
         ),
     },
     procedural_scenario_generator="MarioScenarioEnv.generate_scenario",

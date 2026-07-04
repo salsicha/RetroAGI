@@ -177,6 +177,10 @@ class BlockSMBTrainingConfig:
         "level_10_left_retreat.json",
         "level_11_left_jump_recovery.json",
         "level_12_wait_bridge.json",
+        "level_13_variable_pits.json",
+        "level_14_under_enemy_platform.json",
+        "level_15_wait_long_bridge.json",
+        "level_16_wait_enemy_gate.json",
     )
     generated_scenarios: int = 0
     generated_seed: int = 50_000

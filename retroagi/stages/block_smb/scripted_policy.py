@@ -50,6 +50,18 @@ def fixed_scenario_action_scripts(
         "level_10_left_retreat.json": [3] * max_steps,
         "level_11_left_jump_recovery.json": [4] * 22 + [3] * max_steps,
         "level_12_wait_bridge.json": [0] * 20 + [1] * 20 + [2] * 16 + [1] * max_steps,
+        "level_13_variable_pits.json": (
+            [1] * 8
+            + [2] * 18
+            + [1] * 24
+            + [2] * 18
+            + [1] * 28
+            + [2] * 20
+            + [1] * max_steps
+        ),
+        "level_14_under_enemy_platform.json": [1] * max_steps,
+        "level_15_wait_long_bridge.json": [0] * 28 + [1] * 32 + [2] * 16 + [1] * max_steps,
+        "level_16_wait_enemy_gate.json": [0] * 50 + [2] * 18 + [1] * max_steps,
     }
     return {
         scenario_name: actions[:max_steps]

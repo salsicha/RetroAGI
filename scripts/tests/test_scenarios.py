@@ -164,5 +164,77 @@ class TestMarioScenarios(unittest.TestCase):
             expected_moving_platforms=1,
         )
 
+    def test_level_13_variable_pits(self):
+        self._test_scenario(
+            'level_13_variable_pits.json',
+            expected_mario=[20, 200],
+            expected_platforms=4,
+            expected_coins=4,
+            expected_goal=True,
+        )
+        platforms = [
+            platform['rect']
+            for platform in self.env.platforms
+        ]
+        gaps = [
+            next_platform.left - platform.right
+            for platform, next_platform in zip(platforms, platforms[1:])
+        ]
+        self.assertEqual(len(gaps), 3)
+        self.assertGreater(len(set(gaps)), 1)
+        self.assertGreaterEqual(min(gaps), 36)
+
+    def test_level_14_under_enemy_platform(self):
+        self._test_scenario(
+            'level_14_under_enemy_platform.json',
+            expected_mario=[20, 200],
+            expected_platforms=2,
+            expected_coins=3,
+            expected_goal=True,
+            expected_enemies=6,
+        )
+        overhead_platform = self.env.platforms[1]['rect']
+        enemy_positions = [
+            (enemy['x'], enemy['y'])
+            for enemy in self.env.enemies
+            if not enemy['dead']
+        ]
+
+        self.assertLess(overhead_platform.top, self.env.mario['y'])
+        self.assertGreaterEqual(len(enemy_positions), 6)
+        for _, enemy_y in enemy_positions:
+            self.assertLessEqual(enemy_y + 14, overhead_platform.top + 1)
+
+    def test_level_15_wait_long_bridge(self):
+        self._test_scenario(
+            'level_15_wait_long_bridge.json',
+            expected_mario=[20, 200],
+            expected_platforms=3,
+            expected_coins=2,
+            expected_goal=True,
+            expected_moving_platforms=1,
+        )
+        bridge = next(platform for platform in self.env.platforms if platform['moving'])
+        start_platform = self.env.platforms[0]['rect']
+
+        self.assertGreater(bridge['move_max'], bridge['move_min'])
+        self.assertGreater(bridge['rect'].left - start_platform.right, 60)
+        self.assertEqual(bridge['move_min'], 88)
+
+    def test_level_16_wait_enemy_gate(self):
+        self._test_scenario(
+            'level_16_wait_enemy_gate.json',
+            expected_mario=[20, 200],
+            expected_platforms=1,
+            expected_coins=3,
+            expected_goal=True,
+            expected_enemies=1,
+        )
+        enemy = self.env.enemies[0]
+
+        self.assertGreater(enemy['patrol_max'], enemy['patrol_min'])
+        self.assertGreater(enemy['speed'], 0.0)
+        self.assertGreater(enemy['x'], self.env.mario['x'])
+
 if __name__ == '__main__':
     unittest.main()

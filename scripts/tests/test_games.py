@@ -405,6 +405,10 @@ class TestGameSpec(unittest.TestCase):
                 "level_10_left_retreat.json",
                 "level_11_left_jump_recovery.json",
                 "level_12_wait_bridge.json",
+                "level_13_variable_pits.json",
+                "level_14_under_enemy_platform.json",
+                "level_15_wait_long_bridge.json",
+                "level_16_wait_enemy_gate.json",
             ),
         )
         self.assertEqual(tuple(task.name for task in SMB_GAME_SPEC.fixed_tasks), fixed_names)
@@ -497,6 +501,10 @@ class TestGameSpec(unittest.TestCase):
                 "level_10_left_retreat.json",
                 "level_11_left_jump_recovery.json",
                 "level_12_wait_bridge.json",
+                "level_13_variable_pits.json",
+                "level_14_under_enemy_platform.json",
+                "level_15_wait_long_bridge.json",
+                "level_16_wait_enemy_gate.json",
             ),
         )
         self.assertTrue(spec.fixed_scenario_source("level_2_gap.json").endswith("level_2_gap.json"))
