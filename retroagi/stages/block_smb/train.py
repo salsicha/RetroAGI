@@ -1744,6 +1744,7 @@ def train_block_smb_epoch(
     epoch_losses["gradient_norm"] = float(grad_norm.detach().cpu())
     epoch_losses["mean_return"] = float(np.mean([t.total_return for t in replay.trajectories]))
     epoch_losses["episodes"] = float(len(replay.trajectories))
+    replay.clear()
     return epoch_losses, replay
 
 

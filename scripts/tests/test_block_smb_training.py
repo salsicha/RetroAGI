@@ -54,6 +54,7 @@ from retroagi.stages.block_smb.train import (
     make_target_network,
     save_block_smb_checkpoint,
     target_network_parameter_delta,
+    train_block_smb_epoch,
     update_target_network,
 )
 
@@ -377,6 +378,26 @@ class TestBlockSMBTraining(unittest.TestCase):
         self.assertEqual(losses["loss_imagined_rollout"].item(), 0.0)
         self.assertGreaterEqual(losses["loss_dynamics"].item(), 0.0)
         self.assertTrue(torch.isfinite(losses["loss_total"]).item())
+
+    def test_train_epoch_clears_replay_tensors_before_returning(self):
+        config = tiny_config(generated_scenarios=0, rollout_steps=1)
+        model = make_block_smb_model(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+        curriculum = build_curriculum(config)
+
+        metrics, replay = train_block_smb_epoch(
+            model,
+            optimizer,
+            curriculum,
+            config,
+            epoch=0,
+            device=torch.device("cpu"),
+            vision_factory=static_vision_factory,
+        )
+
+        self.assertEqual(metrics["episodes"], 1.0)
+        self.assertEqual(replay.trajectories, [])
+        self.assertEqual(replay.transitions(), [])
 
     def test_target_network_auto_activation_and_ema_update(self):
         config = tiny_config(

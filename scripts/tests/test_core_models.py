@@ -788,6 +788,28 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
             1e-6,
         )
 
+    def test_returned_recurrent_state_is_detached(self):
+        torch.manual_seed(321)
+        model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)
+        state = torch.zeros(1, 4, requires_grad=True)
+        action = torch.ones(1, 4)
+        w_context = torch.ones(1, 4)
+        b_context = torch.zeros(1, 4)
+
+        prediction, recurrent_state = model(
+            state,
+            action,
+            w_context,
+            b_context,
+            return_state=True,
+        )
+
+        self.assertTrue(prediction.requires_grad)
+        self.assertFalse(recurrent_state.hidden.requires_grad)
+        self.assertFalse(recurrent_state.cell.requires_grad)
+        prediction.sum().backward()
+        self.assertIsNotNone(state.grad)
+
     def test_chunk_episode_masks_are_not_supported_for_action_level_lstm(self):
         torch.manual_seed(456)
         model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)

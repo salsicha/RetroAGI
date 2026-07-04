@@ -735,7 +735,7 @@ class WorldModel(nn.Module):
         decoder_input = torch.cat([slot_features, phases, action_hidden], dim=-1)
         prediction = self.decoder(decoder_input).squeeze(-1)
         if return_state:
-            return prediction, recurrent_state
+            return prediction, recurrent_state.detach()
         return prediction
 
 
@@ -891,7 +891,8 @@ class AgentWorldModelCritic(nn.Module):
     critic maps that predicted C state to A-level feedback plus progress/death
     gates. The actor is rerun with the latest critic feedback until the critic
     predicts progress without predicted death, or until the pass budget is
-    exhausted.
+    exhausted. Feedback is detached between refinement passes so one rollout
+    does not retain every earlier candidate graph.
     """
 
     def __init__(
@@ -1249,7 +1250,7 @@ class AgentWorldModelCritic(nn.Module):
         accepted = self._candidate_is_accepted(first_candidate)
 
         if critic_feedback_enabled and not accepted:
-            actor_criticism = first_candidate.criticism
+            actor_criticism = first_candidate.criticism.detach()
             for _pass_index in range(1, self.max_action_refinement_passes):
                 logits_a, actions, w, b = self.agent(
                     src_A,
@@ -1277,7 +1278,7 @@ class AgentWorldModelCritic(nn.Module):
                 accepted = self._candidate_is_accepted(candidate)
                 if accepted:
                     break
-                actor_criticism = candidate.criticism
+                actor_criticism = candidate.criticism.detach()
 
         if not accepted:
             selected_candidate, selected_iteration = self._select_fallback_candidate(candidates)
