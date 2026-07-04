@@ -333,7 +333,12 @@ class PatchVisionTransformer(nn.Module):
                 dtype=support_logits.dtype,
             )
             support_source = "learned_head+semantic_contact"
-        metadata = {"grid_size": self.grid_size, "image_size": self.image_size}
+        metadata = {
+            "grid_size": self.grid_size,
+            "image_size": self.image_size,
+            "semantic_classes": self.spec.semantic_classes,
+            "support_classes": self.spec.support_classes,
+        }
         metadata["support_source"] = support_source
         return VisionOutput(
             position=self._position_from_logits(logits),
@@ -373,7 +378,11 @@ class LinearVisionEncoder(nn.Module):
             semantic_logits=logits,
             semantic_ids=values.unsqueeze(1),
             tokens=tokens,
-            metadata={"sequence_length": values.shape[1]},
+            metadata={
+                "sequence_length": values.shape[1],
+                "semantic_classes": self.spec.semantic_classes,
+                "support_classes": self.spec.support_classes,
+            },
         )
 
     def encode(self, observation: Any) -> VisionOutput:

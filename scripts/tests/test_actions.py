@@ -1,15 +1,19 @@
 """Tests for the action vocabulary shared by Block SMB and Full SMB."""
 
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
+import torch
 
 from retroagi.core import (
     SMB_ACTION_SPECS,
     SMB_ACTIONS,
     SMBAction,
+    SMBJumpActionTerminator,
     ActionSpec,
     ContinuousControlSpec,
+    VisionOutput,
     action_backend_id,
     action_button_vector,
     block_smb_action,
@@ -17,6 +21,7 @@ from retroagi.core import (
     coerce_smb_action,
     full_smb_action,
     smb_action_spec,
+    smb_jump_release_action,
 )
 
 
@@ -85,6 +90,125 @@ class TestSMBActionVocabulary(unittest.TestCase):
                 stable_id=0,
                 continuous_controls=(ContinuousControlSpec("x", 0.5),),
             )
+
+    def test_jump_release_actions_preserve_horizontal_intent(self):
+        self.assertIs(smb_jump_release_action(SMBAction.RIGHT_JUMP), SMBAction.RIGHT)
+        self.assertIs(smb_jump_release_action(SMBAction.LEFT_JUMP), SMBAction.LEFT)
+        self.assertIs(smb_jump_release_action(SMBAction.JUMP), SMBAction.NOOP)
+
+    def test_jump_terminator_releases_after_vit_support_landing(self):
+        terminator = SMBJumpActionTerminator()
+
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.RIGHT_JUMP,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ),
+            int(SMBAction.RIGHT_JUMP),
+        )
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.RIGHT_JUMP,
+                batch=self._batch_with_vision(self._support_vision(0)),
+            ),
+            int(SMBAction.RIGHT_JUMP),
+        )
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.RIGHT_JUMP,
+                batch=self._batch_with_vision(self._support_vision(2)),
+            ),
+            int(SMBAction.RIGHT),
+        )
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.RIGHT_JUMP,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ),
+            int(SMBAction.RIGHT),
+        )
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.RIGHT,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ),
+            int(SMBAction.RIGHT),
+        )
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.RIGHT_JUMP,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ),
+            int(SMBAction.RIGHT_JUMP),
+        )
+
+    def test_jump_terminator_releases_on_vit_enemy_contact(self):
+        terminator = SMBJumpActionTerminator()
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.JUMP,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ),
+            int(SMBAction.JUMP),
+        )
+        self.assertEqual(
+            terminator.filter_action(
+                SMBAction.JUMP,
+                batch=self._batch_with_vision(self._support_vision(0)),
+            ),
+            int(SMBAction.JUMP),
+        )
+
+        labels = torch.zeros(1, 5, 5, dtype=torch.long)
+        labels[0, 2, 2] = 1
+        labels[0, 3, 2] = 2
+        vision = self._support_vision(
+            0,
+            semantic_ids=labels,
+            semantic_classes=("background", "mario", "enemy"),
+        )
+
+        self.assertEqual(
+            terminator.filter_action(SMBAction.JUMP, batch=self._batch_with_vision(vision)),
+            int(SMBAction.NOOP),
+        )
+
+    @staticmethod
+    def _batch_with_vision(vision: VisionOutput):
+        return SimpleNamespace(metadata={"vision": vision})
+
+    @staticmethod
+    def _support_vision(
+        support_id: int,
+        *,
+        semantic_ids: torch.Tensor | None = None,
+        semantic_classes: tuple[str, ...] = ("background", "mario", "enemy"),
+    ) -> VisionOutput:
+        if semantic_ids is None:
+            semantic_ids = torch.zeros(1, 5, 5, dtype=torch.long)
+            semantic_ids[0, 2, 2] = 1
+        semantic_logits = torch.zeros(
+            semantic_ids.shape[0],
+            len(semantic_classes),
+            semantic_ids.shape[1],
+            semantic_ids.shape[2],
+        )
+        semantic_logits.scatter_(1, semantic_ids.unsqueeze(1), 1.0)
+        return VisionOutput(
+            position=torch.zeros(1, 2),
+            semantic_logits=semantic_logits,
+            semantic_ids=semantic_ids,
+            tokens=torch.zeros(1, 1, 4),
+            metadata={
+                "semantic_classes": semantic_classes,
+                "support_classes": ("air", "ground", "platform"),
+            },
+            support_logits=torch.nn.functional.one_hot(
+                torch.tensor([support_id]),
+                num_classes=3,
+            ).float(),
+            support_ids=torch.tensor([support_id]),
+        )
 
 
 if __name__ == "__main__":

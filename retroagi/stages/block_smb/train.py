@@ -20,6 +20,7 @@ from retroagi.core import (
     SUPPORTED_CONTROLLER_SCHEDULES,
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
+    SMBJumpActionTerminator,
     StageBatch,
     VisionEncoder,
     WorldModelState,
@@ -813,6 +814,7 @@ def _action_from_model(
     world_model_state: WorldModelState | None = None,
     critic_feedback_enabled: bool = True,
     world_model_enabled: bool = True,
+    jump_terminator: SMBJumpActionTerminator | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -850,6 +852,14 @@ def _action_from_model(
     finite_or_raise("action_logits", action_logits)
     distribution = torch.distributions.Categorical(logits=action_logits)
     action_tensor = action_logits.argmax(dim=-1) if deterministic else distribution.sample()
+    if jump_terminator is not None:
+        filtered_action = jump_terminator.filter_action(int(action_tensor.item()), batch=batch)
+        if filtered_action != int(action_tensor.item()):
+            action_tensor = torch.tensor(
+                [filtered_action],
+                dtype=action_tensor.dtype,
+                device=action_tensor.device,
+            )
     log_prob = distribution.log_prob(action_tensor).squeeze(0)
     entropy = distribution.entropy().squeeze(0)
     return (
@@ -879,6 +889,7 @@ def collect_trajectory(
     if record_frames:
         trajectory.frames.append(np.asarray(observation).copy())
     world_model_state: WorldModelState | None = None
+    jump_terminator = SMBJumpActionTerminator()
 
     for _ in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -894,6 +905,7 @@ def collect_trajectory(
             world_model_state=carried_state,
             critic_feedback_enabled=ablation_config.critic_feedback_enabled,
             world_model_enabled=ablation_config.world_model_enabled,
+            jump_terminator=jump_terminator,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)

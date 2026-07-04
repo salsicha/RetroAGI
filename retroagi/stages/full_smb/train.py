@@ -25,6 +25,7 @@ from retroagi.core import (
     ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     ExperimentTrackerConfig,
     SMBAction,
+    SMBJumpActionTerminator,
     StageBatch,
     WorldModelState,
     action_level_world_model_state_dict,
@@ -1146,6 +1147,7 @@ def evaluate_full_smb_policy(
             episode_seed = config.seed + 10_000 + episode_index
             observation = stage.reset(seed=episode_seed)
             action_planner = _make_full_smb_action_planner(config, stage, stage.last_info)
+            jump_terminator = SMBJumpActionTerminator()
             episode_return = 0.0
             fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
                 stage,
@@ -1167,6 +1169,7 @@ def evaluate_full_smb_policy(
                     policy_action=policy_action,
                     info=stage.last_info,
                 )
+                action = jump_terminator.filter_action(action, batch=batch)
                 observation, reward, terminated, truncated, info = stage.step(action)
                 _update_full_smb_fixed_task_episode_metrics(
                     fixed_task_metrics,
@@ -1311,6 +1314,7 @@ def play_full_smb_policy(
             if play_config.human_control
             else _make_full_smb_action_planner(config, stage, stage.last_info)
         )
+        jump_terminator = SMBJumpActionTerminator()
         resets += 1
         _render_full_smb_stage(
             stage,
@@ -1355,6 +1359,7 @@ def play_full_smb_policy(
                     if play_config.human_control
                     else _make_full_smb_action_planner(config, stage, stage.last_info)
                 )
+                jump_terminator.reset()
                 resets += 1
                 world_model_state = None
                 episode_return = 0.0
@@ -1410,6 +1415,7 @@ def play_full_smb_policy(
                     policy_action=action,
                     info=stage.last_info,
                 )
+                action = jump_terminator.filter_action(action, batch=batch)
                 action_probabilities = _full_smb_action_probabilities(
                     logits,
                     temperature=play_config.sampling_temperature,
@@ -1509,6 +1515,7 @@ def play_full_smb_policy(
                         if play_config.human_control
                         else _make_full_smb_action_planner(config, stage, stage.last_info)
                     )
+                    jump_terminator.reset()
                     resets += 1
                     episode_return = 0.0
                     episode_recording = _start_full_smb_episode_recording(
@@ -1529,6 +1536,12 @@ def play_full_smb_policy(
                         semantic_mask=play_config.semantic_mask,
                     )
                     break
+                if (
+                    not play_config.human_control
+                    and repeat_index + 1 < repeated_steps
+                ):
+                    repeat_batch = stage.encode_observation(observation, info)
+                    action = jump_terminator.filter_action(action, batch=repeat_batch)
                 _sleep_full_smb_play_frame(play_config.fps)
             if play_config.action_repeat > 1 and not (terminated or truncated):
                 world_model_state = None
@@ -2446,6 +2459,7 @@ def _train_episode(
     world_model_losses: list[float] = []
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
+    jump_terminator = SMBJumpActionTerminator()
     recurrent_state_resets = 1
     boundary_counts: dict[str, int] = {"manual_reset": 1}
     for _step in range(max_steps):
@@ -2478,6 +2492,13 @@ def _train_episode(
             action_tensor = logits.argmax(dim=-1)
         else:
             action_tensor = distribution.sample()
+        filtered_action = jump_terminator.filter_action(int(action_tensor.item()), batch=batch)
+        if filtered_action != int(action_tensor.item()):
+            action_tensor = torch.tensor(
+                [filtered_action],
+                dtype=action_tensor.dtype,
+                device=action_tensor.device,
+            )
         log_prob = distribution.log_prob(action_tensor)
         _finite_tensor_or_raise("action_log_prob", log_prob)
         observation, reward, terminated, truncated, info = stage.step(int(action_tensor.item()))

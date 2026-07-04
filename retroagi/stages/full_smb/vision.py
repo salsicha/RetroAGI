@@ -201,6 +201,8 @@ class FullSMBDeepLabSegmentationVision(nn.Module):
             tokens=tokens,
             metadata={
                 "checkpoint_classes": self.spec.semantic_classes,
+                "semantic_classes": self.spec.semantic_classes,
+                "support_classes": self.spec.support_classes,
                 "legacy_encoder": "deeplabv3_resnet50",
                 "support_source": "semantic_contact",
             },

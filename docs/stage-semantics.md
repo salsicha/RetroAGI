@@ -127,6 +127,14 @@ upward velocity. Horizontal input uses acceleration, momentum, and skidding.
 Raw integer IDs remain accepted by `BlockSMBStage` for compatibility, but new
 code should use the enum names.
 
+Policy-driven Block SMB and Full SMB training, evaluation, and playback pass
+model-selected jump actions through `SMBJumpActionTerminator`. The terminator
+reads the current ViT output from `StageBatch.metadata["vision"]`; after an
+active jump has left support, `support_ids`/`support_logits` end `RIGHT_JUMP`,
+`LEFT_JUMP`, or `JUMP` on ground/platform landing by releasing `A` to `RIGHT`,
+`LEFT`, or `NOOP`. Semantic ViT labels also release the jump when Mario lands
+on an enemy.
+
 This transfer vocabulary intentionally leaves NES-only buttons such as `B`,
 `START`, and `SELECT` released. Adding run/fire or menu actions requires an
 explicit vocabulary version rather than changing the six stable IDs above.

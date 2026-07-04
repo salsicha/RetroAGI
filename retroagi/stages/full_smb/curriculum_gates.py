@@ -12,7 +12,13 @@ from typing import Any, Mapping, Optional, Sequence
 
 import torch
 
-from retroagi.core import SMB_ACTIONS, SMBAction, select_device, to_plain_data
+from retroagi.core import (
+    SMB_ACTIONS,
+    SMBAction,
+    SMBJumpActionTerminator,
+    select_device,
+    to_plain_data,
+)
 from retroagi.stages.full_smb.adapter import (
     DEFAULT_FULL_SMB_CONTENT,
     FullSMBEnvConfig,
@@ -246,6 +252,7 @@ def _run_full_smb_curriculum_gate(
     for episode_index in range(episodes):
         observation = stage.reset(seed=seed + episode_index)
         world_model_state = None
+        jump_terminator = SMBJumpActionTerminator()
         progress_values: list[float] = []
         score_values: list[float] = []
         coin_values: list[float] = []
@@ -265,6 +272,7 @@ def _run_full_smb_curriculum_gate(
                 world_model_state=world_model_state,
             )
             action = int(forward.logits.argmax(dim=-1).item())
+            action = jump_terminator.filter_action(action, batch=batch)
             observation, reward, terminated, truncated, info = stage.step(action)
             source = _signal_source(info)
             progress = _signal_progress(source)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 
@@ -219,3 +219,217 @@ def full_smb_action(action: SMBAction | int, buttons: Iterable[str]) -> np.ndarr
     """Map an SMB action spec to a stable-retro MultiBinary button vector."""
 
     return action_button_vector(smb_action_spec(action), buttons)
+
+
+SMB_JUMP_ACTIONS = frozenset((SMBAction.RIGHT_JUMP, SMBAction.LEFT_JUMP, SMBAction.JUMP))
+SMB_JUMP_RELEASE_ACTIONS = {
+    SMBAction.RIGHT_JUMP: SMBAction.RIGHT,
+    SMBAction.LEFT_JUMP: SMBAction.LEFT,
+    SMBAction.JUMP: SMBAction.NOOP,
+}
+SMB_SUPPORT_AIR = "air"
+SMB_SUPPORT_GROUND = "ground"
+SMB_SUPPORT_PLATFORM = "platform"
+SMB_AGENT_CLASS_NAMES = frozenset(("mario", "player", "agent"))
+SMB_ENEMY_CLASS_NAMES = frozenset(("enemy", "goomba", "koopa"))
+
+
+def is_smb_jump_action(action: SMBAction | int) -> bool:
+    return coerce_smb_action(action) in SMB_JUMP_ACTIONS
+
+
+def smb_jump_release_action(action: SMBAction | int) -> SMBAction:
+    """Return the non-jump action that preserves horizontal intent."""
+
+    return SMB_JUMP_RELEASE_ACTIONS.get(coerce_smb_action(action), coerce_smb_action(action))
+
+
+class SMBJumpActionTerminator:
+    """Release SMB jump actions after ViT support says a jump has landed.
+
+    The first jump frame is always allowed, even if the current observation is
+    still grounded. Once the support-state output reports air, a subsequent
+    ground/platform support state or enemy contact releases `A` while preserving
+    horizontal direction.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._jump_active = False
+        self._left_support = False
+        self._suppress_until_non_jump = False
+
+    def filter_action(
+        self,
+        action: SMBAction | int,
+        *,
+        batch: Any = None,
+        vision: Any = None,
+    ) -> int:
+        action_value = coerce_smb_action(action)
+        if vision is None and batch is not None:
+            vision = _vision_from_batch(batch)
+        support_name = _vision_support_name(vision)
+        enemy_contact = _vision_enemy_contact(vision)
+
+        if action_value not in SMB_JUMP_ACTIONS:
+            self.reset()
+            return int(action_value)
+
+        if self._suppress_until_non_jump:
+            return int(smb_jump_release_action(action_value))
+
+        if not self._jump_active:
+            self._jump_active = True
+            self._left_support = support_name == SMB_SUPPORT_AIR
+            return int(action_value)
+
+        if enemy_contact:
+            release = smb_jump_release_action(action_value)
+            self._jump_active = False
+            self._left_support = False
+            self._suppress_until_non_jump = True
+            return int(release)
+
+        if support_name == SMB_SUPPORT_AIR:
+            self._left_support = True
+            return int(action_value)
+
+        landed = (
+            self._left_support
+            and support_name in {SMB_SUPPORT_GROUND, SMB_SUPPORT_PLATFORM}
+        )
+        if landed:
+            release = smb_jump_release_action(action_value)
+            self._jump_active = False
+            self._left_support = False
+            self._suppress_until_non_jump = True
+            return int(release)
+
+        return int(action_value)
+
+
+def _vision_from_batch(batch: Any) -> Any:
+    metadata = getattr(batch, "metadata", None)
+    if isinstance(metadata, Mapping):
+        return metadata.get("vision")
+    return None
+
+
+def _vision_support_name(vision: Any) -> str | None:
+    if vision is None:
+        return None
+    support_id = _first_index(getattr(vision, "support_ids", None))
+    if support_id is None:
+        support_logits = _to_numpy(getattr(vision, "support_logits", None))
+        if support_logits is not None and support_logits.size:
+            support_id = int(
+                np.asarray(support_logits)
+                .reshape((-1, support_logits.shape[-1]))[0]
+                .argmax()
+            )
+    if support_id is None:
+        return None
+    support_classes = _metadata_tuple(vision, "support_classes") or (
+        SMB_SUPPORT_AIR,
+        SMB_SUPPORT_GROUND,
+        SMB_SUPPORT_PLATFORM,
+    )
+    if 0 <= support_id < len(support_classes):
+        return str(support_classes[support_id]).lower()
+    return None
+
+
+def _vision_enemy_contact(vision: Any) -> bool:
+    if vision is None:
+        return False
+    labels = _semantic_labels(vision)
+    if labels is None or labels.size == 0:
+        return False
+    if labels.ndim == 3:
+        labels = labels[0]
+    if labels.ndim != 2:
+        return False
+
+    semantic_classes = _metadata_tuple(vision, "semantic_classes") or _metadata_tuple(
+        vision, "checkpoint_classes"
+    )
+    agent_ids, enemy_ids = _semantic_contact_class_ids(semantic_classes, labels)
+    if not agent_ids or not enemy_ids:
+        return False
+
+    agent_mask = np.isin(labels, tuple(agent_ids))
+    if not bool(agent_mask.any()):
+        return False
+    rows, cols = np.nonzero(agent_mask)
+    row_start = max(int(rows.min()) - 1, 0)
+    row_end = min(int(rows.max()) + 2, labels.shape[0])
+    col_start = max(int(cols.min()) - 1, 0)
+    col_end = min(int(cols.max()) + 2, labels.shape[1])
+    contact_window = labels[row_start:row_end, col_start:col_end]
+    return bool(np.isin(contact_window, tuple(enemy_ids)).any())
+
+
+def _semantic_labels(vision: Any) -> np.ndarray | None:
+    semantic_ids = _to_numpy(getattr(vision, "semantic_ids", None))
+    if semantic_ids is not None:
+        return np.asarray(semantic_ids)
+    semantic_logits = _to_numpy(getattr(vision, "semantic_logits", None))
+    if semantic_logits is None or semantic_logits.ndim < 3:
+        return None
+    return np.asarray(semantic_logits).argmax(axis=1)
+
+
+def _semantic_contact_class_ids(
+    semantic_classes: tuple[str, ...],
+    labels: np.ndarray,
+) -> tuple[set[int], set[int]]:
+    if semantic_classes:
+        lowered = tuple(str(name).lower() for name in semantic_classes)
+        agent_ids = {
+            index for index, name in enumerate(lowered) if name in SMB_AGENT_CLASS_NAMES
+        }
+        enemy_ids = {
+            index for index, name in enumerate(lowered) if name in SMB_ENEMY_CLASS_NAMES
+        }
+        return agent_ids, enemy_ids
+
+    class_count = int(labels.max()) + 1 if labels.size else 0
+    if class_count == 7:
+        return {1}, {5}
+    if class_count == 13:
+        return {8}, {6, 7}
+    if class_count == 6:
+        return {5}, {3}
+    return set(), set()
+
+
+def _metadata_tuple(vision: Any, key: str) -> tuple[str, ...]:
+    metadata = getattr(vision, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return ()
+    value = metadata.get(key)
+    if value is None:
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _first_index(value: Any) -> int | None:
+    array = _to_numpy(value)
+    if array is None or array.size == 0:
+        return None
+    return int(np.asarray(array).reshape(-1)[0])
+
+
+def _to_numpy(value: Any) -> np.ndarray | None:
+    if value is None:
+        return None
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        return value.numpy()
+    return np.asarray(value)
