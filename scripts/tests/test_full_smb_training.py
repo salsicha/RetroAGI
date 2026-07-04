@@ -191,6 +191,10 @@ class TestFullSMBTraining(unittest.TestCase):
                 device="cpu",
                 init_checkpoint=block_policy_path,
                 full_smb_vision_checkpoint=full_vision_path,
+                imitation_warm_start_steps=12,
+                imitation_warm_start_epochs=1,
+                imitation_warm_start_batch_size=4,
+                imitation_warm_start_frame_skip=32,
             )
             result = train_full_smb_policy(config, make_stage=tiny_stage)
 
@@ -211,6 +215,20 @@ class TestFullSMBTraining(unittest.TestCase):
         )
         self.assertEqual(source["full_smb_vision_checkpoint"], str(full_vision_path))
         self.assertEqual(source["architecture_config"], source_config.architecture_config)
+        self.assertTrue(source["imitation_warm_start"]["enabled"])
+        self.assertGreater(
+            source["imitation_warm_start"]["training"]["duration_supervision_count"],
+            0.0,
+        )
+        self.assertGreater(
+            checkpoint["metrics"]["imitation_warm_start_duration_supervision_count"],
+            0.0,
+        )
+        self.assertGreater(
+            checkpoint["metrics"]["imitation_warm_start_release_supervision_count"],
+            0.0,
+        )
+        self.assertEqual(checkpoint["metrics"]["imitation_warm_start_enabled"], 1.0)
         self.assertEqual(
             checkpoint["metadata"]["training"]["source"],
             source,

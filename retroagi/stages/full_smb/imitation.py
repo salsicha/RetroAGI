@@ -49,11 +49,15 @@ DEFAULT_FULL_SMB_IMITATION_TRAINABLE_PREFIXES = (
 
 def full_smb_opening_imitation_script(
     max_steps: int = DEFAULT_FULL_SMB_IMITATION_STEPS,
+    *,
+    decision_frame_skip: int = 1,
 ) -> tuple[int, ...]:
     """Timed real-emulator opening script for Level 1-1 warm-start imitation."""
 
     if max_steps <= 0:
         raise ValueError("max_steps must be positive")
+    if int(decision_frame_skip) <= 0:
+        raise ValueError("decision_frame_skip must be positive")
     pattern = (
         [int(SMBAction.RIGHT)] * 160
         + [int(SMBAction.RIGHT_JUMP)] * 20
@@ -61,9 +65,29 @@ def full_smb_opening_imitation_script(
         + [int(SMBAction.RIGHT_JUMP)] * 20
     )
     actions: list[int] = []
-    while len(actions) < max_steps:
+    decision_step = int(decision_frame_skip)
+    frame_steps = int(max_steps) * decision_step
+    while len(actions) < frame_steps:
         actions.extend(pattern)
-    return tuple(actions[:max_steps])
+    if decision_step == 1:
+        return tuple(actions[:max_steps])
+    sampled = [
+        _full_smb_imitation_window_action(actions[index : index + decision_step])
+        for index in range(0, frame_steps, decision_step)
+    ]
+    return tuple(sampled[:max_steps])
+
+
+def _full_smb_imitation_window_action(window: Sequence[int]) -> int:
+    jump_priority = (
+        int(SMBAction.RIGHT_JUMP),
+        int(SMBAction.LEFT_JUMP),
+        int(SMBAction.JUMP),
+    )
+    for action in jump_priority:
+        if action in window:
+            return action
+    return int(window[0])
 
 
 @torch.no_grad()
@@ -143,6 +167,8 @@ def train_full_smb_imitation_warm_start(
     generator.manual_seed(int(seed))
     model.train()
     losses: list[float] = []
+    action_losses: list[float] = []
+    primitive_losses: list[float] = []
     accuracies: list[float] = []
     sample_count = int(actions.numel())
     for _epoch in range(epochs):
@@ -168,6 +194,7 @@ def train_full_smb_imitation_warm_start(
                 duration_targets=primitive_targets["duration_bin"][indices].to(device),
                 duration_mask=primitive_targets["duration_mask"][indices].to(device),
                 release_targets=primitive_targets["release"][indices].to(device),
+                release_mask=primitive_targets["release_mask"][indices].to(device),
                 post_release_targets=primitive_targets["post_release"][indices].to(device),
             )
             loss = loss_action + 0.25 * loss_primitive
@@ -176,6 +203,8 @@ def train_full_smb_imitation_warm_start(
             torch.nn.utils.clip_grad_norm_(parameters, 1.0)
             optimizer.step()
             losses.append(float(loss.detach().cpu().item()))
+            action_losses.append(float(loss_action.detach().cpu().item()))
+            primitive_losses.append(float(loss_primitive.detach().cpu().item()))
             prediction = logits.detach().argmax(dim=-1)
             accuracies.append(float((prediction == target).float().mean().cpu().item()))
     return (
@@ -187,10 +216,21 @@ def train_full_smb_imitation_warm_start(
             "trainable_prefixes": tuple(trainable_prefixes),
             "mean_loss": float(sum(losses) / len(losses)) if losses else 0.0,
             "final_loss": float(losses[-1]) if losses else 0.0,
+            "mean_action_loss": float(sum(action_losses) / len(action_losses))
+            if action_losses
+            else 0.0,
+            "final_action_loss": float(action_losses[-1]) if action_losses else 0.0,
+            "mean_primitive_loss": float(sum(primitive_losses) / len(primitive_losses))
+            if primitive_losses
+            else 0.0,
+            "final_primitive_loss": float(primitive_losses[-1]) if primitive_losses else 0.0,
             "mean_action_accuracy": float(sum(accuracies) / len(accuracies))
             if accuracies
             else 0.0,
             "final_action_accuracy": float(accuracies[-1]) if accuracies else 0.0,
+            "duration_supervision_count": float(primitive_targets["duration_mask"].sum().item()),
+            "release_supervision_count": float(primitive_targets["release_mask"].sum().item()),
+            "release_positive_count": float(primitive_targets["release"].sum().item()),
         },
         optimizer,
     )
@@ -201,6 +241,7 @@ def _full_smb_imitation_primitive_targets(actions: torch.Tensor) -> dict[str, to
     duration_targets = torch.zeros_like(actions)
     duration_mask = torch.zeros(actions.shape, dtype=torch.float32)
     release_targets = torch.zeros(actions.shape, dtype=torch.float32)
+    release_mask = torch.zeros(actions.shape, dtype=torch.float32)
     post_release_targets = torch.zeros_like(actions)
     jump_actions = {
         int(SMBAction.RIGHT_JUMP),
@@ -212,21 +253,25 @@ def _full_smb_imitation_primitive_targets(actions: torch.Tensor) -> dict[str, to
         post_release_targets[index] = int(smb_jump_release_action(action))
         if action not in jump_actions:
             continue
+        release_mask[index] = 1.0
+        is_run_start = index == 0 or action_values[index - 1] != action
         run_length = 1
         for next_index in range(index + 1, len(action_values)):
             if action_values[next_index] != action:
                 break
             run_length += 1
-        duration_mask[index] = 1.0
-        duration_targets[index] = int(
-            torch.abs(duration_bins - float(run_length)).argmin().item()
-        )
+        if is_run_start:
+            duration_mask[index] = 1.0
+            duration_targets[index] = int(
+                torch.abs(duration_bins - float(run_length)).argmin().item()
+            )
         if index + 1 >= len(action_values) or action_values[index + 1] != action:
             release_targets[index] = 1.0
     return {
         "duration_bin": duration_targets.long(),
         "duration_mask": duration_mask,
         "release": release_targets,
+        "release_mask": release_mask,
         "post_release": post_release_targets.long(),
     }
 
@@ -238,6 +283,7 @@ def _full_smb_imitation_primitive_loss(
     duration_targets: torch.Tensor,
     duration_mask: torch.Tensor,
     release_targets: torch.Tensor,
+    release_mask: torch.Tensor,
     post_release_targets: torch.Tensor,
 ) -> torch.Tensor:
     if motor_primitives is None:
@@ -255,10 +301,17 @@ def _full_smb_imitation_primitive_loss(
             )
         )
     release_logit = getattr(motor_primitives, "release_logit", None)
-    if release_logit is not None and release_logit.ndim == 2:
-        losses.append(
-            F.binary_cross_entropy_with_logits(release_logit[:, -1], release_targets)
+    if (
+        release_logit is not None
+        and release_logit.ndim == 2
+        and bool((release_mask > 0).any().item())
+    ):
+        per_sample = F.binary_cross_entropy_with_logits(
+            release_logit[:, -1],
+            release_targets,
+            reduction="none",
         )
+        losses.append((per_sample * release_mask).sum() / release_mask.sum().clamp_min(1.0))
     hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
     if (
         hold_duration_logits is not None
@@ -324,7 +377,10 @@ def run_full_smb_imitation_warm_start(
         )
     )
     try:
-        script = full_smb_opening_imitation_script(steps)
+        script = full_smb_opening_imitation_script(
+            steps,
+            decision_frame_skip=frame_skip,
+        )
         dataset = collect_full_smb_imitation_dataset(stage, script, seed=seed)
     finally:
         stage.close()
@@ -347,6 +403,17 @@ def run_full_smb_imitation_warm_start(
         metrics={
             "imitation_loss": float(training_metrics["final_loss"]),
             "imitation_action_accuracy": float(training_metrics["final_action_accuracy"]),
+            "imitation_primitive_loss": float(training_metrics["final_primitive_loss"]),
+            "imitation_duration_supervision_count": float(
+                training_metrics["duration_supervision_count"]
+            ),
+            "imitation_release_supervision_count": float(
+                training_metrics["release_supervision_count"]
+            ),
+            "imitation_release_positive_count": float(
+                training_metrics["release_positive_count"]
+            ),
+            "imitation_decision_frame_skip": float(frame_skip),
             "imitation_dataset_max_progress": float(dataset["metrics"]["max_progress"]),
         },
         architecture_name=architecture_name,
@@ -365,6 +432,7 @@ def run_full_smb_imitation_warm_start(
         "checkpoint_summary": str(output_checkpoint.with_suffix(".json")),
         "script": {
             "steps": int(steps),
+            "decision_frame_skip": int(frame_skip),
             "right_count": int(sum(1 for action in script if action == int(SMBAction.RIGHT))),
             "right_jump_count": int(
                 sum(1 for action in script if action == int(SMBAction.RIGHT_JUMP))

@@ -374,6 +374,12 @@ class FullSMBTrainingConfig:
     tracking_project: str = "retroagi"
     tracking_run_name: Optional[str] = None
     tracking_mode: Optional[str] = None
+    imitation_warm_start: Optional[bool] = None
+    imitation_warm_start_steps: int = 600
+    imitation_warm_start_epochs: int = 3
+    imitation_warm_start_batch_size: int = 32
+    imitation_warm_start_learning_rate: float = 5e-4
+    imitation_warm_start_frame_skip: Optional[int] = None
 
     def __post_init__(self) -> None:
         if not self.architecture_name:
@@ -492,6 +498,31 @@ class FullSMBTrainingConfig:
         ):
             raise ValueError(
                 "full_smb_vision_checkpoint is required unless " "perception_mode='replace'"
+            )
+        if self.imitation_warm_start is None:
+            warm_start = self.resume_path is None and self.init_checkpoint is not None
+        else:
+            warm_start = bool(self.imitation_warm_start)
+        if warm_start and self.resume_path is not None:
+            raise ValueError("imitation_warm_start cannot be used with resume_path")
+        object.__setattr__(self, "imitation_warm_start", warm_start)
+        for name in (
+            "imitation_warm_start_steps",
+            "imitation_warm_start_epochs",
+            "imitation_warm_start_batch_size",
+        ):
+            if int(getattr(self, name)) <= 0:
+                raise ValueError(f"{name} must be positive")
+            object.__setattr__(self, name, int(getattr(self, name)))
+        if float(self.imitation_warm_start_learning_rate) <= 0.0:
+            raise ValueError("imitation_warm_start_learning_rate must be positive")
+        if self.imitation_warm_start_frame_skip is not None:
+            if int(self.imitation_warm_start_frame_skip) <= 0:
+                raise ValueError("imitation_warm_start_frame_skip must be positive")
+            object.__setattr__(
+                self,
+                "imitation_warm_start_frame_skip",
+                int(self.imitation_warm_start_frame_skip),
             )
 
 
@@ -763,6 +794,15 @@ def train_full_smb_policy(
     if vision is None:
         vision = _build_full_smb_perception(config, device)
     _restore_perception_state(vision, checkpoint)
+    imitation_warm_start_summary = _run_full_smb_imitation_warm_start_phase(
+        config,
+        model,
+        vision,
+        device=device,
+        make_stage=make_stage,
+    )
+    if imitation_warm_start_summary is not None:
+        training_source["imitation_warm_start"] = imitation_warm_start_summary
     optimizer = _make_training_optimizer(model, vision, config)
     _restore_optimizer_state(
         optimizer,
@@ -798,6 +838,7 @@ def train_full_smb_policy(
             initialized_from=(
                 str(config.init_checkpoint) if config.init_checkpoint is not None else None
             ),
+            imitation_warm_start=imitation_warm_start_summary,
         )
         stage: Optional[FullSMBStage] = _make_stage(make_stage, vision, config)
         backend_metadata = _full_smb_backend_metadata(stage, config)
@@ -955,6 +996,7 @@ def train_full_smb_policy(
                 "evaluation_mean_return": final_evaluation.mean_return,
                 "evaluation_success_rate": final_evaluation.success_rate,
                 "periodic_evaluation_count": float(len(evaluations)),
+                **_full_smb_imitation_warm_start_metrics(imitation_warm_start_summary),
             },
             architecture_name=architecture_name,
             architecture_config=architecture_config,
@@ -999,6 +1041,150 @@ def train_full_smb_policy(
         return result
     finally:
         tracker.close()
+
+
+def _run_full_smb_imitation_warm_start_phase(
+    config: FullSMBTrainingConfig,
+    model: torch.nn.Module,
+    vision: FullSMBSegmentationVision,
+    *,
+    device: torch.device,
+    make_stage: Optional[StageFactory],
+) -> Optional[dict[str, Any]]:
+    if not bool(config.imitation_warm_start):
+        return None
+    from retroagi.stages.full_smb.imitation import (
+        collect_full_smb_imitation_dataset,
+        full_smb_opening_imitation_script,
+        train_full_smb_imitation_warm_start,
+    )
+
+    decision_frame_skip = _full_smb_imitation_decision_frame_skip(config)
+    stage = _make_full_smb_imitation_stage(
+        make_stage,
+        vision,
+        config,
+        decision_frame_skip=decision_frame_skip,
+    )
+    try:
+        script = full_smb_opening_imitation_script(
+            config.imitation_warm_start_steps,
+            decision_frame_skip=decision_frame_skip,
+        )
+        dataset = collect_full_smb_imitation_dataset(
+            stage,
+            script,
+            seed=config.seed,
+        )
+    finally:
+        stage.close()
+    training_metrics, _optimizer = train_full_smb_imitation_warm_start(
+        model,
+        dataset,
+        device=device,
+        epochs=config.imitation_warm_start_epochs,
+        batch_size=config.imitation_warm_start_batch_size,
+        learning_rate=config.imitation_warm_start_learning_rate,
+        seed=config.seed,
+    )
+    for parameter in model.parameters():
+        parameter.requires_grad_(True)
+    summary = {
+        "enabled": True,
+        "script": {
+            "name": "full_smb_opening_imitation_script",
+            "steps": int(config.imitation_warm_start_steps),
+            "decision_frame_skip": int(decision_frame_skip),
+            "right_count": int(sum(1 for action in script if action == int(SMBAction.RIGHT))),
+            "right_jump_count": int(
+                sum(1 for action in script if action == int(SMBAction.RIGHT_JUMP))
+            ),
+        },
+        "dataset": dataset["metrics"],
+        "training": training_metrics,
+    }
+    return to_plain_data(summary)
+
+
+def _full_smb_imitation_decision_frame_skip(config: FullSMBTrainingConfig) -> int:
+    value = (
+        config.imitation_warm_start_frame_skip
+        if config.imitation_warm_start_frame_skip is not None
+        else config.frame_skip
+    )
+    return int(value) if value is not None else 1
+
+
+def _make_full_smb_imitation_stage(
+    make_stage: Optional[StageFactory],
+    vision: FullSMBSegmentationVision,
+    config: FullSMBTrainingConfig,
+    *,
+    decision_frame_skip: int,
+) -> FullSMBStage:
+    if make_stage is not None:
+        return make_stage(vision)
+    return FullSMBStage(
+        env_config=FullSMBEnvConfig(
+            game=config.game_id,
+            state=config.emulator_state,
+            scenario=config.scenario,
+        ),
+        vision=vision,
+        observation_config=FullSMBObservationConfig(frame_skip=decision_frame_skip),
+        reward_config=config.reward_config,
+    )
+
+
+def _full_smb_imitation_warm_start_metrics(
+    summary: Optional[Mapping[str, Any]],
+) -> dict[str, float]:
+    if not isinstance(summary, Mapping):
+        return {"imitation_warm_start_enabled": 0.0}
+    script = summary.get("script", {})
+    dataset = summary.get("dataset", {})
+    training = summary.get("training", {})
+    script = script if isinstance(script, Mapping) else {}
+    dataset = dataset if isinstance(dataset, Mapping) else {}
+    training = training if isinstance(training, Mapping) else {}
+    return {
+        "imitation_warm_start_enabled": 1.0,
+        "imitation_warm_start_samples": _float_metric(training.get("samples")),
+        "imitation_warm_start_steps": _float_metric(script.get("steps")),
+        "imitation_warm_start_decision_frame_skip": _float_metric(
+            script.get("decision_frame_skip")
+        ),
+        "imitation_warm_start_right_jump_count": _float_metric(
+            script.get("right_jump_count")
+        ),
+        "imitation_warm_start_dataset_max_progress": _float_metric(
+            dataset.get("max_progress")
+        ),
+        "imitation_warm_start_final_loss": _float_metric(training.get("final_loss")),
+        "imitation_warm_start_final_action_accuracy": _float_metric(
+            training.get("final_action_accuracy")
+        ),
+        "imitation_warm_start_final_primitive_loss": _float_metric(
+            training.get("final_primitive_loss")
+        ),
+        "imitation_warm_start_duration_supervision_count": _float_metric(
+            training.get("duration_supervision_count")
+        ),
+        "imitation_warm_start_release_supervision_count": _float_metric(
+            training.get("release_supervision_count")
+        ),
+        "imitation_warm_start_release_positive_count": _float_metric(
+            training.get("release_positive_count")
+        ),
+    }
+
+
+def _float_metric(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if math.isfinite(parsed) else 0.0
 
 
 @torch.no_grad()
@@ -4603,6 +4789,27 @@ def _add_training_update_args(
                 "scratch starts a new policy, fine_tune requires --init-checkpoint"
             ),
         )
+        parser.set_defaults(imitation_warm_start=None)
+        parser.add_argument(
+            "--imitation-warm-start",
+            action="store_true",
+            dest="imitation_warm_start",
+            help=(
+                "run scripted Full SMB opening imitation before online training; "
+                "enabled by default for fresh --init-checkpoint runs"
+            ),
+        )
+        parser.add_argument(
+            "--no-imitation-warm-start",
+            action="store_false",
+            dest="imitation_warm_start",
+            help="disable the fresh Full SMB imitation warm start",
+        )
+        parser.add_argument("--imitation-warm-start-steps", type=int, default=600)
+        parser.add_argument("--imitation-warm-start-epochs", type=int, default=3)
+        parser.add_argument("--imitation-warm-start-batch-size", type=int, default=32)
+        parser.add_argument("--imitation-warm-start-learning-rate", type=float, default=5e-4)
+        parser.add_argument("--imitation-warm-start-frame-skip", type=int)
     parser.add_argument("--vector-env-count", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--entropy-weight", type=float, default=0.01)
@@ -5059,6 +5266,16 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         tracking_project=args.tracking_project,
         tracking_run_name=args.tracking_run_name,
         tracking_mode=args.tracking_mode,
+        imitation_warm_start=getattr(args, "imitation_warm_start", None),
+        imitation_warm_start_steps=getattr(args, "imitation_warm_start_steps", 600),
+        imitation_warm_start_epochs=getattr(args, "imitation_warm_start_epochs", 3),
+        imitation_warm_start_batch_size=getattr(args, "imitation_warm_start_batch_size", 32),
+        imitation_warm_start_learning_rate=getattr(
+            args,
+            "imitation_warm_start_learning_rate",
+            5e-4,
+        ),
+        imitation_warm_start_frame_skip=getattr(args, "imitation_warm_start_frame_skip", None),
     )
 
 
