@@ -380,6 +380,8 @@ class FullSMBTrainingConfig:
     imitation_warm_start_batch_size: int = 32
     imitation_warm_start_learning_rate: float = 5e-4
     imitation_warm_start_frame_skip: Optional[int] = None
+    imitation_obstacle_window_labels: bool = True
+    imitation_obstacle_window_repository_root: Path = Path(".")
 
     def __post_init__(self) -> None:
         if not self.architecture_name:
@@ -523,6 +525,12 @@ class FullSMBTrainingConfig:
                 self,
                 "imitation_warm_start_frame_skip",
                 int(self.imitation_warm_start_frame_skip),
+            )
+        if not isinstance(self.imitation_obstacle_window_repository_root, Path):
+            object.__setattr__(
+                self,
+                "imitation_obstacle_window_repository_root",
+                Path(self.imitation_obstacle_window_repository_root),
             )
 
 
@@ -1055,11 +1063,14 @@ def _run_full_smb_imitation_warm_start_phase(
         return None
     from retroagi.stages.full_smb.imitation import (
         collect_full_smb_imitation_dataset,
+        collect_full_smb_obstacle_window_duration_dataset,
         full_smb_opening_imitation_script,
+        merge_full_smb_imitation_datasets,
         train_full_smb_imitation_warm_start,
     )
 
     decision_frame_skip = _full_smb_imitation_decision_frame_skip(config)
+    datasets: list[Mapping[str, Any]] = []
     stage = _make_full_smb_imitation_stage(
         make_stage,
         vision,
@@ -1076,8 +1087,38 @@ def _run_full_smb_imitation_warm_start_phase(
             script,
             seed=config.seed,
         )
+        datasets.append(dataset)
     finally:
         stage.close()
+    obstacle_window_metrics: Mapping[str, Any] = {
+        "enabled": bool(config.imitation_obstacle_window_labels),
+        "samples": 0.0,
+        "windows_attempted": 0.0,
+        "windows_labeled": 0.0,
+    }
+    if bool(config.imitation_obstacle_window_labels):
+        stage = _make_full_smb_imitation_stage(
+            make_stage,
+            vision,
+            config,
+            decision_frame_skip=decision_frame_skip,
+        )
+        try:
+            obstacle_dataset = collect_full_smb_obstacle_window_duration_dataset(
+                stage,
+                repository_root=config.imitation_obstacle_window_repository_root,
+                decision_frame_skip=decision_frame_skip,
+                seed=config.seed,
+            )
+        finally:
+            stage.close()
+        obstacle_window_metrics = {
+            "enabled": True,
+            **dict(obstacle_dataset.get("metrics", {})),
+        }
+        if int(torch.as_tensor(obstacle_dataset["actions"]).numel()) > 0:
+            datasets.append(obstacle_dataset)
+    dataset = merge_full_smb_imitation_datasets(datasets)
     training_metrics, _optimizer = train_full_smb_imitation_warm_start(
         model,
         dataset,
@@ -1101,6 +1142,7 @@ def _run_full_smb_imitation_warm_start_phase(
             ),
         },
         "dataset": dataset["metrics"],
+        "obstacle_window_duration_labels": obstacle_window_metrics,
         "training": training_metrics,
     }
     return to_plain_data(summary)
@@ -1143,9 +1185,11 @@ def _full_smb_imitation_warm_start_metrics(
         return {"imitation_warm_start_enabled": 0.0}
     script = summary.get("script", {})
     dataset = summary.get("dataset", {})
+    obstacle_labels = summary.get("obstacle_window_duration_labels", {})
     training = summary.get("training", {})
     script = script if isinstance(script, Mapping) else {}
     dataset = dataset if isinstance(dataset, Mapping) else {}
+    obstacle_labels = obstacle_labels if isinstance(obstacle_labels, Mapping) else {}
     training = training if isinstance(training, Mapping) else {}
     return {
         "imitation_warm_start_enabled": 1.0,
@@ -1170,11 +1214,23 @@ def _full_smb_imitation_warm_start_metrics(
         "imitation_warm_start_duration_supervision_count": _float_metric(
             training.get("duration_supervision_count")
         ),
+        "imitation_warm_start_explicit_duration_supervision_count": _float_metric(
+            training.get("explicit_duration_supervision_count")
+        ),
         "imitation_warm_start_release_supervision_count": _float_metric(
             training.get("release_supervision_count")
         ),
         "imitation_warm_start_release_positive_count": _float_metric(
             training.get("release_positive_count")
+        ),
+        "imitation_warm_start_obstacle_window_label_count": _float_metric(
+            obstacle_labels.get("windows_labeled")
+        ),
+        "imitation_warm_start_obstacle_window_trial_count": _float_metric(
+            obstacle_labels.get("trial_count")
+        ),
+        "imitation_warm_start_obstacle_window_missing_save_state_count": _float_metric(
+            obstacle_labels.get("missing_save_state_count")
         ),
     }
 
@@ -4810,6 +4866,25 @@ def _add_training_update_args(
         parser.add_argument("--imitation-warm-start-batch-size", type=int, default=32)
         parser.add_argument("--imitation-warm-start-learning-rate", type=float, default=5e-4)
         parser.add_argument("--imitation-warm-start-frame-skip", type=int)
+        parser.set_defaults(imitation_obstacle_window_labels=True)
+        parser.add_argument(
+            "--imitation-obstacle-window-labels",
+            action="store_true",
+            dest="imitation_obstacle_window_labels",
+            help="add save-state obstacle-window duration labels during imitation warm start",
+        )
+        parser.add_argument(
+            "--no-imitation-obstacle-window-labels",
+            action="store_false",
+            dest="imitation_obstacle_window_labels",
+            help="disable save-state obstacle-window duration labels",
+        )
+        parser.add_argument(
+            "--imitation-obstacle-window-root",
+            type=Path,
+            default=Path("."),
+            help="repository root used to locate local/full_smb/states save-state files",
+        )
     parser.add_argument("--vector-env-count", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--entropy-weight", type=float, default=0.01)
@@ -5276,6 +5351,16 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
             5e-4,
         ),
         imitation_warm_start_frame_skip=getattr(args, "imitation_warm_start_frame_skip", None),
+        imitation_obstacle_window_labels=getattr(
+            args,
+            "imitation_obstacle_window_labels",
+            True,
+        ),
+        imitation_obstacle_window_repository_root=getattr(
+            args,
+            "imitation_obstacle_window_root",
+            Path("."),
+        ),
     )
 
 

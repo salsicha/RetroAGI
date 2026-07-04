@@ -74,6 +74,10 @@ class TestFullSMBSaveStates(unittest.TestCase):
         self.assertTrue(set(catalog.save_state_artifact_paths).issubset(plan_paths))
         self.assertTrue(plan.artifacts_for_task("curriculum_1_1_midpipe"))
         self.assertTrue(plan.artifacts_for_task("benchmark_1_1_start"))
+        self.assertEqual(
+            plan.artifact("section_1_1_first_enemy_approach").metadata["expected_use"],
+            "obstacle-window jump-duration sweeps",
+        )
         for artifact in plan.artifacts:
             manifest = artifact.to_manifest()
             self.assertTrue(manifest["local_only"])

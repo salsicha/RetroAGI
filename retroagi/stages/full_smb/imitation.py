@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -44,6 +46,69 @@ DEFAULT_FULL_SMB_IMITATION_TRAINABLE_PREFIXES = (
     "agent.fc_out_A",
     "agent.fc_controller_params",
     "agent.fc_primitive_",
+)
+DEFAULT_FULL_SMB_OBSTACLE_WINDOW_HOLD_CANDIDATES = (2, 3, 4, 6, 8, 12, 16)
+
+
+@dataclass(frozen=True)
+class FullSMBObstacleWindowDurationSpec:
+    """Save-state sweep recipe for one explicit jump-duration label."""
+
+    name: str
+    save_state_artifact: str
+    obstacle_kind: str
+    warmup_script: tuple[tuple[int, int], ...] = ()
+    candidate_hold_decisions: tuple[int, ...] = field(
+        default_factory=lambda: DEFAULT_FULL_SMB_OBSTACLE_WINDOW_HOLD_CANDIDATES
+    )
+    post_release_action: int = int(SMBAction.RIGHT)
+    settle_frames: int = 96
+    minimum_progress_delta: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("obstacle window name must be non-empty")
+        if not self.save_state_artifact:
+            raise ValueError("save_state_artifact must be non-empty")
+        if not self.obstacle_kind:
+            raise ValueError("obstacle_kind must be non-empty")
+        warmup = []
+        for action, frames in self.warmup_script:
+            if int(frames) <= 0:
+                raise ValueError("warmup_script frames must be positive")
+            warmup.append((int(SMBAction(action)), int(frames)))
+        candidates = tuple(int(value) for value in self.candidate_hold_decisions)
+        if not candidates:
+            raise ValueError("candidate_hold_decisions must not be empty")
+        if any(value <= 0 for value in candidates):
+            raise ValueError("candidate_hold_decisions must be positive")
+        if int(self.settle_frames) <= 0:
+            raise ValueError("settle_frames must be positive")
+        object.__setattr__(self, "warmup_script", tuple(warmup))
+        object.__setattr__(self, "candidate_hold_decisions", candidates)
+        object.__setattr__(self, "post_release_action", int(SMBAction(self.post_release_action)))
+        object.__setattr__(self, "settle_frames", int(self.settle_frames))
+        object.__setattr__(self, "minimum_progress_delta", float(self.minimum_progress_delta))
+
+
+DEFAULT_FULL_SMB_OBSTACLE_WINDOW_DURATION_SPECS = (
+    FullSMBObstacleWindowDurationSpec(
+        name="first_enemy_approach",
+        save_state_artifact="section_1_1_first_enemy_approach",
+        obstacle_kind="enemy",
+        candidate_hold_decisions=(2, 3, 4, 6, 8, 12),
+        settle_frames=84,
+        minimum_progress_delta=2.0,
+    ),
+    FullSMBObstacleWindowDurationSpec(
+        name="first_pipe_midpipe",
+        save_state_artifact="section_1_1_midpipe",
+        obstacle_kind="pipe",
+        warmup_script=((int(SMBAction.RIGHT), 16),),
+        candidate_hold_decisions=(3, 4, 6, 8, 12, 16),
+        settle_frames=108,
+        minimum_progress_delta=2.0,
+    ),
 )
 
 
@@ -140,6 +205,392 @@ def collect_full_smb_imitation_dataset(
     }
 
 
+@torch.no_grad()
+def collect_full_smb_obstacle_window_duration_dataset(
+    stage: FullSMBStage,
+    *,
+    repository_root: Path | str = Path("."),
+    decision_frame_skip: int = 1,
+    specs: Sequence[FullSMBObstacleWindowDurationSpec] = (
+        DEFAULT_FULL_SMB_OBSTACLE_WINDOW_DURATION_SPECS
+    ),
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Collect explicit duration-bin labels from local save-state sweeps."""
+
+    if int(decision_frame_skip) <= 0:
+        raise ValueError("decision_frame_skip must be positive")
+    root = Path(repository_root)
+    selected_specs = tuple(specs)
+    if not selected_specs:
+        raise ValueError("specs must not be empty")
+
+    from retroagi.stages.full_smb.save_states import (
+        full_smb_save_state_plan,
+        load_full_smb_save_state_payload,
+    )
+
+    plan = full_smb_save_state_plan()
+    src_a: list[torch.Tensor] = []
+    src_b: list[torch.Tensor] = []
+    src_c: list[torch.Tensor] = []
+    actions: list[int] = []
+    duration_bins: list[int] = []
+    duration_masks: list[float] = []
+    release_targets: list[float] = []
+    release_masks: list[float] = []
+    post_release_targets: list[int] = []
+    labels: list[dict[str, Any]] = []
+    missing: list[str] = []
+    skipped: list[dict[str, str]] = []
+    trial_count = 0
+
+    try:
+        stage.reset(seed=seed)
+    except Exception as exc:  # pragma: no cover - defensive for real backends.
+        return _empty_obstacle_window_duration_dataset(
+            selected_specs,
+            missing=(),
+            skipped=(
+                {
+                    "name": "stage_reset",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                },
+            ),
+            trial_count=0,
+        )
+
+    for spec in selected_specs:
+        try:
+            artifact = plan.artifact(spec.save_state_artifact)
+        except KeyError:
+            skipped.append({"name": spec.name, "reason": "unknown_save_state_artifact"})
+            continue
+        path = root / artifact.path
+        if not path.exists():
+            missing.append(str(path))
+            continue
+        try:
+            payload = load_full_smb_save_state_payload(path)
+            label = _collect_obstacle_window_duration_label(
+                stage,
+                payload["state"],
+                spec,
+                decision_frame_skip=int(decision_frame_skip),
+            )
+        except Exception as exc:
+            skipped.append({"name": spec.name, "reason": f"{type(exc).__name__}: {exc}"})
+            continue
+        trial_count += len(label["trials"])
+        if not label["accepted"]:
+            skipped.append({"name": spec.name, "reason": "no_candidate_progressed"})
+            continue
+        batch = label["batch"]
+        src_a.append(batch.src_a.detach().cpu())
+        src_b.append(batch.src_b.detach().cpu())
+        src_c.append(batch.src_c.detach().cpu())
+        actions.append(int(label["action"]))
+        duration_bins.append(int(label["duration_bin"]))
+        duration_masks.append(1.0)
+        release_targets.append(0.0)
+        release_masks.append(0.0)
+        post_release_targets.append(int(label["post_release_action"]))
+        labels.append(
+            {
+                key: value
+                for key, value in label.items()
+                if key not in {"batch", "state"}
+            }
+        )
+
+    metrics = {
+        "source": "full_smb_obstacle_window_save_state_sweeps",
+        "samples": float(len(actions)),
+        "windows_attempted": float(len(selected_specs)),
+        "windows_labeled": float(len(labels)),
+        "trial_count": float(trial_count),
+        "missing_save_state_count": float(len(missing)),
+        "skipped_count": float(len(skipped)),
+        "missing_save_states": tuple(missing),
+        "skipped": tuple(skipped),
+        "labels": tuple(labels),
+    }
+    if not actions:
+        return {
+            "src_a": torch.empty((0, stage.spec.seq_len_a), dtype=torch.long),
+            "src_b": torch.empty((0, stage.spec.seq_len_b), dtype=torch.long),
+            "src_c": torch.empty((0, stage.spec.seq_len_c), dtype=torch.float32),
+            "actions": torch.empty((0,), dtype=torch.long),
+            "metrics": metrics,
+        }
+    return {
+        "src_a": torch.cat(src_a, dim=0),
+        "src_b": torch.cat(src_b, dim=0),
+        "src_c": torch.cat(src_c, dim=0),
+        "actions": torch.as_tensor(actions, dtype=torch.long),
+        "primitive_duration_bin": torch.as_tensor(duration_bins, dtype=torch.long),
+        "primitive_duration_mask": torch.as_tensor(duration_masks, dtype=torch.float32),
+        "primitive_release": torch.as_tensor(release_targets, dtype=torch.float32),
+        "primitive_release_mask": torch.as_tensor(release_masks, dtype=torch.float32),
+        "primitive_post_release": torch.as_tensor(post_release_targets, dtype=torch.long),
+        "metrics": metrics,
+    }
+
+
+def merge_full_smb_imitation_datasets(
+    datasets: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Concatenate imitation datasets while preserving optional primitive labels."""
+
+    non_empty = [
+        dataset
+        for dataset in datasets
+        if int(torch.as_tensor(dataset.get("actions", ())).numel()) > 0
+    ]
+    if not non_empty:
+        raise ValueError("at least one imitation dataset must contain samples")
+    merged: dict[str, Any] = {
+        "src_a": torch.cat([torch.as_tensor(dataset["src_a"]) for dataset in non_empty], dim=0),
+        "src_b": torch.cat([torch.as_tensor(dataset["src_b"]) for dataset in non_empty], dim=0),
+        "src_c": torch.cat([torch.as_tensor(dataset["src_c"]) for dataset in non_empty], dim=0),
+        "actions": torch.cat(
+            [torch.as_tensor(dataset["actions"], dtype=torch.long) for dataset in non_empty],
+            dim=0,
+        ),
+    }
+    optional_specs = {
+        "primitive_duration_bin": torch.long,
+        "primitive_duration_mask": torch.float32,
+        "primitive_release": torch.float32,
+        "primitive_release_mask": torch.float32,
+        "primitive_post_release": torch.long,
+    }
+    for key, dtype in optional_specs.items():
+        if not any(key in dataset for dataset in non_empty):
+            continue
+        values = []
+        for dataset in non_empty:
+            sample_count = int(torch.as_tensor(dataset["actions"]).numel())
+            if key in dataset:
+                values.append(torch.as_tensor(dataset[key], dtype=dtype))
+            elif key == "primitive_post_release":
+                values.append(
+                    torch.as_tensor(
+                        [
+                            int(smb_jump_release_action(int(action)))
+                            for action in torch.as_tensor(dataset["actions"]).tolist()
+                        ],
+                        dtype=dtype,
+                    )
+                )
+            else:
+                values.append(torch.zeros((sample_count,), dtype=dtype))
+        merged[key] = torch.cat(values, dim=0)
+    merged["metrics"] = {
+        "samples": float(int(merged["actions"].numel())),
+        "max_progress": float(
+            max(
+                (
+                    float(dataset.get("metrics", {}).get("max_progress", 0.0))
+                    for dataset in non_empty
+                ),
+                default=0.0,
+            )
+        ),
+        "components": tuple(
+            {
+                "source": dataset.get("metrics", {}).get("source", "scripted_opening"),
+                "samples": float(torch.as_tensor(dataset["actions"]).numel()),
+                "metrics": dataset.get("metrics", {}),
+            }
+            for dataset in non_empty
+        ),
+    }
+    return merged
+
+
+def _empty_obstacle_window_duration_dataset(
+    specs: Sequence[FullSMBObstacleWindowDurationSpec],
+    *,
+    missing: Sequence[str],
+    skipped: Sequence[Mapping[str, str]],
+    trial_count: int,
+) -> dict[str, Any]:
+    return {
+        "src_a": torch.empty((0, 0), dtype=torch.long),
+        "src_b": torch.empty((0, 0), dtype=torch.long),
+        "src_c": torch.empty((0, 0), dtype=torch.float32),
+        "actions": torch.empty((0,), dtype=torch.long),
+        "metrics": {
+            "source": "full_smb_obstacle_window_save_state_sweeps",
+            "samples": 0.0,
+            "windows_attempted": float(len(specs)),
+            "windows_labeled": 0.0,
+            "trial_count": float(trial_count),
+            "missing_save_state_count": float(len(missing)),
+            "skipped_count": float(len(skipped)),
+            "missing_save_states": tuple(missing),
+            "skipped": tuple(dict(item) for item in skipped),
+            "labels": (),
+        },
+    }
+
+
+def _collect_obstacle_window_duration_label(
+    stage: FullSMBStage,
+    state: Any,
+    spec: FullSMBObstacleWindowDurationSpec,
+    *,
+    decision_frame_skip: int,
+) -> dict[str, Any]:
+    _load_obstacle_window_state(stage, state)
+    for action, frames in spec.warmup_script:
+        for _ in range(_decision_count(frames, decision_frame_skip)):
+            _observation, _reward, terminated, truncated, _info = stage.step(action)
+            if terminated or truncated:
+                break
+        if terminated or truncated:
+            break
+    snapshot = stage.save_emulator_state()
+    label_observation = _load_obstacle_window_state(stage, snapshot)
+    label_batch = stage.encode_observation(label_observation)
+    start_info = dict(getattr(stage, "last_info", {}))
+    start_progress = _progress_from_info(start_info)
+    trials = []
+    for hold_decisions in spec.candidate_hold_decisions:
+        trial = _run_obstacle_window_candidate(
+            stage,
+            snapshot,
+            spec,
+            hold_decisions=int(hold_decisions),
+            decision_frame_skip=decision_frame_skip,
+            start_progress=start_progress,
+        )
+        trials.append(trial)
+    best = _select_obstacle_window_trial(trials)
+    accepted = bool(best is not None and best["success"])
+    if best is None:
+        best = {
+            "hold_decisions": 0,
+            "duration_bin": 0,
+            "progress_delta": 0.0,
+            "success": False,
+            "score": float("-inf"),
+        }
+    return {
+        "name": spec.name,
+        "save_state_artifact": spec.save_state_artifact,
+        "obstacle_kind": spec.obstacle_kind,
+        "action": int(SMBAction.RIGHT_JUMP),
+        "post_release_action": int(spec.post_release_action),
+        "hold_decisions": int(best["hold_decisions"]),
+        "duration_bin": int(best["duration_bin"]),
+        "progress_delta": float(best["progress_delta"]),
+        "score": float(best["score"]),
+        "success": bool(best["success"]),
+        "accepted": accepted,
+        "trials": tuple(trials),
+        "batch": label_batch,
+    }
+
+
+def _run_obstacle_window_candidate(
+    stage: FullSMBStage,
+    snapshot: Any,
+    spec: FullSMBObstacleWindowDurationSpec,
+    *,
+    hold_decisions: int,
+    decision_frame_skip: int,
+    start_progress: Optional[float],
+) -> dict[str, Any]:
+    _load_obstacle_window_state(stage, snapshot)
+    terminated = False
+    truncated = False
+    info: Mapping[str, Any] = dict(getattr(stage, "last_info", {}))
+    for _ in range(int(hold_decisions)):
+        _observation, _reward, terminated, truncated, info = stage.step(SMBAction.RIGHT_JUMP)
+        if terminated or truncated:
+            break
+    if not (terminated or truncated):
+        for _ in range(_decision_count(spec.settle_frames, decision_frame_skip)):
+            _observation, _reward, terminated, truncated, info = stage.step(
+                spec.post_release_action
+            )
+            if terminated or truncated:
+                break
+    end_progress = _progress_from_info(info)
+    progress_delta = (
+        float(end_progress - start_progress)
+        if end_progress is not None and start_progress is not None
+        else 0.0
+    )
+    failure = bool(truncated or _full_smb_terminal_failure(info))
+    success = (not failure) and progress_delta >= float(spec.minimum_progress_delta)
+    duration_bin = _nearest_duration_bin_index(float(hold_decisions))
+    score = progress_delta
+    if failure:
+        score -= 10_000.0
+    if not success:
+        score -= 100.0
+    return {
+        "hold_decisions": int(hold_decisions),
+        "duration_bin": int(duration_bin),
+        "progress_delta": float(progress_delta),
+        "end_progress": float(end_progress) if end_progress is not None else None,
+        "terminated": bool(terminated),
+        "truncated": bool(truncated),
+        "failure": bool(failure),
+        "success": bool(success),
+        "score": float(score),
+    }
+
+
+def _load_obstacle_window_state(stage: FullSMBStage, state: Any) -> Any:
+    observation = stage.load_emulator_state(state)
+    reset_frame_stack = getattr(stage, "_reset_frame_stack", None)
+    if callable(reset_frame_stack):
+        reset_frame_stack(observation)
+    return observation
+
+
+def _select_obstacle_window_trial(
+    trials: Sequence[Mapping[str, Any]],
+) -> Optional[Mapping[str, Any]]:
+    if not trials:
+        return None
+    return max(
+        trials,
+        key=lambda trial: (
+            bool(trial.get("success")),
+            float(trial.get("score", float("-inf"))),
+            float(trial.get("progress_delta", 0.0)),
+            -abs(int(trial.get("hold_decisions", 0)) - 6),
+        ),
+    )
+
+
+def _decision_count(frames: int, decision_frame_skip: int) -> int:
+    return max(1, int(math.ceil(float(frames) / float(decision_frame_skip))))
+
+
+def _nearest_duration_bin_index(duration: float) -> int:
+    duration_bins = torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32)
+    return int(torch.abs(duration_bins - float(duration)).argmin().item())
+
+
+def _full_smb_terminal_failure(info: Mapping[str, Any]) -> bool:
+    source = info.get("full_smb_signals")
+    signals = source if isinstance(source, Mapping) else info
+    for key in ("death", "game_over", "timeout", "time_up"):
+        if bool(signals.get(key, False)):
+            return True
+    reason = signals.get("termination_reason") or signals.get("reason")
+    if reason is None:
+        return False
+    normalized = str(reason).strip().lower()
+    return any(token in normalized for token in ("death", "dead", "game_over", "timeout"))
+
+
 def train_full_smb_imitation_warm_start(
     model: torch.nn.Module,
     dataset: Mapping[str, Any],
@@ -160,7 +611,7 @@ def train_full_smb_imitation_warm_start(
     actions = torch.as_tensor(dataset["actions"], dtype=torch.long)
     if actions.numel() <= 0:
         raise ValueError("dataset must contain at least one action")
-    primitive_targets = _full_smb_imitation_primitive_targets(actions)
+    primitive_targets = _full_smb_imitation_primitive_targets(actions, dataset=dataset)
     parameters = _select_trainable_parameters(model, trainable_prefixes)
     optimizer = torch.optim.AdamW(parameters, lr=float(learning_rate))
     generator = torch.Generator(device="cpu")
@@ -231,12 +682,19 @@ def train_full_smb_imitation_warm_start(
             "duration_supervision_count": float(primitive_targets["duration_mask"].sum().item()),
             "release_supervision_count": float(primitive_targets["release_mask"].sum().item()),
             "release_positive_count": float(primitive_targets["release"].sum().item()),
+            "explicit_duration_supervision_count": float(
+                primitive_targets["explicit_duration_mask"].sum().item()
+            ),
         },
         optimizer,
     )
 
 
-def _full_smb_imitation_primitive_targets(actions: torch.Tensor) -> dict[str, torch.Tensor]:
+def _full_smb_imitation_primitive_targets(
+    actions: torch.Tensor,
+    *,
+    dataset: Optional[Mapping[str, Any]] = None,
+) -> dict[str, torch.Tensor]:
     duration_bins = torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32)
     duration_targets = torch.zeros_like(actions)
     duration_mask = torch.zeros(actions.shape, dtype=torch.float32)
@@ -267,13 +725,84 @@ def _full_smb_imitation_primitive_targets(actions: torch.Tensor) -> dict[str, to
             )
         if index + 1 >= len(action_values) or action_values[index + 1] != action:
             release_targets[index] = 1.0
-    return {
+    targets = {
         "duration_bin": duration_targets.long(),
         "duration_mask": duration_mask,
         "release": release_targets,
         "release_mask": release_mask,
         "post_release": post_release_targets.long(),
+        "explicit_duration_mask": torch.zeros(actions.shape, dtype=torch.float32),
     }
+    if dataset is None:
+        return targets
+    _overlay_explicit_primitive_targets(targets, dataset, sample_count=int(actions.numel()))
+    return targets
+
+
+def _overlay_explicit_primitive_targets(
+    targets: dict[str, torch.Tensor],
+    dataset: Mapping[str, Any],
+    *,
+    sample_count: int,
+) -> None:
+    explicit_duration_mask = _optional_target_tensor(
+        dataset,
+        "primitive_duration_mask",
+        sample_count=sample_count,
+        dtype=torch.float32,
+    )
+    explicit_duration_bin = _optional_target_tensor(
+        dataset,
+        "primitive_duration_bin",
+        sample_count=sample_count,
+        dtype=torch.long,
+    )
+    if explicit_duration_mask is not None and explicit_duration_bin is not None:
+        mask = explicit_duration_mask > 0
+        targets["duration_bin"][mask] = explicit_duration_bin[mask]
+        targets["duration_mask"][mask] = explicit_duration_mask[mask]
+        targets["explicit_duration_mask"][mask] = explicit_duration_mask[mask]
+
+    explicit_release_mask = _optional_target_tensor(
+        dataset,
+        "primitive_release_mask",
+        sample_count=sample_count,
+        dtype=torch.float32,
+    )
+    explicit_release = _optional_target_tensor(
+        dataset,
+        "primitive_release",
+        sample_count=sample_count,
+        dtype=torch.float32,
+    )
+    if explicit_release_mask is not None and explicit_release is not None:
+        mask = explicit_release_mask > 0
+        targets["release"][mask] = explicit_release[mask]
+        targets["release_mask"][mask] = explicit_release_mask[mask]
+
+    explicit_post_release = _optional_target_tensor(
+        dataset,
+        "primitive_post_release",
+        sample_count=sample_count,
+        dtype=torch.long,
+    )
+    if explicit_post_release is not None:
+        targets["post_release"] = explicit_post_release
+
+
+def _optional_target_tensor(
+    dataset: Mapping[str, Any],
+    key: str,
+    *,
+    sample_count: int,
+    dtype: torch.dtype,
+) -> Optional[torch.Tensor]:
+    if key not in dataset:
+        return None
+    tensor = torch.as_tensor(dataset[key], dtype=dtype)
+    if tensor.shape != (sample_count,):
+        raise ValueError(f"{key} must have shape ({sample_count},), got {tuple(tensor.shape)}")
+    return tensor
 
 
 def _full_smb_imitation_primitive_loss(
@@ -344,6 +873,8 @@ def run_full_smb_imitation_warm_start(
     game_id: str = DEFAULT_FULL_SMB_CONTENT.game,
     state: str = "Level1-1",
     frame_skip: int = 1,
+    obstacle_window_labels: bool = True,
+    obstacle_window_repository_root: Path | str = Path("."),
     make_stage: Optional[Callable[[Any], FullSMBStage]] = None,
 ) -> dict[str, Any]:
     """Run collection, imitation training, checkpoint save, and summary write."""
@@ -384,6 +915,39 @@ def run_full_smb_imitation_warm_start(
         dataset = collect_full_smb_imitation_dataset(stage, script, seed=seed)
     finally:
         stage.close()
+    obstacle_window_metrics: Mapping[str, Any] = {
+        "enabled": bool(obstacle_window_labels),
+        "samples": 0.0,
+        "windows_attempted": 0.0,
+        "windows_labeled": 0.0,
+    }
+    datasets: list[Mapping[str, Any]] = [dataset]
+    if obstacle_window_labels:
+        obstacle_stage = (
+            make_stage(vision)
+            if make_stage is not None
+            else FullSMBStage(
+                env_config=FullSMBEnvConfig(game=game_id, state=state),
+                vision=vision,
+                observation_config=FullSMBObservationConfig(frame_skip=frame_skip),
+            )
+        )
+        try:
+            obstacle_dataset = collect_full_smb_obstacle_window_duration_dataset(
+                obstacle_stage,
+                repository_root=obstacle_window_repository_root,
+                decision_frame_skip=frame_skip,
+                seed=seed,
+            )
+        finally:
+            obstacle_stage.close()
+        obstacle_window_metrics = {
+            "enabled": True,
+            **dict(obstacle_dataset.get("metrics", {})),
+        }
+        if int(torch.as_tensor(obstacle_dataset["actions"]).numel()) > 0:
+            datasets.append(obstacle_dataset)
+    dataset = merge_full_smb_imitation_datasets(datasets)
 
     training_metrics, optimizer = train_full_smb_imitation_warm_start(
         model,
@@ -413,6 +977,15 @@ def run_full_smb_imitation_warm_start(
             "imitation_release_positive_count": float(
                 training_metrics["release_positive_count"]
             ),
+            "imitation_explicit_duration_supervision_count": float(
+                training_metrics["explicit_duration_supervision_count"]
+            ),
+            "imitation_obstacle_window_label_count": float(
+                obstacle_window_metrics.get("windows_labeled", 0.0)
+            ),
+            "imitation_obstacle_window_trial_count": float(
+                obstacle_window_metrics.get("trial_count", 0.0)
+            ),
             "imitation_decision_frame_skip": float(frame_skip),
             "imitation_dataset_max_progress": float(dataset["metrics"]["max_progress"]),
         },
@@ -439,6 +1012,7 @@ def run_full_smb_imitation_warm_start(
             ),
         },
         "dataset": dataset["metrics"],
+        "obstacle_window_duration_labels": obstacle_window_metrics,
         "training": training_metrics,
     }
     if output_summary is not None:
@@ -497,6 +1071,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--game-id", default=DEFAULT_FULL_SMB_CONTENT.game)
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=1)
+    parser.set_defaults(obstacle_window_labels=True)
+    parser.add_argument(
+        "--obstacle-window-labels",
+        action="store_true",
+        dest="obstacle_window_labels",
+        help="add save-state obstacle-window duration labels",
+    )
+    parser.add_argument(
+        "--no-obstacle-window-labels",
+        action="store_false",
+        dest="obstacle_window_labels",
+        help="disable save-state obstacle-window duration labels",
+    )
+    parser.add_argument(
+        "--obstacle-window-root",
+        type=Path,
+        default=Path("."),
+        help="repository root used to locate local/full_smb/states save-state files",
+    )
     return parser
 
 
@@ -516,6 +1109,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         game_id=args.game_id,
         state=args.state,
         frame_skip=args.frame_skip,
+        obstacle_window_labels=args.obstacle_window_labels,
+        obstacle_window_repository_root=args.obstacle_window_root,
     )
     print(json.dumps(to_plain_data(result), indent=2, sort_keys=True))
     return 0

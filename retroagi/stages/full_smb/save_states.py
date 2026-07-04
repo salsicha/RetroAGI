@@ -464,6 +464,22 @@ FULL_SMB_SAVE_STATE_PLAN = FullSMBSaveStatePlan(
             description="Curriculum state near the first level 1-1 pipe section.",
         ),
         FullSMBSaveStateArtifactSpec(
+            name="section_1_1_first_enemy_approach",
+            category="level_section",
+            path=Path("local/full_smb/states/curriculum/1_1_first_enemy_approach.state"),
+            source_state="Level1-1",
+            reset_seed=330_101,
+            action_script=(
+                _step(
+                    SMBAction.RIGHT,
+                    132,
+                    "Run right from spawn to just before the first enemy timing window.",
+                ),
+            ),
+            description="Curriculum state before the first enemy in level 1-1.",
+            metadata={"expected_use": "obstacle-window jump-duration sweeps"},
+        ),
+        FullSMBSaveStateArtifactSpec(
             name="section_1_1_flagpole_approach",
             category="level_section",
             path=Path("local/full_smb/states/curriculum/1_1_flagpole_approach.state"),

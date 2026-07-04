@@ -79,6 +79,7 @@ backend-native Python objects.
 | `benchmark_1_1_start` | `benchmark` | `local/full_smb/states/benchmark/1_1_start.state` | `Level1-1` | `benchmark_1_1_start` |
 | `benchmark_1_2_start` | `benchmark` | `local/full_smb/states/benchmark/1_2_start.state` | `Level1-2` | `benchmark_1_2_start` |
 | `benchmark_2_1_start` | `benchmark` | `local/full_smb/states/benchmark/2_1_start.state` | `Level2-1` | `benchmark_2_1_start` |
+| `section_1_1_first_enemy_approach` | `level_section` | `local/full_smb/states/curriculum/1_1_first_enemy_approach.state` | `Level1-1` | obstacle-window labels |
 | `section_1_1_midpipe` | `level_section` | `local/full_smb/states/curriculum/1_1_midpipe.state` | `Level1-1` | `curriculum_1_1_midpipe` |
 | `section_1_1_flagpole_approach` | `level_section` | `local/full_smb/states/curriculum/1_1_flagpole_approach.state` | `Level1-1` | `curriculum_1_1_flagpole` |
 | `section_1_2_underworld_opening` | `level_section` | `local/full_smb/states/curriculum/1_2_underworld_opening.state` | `Level1-2` | `curriculum_1_2_underworld` |

@@ -195,6 +195,7 @@ class TestFullSMBTraining(unittest.TestCase):
                 imitation_warm_start_epochs=1,
                 imitation_warm_start_batch_size=4,
                 imitation_warm_start_frame_skip=32,
+                imitation_obstacle_window_repository_root=tmp / "empty_save_state_root",
             )
             result = train_full_smb_policy(config, make_stage=tiny_stage)
 
@@ -220,12 +221,25 @@ class TestFullSMBTraining(unittest.TestCase):
             source["imitation_warm_start"]["training"]["duration_supervision_count"],
             0.0,
         )
+        self.assertTrue(
+            source["imitation_warm_start"]["obstacle_window_duration_labels"]["enabled"]
+        )
+        self.assertGreater(
+            source["imitation_warm_start"]["obstacle_window_duration_labels"][
+                "missing_save_state_count"
+            ],
+            0.0,
+        )
         self.assertGreater(
             checkpoint["metrics"]["imitation_warm_start_duration_supervision_count"],
             0.0,
         )
         self.assertGreater(
             checkpoint["metrics"]["imitation_warm_start_release_supervision_count"],
+            0.0,
+        )
+        self.assertEqual(
+            checkpoint["metrics"]["imitation_warm_start_obstacle_window_label_count"],
             0.0,
         )
         self.assertEqual(checkpoint["metrics"]["imitation_warm_start_enabled"], 1.0)
