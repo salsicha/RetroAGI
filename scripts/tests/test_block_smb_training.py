@@ -45,6 +45,8 @@ from retroagi.stages.block_smb import (
 from retroagi.stages.block_smb.train import (
     apply_block_smb_ablations,
     block_smb_c_stream_slot_spans,
+    block_smb_noop_allowed_for_step,
+    block_smb_noop_suppression_loss,
     collect_trajectory,
     compute_block_smb_losses,
     compute_imagined_rollout_losses,
@@ -222,6 +224,53 @@ class TestBlockSMBTraining(unittest.TestCase):
         for step in trajectory.transitions:
             self.assertIn(step.episode_mask, (0.0, 1.0))
             self.assertEqual(step.batch.src_c.shape, (1, BLOCK_SMB_SPEC.seq_len_c))
+
+    def test_noop_allowed_is_step_local_for_wait_scenarios(self):
+        wait_scenario = {
+            "metadata": {
+                "block_smb_monte_carlo": {
+                    "oracle": {"actions": [0, 0, 1, 2]},
+                },
+            },
+        }
+
+        self.assertTrue(
+            block_smb_noop_allowed_for_step("level_12_wait_bridge.json", {}, 19)
+        )
+        self.assertFalse(
+            block_smb_noop_allowed_for_step("level_12_wait_bridge.json", {}, 20)
+        )
+        self.assertTrue(block_smb_noop_allowed_for_step("mc.wait_timing", wait_scenario, 1))
+        self.assertFalse(block_smb_noop_allowed_for_step("mc.wait_timing", wait_scenario, 2))
+
+    def test_noop_suppression_loss_penalizes_non_wait_noop_logits(self):
+        config = tiny_config(generated_scenarios=0)
+        model = make_block_smb_model(config)
+        scenario_name, scenario = build_curriculum(config)[0]
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                scenario_name,
+                rollout_steps=1,
+                seed=3,
+                deterministic=True,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+        step = trajectory.transitions[0]
+        step.logits_a = torch.full_like(step.logits_a, -4.0)
+        step.logits_a[:, -1, 0] = 6.0
+        step.noop_allowed = False
+
+        loss = block_smb_noop_suppression_loss(step, device=torch.device("cpu"))
+        self.assertGreater(loss.item(), 1.0)
+
+        step.noop_allowed = True
+        exempt_loss = block_smb_noop_suppression_loss(step, device=torch.device("cpu"))
+        self.assertEqual(exempt_loss.item(), 0.0)
 
     def test_imagined_rollout_loss_unrolls_within_trajectory(self):
         config = tiny_config(
@@ -515,6 +564,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                 "loss_reward",
                 "loss_value",
                 "loss_policy",
+                "loss_noop",
                 "loss_critic_feedback",
                 "loss_imagined_dynamics",
                 "loss_imagined_reward",

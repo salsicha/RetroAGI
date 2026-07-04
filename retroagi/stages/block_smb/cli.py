@@ -201,6 +201,11 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reward-loss-weight", type=_non_negative_float)
     parser.add_argument("--value-loss-weight", type=_non_negative_float)
     parser.add_argument("--action-aux-weight", type=_non_negative_float)
+    parser.add_argument(
+        "--noop-loss-weight",
+        type=_non_negative_float,
+        help="penalize NOOP probability outside explicit wait/NOOP scenario windows",
+    )
     parser.add_argument("--critic-loss-weight", type=_non_negative_float)
     parser.add_argument("--imagined-rollout-weight", type=_non_negative_float)
     parser.add_argument("--imagined-rollout-horizon", type=_non_negative_int)
@@ -546,6 +551,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "reward_loss_weight",
         "value_loss_weight",
         "action_aux_weight",
+        "noop_loss_weight",
         "critic_loss_weight",
         "imagined_rollout_weight",
         "imagined_rollout_horizon",

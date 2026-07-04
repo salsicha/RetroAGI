@@ -133,6 +133,10 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "--skip-monte-carlo-reachability-validation",
                     "--policy-loss-weight",
                     "0.8",
+                    "--action-aux-weight",
+                    "0.12",
+                    "--noop-loss-weight",
+                    "0.35",
                     "--representation-weight",
                     "0.07",
                     "--reward-loss-weight",
@@ -194,6 +198,8 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.monte_carlo_failure_replay_samples_per_epoch, 3)
         self.assertFalse(config.monte_carlo_validate_reachability)
         self.assertEqual(config.policy_loss_weight, 0.8)
+        self.assertEqual(config.action_aux_weight, 0.12)
+        self.assertEqual(config.noop_loss_weight, 0.35)
         self.assertEqual(config.representation_weight, 0.07)
         self.assertEqual(config.reward_loss_weight, 0.03)
         self.assertEqual(config.value_loss_weight, 0.4)
@@ -228,6 +234,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(payload["config"]["tracking_project"], "retroagi-test")
         self.assertEqual(payload["config"]["tracking_run_name"], "smoke")
         self.assertEqual(payload["config"]["tracking_mode"], "offline")
+        self.assertEqual(payload["config"]["noop_loss_weight"], 0.35)
         self.assertEqual(payload["config"]["monte_carlo_train_samples_per_epoch"], 12)
         self.assertEqual(payload["config"]["monte_carlo_seed"], 60001)
         self.assertEqual(

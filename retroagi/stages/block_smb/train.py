@@ -45,6 +45,7 @@ from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
     DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
+    block_smb_monte_carlo_oracle_actions,
     block_smb_monte_carlo_metadata,
     evaluate_block_smb_monte_carlo_gates,
     sample_block_smb_monte_carlo_parameter_sweep,
@@ -100,6 +101,12 @@ ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES = (
     "chained_enemy_gauntlet",
     "full_smb_opening_proxy",
 )
+BLOCK_SMB_NOOP_ACTION = 0
+FIXED_BLOCK_SMB_NOOP_WINDOWS = {
+    "level_12_wait_bridge.json": ((0, 20),),
+    "level_15_wait_long_bridge.json": ((0, 28),),
+    "level_16_wait_enemy_gate.json": ((0, 50),),
+}
 
 
 def normalize_block_smb_world_model_slot_weights(
@@ -166,6 +173,7 @@ class BlockSMBTrainingConfig:
     reward_loss_weight: float = 0.01
     value_loss_weight: float = 0.25
     action_aux_weight: float = 0.01
+    noop_loss_weight: float = 0.25
     critic_loss_weight: float = 0.001
     imagined_rollout_weight: float = 0.0
     imagined_rollout_horizon: int = 0
@@ -336,6 +344,7 @@ class BlockSMBTrainingConfig:
             self.reward_loss_weight,
             self.value_loss_weight,
             self.action_aux_weight,
+            self.noop_loss_weight,
             self.critic_loss_weight,
             self.imagined_rollout_weight,
         )
@@ -374,6 +383,8 @@ class BlockSMBTransition:
     criticism: torch.Tensor
     logits_a: torch.Tensor
     primitive_aux_loss: torch.Tensor | None = None
+    step_index: int = 0
+    noop_allowed: bool = False
 
 
 @dataclass
@@ -468,6 +479,44 @@ def load_fixed_scenarios(names: tuple[str, ...]) -> list[tuple[str, dict]]:
         with path.open("r", encoding="utf-8") as handle:
             scenarios.append((name, json.load(handle)))
     return scenarios
+
+
+def block_smb_noop_allowed_for_step(
+    scenario_name: str,
+    scenario: Mapping[str, Any] | None,
+    step_index: int,
+) -> bool:
+    """Return true when a scenario's known-good plan explicitly waits now."""
+
+    step = max(0, int(step_index))
+    if isinstance(scenario, Mapping):
+        metadata = block_smb_monte_carlo_metadata(scenario)
+        if metadata:
+            try:
+                oracle_actions = block_smb_monte_carlo_oracle_actions(
+                    scenario,
+                    max_steps=step + 1,
+                )
+            except ValueError:
+                oracle_actions = []
+            if step < len(oracle_actions):
+                return int(oracle_actions[step]) == BLOCK_SMB_NOOP_ACTION
+
+        generic_metadata = scenario.get("metadata")
+        if isinstance(generic_metadata, Mapping):
+            windows = generic_metadata.get("noop_allowed_windows", ())
+            for window in windows if isinstance(windows, (list, tuple)) else ():
+                try:
+                    start, end = int(window[0]), int(window[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if start <= step < end:
+                    return True
+
+    for start, end in FIXED_BLOCK_SMB_NOOP_WINDOWS.get(str(scenario_name), ()):
+        if int(start) <= step < int(end):
+            return True
+    return False
 
 
 def normalize_block_smb_monte_carlo_family_weights(
@@ -1062,7 +1111,7 @@ def collect_trajectory(
     primitive_executor = SMBParameterizedPrimitiveExecutor()
     walk_limiter = SMBWalkActionLimiter()
 
-    for _ in range(rollout_steps):
+    for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
         batch.src_a = batch.src_a.to(device)
         batch.src_b = batch.src_b.to(device)
@@ -1116,6 +1165,12 @@ def collect_trajectory(
                 criticism=criticism,
                 logits_a=logits_a,
                 primitive_aux_loss=primitive_aux_loss,
+                step_index=step_index,
+                noop_allowed=block_smb_noop_allowed_for_step(
+                    scenario_name,
+                    stage.scenario,
+                    step_index,
+                ),
             )
         )
         observation = next_observation
@@ -1442,6 +1497,36 @@ def _critic_action_outcome_loss(
     ) + F.binary_cross_entropy_with_logits(death_logit, death_target)
 
 
+def block_smb_noop_suppression_loss(
+    step: BlockSMBTransition,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Penalize NOOP probability unless the scenario's plan explicitly waits."""
+
+    logits = step.logits_a.to(device=device)
+    zero = logits.new_zeros(())
+    if bool(step.noop_allowed):
+        return zero
+    if logits.ndim != 3 or logits.size(-1) <= BLOCK_SMB_NOOP_ACTION:
+        return zero
+    action_logits = logits[:, -1, :BLOCK_SMB_ACTION_COUNT]
+    if action_logits.size(-1) <= 1:
+        return zero
+    noop_logit = action_logits[:, BLOCK_SMB_NOOP_ACTION]
+    non_noop_logsumexp = torch.logsumexp(
+        torch.cat(
+            (
+                action_logits[:, :BLOCK_SMB_NOOP_ACTION],
+                action_logits[:, BLOCK_SMB_NOOP_ACTION + 1 :],
+            ),
+            dim=-1,
+        ),
+        dim=-1,
+    )
+    return F.softplus(noop_logit - non_noop_logsumexp).mean()
+
+
 def compute_block_smb_losses(
     model: torch.nn.Module,
     transitions: list[BlockSMBTransition],
@@ -1472,6 +1557,7 @@ def compute_block_smb_losses(
     reward_terms = []
     value_terms = []
     action_aux_terms = []
+    noop_terms = []
     critic_terms = []
     for index, step in enumerate(transitions):
         return_target = returns[index].view(1)
@@ -1518,6 +1604,7 @@ def compute_block_smb_losses(
             action_aux_terms.append(step.log_prob.new_zeros(()))
         else:
             action_aux_terms.append(step.primitive_aux_loss.to(device=device))
+        noop_terms.append(block_smb_noop_suppression_loss(step, device=device))
         critic_terms.append(
             step.criticism.pow(2).mean()
             + _critic_action_outcome_loss(model, step, device=device)
@@ -1528,6 +1615,7 @@ def compute_block_smb_losses(
     loss_value = torch.stack(value_terms).mean()
     loss_policy = torch.stack(policy_terms).mean()
     loss_action_aux = torch.stack(action_aux_terms).mean()
+    loss_noop = torch.stack(noop_terms).mean()
     loss_critic_feedback = torch.stack(critic_terms).mean()
     entropy_bonus = torch.stack(entropy_terms).mean()
     imagined_losses = compute_imagined_rollout_losses(model, trajectories or [], config, device)
@@ -1542,6 +1630,7 @@ def compute_block_smb_losses(
         + config.value_loss_weight * loss_value
         + config.policy_loss_weight * loss_policy
         + config.action_aux_weight * loss_action_aux
+        + config.noop_loss_weight * loss_noop
         + config.critic_loss_weight * loss_critic_feedback
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
@@ -1564,6 +1653,7 @@ def compute_block_smb_losses(
         "loss_value": loss_value,
         "loss_policy": loss_policy,
         "loss_action_aux": loss_action_aux,
+        "loss_noop": loss_noop,
         "loss_critic_feedback": loss_critic_feedback,
         **imagined_losses,
         "target_network_active": torch.tensor(
