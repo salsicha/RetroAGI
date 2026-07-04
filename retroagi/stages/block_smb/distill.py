@@ -946,6 +946,7 @@ def _train_behavior_cloning_epoch_recurrent(
         "semantic_probabilities",
         "support_state",
         "state",
+        "terminal_outcome",
         "patch_tokens",
     ):
         total_slot_losses.setdefault(slot_name, 0.0)
@@ -1077,6 +1078,7 @@ def _train_behavior_cloning_epoch_independent(
         "semantic_probabilities",
         "support_state",
         "state",
+        "terminal_outcome",
         "patch_tokens",
     ):
         total_slot_losses.setdefault(slot_name, 0.0)
