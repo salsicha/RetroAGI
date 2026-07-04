@@ -15,7 +15,7 @@ import torch
 from retroagi.core import (
     SMB_ACTIONS,
     SMBAction,
-    SMBJumpActionTerminator,
+    SMBParameterizedPrimitiveExecutor,
     select_device,
     to_plain_data,
 )
@@ -255,7 +255,7 @@ def _run_full_smb_curriculum_gate(
     for episode_index in range(episodes):
         observation = stage.reset(seed=seed + episode_index)
         world_model_state = None
-        jump_terminator = SMBJumpActionTerminator()
+        primitive_executor = SMBParameterizedPrimitiveExecutor()
         walk_limiter = _full_smb_walk_action_limiter(stage)
         progress_values: list[float] = []
         score_values: list[float] = []
@@ -276,7 +276,11 @@ def _run_full_smb_curriculum_gate(
                 world_model_state=world_model_state,
             )
             action = int(forward.logits.argmax(dim=-1).item())
-            action = jump_terminator.filter_action(action, batch=batch)
+            action = primitive_executor.execute(
+                action,
+                motor_primitives=forward.motor_primitives,
+                batch=batch,
+            ).action
             action = walk_limiter.filter_action(action)
             observation, reward, terminated, truncated, info = stage.step(action)
             source = _signal_source(info)

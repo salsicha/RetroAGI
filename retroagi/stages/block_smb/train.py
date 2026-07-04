@@ -20,7 +20,8 @@ from retroagi.core import (
     SUPPORTED_CONTROLLER_SCHEDULES,
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
-    SMBJumpActionTerminator,
+    SMBParameterizedPrimitiveExecutor,
+    SMBPrimitiveExecution,
     SMBWalkActionLimiter,
     StageBatch,
     VisionEncoder,
@@ -34,6 +35,7 @@ from retroagi.core import (
     make_experiment_tracker,
     save_checkpoint,
     select_device,
+    smb_jump_release_action,
     to_plain_data,
 )
 
@@ -366,6 +368,7 @@ class BlockSMBTransition:
     next_state_pred: torch.Tensor
     criticism: torch.Tensor
     logits_a: torch.Tensor
+    primitive_aux_loss: torch.Tensor | None = None
 
 
 @dataclass
@@ -825,10 +828,11 @@ def _action_from_model(
     world_model_state: WorldModelState | None = None,
     critic_feedback_enabled: bool = True,
     world_model_enabled: bool = True,
-    jump_terminator: SMBJumpActionTerminator | None = None,
+    primitive_executor: SMBParameterizedPrimitiveExecutor | None = None,
     walk_limiter: SMBWalkActionLimiter | None = None,
 ) -> tuple[
     int,
+    torch.Tensor,
     torch.Tensor,
     torch.Tensor,
     tuple[torch.Tensor, ...],
@@ -864,11 +868,17 @@ def _action_from_model(
     finite_or_raise("action_logits", action_logits)
     distribution = torch.distributions.Categorical(logits=action_logits)
     action_tensor = action_logits.argmax(dim=-1) if deterministic else distribution.sample()
-    if jump_terminator is not None:
-        filtered_action = jump_terminator.filter_action(int(action_tensor.item()), batch=batch)
-        if filtered_action != int(action_tensor.item()):
+    motor_primitives = getattr(model, "last_motor_primitives", None)
+    execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
+    if primitive_executor is not None:
+        execution = primitive_executor.execute(
+            int(action_tensor.item()),
+            motor_primitives=motor_primitives,
+            batch=batch,
+        )
+        if execution.action != int(action_tensor.item()):
             action_tensor = torch.tensor(
-                [filtered_action],
+                [execution.action],
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
@@ -881,14 +891,129 @@ def _action_from_model(
                 device=action_tensor.device,
             )
     log_prob = distribution.log_prob(action_tensor).squeeze(0)
+    log_prob = log_prob + _smb_primitive_duration_log_prob(
+        motor_primitives,
+        execution,
+        device=action_logits.device,
+        dtype=log_prob.dtype,
+    )
     entropy = distribution.entropy().squeeze(0)
+    primitive_aux_loss = _smb_primitive_auxiliary_loss(
+        motor_primitives,
+        action_tensor,
+        execution,
+        action_count=BLOCK_SMB_ACTION_COUNT,
+        device=action_logits.device,
+        dtype=log_prob.dtype,
+    )
     return (
         int(action_tensor.item()),
         log_prob,
         entropy,
+        primitive_aux_loss,
         (actions1, actions2, next_state_pred, criticism, logits_a),
         next_world_model_state,
     )
+
+
+def _smb_primitive_duration_log_prob(
+    motor_primitives: Any,
+    execution: SMBPrimitiveExecution,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        motor_primitives is None
+        or not execution.started
+        or execution.duration_bin_index is None
+    ):
+        return zero
+    logits = getattr(motor_primitives, "hold_duration_logits", None)
+    if logits is None:
+        return zero
+    logits = logits.to(device=device, dtype=dtype)
+    if logits.ndim != 3 or logits.size(0) != 1:
+        return zero
+    index = int(execution.duration_bin_index)
+    if index < 0 or index >= logits.size(-1):
+        return zero
+    target = torch.tensor([index], dtype=torch.long, device=device)
+    return F.log_softmax(logits[:, -1, :], dim=-1).gather(1, target.view(1, 1)).mean()
+
+
+def _smb_primitive_auxiliary_loss(
+    motor_primitives: Any,
+    action_tensor: torch.Tensor,
+    execution: SMBPrimitiveExecution,
+    *,
+    action_count: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if motor_primitives is None:
+        return zero
+    target = action_tensor.detach().to(device=device, dtype=torch.long).view(-1)
+    if target.numel() != 1:
+        return zero
+
+    losses: list[torch.Tensor] = []
+    combo_logits = getattr(motor_primitives, "button_combo_logits", None)
+    if combo_logits is not None and combo_logits.ndim == 3:
+        losses.append(F.cross_entropy(combo_logits[:, -1, :action_count], target))
+
+    post_release_logits = getattr(motor_primitives, "post_release_logits", None)
+    if post_release_logits is not None and post_release_logits.ndim == 3:
+        release_target = torch.tensor(
+            [int(smb_jump_release_action(int(target.item())))],
+            dtype=torch.long,
+            device=device,
+        )
+        losses.append(
+            F.cross_entropy(post_release_logits[:, -1, :action_count], release_target)
+        )
+
+    hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
+    if (
+        hold_duration_logits is not None
+        and hold_duration_logits.ndim == 3
+        and execution.started
+        and execution.duration_bin_index is not None
+    ):
+        duration_target = torch.tensor(
+            [int(execution.duration_bin_index)],
+            dtype=torch.long,
+            device=device,
+        )
+        losses.append(F.cross_entropy(hold_duration_logits[:, -1, :], duration_target))
+
+    release_logit = getattr(motor_primitives, "release_logit", None)
+    if release_logit is not None and release_logit.ndim == 2:
+        release_target = torch.tensor(
+            [float(execution.released)],
+            dtype=dtype,
+            device=device,
+        )
+        losses.append(
+            F.binary_cross_entropy_with_logits(release_logit[:, -1], release_target)
+        )
+
+    cancel_logit = getattr(motor_primitives, "cancel_logit", None)
+    if cancel_logit is not None and cancel_logit.ndim == 2:
+        cancel_target = torch.tensor(
+            [float(execution.cancelled)],
+            dtype=dtype,
+            device=device,
+        )
+        losses.append(
+            F.binary_cross_entropy_with_logits(cancel_logit[:, -1], cancel_target)
+        )
+
+    if not losses:
+        return zero
+    return torch.stack([loss.to(device=device, dtype=dtype) for loss in losses]).mean()
 
 
 def collect_trajectory(
@@ -909,7 +1034,7 @@ def collect_trajectory(
     if record_frames:
         trajectory.frames.append(np.asarray(observation).copy())
     world_model_state: WorldModelState | None = None
-    jump_terminator = SMBJumpActionTerminator()
+    primitive_executor = SMBParameterizedPrimitiveExecutor()
     walk_limiter = SMBWalkActionLimiter()
 
     for _ in range(rollout_steps):
@@ -918,7 +1043,14 @@ def collect_trajectory(
         batch.src_b = batch.src_b.to(device)
         batch.src_c = batch.src_c.to(device)
         carried_state = world_model_state if ablation_config.recurrent_state_enabled else None
-        action, log_prob, entropy, outputs, next_world_model_state = _action_from_model(
+        (
+            action,
+            log_prob,
+            entropy,
+            primitive_aux_loss,
+            outputs,
+            next_world_model_state,
+        ) = _action_from_model(
             model,
             batch,
             deterministic=deterministic,
@@ -926,7 +1058,7 @@ def collect_trajectory(
             world_model_state=carried_state,
             critic_feedback_enabled=ablation_config.critic_feedback_enabled,
             world_model_enabled=ablation_config.world_model_enabled,
-            jump_terminator=jump_terminator,
+            primitive_executor=primitive_executor,
             walk_limiter=walk_limiter,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
@@ -958,6 +1090,7 @@ def collect_trajectory(
                 next_state_pred=next_state_pred,
                 criticism=criticism,
                 logits_a=logits_a,
+                primitive_aux_loss=primitive_aux_loss,
             )
         )
         observation = next_observation
@@ -1313,6 +1446,7 @@ def compute_block_smb_losses(
     dynamics_metric_terms: dict[str, list[torch.Tensor]] = {}
     reward_terms = []
     value_terms = []
+    action_aux_terms = []
     critic_terms = []
     for index, step in enumerate(transitions):
         return_target = returns[index].view(1)
@@ -1355,6 +1489,10 @@ def compute_block_smb_losses(
             dynamics_metric_terms.setdefault(metric_name, []).append(metric_value)
         reward_terms.append(F.mse_loss(reward_pred, reward_target))
         value_terms.append(F.mse_loss(value_pred, return_target.detach()))
+        if step.primitive_aux_loss is None:
+            action_aux_terms.append(step.log_prob.new_zeros(()))
+        else:
+            action_aux_terms.append(step.primitive_aux_loss.to(device=device))
         critic_terms.append(
             step.criticism.pow(2).mean()
             + _critic_action_outcome_loss(model, step, device=device)
@@ -1364,6 +1502,7 @@ def compute_block_smb_losses(
     loss_reward = torch.stack(reward_terms).mean()
     loss_value = torch.stack(value_terms).mean()
     loss_policy = torch.stack(policy_terms).mean()
+    loss_action_aux = torch.stack(action_aux_terms).mean()
     loss_critic_feedback = torch.stack(critic_terms).mean()
     entropy_bonus = torch.stack(entropy_terms).mean()
     imagined_losses = compute_imagined_rollout_losses(model, trajectories or [], config, device)
@@ -1377,6 +1516,7 @@ def compute_block_smb_losses(
         + config.reward_loss_weight * loss_reward
         + config.value_loss_weight * loss_value
         + config.policy_loss_weight * loss_policy
+        + config.action_aux_weight * loss_action_aux
         + config.critic_loss_weight * loss_critic_feedback
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
@@ -1398,6 +1538,7 @@ def compute_block_smb_losses(
         "loss_reward": loss_reward,
         "loss_value": loss_value,
         "loss_policy": loss_policy,
+        "loss_action_aux": loss_action_aux,
         "loss_critic_feedback": loss_critic_feedback,
         **imagined_losses,
         "target_network_active": torch.tensor(

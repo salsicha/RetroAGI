@@ -167,27 +167,26 @@ primitive metadata:
 | Field | Current Derivation | Intended Meaning |
 | --- | --- | --- |
 | `button_combo_logits` | A logits repeated to B resolution | Candidate button combos. |
-| `hold_duration` | sigmoid of `w_b` scaled to `[1,max_hold]`; pure SMB `RIGHT`/`LEFT` walk primitives are capped at `1.0` | How long a primitive should last. |
-| `release_logit` | `-b_b` | Tendency to release. |
-| `cancel_logit` | `b_b - w_b` | Tendency to cancel current primitive. |
+| `hold_duration` | expected value of explicit B-level duration-bin logits; old checkpoints fall back to sigmoid of `w_b` scaled to `[1,max_hold]`; pure SMB `RIGHT`/`LEFT` walk primitives are capped at `1.0` | How long a primitive should last. |
+| `hold_duration_logits` | B-level transformer head over fixed duration bins | Distribution used to choose jump-hold frames. |
+| `release_logit` | explicit B-level release head; old checkpoints fall back to `-b_b` | Tendency to release. |
+| `cancel_logit` | explicit B-level cancel head; old checkpoints fall back to `b_b - w_b` | Tendency to cancel current primitive. |
 | `confidence` | sigmoid of `abs(w_b)+abs(b_b)` | Confidence in primitive control. |
-| `interrupt_logit` | cancel plus low-motion signal | Replan if predicted motion is poor. |
+| `interrupt_logit` | explicit replan head plus low-motion signal | Replan if predicted motion is poor. |
 | `replan_probability` | sigmoid of interrupt | Probability of choosing a new primitive. |
+| `post_release_logits` | B-level transformer head | Button combo to use after releasing jump. |
 
 The SMB action filter also enforces that cap at runtime: continuous pure
 `RIGHT` or `LEFT` holds are released after one second before a new walk hold can
 begin.
 
-In Full SMB action selection, these primitives bias logits toward combined
-movement/jump actions. For example, when the model supports `RIGHT` and the
-motor primitive is confident/replanning, `_apply_full_smb_motor_primitive_bias`
-can boost `RIGHT_JUMP`.
-
-Important limitation: the motor primitive decoder currently exposes
-hold/release/cancel metadata, but most action selection still consumes a single
-argmax action per environment step. The system can boost `RIGHT_JUMP` without
-enforcing a full release/cooldown schedule. That is central to the overlong-jump
-failure.
+In Full SMB and Block SMB rollouts, `SMBParameterizedPrimitiveExecutor` now uses
+these primitive parameters as an executable option. When the policy starts a
+jump or jump-combo action, the executor holds the jump for the predicted
+duration bin, releases `A` while preserving horizontal movement, terminates on
+ViT ground/platform/enemy signals, and requires a non-jump action before another
+jump can begin. The old motor bias remains as a compatibility layer for action
+logits, but it is no longer the only temporal-control mechanism.
 
 ## LSTM World Model
 
@@ -536,8 +535,9 @@ stateful primitive execution during training, not only evaluation.
 
 - The raw transferred neural policy still does not independently execute a
   robust Full SMB Level 1-1 route.
-- Motor primitive hold/release/cancel outputs are not yet trained and enforced
-  as first-class temporal actions.
+- Motor primitive hold/release/cancel outputs are now explicit B-level heads and
+  are enforced by a stateful primitive executor, but they still need stronger
+  long-horizon supervision and more Full SMB validation.
 - Deterministic argmax can repeat bad actions for hundreds of frames.
 - Block SMB-to-Full SMB transfer remains sensitive to physics differences.
 - The world model predicts C state, but there is no planning/search loop over
@@ -546,12 +546,13 @@ stateful primitive execution during training, not only evaluation.
 
 ## Recommended Architecture Improvements
 
-1. Train explicit primitive targets:
-   `primitive_action`, `hold_frames`, `release`, `cancel`, and `cooldown`.
+1. Broaden explicit primitive targets:
+   `primitive_action`, `hold_frames`, `release`, `cancel`, and `cooldown` are
+   now trainable; the next step is adding higher-quality labels from save-state
+   timing sweeps and failure-window DAgger.
 
-2. Replace pure logit bias with a stateful primitive executor during both
-   training and evaluation. The executor should consume motor primitive outputs
-   and enforce maximum hold duration, release windows, and replan/cancel rules.
+2. Expand the stateful primitive executor with stronger post-release action
+   selection and learned cooldown/replan thresholds.
 
 3. Add sequence-level losses for action runs, not only per-frame action IDs.
    Penalize impossible or physically bad patterns such as unbounded

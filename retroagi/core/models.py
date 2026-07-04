@@ -19,10 +19,19 @@ ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES = (
     "critic.progress_head.",
     "critic.death_head.",
 )
+LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES = (
+    "agent.fc_primitive_hold_duration.",
+    "agent.fc_primitive_release.",
+    "agent.fc_primitive_cancel.",
+    "agent.fc_primitive_replan.",
+    "agent.fc_primitive_post_release.",
+)
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     *ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
+    *LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES,
 )
+DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
 
 
 def action_level_world_model_state_dict(
@@ -72,6 +81,9 @@ class MotorPrimitiveOutput:
     confidence: torch.Tensor
     interrupt_logit: torch.Tensor
     replan_probability: torch.Tensor
+    hold_duration_logits: torch.Tensor | None = None
+    duration_bin_values: torch.Tensor | None = None
+    post_release_logits: torch.Tensor | None = None
 
     def detach(self):
         return MotorPrimitiveOutput(
@@ -82,7 +94,33 @@ class MotorPrimitiveOutput:
             confidence=self.confidence.detach(),
             interrupt_logit=self.interrupt_logit.detach(),
             replan_probability=self.replan_probability.detach(),
+            hold_duration_logits=(
+                self.hold_duration_logits.detach()
+                if self.hold_duration_logits is not None
+                else None
+            ),
+            duration_bin_values=(
+                self.duration_bin_values.detach()
+                if self.duration_bin_values is not None
+                else None
+            ),
+            post_release_logits=(
+                self.post_release_logits.detach()
+                if self.post_release_logits is not None
+                else None
+            ),
         )
+
+
+@dataclass(frozen=True)
+class LevelBPrimitiveParameters:
+    """Explicit primitive-control heads emitted by the B-level transformer."""
+
+    hold_duration_logits: torch.Tensor
+    release_logit: torch.Tensor
+    cancel_logit: torch.Tensor
+    replan_logit: torch.Tensor
+    post_release_logits: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -113,6 +151,7 @@ class _ActionCandidate:
     actions: torch.Tensor
     w: torch.Tensor
     b: torch.Tensor
+    primitive_params: LevelBPrimitiveParameters | None
     next_state_pred: torch.Tensor
     criticism: torch.Tensor
     evaluation: CriticActionEvaluation
@@ -206,6 +245,7 @@ class MotorPrimitiveController(nn.Module):
         max_hold_duration=8.0,
         max_walk_action_duration=None,
         walk_action_ids: Iterable[int] = (),
+        duration_bins: Iterable[float] = DEFAULT_PRIMITIVE_DURATION_BINS,
     ):
         super().__init__()
         if int(ratio_ab) <= 0:
@@ -224,6 +264,13 @@ class MotorPrimitiveController(nn.Module):
             raise ValueError("walk_action_ids must be non-negative")
         if len(set(resolved_walk_action_ids)) != len(resolved_walk_action_ids):
             raise ValueError("walk_action_ids must be unique")
+        resolved_duration_bins = tuple(float(value) for value in duration_bins)
+        if not resolved_duration_bins:
+            raise ValueError("duration_bins must not be empty")
+        if any(value < 1.0 or not math.isfinite(value) for value in resolved_duration_bins):
+            raise ValueError("duration_bins must contain finite values >= 1")
+        if tuple(sorted(resolved_duration_bins)) != resolved_duration_bins:
+            raise ValueError("duration_bins must be sorted")
         self.ratio_ab = int(ratio_ab)
         self.ratio_bc = int(ratio_bc)
         self.max_hold_duration = float(max_hold_duration)
@@ -233,6 +280,11 @@ class MotorPrimitiveController(nn.Module):
             else float(max_walk_action_duration)
         )
         self.walk_action_ids = resolved_walk_action_ids
+        self.register_buffer(
+            "duration_bin_values",
+            torch.tensor(resolved_duration_bins, dtype=torch.float32),
+            persistent=False,
+        )
 
     def forward(
         self,
@@ -242,6 +294,7 @@ class MotorPrimitiveController(nn.Module):
         *,
         next_state_pred=None,
         current_state=None,
+        primitive_params: LevelBPrimitiveParameters | None = None,
     ):
         if logits_a.ndim != 3:
             raise ValueError("logits_a must have shape [batch, seq_len_a, vocab]")
@@ -265,13 +318,28 @@ class MotorPrimitiveController(nn.Module):
 
         button_combo_logits = logits_a.repeat_interleave(self.ratio_ab, dim=1)
         confidence = torch.sigmoid(w_pred.abs() + b_pred.abs())
-        hold_duration = 1.0 + (self.max_hold_duration - 1.0) * torch.sigmoid(w_pred)
-        hold_duration = self._cap_walk_hold_duration(hold_duration, button_combo_logits)
-        release_logit = -b_pred
-        cancel_logit = b_pred - w_pred
-
         motion = self._predicted_motion(next_state_pred, current_state, w_pred)
-        interrupt_logit = cancel_logit + (0.05 - motion)
+        hold_duration_logits = None
+        post_release_logits = None
+        if primitive_params is None:
+            hold_duration = 1.0 + (self.max_hold_duration - 1.0) * torch.sigmoid(w_pred)
+            release_logit = -b_pred
+            cancel_logit = b_pred - w_pred
+            interrupt_logit = cancel_logit + (0.05 - motion)
+        else:
+            self._validate_primitive_params(primitive_params, w_pred, logits_a)
+            hold_duration_logits = primitive_params.hold_duration_logits
+            post_release_logits = primitive_params.post_release_logits
+            duration_values = self.duration_bin_values.to(
+                device=hold_duration_logits.device,
+                dtype=hold_duration_logits.dtype,
+            )
+            hold_probabilities = F.softmax(hold_duration_logits, dim=-1)
+            hold_duration = (hold_probabilities * duration_values.view(1, 1, -1)).sum(dim=-1)
+            release_logit = primitive_params.release_logit
+            cancel_logit = primitive_params.cancel_logit
+            interrupt_logit = primitive_params.replan_logit + (0.05 - motion)
+        hold_duration = self._cap_walk_hold_duration(hold_duration, button_combo_logits)
         replan_probability = torch.sigmoid(interrupt_logit)
         return MotorPrimitiveOutput(
             button_combo_logits=button_combo_logits,
@@ -281,7 +349,39 @@ class MotorPrimitiveController(nn.Module):
             confidence=confidence,
             interrupt_logit=interrupt_logit,
             replan_probability=replan_probability,
+            hold_duration_logits=hold_duration_logits,
+            duration_bin_values=self.duration_bin_values.to(
+                device=hold_duration.device,
+                dtype=hold_duration.dtype,
+            ),
+            post_release_logits=post_release_logits,
         )
+
+    def _validate_primitive_params(
+        self,
+        primitive_params: LevelBPrimitiveParameters,
+        reference_b: torch.Tensor,
+        logits_a: torch.Tensor,
+    ) -> None:
+        expected_b = tuple(reference_b.shape)
+        for name in ("release_logit", "cancel_logit", "replan_logit"):
+            value = getattr(primitive_params, name)
+            if tuple(value.shape) != expected_b:
+                raise ValueError(
+                    f"primitive {name} must have shape {expected_b}, got {tuple(value.shape)}"
+                )
+        expected_hold = (*expected_b, int(self.duration_bin_values.numel()))
+        if tuple(primitive_params.hold_duration_logits.shape) != expected_hold:
+            raise ValueError(
+                "primitive hold_duration_logits must have shape "
+                f"{expected_hold}, got {tuple(primitive_params.hold_duration_logits.shape)}"
+            )
+        expected_release = (reference_b.size(0), reference_b.size(1), logits_a.size(-1))
+        if tuple(primitive_params.post_release_logits.shape) != expected_release:
+            raise ValueError(
+                "primitive post_release_logits must have shape "
+                f"{expected_release}, got {tuple(primitive_params.post_release_logits.shape)}"
+            )
 
     def _cap_walk_hold_duration(self, hold_duration, button_combo_logits):
         if self.max_walk_action_duration is None or not self.walk_action_ids:
@@ -351,8 +451,26 @@ class HierarchicalAdaptiveModel(nn.Module):
         )
         self.transformer_B = nn.TransformerDecoder(decoder_layers_b, num_layers)
         self.fc_controller_params = nn.Linear(d_model, 2)
+        self.fc_primitive_hold_duration = nn.Linear(
+            d_model,
+            len(DEFAULT_PRIMITIVE_DURATION_BINS),
+        )
+        self.fc_primitive_release = nn.Linear(d_model, 1)
+        self.fc_primitive_cancel = nn.Linear(d_model, 1)
+        self.fc_primitive_replan = nn.Linear(d_model, 1)
+        self.fc_primitive_post_release = nn.Linear(d_model, vocab_size)
+        self.last_level_b_primitives: LevelBPrimitiveParameters | None = None
+        self._initialize_primitive_heads()
 
         self.controller = AdaptiveController(schedule=controller_schedule)
+
+    def _initialize_primitive_heads(self) -> None:
+        nn.init.zeros_(self.fc_primitive_release.weight)
+        nn.init.constant_(self.fc_primitive_release.bias, -4.0)
+        nn.init.zeros_(self.fc_primitive_cancel.weight)
+        nn.init.constant_(self.fc_primitive_cancel.bias, -4.0)
+        nn.init.zeros_(self.fc_primitive_replan.weight)
+        nn.init.constant_(self.fc_primitive_replan.bias, -1.0)
 
     def generate_causal_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
@@ -419,6 +537,13 @@ class HierarchicalAdaptiveModel(nn.Module):
         controller_params = self.fc_controller_params(hidden_b)
         w_pred = controller_params[:, :, 0]
         b_pred = controller_params[:, :, 1]
+        self.last_level_b_primitives = LevelBPrimitiveParameters(
+            hold_duration_logits=self.fc_primitive_hold_duration(hidden_b),
+            release_logit=self.fc_primitive_release(hidden_b).squeeze(-1),
+            cancel_logit=self.fc_primitive_cancel(hidden_b).squeeze(-1),
+            replan_logit=self.fc_primitive_replan(hidden_b).squeeze(-1),
+            post_release_logits=self.fc_primitive_post_release(hidden_b),
+        )
 
         y_hat_c = self.controller(src_C, w_pred, b_pred)
         if return_hidden:
@@ -840,6 +965,7 @@ class AgentWorldModelCritic(nn.Module):
         actions,
         w,
         b,
+        primitive_params=None,
         *,
         world_model_state=None,
         episode_mask=None,
@@ -862,6 +988,7 @@ class AgentWorldModelCritic(nn.Module):
             actions=actions,
             w=w,
             b=b,
+            primitive_params=primitive_params,
             next_state_pred=next_state_pred,
             criticism=evaluation.feedback,
             evaluation=evaluation,
@@ -917,12 +1044,14 @@ class AgentWorldModelCritic(nn.Module):
         world_model_enabled=True,
     ):
         logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
+        primitive_params1 = getattr(self.agent, "last_level_b_primitives", None)
         first_candidate = self._candidate_from_actor_outputs(
             src_C,
             logits_a1,
             actions1,
             w_1,
             b_1,
+            primitive_params=primitive_params1,
             world_model_state=world_model_state,
             episode_mask=episode_mask,
             return_world_model_state=return_world_model_state,
@@ -943,12 +1072,14 @@ class AgentWorldModelCritic(nn.Module):
                     criticism=actor_criticism,
                     tau=tau,
                 )
+                primitive_params = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(
                     src_C,
                     logits_a,
                     actions,
                     w,
                     b,
+                    primitive_params=primitive_params,
                     world_model_state=world_model_state,
                     episode_mask=episode_mask,
                     return_world_model_state=return_world_model_state,
@@ -977,6 +1108,7 @@ class AgentWorldModelCritic(nn.Module):
             selected_candidate.b,
             next_state_pred=selected_candidate.next_state_pred,
             current_state=src_C,
+            primitive_params=selected_candidate.primitive_params,
         )
 
         outputs = (

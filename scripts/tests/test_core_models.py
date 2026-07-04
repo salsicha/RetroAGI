@@ -7,11 +7,13 @@ import torch.nn as nn
 
 from retroagi.core import (
     ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
+    DEFAULT_PRIMITIVE_DURATION_BINS,
     AdaptiveController,
     AgentWorldModelCritic,
     CriticActionEvaluation,
     HierarchicalAdaptiveModel,
     MotorPrimitiveController,
+    LevelBPrimitiveParameters,
     SMBAction,
     WorldModel,
     WorldModelState,
@@ -232,6 +234,41 @@ class TestMotorPrimitiveController(unittest.TestCase):
             output.replan_probability[0, 0].item(),
             output.replan_probability[0, 1].item(),
         )
+        self.assertIsNone(output.hold_duration_logits)
+        self.assertIsNone(output.post_release_logits)
+
+    def test_decodes_explicit_level_b_primitive_heads(self):
+        controller = MotorPrimitiveController(ratio_ab=2, ratio_bc=2)
+        logits_a = torch.zeros(1, 2, len(SMBAction))
+        w_pred = torch.zeros(1, 4)
+        b_pred = torch.zeros(1, 4)
+        hold_logits = torch.full((1, 4, len(DEFAULT_PRIMITIVE_DURATION_BINS)), -8.0)
+        hold_logits[:, :, 3] = 8.0
+        primitive_params = LevelBPrimitiveParameters(
+            hold_duration_logits=hold_logits,
+            release_logit=torch.ones(1, 4),
+            cancel_logit=torch.full((1, 4), -2.0),
+            replan_logit=torch.zeros(1, 4),
+            post_release_logits=torch.zeros(1, 4, len(SMBAction)),
+        )
+
+        output = controller(
+            logits_a,
+            w_pred,
+            b_pred,
+            primitive_params=primitive_params,
+        )
+
+        torch.testing.assert_close(
+            output.hold_duration,
+            torch.full((1, 4), DEFAULT_PRIMITIVE_DURATION_BINS[3]),
+            rtol=1e-3,
+            atol=1e-3,
+        )
+        torch.testing.assert_close(output.release_logit, torch.ones(1, 4))
+        torch.testing.assert_close(output.cancel_logit, torch.full((1, 4), -2.0))
+        self.assertIs(output.hold_duration_logits, hold_logits)
+        self.assertIs(output.post_release_logits, primitive_params.post_release_logits)
 
     def test_caps_walk_primitives_to_one_second(self):
         controller = MotorPrimitiveController(

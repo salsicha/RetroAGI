@@ -359,6 +359,196 @@ class SMBWalkActionLimiter:
         return int(action_value)
 
 
+@dataclass(frozen=True)
+class SMBPrimitiveExecution:
+    """One action emitted by a stateful SMB parameterized primitive executor."""
+
+    action: int
+    started: bool = False
+    active: bool = False
+    released: bool = False
+    cancelled: bool = False
+    landed: bool = False
+    duration_bin_index: int | None = None
+    hold_frames: int | None = None
+
+
+class SMBParameterizedPrimitiveExecutor:
+    """Execute learned SMB jump primitives with explicit hold/release timing."""
+
+    def __init__(self, *, default_hold_frames: int = 4, max_hold_frames: int = 60) -> None:
+        if int(default_hold_frames) <= 0:
+            raise ValueError("default_hold_frames must be positive")
+        if int(max_hold_frames) <= 0:
+            raise ValueError("max_hold_frames must be positive")
+        self.default_hold_frames = int(default_hold_frames)
+        self.max_hold_frames = int(max_hold_frames)
+        self.reset()
+
+    @property
+    def active(self) -> bool:
+        return self._active_jump is not None
+
+    def reset(self) -> None:
+        self._active_jump: SMBAction | None = None
+        self._release_action: SMBAction | None = None
+        self._hold_frames_remaining = 0
+        self._released = False
+        self._left_support = False
+        self._suppress_until_non_jump = False
+        self._duration_bin_index: int | None = None
+        self._hold_frames: int | None = None
+
+    def filter_action(
+        self,
+        action: SMBAction | int,
+        *,
+        motor_primitives: Any = None,
+        batch: Any = None,
+        vision: Any = None,
+    ) -> int:
+        return self.execute(
+            action,
+            motor_primitives=motor_primitives,
+            batch=batch,
+            vision=vision,
+        ).action
+
+    def execute(
+        self,
+        action: SMBAction | int,
+        *,
+        motor_primitives: Any = None,
+        batch: Any = None,
+        vision: Any = None,
+    ) -> SMBPrimitiveExecution:
+        action_value = coerce_smb_action(action)
+        if vision is None and batch is not None:
+            vision = _vision_from_batch(batch)
+        support_name = _vision_support_name(vision)
+        enemy_contact = _vision_enemy_contact(vision)
+
+        if self._suppress_until_non_jump:
+            if action_value not in SMB_JUMP_ACTIONS:
+                self.reset()
+                return SMBPrimitiveExecution(action=int(action_value))
+            release = smb_jump_release_action(action_value)
+            return SMBPrimitiveExecution(
+                action=int(release),
+                released=True,
+                active=False,
+            )
+
+        if self._active_jump is not None:
+            return self._execute_active_primitive(
+                action_value,
+                motor_primitives=motor_primitives,
+                support_name=support_name,
+                enemy_contact=enemy_contact,
+            )
+
+        if action_value not in SMB_JUMP_ACTIONS:
+            self.reset()
+            return SMBPrimitiveExecution(action=int(action_value))
+
+        hold_frames, duration_bin_index = self._select_hold_frames(motor_primitives)
+        self._active_jump = action_value
+        self._release_action = smb_jump_release_action(action_value)
+        self._hold_frames = hold_frames
+        self._duration_bin_index = duration_bin_index
+        self._hold_frames_remaining = max(0, hold_frames - 1)
+        self._released = False
+        self._left_support = support_name == SMB_SUPPORT_AIR
+        return SMBPrimitiveExecution(
+            action=int(action_value),
+            started=True,
+            active=True,
+            duration_bin_index=duration_bin_index,
+            hold_frames=hold_frames,
+        )
+
+    def _execute_active_primitive(
+        self,
+        action_value: SMBAction,
+        *,
+        motor_primitives: Any,
+        support_name: str | None,
+        enemy_contact: bool,
+    ) -> SMBPrimitiveExecution:
+        assert self._active_jump is not None
+        release_action = self._release_action or smb_jump_release_action(self._active_jump)
+        if support_name == SMB_SUPPORT_AIR:
+            self._left_support = True
+        landed = self._left_support and support_name in {
+            SMB_SUPPORT_GROUND,
+            SMB_SUPPORT_PLATFORM,
+        }
+        cancelled = self._cancel_requested(motor_primitives)
+        if enemy_contact or landed or cancelled:
+            action = int(release_action)
+            duration_bin_index = self._duration_bin_index
+            hold_frames = self._hold_frames
+            self.reset()
+            if action_value in SMB_JUMP_ACTIONS:
+                self._suppress_until_non_jump = True
+            return SMBPrimitiveExecution(
+                action=action,
+                released=True,
+                cancelled=cancelled or enemy_contact,
+                landed=landed,
+                duration_bin_index=duration_bin_index,
+                hold_frames=hold_frames,
+            )
+
+        if not self._released and self._hold_frames_remaining > 0:
+            self._hold_frames_remaining -= 1
+            return SMBPrimitiveExecution(
+                action=int(self._active_jump),
+                active=True,
+                duration_bin_index=self._duration_bin_index,
+                hold_frames=self._hold_frames,
+            )
+
+        self._released = True
+        return SMBPrimitiveExecution(
+            action=int(release_action),
+            active=True,
+            released=True,
+            duration_bin_index=self._duration_bin_index,
+            hold_frames=self._hold_frames,
+        )
+
+    def _select_hold_frames(self, motor_primitives: Any) -> tuple[int, int | None]:
+        logits = _last_motor_array(getattr(motor_primitives, "hold_duration_logits", None))
+        duration_values = _last_motor_array(getattr(motor_primitives, "duration_bin_values", None))
+        if logits is not None and logits.size:
+            duration_bin_index = int(np.asarray(logits).reshape(-1).argmax())
+            if duration_values is not None and duration_values.size:
+                values = np.asarray(duration_values).reshape(-1)
+                if 0 <= duration_bin_index < values.size:
+                    return self._clamp_hold_frames(values[duration_bin_index]), duration_bin_index
+            return self._clamp_hold_frames(duration_bin_index + 1), duration_bin_index
+        hold_duration = _last_motor_scalar(getattr(motor_primitives, "hold_duration", None))
+        if hold_duration is not None:
+            return self._clamp_hold_frames(hold_duration), None
+        return self.default_hold_frames, None
+
+    def _cancel_requested(self, motor_primitives: Any) -> bool:
+        cancel_logit = _last_motor_scalar(getattr(motor_primitives, "cancel_logit", None))
+        if cancel_logit is None:
+            return False
+        return bool(cancel_logit > 0.0)
+
+    def _clamp_hold_frames(self, value: Any) -> int:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return self.default_hold_frames
+        if not math.isfinite(numeric):
+            return self.default_hold_frames
+        return max(1, min(self.max_hold_frames, int(round(numeric))))
+
+
 def _vision_from_batch(batch: Any) -> Any:
     metadata = getattr(batch, "metadata", None)
     if isinstance(metadata, Mapping):
@@ -469,6 +659,28 @@ def _first_index(value: Any) -> int | None:
     if array is None or array.size == 0:
         return None
     return int(np.asarray(array).reshape(-1)[0])
+
+
+def _last_motor_scalar(value: Any) -> float | None:
+    array = _last_motor_array(value)
+    if array is None or array.size == 0:
+        return None
+    try:
+        return float(np.asarray(array).reshape(-1)[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _last_motor_array(value: Any) -> np.ndarray | None:
+    array = _to_numpy(value)
+    if array is None or array.size == 0:
+        return None
+    array = np.asarray(array)
+    if array.ndim >= 3:
+        return array.reshape((-1, array.shape[-1]))[-1]
+    if array.ndim >= 2:
+        return array.reshape(-1)
+    return array
 
 
 def _to_numpy(value: Any) -> np.ndarray | None:

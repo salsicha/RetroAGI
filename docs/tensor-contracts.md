@@ -316,8 +316,23 @@ the low-level gains that produced the C actions.
 For SMB stages, the baseline architecture configures the motor primitive
 controller with `RIGHT` and `LEFT` as walk actions. Their decoded
 `hold_duration` is capped at `1.0`, so a walk primitive cannot request more than
-one second of continuous hold before replanning. Jump and jump-combo primitives
-remain governed by the general hold limit and the ViT-driven jump terminator.
+one second of continuous hold before replanning.
+
+The B-level transformer also emits explicit primitive-control heads:
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `hold_duration_logits` | `[B,L_B,D]` | Distribution over jump-hold duration bins. |
+| `release_logit` | `[B,L_B]` | Learned tendency to release the active primitive. |
+| `cancel_logit` | `[B,L_B]` | Learned tendency to cancel the active primitive. |
+| `replan_logit` | `[B,L_B]` | Learned tendency to replan after poor predicted motion. |
+| `post_release_logits` | `[B,L_B,V]` | Button combo to use after releasing jump. |
+
+`SMBParameterizedPrimitiveExecutor` consumes those heads at runtime. For jump
+and jump-combo actions it commits to the selected duration bin, releases `A`
+while preserving horizontal intent, terminates on ViT ground/platform/enemy
+signals, and suppresses another jump until a non-jump action resets the
+primitive.
 
 The world model accepts an optional `WorldModelState` carrying LSTM hidden and
 cell tensors between calls. Without a state it starts from zeros. Callers can

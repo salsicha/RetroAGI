@@ -25,7 +25,8 @@ from retroagi.core import (
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
     SMBAction,
-    SMBJumpActionTerminator,
+    SMBParameterizedPrimitiveExecutor,
+    SMBPrimitiveExecution,
     SMBWalkActionLimiter,
     StageBatch,
     WorldModelState,
@@ -35,6 +36,7 @@ from retroagi.core import (
     make_experiment_tracker,
     save_checkpoint,
     select_device,
+    smb_jump_release_action,
     to_plain_data,
 )
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
@@ -822,6 +824,7 @@ def train_full_smb_policy(
                             policy_loss_weight=config.policy_loss_weight,
                             world_model_weight=config.world_model_weight,
                             world_model_slot_weights=config.world_model_slot_weights,
+                            action_aux_weight=config.action_aux_weight,
                             critic_loss_weight=config.critic_loss_weight,
                             gradient_clip_norm=config.gradient_clip_norm,
                             max_abs_loss=config.max_abs_loss,
@@ -1030,7 +1033,7 @@ def evaluate_full_smb_policy(
         for episode_index in range(config.evaluation_episodes):
             episode_seed = config.seed + 10_000 + episode_index
             observation = stage.reset(seed=episode_seed)
-            jump_terminator = SMBJumpActionTerminator()
+            primitive_executor = SMBParameterizedPrimitiveExecutor()
             walk_limiter = _full_smb_walk_action_limiter(stage)
             episode_return = 0.0
             fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
@@ -1046,9 +1049,20 @@ def evaluate_full_smb_policy(
             )
             for _step in range(config.evaluation_max_steps):
                 batch = stage.encode_observation(observation)
-                logits = _policy_action_logits(model, batch, device=resolved_device)
+                forward = _coerce_policy_forward_result(
+                    _policy_action_logits_and_state(
+                        model,
+                        batch,
+                        device=resolved_device,
+                    )
+                )
+                logits = forward.logits
                 action = int(logits.argmax(dim=-1).item())
-                action = jump_terminator.filter_action(action, batch=batch)
+                action = primitive_executor.execute(
+                    action,
+                    motor_primitives=forward.motor_primitives,
+                    batch=batch,
+                ).action
                 action = walk_limiter.filter_action(action)
                 observation, reward, terminated, truncated, info = stage.step(action)
                 _update_full_smb_fixed_task_episode_metrics(
@@ -1189,7 +1203,7 @@ def play_full_smb_policy(
         episode_index = 0
         episode_seed = config.seed
         observation = stage.reset(seed=episode_seed)
-        jump_terminator = SMBJumpActionTerminator()
+        primitive_executor = SMBParameterizedPrimitiveExecutor()
         walk_limiter = _full_smb_walk_action_limiter(stage)
         resets += 1
         _render_full_smb_stage(
@@ -1230,7 +1244,7 @@ def play_full_smb_policy(
                 episode_index += 1
                 episode_seed = config.seed + episode_index
                 observation = stage.reset(seed=episode_seed)
-                jump_terminator.reset()
+                primitive_executor.reset()
                 walk_limiter.reset()
                 resets += 1
                 world_model_state = None
@@ -1263,6 +1277,7 @@ def play_full_smb_policy(
                     script_index=script_index,
                 )
                 next_world_model_state = None
+                current_motor_primitives = None
                 action_probabilities = None
             else:
                 assert model is not None
@@ -1282,13 +1297,18 @@ def play_full_smb_policy(
                     deterministic=play_config.deterministic_policy,
                     temperature=play_config.sampling_temperature,
                 )
-                action = jump_terminator.filter_action(action, batch=batch)
+                action = primitive_executor.execute(
+                    action,
+                    motor_primitives=forward.motor_primitives,
+                    batch=batch,
+                ).action
                 action = walk_limiter.filter_action(action)
                 action_probabilities = _full_smb_action_probabilities(
                     logits,
                     temperature=play_config.sampling_temperature,
                 )
                 next_world_model_state = forward.next_world_model_state
+                current_motor_primitives = forward.motor_primitives
             repeated_steps = min(
                 play_config.action_repeat,
                 play_config.max_steps - len(actions),
@@ -1378,7 +1398,7 @@ def play_full_smb_policy(
                     episode_index += 1
                     episode_seed = config.seed + episode_index
                     observation = stage.reset(seed=episode_seed)
-                    jump_terminator.reset()
+                    primitive_executor.reset()
                     walk_limiter.reset()
                     resets += 1
                     episode_return = 0.0
@@ -1405,7 +1425,11 @@ def play_full_smb_policy(
                     and repeat_index + 1 < repeated_steps
                 ):
                     repeat_batch = stage.encode_observation(observation, info)
-                    action = jump_terminator.filter_action(action, batch=repeat_batch)
+                    action = primitive_executor.execute(
+                        action,
+                        motor_primitives=current_motor_primitives,
+                        batch=repeat_batch,
+                    ).action
                     action = walk_limiter.filter_action(action)
                 _sleep_full_smb_play_frame(play_config.fps)
             if play_config.action_repeat > 1 and not (terminated or truncated):
@@ -2310,6 +2334,7 @@ def _train_episode(
     policy_loss_weight: float,
     world_model_weight: float,
     world_model_slot_weights: Mapping[str, float],
+    action_aux_weight: float,
     critic_loss_weight: float,
     gradient_clip_norm: float,
     max_abs_loss: float,
@@ -2335,10 +2360,11 @@ def _train_episode(
         slot_name: [] for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
     }
     world_model_losses: list[float] = []
+    action_aux_losses: list[float] = []
     critic_losses: list[float] = []
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
-    jump_terminator = SMBJumpActionTerminator()
+    primitive_executor = SMBParameterizedPrimitiveExecutor()
     walk_limiter = _full_smb_walk_action_limiter(stage)
     recurrent_state_resets = 1
     boundary_counts: dict[str, int] = {"manual_reset": 1}
@@ -2372,10 +2398,14 @@ def _train_episode(
             action_tensor = logits.argmax(dim=-1)
         else:
             action_tensor = distribution.sample()
-        filtered_action = jump_terminator.filter_action(int(action_tensor.item()), batch=batch)
-        if filtered_action != int(action_tensor.item()):
+        execution = primitive_executor.execute(
+            int(action_tensor.item()),
+            motor_primitives=forward.motor_primitives,
+            batch=batch,
+        )
+        if execution.action != int(action_tensor.item()):
             action_tensor = torch.tensor(
-                [filtered_action],
+                [execution.action],
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
@@ -2387,6 +2417,13 @@ def _train_episode(
                 device=action_tensor.device,
             )
         log_prob = distribution.log_prob(action_tensor)
+        primitive_log_prob = _smb_primitive_duration_log_prob(
+            forward.motor_primitives,
+            execution,
+            device=device,
+            dtype=log_prob.dtype,
+        )
+        log_prob = log_prob + primitive_log_prob
         _finite_tensor_or_raise("action_log_prob", log_prob)
         observation, reward, terminated, truncated, info = stage.step(int(action_tensor.item()))
         boundary = _full_smb_rollout_boundary(
@@ -2453,6 +2490,14 @@ def _train_episode(
         entropy = distribution.entropy().mean()
         _finite_tensor_or_raise("action_entropy", entropy)
         policy_loss = -(log_prob.mean() * scaled_reward.detach())
+        loss_action_aux = _smb_primitive_auxiliary_loss(
+            forward.motor_primitives,
+            action_tensor,
+            execution,
+            action_count=FULL_SMB_ACTION_COUNT,
+            device=device,
+            dtype=log_prob.dtype,
+        )
         loss_critic = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
         if critic_loss_weight > 0.0:
             loss_critic = _full_smb_critic_action_outcome_loss(
@@ -2467,10 +2512,12 @@ def _train_episode(
         loss = (
             policy_loss_weight * policy_loss
             + loss_world_model
+            + float(action_aux_weight) * loss_action_aux
             + weighted_critic_loss
             - entropy_weight * entropy
         )
         _finite_tensor_or_raise("policy_loss", policy_loss)
+        _finite_tensor_or_raise("loss_action_aux", loss_action_aux)
         _finite_tensor_or_raise("loss_critic", loss_critic)
         _finite_tensor_or_raise("loss", loss)
         _bounded_tensor_or_raise("loss", loss.detach(), max_abs_loss)
@@ -2494,6 +2541,7 @@ def _train_episode(
                 slot_value = float(slot_loss.detach().cpu().item())
             dynamics_slot_losses[slot_name].append(slot_value)
         world_model_losses.append(float(loss_world_model.detach().cpu().item()))
+        action_aux_losses.append(float(loss_action_aux.detach().cpu().item()))
         critic_losses.append(float(loss_critic.detach().cpu().item()))
         entropies.append(float(entropy.detach().cpu().item()))
         gradient_norm = float(grad_norm.detach().cpu().item())
@@ -2525,6 +2573,7 @@ def _train_episode(
             for slot_name, values in dynamics_slot_losses.items()
         },
         "loss_world_model": _mean(world_model_losses),
+        "loss_action_aux": _mean(action_aux_losses),
         "loss_critic": _mean(critic_losses),
         "mean_entropy": _mean(entropies),
         "min_entropy": min(entropies) if entropies else 0.0,
@@ -2557,6 +2606,106 @@ def _train_episode(
             steps=tuple(steps),
         ),
     )
+
+
+def _smb_primitive_duration_log_prob(
+    motor_primitives: Any,
+    execution: SMBPrimitiveExecution,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if (
+        motor_primitives is None
+        or not execution.started
+        or execution.duration_bin_index is None
+    ):
+        return zero
+    logits = getattr(motor_primitives, "hold_duration_logits", None)
+    if logits is None:
+        return zero
+    logits = logits.to(device=device, dtype=dtype)
+    if logits.ndim != 3 or logits.size(0) != 1:
+        return zero
+    index = int(execution.duration_bin_index)
+    if index < 0 or index >= logits.size(-1):
+        return zero
+    target = torch.tensor([index], dtype=torch.long, device=device)
+    return F.log_softmax(logits[:, -1, :], dim=-1).gather(1, target.view(1, 1)).mean()
+
+
+def _smb_primitive_auxiliary_loss(
+    motor_primitives: Any,
+    action_tensor: torch.Tensor,
+    execution: SMBPrimitiveExecution,
+    *,
+    action_count: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    zero = torch.zeros((), dtype=dtype, device=device)
+    if motor_primitives is None:
+        return zero
+    target = action_tensor.detach().to(device=device, dtype=torch.long).view(-1)
+    if target.numel() != 1:
+        return zero
+
+    losses: list[torch.Tensor] = []
+    combo_logits = getattr(motor_primitives, "button_combo_logits", None)
+    if combo_logits is not None and combo_logits.ndim == 3:
+        losses.append(F.cross_entropy(combo_logits[:, -1, :action_count], target))
+
+    post_release_logits = getattr(motor_primitives, "post_release_logits", None)
+    if post_release_logits is not None and post_release_logits.ndim == 3:
+        release_target = torch.tensor(
+            [int(smb_jump_release_action(int(target.item())))],
+            dtype=torch.long,
+            device=device,
+        )
+        losses.append(
+            F.cross_entropy(post_release_logits[:, -1, :action_count], release_target)
+        )
+
+    hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
+    if (
+        hold_duration_logits is not None
+        and hold_duration_logits.ndim == 3
+        and execution.started
+        and execution.duration_bin_index is not None
+    ):
+        duration_target = torch.tensor(
+            [int(execution.duration_bin_index)],
+            dtype=torch.long,
+            device=device,
+        )
+        losses.append(F.cross_entropy(hold_duration_logits[:, -1, :], duration_target))
+
+    release_logit = getattr(motor_primitives, "release_logit", None)
+    if release_logit is not None and release_logit.ndim == 2:
+        release_target = torch.tensor(
+            [float(execution.released)],
+            dtype=dtype,
+            device=device,
+        )
+        losses.append(
+            F.binary_cross_entropy_with_logits(release_logit[:, -1], release_target)
+        )
+
+    cancel_logit = getattr(motor_primitives, "cancel_logit", None)
+    if cancel_logit is not None and cancel_logit.ndim == 2:
+        cancel_target = torch.tensor(
+            [float(execution.cancelled)],
+            dtype=dtype,
+            device=device,
+        )
+        losses.append(
+            F.binary_cross_entropy_with_logits(cancel_logit[:, -1], cancel_target)
+        )
+
+    if not losses:
+        return zero
+    return torch.stack([loss.to(device=device, dtype=dtype) for loss in losses]).mean()
 
 
 def _full_smb_c_stream_dynamics_slot_losses(

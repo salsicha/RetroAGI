@@ -11,6 +11,7 @@ from retroagi.core import (
     SMB_ACTIONS,
     SMBAction,
     SMBJumpActionTerminator,
+    SMBParameterizedPrimitiveExecutor,
     SMBWalkActionLimiter,
     ActionSpec,
     ContinuousControlSpec,
@@ -194,6 +195,98 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertEqual(
             terminator.filter_action(SMBAction.JUMP, batch=self._batch_with_vision(vision)),
             int(SMBAction.NOOP),
+        )
+
+    def test_parameterized_primitive_executor_releases_after_learned_hold(self):
+        executor = SMBParameterizedPrimitiveExecutor()
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[0.0, 4.0, -1.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 4.0]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            batch=self._batch_with_vision(self._support_vision(1)),
+        )
+        second = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+        )
+        third = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+        )
+        repeated = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+        )
+
+        self.assertTrue(first.started)
+        self.assertEqual(first.hold_frames, 2)
+        self.assertEqual(first.duration_bin_index, 1)
+        self.assertEqual(second.action, int(SMBAction.RIGHT_JUMP))
+        self.assertEqual(third.action, int(SMBAction.RIGHT))
+        self.assertEqual(repeated.action, int(SMBAction.RIGHT))
+
+    def test_parameterized_primitive_executor_requires_non_jump_after_landing(self):
+        executor = SMBParameterizedPrimitiveExecutor()
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[6.0, -1.0]]]),
+            duration_bin_values=torch.tensor([1.0, 4.0]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+
+        self.assertEqual(
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ).action,
+            int(SMBAction.RIGHT_JUMP),
+        )
+        self.assertEqual(
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(0)),
+            ).action,
+            int(SMBAction.RIGHT),
+        )
+        landed = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            batch=self._batch_with_vision(self._support_vision(1)),
+        )
+        self.assertTrue(landed.landed)
+        self.assertEqual(landed.action, int(SMBAction.RIGHT))
+        self.assertEqual(
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ).action,
+            int(SMBAction.RIGHT),
+        )
+        self.assertEqual(
+            executor.execute(
+                SMBAction.RIGHT,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ).action,
+            int(SMBAction.RIGHT),
+        )
+        self.assertEqual(
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            ).action,
+            int(SMBAction.RIGHT_JUMP),
         )
 
     @staticmethod

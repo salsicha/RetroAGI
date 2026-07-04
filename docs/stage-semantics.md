@@ -130,14 +130,15 @@ Raw integer IDs remain accepted by `BlockSMBStage` for compatibility, but new
 code should use the enum names.
 
 Policy-driven Block SMB and Full SMB training, evaluation, and playback pass
-model-selected jump actions through `SMBJumpActionTerminator`. The terminator
-reads the current ViT output from `StageBatch.metadata["vision"]`; after an
-active jump has left support, `support_ids`/`support_logits` end `RIGHT_JUMP`,
-`LEFT_JUMP`, or `JUMP` on ground/platform landing by releasing `A` to `RIGHT`,
-`LEFT`, or `NOOP`. Semantic ViT labels also release the jump when Mario lands
-on an enemy. The same policy paths pass pure walk actions through
-`SMBWalkActionLimiter`, which caps continuous `RIGHT` or `LEFT` holds at one
-second before inserting a release frame.
+model-selected jump actions through `SMBParameterizedPrimitiveExecutor`. The
+executor reads B-level primitive duration logits, holds `A` for the selected
+duration bin, releases to `RIGHT`, `LEFT`, or `NOOP`, and uses the current ViT
+output from `StageBatch.metadata["vision"]` to terminate on ground/platform
+landing or enemy contact. It also suppresses repeated jump starts until the
+policy emits a non-jump action. `SMBJumpActionTerminator` remains available as a
+lower-level landing-release helper. The same policy paths pass pure walk actions
+through `SMBWalkActionLimiter`, which caps continuous `RIGHT` or `LEFT` holds at
+one second before inserting a release frame.
 
 This transfer vocabulary intentionally leaves NES-only buttons such as `B`,
 `START`, and `SELECT` released. Adding run/fire or menu actions requires an

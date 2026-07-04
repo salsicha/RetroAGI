@@ -11,7 +11,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from retroagi.core import SMBAction, StageBatch, save_checkpoint, select_device, to_plain_data
+from retroagi.core import (
+    DEFAULT_PRIMITIVE_DURATION_BINS,
+    SMBAction,
+    StageBatch,
+    save_checkpoint,
+    select_device,
+    smb_jump_release_action,
+    to_plain_data,
+)
 from retroagi.stages.full_smb.adapter import (
     DEFAULT_FULL_SMB_CONTENT,
     FullSMBEnvConfig,
@@ -35,6 +43,7 @@ DEFAULT_FULL_SMB_IMITATION_LR = 5e-4
 DEFAULT_FULL_SMB_IMITATION_TRAINABLE_PREFIXES = (
     "agent.fc_out_A",
     "agent.fc_controller_params",
+    "agent.fc_primitive_",
 )
 
 
@@ -127,6 +136,7 @@ def train_full_smb_imitation_warm_start(
     actions = torch.as_tensor(dataset["actions"], dtype=torch.long)
     if actions.numel() <= 0:
         raise ValueError("dataset must contain at least one action")
+    primitive_targets = _full_smb_imitation_primitive_targets(actions)
     parameters = _select_trainable_parameters(model, trainable_prefixes)
     optimizer = torch.optim.AdamW(parameters, lr=float(learning_rate))
     generator = torch.Generator(device="cpu")
@@ -149,8 +159,18 @@ def train_full_smb_imitation_warm_start(
                 metadata={},
             )
             target = actions[indices].to(device)
-            logits = _policy_action_logits_and_state(model, batch, device=device).logits
-            loss = F.cross_entropy(logits, target)
+            forward = _policy_action_logits_and_state(model, batch, device=device)
+            logits = forward.logits
+            loss_action = F.cross_entropy(logits, target)
+            loss_primitive = _full_smb_imitation_primitive_loss(
+                forward.motor_primitives,
+                target,
+                duration_targets=primitive_targets["duration_bin"][indices].to(device),
+                duration_mask=primitive_targets["duration_mask"][indices].to(device),
+                release_targets=primitive_targets["release"][indices].to(device),
+                post_release_targets=primitive_targets["post_release"][indices].to(device),
+            )
+            loss = loss_action + 0.25 * loss_primitive
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(parameters, 1.0)
@@ -174,6 +194,86 @@ def train_full_smb_imitation_warm_start(
         },
         optimizer,
     )
+
+
+def _full_smb_imitation_primitive_targets(actions: torch.Tensor) -> dict[str, torch.Tensor]:
+    duration_bins = torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32)
+    duration_targets = torch.zeros_like(actions)
+    duration_mask = torch.zeros(actions.shape, dtype=torch.float32)
+    release_targets = torch.zeros(actions.shape, dtype=torch.float32)
+    post_release_targets = torch.zeros_like(actions)
+    jump_actions = {
+        int(SMBAction.RIGHT_JUMP),
+        int(SMBAction.LEFT_JUMP),
+        int(SMBAction.JUMP),
+    }
+    action_values = [int(action) for action in actions.detach().cpu().tolist()]
+    for index, action in enumerate(action_values):
+        post_release_targets[index] = int(smb_jump_release_action(action))
+        if action not in jump_actions:
+            continue
+        run_length = 1
+        for next_index in range(index + 1, len(action_values)):
+            if action_values[next_index] != action:
+                break
+            run_length += 1
+        duration_mask[index] = 1.0
+        duration_targets[index] = int(
+            torch.abs(duration_bins - float(run_length)).argmin().item()
+        )
+        if index + 1 >= len(action_values) or action_values[index + 1] != action:
+            release_targets[index] = 1.0
+    return {
+        "duration_bin": duration_targets.long(),
+        "duration_mask": duration_mask,
+        "release": release_targets,
+        "post_release": post_release_targets.long(),
+    }
+
+
+def _full_smb_imitation_primitive_loss(
+    motor_primitives: Any,
+    target_actions: torch.Tensor,
+    *,
+    duration_targets: torch.Tensor,
+    duration_mask: torch.Tensor,
+    release_targets: torch.Tensor,
+    post_release_targets: torch.Tensor,
+) -> torch.Tensor:
+    if motor_primitives is None:
+        return target_actions.new_zeros((), dtype=torch.float32)
+    losses: list[torch.Tensor] = []
+    combo_logits = getattr(motor_primitives, "button_combo_logits", None)
+    if combo_logits is not None and combo_logits.ndim == 3:
+        losses.append(F.cross_entropy(combo_logits[:, -1, : len(SMBAction)], target_actions))
+    post_release_logits = getattr(motor_primitives, "post_release_logits", None)
+    if post_release_logits is not None and post_release_logits.ndim == 3:
+        losses.append(
+            F.cross_entropy(
+                post_release_logits[:, -1, : len(SMBAction)],
+                post_release_targets,
+            )
+        )
+    release_logit = getattr(motor_primitives, "release_logit", None)
+    if release_logit is not None and release_logit.ndim == 2:
+        losses.append(
+            F.binary_cross_entropy_with_logits(release_logit[:, -1], release_targets)
+        )
+    hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
+    if (
+        hold_duration_logits is not None
+        and hold_duration_logits.ndim == 3
+        and bool((duration_mask > 0).any().item())
+    ):
+        per_sample = F.cross_entropy(
+            hold_duration_logits[:, -1, :],
+            duration_targets,
+            reduction="none",
+        )
+        losses.append((per_sample * duration_mask).sum() / duration_mask.sum().clamp_min(1.0))
+    if not losses:
+        return target_actions.new_zeros((), dtype=torch.float32)
+    return torch.stack(losses).mean()
 
 
 def run_full_smb_imitation_warm_start(
