@@ -29,11 +29,10 @@ The default registered architecture is `agent_world_model_critic`. It combines:
 - a motor-primitive decoder that exposes button-combo, hold/release, cancel,
   confidence, and replan signals.
 
-The current Full SMB Level 1-1 gate is passed by adding an explicit
-`level1_1_primitive` action planner/action shield for `benchmark_1_1_start`.
-That planner closes a demonstrated temporal-control gap: the transferred neural
-policy and segmentation were good enough to perceive the scene, but the policy
-collapsed into jump timing that was too long or repeated at the wrong cadence.
+Full SMB Level 1-1 is evaluated without a hand-authored route planner. The
+remaining gap is learned temporal control: the transferred neural policy and
+segmentation can perceive useful state, but the policy can still collapse into
+jump timing that is too long or repeated at the wrong cadence.
 
 ## Data Flow
 
@@ -66,7 +65,7 @@ Critic projects predicted state to A feedback
 Second actor pass produces final action logits
         |
         v
-Motor primitive bias / optional action planner
+Motor primitive bias and runtime filters
         |
         v
 SMBAction -> Block SMB or Full SMB buttons
@@ -186,9 +185,9 @@ can boost `RIGHT_JUMP`.
 
 Important limitation: the motor primitive decoder currently exposes
 hold/release/cancel metadata, but most action selection still consumes a single
-argmax action per environment step. Before the explicit Level 1-1 planner, the
-system could boost `RIGHT_JUMP` without enforcing a real release/cooldown
-schedule. That is central to the overlong-jump failure.
+argmax action per environment step. The system can boost `RIGHT_JUMP` without
+enforcing a full release/cooldown schedule. That is central to the overlong-jump
+failure.
 
 ## LSTM World Model
 
@@ -352,20 +351,17 @@ selection setup:
 6. **Block SMB examples were not long-horizon enough.** Isolated scenarios teach
    "jump over this thing." The full level requires "jump, land, run, delay,
    jump again, sometimes correct left, then resume right." That is a sequence
-   skill. Chained Monte Carlo scenarios and the Level 1-1 primitive planner were
-   added specifically because the old curriculum did not represent that horizon.
+   skill. Chained Monte Carlo scenarios were added specifically because the old
+   curriculum did not represent that horizon.
 
 7. **Full SMB physics differs from Block SMB.** NES jump arcs, pipe collisions,
    run acceleration, enemy timing, and camera/scroll behavior make overlong
    jumps more dangerous. A behavior that is robust in simplified physics can
    wedge against a pipe or miss a landing in the emulator.
 
-The Level 1-1 primitive planner fixes this at evaluation time by adding the
-missing stateful motor contract: one-shot jumps, fixed hold windows, release
-periods, and a short corrective `LEFT` where the real level needs it. Longer
-term, the neural model should learn this contract directly through sequence
-supervision, explicit primitive losses, and longer Block SMB/Full SMB curriculum
-segments.
+Evaluation no longer uses a hand-authored route planner. The neural model must
+learn the missing stateful motor contract directly through sequence supervision,
+explicit primitive losses, and longer Block SMB/Full SMB curriculum segments.
 
 ## Comparison To Common Retro-Game Solutions
 
@@ -433,8 +429,7 @@ Weaknesses:
 
 RetroAGI's LSTM world model is lighter: it predicts next C state and feeds a
 critic, but it does not currently run Monte Carlo tree search over candidate
-action sequences. The Level 1-1 primitive planner is closer to a hand-authored
-options layer than to learned MuZero search.
+action sequences or use a hand-authored options layer.
 
 ### Dreamer And Latent World-Model RL
 
@@ -498,10 +493,8 @@ Weaknesses:
 - does not automatically discover alternatives.
 
 RetroAGI uses this pragmatically. Block SMB scripted/oracle trajectories and
-Full SMB imitation warm starts expose the timing the model should learn. The
-new Level 1-1 primitive planner is a deterministic action shield proving the
-environment and controls can clear the level while the neural controller catches
-up.
+Full SMB imitation warm starts expose the timing the model should learn, but the
+controller is expected to execute the route itself.
 
 ### Hierarchical RL And Options
 
@@ -536,9 +529,8 @@ stateful primitive execution during training, not only evaluation.
 - Transfer path from fast deterministic Block SMB to real Full SMB.
 - Monte Carlo Block SMB scenario families for coverage beyond fixed sentinels.
 - Full SMB RAM-backed progress, life-loss boundaries, and run-button mapping.
-- Real emulator Level 1-1 gate now passes with the primitive planner:
-  `success_rate=1.0`, `completion_rate=1.0`, `survival_rate=1.0`, and
-  `max_progress=3266.0` over three deterministic episodes.
+- Full SMB evaluation now measures the learned policy plus generic motor
+  filters, without a hand-authored Level 1-1 route planner.
 
 ## Current Weaknesses
 
@@ -577,9 +569,8 @@ stateful primitive execution during training, not only evaluation.
    predicts little forward progress should increase cancel/replan probability
    and force a release/cooldown decision.
 
-7. Evaluate policy logits separately from planner-corrected behavior. The
-   planner-corrected gate proves the environment and control contract; the raw
-   policy gate should remain as a stricter learning target.
+7. Evaluate raw policy logits separately from motor-filtered executed behavior
+   so repeated-action failures remain visible in diagnostics.
 
 ## Bottom Line
 
@@ -592,9 +583,7 @@ The architecture is designed as a hierarchy:
 - critic feedback for actor refinement;
 - motor primitive decoder for temporal action control.
 
-The recent Full SMB result shows the hierarchy has the right pieces but not yet
+The recent Full SMB failures show the hierarchy has the right pieces but not yet
 enough learned temporal enforcement. The model learned overlong `RIGHT_JUMP`
 because the training signal made "right plus jump" broadly useful while the
 execution path did not force release/cooldown as a first-class learned skill.
-The new Level 1-1 primitive planner demonstrates the missing temporal contract
-and provides a concrete target for the next neural training iteration.

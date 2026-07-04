@@ -296,29 +296,14 @@ Next steps:
       passed only `opening_movement`; `first_pipe`, `first_enemy`, and
       `first_gap_or_stair` all stalled at max progress 398.0, so the gate pass
       rate is 0.25 and another full 2,400-step benchmark is blocked.
-- [x] Close the Level 1-1 Full SMB transfer gate with an explicit long-horizon
-      primitive planner and backend-completion fallback.
+- [x] Add Full SMB benchmark diagnostics and backend-completion fallback.
   - [x] Diagnose the current transferred Block SMB policy on the real emulator:
         RAM-backed position and ViT segmentation are valid, but the policy
         collapses to overlong `RIGHT_JUMP` usage and dies or stalls at early
         hazards without a release/cooldown horizon.
-  - [x] Add an `action_planner` config/CLI selector with an automatic
-        `level1_1_primitive` planner for `benchmark_1_1_start` evaluation and
-        playback.
   - [x] Add a fixed-benchmark completion proxy for stable-retro runs where the
         backend reaches the flag/castle and transitions onward but does not
         expose `level_complete` in `info`.
-  - [x] Validate the transferred Block SMB checkpoint on real Full SMB
-        `benchmark_1_1_start` for 3 deterministic episodes with the documented
-        2,400-step budget.
-      Result: `artifacts/full_smb/level1_1_primitive_planner_eval_3ep.json`
-      reports `success_thresholds_met=true`, `success_rate=1.0`,
-      `completion_rate=1.0`, `survival_rate=1.0`, `death_count=0`,
-      `max_progress=3266.0`, `mean_score=1750.0`, and threshold pass rate
-      `1.0`. The recorded rollout
-      `artifacts/full_smb/level1_1_primitive_planner_record/evaluation/evaluation_episode0000.npz`
-      reaches the World 1-2 transition; the extracted final frame is
-      `artifacts/full_smb/level1_1_primitive_planner_record/final_frame.png`.
 
 ## Completed Work
 
