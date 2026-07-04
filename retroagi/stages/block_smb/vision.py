@@ -57,6 +57,7 @@ class BlockVITPerceptionThresholds:
     min_accuracy: float = 0.95
     min_foreground_accuracy: float = 0.90
     min_mean_iou: float = 0.70
+    min_support_accuracy: float = 0.90
     max_position_rmse: float = 0.06
     min_position_within_tolerance: float = 0.90
     position_tolerance: float = 0.05
@@ -66,6 +67,7 @@ class BlockVITPerceptionThresholds:
             "min_accuracy",
             "min_foreground_accuracy",
             "min_mean_iou",
+            "min_support_accuracy",
             "min_position_within_tolerance",
             "position_tolerance",
         ):
@@ -80,6 +82,7 @@ class BlockVITPerceptionThresholds:
             "min_accuracy": self.min_accuracy,
             "min_foreground_accuracy": self.min_foreground_accuracy,
             "min_mean_iou": self.min_mean_iou,
+            "min_support_accuracy": self.min_support_accuracy,
             "max_position_rmse": self.max_position_rmse,
             "min_position_within_tolerance": self.min_position_within_tolerance,
             "position_tolerance": self.position_tolerance,
@@ -139,6 +142,9 @@ def _legacy_block_vit_checkpoint(
                 "semantic_classes": semantic_classes,
                 "token_dim": int(vision_spec.get("token_dim", model_config["hidden_dim"])),
                 "position_dim": int(vision_spec.get("position_dim", 2)),
+                "support_classes": tuple(
+                    vision_spec.get("support_classes", ("air", "ground", "platform"))
+                ),
             }
         },
         states={"model": checkpoint["model_state"]},
@@ -207,7 +213,7 @@ def load_block_vit_checkpoint(
         required_states=("model",),
         context=f"Block ViT policy loader {checkpoint_path}",
     )
-    model.load_state_dict(checkpoint["states"]["model"])
+    model.load_compatible_state_dict(checkpoint["states"]["model"])
     set_block_vit_trainable(model, trainable=not freeze)
     if freeze:
         model.eval()
@@ -239,6 +245,7 @@ def evaluate_block_vit_perception(
     was_training = model.training
     model.eval()
     samples = correct = foreground_correct = foreground_total = patches = 0
+    support_correct = support_total = 0
     position_squared_error = 0.0
     position_within_tolerance = 0
     intersections = torch.zeros(model.spec.num_classes, dtype=torch.float64)
@@ -248,6 +255,7 @@ def evaluate_block_vit_perception(
         batch = frames[start : start + batch_size].to(device)
         labels = model.patch_targets(batch)
         positions = model.position_targets(batch)
+        support_targets = model.support_targets(batch)
         output = model.encode(batch)
         prediction = output.semantic_ids
         if prediction.shape != labels.shape:
@@ -260,10 +268,18 @@ def evaluate_block_vit_perception(
                 "vision position shape must match position targets "
                 f"{tuple(positions.shape)}, got {tuple(output.position.shape)}"
             )
+        if output.support_ids is None or output.support_ids.shape != support_targets.shape:
+            raise ValueError(
+                "vision support_ids shape must match support targets "
+                f"{tuple(support_targets.shape)}, got "
+                f"{None if output.support_ids is None else tuple(output.support_ids.shape)}"
+            )
 
         batch_size_actual = batch.shape[0]
         samples += batch_size_actual
         patches += labels.numel()
+        support_correct += (output.support_ids == support_targets).sum().item()
+        support_total += support_targets.numel()
         correct += (prediction == labels).sum().item()
         foreground = labels != 0
         foreground_correct += (prediction[foreground] == labels[foreground]).sum().item()
@@ -298,6 +314,7 @@ def evaluate_block_vit_perception(
     )
     accuracy = correct / max(patches, 1)
     foreground_accuracy = foreground_correct / max(foreground_total, 1)
+    support_accuracy = support_correct / max(support_total, 1)
     position_mse = position_squared_error / max(samples * model.spec.position_dim, 1)
     position_rmse = position_mse ** 0.5
     position_within_rate = position_within_tolerance / max(samples, 1)
@@ -308,6 +325,8 @@ def evaluate_block_vit_perception(
         bottleneck_reasons.append("foreground_accuracy")
     if mean_iou < thresholds.min_mean_iou:
         bottleneck_reasons.append("mean_iou")
+    if support_accuracy < thresholds.min_support_accuracy:
+        bottleneck_reasons.append("support_accuracy")
     if position_rmse > thresholds.max_position_rmse:
         bottleneck_reasons.append("position_rmse")
     if position_within_rate < thresholds.min_position_within_tolerance:
@@ -319,6 +338,7 @@ def evaluate_block_vit_perception(
         "accuracy": float(accuracy),
         "foreground_accuracy": float(foreground_accuracy),
         "mean_iou": float(mean_iou),
+        "support_accuracy": float(support_accuracy),
         "per_class_iou": per_class_iou,
         "position_mse": float(position_mse),
         "position_rmse": float(position_rmse),
@@ -395,21 +415,41 @@ class BlockVisionTransformer(PatchVisionTransformer):
             dim=-1,
         )
 
+    @torch.no_grad()
+    def support_targets(self, observation: Any) -> torch.Tensor:
+        """Return exact air/ground/platform labels from renderer patch targets."""
+
+        targets = self.support_targets_from_labels(self.patch_targets(observation))
+        if targets is None:
+            raise ValueError("Block SMB support targets could not be inferred")
+        return targets
+
     def training_loss(
         self,
         observation: Any,
         semantic_weight: float = 1.0,
         position_weight: float = 1.0,
+        support_weight: float = 1.0,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Compute joint patch-segmentation and normalized Mario-position loss."""
+        """Compute joint patch-segmentation, support, and Mario-position loss."""
         output = self.forward(observation)
         targets = self.patch_targets(observation)
         semantic_loss = F.cross_entropy(output.semantic_logits, targets)
 
         position_target = self.position_targets(observation)
         position_loss = F.mse_loss(output.position, position_target)
-        total = semantic_weight * semantic_loss + position_weight * position_loss
-        return total, {"semantic": semantic_loss, "position": position_loss}
+        support_target = self.support_targets(observation)
+        support_loss = F.cross_entropy(output.support_logits, support_target)
+        total = (
+            semantic_weight * semantic_loss
+            + position_weight * position_loss
+            + support_weight * support_loss
+        )
+        return total, {
+            "semantic": semantic_loss,
+            "position": position_loss,
+            "support": support_loss,
+        }
 
     def encode(self, observation: Any) -> VisionOutput:
         return self.forward(observation)

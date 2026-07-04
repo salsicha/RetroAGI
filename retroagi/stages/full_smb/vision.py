@@ -240,7 +240,7 @@ def load_full_smb_vit_checkpoint(
         mlp_ratio=float(model_config.get("mlp_ratio", 4.0)),
         drop=float(model_config.get("dropout", model_config.get("drop", 0.1))),
     ).to(device)
-    model.load_state_dict(state)
+    model.load_compatible_state_dict(state)
     _set_trainable(model, trainable=not freeze)
     if freeze:
         model.eval()
@@ -268,6 +268,7 @@ def build_full_smb_vit_checkpoint(
         "patch_size": model.patch_size,
         "mlp_ratio": float(model.encoder.layers[0].linear1.out_features / model.spec.token_dim),
         "dropout": float(model.dropout.p),
+        "support_prior_scale": model.support_prior_scale,
     }
     checkpoint_config = {"model": model_config}
     if config:
@@ -358,6 +359,7 @@ def _load_full_smb_vit_checkpoint_payload(
                 "semantic_classes": FULL_SMB_VIT_CLASSES,
                 "token_dim": int(model_config["hidden_dim"]),
                 "position_dim": 2,
+                "support_classes": ("air", "ground", "platform"),
             }
         },
         metadata={"legacy_checkpoint": True, "source_path": str(path)},

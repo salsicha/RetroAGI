@@ -4,12 +4,14 @@ generate_dataset.py
 Procedurally compose Super Mario Bros scenes from the extracted sprites and
 emit pixel-accurate per-patch semantic labels for training a Vision Transformer.
 
-Task: PATCH-LEVEL SEMANTIC SEGMENTATION.
+Task: PATCH-LEVEL SEMANTIC SEGMENTATION plus Mario support-state supervision.
   - Each 256x240 RGB scene is built by stamping real SMB sprites on a tile grid.
   - As every sprite is stamped, its class id is also written to a per-pixel
     label canvas using the sprite's alpha mask -> ground truth is exact.
   - The pixel labels are reduced to a (H/P x W/P) grid (one class per ViT patch)
     via a priority-aware majority vote, so small actors (coins, Mario) survive.
+  - Mario is placed on ground, on pipes/blocks, or in air so the trainer can
+    derive air/ground/platform support labels from the semantic grid.
 
 Run:
     python scripts/vit/generate_dataset.py --train 4000 --val 800
@@ -104,6 +106,7 @@ class Scene:
 
 def build_scene(sprites, rng):
     s = Scene(rng)
+    support_surfaces = []
 
     # ── Background scenery ────────────────────────────────────────────────────
     for _ in range(rng.randint(0, 3)):                       # clouds
@@ -125,12 +128,14 @@ def build_scene(sprites, rng):
             continue
         for row in range(2):
             s.stamp(sprites["ground"], gx*TILE, ground_top + row*TILE, "ground")
+        support_surfaces.append((gx * TILE, (gx + 1) * TILE, ground_top, "ground"))
 
     # ── Pipes (sit on the ground) ─────────────────────────────────────────────
     for _ in range(rng.randint(0, 2)):
         ph, pw = sprites["pipe"].shape[:2]
         px = rng.randint(0, GW-3) * TILE
         s.stamp(sprites["pipe"], px, ground_top - ph, "pipe")
+        support_surfaces.append((px, px + pw, ground_top - ph, "pipe"))
 
     # ── Floating block rows (bricks + question blocks) ────────────────────────
     for _ in range(rng.randint(1, 3)):
@@ -141,6 +146,7 @@ def build_scene(sprites, rng):
                 break
             kind = "question_block" if rng.random() < 0.35 else "brick"
             s.stamp(sprites[kind], x, row_y, kind)
+            support_surfaces.append((x, x + TILE, row_y, kind))
             x += TILE
 
     # ── Coins (floating) ──────────────────────────────────────────────────────
@@ -157,11 +163,46 @@ def build_scene(sprites, rng):
     if rng.random() < 0.25:
         s.stamp(sprites["mushroom"], rng.randint(0, W-16), ground_top - 16, "mushroom")
 
-    # ── Mario on the ground ───────────────────────────────────────────────────
+    # ── Mario on ground, on platforms, or in air ──────────────────────────────
     mh = sprites["mario"].shape[0]
-    s.stamp(sprites["mario"], rng.randint(0, W//2), ground_top - mh, "mario")
+    mw = sprites["mario"].shape[1]
+    x, y = choose_mario_pose(support_surfaces, rng, mw=mw, mh=mh, ground_top=ground_top)
+    s.stamp(sprites["mario"], x, y, "mario")
 
     return s
+
+
+def choose_mario_pose(support_surfaces, rng, *, mw, mh, ground_top):
+    """Choose a Mario location that diversifies support-state labels."""
+
+    roll = rng.random()
+    platform_surfaces = [
+        surface for surface in support_surfaces if surface[3] in {"pipe", "brick", "question_block"}
+    ]
+    ground_surfaces = [surface for surface in support_surfaces if surface[3] == "ground"]
+
+    if roll < 0.20:
+        max_y = max(2 * TILE, ground_top - mh - TILE)
+        return rng.randint(0, max(W - mw, 0)), rng.randint(2 * TILE, max_y)
+
+    if roll < 0.45 and platform_surfaces:
+        return _pose_on_surface(rng.choice(platform_surfaces), rng, mw=mw, mh=mh)
+
+    if ground_surfaces:
+        return _pose_on_surface(rng.choice(ground_surfaces), rng, mw=mw, mh=mh)
+
+    return rng.randint(0, max(W - mw, 0)), ground_top - mh
+
+
+def _pose_on_surface(surface, rng, *, mw, mh):
+    x0, x1, top, _kind = surface
+    min_x = max(0, int(x0))
+    max_x = min(W - mw, int(x1) - mw)
+    if max_x < min_x:
+        x = max(0, min(W - mw, int(round((x0 + x1 - mw) / 2))))
+    else:
+        x = rng.randint(min_x, max_x)
+    return x, int(top) - mh
 
 
 def make_split(n, sprites, seed):

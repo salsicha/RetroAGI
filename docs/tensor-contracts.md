@@ -407,10 +407,15 @@ and is `0.0` after termination or truncation.
 | `semantic_ids` | `[B,G_H,G_W]` or `[B,H,W]` | `long` | Argmax IDs `[0,K-1]`. |
 | `tokens` | `[B,N,D]` | floating | Latent or pooled semantic tokens; generally unbounded. |
 | `metadata` | not a tensor | mapping or `None` | Grid, image, checkpoint, or sequence diagnostics. |
+| `support_logits` | `[B,3]` or `None` | floating | Unnormalized support-state scores for `air, ground, platform`. ViT encoders must provide this. |
+| `support_ids` | `[B]` or `None` | `long` | Argmax support IDs: `0=air`, `1=ground`, `2=platform`. ViT encoders must provide this. |
 
 `semantic_logits` are not probabilities. Consumers apply `softmax` over
 dimension 1. Image encoders accept HWC/BHWC or CHW/BCHW input, convert to
 `float32` BCHW, discard alpha, and divide by 255 only when values exceed 1.
+SMB ViT encoders also emit a learned support-state head. Its logits are combined
+with a semantic-contact prior so legacy checkpoints without the learned head
+still expose useful air/ground/platform state.
 
 ### Synthetic Linear Vision
 
@@ -436,6 +441,8 @@ Input is resized to `240x256` and divided into 16x16 patches, giving
 | `semantic_logits` | `[B,7,15,16]` | Unbounded seven-class logits. |
 | `semantic_ids` | `[B,15,16]` | IDs `[0,6]`. |
 | `tokens` | `[B,240,D]` | Transformer tokens; unbounded. Default `D=64`. |
+| `support_logits` | `[B,3]` | Air/ground/platform logits. |
+| `support_ids` | `[B]` | Air/ground/platform IDs. |
 
 The compatible sprite ViT uses the same grid with `K=13` and default `D=192`.
 Its position is normalized `(x,y)` for the Mario class.
@@ -452,6 +459,8 @@ HWC/BHWC or CHW/BCHW RGB input. Input is resized to `240x256` and divided into
 | `semantic_logits` | `[B,13,15,16]` | Unbounded thirteen-class logits. |
 | `semantic_ids` | `[B,15,16]` | IDs `[0,12]`. |
 | `tokens` | `[B,240,D]` | Transformer tokens; unbounded. Default `D=192`. |
+| `support_logits` | `[B,3]` | Air/ground/platform logits. |
+| `support_ids` | `[B]` | Air/ground/platform IDs. |
 
 The thirteen semantic classes are exactly
 `sky, ground, brick, question_block, pipe, coin, goomba, koopa, mario,
@@ -468,6 +477,8 @@ inspection and migration. For normalized model input `[B,3,H,W]`:
 | `semantic_logits` | `[B,6,H,W]` | Unbounded six-class logits. |
 | `semantic_ids` | `[B,H,W]` | IDs `[0,5]`. |
 | `tokens` | `[B,240,6]` | Logits pooled to 15x16 and flattened row-major; unbounded. |
+| `support_logits` | `[B,3]` | Air/ground/platform logits inferred from semantic contact. |
+| `support_ids` | `[B]` | Air/ground/platform IDs. |
 
 DeepLab preserves input spatial size. Its token width is six class logits, not
 a learned embedding width comparable to ViT tokens. New Full SMB policy code
@@ -481,5 +492,7 @@ should use the ViT-backed `FullSMBSegmentationVision`.
 - A/B IDs remain below `vocab_size` before embedding.
 - Position order is `(x,y)` whenever `P=2`.
 - Semantic class ordering is exactly `VisionSpec.semantic_classes`.
+- ViT support class ordering is exactly `VisionSpec.support_classes`, currently
+  `air, ground, platform`.
 - Raw logits from different architectures are not calibrated probabilities.
 - Metadata is observational and is not required by shared model code.

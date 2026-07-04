@@ -78,15 +78,27 @@ def load_split(name):
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, support_weight=1.0):
     model.eval()
     inter = np.zeros(NUM_CLASSES); union = np.zeros(NUM_CLASSES)
     correct_c = np.zeros(NUM_CLASSES); total_c = np.zeros(NUM_CLASSES)
     n_correct = n_total = fg_correct = fg_total = 0
+    support_correct = support_total = 0
+    support_loss_total = semantic_loss_total = 0.0
     for x, y in loader:
         x, y = x.to(device), y.to(device)
-        pred = model(x).argmax(1)
+        output = model.encode(x)
+        semantic_loss = F.cross_entropy(output.semantic_logits, y)
+        support_y = support_targets_from_labels(model, y)
+        support_loss = F.cross_entropy(output.support_logits, support_y)
+        pred = output.semantic_logits.argmax(1)
+        support_pred = output.support_ids
+        batch_size = x.shape[0]
+        semantic_loss_total += semantic_loss.item() * batch_size
+        support_loss_total += support_loss.item() * batch_size
         n_correct += (pred == y).sum().item(); n_total += y.numel()
+        support_correct += (support_pred == support_y).sum().item()
+        support_total += support_y.numel()
         fg = y != 0
         fg_correct += (pred[fg] == y[fg]).sum().item(); fg_total += fg.sum().item()
         p, t = pred.cpu().numpy().ravel(), y.cpu().numpy().ravel()
@@ -101,6 +113,10 @@ def evaluate(model, loader, device):
         "acc": n_correct / n_total,
         "fg_acc": fg_correct / max(fg_total, 1),
         "miou": np.nanmean(iou),
+        "loss": (semantic_loss_total + support_weight * support_loss_total) / len(loader.dataset),
+        "semantic_loss": semantic_loss_total / len(loader.dataset),
+        "support_loss": support_loss_total / len(loader.dataset),
+        "support_accuracy": support_correct / max(support_total, 1),
         "iou": iou, "recall": recall,
     }
 
@@ -110,6 +126,10 @@ def scalar_metrics(metrics):
         "accuracy": float(metrics["acc"]),
         "foreground_accuracy": float(metrics["fg_acc"]),
         "mean_iou": float(metrics["miou"]),
+        "loss": float(metrics["loss"]),
+        "semantic_loss": float(metrics["semantic_loss"]),
+        "support_loss": float(metrics["support_loss"]),
+        "support_accuracy": float(metrics["support_accuracy"]),
     }
     for index, name in enumerate(CLASSES):
         iou = metrics["iou"][index]
@@ -141,6 +161,7 @@ def save_training_checkpoint(model, args, *, epoch, metrics):
                 "batch_size": args.batch,
                 "learning_rate": args.lr,
                 "epochs": args.epochs,
+                "support_weight": args.support_weight,
             },
             "data": {
                 "train": os.path.relpath(os.path.join(DATA, "train.npz"), PROJECT),
@@ -156,6 +177,13 @@ def save_training_checkpoint(model, args, *, epoch, metrics):
     )
     save_versioned_checkpoint(checkpoint_path, checkpoint)
     torch.save(model.state_dict(), legacy_checkpoint_path)
+
+
+def support_targets_from_labels(model, labels):
+    support = model.support_targets_from_labels(labels)
+    if support is None:
+        raise ValueError("could not infer Full SMB ViT support targets")
+    return support
 
 
 # ── Visualization ─────────────────────────────────────────────────────────────
@@ -199,6 +227,7 @@ def main():
     ap.add_argument("--device", default="auto")
     ap.add_argument("--checkpoint", default=VERSIONED_CHECKPOINT)
     ap.add_argument("--legacy-checkpoint", default=LEGACY_CHECKPOINT)
+    ap.add_argument("--support-weight", type=float, default=1.0)
     args = ap.parse_args()
 
     device = select_device(args.device)
@@ -233,27 +262,33 @@ def main():
         for x, y in train_ld:
             x, y = x.to(device), y.to(device)
             opt.zero_grad()
-            loss = criterion(model(x), y)
+            output = model.encode(x)
+            semantic_loss = criterion(output.semantic_logits, y)
+            support_y = support_targets_from_labels(model, y)
+            support_loss = F.cross_entropy(output.support_logits, support_y)
+            loss = semantic_loss + args.support_weight * support_loss
             loss.backward(); opt.step()
             running += loss.item() * x.size(0)
         sched.step()
-        m = evaluate(model, val_ld, device)
+        m = evaluate(model, val_ld, device, support_weight=args.support_weight)
         print(f"Epoch {epoch+1:02d}/{args.epochs} | loss {running/len(train_ds):.4f} "
-              f"| acc {m['acc']*100:5.2f}% | fg_acc {m['fg_acc']*100:5.2f}% | mIoU {m['miou']*100:5.2f}%")
+              f"| acc {m['acc']*100:5.2f}% | fg_acc {m['fg_acc']*100:5.2f}% "
+              f"| mIoU {m['miou']*100:5.2f}% | support_acc {m['support_accuracy']*100:5.2f}%")
         if m["miou"] > best_miou:
             best_miou = m["miou"]
             save_training_checkpoint(model, args, epoch=epoch + 1, metrics=m)
 
     # final per-class report
-    model.load_state_dict(torch.load(args.legacy_checkpoint, map_location=device))
-    m = evaluate(model, val_ld, device)
+    model.load_compatible_state_dict(torch.load(args.legacy_checkpoint, map_location=device))
+    m = evaluate(model, val_ld, device, support_weight=args.support_weight)
     print("\n── Final per-class metrics (val) ──")
     print(f"{'class':16s}{'recall':>9s}{'IoU':>9s}")
     for c, name in enumerate(CLASSES):
         r = m["recall"][c]; i = m["iou"][c]
         print(f"{name:16s}{('%.1f%%'%(r*100)) if not np.isnan(r) else '   n/a':>9s}"
               f"{('%.1f%%'%(i*100)) if not np.isnan(i) else '   n/a':>9s}")
-    print(f"\nOverall acc {m['acc']*100:.2f}% | foreground acc {m['fg_acc']*100:.2f}% | mIoU {m['miou']*100:.2f}%")
+    print(f"\nOverall acc {m['acc']*100:.2f}% | foreground acc {m['fg_acc']*100:.2f}% "
+          f"| mIoU {m['miou']*100:.2f}% | support acc {m['support_accuracy']*100:.2f}%")
 
     save_predictions(model, val_ds, device, os.path.join(DATA, "predictions.png"))
     print(f"Saved checkpoint -> {args.checkpoint}")

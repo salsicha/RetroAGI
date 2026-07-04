@@ -50,6 +50,7 @@ DEFAULT_BATCH_SIZE = 32
 DEFAULT_LEARNING_RATE = 3e-4
 DEFAULT_WEIGHT_DECAY = 0.05
 DEFAULT_POSITION_WEIGHT = 2.0
+DEFAULT_SUPPORT_WEIGHT = 1.0
 DEFAULT_DIM = 64
 DEFAULT_DEPTH = 2
 DEFAULT_HEADS = 4
@@ -97,9 +98,11 @@ class TrainConfig:
                 "loss",
                 "semantic_loss",
                 "position_loss",
+                "support_loss",
                 "accuracy",
                 "foreground_accuracy",
                 "mean_iou",
+                "support_accuracy",
             ),
         )
     )
@@ -111,10 +114,13 @@ class TrainConfig:
         )
     )
     position_weight: float = DEFAULT_POSITION_WEIGHT
+    support_weight: float = DEFAULT_SUPPORT_WEIGHT
 
     def __post_init__(self) -> None:
         if self.position_weight <= 0:
             raise ValueError("position_weight must be positive")
+        if self.support_weight <= 0:
+            raise ValueError("support_weight must be positive")
         if self.training.samples_per_epoch is None:
             raise ValueError("training.samples_per_epoch must be set for Block ViT training")
         if self.evaluation.samples is None:
@@ -128,7 +134,10 @@ class TrainConfig:
             evaluation=self.evaluation,
             checkpoints=self.checkpoints,
             name="block_vit_training",
-            metadata={"position_weight": self.position_weight},
+            metadata={
+                "position_weight": self.position_weight,
+                "support_weight": self.support_weight,
+            },
         )
         return experiment.to_dict()
 
@@ -195,21 +204,28 @@ def build_ground_truth(
     model: BlockVisionTransformer,
     frames: torch.Tensor,
     batch_size: int = 64,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Create exact patch labels and normalized positions for collected frames."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Create exact patch labels, support labels, and normalized positions."""
     labels = []
     positions = []
+    supports = []
     for start in range(0, len(frames), batch_size):
         batch = frames[start : start + batch_size].to(model.pos_embed.device)
-        labels.append(model.patch_targets(batch).cpu())
+        batch_labels = model.patch_targets(batch)
+        labels.append(batch_labels.cpu())
         positions.append(model.position_targets(batch).cpu())
-    return torch.cat(labels), torch.cat(positions)
+        support_targets = model.support_targets_from_labels(batch_labels)
+        if support_targets is None:
+            raise ValueError("could not infer Block ViT support targets")
+        supports.append(support_targets.cpu())
+    return torch.cat(labels), torch.cat(positions), torch.cat(supports)
 
 
 def make_loader(
     frames: torch.Tensor,
     labels: torch.Tensor,
     positions: torch.Tensor,
+    supports: torch.Tensor,
     batch_size: int,
     shuffle: bool,
     seed: int,
@@ -217,7 +233,7 @@ def make_loader(
     images = frames.permute(0, 3, 1, 2).float().div_(255.0)
     generator = torch.Generator().manual_seed(seed)
     return DataLoader(
-        TensorDataset(images, labels, positions),
+        TensorDataset(images, labels, positions, supports),
         batch_size=batch_size,
         shuffle=shuffle,
         generator=generator,
@@ -236,14 +252,17 @@ def compute_loss(
     images: torch.Tensor,
     labels: torch.Tensor,
     positions: torch.Tensor,
+    supports: torch.Tensor,
     weights: torch.Tensor,
     position_weight: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    support_weight: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     output = model(images)
     semantic_loss = F.cross_entropy(output.semantic_logits, labels, weight=weights)
     position_loss = F.mse_loss(output.position, positions)
-    total = semantic_loss + position_weight * position_loss
-    return total, semantic_loss, position_loss
+    support_loss = F.cross_entropy(output.support_logits, supports)
+    total = semantic_loss + position_weight * position_loss + support_weight * support_loss
+    return total, semantic_loss, position_loss, support_loss
 
 
 @torch.no_grad()
@@ -252,28 +271,38 @@ def evaluate(
     loader: DataLoader,
     weights: torch.Tensor,
     position_weight: float,
+    support_weight: float,
     device: torch.device,
 ) -> dict[str, float]:
     model.eval()
-    total_loss = semantic_loss = position_loss = 0.0
+    total_loss = semantic_loss = position_loss = support_loss = 0.0
     correct = foreground_correct = foreground_total = samples = patches = 0
+    support_correct = support_total = 0
     intersections = torch.zeros(model.spec.num_classes, dtype=torch.float64)
     unions = torch.zeros(model.spec.num_classes, dtype=torch.float64)
 
-    for images, labels, positions in loader:
-        images, labels, positions = images.to(device), labels.to(device), positions.to(device)
+    for images, labels, positions, supports in loader:
+        images = images.to(device)
+        labels = labels.to(device)
+        positions = positions.to(device)
+        supports = supports.to(device)
         output = model(images)
         semantic = F.cross_entropy(output.semantic_logits, labels, weight=weights)
         position = F.mse_loss(output.position, positions)
-        total = semantic + position_weight * position
+        support = F.cross_entropy(output.support_logits, supports)
+        total = semantic + position_weight * position + support_weight * support
         batch_size = images.shape[0]
         total_loss += total.item() * batch_size
         semantic_loss += semantic.item() * batch_size
         position_loss += position.item() * batch_size
+        support_loss += support.item() * batch_size
         samples += batch_size
 
         prediction = output.semantic_ids
+        support_prediction = output.support_ids
         correct += (prediction == labels).sum().item()
+        support_correct += (support_prediction == supports).sum().item()
+        support_total += supports.numel()
         patches += labels.numel()
         foreground = labels != 0
         foreground_correct += (prediction[foreground] == labels[foreground]).sum().item()
@@ -290,9 +319,11 @@ def evaluate(
         "loss": total_loss / samples,
         "semantic_loss": semantic_loss / samples,
         "position_loss": position_loss / samples,
+        "support_loss": support_loss / samples,
         "accuracy": correct / patches,
         "foreground_accuracy": foreground_correct / max(foreground_total, 1),
         "mean_iou": mean_iou,
+        "support_accuracy": support_correct / max(support_total, 1),
     }
 
 
@@ -368,10 +399,10 @@ def train(
                 context=f"resume checkpoint {resume}",
             )
             states = checkpoint["states"]
-            model.load_state_dict(states["model"])
+            model.load_compatible_state_dict(states["model"])
             optimizer.load_state_dict(states["optimizer"])
         else:
-            model.load_state_dict(checkpoint["model_state"])
+            model.load_compatible_state_dict(checkpoint["model_state"])
             optimizer.load_state_dict(checkpoint["optimizer_state"])
         start_epoch = int(checkpoint["epoch"]) + 1
 
@@ -383,11 +414,12 @@ def train(
         config.environment.rollout_steps,
         show_progress=True,
     )
-    val_labels, val_positions = build_ground_truth(model, val_frames)
+    val_labels, val_positions, val_supports = build_ground_truth(model, val_frames)
     val_loader = make_loader(
         val_frames,
         val_labels,
         val_positions,
+        val_supports,
         config.training.batch_size,
         False,
         config.evaluation.seed,
@@ -402,11 +434,12 @@ def train(
             config.environment.rollout_steps,
             show_progress=True,
         )
-        train_labels, train_positions = build_ground_truth(model, train_frames)
+        train_labels, train_positions, train_supports = build_ground_truth(model, train_frames)
         train_loader = make_loader(
             train_frames,
             train_labels,
             train_positions,
+            train_supports,
             config.training.batch_size,
             True,
             config.training.seed + epoch,
@@ -415,11 +448,21 @@ def train(
 
         model.train()
         running = 0.0
-        for images, labels, positions in train_loader:
-            images, labels, positions = images.to(device), labels.to(device), positions.to(device)
+        for images, labels, positions, supports in train_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            positions = positions.to(device)
+            supports = supports.to(device)
             optimizer.zero_grad(set_to_none=True)
-            loss, _, _ = compute_loss(
-                model, images, labels, positions, weights, config.position_weight
+            loss, _, _, _ = compute_loss(
+                model,
+                images,
+                labels,
+                positions,
+                supports,
+                weights,
+                config.position_weight,
+                config.support_weight,
             )
             loss.backward()
             if config.training.gradient_clip_norm is not None:
@@ -429,14 +472,22 @@ def train(
             optimizer.step()
             running += loss.item() * images.shape[0]
 
-        final_metrics = evaluate(model, val_loader, weights, config.position_weight, device)
+        final_metrics = evaluate(
+            model,
+            val_loader,
+            weights,
+            config.position_weight,
+            config.support_weight,
+            device,
+        )
         train_loss = running / len(train_loader.dataset)
         print(
             f"Epoch {epoch + 1:03d}/{config.training.epochs:03d} "
             f"train={train_loss:.4f} val={final_metrics['loss']:.4f} "
             f"fg_acc={final_metrics['foreground_accuracy'] * 100:5.1f}% "
             f"mIoU={final_metrics['mean_iou'] * 100:5.1f}% "
-            f"pos_mse={final_metrics['position_loss']:.5f}"
+            f"pos_mse={final_metrics['position_loss']:.5f} "
+            f"support_acc={final_metrics['support_accuracy'] * 100:5.1f}%"
         )
         if final_metrics["mean_iou"] >= best_iou:
             best_iou = final_metrics["mean_iou"]
@@ -456,6 +507,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument("--weight-decay", type=float, default=DEFAULT_WEIGHT_DECAY)
     parser.add_argument("--position-weight", type=float, default=DEFAULT_POSITION_WEIGHT)
+    parser.add_argument("--support-weight", type=float, default=DEFAULT_SUPPORT_WEIGHT)
     parser.add_argument("--dim", type=int, default=DEFAULT_DIM)
     parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
     parser.add_argument("--heads", type=int, default=DEFAULT_HEADS)
@@ -501,9 +553,11 @@ def main() -> None:
                 "loss",
                 "semantic_loss",
                 "position_loss",
+                "support_loss",
                 "accuracy",
                 "foreground_accuracy",
                 "mean_iou",
+                "support_accuracy",
             ),
         ),
         checkpoints=CheckpointConfig(
@@ -513,6 +567,7 @@ def main() -> None:
             best_mode="max",
         ),
         position_weight=args.position_weight,
+        support_weight=args.support_weight,
     )
     train(config)
 

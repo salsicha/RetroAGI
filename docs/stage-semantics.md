@@ -292,12 +292,12 @@ retroagi-block-smb diagnose-vision \
   --rollout-steps 32
 ```
 
-The diagnostic compares semantic patch IDs and normalized Mario position
-against exact palette-derived labels from procedural Block SMB frames. It
-reports accuracy, foreground accuracy, mean IoU, per-class IoU, position RMSE,
-and `bottleneck_reasons`. If `perception.bottleneck` is true, improve or
-retrain the Block ViT checkpoint before interpreting low policy success as an
-actor/world-model/critic failure.
+The diagnostic compares semantic patch IDs, air/ground/platform support state,
+and normalized Mario position against exact palette-derived labels from
+procedural Block SMB frames. It reports accuracy, foreground accuracy, mean IoU,
+per-class IoU, support accuracy, position RMSE, and `bottleneck_reasons`. If
+`perception.bottleneck` is true, improve or retrain the Block ViT checkpoint
+before interpreting low policy success as an actor/world-model/critic failure.
 
 The tracked `data/block_vit/block_vit.pth` checkpoint was retrained through
 epoch 20 with `position_weight=16.0`. On the standard 64-frame diagnostic sample

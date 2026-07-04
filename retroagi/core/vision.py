@@ -1,12 +1,14 @@
 """Shared vision models used across curriculum stages."""
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .interfaces import VISION_SUPPORT_CLASSES, VisionOutput, VisionSpec
+
+SUPPORT_HEAD_STATE_KEYS = ("support_head.weight", "support_head.bias")
 
 
 def image_tensor(observation: Any, device: Optional[torch.device] = None) -> torch.Tensor:
@@ -35,8 +37,46 @@ def infer_agent_support_logits(
     platform_classes: tuple[str, ...],
     support_classes: tuple[str, ...] = VISION_SUPPORT_CLASSES,
     floor_y_threshold: float = 0.82,
+    scan_depth: Optional[int] = None,
 ) -> Optional[torch.Tensor]:
     """Infer air/ground/platform contact from predicted semantic labels."""
+
+    support_ids = infer_agent_support_ids_from_labels(
+        semantic_logits.argmax(dim=1),
+        semantic_classes=semantic_classes,
+        agent_class=agent_class,
+        ground_classes=ground_classes,
+        platform_classes=platform_classes,
+        support_classes=support_classes,
+        floor_y_threshold=floor_y_threshold,
+        scan_depth=scan_depth,
+    )
+    if support_ids is None:
+        return None
+    return support_logits_from_ids(
+        support_ids,
+        len(support_classes),
+        dtype=semantic_logits.dtype,
+    )
+
+
+def infer_agent_support_ids_from_labels(
+    labels: torch.Tensor,
+    *,
+    semantic_classes: tuple[str, ...],
+    agent_class: Optional[str],
+    ground_classes: tuple[str, ...],
+    platform_classes: tuple[str, ...],
+    support_classes: tuple[str, ...] = VISION_SUPPORT_CLASSES,
+    floor_y_threshold: float = 0.82,
+    scan_depth: Optional[int] = None,
+) -> Optional[torch.Tensor]:
+    """Infer support IDs from hard semantic labels.
+
+    Support classes are ordered as ``air, ground, platform`` by default. The
+    contact test uses the first row below the agent at patch resolution and a
+    small pixel tolerance for dense masks.
+    """
 
     if (
         not agent_class
@@ -47,12 +87,14 @@ def infer_agent_support_logits(
         or "platform" not in support_classes
     ):
         return None
+    if labels.ndim != 3:
+        raise ValueError("labels must have shape [B, H, W]")
 
     class_to_id = {name: index for index, name in enumerate(semantic_classes)}
     ground_ids = {class_to_id[name] for name in ground_classes if name in class_to_id}
     platform_ids = {class_to_id[name] for name in platform_classes if name in class_to_id}
-    support_ids = ground_ids | platform_ids
-    if not support_ids:
+    terrain_ids = ground_ids | platform_ids
+    if not terrain_ids:
         return None
 
     support_to_id = {name: index for index, name in enumerate(support_classes)}
@@ -61,10 +103,11 @@ def infer_agent_support_logits(
     platform_id = support_to_id["platform"]
     agent_id = class_to_id[agent_class]
 
-    labels = semantic_logits.argmax(dim=1)
     batch, grid_h, grid_w = labels.shape
-    output = semantic_logits.new_full((batch, len(support_classes)), -4.0)
-    scan_depth = max(2, grid_h // 16)
+    output = torch.full((batch,), air_id, dtype=torch.long, device=labels.device)
+    contact_scan_depth = _contact_scan_depth(grid_h) if scan_depth is None else int(scan_depth)
+    if contact_scan_depth <= 0:
+        raise ValueError("scan_depth must be positive")
     column_margin = 1
 
     for batch_index in range(batch):
@@ -76,13 +119,13 @@ def infer_agent_support_logits(
             bottom = int(rows.max().item())
             col_start = max(int(cols.min().item()) - column_margin, 0)
             col_end = min(int(cols.max().item()) + column_margin + 1, grid_w)
-            row_end = min(bottom + scan_depth + 1, grid_h)
+            row_end = min(bottom + contact_scan_depth + 1, grid_h)
             for row in range(bottom + 1, row_end):
                 window = labels[batch_index, row, col_start:col_end]
                 matches = [
                     int(value)
                     for value in window.flatten().tolist()
-                    if int(value) in support_ids
+                    if int(value) in terrain_ids
                 ]
                 if not matches:
                     continue
@@ -95,8 +138,36 @@ def infer_agent_support_logits(
                 else:
                     support_id = ground_id
                 break
-        output[batch_index, support_id] = 4.0
+        output[batch_index] = support_id
     return output
+
+
+def support_logits_from_ids(
+    support_ids: torch.Tensor,
+    num_support_classes: int,
+    *,
+    positive: float = 4.0,
+    negative: float = -4.0,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Convert support class IDs to high-margin logits."""
+
+    ids = torch.as_tensor(support_ids, dtype=torch.long)
+    if ids.ndim != 1:
+        raise ValueError("support_ids must have shape [B]")
+    if num_support_classes <= 0:
+        raise ValueError("num_support_classes must be positive")
+    logits = torch.full(
+        (ids.shape[0], num_support_classes),
+        float(negative),
+        dtype=dtype,
+        device=ids.device,
+    )
+    return logits.scatter_(1, ids.unsqueeze(1), float(positive))
+
+
+def _contact_scan_depth(grid_h: int) -> int:
+    return max(1, int(round(float(grid_h) / 120.0)))
 
 
 class PatchVisionTransformer(nn.Module):
@@ -116,6 +187,8 @@ class PatchVisionTransformer(nn.Module):
         support_ground_classes: tuple[str, ...] = (),
         support_platform_classes: tuple[str, ...] = (),
         support_floor_y_threshold: float = 0.82,
+        support_prior_scale: float = 0.25,
+        support_scan_depth: Optional[int] = None,
         name: str = "patch_vit",
     ):
         super().__init__()
@@ -133,6 +206,8 @@ class PatchVisionTransformer(nn.Module):
         self.support_ground_classes = tuple(support_ground_classes)
         self.support_platform_classes = tuple(support_platform_classes)
         self.support_floor_y_threshold = float(support_floor_y_threshold)
+        self.support_prior_scale = float(support_prior_scale)
+        self.support_scan_depth = support_scan_depth
 
         self.patch_embed = nn.Conv2d(3, dim, kernel_size=patch_size, stride=patch_size)
         self.num_tokens = self.grid_size[0] * self.grid_size[1]
@@ -152,6 +227,9 @@ class PatchVisionTransformer(nn.Module):
         self.encoder = nn.TransformerEncoder(layer, depth)
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, self.spec.num_classes)
+        self.support_head = nn.Linear(dim, self.spec.num_support_classes)
+        nn.init.zeros_(self.support_head.weight)
+        nn.init.zeros_(self.support_head.bias)
 
     def _position_from_logits(self, logits: torch.Tensor) -> torch.Tensor:
         batch, _, grid_h, grid_w = logits.shape
@@ -176,7 +254,62 @@ class PatchVisionTransformer(nn.Module):
             platform_classes=self.support_platform_classes,
             support_classes=self.spec.support_classes,
             floor_y_threshold=self.support_floor_y_threshold,
+            scan_depth=self.support_scan_depth,
         )
+
+    def _support_context(self, tokens: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        if self.position_class in self.spec.semantic_classes:
+            class_id = self.spec.semantic_classes.index(self.position_class)
+            weights = logits.softmax(dim=1)[:, class_id].flatten(1)
+            weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+            return (tokens * weights.unsqueeze(-1)).sum(dim=1)
+        return tokens.mean(dim=1)
+
+    def support_targets_from_labels(self, labels: torch.Tensor) -> Optional[torch.Tensor]:
+        return infer_agent_support_ids_from_labels(
+            labels,
+            semantic_classes=self.spec.semantic_classes,
+            agent_class=self.position_class,
+            ground_classes=self.support_ground_classes,
+            platform_classes=self.support_platform_classes,
+            support_classes=self.spec.support_classes,
+            floor_y_threshold=self.support_floor_y_threshold,
+            scan_depth=self.support_scan_depth,
+        )
+
+    def support_logits_from_ids(self, support_ids: torch.Tensor) -> torch.Tensor:
+        return support_logits_from_ids(
+            support_ids,
+            self.spec.num_support_classes,
+            dtype=self.support_head.weight.dtype,
+        )
+
+    def load_compatible_state_dict(
+        self,
+        state_dict: Mapping[str, torch.Tensor],
+        *,
+        strict: bool = True,
+    ):
+        """Load ViT checkpoints while allowing legacy checkpoints without support head."""
+
+        result = self.load_state_dict(state_dict, strict=False)
+        allowed_missing = set(SUPPORT_HEAD_STATE_KEYS)
+        missing = list(result.missing_keys)
+        unexpected = list(result.unexpected_keys)
+        unsupported_missing = [
+            key for key in missing if strict and key not in allowed_missing
+        ]
+        if unsupported_missing or unexpected:
+            messages = []
+            if unsupported_missing:
+                messages.append(f"Missing key(s): {unsupported_missing}")
+            if unexpected:
+                messages.append(f"Unexpected key(s): {unexpected}")
+            raise RuntimeError(
+                f"Error(s) in loading state_dict for {self.__class__.__name__}: "
+                + "; ".join(messages)
+            )
+        return result
 
     def forward(self, image: torch.Tensor) -> VisionOutput:
         image = image_tensor(image, device=self.pos_embed.device)
@@ -191,10 +324,17 @@ class PatchVisionTransformer(nn.Module):
         logits = self.head(tokens).transpose(1, 2).reshape(
             batch, self.spec.num_classes, grid_h, grid_w
         )
-        support_logits = self._support_from_logits(logits)
+        support_logits = self.support_head(self._support_context(tokens, logits))
+        support_source = "learned_head"
+        support_prior = self._support_from_logits(logits)
+        if support_prior is not None and self.support_prior_scale != 0.0:
+            support_logits = support_logits + self.support_prior_scale * support_prior.to(
+                device=support_logits.device,
+                dtype=support_logits.dtype,
+            )
+            support_source = "learned_head+semantic_contact"
         metadata = {"grid_size": self.grid_size, "image_size": self.image_size}
-        if support_logits is not None:
-            metadata["support_source"] = "semantic_contact"
+        metadata["support_source"] = support_source
         return VisionOutput(
             position=self._position_from_logits(logits),
             semantic_logits=logits,

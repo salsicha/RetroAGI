@@ -54,6 +54,8 @@ class OracleBlockVisionTransformer(BlockVisionTransformer):
             device=labels.device,
         )
         logits.scatter_(1, labels.unsqueeze(1), 12.0)
+        support_ids = self.support_targets_from_labels(labels)
+        support_logits = self.support_logits_from_ids(support_ids)
         return VisionOutput(
             position=self.position_targets(observation),
             semantic_logits=logits,
@@ -65,6 +67,8 @@ class OracleBlockVisionTransformer(BlockVisionTransformer):
                 device=labels.device,
             ),
             metadata={},
+            support_logits=support_logits,
+            support_ids=support_ids,
         )
 
 
@@ -82,10 +86,13 @@ class BackgroundOnlyBlockVisionTransformer(BlockVisionTransformer):
             device=self.pos_embed.device,
         )
         logits[:, 0] = 12.0
+        labels = logits.argmax(dim=1)
+        support_ids = self.support_targets_from_labels(labels)
+        support_logits = self.support_logits_from_ids(support_ids)
         return VisionOutput(
             position=torch.zeros(batch_size, 2, device=self.pos_embed.device),
             semantic_logits=logits,
-            semantic_ids=logits.argmax(dim=1),
+            semantic_ids=labels,
             tokens=torch.zeros(
                 batch_size,
                 height * width,
@@ -93,6 +100,8 @@ class BackgroundOnlyBlockVisionTransformer(BlockVisionTransformer):
                 device=self.pos_embed.device,
             ),
             metadata={},
+            support_logits=support_logits,
+            support_ids=support_ids,
         )
 
 
@@ -122,13 +131,30 @@ class TestVisionInterface(unittest.TestCase):
             self.assertEqual(output.tokens.shape, (1, 240, 32))
             self.assertEqual(output.support_logits.shape, (1, 3))
             self.assertEqual(output.support_ids.shape, (1,))
+            self.assertEqual(encoder.support_targets(observation).shape, (1,))
             self.assertEqual(targets.shape, (1, 240, 256))
             self.assertEqual(encoder.patch_targets(observation).shape, (1, 15, 16))
             self.assertTrue(torch.isfinite(loss))
-            self.assertEqual(set(losses), {"semantic", "position"})
+            self.assertEqual(set(losses), {"semantic", "position", "support"})
             self.assertTrue(torch.all((output.position >= 0) & (output.position <= 1)))
         finally:
             stage.env.close()
+
+    def test_block_vit_support_targets_distinguish_air_ground_and_platform(self):
+        encoder = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0).eval()
+        labels = torch.zeros(3, 15, 16, dtype=torch.long)
+        mario = encoder.spec.semantic_classes.index("mario")
+        platform = encoder.spec.semantic_classes.index("platform")
+        moving_platform = encoder.spec.semantic_classes.index("moving_platform")
+        labels[0, 12, 5] = mario
+        labels[0, 13, 5] = platform
+        labels[1, 5, 5] = mario
+        labels[1, 6, 5] = moving_platform
+        labels[2, 5, 5] = mario
+
+        support_targets = encoder.support_targets_from_labels(labels)
+
+        self.assertEqual(support_targets.tolist(), [1, 2, 0])
 
     def test_block_vit_perception_diagnostic_accepts_oracle_predictions(self):
         encoder = OracleBlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
@@ -160,6 +186,7 @@ class TestVisionInterface(unittest.TestCase):
         self.assertEqual(metrics["accuracy"], 1.0)
         self.assertEqual(metrics["foreground_accuracy"], 1.0)
         self.assertEqual(metrics["mean_iou"], 1.0)
+        self.assertEqual(metrics["support_accuracy"], 1.0)
         self.assertEqual(metrics["position_rmse"], 0.0)
 
     def test_block_vit_perception_diagnostic_flags_bad_predictions(self):
@@ -185,25 +212,36 @@ class TestVisionInterface(unittest.TestCase):
         self.assertTrue(metrics["bottleneck"])
         self.assertIn("foreground_accuracy", metrics["bottleneck_reasons"])
         self.assertIn("mean_iou", metrics["bottleneck_reasons"])
+        self.assertIn("support_accuracy", metrics["bottleneck_reasons"])
         self.assertIn("position_rmse", metrics["bottleneck_reasons"])
 
     def test_procedural_trainer_executes_an_optimizer_step(self):
         frames = collect_procedural_frames(8, seed=12, rollout_steps=4)
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        labels, positions = build_ground_truth(model, frames, batch_size=4)
-        loader = make_loader(frames, labels, positions, batch_size=4, shuffle=False, seed=12)
+        labels, positions, supports = build_ground_truth(model, frames, batch_size=4)
+        loader = make_loader(
+            frames,
+            labels,
+            positions,
+            supports,
+            batch_size=4,
+            shuffle=False,
+            seed=12,
+        )
         weights = class_weights(labels, model.spec.num_classes, torch.device("cpu"))
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-        images, batch_labels, batch_positions = next(iter(loader))
+        images, batch_labels, batch_positions, batch_supports = next(iter(loader))
         before = model.patch_embed.weight.detach().clone()
-        loss, semantic_loss, position_loss = compute_loss(
+        loss, semantic_loss, position_loss, support_loss = compute_loss(
             model,
             images,
             batch_labels,
             batch_positions,
+            batch_supports,
             weights,
             position_weight=2.0,
+            support_weight=1.0,
         )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -212,8 +250,10 @@ class TestVisionInterface(unittest.TestCase):
         self.assertEqual(frames.shape, (8, 240, 256, 3))
         self.assertEqual(labels.shape, (8, 15, 16))
         self.assertEqual(positions.shape, (8, 2))
+        self.assertEqual(supports.shape, (8,))
         self.assertTrue(torch.isfinite(semantic_loss))
         self.assertTrue(torch.isfinite(position_loss))
+        self.assertTrue(torch.isfinite(support_loss))
         self.assertFalse(torch.equal(before, model.patch_embed.weight))
 
     def test_block_stage_populates_hierarchical_streams_from_vision(self):
@@ -295,6 +335,37 @@ class TestVisionInterface(unittest.TestCase):
         self.assertEqual(result.checkpoint["metrics"]["mean_iou"], 0.5)
         for name, value in result.model.state_dict().items():
             torch.testing.assert_close(value, source.state_dict()[name])
+
+    def test_block_vit_loader_initializes_support_head_for_old_checkpoints(self):
+        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        legacy_state = {
+            name: value
+            for name, value in source.state_dict().items()
+            if not name.startswith("support_head.")
+        }
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "old_block_vit.pth"
+            torch.save(
+                {
+                    "model_state": legacy_state,
+                    "epoch": 1,
+                    "config": {
+                        "dim": 16,
+                        "depth": 1,
+                        "heads": 4,
+                        "patch_size": 16,
+                        "dropout": 0.0,
+                    },
+                    "vision_spec": asdict(source.spec),
+                },
+                path,
+            )
+
+            result = load_block_vit_checkpoint(path, freeze=True)
+
+        self.assertIn("support_head.weight", result.model.state_dict())
+        output = result.model.encode(torch.zeros(1, 3, 240, 256))
+        self.assertEqual(output.support_logits.shape, (1, 3))
 
     def test_block_vit_policy_loader_can_enable_fine_tuning(self):
         source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
