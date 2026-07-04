@@ -137,10 +137,14 @@ def make_agent_world_model_critic(
             f"{SUPPORTED_CONTROLLER_SCHEDULES}, got {controller_schedule!r}"
         )
     walk_action_ids: tuple[int, ...] = ()
+    pause_action_ids: tuple[int, ...] = ()
     max_walk_action_duration: float | None = None
+    motion_position_dims: int | None = None
     if stage.name in SMB_STAGE_NAMES:
         walk_action_ids = (int(SMBAction.RIGHT), int(SMBAction.LEFT))
+        pause_action_ids = (int(SMBAction.NOOP),)
         max_walk_action_duration = SMB_MAX_WALK_ACTION_DURATION_SECONDS
+        motion_position_dims = 2
     return AgentWorldModelCritic(
         stage.vocab_size,
         stage.seq_len_a,
@@ -150,6 +154,8 @@ def make_agent_world_model_critic(
         controller_schedule=controller_schedule,
         max_walk_action_duration=max_walk_action_duration,
         walk_action_ids=walk_action_ids,
+        pause_action_ids=pause_action_ids,
+        motion_position_dims=motion_position_dims,
     )
 
 

@@ -32,6 +32,7 @@ ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES,
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
+DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
 
 
 def action_level_world_model_state_dict(
@@ -132,6 +133,9 @@ class CriticActionEvaluation:
     death_risk: torch.Tensor
     would_progress: torch.Tensor
     predicts_death: torch.Tensor
+    motion_score: torch.Tensor | None = None
+    predicts_no_motion: torch.Tensor | None = None
+    is_pause_action: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,9 @@ class ActionRefinementTrace:
     selected_iteration: int
     progress_score: torch.Tensor
     death_risk: torch.Tensor
+    motion_score: torch.Tensor | None = None
+    predicts_no_motion: torch.Tensor | None = None
+    is_pause_action: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -732,6 +739,75 @@ class WorldModel(nn.Module):
         return prediction
 
 
+def action_motion_score(
+    next_state_pred: torch.Tensor,
+    current_state: torch.Tensor | None,
+    *,
+    motion_position_dims: int | None = None,
+) -> torch.Tensor:
+    if current_state is None:
+        return next_state_pred.new_full((next_state_pred.size(0),), float("inf"))
+    if next_state_pred.shape != current_state.shape:
+        raise ValueError(
+            "next_state_pred and current_state must have the same shape for "
+            "critic motion evaluation, got "
+            f"{next_state_pred.shape} and {current_state.shape}"
+        )
+    if next_state_pred.ndim != 2:
+        raise ValueError(
+            "next_state_pred and current_state must have shape [batch, seq_len_c]"
+        )
+    if motion_position_dims is None:
+        end = next_state_pred.size(1)
+    else:
+        end = max(0, min(int(motion_position_dims), next_state_pred.size(1)))
+        if end == 0:
+            end = next_state_pred.size(1)
+    delta = next_state_pred[:, :end] - current_state[:, :end]
+    return delta.abs().amax(dim=1)
+
+
+def action_pause_mask(
+    is_pause_action: torch.Tensor | None,
+    *,
+    batch_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    if is_pause_action is None:
+        return torch.zeros(batch_size, dtype=torch.bool, device=device)
+    mask = torch.as_tensor(is_pause_action, dtype=torch.bool, device=device)
+    if mask.ndim == 0:
+        mask = mask.view(1)
+    if mask.numel() == 1 and batch_size != 1:
+        mask = mask.expand(batch_size)
+    if tuple(mask.shape) != (batch_size,):
+        raise ValueError(
+            "is_pause_action must have shape [batch] or scalar, got "
+            f"{tuple(mask.shape)} for batch size {batch_size}"
+        )
+    return mask
+
+
+def action_rejection_mask(
+    value: torch.Tensor | None,
+    *,
+    reference: torch.Tensor,
+) -> torch.Tensor:
+    if value is None:
+        return torch.zeros(reference.size(0), dtype=torch.bool, device=reference.device)
+    mask = torch.as_tensor(value, dtype=torch.bool, device=reference.device)
+    if mask.ndim == 0:
+        mask = mask.view(1)
+    if mask.numel() == 1 and reference.size(0) != 1:
+        mask = mask.expand(reference.size(0))
+    if tuple(mask.shape) != (reference.size(0),):
+        raise ValueError(
+            "critic rejection mask must have shape [batch] or scalar, got "
+            f"{tuple(mask.shape)}"
+        )
+    return mask
+
+
 class Critic(nn.Module):
     """Evaluates predicted C state and returns actor feedback plus outcome gates."""
 
@@ -778,6 +854,8 @@ class Critic(nn.Module):
         *,
         progress_threshold=0.0,
         death_threshold=0.75,
+        motion_threshold=DEFAULT_ACTION_MOTION_THRESHOLD,
+        is_pause_action=None,
     ) -> CriticActionEvaluation:
         feedback = self(next_state_pred)
         progress_score = self.action_progress_logit(
@@ -785,12 +863,22 @@ class Critic(nn.Module):
             current_state=current_state,
         )
         death_risk = torch.sigmoid(self.action_death_logit(next_state_pred))
+        motion_score = action_motion_score(next_state_pred, current_state)
+        pause_mask = action_pause_mask(
+            is_pause_action,
+            batch_size=next_state_pred.size(0),
+            device=next_state_pred.device,
+        )
+        predicts_no_motion = (motion_score <= float(motion_threshold)) & ~pause_mask
         return CriticActionEvaluation(
             feedback=feedback,
             progress_score=progress_score,
             death_risk=death_risk,
             would_progress=progress_score >= float(progress_threshold),
             predicts_death=death_risk >= float(death_threshold),
+            motion_score=motion_score,
+            predicts_no_motion=predicts_no_motion,
+            is_pause_action=pause_mask,
         )
 
 
@@ -816,9 +904,12 @@ class AgentWorldModelCritic(nn.Module):
         controller_schedule="constant",
         max_walk_action_duration=None,
         walk_action_ids: Iterable[int] = (),
+        pause_action_ids: Iterable[int] = (0,),
+        motion_position_dims: int | None = None,
         max_action_refinement_passes=3,
         critic_progress_threshold=0.0,
         critic_death_threshold=0.75,
+        critic_motion_threshold=DEFAULT_ACTION_MOTION_THRESHOLD,
     ):
         super().__init__()
         if int(max_action_refinement_passes) <= 0:
@@ -827,12 +918,26 @@ class AgentWorldModelCritic(nn.Module):
             raise ValueError("critic_progress_threshold must be finite")
         if not 0.0 < float(critic_death_threshold) < 1.0:
             raise ValueError("critic_death_threshold must be in (0, 1)")
+        if not math.isfinite(float(critic_motion_threshold)) or float(critic_motion_threshold) < 0.0:
+            raise ValueError("critic_motion_threshold must be finite and non-negative")
+        resolved_pause_action_ids = tuple(int(action_id) for action_id in pause_action_ids)
+        if any(action_id < 0 for action_id in resolved_pause_action_ids):
+            raise ValueError("pause_action_ids must be non-negative")
+        if len(set(resolved_pause_action_ids)) != len(resolved_pause_action_ids):
+            raise ValueError("pause_action_ids must be unique")
+        if motion_position_dims is not None and int(motion_position_dims) < 0:
+            raise ValueError("motion_position_dims must be non-negative when set")
         seq_len_b = seq_len_c // ratio_bc
         ratio_ab = seq_len_b // seq_len_a
         self.ratio_bc = ratio_bc
         self.max_action_refinement_passes = int(max_action_refinement_passes)
         self.critic_progress_threshold = float(critic_progress_threshold)
         self.critic_death_threshold = float(critic_death_threshold)
+        self.critic_motion_threshold = float(critic_motion_threshold)
+        self.pause_action_ids = resolved_pause_action_ids
+        self.motion_position_dims = (
+            None if motion_position_dims is None else int(motion_position_dims)
+        )
         self.agent = HierarchicalAdaptiveModel(
             vocab_size,
             d_model=d_model,
@@ -934,14 +1039,20 @@ class AgentWorldModelCritic(nn.Module):
             return_state=True,
         )
 
-    def _critic_evaluation(self, next_state_pred, current_state):
+    def _critic_evaluation(self, next_state_pred, current_state, logits_a):
         critic = getattr(self, "critic", None)
         if hasattr(critic, "evaluate_action"):
-            return critic.evaluate_action(
+            evaluation = critic.evaluate_action(
                 next_state_pred,
                 current_state=current_state,
                 progress_threshold=self.critic_progress_threshold,
                 death_threshold=self.critic_death_threshold,
+            )
+            return self._with_action_motion_gate(
+                evaluation,
+                next_state_pred,
+                current_state,
+                logits_a,
             )
 
         feedback = self.critic(next_state_pred)
@@ -950,12 +1061,56 @@ class AgentWorldModelCritic(nn.Module):
             current_state=current_state,
         )
         death_risk = torch.sigmoid(self.predict_action_death_logit(next_state_pred))
-        return CriticActionEvaluation(
+        evaluation = CriticActionEvaluation(
             feedback=feedback,
             progress_score=progress_score,
             death_risk=death_risk,
             would_progress=progress_score >= self.critic_progress_threshold,
             predicts_death=death_risk >= self.critic_death_threshold,
+        )
+        return self._with_action_motion_gate(
+            evaluation,
+            next_state_pred,
+            current_state,
+            logits_a,
+        )
+
+    def _candidate_pause_mask(self, logits_a: torch.Tensor) -> torch.Tensor:
+        if logits_a.ndim != 3:
+            raise ValueError("logits_a must have shape [batch, seq_len_a, vocab]")
+        if not self.pause_action_ids:
+            return torch.zeros(logits_a.size(0), dtype=torch.bool, device=logits_a.device)
+        selected_action = logits_a[:, -1, :].argmax(dim=-1)
+        pause_ids = torch.as_tensor(
+            self.pause_action_ids,
+            dtype=selected_action.dtype,
+            device=selected_action.device,
+        )
+        return (selected_action.unsqueeze(-1) == pause_ids).any(dim=-1)
+
+    def _with_action_motion_gate(
+        self,
+        evaluation: CriticActionEvaluation,
+        next_state_pred: torch.Tensor,
+        current_state: torch.Tensor,
+        logits_a: torch.Tensor,
+    ) -> CriticActionEvaluation:
+        motion_score = action_motion_score(
+            next_state_pred,
+            current_state,
+            motion_position_dims=self.motion_position_dims,
+        )
+        pause_mask = self._candidate_pause_mask(logits_a)
+        predicts_no_motion = (motion_score <= self.critic_motion_threshold) & ~pause_mask
+        return CriticActionEvaluation(
+            feedback=evaluation.feedback,
+            progress_score=evaluation.progress_score,
+            death_risk=evaluation.death_risk,
+            would_progress=evaluation.would_progress,
+            predicts_death=evaluation.predicts_death,
+            motion_score=motion_score,
+            predicts_no_motion=predicts_no_motion,
+            is_pause_action=pause_mask,
         )
 
     def _candidate_from_actor_outputs(
@@ -982,7 +1137,7 @@ class AgentWorldModelCritic(nn.Module):
             return_world_model_state=return_world_model_state,
             world_model_enabled=world_model_enabled,
         )
-        evaluation = self._critic_evaluation(next_state_pred, src_C)
+        evaluation = self._critic_evaluation(next_state_pred, src_C, logits_a)
         return _ActionCandidate(
             logits_a=logits_a,
             actions=actions,
@@ -997,12 +1152,28 @@ class AgentWorldModelCritic(nn.Module):
 
     @staticmethod
     def _candidate_is_accepted(candidate: _ActionCandidate) -> bool:
-        accepted = candidate.evaluation.would_progress & ~candidate.evaluation.predicts_death
+        predicts_no_motion = action_rejection_mask(
+            candidate.evaluation.predicts_no_motion,
+            reference=candidate.evaluation.progress_score,
+        )
+        accepted = (
+            candidate.evaluation.would_progress
+            & ~candidate.evaluation.predicts_death
+            & ~predicts_no_motion
+        )
         return bool(torch.all(accepted.detach()).cpu().item())
 
     @staticmethod
     def _candidate_rank(candidate: _ActionCandidate) -> float:
-        score = candidate.evaluation.progress_score - candidate.evaluation.death_risk
+        predicts_no_motion = action_rejection_mask(
+            candidate.evaluation.predicts_no_motion,
+            reference=candidate.evaluation.progress_score,
+        ).to(dtype=candidate.evaluation.progress_score.dtype)
+        score = (
+            candidate.evaluation.progress_score
+            - candidate.evaluation.death_risk
+            - predicts_no_motion
+        )
         return float(score.detach().mean().cpu().item())
 
     def _select_fallback_candidate(
@@ -1028,6 +1199,21 @@ class AgentWorldModelCritic(nn.Module):
             selected_iteration=int(selected_iteration),
             progress_score=selected.evaluation.progress_score.detach(),
             death_risk=selected.evaluation.death_risk.detach(),
+            motion_score=(
+                None
+                if selected.evaluation.motion_score is None
+                else selected.evaluation.motion_score.detach()
+            ),
+            predicts_no_motion=(
+                None
+                if selected.evaluation.predicts_no_motion is None
+                else selected.evaluation.predicts_no_motion.detach()
+            ),
+            is_pause_action=(
+                None
+                if selected.evaluation.is_pause_action is None
+                else selected.evaluation.is_pause_action.detach()
+            ),
         )
 
     def forward(

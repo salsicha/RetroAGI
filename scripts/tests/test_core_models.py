@@ -43,6 +43,35 @@ class RecordingAgent(nn.Module):
         return logits, actions, w_b, b_b
 
 
+class ScriptedRefinementAgent(nn.Module):
+    def __init__(self, seq_len_a, seq_len_b, vocab_size, action_ids, action_values):
+        super().__init__()
+        self.seq_len_a = seq_len_a
+        self.seq_len_b = seq_len_b
+        self.vocab_size = vocab_size
+        self.action_ids = tuple(int(action_id) for action_id in action_ids)
+        self.action_values = tuple(float(value) for value in action_values)
+        self.criticisms = []
+        self.calls = 0
+
+    def forward(self, src_a, src_b, src_c, criticism=None, tau=1.0):
+        self.criticisms.append(None if criticism is None else criticism.detach().clone())
+        index = min(self.calls, len(self.action_ids) - 1)
+        self.calls += 1
+        batch_size = src_a.size(0)
+        device = src_a.device
+        logits = torch.full(
+            (batch_size, self.seq_len_a, self.vocab_size),
+            -10.0,
+            device=device,
+        )
+        logits[:, -1, self.action_ids[index]] = 10.0
+        actions = torch.full_like(src_c, self.action_values[index])
+        w_b = torch.ones(batch_size, self.seq_len_b, device=device)
+        b_b = torch.zeros(batch_size, self.seq_len_b, device=device)
+        return logits, actions, w_b, b_b
+
+
 class EchoWorldModel(nn.Module):
     def forward(self, state, action, w_context, b_context):
         return state + action
@@ -462,6 +491,121 @@ class TestCriticFeedbackContract(unittest.TestCase):
         self.assertEqual(model.last_action_refinement.iterations, 3)
         self.assertEqual(model.last_action_refinement.selected_iteration, 3)
         self.assertTrue(model.last_action_refinement.accepted)
+
+    def test_action_refinement_retries_non_pause_no_motion_predictions(self):
+        seq_len_a = 2
+        seq_len_b = 4
+        seq_len_c = 8
+        d_model = 4
+        vocab_size = len(SMBAction)
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+            max_action_refinement_passes=3,
+            pause_action_ids=(int(SMBAction.NOOP),),
+            motion_position_dims=2,
+            critic_motion_threshold=0.01,
+        )
+        fixed_criticism = torch.ones(1, seq_len_a, d_model)
+        recording_agent = ScriptedRefinementAgent(
+            seq_len_a,
+            seq_len_b,
+            vocab_size,
+            action_ids=(SMBAction.RIGHT, SMBAction.RIGHT_JUMP),
+            action_values=(0.0, 0.25),
+        )
+        recording_world_model = RecordingWorldModel()
+        model.agent = recording_agent
+        model.world_model = recording_world_model
+        model.critic = FixedCritic(
+            fixed_criticism,
+            progress_scores=(1.0, 1.0),
+            death_risks=(0.0, 0.0),
+        )
+
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, seq_len_b, dtype=torch.long)
+        src_c = torch.ones(1, seq_len_c)
+
+        _actions1, _next_state, criticism, actions2, _logits_a, _w_b, _b_b = model(
+            src_a,
+            src_b,
+            src_c,
+        )
+
+        self.assertEqual(recording_world_model.calls, 2)
+        self.assertEqual(len(recording_agent.criticisms), 2)
+        torch.testing.assert_close(criticism, fixed_criticism)
+        torch.testing.assert_close(actions2, torch.full_like(src_c, 0.25))
+        self.assertIsNotNone(model.last_action_refinement)
+        self.assertEqual(model.last_action_refinement.iterations, 2)
+        self.assertEqual(model.last_action_refinement.selected_iteration, 2)
+        self.assertTrue(model.last_action_refinement.accepted)
+        self.assertFalse(bool(model.last_action_refinement.predicts_no_motion.item()))
+        self.assertFalse(bool(model.last_action_refinement.is_pause_action.item()))
+        torch.testing.assert_close(
+            model.last_action_refinement.motion_score,
+            torch.tensor([0.25]),
+        )
+
+    def test_action_refinement_allows_pause_action_without_motion(self):
+        seq_len_a = 2
+        seq_len_b = 4
+        seq_len_c = 8
+        d_model = 4
+        vocab_size = len(SMBAction)
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+            max_action_refinement_passes=3,
+            pause_action_ids=(int(SMBAction.NOOP),),
+            motion_position_dims=2,
+            critic_motion_threshold=0.01,
+        )
+        fixed_criticism = torch.ones(1, seq_len_a, d_model)
+        recording_agent = ScriptedRefinementAgent(
+            seq_len_a,
+            seq_len_b,
+            vocab_size,
+            action_ids=(SMBAction.NOOP,),
+            action_values=(0.0,),
+        )
+        recording_world_model = RecordingWorldModel()
+        model.agent = recording_agent
+        model.world_model = recording_world_model
+        model.critic = FixedCritic(
+            fixed_criticism,
+            progress_scores=(1.0,),
+            death_risks=(0.0,),
+        )
+
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, seq_len_b, dtype=torch.long)
+        src_c = torch.ones(1, seq_len_c)
+
+        _actions1, _next_state, _criticism, actions2, _logits_a, _w_b, _b_b = model(
+            src_a,
+            src_b,
+            src_c,
+        )
+
+        self.assertEqual(recording_world_model.calls, 1)
+        torch.testing.assert_close(actions2, torch.zeros_like(src_c))
+        self.assertIsNotNone(model.last_action_refinement)
+        self.assertEqual(model.last_action_refinement.iterations, 1)
+        self.assertTrue(model.last_action_refinement.accepted)
+        self.assertFalse(bool(model.last_action_refinement.predicts_no_motion.item()))
+        self.assertTrue(bool(model.last_action_refinement.is_pause_action.item()))
+        torch.testing.assert_close(
+            model.last_action_refinement.motion_score,
+            torch.tensor([0.0]),
+        )
 
     def test_world_model_receives_scheduled_controller_context(self):
         seq_len_a = 2
