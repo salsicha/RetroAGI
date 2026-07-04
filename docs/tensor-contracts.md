@@ -313,6 +313,12 @@ The actor still returns `w_b` and `b_b` with shape `[B,L_B]` in both modes.
 that same C-level context to the world model, so dynamics prediction observes
 the low-level gains that produced the C actions.
 
+For SMB stages, the baseline architecture configures the motor primitive
+controller with `RIGHT` and `LEFT` as walk actions. Their decoded
+`hold_duration` is capped at `1.0`, so a walk primitive cannot request more than
+one second of continuous hold before replanning. Jump and jump-combo primitives
+remain governed by the general hold limit and the ViT-driven jump terminator.
+
 The world model accepts an optional `WorldModelState` carrying LSTM hidden and
 cell tensors between calls. Without a state it starts from zeros. Callers can
 pass `episode_mask` to reset recurrent memory inside the model:

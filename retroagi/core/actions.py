@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Iterable, Mapping
@@ -227,6 +228,9 @@ SMB_JUMP_RELEASE_ACTIONS = {
     SMBAction.LEFT_JUMP: SMBAction.LEFT,
     SMBAction.JUMP: SMBAction.NOOP,
 }
+SMB_WALK_ACTIONS = frozenset((SMBAction.RIGHT, SMBAction.LEFT))
+SMB_DEFAULT_ACTIONS_PER_SECOND = 60.0
+SMB_MAX_WALK_ACTION_SECONDS = 1.0
 SMB_SUPPORT_AIR = "air"
 SMB_SUPPORT_GROUND = "ground"
 SMB_SUPPORT_PLATFORM = "platform"
@@ -236,6 +240,10 @@ SMB_ENEMY_CLASS_NAMES = frozenset(("enemy", "goomba", "koopa"))
 
 def is_smb_jump_action(action: SMBAction | int) -> bool:
     return coerce_smb_action(action) in SMB_JUMP_ACTIONS
+
+
+def is_smb_walk_action(action: SMBAction | int) -> bool:
+    return coerce_smb_action(action) in SMB_WALK_ACTIONS
 
 
 def smb_jump_release_action(action: SMBAction | int) -> SMBAction:
@@ -308,6 +316,46 @@ class SMBJumpActionTerminator:
             self._suppress_until_non_jump = True
             return int(release)
 
+        return int(action_value)
+
+
+class SMBWalkActionLimiter:
+    """Release pure SMB walk actions after a fixed continuous hold window."""
+
+    def __init__(
+        self,
+        *,
+        max_walk_seconds: float = SMB_MAX_WALK_ACTION_SECONDS,
+        actions_per_second: float = SMB_DEFAULT_ACTIONS_PER_SECOND,
+    ) -> None:
+        if float(max_walk_seconds) <= 0.0:
+            raise ValueError("max_walk_seconds must be positive")
+        if float(actions_per_second) <= 0.0:
+            raise ValueError("actions_per_second must be positive")
+        self.max_walk_seconds = float(max_walk_seconds)
+        self.actions_per_second = float(actions_per_second)
+        self.max_walk_frames = max(
+            1,
+            int(math.ceil(self.max_walk_seconds * self.actions_per_second)),
+        )
+        self.reset()
+
+    def reset(self) -> None:
+        self._walk_action: SMBAction | None = None
+        self._walk_frames = 0
+
+    def filter_action(self, action: SMBAction | int) -> int:
+        action_value = coerce_smb_action(action)
+        if action_value not in SMB_WALK_ACTIONS:
+            self.reset()
+            return int(action_value)
+        if self._walk_action != action_value:
+            self._walk_action = action_value
+            self._walk_frames = 0
+        if self._walk_frames >= self.max_walk_frames:
+            self.reset()
+            return int(SMBAction.NOOP)
+        self._walk_frames += 1
         return int(action_value)
 
 

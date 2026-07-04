@@ -21,6 +21,7 @@ from retroagi.core import (
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
     SMBJumpActionTerminator,
+    SMBWalkActionLimiter,
     StageBatch,
     VisionEncoder,
     WorldModelState,
@@ -815,6 +816,7 @@ def _action_from_model(
     critic_feedback_enabled: bool = True,
     world_model_enabled: bool = True,
     jump_terminator: SMBJumpActionTerminator | None = None,
+    walk_limiter: SMBWalkActionLimiter | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -860,6 +862,14 @@ def _action_from_model(
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
+    if walk_limiter is not None:
+        filtered_action = walk_limiter.filter_action(int(action_tensor.item()))
+        if filtered_action != int(action_tensor.item()):
+            action_tensor = torch.tensor(
+                [filtered_action],
+                dtype=action_tensor.dtype,
+                device=action_tensor.device,
+            )
     log_prob = distribution.log_prob(action_tensor).squeeze(0)
     entropy = distribution.entropy().squeeze(0)
     return (
@@ -890,6 +900,7 @@ def collect_trajectory(
         trajectory.frames.append(np.asarray(observation).copy())
     world_model_state: WorldModelState | None = None
     jump_terminator = SMBJumpActionTerminator()
+    walk_limiter = SMBWalkActionLimiter()
 
     for _ in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -906,6 +917,7 @@ def collect_trajectory(
             critic_feedback_enabled=ablation_config.critic_feedback_enabled,
             world_model_enabled=ablation_config.world_model_enabled,
             jump_terminator=jump_terminator,
+            walk_limiter=walk_limiter,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)

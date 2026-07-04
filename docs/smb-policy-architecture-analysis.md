@@ -168,12 +168,16 @@ primitive metadata:
 | Field | Current Derivation | Intended Meaning |
 | --- | --- | --- |
 | `button_combo_logits` | A logits repeated to B resolution | Candidate button combos. |
-| `hold_duration` | sigmoid of `w_b` scaled to `[1,max_hold]` | How long a primitive should last. |
+| `hold_duration` | sigmoid of `w_b` scaled to `[1,max_hold]`; pure SMB `RIGHT`/`LEFT` walk primitives are capped at `1.0` | How long a primitive should last. |
 | `release_logit` | `-b_b` | Tendency to release. |
 | `cancel_logit` | `b_b - w_b` | Tendency to cancel current primitive. |
 | `confidence` | sigmoid of `abs(w_b)+abs(b_b)` | Confidence in primitive control. |
 | `interrupt_logit` | cancel plus low-motion signal | Replan if predicted motion is poor. |
 | `replan_probability` | sigmoid of interrupt | Probability of choosing a new primitive. |
+
+The SMB action filter also enforces that cap at runtime: continuous pure
+`RIGHT` or `LEFT` holds are released after one second before a new walk hold can
+begin.
 
 In Full SMB action selection, these primitives bias logits toward combined
 movement/jump actions. For example, when the model supports `RIGHT` and the

@@ -11,6 +11,7 @@ from retroagi.core import (
     AgentWorldModelCritic,
     HierarchicalAdaptiveModel,
     MotorPrimitiveController,
+    SMBAction,
     WorldModel,
     WorldModelState,
     action_level_world_model_state_dict,
@@ -193,6 +194,44 @@ class TestMotorPrimitiveController(unittest.TestCase):
             output.replan_probability[0, 0].item(),
             output.replan_probability[0, 1].item(),
         )
+
+    def test_caps_walk_primitives_to_one_second(self):
+        controller = MotorPrimitiveController(
+            ratio_ab=2,
+            ratio_bc=2,
+            max_hold_duration=5.0,
+            max_walk_action_duration=1.0,
+            walk_action_ids=(SMBAction.RIGHT, SMBAction.LEFT),
+        )
+        logits_a = torch.full((1, 3, len(SMBAction)), -10.0)
+        logits_a[0, 0, int(SMBAction.RIGHT)] = 10.0
+        logits_a[0, 1, int(SMBAction.JUMP)] = 10.0
+        logits_a[0, 2, int(SMBAction.LEFT)] = 10.0
+        w_pred = torch.full((1, 6), 10.0)
+        b_pred = torch.zeros(1, 6)
+
+        output = controller(logits_a, w_pred, b_pred)
+
+        torch.testing.assert_close(
+            output.hold_duration[:, (0, 1, 4, 5)],
+            torch.ones(1, 4),
+        )
+        self.assertTrue(torch.all(output.hold_duration[:, (2, 3)] > 4.9))
+
+    def test_rejects_invalid_walk_primitive_limits(self):
+        with self.assertRaisesRegex(ValueError, "max_walk_action_duration"):
+            MotorPrimitiveController(
+                ratio_ab=1,
+                ratio_bc=1,
+                max_walk_action_duration=0.5,
+                walk_action_ids=(SMBAction.RIGHT,),
+            )
+        with self.assertRaisesRegex(ValueError, "walk_action_ids"):
+            MotorPrimitiveController(
+                ratio_ab=1,
+                ratio_bc=1,
+                walk_action_ids=(SMBAction.RIGHT, SMBAction.RIGHT),
+            )
 
 
 class TestCriticFeedbackContract(unittest.TestCase):

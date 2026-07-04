@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import torch
 import torch.nn as nn
@@ -156,7 +156,15 @@ class MotorPrimitiveController(nn.Module):
     as primitive timing and replan controls so old checkpoints remain loadable.
     """
 
-    def __init__(self, *, ratio_ab, ratio_bc, max_hold_duration=8.0):
+    def __init__(
+        self,
+        *,
+        ratio_ab,
+        ratio_bc,
+        max_hold_duration=8.0,
+        max_walk_action_duration=None,
+        walk_action_ids: Iterable[int] = (),
+    ):
         super().__init__()
         if int(ratio_ab) <= 0:
             raise ValueError("ratio_ab must be positive")
@@ -164,9 +172,25 @@ class MotorPrimitiveController(nn.Module):
             raise ValueError("ratio_bc must be positive")
         if float(max_hold_duration) < 1.0:
             raise ValueError("max_hold_duration must be at least 1")
+        if (
+            max_walk_action_duration is not None
+            and float(max_walk_action_duration) < 1.0
+        ):
+            raise ValueError("max_walk_action_duration must be at least 1 when set")
+        resolved_walk_action_ids = tuple(int(action_id) for action_id in walk_action_ids)
+        if any(action_id < 0 for action_id in resolved_walk_action_ids):
+            raise ValueError("walk_action_ids must be non-negative")
+        if len(set(resolved_walk_action_ids)) != len(resolved_walk_action_ids):
+            raise ValueError("walk_action_ids must be unique")
         self.ratio_ab = int(ratio_ab)
         self.ratio_bc = int(ratio_bc)
         self.max_hold_duration = float(max_hold_duration)
+        self.max_walk_action_duration = (
+            None
+            if max_walk_action_duration is None
+            else float(max_walk_action_duration)
+        )
+        self.walk_action_ids = resolved_walk_action_ids
 
     def forward(
         self,
@@ -200,6 +224,7 @@ class MotorPrimitiveController(nn.Module):
         button_combo_logits = logits_a.repeat_interleave(self.ratio_ab, dim=1)
         confidence = torch.sigmoid(w_pred.abs() + b_pred.abs())
         hold_duration = 1.0 + (self.max_hold_duration - 1.0) * torch.sigmoid(w_pred)
+        hold_duration = self._cap_walk_hold_duration(hold_duration, button_combo_logits)
         release_logit = -b_pred
         cancel_logit = b_pred - w_pred
 
@@ -215,6 +240,23 @@ class MotorPrimitiveController(nn.Module):
             interrupt_logit=interrupt_logit,
             replan_probability=replan_probability,
         )
+
+    def _cap_walk_hold_duration(self, hold_duration, button_combo_logits):
+        if self.max_walk_action_duration is None or not self.walk_action_ids:
+            return hold_duration
+        selected_actions = button_combo_logits.argmax(dim=-1)
+        walk_action_ids = torch.as_tensor(
+            self.walk_action_ids,
+            dtype=selected_actions.dtype,
+            device=selected_actions.device,
+        )
+        walk_mask = (selected_actions.unsqueeze(-1) == walk_action_ids).any(dim=-1)
+        cap = torch.as_tensor(
+            self.max_walk_action_duration,
+            dtype=hold_duration.dtype,
+            device=hold_duration.device,
+        )
+        return torch.where(walk_mask, torch.minimum(hold_duration, cap), hold_duration)
 
     def _predicted_motion(self, next_state_pred, current_state, reference):
         if next_state_pred is None or current_state is None:
@@ -555,6 +597,8 @@ class AgentWorldModelCritic(nn.Module):
         ratio_bc,
         d_model=64,
         controller_schedule="constant",
+        max_walk_action_duration=None,
+        walk_action_ids: Iterable[int] = (),
     ):
         super().__init__()
         seq_len_b = seq_len_c // ratio_bc
@@ -570,6 +614,8 @@ class AgentWorldModelCritic(nn.Module):
         self.motor_controller = MotorPrimitiveController(
             ratio_ab=ratio_ab,
             ratio_bc=ratio_bc,
+            max_walk_action_duration=max_walk_action_duration,
+            walk_action_ids=walk_action_ids,
         )
         self.last_motor_primitives: MotorPrimitiveOutput | None = None
         self.transition_representation_head = nn.Sequential(

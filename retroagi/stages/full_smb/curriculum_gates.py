@@ -245,7 +245,10 @@ def _run_full_smb_curriculum_gate(
     seed: int,
     episodes: int,
 ) -> dict[str, Any]:
-    from retroagi.stages.full_smb.train import _policy_action_logits_and_state
+    from retroagi.stages.full_smb.train import (
+        _full_smb_walk_action_limiter,
+        _policy_action_logits_and_state,
+    )
 
     episode_results = []
     all_actions: list[int] = []
@@ -253,6 +256,7 @@ def _run_full_smb_curriculum_gate(
         observation = stage.reset(seed=seed + episode_index)
         world_model_state = None
         jump_terminator = SMBJumpActionTerminator()
+        walk_limiter = _full_smb_walk_action_limiter(stage)
         progress_values: list[float] = []
         score_values: list[float] = []
         coin_values: list[float] = []
@@ -273,6 +277,7 @@ def _run_full_smb_curriculum_gate(
             )
             action = int(forward.logits.argmax(dim=-1).item())
             action = jump_terminator.filter_action(action, batch=batch)
+            action = walk_limiter.filter_action(action)
             observation, reward, terminated, truncated, info = stage.step(action)
             source = _signal_source(info)
             progress = _signal_progress(source)

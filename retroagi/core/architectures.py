@@ -7,6 +7,7 @@ from typing import Any, Mapping, Protocol
 
 import torch.nn as nn
 
+from .actions import SMBAction
 from .interfaces import StageSpec
 from .models import (
     SUPPORTED_CONTROLLER_SCHEDULES,
@@ -17,6 +18,8 @@ BASELINE_ARCHITECTURE_NAME = "agent_world_model_critic"
 BASELINE_OUTPUT_CONTRACT = "agent_world_model_critic.forward.v1"
 BASELINE_CHECKPOINT_POLICY = "strict_stage_spec_and_model_state"
 POLICY_TUPLE_OUTPUT_CONTRACTS = (BASELINE_OUTPUT_CONTRACT,)
+SMB_STAGE_NAMES = frozenset(("block_smb", "full_smb"))
+SMB_MAX_WALK_ACTION_DURATION_SECONDS = 1.0
 
 
 class ArchitectureFactory(Protocol):
@@ -133,6 +136,11 @@ def make_agent_world_model_critic(
             "controller_schedule must be one of "
             f"{SUPPORTED_CONTROLLER_SCHEDULES}, got {controller_schedule!r}"
         )
+    walk_action_ids: tuple[int, ...] = ()
+    max_walk_action_duration: float | None = None
+    if stage.name in SMB_STAGE_NAMES:
+        walk_action_ids = (int(SMBAction.RIGHT), int(SMBAction.LEFT))
+        max_walk_action_duration = SMB_MAX_WALK_ACTION_DURATION_SECONDS
     return AgentWorldModelCritic(
         stage.vocab_size,
         stage.seq_len_a,
@@ -140,6 +148,8 @@ def make_agent_world_model_critic(
         stage.ratio_bc,
         d_model=hidden_dim,
         controller_schedule=controller_schedule,
+        max_walk_action_duration=max_walk_action_duration,
+        walk_action_ids=walk_action_ids,
     )
 
 

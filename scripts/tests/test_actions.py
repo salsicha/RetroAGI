@@ -11,6 +11,7 @@ from retroagi.core import (
     SMB_ACTIONS,
     SMBAction,
     SMBJumpActionTerminator,
+    SMBWalkActionLimiter,
     ActionSpec,
     ContinuousControlSpec,
     VisionOutput,
@@ -20,6 +21,7 @@ from retroagi.core import (
     coerce_action_spec,
     coerce_smb_action,
     full_smb_action,
+    is_smb_walk_action,
     smb_action_spec,
     smb_jump_release_action,
 )
@@ -95,6 +97,27 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertIs(smb_jump_release_action(SMBAction.RIGHT_JUMP), SMBAction.RIGHT)
         self.assertIs(smb_jump_release_action(SMBAction.LEFT_JUMP), SMBAction.LEFT)
         self.assertIs(smb_jump_release_action(SMBAction.JUMP), SMBAction.NOOP)
+
+    def test_walk_limiter_releases_after_one_second_window(self):
+        limiter = SMBWalkActionLimiter(max_walk_seconds=1.0, actions_per_second=2.0)
+
+        self.assertTrue(is_smb_walk_action(SMBAction.RIGHT))
+        self.assertTrue(is_smb_walk_action(SMBAction.LEFT))
+        self.assertFalse(is_smb_walk_action(SMBAction.RIGHT_JUMP))
+        self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
+        self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
+        self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.NOOP))
+        self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
+
+    def test_walk_limiter_resets_on_non_walk_or_direction_change(self):
+        limiter = SMBWalkActionLimiter(max_walk_seconds=1.0, actions_per_second=2.0)
+
+        self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
+        self.assertEqual(limiter.filter_action(SMBAction.JUMP), int(SMBAction.JUMP))
+        self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
+        self.assertEqual(limiter.filter_action(SMBAction.LEFT), int(SMBAction.LEFT))
+        self.assertEqual(limiter.filter_action(SMBAction.LEFT), int(SMBAction.LEFT))
+        self.assertEqual(limiter.filter_action(SMBAction.LEFT), int(SMBAction.NOOP))
 
     def test_jump_terminator_releases_after_vit_support_landing(self):
         terminator = SMBJumpActionTerminator()

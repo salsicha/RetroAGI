@@ -133,7 +133,9 @@ reads the current ViT output from `StageBatch.metadata["vision"]`; after an
 active jump has left support, `support_ids`/`support_logits` end `RIGHT_JUMP`,
 `LEFT_JUMP`, or `JUMP` on ground/platform landing by releasing `A` to `RIGHT`,
 `LEFT`, or `NOOP`. Semantic ViT labels also release the jump when Mario lands
-on an enemy.
+on an enemy. The same policy paths pass pure walk actions through
+`SMBWalkActionLimiter`, which caps continuous `RIGHT` or `LEFT` holds at one
+second before inserting a release frame.
 
 This transfer vocabulary intentionally leaves NES-only buttons such as `B`,
 `START`, and `SELECT` released. Adding run/fire or menu actions requires an

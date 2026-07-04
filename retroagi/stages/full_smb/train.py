@@ -26,6 +26,7 @@ from retroagi.core import (
     ExperimentTrackerConfig,
     SMBAction,
     SMBJumpActionTerminator,
+    SMBWalkActionLimiter,
     StageBatch,
     WorldModelState,
     action_level_world_model_state_dict,
@@ -154,6 +155,7 @@ _FULL_SMB_DEFAULT_MAX_ABS_LOSS = 1_000_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
 _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT = 0.05
+_FULL_SMB_EMULATOR_FRAMES_PER_SECOND = 60.0
 _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
     "position",
     "semantic_probabilities",
@@ -1148,6 +1150,7 @@ def evaluate_full_smb_policy(
             observation = stage.reset(seed=episode_seed)
             action_planner = _make_full_smb_action_planner(config, stage, stage.last_info)
             jump_terminator = SMBJumpActionTerminator()
+            walk_limiter = _full_smb_walk_action_limiter(stage)
             episode_return = 0.0
             fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
                 stage,
@@ -1170,6 +1173,7 @@ def evaluate_full_smb_policy(
                     info=stage.last_info,
                 )
                 action = jump_terminator.filter_action(action, batch=batch)
+                action = walk_limiter.filter_action(action)
                 observation, reward, terminated, truncated, info = stage.step(action)
                 _update_full_smb_fixed_task_episode_metrics(
                     fixed_task_metrics,
@@ -1315,6 +1319,7 @@ def play_full_smb_policy(
             else _make_full_smb_action_planner(config, stage, stage.last_info)
         )
         jump_terminator = SMBJumpActionTerminator()
+        walk_limiter = _full_smb_walk_action_limiter(stage)
         resets += 1
         _render_full_smb_stage(
             stage,
@@ -1360,6 +1365,7 @@ def play_full_smb_policy(
                     else _make_full_smb_action_planner(config, stage, stage.last_info)
                 )
                 jump_terminator.reset()
+                walk_limiter.reset()
                 resets += 1
                 world_model_state = None
                 episode_return = 0.0
@@ -1416,6 +1422,7 @@ def play_full_smb_policy(
                     info=stage.last_info,
                 )
                 action = jump_terminator.filter_action(action, batch=batch)
+                action = walk_limiter.filter_action(action)
                 action_probabilities = _full_smb_action_probabilities(
                     logits,
                     temperature=play_config.sampling_temperature,
@@ -1516,6 +1523,7 @@ def play_full_smb_policy(
                         else _make_full_smb_action_planner(config, stage, stage.last_info)
                     )
                     jump_terminator.reset()
+                    walk_limiter.reset()
                     resets += 1
                     episode_return = 0.0
                     episode_recording = _start_full_smb_episode_recording(
@@ -1542,6 +1550,7 @@ def play_full_smb_policy(
                 ):
                     repeat_batch = stage.encode_observation(observation, info)
                     action = jump_terminator.filter_action(action, batch=repeat_batch)
+                    action = walk_limiter.filter_action(action)
                 _sleep_full_smb_play_frame(play_config.fps)
             if play_config.action_repeat > 1 and not (terminated or truncated):
                 world_model_state = None
@@ -2460,6 +2469,7 @@ def _train_episode(
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
     jump_terminator = SMBJumpActionTerminator()
+    walk_limiter = _full_smb_walk_action_limiter(stage)
     recurrent_state_resets = 1
     boundary_counts: dict[str, int] = {"manual_reset": 1}
     for _step in range(max_steps):
@@ -2493,6 +2503,13 @@ def _train_episode(
         else:
             action_tensor = distribution.sample()
         filtered_action = jump_terminator.filter_action(int(action_tensor.item()), batch=batch)
+        if filtered_action != int(action_tensor.item()):
+            action_tensor = torch.tensor(
+                [filtered_action],
+                dtype=action_tensor.dtype,
+                device=action_tensor.device,
+            )
+        filtered_action = walk_limiter.filter_action(int(action_tensor.item()))
         if filtered_action != int(action_tensor.item()):
             action_tensor = torch.tensor(
                 [filtered_action],
@@ -2816,6 +2833,14 @@ def _policy_action_logits_and_state(
         next_state_pred=next_state_pred,
         criticism=criticism,
         motor_primitives=motor_primitives,
+    )
+
+
+def _full_smb_walk_action_limiter(stage: FullSMBStage) -> SMBWalkActionLimiter:
+    observation_config = getattr(stage, "observation_config", None)
+    frame_skip = int(getattr(observation_config, "frame_skip", 1) or 1)
+    return SMBWalkActionLimiter(
+        actions_per_second=_FULL_SMB_EMULATOR_FRAMES_PER_SECOND / max(frame_skip, 1),
     )
 
 
