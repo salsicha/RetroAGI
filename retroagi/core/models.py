@@ -15,6 +15,14 @@ ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES = (
     "world_model.lstm.weight_ih",
 )
 ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES = ("world_model.fc.",)
+ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES = (
+    "critic.progress_head.",
+    "critic.death_head.",
+)
+ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
+    *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    *ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
+)
 
 
 def action_level_world_model_state_dict(
@@ -75,6 +83,40 @@ class MotorPrimitiveOutput:
             interrupt_logit=self.interrupt_logit.detach(),
             replan_probability=self.replan_probability.detach(),
         )
+
+
+@dataclass(frozen=True)
+class CriticActionEvaluation:
+    """Critic decision signals for one imagined action candidate."""
+
+    feedback: torch.Tensor
+    progress_score: torch.Tensor
+    death_risk: torch.Tensor
+    would_progress: torch.Tensor
+    predicts_death: torch.Tensor
+
+
+@dataclass(frozen=True)
+class ActionRefinementTrace:
+    """Diagnostics for the actor/world-model/critic refinement loop."""
+
+    iterations: int
+    accepted: bool
+    selected_iteration: int
+    progress_score: torch.Tensor
+    death_risk: torch.Tensor
+
+
+@dataclass(frozen=True)
+class _ActionCandidate:
+    logits_a: torch.Tensor
+    actions: torch.Tensor
+    w: torch.Tensor
+    b: torch.Tensor
+    next_state_pred: torch.Tensor
+    criticism: torch.Tensor
+    evaluation: CriticActionEvaluation
+    next_world_model_state: WorldModelState | None
 
 
 class PositionalEncoding(nn.Module):
@@ -566,27 +608,77 @@ class WorldModel(nn.Module):
 
 
 class Critic(nn.Module):
-    """Evaluates predicted C state and returns `[B, L_A, d_model]` feedback."""
+    """Evaluates predicted C state and returns actor feedback plus outcome gates."""
 
     def __init__(self, seq_len_c, seq_len_a, d_model):
         super().__init__()
         self.seq_len_a = seq_len_a
         self.d_model = d_model
         self.net = nn.Sequential(nn.Linear(seq_len_c, 128), nn.ReLU(), nn.Linear(128, seq_len_a * d_model))
+        self.progress_head = nn.Sequential(
+            nn.Linear(seq_len_c, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+        )
+        self.death_head = nn.Sequential(
+            nn.Linear(seq_len_c, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+        )
 
     def forward(self, next_state_pred):
         critique = self.net(next_state_pred)
         return critique.view(-1, self.seq_len_a, self.d_model)
 
+    def action_progress_logit(self, next_state_pred, current_state=None):
+        progress_logit = self.progress_head(next_state_pred).squeeze(-1)
+        if current_state is None:
+            return progress_logit
+        if next_state_pred.shape != current_state.shape:
+            raise ValueError(
+                "next_state_pred and current_state must have the same shape for "
+                "critic progress evaluation, got "
+                f"{next_state_pred.shape} and {current_state.shape}"
+            )
+        delta_hint = (next_state_pred - current_state).mean(dim=1)
+        return progress_logit + 0.1 * delta_hint
+
+    def action_death_logit(self, next_state_pred):
+        return self.death_head(next_state_pred).squeeze(-1)
+
+    def evaluate_action(
+        self,
+        next_state_pred,
+        current_state=None,
+        *,
+        progress_threshold=0.0,
+        death_threshold=0.75,
+    ) -> CriticActionEvaluation:
+        feedback = self(next_state_pred)
+        progress_score = self.action_progress_logit(
+            next_state_pred,
+            current_state=current_state,
+        )
+        death_risk = torch.sigmoid(self.action_death_logit(next_state_pred))
+        return CriticActionEvaluation(
+            feedback=feedback,
+            progress_score=progress_score,
+            death_risk=death_risk,
+            would_progress=progress_score >= float(progress_threshold),
+            predicts_death=death_risk >= float(death_threshold),
+        )
+
 
 class AgentWorldModelCritic(nn.Module):
     """
-    Combines the actor, world model, and critic in a two-pass refinement loop.
+    Combines the actor, world model, and critic in a bounded refinement loop.
 
-    Pass one runs the actor with no feedback. Its C actions and B controller
-    parameters feed the world model. The critic maps that predicted C state to
-    A-level feedback, and pass two reruns the same actor inputs with that
-    feedback added to the encoded A stream.
+    The first pass runs the actor with no feedback. Each candidate C action and
+    B controller parameter set feeds the action-level LSTM world model. The
+    critic maps that predicted C state to A-level feedback plus progress/death
+    gates. The actor is rerun with the latest critic feedback until the critic
+    predicts progress without predicted death, or until the pass budget is
+    exhausted.
     """
 
     def __init__(
@@ -599,11 +691,23 @@ class AgentWorldModelCritic(nn.Module):
         controller_schedule="constant",
         max_walk_action_duration=None,
         walk_action_ids: Iterable[int] = (),
+        max_action_refinement_passes=3,
+        critic_progress_threshold=0.0,
+        critic_death_threshold=0.75,
     ):
         super().__init__()
+        if int(max_action_refinement_passes) <= 0:
+            raise ValueError("max_action_refinement_passes must be positive")
+        if not math.isfinite(float(critic_progress_threshold)):
+            raise ValueError("critic_progress_threshold must be finite")
+        if not 0.0 < float(critic_death_threshold) < 1.0:
+            raise ValueError("critic_death_threshold must be in (0, 1)")
         seq_len_b = seq_len_c // ratio_bc
         ratio_ab = seq_len_b // seq_len_a
         self.ratio_bc = ratio_bc
+        self.max_action_refinement_passes = int(max_action_refinement_passes)
+        self.critic_progress_threshold = float(critic_progress_threshold)
+        self.critic_death_threshold = float(critic_death_threshold)
         self.agent = HierarchicalAdaptiveModel(
             vocab_size,
             d_model=d_model,
@@ -618,6 +722,7 @@ class AgentWorldModelCritic(nn.Module):
             walk_action_ids=walk_action_ids,
         )
         self.last_motor_primitives: MotorPrimitiveOutput | None = None
+        self.last_action_refinement: ActionRefinementTrace | None = None
         self.transition_representation_head = nn.Sequential(
             nn.Linear(seq_len_c, d_model),
             nn.LayerNorm(d_model),
@@ -643,6 +748,23 @@ class AgentWorldModelCritic(nn.Module):
     def predict_value(self, state):
         return self.value_head(state).squeeze(-1)
 
+    def predict_action_progress_logit(self, next_state_pred, current_state=None):
+        critic = getattr(self, "critic", None)
+        if hasattr(critic, "action_progress_logit"):
+            return critic.action_progress_logit(
+                next_state_pred,
+                current_state=current_state,
+            )
+        if current_state is not None and next_state_pred.shape == current_state.shape:
+            return (next_state_pred - current_state).mean(dim=1)
+        return next_state_pred.new_zeros((next_state_pred.size(0),))
+
+    def predict_action_death_logit(self, next_state_pred):
+        critic = getattr(self, "critic", None)
+        if hasattr(critic, "action_death_logit"):
+            return critic.action_death_logit(next_state_pred)
+        return next_state_pred.new_full((next_state_pred.size(0),), -10.0)
+
     def initial_world_model_state(self, batch_size, device, dtype=torch.float32):
         return self.world_model.initial_state(batch_size, device, dtype=dtype)
 
@@ -654,6 +776,131 @@ class AgentWorldModelCritic(nn.Module):
         return (
             w.repeat_interleave(ratio_bc, dim=1),
             b.repeat_interleave(ratio_bc, dim=1),
+        )
+
+    def _world_model_prediction(
+        self,
+        src_C,
+        actions,
+        w,
+        b,
+        *,
+        world_model_state=None,
+        episode_mask=None,
+        return_world_model_state=False,
+        world_model_enabled=True,
+    ):
+        w_context, b_context = self.controller_context(src_C, w, b)
+        if not world_model_enabled:
+            return src_C.detach(), None
+        if (
+            world_model_state is None
+            and episode_mask is None
+            and not return_world_model_state
+        ):
+            return self.world_model(src_C, actions, w_context, b_context), None
+        return self.world_model(
+            src_C,
+            actions,
+            w_context,
+            b_context,
+            initial_state=world_model_state,
+            episode_mask=episode_mask,
+            return_state=True,
+        )
+
+    def _critic_evaluation(self, next_state_pred, current_state):
+        critic = getattr(self, "critic", None)
+        if hasattr(critic, "evaluate_action"):
+            return critic.evaluate_action(
+                next_state_pred,
+                current_state=current_state,
+                progress_threshold=self.critic_progress_threshold,
+                death_threshold=self.critic_death_threshold,
+            )
+
+        feedback = self.critic(next_state_pred)
+        progress_score = self.predict_action_progress_logit(
+            next_state_pred,
+            current_state=current_state,
+        )
+        death_risk = torch.sigmoid(self.predict_action_death_logit(next_state_pred))
+        return CriticActionEvaluation(
+            feedback=feedback,
+            progress_score=progress_score,
+            death_risk=death_risk,
+            would_progress=progress_score >= self.critic_progress_threshold,
+            predicts_death=death_risk >= self.critic_death_threshold,
+        )
+
+    def _candidate_from_actor_outputs(
+        self,
+        src_C,
+        logits_a,
+        actions,
+        w,
+        b,
+        *,
+        world_model_state=None,
+        episode_mask=None,
+        return_world_model_state=False,
+        world_model_enabled=True,
+    ) -> _ActionCandidate:
+        next_state_pred, next_world_model_state = self._world_model_prediction(
+            src_C,
+            actions,
+            w,
+            b,
+            world_model_state=world_model_state,
+            episode_mask=episode_mask,
+            return_world_model_state=return_world_model_state,
+            world_model_enabled=world_model_enabled,
+        )
+        evaluation = self._critic_evaluation(next_state_pred, src_C)
+        return _ActionCandidate(
+            logits_a=logits_a,
+            actions=actions,
+            w=w,
+            b=b,
+            next_state_pred=next_state_pred,
+            criticism=evaluation.feedback,
+            evaluation=evaluation,
+            next_world_model_state=next_world_model_state,
+        )
+
+    @staticmethod
+    def _candidate_is_accepted(candidate: _ActionCandidate) -> bool:
+        accepted = candidate.evaluation.would_progress & ~candidate.evaluation.predicts_death
+        return bool(torch.all(accepted.detach()).cpu().item())
+
+    @staticmethod
+    def _candidate_rank(candidate: _ActionCandidate) -> float:
+        score = candidate.evaluation.progress_score - candidate.evaluation.death_risk
+        return float(score.detach().mean().cpu().item())
+
+    def _select_fallback_candidate(
+        self,
+        candidates: list[_ActionCandidate],
+    ) -> tuple[_ActionCandidate, int]:
+        if not candidates:
+            raise ValueError("at least one action candidate is required")
+        best_index = max(range(len(candidates)), key=lambda index: self._candidate_rank(candidates[index]))
+        return candidates[best_index], best_index + 1
+
+    def _record_refinement_trace(
+        self,
+        *,
+        candidates: list[_ActionCandidate],
+        selected: _ActionCandidate,
+        selected_iteration: int,
+        accepted: bool,
+    ) -> None:
+        self.last_action_refinement = ActionRefinementTrace(
+            iterations=len(candidates),
+            accepted=bool(accepted),
+            selected_iteration=int(selected_iteration),
+            progress_score=selected.evaluation.progress_score.detach(),
+            death_risk=selected.evaluation.death_risk.detach(),
         )
 
     def forward(
@@ -670,45 +917,77 @@ class AgentWorldModelCritic(nn.Module):
         world_model_enabled=True,
     ):
         logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
+        first_candidate = self._candidate_from_actor_outputs(
+            src_C,
+            logits_a1,
+            actions1,
+            w_1,
+            b_1,
+            world_model_state=world_model_state,
+            episode_mask=episode_mask,
+            return_world_model_state=return_world_model_state,
+            world_model_enabled=world_model_enabled,
+        )
+        candidates = [first_candidate]
+        selected_candidate = first_candidate
+        selected_iteration = 1
+        accepted = self._candidate_is_accepted(first_candidate)
 
-        w_1_context, b_1_context = self.controller_context(src_C, w_1, b_1)
-        if not world_model_enabled:
-            next_state_pred = src_C.detach()
-            next_world_model_state = None
-        elif (
-            world_model_state is None
-            and episode_mask is None
-            and not return_world_model_state
-        ):
-            next_state_pred = self.world_model(
-                src_C, actions1, w_1_context, b_1_context
-            )
-            next_world_model_state = None
-        else:
-            next_state_pred, next_world_model_state = self.world_model(
-                src_C,
-                actions1,
-                w_1_context,
-                b_1_context,
-                initial_state=world_model_state,
-                episode_mask=episode_mask,
-                return_state=True,
-            )
+        if critic_feedback_enabled and not accepted:
+            actor_criticism = first_candidate.criticism
+            for _pass_index in range(1, self.max_action_refinement_passes):
+                logits_a, actions, w, b = self.agent(
+                    src_A,
+                    src_B,
+                    src_C,
+                    criticism=actor_criticism,
+                    tau=tau,
+                )
+                candidate = self._candidate_from_actor_outputs(
+                    src_C,
+                    logits_a,
+                    actions,
+                    w,
+                    b,
+                    world_model_state=world_model_state,
+                    episode_mask=episode_mask,
+                    return_world_model_state=return_world_model_state,
+                    world_model_enabled=world_model_enabled,
+                )
+                candidates.append(candidate)
+                selected_candidate = candidate
+                selected_iteration = len(candidates)
+                accepted = self._candidate_is_accepted(candidate)
+                if accepted:
+                    break
+                actor_criticism = candidate.criticism
 
-        criticism = self.critic(next_state_pred)
-        actor_criticism = criticism if critic_feedback_enabled else None
-        logits_a2, actions2, w_2, b_2 = self.agent(
-            src_A, src_B, src_C, criticism=actor_criticism, tau=tau
+        if not accepted:
+            selected_candidate, selected_iteration = self._select_fallback_candidate(candidates)
+
+        self._record_refinement_trace(
+            candidates=candidates,
+            selected=selected_candidate,
+            selected_iteration=selected_iteration,
+            accepted=accepted,
         )
         self.last_motor_primitives = self.motor_controller(
-            logits_a2,
-            w_2,
-            b_2,
-            next_state_pred=next_state_pred,
+            selected_candidate.logits_a,
+            selected_candidate.w,
+            selected_candidate.b,
+            next_state_pred=selected_candidate.next_state_pred,
             current_state=src_C,
         )
 
-        outputs = (actions1, next_state_pred, criticism, actions2, logits_a2, w_2, b_2)
+        outputs = (
+            actions1,
+            selected_candidate.next_state_pred,
+            selected_candidate.criticism,
+            selected_candidate.actions,
+            selected_candidate.logits_a,
+            selected_candidate.w,
+            selected_candidate.b,
+        )
         if return_world_model_state:
-            return (*outputs, next_world_model_state)
+            return (*outputs, selected_candidate.next_world_model_state)
         return outputs

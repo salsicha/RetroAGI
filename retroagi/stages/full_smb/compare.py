@@ -13,7 +13,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 import torch
 
 from retroagi.core import (
-    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     SMB_ACTIONS,
     StageBatch,
     action_level_world_model_state_dict,
@@ -592,7 +592,7 @@ def _load_comparison_policy_from_checkpoint(
     unsupported_missing = tuple(
         key
         for key in load_result.missing_keys
-        if not key.startswith(ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES)
+        if not key.startswith(ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES)
     )
     if load_result.unexpected_keys or unsupported_missing:
         raise ValueError(
@@ -669,7 +669,7 @@ def _scratch_model_for_transfer(
         unsupported_missing = tuple(
             key
             for key in load_result.missing_keys
-            if not key.startswith(ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES)
+            if not key.startswith(ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES)
         )
         if load_result.unexpected_keys or unsupported_missing:
             raise ValueError(

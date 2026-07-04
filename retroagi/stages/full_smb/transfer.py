@@ -10,12 +10,12 @@ from typing import Any, Mapping, Optional
 import torch
 
 from retroagi.core import (
+    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     BASELINE_ARCHITECTURE_NAME,
     BASELINE_ARCHITECTURE_SPEC,
     POLICY_TUPLE_OUTPUT_CONTRACTS,
     SMB_ACTIONS,
     StageBatch,
-    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     action_level_world_model_state_dict,
     build_architecture,
     build_checkpoint,
@@ -521,7 +521,7 @@ def _validate_policy_load_result(load_result: Any) -> tuple[str, ...]:
         "transition_representation_head.",
         "reward_head.",
         "value_head.",
-        *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+        *ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     )
     unexpected = tuple(load_result.unexpected_keys)
     unsupported_missing = tuple(

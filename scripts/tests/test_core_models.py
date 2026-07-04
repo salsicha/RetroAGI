@@ -6,9 +6,10 @@ import torch
 import torch.nn as nn
 
 from retroagi.core import (
-    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     AdaptiveController,
     AgentWorldModelCritic,
+    CriticActionEvaluation,
     HierarchicalAdaptiveModel,
     MotorPrimitiveController,
     SMBAction,
@@ -51,12 +52,47 @@ class FailingWorldModel(nn.Module):
 
 
 class FixedCritic(nn.Module):
-    def __init__(self, criticism):
+    def __init__(self, criticism, progress_scores=(1.0,), death_risks=(0.0,)):
         super().__init__()
         self.register_buffer("criticism", criticism)
+        self.progress_scores = tuple(float(score) for score in progress_scores)
+        self.death_risks = tuple(float(risk) for risk in death_risks)
+        self.evaluations = 0
 
     def forward(self, next_state_pred):
         return self.criticism[: next_state_pred.size(0)]
+
+    def evaluate_action(
+        self,
+        next_state_pred,
+        current_state=None,
+        *,
+        progress_threshold=0.0,
+        death_threshold=0.75,
+    ):
+        del current_state
+        index = min(self.evaluations, len(self.progress_scores) - 1)
+        risk_index = min(self.evaluations, len(self.death_risks) - 1)
+        self.evaluations += 1
+        progress_score = torch.full(
+            (next_state_pred.size(0),),
+            self.progress_scores[index],
+            dtype=next_state_pred.dtype,
+            device=next_state_pred.device,
+        )
+        death_risk = torch.full(
+            (next_state_pred.size(0),),
+            self.death_risks[risk_index],
+            dtype=next_state_pred.dtype,
+            device=next_state_pred.device,
+        )
+        return CriticActionEvaluation(
+            feedback=self.forward(next_state_pred),
+            progress_score=progress_score,
+            death_risk=death_risk,
+            would_progress=progress_score >= progress_threshold,
+            predicts_death=death_risk >= death_threshold,
+        )
 
 
 class FixedControllerAgent(nn.Module):
@@ -90,8 +126,10 @@ class RecordingWorldModel(nn.Module):
         super().__init__()
         self.w_context = None
         self.b_context = None
+        self.calls = 0
 
     def forward(self, state, action, w_context, b_context):
+        self.calls += 1
         self.w_context = w_context.detach().clone()
         self.b_context = b_context.detach().clone()
         return state + action
@@ -285,7 +323,11 @@ class TestCriticFeedbackContract(unittest.TestCase):
         recording_agent = RecordingAgent(seq_len_a, seq_len_b, vocab_size)
         model.agent = recording_agent
         model.world_model = EchoWorldModel()
-        model.critic = FixedCritic(fixed_criticism)
+        model.critic = FixedCritic(
+            fixed_criticism,
+            progress_scores=(-1.0, 1.0),
+            death_risks=(0.0, 0.0),
+        )
 
         src_a = torch.zeros(2, seq_len_a, dtype=torch.long)
         src_b = torch.zeros(2, seq_len_b, dtype=torch.long)
@@ -298,6 +340,9 @@ class TestCriticFeedbackContract(unittest.TestCase):
         torch.testing.assert_close(recording_agent.criticisms[1], fixed_criticism)
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c + fixed_criticism.mean(dim=(1, 2)).unsqueeze(1))
+        self.assertIsNotNone(model.last_action_refinement)
+        self.assertEqual(model.last_action_refinement.iterations, 2)
+        self.assertTrue(model.last_action_refinement.accepted)
 
     def test_agent_second_pass_can_disable_critic_feedback(self):
         seq_len_a = 2
@@ -329,11 +374,57 @@ class TestCriticFeedbackContract(unittest.TestCase):
             critic_feedback_enabled=False,
         )
 
-        self.assertEqual(len(recording_agent.criticisms), 2)
+        self.assertEqual(len(recording_agent.criticisms), 1)
         self.assertIsNone(recording_agent.criticisms[0])
-        self.assertIsNone(recording_agent.criticisms[1])
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c)
+
+    def test_action_refinement_retries_death_and_non_progress_predictions(self):
+        seq_len_a = 2
+        seq_len_b = 4
+        seq_len_c = 8
+        d_model = 4
+        vocab_size = 7
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+            max_action_refinement_passes=4,
+        )
+        fixed_criticism = torch.ones(1, seq_len_a, d_model)
+        recording_agent = RecordingAgent(seq_len_a, seq_len_b, vocab_size)
+        recording_world_model = RecordingWorldModel()
+        model.agent = recording_agent
+        model.world_model = recording_world_model
+        model.critic = FixedCritic(
+            fixed_criticism,
+            progress_scores=(1.0, -1.0, 1.0),
+            death_risks=(0.95, 0.0, 0.0),
+        )
+
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, seq_len_b, dtype=torch.long)
+        src_c = torch.ones(1, seq_len_c)
+
+        _actions1, _next_state, criticism, actions2, _logits_a, _w_b, _b_b = model(
+            src_a,
+            src_b,
+            src_c,
+        )
+
+        self.assertEqual(recording_world_model.calls, 3)
+        self.assertEqual(len(recording_agent.criticisms), 3)
+        self.assertIsNone(recording_agent.criticisms[0])
+        torch.testing.assert_close(recording_agent.criticisms[1], fixed_criticism)
+        torch.testing.assert_close(recording_agent.criticisms[2], fixed_criticism)
+        torch.testing.assert_close(criticism, fixed_criticism)
+        torch.testing.assert_close(actions2, src_c + 1.0)
+        self.assertIsNotNone(model.last_action_refinement)
+        self.assertEqual(model.last_action_refinement.iterations, 3)
+        self.assertEqual(model.last_action_refinement.selected_iteration, 3)
+        self.assertTrue(model.last_action_refinement.accepted)
 
     def test_world_model_receives_scheduled_controller_context(self):
         seq_len_a = 2
@@ -448,6 +539,9 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
             d_model=4,
         )
         old_state = dict(model.state_dict())
+        for key in tuple(old_state):
+            if key.startswith(("critic.progress_head.", "critic.death_head.")):
+                del old_state[key]
         old_state["world_model.lstm.weight_ih_l0"] = torch.zeros(128, 12)
         old_state["world_model.fc.weight"] = torch.zeros(1, 32)
         old_state["world_model.fc.bias"] = torch.zeros(1)
@@ -457,12 +551,18 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
         unsupported_missing = tuple(
             key
             for key in load_result.missing_keys
-            if not key.startswith(ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES)
+            if not key.startswith(ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES)
         )
 
         self.assertIn("world_model.lstm.weight_ih_l0", skipped)
         self.assertIn("world_model.fc.weight", skipped)
         self.assertIn("world_model.fc.bias", skipped)
+        self.assertTrue(
+            any(key.startswith("critic.progress_head.") for key in load_result.missing_keys)
+        )
+        self.assertTrue(
+            any(key.startswith("critic.death_head.") for key in load_result.missing_keys)
+        )
         self.assertEqual(unsupported_missing, ())
         self.assertEqual(tuple(load_result.unexpected_keys), ())
 

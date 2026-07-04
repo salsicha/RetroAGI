@@ -25,7 +25,7 @@ from retroagi.core import (
     StageBatch,
     VisionEncoder,
     WorldModelState,
-    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     action_level_world_model_state_dict,
     build_architecture,
     build_checkpoint,
@@ -1220,6 +1220,61 @@ def target_network_is_active(
     return float(instability.detach().cpu()) >= config.target_network_instability_threshold
 
 
+def _block_smb_transition_progress_target(step: BlockSMBTransition) -> float:
+    reward_terms = step.info.get("reward_terms", {})
+    progress_reward = 0.0
+    if isinstance(reward_terms, Mapping):
+        progress_reward = float(reward_terms.get("progress", 0.0) or 0.0)
+        goal_reward = float(reward_terms.get("goal", 0.0) or 0.0)
+    else:
+        goal_reward = 0.0
+    return 1.0 if progress_reward > 0.0 or goal_reward > 0.0 else 0.0
+
+
+def _block_smb_transition_death_target(step: BlockSMBTransition) -> float:
+    reward_terms = step.info.get("reward_terms", {})
+    if isinstance(reward_terms, Mapping):
+        if float(reward_terms.get("fall_death", 0.0) or 0.0) < 0.0:
+            return 1.0
+        if float(reward_terms.get("enemy_hit", 0.0) or 0.0) < 0.0:
+            return 1.0
+    if step.done and not bool(step.info.get("goal_reached", False)):
+        return 1.0
+    return 0.0
+
+
+def _critic_action_outcome_loss(
+    model: torch.nn.Module,
+    step: BlockSMBTransition,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    if not (
+        hasattr(model, "predict_action_progress_logit")
+        and hasattr(model, "predict_action_death_logit")
+    ):
+        return step.next_state_pred.new_zeros(())
+    progress_target = torch.tensor(
+        [_block_smb_transition_progress_target(step)],
+        dtype=step.next_state_pred.dtype,
+        device=device,
+    )
+    death_target = torch.tensor(
+        [_block_smb_transition_death_target(step)],
+        dtype=step.next_state_pred.dtype,
+        device=device,
+    )
+    progress_logit = model.predict_action_progress_logit(
+        step.next_state_pred,
+        current_state=step.batch.src_c.detach(),
+    )
+    death_logit = model.predict_action_death_logit(step.next_state_pred)
+    return F.binary_cross_entropy_with_logits(
+        progress_logit,
+        progress_target,
+    ) + F.binary_cross_entropy_with_logits(death_logit, death_target)
+
+
 def compute_block_smb_losses(
     model: torch.nn.Module,
     transitions: list[BlockSMBTransition],
@@ -1291,7 +1346,10 @@ def compute_block_smb_losses(
             dynamics_metric_terms.setdefault(metric_name, []).append(metric_value)
         reward_terms.append(F.mse_loss(reward_pred, reward_target))
         value_terms.append(F.mse_loss(value_pred, return_target.detach()))
-        critic_terms.append(step.criticism.pow(2).mean())
+        critic_terms.append(
+            step.criticism.pow(2).mean()
+            + _critic_action_outcome_loss(model, step, device=device)
+        )
     loss_representation = torch.stack(representation_terms).mean()
     loss_dynamics = torch.stack(dynamics_terms).mean()
     loss_reward = torch.stack(reward_terms).mean()
@@ -1889,7 +1947,7 @@ def restore_block_smb_checkpoint(
         "transition_representation_head.",
         "reward_head.",
         "value_head.",
-        *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
+        *ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     )
     unexpected = list(load_result.unexpected_keys)
     unsupported_missing = [

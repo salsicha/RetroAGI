@@ -18,11 +18,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from retroagi.core import (
+    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     BASELINE_ARCHITECTURE_NAME,
     CHECKPOINT_SCHEMA_KEY,
     SMB_ACTIONS,
     TRACKING_BACKENDS,
-    ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     ExperimentTrackerConfig,
     SMBAction,
     SMBJumpActionTerminator,
@@ -942,6 +942,7 @@ def train_full_smb_policy(
                             policy_loss_weight=config.policy_loss_weight,
                             world_model_weight=config.world_model_weight,
                             world_model_slot_weights=config.world_model_slot_weights,
+                            critic_loss_weight=config.critic_loss_weight,
                             gradient_clip_norm=config.gradient_clip_norm,
                             max_abs_loss=config.max_abs_loss,
                             max_abs_scaled_reward=config.max_abs_scaled_reward,
@@ -1056,6 +1057,7 @@ def train_full_smb_policy(
                 "mean_policy_loss": _mean(history["policy_loss"]),
                 "mean_loss_dynamics": _mean(history.get("loss_dynamics", [])),
                 "mean_loss_world_model": _mean(history.get("loss_world_model", [])),
+                "mean_loss_critic": _mean(history.get("loss_critic", [])),
                 **{
                     f"mean_loss_dynamics_{slot_name}": _mean(
                         history.get(f"loss_dynamics_{slot_name}", [])
@@ -2136,7 +2138,7 @@ def _load_full_smb_policy_state(
     )
     load_result = model.load_state_dict(migrated_state, strict=False)
     unexpected = tuple(load_result.unexpected_keys)
-    allowed_missing_prefixes = ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES
+    allowed_missing_prefixes = ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES
     unsupported_missing = tuple(
         key
         for key in load_result.missing_keys
@@ -2429,6 +2431,47 @@ def _load_init_training_state(
     )
 
 
+def _full_smb_critic_action_outcome_loss(
+    model: torch.nn.Module,
+    batch: StageBatch,
+    forward: FullSMBPolicyForwardResult,
+    *,
+    reward: float,
+    boundary: FullSMBRolloutBoundary,
+    device: torch.device,
+) -> torch.Tensor:
+    if forward.next_state_pred is None:
+        return batch.src_c.to(device).new_zeros(())
+    if not (
+        hasattr(model, "predict_action_progress_logit")
+        and hasattr(model, "predict_action_death_logit")
+    ):
+        return forward.next_state_pred.new_zeros(())
+    progress_target_value = 1.0 if float(reward) > 0.0 else 0.0
+    death_target_value = 1.0 if any(
+        reason in {"death", "game_over", "life_lost"} for reason in boundary.reasons
+    ) else 0.0
+    progress_target = torch.tensor(
+        [progress_target_value],
+        dtype=forward.next_state_pred.dtype,
+        device=device,
+    )
+    death_target = torch.tensor(
+        [death_target_value],
+        dtype=forward.next_state_pred.dtype,
+        device=device,
+    )
+    progress_logit = model.predict_action_progress_logit(
+        forward.next_state_pred,
+        current_state=batch.src_c.to(device).detach(),
+    )
+    death_logit = model.predict_action_death_logit(forward.next_state_pred)
+    return F.binary_cross_entropy_with_logits(
+        progress_logit,
+        progress_target,
+    ) + F.binary_cross_entropy_with_logits(death_logit, death_target)
+
+
 def _train_episode(
     model: torch.nn.Module,
     optimizer: optim.Optimizer,
@@ -2442,6 +2485,7 @@ def _train_episode(
     policy_loss_weight: float,
     world_model_weight: float,
     world_model_slot_weights: Mapping[str, float],
+    critic_loss_weight: float,
     gradient_clip_norm: float,
     max_abs_loss: float,
     max_abs_scaled_reward: float,
@@ -2466,6 +2510,7 @@ def _train_episode(
         slot_name: [] for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
     }
     world_model_losses: list[float] = []
+    critic_losses: list[float] = []
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
     jump_terminator = SMBJumpActionTerminator()
@@ -2583,8 +2628,25 @@ def _train_episode(
         entropy = distribution.entropy().mean()
         _finite_tensor_or_raise("action_entropy", entropy)
         policy_loss = -(log_prob.mean() * scaled_reward.detach())
-        loss = policy_loss_weight * policy_loss + loss_world_model - entropy_weight * entropy
+        loss_critic = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
+        if critic_loss_weight > 0.0:
+            loss_critic = _full_smb_critic_action_outcome_loss(
+                model,
+                batch,
+                forward,
+                reward=float(reward),
+                boundary=boundary,
+                device=device,
+            )
+        weighted_critic_loss = float(critic_loss_weight) * loss_critic
+        loss = (
+            policy_loss_weight * policy_loss
+            + loss_world_model
+            + weighted_critic_loss
+            - entropy_weight * entropy
+        )
         _finite_tensor_or_raise("policy_loss", policy_loss)
+        _finite_tensor_or_raise("loss_critic", loss_critic)
         _finite_tensor_or_raise("loss", loss)
         _bounded_tensor_or_raise("loss", loss.detach(), max_abs_loss)
         optimizer.zero_grad(set_to_none=True)
@@ -2607,6 +2669,7 @@ def _train_episode(
                 slot_value = float(slot_loss.detach().cpu().item())
             dynamics_slot_losses[slot_name].append(slot_value)
         world_model_losses.append(float(loss_world_model.detach().cpu().item()))
+        critic_losses.append(float(loss_critic.detach().cpu().item()))
         entropies.append(float(entropy.detach().cpu().item()))
         gradient_norm = float(grad_norm.detach().cpu().item())
         gradient_norms.append(gradient_norm)
@@ -2637,6 +2700,7 @@ def _train_episode(
             for slot_name, values in dynamics_slot_losses.items()
         },
         "loss_world_model": _mean(world_model_losses),
+        "loss_critic": _mean(critic_losses),
         "mean_entropy": _mean(entropies),
         "min_entropy": min(entropies) if entropies else 0.0,
         "max_entropy": max(entropies) if entropies else 0.0,
@@ -3456,6 +3520,7 @@ def _safety_metadata(config: FullSMBTrainingConfig) -> dict[str, Any]:
             "max_value_prediction_abs",
             "mean_reward_prediction_abs",
             "max_reward_prediction_abs",
+            "loss_critic",
             "max_abs_prediction",
         ),
     }
