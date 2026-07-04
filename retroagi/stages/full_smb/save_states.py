@@ -207,7 +207,7 @@ class FullSMBSaveStateArtifactResult:
             "truncated": bool(self.truncated),
             "observation_sha256": self.observation_sha256,
             "bytes_written": int(self.bytes_written),
-            "final_info": dict(self.final_info),
+            "final_info": _json_safe_metadata(self.final_info),
         }
 
 
@@ -401,6 +401,22 @@ def _step(action: SMBAction, frames: int, description: str) -> FullSMBSaveStateS
 def _observation_hash(observation: Any) -> str:
     array = np.asarray(observation)
     return hashlib.sha256(array.tobytes()).hexdigest()
+
+
+def _json_safe_metadata(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe_metadata(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_safe_metadata(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe_metadata(item) for item in value]
+    return value
 
 
 FULL_SMB_SAVE_STATE_PLAN = FullSMBSaveStatePlan(

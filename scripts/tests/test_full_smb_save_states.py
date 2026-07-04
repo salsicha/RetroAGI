@@ -45,6 +45,10 @@ class FakeSaveStateStage:
             "x_pos": self.seed % 100 + self.step_count,
             "score": self.step_count * 10,
             "action": shared_action.name.lower(),
+            "screen": np.asarray([self.step_count, int(shared_action)], dtype=np.int64),
+            "metrics": {
+                "distance": np.float32(self.step_count + 0.5),
+            },
         }
         return self._observation(), 1.5, False, False, dict(self.last_info)
 
@@ -130,6 +134,9 @@ class TestFullSMBSaveStates(unittest.TestCase):
         self.assertEqual(result.name, "unit_state")
         self.assertEqual(result.steps_executed, 3)
         self.assertEqual(result.final_info["score"], 30)
+        self.assertEqual(result.to_manifest()["final_info"]["screen"], [3, 5])
+        self.assertEqual(result.to_manifest()["final_info"]["metrics"]["distance"], 3.5)
+        json.dumps(result.to_manifest(), sort_keys=True)
         self.assertGreater(result.bytes_written, 0)
         self.assertEqual(payload["spec"]["name"], "unit_state")
         self.assertEqual(payload["state"]["actions"], (1, 1, 5))
