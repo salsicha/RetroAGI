@@ -24,6 +24,7 @@ from retroagi.stages.block_smb import (
     BLOCK_SMB_MC_FAMILIES,
     BLOCK_SMB_MODEL_NAME,
     BLOCK_SMB_SPEC,
+    ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES,
     BlockSMBAblationConfig,
     BlockSMBRewardConfig,
     BlockSMBStage,
@@ -33,9 +34,11 @@ from retroagi.stages.block_smb import (
     build_adaptive_monte_carlo_replay_curriculum,
     build_curriculum,
     build_epoch_curriculum,
+    block_smb_monte_carlo_train_sample_count,
     evaluate_block_smb,
     evaluate_block_smb_monte_carlo,
     restore_block_smb_checkpoint,
+    routine_block_smb_monte_carlo_train_min_sample_count,
     summarize_block_smb_curriculum,
     train_and_evaluate_block_smb,
 )
@@ -134,6 +137,34 @@ class TestBlockSMBTraining(unittest.TestCase):
                 self.assertEqual(info["state_vec"].shape, (27,))
         finally:
             vector_env.close()
+
+    def test_explicit_monte_carlo_training_count_covers_routine_chained_families(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            monte_carlo_train_samples_per_epoch=8,
+        )
+        minimum_count = routine_block_smb_monte_carlo_train_min_sample_count()
+        curriculum = build_curriculum(config)
+        summary = summarize_block_smb_curriculum(curriculum)
+
+        self.assertGreater(minimum_count, 8)
+        self.assertEqual(block_smb_monte_carlo_train_sample_count(config), minimum_count)
+        self.assertEqual(summary["monte_carlo_sample_count"], minimum_count)
+        for family in ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES:
+            self.assertEqual(summary["monte_carlo"]["family_counts"][family], 1)
+
+    def test_weighted_monte_carlo_training_count_preserves_requested_focus(self):
+        config = tiny_config(
+            generated_scenarios=0,
+            monte_carlo_train_samples_per_epoch=4,
+            monte_carlo_family_weights={"flat_run": 1.0},
+        )
+        curriculum = build_curriculum(config)
+        summary = summarize_block_smb_curriculum(curriculum)
+
+        self.assertEqual(block_smb_monte_carlo_train_sample_count(config), 4)
+        self.assertEqual(summary["monte_carlo_sample_count"], 4)
+        self.assertEqual(summary["monte_carlo"]["family_counts"], {"flat_run": 4})
 
     def test_controller_schedule_configures_block_smb_model(self):
         config = tiny_config(controller_schedule="linear")

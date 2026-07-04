@@ -95,6 +95,11 @@ _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
     "patch-tokens": "patch_tokens",
 }
 DEFAULT_BLOCK_SMB_SEMANTIC_PREDICTION_ACCURACY_THRESHOLD = 0.8
+ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES = (
+    "chained_obstacles",
+    "chained_enemy_gauntlet",
+    "full_smb_opening_proxy",
+)
 
 
 def normalize_block_smb_world_model_slot_weights(
@@ -491,7 +496,27 @@ def block_smb_monte_carlo_train_sample_count(config: BlockSMBTrainingConfig) -> 
 
     explicit = int(config.monte_carlo_train_samples_per_epoch)
     legacy = int(config.generated_scenarios)
-    return explicit if explicit > 0 else legacy
+    if explicit <= 0:
+        return legacy
+    if config.monte_carlo_family_weights:
+        return explicit
+    return max(explicit, routine_block_smb_monte_carlo_train_min_sample_count())
+
+
+def routine_block_smb_monte_carlo_train_min_sample_count(
+    required_families: tuple[str, ...] = ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES,
+) -> int:
+    """Return the minimum default-order sample count that covers routine train families."""
+
+    if not required_families:
+        return 0
+    missing = [family for family in required_families if family not in BLOCK_SMB_MC_FAMILIES]
+    if missing:
+        choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+        raise ValueError(
+            f"unknown required Block SMB Monte Carlo family {missing!r}; expected {choices}"
+        )
+    return max(BLOCK_SMB_MC_FAMILIES.index(family) for family in required_families) + 1
 
 
 def block_smb_monte_carlo_sweep_sample_count(

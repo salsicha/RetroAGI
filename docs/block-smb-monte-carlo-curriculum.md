@@ -64,6 +64,9 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `enemy_stomp` | enemy height/position, stomp window, safe landing distance |
 | `retreat_recovery` | left/right recovery need, obstacle proximity, safe fallback |
 | `wait_timing` | moving-platform phase, wait window, jump window |
+| `chained_obstacles` | multiple obstacle sections with enemies and pipes |
+| `chained_enemy_gauntlet` | enemy, gap, patrol, and pipe sequence in one level |
+| `full_smb_opening_proxy` | Block SMB approximation of the early Full SMB 1-1 demands |
 | `mixed_section` | sampled composition of two or three families in one level |
 
 The first implementation should keep geometry ranges conservative enough that a
@@ -112,6 +115,15 @@ The sampler supports:
 - adaptive replay of recent failure bins;
 - minimum coverage per family and difficulty bin;
 - deterministic replay by scenario ID.
+
+Routine fresh runs that set `--monte-carlo-train-samples-per-epoch` use the
+default family order, but explicit counts are lifted when needed so the train
+stream includes `chained_obstacles`, `chained_enemy_gauntlet`, and
+`full_smb_opening_proxy`. This prevents small smoke-sized fresh runs from
+training only on the early simple families and missing the Block scenarios that
+approximate the first Full SMB 1-1 hazards. Runs that pass
+`--monte-carlo-family-weight` keep the exact requested sample count because
+those are intentionally targeted curricula.
 
 Training can enable failure replay with
 `--monte-carlo-failure-replay-samples-per-epoch N`. After a Monte Carlo
@@ -167,7 +179,7 @@ Train with versioned Monte Carlo samples:
 
 ```bash
 retroagi-block-smb train \
-  --generated-scenarios 512 \
+  --monte-carlo-train-samples-per-epoch 512 \
   --monte-carlo-validation-samples 128 \
   --monte-carlo-failure-replay-samples-per-epoch 64 \
   --checkpoint data/block_smb/policy.pth \
