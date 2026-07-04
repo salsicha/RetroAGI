@@ -22,9 +22,12 @@ from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
     DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
+    BlockSMBMonteCarloSampleSet,
+    BlockSMBScenarioSample,
     block_smb_monte_carlo_oracle_actions,
     sample_block_smb_monte_carlo_parameter_sweep,
     sample_block_smb_monte_carlo_split,
+    summarize_block_smb_monte_carlo_samples,
 )
 from .scripted_policy import BlockSMBScriptedPolicy, fixed_scenario_action_scripts
 from .train import (
@@ -46,6 +49,8 @@ from .train import (
     seed_everything,
 )
 from .vision import DEFAULT_BLOCK_VIT_CHECKPOINT, load_block_vit_checkpoint
+
+DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES = BLOCK_SMB_MC_FAMILIES
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,10 @@ class BlockSMBDistillationConfig:
     monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
     monte_carlo_parameter_sweep: bool = False
     monte_carlo_sweep_repeats_per_difficulty: int = 1
+    required_monte_carlo_families: tuple[str, ...] = (
+        DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES
+    )
+    required_monte_carlo_repeats_per_difficulty: int = 1
     monte_carlo_validation_samples: int = 0
     monte_carlo_test_samples: int = 0
     monte_carlo_pass_rate_gate: float = 0.95
@@ -140,6 +149,8 @@ class BlockSMBDistillationConfig:
             raise TypeError("monte_carlo_parameter_sweep must be a bool")
         if self.monte_carlo_sweep_repeats_per_difficulty <= 0:
             raise ValueError("monte_carlo_sweep_repeats_per_difficulty must be positive")
+        if self.required_monte_carlo_repeats_per_difficulty <= 0:
+            raise ValueError("required_monte_carlo_repeats_per_difficulty must be positive")
         if self.monte_carlo_validation_samples < 0:
             raise ValueError("monte_carlo_validation_samples must be non-negative")
         if self.monte_carlo_test_samples < 0:
@@ -151,6 +162,13 @@ class BlockSMBDistillationConfig:
             "monte_carlo_family_weights",
             _normalize_distillation_monte_carlo_family_weights(
                 self.monte_carlo_family_weights
+            ),
+        )
+        object.__setattr__(
+            self,
+            "required_monte_carlo_families",
+            _normalize_distillation_monte_carlo_families(
+                self.required_monte_carlo_families
             ),
         )
         if not 0.0 <= self.monte_carlo_pass_rate_gate <= 1.0:
@@ -210,6 +228,22 @@ def _normalize_distillation_monte_carlo_family_weights(
         if weight > 0.0:
             normalized[family] = weight
     return normalized
+
+
+def _normalize_distillation_monte_carlo_families(
+    families: tuple[str, ...] | list[str] | None,
+) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for raw_family in families or ():
+        family = str(raw_family)
+        if family not in BLOCK_SMB_MC_FAMILIES:
+            choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+            raise ValueError(
+                f"unknown Block SMB Monte Carlo family {raw_family!r}; expected {choices}"
+            )
+        if family not in normalized:
+            normalized.append(family)
+    return tuple(normalized)
 
 
 def train_distilled_block_smb_policy(
@@ -421,30 +455,13 @@ def build_block_smb_distillation_scenarios(
         scenarios.append((scenario_name, scenario))
         action_scripts[scenario_name] = list(fixed_scripts[scenario_name])
 
-    monte_carlo_manifest: dict[str, Any] = {}
-    if config.monte_carlo_parameter_sweep or config.monte_carlo_samples > 0:
-        if config.monte_carlo_parameter_sweep:
-            sample_set = sample_block_smb_monte_carlo_parameter_sweep(
-                distribution_id=config.monte_carlo_distribution_id,
-                split="train",
-                seed=config.monte_carlo_seed,
-                repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
-            )
-        else:
-            sample_set = sample_block_smb_monte_carlo_split(
-                distribution_id=config.monte_carlo_distribution_id,
-                split="train",
-                seed=config.monte_carlo_seed,
-                sample_count=config.monte_carlo_samples,
-                family_weights=config.monte_carlo_family_weights,
-            )
-        for sample in sample_set.samples:
-            scenarios.append((sample.scenario_id, copy.deepcopy(dict(sample.scenario))))
-            action_scripts[sample.scenario_id] = block_smb_monte_carlo_oracle_actions(
-                sample.scenario,
-                max_steps=config.rollout_steps,
-            )
-        monte_carlo_manifest = sample_set.manifest(include_scenarios=False)
+    monte_carlo_samples, monte_carlo_manifest = _distillation_monte_carlo_samples(config)
+    for sample in monte_carlo_samples:
+        scenarios.append((sample.scenario_id, copy.deepcopy(dict(sample.scenario))))
+        action_scripts[sample.scenario_id] = block_smb_monte_carlo_oracle_actions(
+            sample.scenario,
+            max_steps=config.rollout_steps,
+        )
 
     if not scenarios:
         raise ValueError("distillation requires at least one fixed or Monte Carlo scenario")
@@ -457,6 +474,101 @@ def build_block_smb_distillation_scenarios(
         "scenario_count": len(scenarios),
     }
     return scenarios, action_scripts, summary
+
+
+def _distillation_monte_carlo_samples(
+    config: BlockSMBDistillationConfig,
+) -> tuple[list[BlockSMBScenarioSample], dict[str, Any]]:
+    sample_sets: list[tuple[str, BlockSMBMonteCarloSampleSet]] = []
+    if config.required_monte_carlo_families:
+        sample_sets.append(
+            (
+                "required_warm_start",
+                sample_block_smb_monte_carlo_parameter_sweep(
+                    distribution_id=config.monte_carlo_distribution_id,
+                    split="train",
+                    seed=config.monte_carlo_seed,
+                    repeats_per_difficulty=(
+                        config.required_monte_carlo_repeats_per_difficulty
+                    ),
+                    families=config.required_monte_carlo_families,
+                ),
+            )
+        )
+    if config.monte_carlo_parameter_sweep:
+        sample_sets.append(
+            (
+                "parameter_sweep",
+                sample_block_smb_monte_carlo_parameter_sweep(
+                    distribution_id=config.monte_carlo_distribution_id,
+                    split="train",
+                    seed=config.monte_carlo_seed,
+                    repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
+                ),
+            )
+        )
+    elif config.monte_carlo_samples > 0:
+        sample_sets.append(
+            (
+                "sampled",
+                sample_block_smb_monte_carlo_split(
+                    distribution_id=config.monte_carlo_distribution_id,
+                    split="train",
+                    seed=config.monte_carlo_seed,
+                    sample_count=config.monte_carlo_samples,
+                    family_weights=config.monte_carlo_family_weights,
+                ),
+            )
+        )
+
+    if not sample_sets:
+        return [], {}
+
+    selected_samples: list[BlockSMBScenarioSample] = []
+    source_manifests: dict[str, Any] = {}
+    source_selected_counts: dict[str, int] = {}
+    seen_keys: set[tuple[Any, ...]] = set()
+    for source_name, sample_set in sample_sets:
+        source_manifests[source_name] = sample_set.manifest(include_scenarios=False)
+        source_selected_counts[source_name] = 0
+        for sample in sample_set.samples:
+            sample_key = _distillation_monte_carlo_sample_key(sample)
+            if sample_key in seen_keys:
+                continue
+            seen_keys.add(sample_key)
+            selected_samples.append(sample)
+            source_selected_counts[source_name] += 1
+
+    manifest = {
+        "schema_version": selected_samples[0].schema_version if selected_samples else None,
+        "distribution_id": config.monte_carlo_distribution_id,
+        "split": "train",
+        "seed": int(config.monte_carlo_seed),
+        "sample_count": len(selected_samples),
+        "required_families": list(config.required_monte_carlo_families),
+        "required_repeats_per_difficulty": int(
+            config.required_monte_carlo_repeats_per_difficulty
+        ),
+        "source_selected_counts": source_selected_counts,
+        "sources": source_manifests,
+        "coverage": summarize_block_smb_monte_carlo_samples(selected_samples),
+        "scenario_ids": [sample.scenario_id for sample in selected_samples],
+    }
+    return selected_samples, manifest
+
+
+def _distillation_monte_carlo_sample_key(
+    sample: BlockSMBScenarioSample,
+) -> tuple[Any, ...]:
+    parameters = sample.parameters if isinstance(sample.parameters, Mapping) else {}
+    if bool(parameters.get("parameter_sweep", False)):
+        return (
+            "sweep",
+            sample.family,
+            str(parameters.get("difficulty_bin", "default")),
+            int(parameters.get("sweep_repeat", 0)),
+        )
+    return ("scenario", sample.scenario_id)
 
 
 def collect_scripted_distillation_examples(
@@ -1093,13 +1205,21 @@ def _action_class_weights(
 def _training_config_from_distillation(
     config: BlockSMBDistillationConfig,
 ) -> BlockSMBTrainingConfig:
-    monte_carlo_count = (
+    explicit_monte_carlo_count = (
         len(BLOCK_SMB_MC_FAMILIES)
         * len(BLOCK_SMB_MC_DIFFICULTY_BINS)
         * int(config.monte_carlo_sweep_repeats_per_difficulty)
         if config.monte_carlo_parameter_sweep
         else int(config.monte_carlo_samples)
     )
+    required_monte_carlo_count = (
+        0
+        if config.monte_carlo_parameter_sweep
+        else len(config.required_monte_carlo_families)
+        * len(BLOCK_SMB_MC_DIFFICULTY_BINS)
+        * int(config.required_monte_carlo_repeats_per_difficulty)
+    )
+    monte_carlo_count = required_monte_carlo_count + explicit_monte_carlo_count
     scenario_count = len(config.fixed_scenarios) + monte_carlo_count
     return BlockSMBTrainingConfig(
         seed=config.seed,
@@ -1229,6 +1349,14 @@ def _family_weight_arg(value: str) -> tuple[str, float]:
     return key, weight
 
 
+def _family_arg(value: str) -> str:
+    family = str(value)
+    if family not in BLOCK_SMB_MC_FAMILIES:
+        choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
+        raise argparse.ArgumentTypeError(f"unknown family {family!r}; expected one of: {choices}")
+    return family
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="retroagi-block-smb-distill",
@@ -1338,6 +1466,32 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=BlockSMBDistillationConfig.monte_carlo_sweep_repeats_per_difficulty,
     )
+    parser.set_defaults(required_monte_carlo_families=None)
+    parser.add_argument(
+        "--required-monte-carlo-family",
+        action="append",
+        default=None,
+        type=_family_arg,
+        dest="required_monte_carlo_families",
+        metavar="FAMILY",
+        help=(
+            "required MC family for scripted warm start; defaults to the full "
+            "MC family set, including chained and Full-SMB-opening proxy families; "
+            "may be repeated"
+        ),
+    )
+    parser.add_argument(
+        "--required-monte-carlo-repeats-per-difficulty",
+        type=int,
+        default=BlockSMBDistillationConfig.required_monte_carlo_repeats_per_difficulty,
+    )
+    parser.set_defaults(include_required_monte_carlo_families=True)
+    parser.add_argument(
+        "--no-required-monte-carlo-families",
+        action="store_false",
+        dest="include_required_monte_carlo_families",
+        help="disable default chained/proxy MC scripted warm-start coverage",
+    )
     parser.add_argument("--monte-carlo-validation-samples", type=int, default=0)
     parser.add_argument("--monte-carlo-test-samples", type=int, default=0)
     parser.add_argument("--monte-carlo-pass-rate-gate", type=float, default=0.95)
@@ -1387,6 +1541,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         monte_carlo_parameter_sweep=args.monte_carlo_parameter_sweep,
         monte_carlo_sweep_repeats_per_difficulty=(
             args.monte_carlo_sweep_repeats_per_difficulty
+        ),
+        required_monte_carlo_families=(
+            tuple(args.required_monte_carlo_families)
+            if args.required_monte_carlo_families is not None
+            else (
+                DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES
+                if args.include_required_monte_carlo_families
+                else ()
+            )
+        ),
+        required_monte_carlo_repeats_per_difficulty=(
+            args.required_monte_carlo_repeats_per_difficulty
         ),
         monte_carlo_validation_samples=args.monte_carlo_validation_samples,
         monte_carlo_test_samples=args.monte_carlo_test_samples,
