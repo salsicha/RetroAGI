@@ -32,9 +32,11 @@ from .train import (
     DEFAULT_BLOCK_SMB_SEMANTIC_PREDICTION_ACCURACY_THRESHOLD,
     BlockSMBTrainingConfig,
     apply_block_smb_semantic_prediction_gate,
+    block_smb_action_count_metric_values,
     block_smb_c_stream_dynamics_metrics,
     block_smb_c_stream_dynamics_slot_losses,
     block_smb_dynamics_loss,
+    block_smb_monte_carlo_eval_metrics,
     evaluate_block_smb,
     load_fixed_scenarios,
     make_block_smb_model,
@@ -332,6 +334,13 @@ def train_distilled_block_smb_policy(
         ),
         "eval_tuning_score": float(evaluation.get("tuning_metrics", {}).get("score", 0.0)),
     }
+    final_metrics.update(
+        block_smb_action_count_metric_values(
+            "eval_fixed",
+            evaluation.get("action_counts", {}),
+        )
+    )
+    final_metrics.update(block_smb_monte_carlo_eval_metrics(evaluation))
     gated_evaluation = apply_block_smb_semantic_prediction_gate(
         evaluation,
         final_metrics,

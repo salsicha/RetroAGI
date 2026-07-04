@@ -124,6 +124,32 @@ def tiny_block_config(**overrides):
     return BlockSMBTrainingConfig(**values)
 
 
+def transfer_ready_metrics(**overrides):
+    metrics = {
+        "loss_total": 0.25,
+        "eval_threshold_pass_rate": 1.0,
+        "semantic_prediction_gate_met": 1.0,
+        "eval_monte_carlo_validation_success_rate": 1.0,
+        "eval_monte_carlo_validation_gate_met": 1.0,
+        "eval_fixed_action_count_0": 1.0,
+        "eval_fixed_action_count_1": 8.0,
+        "eval_fixed_action_count_2": 2.0,
+        "eval_fixed_action_count_3": 0.0,
+        "eval_fixed_action_count_4": 0.0,
+        "eval_fixed_action_count_5": 0.0,
+        "eval_fixed_all_noop_action_collapse": 0.0,
+        "eval_monte_carlo_validation_action_count_0": 2.0,
+        "eval_monte_carlo_validation_action_count_1": 16.0,
+        "eval_monte_carlo_validation_action_count_2": 4.0,
+        "eval_monte_carlo_validation_action_count_3": 0.0,
+        "eval_monte_carlo_validation_action_count_4": 0.0,
+        "eval_monte_carlo_validation_action_count_5": 0.0,
+        "eval_monte_carlo_validation_all_noop_action_collapse": 0.0,
+    }
+    metrics.update(overrides)
+    return metrics
+
+
 def write_full_smb_vision_checkpoint(path: Path) -> None:
     model = FullSMBVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
     checkpoint = build_full_smb_vit_checkpoint(
@@ -157,13 +183,7 @@ def write_block_policy_checkpoint(path: Path):
         epoch=2,
         global_step=5,
         config=config,
-        metrics={
-            "loss_total": 0.25,
-            "eval_threshold_pass_rate": 1.0,
-            "semantic_prediction_gate_met": 1.0,
-            "eval_monte_carlo_validation_success_rate": 1.0,
-            "eval_monte_carlo_validation_gate_met": 1.0,
-        },
+        metrics=transfer_ready_metrics(),
     )
     return model, config
 
@@ -366,6 +386,89 @@ class TestFullSMBTransfer(unittest.TestCase):
 
             self.assertFalse(gate["transfer_source_gate_met"])
             with self.assertRaisesRegex(ValueError, "held-out Monte Carlo validation gate"):
+                transfer_block_smb_checkpoint_to_full_smb(
+                    source_policy_path,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    block_vision_checkpoint=None,
+                    device="cpu",
+                )
+
+    def test_transfer_rejects_fixed_deterministic_all_noop_action_collapse(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "fixed_noop_block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            config = tiny_block_config()
+            model = make_block_smb_model(config)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            save_block_smb_checkpoint(
+                source_policy_path,
+                model,
+                optimizer,
+                epoch=1,
+                global_step=1,
+                config=config,
+                metrics=transfer_ready_metrics(
+                    eval_fixed_action_count_0=20.0,
+                    eval_fixed_action_count_1=0.0,
+                    eval_fixed_action_count_2=0.0,
+                    eval_fixed_action_count_3=0.0,
+                    eval_fixed_action_count_4=0.0,
+                    eval_fixed_action_count_5=0.0,
+                    eval_fixed_all_noop_action_collapse=1.0,
+                ),
+            )
+            checkpoint = load_checkpoint(source_policy_path, map_location="cpu")
+            gate = block_smb_checkpoint_transfer_source_gate(checkpoint)
+
+            self.assertFalse(gate["transfer_source_gate_met"])
+            self.assertTrue(gate["fixed_all_noop_action_collapse"])
+            self.assertFalse(gate["fixed_action_collapse_gate_met"])
+            with self.assertRaisesRegex(ValueError, "fixed deterministic policy collapsed"):
+                transfer_block_smb_checkpoint_to_full_smb(
+                    source_policy_path,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    block_vision_checkpoint=None,
+                    device="cpu",
+                )
+
+    def test_transfer_rejects_monte_carlo_deterministic_all_noop_action_collapse(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "mc_noop_block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            config = tiny_block_config()
+            model = make_block_smb_model(config)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            save_block_smb_checkpoint(
+                source_policy_path,
+                model,
+                optimizer,
+                epoch=1,
+                global_step=1,
+                config=config,
+                metrics=transfer_ready_metrics(
+                    eval_monte_carlo_validation_action_count_0=64.0,
+                    eval_monte_carlo_validation_action_count_1=0.0,
+                    eval_monte_carlo_validation_action_count_2=0.0,
+                    eval_monte_carlo_validation_action_count_3=0.0,
+                    eval_monte_carlo_validation_action_count_4=0.0,
+                    eval_monte_carlo_validation_action_count_5=0.0,
+                    eval_monte_carlo_validation_all_noop_action_collapse=1.0,
+                ),
+            )
+            checkpoint = load_checkpoint(source_policy_path, map_location="cpu")
+            gate = block_smb_checkpoint_transfer_source_gate(checkpoint)
+
+            self.assertFalse(gate["transfer_source_gate_met"])
+            self.assertTrue(gate["monte_carlo_validation_all_noop_action_collapse"])
+            self.assertFalse(gate["monte_carlo_validation_action_collapse_gate_met"])
+            with self.assertRaisesRegex(
+                ValueError,
+                "Monte Carlo validation deterministic policy collapsed",
+            ):
                 transfer_block_smb_checkpoint_to_full_smb(
                     source_policy_path,
                     full_smb_vision_checkpoint=full_vision_path,

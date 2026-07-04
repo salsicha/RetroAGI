@@ -349,6 +349,23 @@ def block_smb_checkpoint_transfer_source_gate(
         and monte_carlo_gate_metric is not None
         and monte_carlo_gate_metric >= 1.0
     )
+    fixed_action_counts = _action_counts_from_metric_prefix(metrics, "eval_fixed")
+    fixed_action_collapse = _all_noop_action_collapse_from_metrics(
+        metrics,
+        "eval_fixed",
+        fixed_action_counts,
+    )
+    fixed_action_gate_met = fixed_action_collapse is False
+    monte_carlo_validation_action_counts = _action_counts_from_metric_prefix(
+        metrics,
+        "eval_monte_carlo_validation",
+    )
+    monte_carlo_validation_action_collapse = _all_noop_action_collapse_from_metrics(
+        metrics,
+        "eval_monte_carlo_validation",
+        monte_carlo_validation_action_counts,
+    )
+    monte_carlo_validation_action_gate_met = monte_carlo_validation_action_collapse is False
     failure_reasons: list[str] = []
     if not fixed_gate_met:
         failure_reasons.append("fixed scenario threshold pass rate is missing or below 1.0")
@@ -356,9 +373,23 @@ def block_smb_checkpoint_transfer_source_gate(
         failure_reasons.append("Block SMB semantic prediction gate is not met")
     if not monte_carlo_gate_met:
         failure_reasons.append("held-out Monte Carlo validation gate is missing or failed")
+    if fixed_action_collapse is None:
+        failure_reasons.append("fixed deterministic action counts are missing")
+    elif fixed_action_collapse:
+        failure_reasons.append("fixed deterministic policy collapsed to all NOOP actions")
+    if monte_carlo_validation_samples > 0:
+        if monte_carlo_validation_action_collapse is None:
+            failure_reasons.append("Monte Carlo validation deterministic action counts are missing")
+        elif monte_carlo_validation_action_collapse:
+            failure_reasons.append(
+                "Monte Carlo validation deterministic policy collapsed to all NOOP actions"
+            )
     return {
         "fixed_threshold_pass_rate": fixed_pass_rate,
         "fixed_gate_met": bool(fixed_gate_met),
+        "fixed_action_counts": fixed_action_counts,
+        "fixed_all_noop_action_collapse": fixed_action_collapse,
+        "fixed_action_collapse_gate_met": bool(fixed_action_gate_met),
         "semantic_prediction_gate_met": bool(semantic_gate_met),
         "monte_carlo_distribution_id": str(
             config.get("monte_carlo_distribution_id", DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID)
@@ -368,11 +399,64 @@ def block_smb_checkpoint_transfer_source_gate(
             metrics.get("eval_monte_carlo_validation_success_rate")
         ),
         "monte_carlo_validation_gate_met": bool(monte_carlo_gate_met),
+        "monte_carlo_validation_action_counts": monte_carlo_validation_action_counts,
+        "monte_carlo_validation_all_noop_action_collapse": (
+            monte_carlo_validation_action_collapse
+        ),
+        "monte_carlo_validation_action_collapse_gate_met": bool(
+            monte_carlo_validation_action_gate_met
+        ),
         "transfer_source_gate_met": bool(
-            fixed_gate_met and semantic_gate_met and monte_carlo_gate_met
+            fixed_gate_met
+            and fixed_action_gate_met
+            and semantic_gate_met
+            and monte_carlo_gate_met
+            and monte_carlo_validation_action_gate_met
         ),
         "failure_reasons": failure_reasons,
     }
+
+
+def _action_counts_from_metric_prefix(
+    metrics: Mapping[str, Any],
+    prefix: str,
+    *,
+    action_count: int = 6,
+) -> dict[str, float]:
+    counts: dict[str, float] = {}
+    for action_index in range(action_count):
+        value = _optional_float(metrics.get(f"{prefix}_action_count_{action_index}"))
+        if value is not None:
+            counts[str(action_index)] = value
+    return counts
+
+
+def _all_noop_action_collapse_from_metrics(
+    metrics: Mapping[str, Any],
+    prefix: str,
+    action_counts: Mapping[str, Any],
+) -> Optional[bool]:
+    total = 0.0
+    noop = 0.0
+    saw_count = False
+    for raw_action, raw_count in action_counts.items():
+        try:
+            action = int(raw_action)
+            count = float(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if count <= 0.0:
+            continue
+        saw_count = True
+        total += count
+        if action == 0:
+            noop += count
+    if saw_count:
+        return total > 0.0 and noop == total
+    marker = _optional_float(metrics.get(f"{prefix}_all_noop_action_collapse"))
+    if marker is None:
+        return None
+    return marker >= 1.0
 
 
 def _validate_policy_checkpoint_architecture(

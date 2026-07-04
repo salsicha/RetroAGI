@@ -500,10 +500,13 @@ class TestBlockSMBTraining(unittest.TestCase):
             evaluation = result["evaluation"]
             self.assertIn("level_1_flat.json", evaluation["fixed_scenarios"])
             self.assertIn("tuning_metrics", evaluation)
+            self.assertIn("action_counts", evaluation)
+            self.assertIn("action_collapse", evaluation)
             self.assertFalse(evaluation["success_thresholds_met"])
             level_result = evaluation["fixed_scenarios"]["level_1_flat.json"]
             self.assertIn("threshold", level_result)
             self.assertIn("threshold_diagnostics", level_result)
+            self.assertIn("action_counts", level_result)
             self.assertFalse(level_result["threshold_met"])
             self.assertTrue((video_dir / "level_1_flat.json_episode0.npz").exists())
             for key in (
@@ -529,6 +532,13 @@ class TestBlockSMBTraining(unittest.TestCase):
                 "gradient_norm",
                 "eval_threshold_pass_rate",
                 "eval_tuning_score",
+                "eval_fixed_action_count_0",
+                "eval_fixed_action_count_1",
+                "eval_fixed_action_count_2",
+                "eval_fixed_action_count_3",
+                "eval_fixed_action_count_4",
+                "eval_fixed_action_count_5",
+                "eval_fixed_all_noop_action_collapse",
             ):
                 self.assertTrue(torch.isfinite(torch.tensor(result["metrics"][key])).item())
 
@@ -573,6 +583,7 @@ class TestBlockSMBTraining(unittest.TestCase):
         self.assertEqual(set(evaluation["families"]), set(BLOCK_SMB_MC_FAMILIES))
         self.assertFalse(evaluation["coverage"]["missing_families"])
         self.assertIn("action_counts", evaluation)
+        self.assertIn("action_collapse", evaluation)
         self.assertIn("failure_bins", evaluation)
         self.assertIn("gates", evaluation)
         self.assertFalse(evaluation["gates"]["gate_met"])

@@ -1820,6 +1820,9 @@ def evaluate_block_smb_monte_carlo(
         "action_counts": summarize_block_smb_monte_carlo_action_counts(all_actions),
         "scenario_ids": [sample.scenario_id for sample in sample_set.samples],
     }
+    evaluation["action_collapse"] = {
+        "all_noop": block_smb_action_counts_all_noop(evaluation["action_counts"]),
+    }
     evaluation["gates"] = evaluate_block_smb_monte_carlo_gates(
         evaluation,
         pass_rate_gate=config.monte_carlo_pass_rate_gate,
@@ -1883,6 +1886,39 @@ def _finalize_monte_carlo_rollups(
     return finalized
 
 
+def block_smb_action_counts_all_noop(action_counts: Mapping[str, Any]) -> bool:
+    """Return true when a deterministic action summary contains only NOOP actions."""
+
+    counts: dict[int, float] = {}
+    for raw_action, raw_count in action_counts.items():
+        try:
+            action = int(raw_action)
+            count = float(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if count > 0.0:
+            counts[action] = counts.get(action, 0.0) + count
+    total = sum(counts.values())
+    return total > 0.0 and counts.get(0, 0.0) == total
+
+
+def block_smb_action_count_metric_values(
+    prefix: str,
+    action_counts: Mapping[str, Any],
+) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for action_index in range(BLOCK_SMB_ACTION_COUNT):
+        try:
+            count = float(action_counts.get(str(action_index), 0.0))
+        except (TypeError, ValueError):
+            count = 0.0
+        metrics[f"{prefix}_action_count_{action_index}"] = count
+    metrics[f"{prefix}_all_noop_action_collapse"] = float(
+        block_smb_action_counts_all_noop(action_counts)
+    )
+    return metrics
+
+
 def evaluate_block_smb(
     model: torch.nn.Module,
     config: BlockSMBTrainingConfig,
@@ -1896,10 +1932,12 @@ def evaluate_block_smb(
     results = {}
     returns = []
     successes = []
+    all_actions: list[int] = []
     with torch.no_grad():
         for scenario_index, (scenario_name, scenario) in enumerate(fixed):
             scenario_returns = []
             scenario_successes = []
+            scenario_actions: list[int] = []
             for episode in range(config.evaluation_episodes):
                 stage = BlockSMBStage(
                     env=MarioScenarioEnv(reward_config=config.reward_config),
@@ -1920,8 +1958,11 @@ def evaluate_block_smb(
                     )
                 finally:
                     stage.env.close()
+                actions = [step.action for step in trajectory.transitions]
                 scenario_returns.append(trajectory.total_return)
                 scenario_successes.append(float(trajectory.success))
+                scenario_actions.extend(actions)
+                all_actions.extend(actions)
                 if record_dir is not None:
                     record_dir.mkdir(parents=True, exist_ok=True)
                     frames = np.stack(trajectory.frames) if trajectory.frames else np.empty((0,))
@@ -1938,9 +1979,14 @@ def evaluate_block_smb(
                     )
             mean_return = float(np.mean(scenario_returns))
             success_rate = float(np.mean(scenario_successes))
+            action_counts = summarize_block_smb_monte_carlo_action_counts(scenario_actions)
             results[scenario_name] = {
                 "return": mean_return,
                 "success_rate": success_rate,
+                "action_counts": action_counts,
+                "action_collapse": {
+                    "all_noop": block_smb_action_counts_all_noop(action_counts),
+                },
             }
             returns.extend(scenario_returns)
             successes.extend(scenario_successes)
@@ -1970,6 +2016,10 @@ def evaluate_block_smb(
             else False
         ),
         "tuning_metrics": tuning_metrics,
+        "action_counts": summarize_block_smb_monte_carlo_action_counts(all_actions),
+    }
+    evaluation["action_collapse"] = {
+        "all_noop": block_smb_action_counts_all_noop(evaluation["action_counts"]),
     }
     if config.monte_carlo_validation_samples > 0 or config.monte_carlo_parameter_sweep:
         validation_record_dir = record_dir / "monte_carlo" if record_dir is not None else None
@@ -2275,7 +2325,13 @@ def train_and_evaluate_block_smb(
                 ),
                 "eval_tuning_score": float(evaluation["tuning_metrics"]["score"]),
             }
-            last_metrics.update(_monte_carlo_eval_metrics(evaluation))
+            last_metrics.update(
+                block_smb_action_count_metric_values(
+                    "eval_fixed",
+                    evaluation.get("action_counts", {}),
+                )
+            )
+            last_metrics.update(block_smb_monte_carlo_eval_metrics(evaluation))
             monte_carlo_validation = evaluation.get("monte_carlo_validation", {})
             if isinstance(monte_carlo_validation, Mapping):
                 failure_bins = monte_carlo_validation.get("failure_bins", {})
@@ -2359,7 +2415,7 @@ def train_and_evaluate_block_smb(
     }
 
 
-def _monte_carlo_eval_metrics(evaluation: Mapping[str, Any]) -> dict[str, float]:
+def block_smb_monte_carlo_eval_metrics(evaluation: Mapping[str, Any]) -> dict[str, float]:
     metrics: dict[str, float] = {}
     for key, prefix in (
         ("monte_carlo_validation", "eval_monte_carlo_validation"),
@@ -2378,6 +2434,12 @@ def _monte_carlo_eval_metrics(evaluation: Mapping[str, Any]) -> dict[str, float]
             bool(gates.get("family_pass_rate_gate_met", False))
             if isinstance(gates, Mapping)
             else False
+        )
+        metrics.update(
+            block_smb_action_count_metric_values(
+                prefix,
+                result.get("action_counts", {}),
+            )
         )
     return metrics
 
