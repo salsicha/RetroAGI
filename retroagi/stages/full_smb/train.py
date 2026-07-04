@@ -162,6 +162,7 @@ _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
     "support_state",
     "emulator_state",
     "camera_state",
+    "terminal_outcome",
     "patch_tokens",
 )
 _FULL_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
@@ -183,6 +184,11 @@ _FULL_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
     "camera": "camera_state",
     "camera_state": "camera_state",
     "camera-state": "camera_state",
+    "terminal": "terminal_outcome",
+    "terminal_outcome": "terminal_outcome",
+    "terminal-outcome": "terminal_outcome",
+    "outcome": "terminal_outcome",
+    "death": "terminal_outcome",
     "tokens": "patch_tokens",
     "patch": "patch_tokens",
     "patch_tokens": "patch_tokens",
@@ -2815,6 +2821,8 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
     )
     state_start, state_end = state
     emulator_end = min(state_end, state_start + _FULL_SMB_SIGNAL_STATE_SLOT_COUNT)
+    terminal_start = min(emulator_end, state_start + 6)
+    terminal_outcome = (terminal_start, emulator_end)
     if camera_enabled:
         camera_start = emulator_end
         camera_end = min(state_end, camera_start + _FULL_SMB_CAMERA_STATE_SLOT_COUNT)
@@ -2827,6 +2835,7 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         "support_state": support,
         "emulator_state": (state_start, emulator_end),
         "camera_state": (camera_start, camera_end),
+        "terminal_outcome": terminal_outcome,
         "patch_tokens": patch_tokens,
     }
 
@@ -4644,7 +4653,7 @@ def _add_training_update_args(
         help=(
             "optional C-stream dynamics slot weight as SLOT=WEIGHT; slots are "
             "position, semantic_probabilities, support_state, emulator_state, "
-            "camera_state, and patch_tokens"
+            "camera_state, terminal_outcome, and patch_tokens"
         ),
     )
     parser.add_argument("--reward-loss-weight", type=float, default=0.0)

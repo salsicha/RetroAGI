@@ -356,8 +356,10 @@ larger batches, but batched environment metadata is not yet defined.
 4. Build C with fixed, non-overlapping slots:
    - `[0:2]`: normalized `(x,y)` position;
    - `[2:9]`: seven global mean semantic probabilities;
-   - `[9:33]`: the 24-element environment `state_vec`;
-   - `[33:64]`: 31 adaptive-average bins over flattened
+   - `[9:12]`: three support-state logits/probabilities;
+   - `[12:39]`: the 27-element environment `state_vec`, with `[36:39]`
+     encoding `death`, `terminated`, and `truncated`;
+   - `[39:64]`: 25 adaptive-average bins over flattened
      `tanh(patch_tokens)`.
 
 This preserves horizontal scene order in A/B and keeps heterogeneous C values

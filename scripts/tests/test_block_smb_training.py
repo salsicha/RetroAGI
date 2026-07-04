@@ -28,6 +28,7 @@ from retroagi.stages.block_smb import (
     BlockSMBRewardConfig,
     BlockSMBStage,
     BlockSMBTrainingConfig,
+    MarioScenarioEnv,
     SequentialBlockSMBVectorEnv,
     build_adaptive_monte_carlo_replay_curriculum,
     build_curriculum,
@@ -40,6 +41,7 @@ from retroagi.stages.block_smb import (
 )
 from retroagi.stages.block_smb.train import (
     apply_block_smb_ablations,
+    block_smb_c_stream_slot_spans,
     collect_trajectory,
     compute_block_smb_losses,
     compute_imagined_rollout_losses,
@@ -129,6 +131,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                 self.assertIsInstance(terminated, bool)
                 self.assertIsInstance(truncated, bool)
                 self.assertIn("state_vec", info)
+                self.assertEqual(info["state_vec"].shape, (27,))
         finally:
             vector_env.close()
 
@@ -240,6 +243,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             "semantic_probabilities",
             "support_state",
             "state",
+            "terminal_outcome",
             "patch_tokens",
         ):
             self.assertIn(f"loss_dynamics_{slot_name}", losses)
@@ -383,6 +387,38 @@ class TestBlockSMBTraining(unittest.TestCase):
         torch.testing.assert_close(hierarchy.src_c, batch.src_c)
         self.assertFalse(visual.metadata["ablation"]["vision_enabled"])
         self.assertFalse(hierarchy.metadata["ablation"]["hierarchy_enabled"])
+
+    def test_terminal_death_transition_is_encoded_as_lstm_target(self):
+        stage = BlockSMBStage(
+            scenario={
+                "mario": [20, 200],
+                "platforms": [[0, 220, 256, 20]],
+                "enemies": [[20, 206, 20, 20, 0]],
+                "world_width": 256,
+            },
+            vision=StaticBlockVision(),
+            env=MarioScenarioEnv(
+                reward_config=BlockSMBRewardConfig(fall_death=0.0, enemy_hit=0.0),
+            ),
+        )
+        try:
+            observation = stage.reset(seed=5)
+            next_observation, _reward, terminated, truncated, info = stage.step(0)
+            next_batch = stage.encode_observation(next_observation, info)
+        finally:
+            stage.env.close()
+
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertTrue(info["death"])
+        self.assertEqual(info["state_vec"][-3:].tolist(), [1.0, 1.0, 0.0])
+        spans = block_smb_c_stream_slot_spans(next_batch)
+        terminal_start, terminal_end = spans["terminal_outcome"]
+        torch.testing.assert_close(
+            next_batch.src_c[:, terminal_start:terminal_end],
+            torch.tensor([[1.0, 1.0, 0.0]], dtype=next_batch.src_c.dtype),
+        )
+        self.assertEqual(next_batch.metadata["episode"]["mask"].item(), 0.0)
 
     def test_train_evaluate_checkpoint_and_recording_smoke(self):
         with TemporaryDirectory() as tmpdir:

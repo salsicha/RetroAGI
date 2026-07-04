@@ -1252,7 +1252,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SLOT=WEIGHT",
         help=(
             "weight a Block SMB C-stream dynamics slot; slots: position, "
-            "semantic_probabilities, support_state, state, patch_tokens"
+            "semantic_probabilities, support_state, state, terminal_outcome, "
+            "patch_tokens"
         ),
     )
     parser.add_argument(

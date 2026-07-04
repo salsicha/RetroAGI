@@ -228,7 +228,12 @@ class MarioScenarioEnv:
 
         obs = self.render()
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
-        info = self._build_info(reward_terms=reward_terms)
+        info = self._build_info(
+            reward_terms=reward_terms,
+            death=False,
+            terminated=False,
+            truncated=False,
+        )
         return obs, info
 
     # ── Step ──────────────────────────────────────────────────────────────────
@@ -244,6 +249,7 @@ class MarioScenarioEnv:
         reward_terms = self.reward_config.zero_terms()
         terminated = False
         truncated = False
+        death = False
         info = {}
 
         jump_pressed = action in [2, 4, 5]
@@ -404,6 +410,7 @@ class MarioScenarioEnv:
         # ── 13. Fall death ────────────────────────────────────────────────────
         if self.mario["y"] > self.height:
             terminated = True
+            death = True
             if self._airborne_started_with_jump and not self._has_horizontal_platform_support():
                 reward_terms["gap_jump"] += self.reward_config.gap_jump
             reward_terms["fall_death"] += self.reward_config.fall_death
@@ -432,6 +439,7 @@ class MarioScenarioEnv:
                 self.mario["on_ground"] = False
             else:
                 terminated = True
+                death = True
                 reward_terms["enemy_hit"] += self.reward_config.enemy_hit
 
         # ── 16. Coin collection ───────────────────────────────────────────────
@@ -455,7 +463,12 @@ class MarioScenarioEnv:
         reward, reward_terms = self._finalize_reward_terms(reward_terms)
 
         obs = self.render()
-        info = self._build_info(reward_terms=reward_terms)
+        info = self._build_info(
+            reward_terms=reward_terms,
+            death=death,
+            terminated=terminated,
+            truncated=truncated,
+        )
         return obs, reward, terminated, truncated, info
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -529,14 +542,21 @@ class MarioScenarioEnv:
             for platform in self.platforms
         )
 
-    def _build_info(self, reward_terms: dict[str, float] = None) -> dict:
+    def _build_info(
+        self,
+        reward_terms: dict[str, float] = None,
+        *,
+        death: bool | None = None,
+        terminated: bool = False,
+        truncated: bool = False,
+    ) -> dict:
         """
         Returns a rich info dict containing:
         - mario   : core kinematic state
         - camera_x, max_x_reached
         - nearest_coin, nearest_enemy : {dx, dy, dist}  (normalised 0-1)
         - platform_below_dist          : normalised 0-1
-        - state_vec                    : flat float32 array ready for RL (24 dims)
+        - state_vec                    : flat float32 array ready for RL (27 dims)
         - reward_terms                 : transition reward breakdown
         - reward_total                 : scalar transition reward
         - reward_config                : resolved reward configuration
@@ -544,6 +564,11 @@ class MarioScenarioEnv:
         reward_total, reward_terms = self._finalize_reward_terms(
             reward_terms or self.reward_config.zero_terms()
         )
+        if death is None:
+            death = bool(
+                reward_terms.get("fall_death", 0.0) < 0.0
+                or reward_terms.get("enemy_hit", 0.0) < 0.0
+            )
 
         m = self.mario
         ww = self.world_width
@@ -651,6 +676,9 @@ class MarioScenarioEnv:
                 _ground_ahead(24.0),
                 _ground_ahead(48.0),
                 _ground_ahead(72.0),
+                float(death),
+                float(terminated),
+                float(truncated),
             ],
             dtype=np.float32,
         )
@@ -686,6 +714,9 @@ class MarioScenarioEnv:
             "reward_terms": dict(reward_terms),
             "reward_total": reward_total,
             "reward_config": asdict(self.reward_config),
+            "death": death,
+            "terminated": bool(terminated),
+            "truncated": bool(truncated),
             "state_vec": state_vec,
         }
 

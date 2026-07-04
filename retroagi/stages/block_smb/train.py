@@ -62,6 +62,7 @@ BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
     "semantic_probabilities",
     "support_state",
     "state",
+    "terminal_outcome",
     "patch_tokens",
 )
 _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
@@ -81,6 +82,11 @@ _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
     "symbolic": "state",
     "symbolic_state": "state",
     "symbolic-state": "state",
+    "terminal": "terminal_outcome",
+    "terminal_outcome": "terminal_outcome",
+    "terminal-outcome": "terminal_outcome",
+    "outcome": "terminal_outcome",
+    "death": "terminal_outcome",
     "tokens": "patch_tokens",
     "patch": "patch_tokens",
     "patch_tokens": "patch_tokens",
@@ -1176,6 +1182,8 @@ def block_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         feature_length,
         default=(support[1], support[1]),
     )
+    terminal_start = max(state[0], state[1] - 3)
+    terminal_outcome = (terminal_start, state[1])
     patch_tokens = _block_smb_c_stream_span(
         fusion,
         "c_patch_tokens",
@@ -1187,6 +1195,7 @@ def block_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         "semantic_probabilities": semantics,
         "support_state": support,
         "state": state,
+        "terminal_outcome": terminal_outcome,
         "patch_tokens": patch_tokens,
     }
 

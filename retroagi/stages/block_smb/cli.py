@@ -194,7 +194,8 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         metavar="SLOT=WEIGHT",
         help=(
             "weight a Block SMB C-stream dynamics slot; slots: position, "
-            "semantic_probabilities, support_state, state, patch_tokens"
+            "semantic_probabilities, support_state, state, terminal_outcome, "
+            "patch_tokens"
         ),
     )
     parser.add_argument("--reward-loss-weight", type=_non_negative_float)

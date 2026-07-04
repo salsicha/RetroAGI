@@ -1210,6 +1210,7 @@ class TestFullSMBTraining(unittest.TestCase):
             "support_state",
             "emulator_state",
             "camera_state",
+            "terminal_outcome",
             "patch_tokens",
         ):
             history_name = f"loss_dynamics_{slot_name}"
