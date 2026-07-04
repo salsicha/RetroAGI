@@ -850,30 +850,25 @@ and playable end target.
         transformer consumes the LSTM/world-model prediction as an input or
         context feature for final action selection instead of running the actor
         a second time for critic feedback.
-        Result: added `SinglePassLSTMConditionedAgentWorldModel`, which runs the
-        actor transformer once, projects the LSTM-predicted C stream into
-        A-stream context, and uses a final action head without a second
-        transformer pass.
+        Result: the experimental single-pass actor variant was removed. The
+        supported policy architecture remains `AgentWorldModelCritic`, with the
+        action-level world model and motor-primitive controller carrying the
+        LSTM prediction signal through the existing trainer-facing tuple.
   - [x] Define a new single-pass architecture output contract that preserves
         checkpoint compatibility or provides an explicit migration path from the
         current two-pass `AgentWorldModelCritic` contract.
-        Result: registered `single_pass_lstm_conditioned_actor` with output
-        contract `single_pass_lstm_conditioned_actor.forward.v1`; Block SMB and
-        Full SMB trainers now accept the shared trainer-compatible policy tuple
-        contract set, and tests verify two-pass shared state loads with only the
-        new final action head initialized.
+        Result: retired the experimental output contract. Block SMB and Full SMB
+        trainers now accept only the baseline `agent_world_model_critic.forward.v1`
+        trainer-compatible policy tuple contract.
   - [x] Benchmark the single-pass LSTM-conditioned actor against the current
         two-pass critic-feedback actor for training throughput, action quality,
         recurrent-state behavior, and transfer performance from Block SMB to
         Full SMB.
         Result: `retroagi benchmark-architecture --stage full` now writes a
-        schema-v1 comparison report. The first CUDA report
-        `artifacts/full_pipeline_20260626_1450/full_smb/architecture_benchmark_single_pass_lstm_vs_two_pass.json`
-        loaded the preserved nine-scenario Block SMB checkpoint into both
-        Full SMB variants. The single-pass architecture reached 57.75
-        train steps/sec and 212.12 inference steps/sec versus 43.43 and 132.06
-        for the two-pass baseline, carried recurrent state successfully, and
-        migrated 88 shared keys with only the new final action head initialized.
+        schema-v1 report for the supported baseline architecture by default.
+        The retired experimental comparison showed that the one-pass idea was
+        faster, but it added a second checkpoint contract and action head without
+        becoming the primary policy path.
   - [x] Add a motor-primitive controller where the short-term/B transformer
         emits button combo, hold duration, release/cancel behavior, and optional
         confidence or interrupt parameters instead of only model-space adaptive

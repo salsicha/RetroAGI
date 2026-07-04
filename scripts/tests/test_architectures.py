@@ -7,12 +7,9 @@ import torch
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     BASELINE_ARCHITECTURE_SPEC,
-    SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
-    SINGLE_PASS_LSTM_ARCHITECTURE_SPEC,
     AgentWorldModelCritic,
     ArchitectureRegistry,
     ArchitectureSpec,
-    SinglePassLSTMConditionedAgentWorldModel,
     StageSpec,
     architecture_names,
     build_architecture,
@@ -66,56 +63,12 @@ class TestArchitectureRegistry(unittest.TestCase):
         self.assertEqual(outputs[3].shape, (1, 8))
         self.assertEqual(outputs[4].shape, (1, 2, 6))
 
-    def test_single_pass_lstm_conditioned_actor_builds_and_migrates_shared_state(self):
-        model = build_architecture(
-            SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
-            tiny_stage(),
-            {
-                "hidden_dim": 16,
-                "controller_schedule": "linear",
-                "world_context_scale": 0.5,
-            },
-        )
-        baseline = build_architecture(
-            BASELINE_ARCHITECTURE_NAME,
-            tiny_stage(),
-            {"hidden_dim": 16, "controller_schedule": "linear"},
-        )
+    def test_removed_lstm_actor_is_not_registered(self):
+        removed_name = "_".join(("single", "pass", "lstm", "conditioned", "actor"))
 
-        self.assertIsInstance(model, SinglePassLSTMConditionedAgentWorldModel)
-        self.assertEqual(
-            get_architecture(SINGLE_PASS_LSTM_ARCHITECTURE_NAME).output_contract,
-            SINGLE_PASS_LSTM_ARCHITECTURE_SPEC.output_contract,
-        )
-        src_a = torch.zeros((1, 2), dtype=torch.long)
-        src_b = torch.zeros((1, 4), dtype=torch.long)
-        src_c = torch.zeros((1, 8), dtype=torch.float32)
-
-        outputs = model(
-            src_a,
-            src_b,
-            src_c,
-            tau=1.0,
-            return_world_model_state=True,
-        )
-
-        self.assertEqual(len(outputs), 8)
-        self.assertEqual(outputs[0].shape, (1, 8))
-        self.assertEqual(outputs[1].shape, (1, 8))
-        self.assertEqual(outputs[2].shape, (1, 2, 16))
-        self.assertEqual(outputs[3].shape, (1, 8))
-        self.assertEqual(outputs[4].shape, (1, 2, 6))
-        self.assertIsNotNone(outputs[-1])
-
-        load_result = model.load_state_dict(baseline.state_dict(), strict=False)
-        self.assertEqual(tuple(load_result.unexpected_keys), ())
-        self.assertEqual(
-            tuple(load_result.missing_keys),
-            (
-                "world_conditioned_action_head.weight",
-                "world_conditioned_action_head.bias",
-            ),
-        )
+        self.assertNotIn(removed_name, architecture_names())
+        with self.assertRaisesRegex(KeyError, "unknown architecture"):
+            get_architecture(removed_name)
 
     def test_baseline_rejects_unsupported_stage_and_bad_hyperparameters(self):
         with self.assertRaisesRegex(ValueError, "does not support stage"):
@@ -136,12 +89,6 @@ class TestArchitectureRegistry(unittest.TestCase):
                 BASELINE_ARCHITECTURE_NAME,
                 tiny_stage(),
                 {"not_a_real_option": True},
-            )
-        with self.assertRaisesRegex(ValueError, "world_context_scale"):
-            build_architecture(
-                SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
-                tiny_stage(),
-                {"world_context_scale": -1.0},
             )
 
     def test_registry_rejects_duplicate_architecture_names(self):

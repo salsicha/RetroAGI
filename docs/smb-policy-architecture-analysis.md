@@ -232,10 +232,10 @@ path. The trainer owns the loss weights and regularization. This makes the
 feedback pathway explicit and testable: if the critic is harmful or too large,
 ablation and loss metrics should show it.
 
-There is also a `single_pass_lstm_conditioned_actor` variant. It runs the actor
-once, projects LSTM-predicted state through the critic, and conditions a final
-action head on `hidden_A + world_context_scale * world_context`. That variant
-avoids a second full transformer pass while preserving world-model context.
+The earlier experimental single-pass actor variant has been removed. The
+supported trainer-facing architecture is the baseline `AgentWorldModelCritic`
+tuple contract, so checkpoint compatibility, transfer, and Full SMB training
+all share one policy path.
 
 ## Training Objectives
 

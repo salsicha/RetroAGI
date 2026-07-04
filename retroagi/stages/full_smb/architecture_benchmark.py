@@ -15,7 +15,6 @@ from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     POLICY_TUPLE_OUTPUT_CONTRACTS,
     SMB_ACTIONS,
-    SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
     StageBatch,
     WorldModelState,
     action_level_world_model_state_dict,
@@ -30,7 +29,6 @@ from retroagi.stages.full_smb.transfer import make_full_smb_policy_model
 FULL_SMB_ARCHITECTURE_BENCHMARK_SCHEMA_VERSION = 1
 DEFAULT_FULL_SMB_ARCHITECTURE_BENCHMARK_ARCHITECTURES = (
     BASELINE_ARCHITECTURE_NAME,
-    SINGLE_PASS_LSTM_ARCHITECTURE_NAME,
 )
 
 
@@ -69,7 +67,6 @@ def benchmark_full_smb_policy_architectures(
                 f"{architecture.output_contract!r}"
             )
         config = _architecture_config_for_source(
-            name,
             architecture_config=architecture_config,
             source_state=source_state,
         )
@@ -153,7 +150,6 @@ def _benchmark_batch(*, batch_size: int, device: torch.device) -> StageBatch:
 
 
 def _architecture_config_for_source(
-    architecture_name: str,
     *,
     architecture_config: Optional[Mapping[str, Any]],
     source_state: Optional[Mapping[str, torch.Tensor]],
@@ -161,8 +157,6 @@ def _architecture_config_for_source(
     config = dict(architecture_config or {})
     if source_state is not None and "agent.embedding.weight" in source_state:
         config.setdefault("hidden_dim", int(source_state["agent.embedding.weight"].shape[1]))
-    if architecture_name == SINGLE_PASS_LSTM_ARCHITECTURE_NAME:
-        config.setdefault("world_context_scale", 1.0)
     return config
 
 
@@ -408,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="architecture_names",
         action="append",
         default=[],
-        help="architecture name to benchmark; defaults to baseline and single-pass",
+        help="architecture name to benchmark; defaults to the baseline policy architecture",
     )
     parser.add_argument("--architecture-config", action="append", default=[])
     parser.add_argument("--block-policy-checkpoint", type=Path)
