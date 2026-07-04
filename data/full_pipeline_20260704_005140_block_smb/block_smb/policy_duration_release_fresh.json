@@ -1,0 +1,285 @@
+{
+  "architecture": {
+    "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+    "checkpoint_model_name": "agent_world_model_critic",
+    "config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "extension_schema_version": 1,
+    "name": "agent_world_model_critic",
+    "output_contract": "agent_world_model_critic.forward.v1",
+    "supported_stage_names": [
+      "synthetic_1d",
+      "block_smb",
+      "full_smb",
+      "pong_block"
+    ]
+  },
+  "checkpoint_kind": "block_smb_trainer",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "fca49aa980d01f73d066d767c0446952bc0d8bae",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "fca49aa",
+    "system": "git"
+  },
+  "config": {
+    "ablation": {
+      "checkpoint_transfer_enabled": true,
+      "critic_feedback_enabled": true,
+      "hierarchy_enabled": true,
+      "recurrent_state_enabled": true,
+      "vision_enabled": true,
+      "world_model_enabled": true
+    },
+    "action_aux_weight": 0.01,
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "architecture_name": "agent_world_model_critic",
+    "checkpoint_path": "data/full_pipeline_20260704_005140_block_smb/block_smb/policy_duration_release_fresh.pth",
+    "controller_schedule": "constant",
+    "critic_loss_weight": 0.001,
+    "deterministic": true,
+    "device": "cuda",
+    "entropy_weight": 0.01,
+    "episodes_per_epoch": 122,
+    "epochs": 80,
+    "evaluation_episodes": 3,
+    "evaluation_interval_epochs": 1,
+    "evaluation_max_steps": 200,
+    "fixed_scenarios": [
+      "level_1_flat.json",
+      "level_2_gap.json",
+      "level_3_stairs.json",
+      "level_4_platforms.json",
+      "level_5_enemy_hop.json",
+      "level_6_enemy_patrol.json",
+      "level_7_moving_bridge.json",
+      "level_8_enemy_gap.json",
+      "level_9_enemy_stomp.json",
+      "level_10_left_retreat.json",
+      "level_11_left_jump_recovery.json",
+      "level_12_wait_bridge.json",
+      "level_13_variable_pits.json",
+      "level_14_under_enemy_platform.json",
+      "level_15_wait_long_bridge.json",
+      "level_16_wait_enemy_gate.json"
+    ],
+    "gamma": 0.95,
+    "generated_scenarios": 0,
+    "generated_seed": 50000,
+    "gradient_clip_norm": 1.0,
+    "hidden_dim": 64,
+    "imagined_rollout_horizon": 0,
+    "imagined_rollout_weight": 0.0,
+    "learning_rate": 0.0008,
+    "log_path": null,
+    "monte_carlo_distribution_id": "block_smb_mc_v1",
+    "monte_carlo_failure_replay_samples_per_epoch": 0,
+    "monte_carlo_family_pass_rate_gate": 0.9,
+    "monte_carlo_family_weights": {},
+    "monte_carlo_max_rejections": 32,
+    "monte_carlo_parameter_sweep": true,
+    "monte_carlo_pass_rate_gate": 0.95,
+    "monte_carlo_seed": 50000,
+    "monte_carlo_sweep_repeats_per_difficulty": 1,
+    "monte_carlo_test_samples": 45,
+    "monte_carlo_train_samples_per_epoch": 45,
+    "monte_carlo_validate_reachability": true,
+    "monte_carlo_validation_samples": 45,
+    "noop_loss_weight": 0.25,
+    "num_envs": 1,
+    "policy_loss_weight": 1.0,
+    "record_videos": false,
+    "representation_weight": 0.05,
+    "resume_path": null,
+    "reward_config": {
+      "coin": 10.0,
+      "enemy_hit": -10.0,
+      "enemy_stomp": 5.0,
+      "fall_death": -10.0,
+      "frame_penalty": -0.01,
+      "gap_jump": -5.0,
+      "goal": 50.0,
+      "progress_per_pixel": 0.05
+    },
+    "reward_loss_weight": 0.01,
+    "rollout_steps": 220,
+    "save_checkpoints": true,
+    "seed": 20260704,
+    "semantic_prediction_accuracy_threshold": 0.8,
+    "target_network_instability_threshold": 1.0,
+    "target_network_mode": "off",
+    "target_network_tau": 0.01,
+    "tracking_backend": "none",
+    "tracking_log_dir": null,
+    "tracking_mode": null,
+    "tracking_project": "retroagi",
+    "tracking_run_name": null,
+    "value_loss_weight": 0.25,
+    "video_dir": null,
+    "vision_checkpoint_path": "data/block_vit/block_vit.pth",
+    "world_model_slot_weights": {
+      "semantic_probabilities": 4.0
+    },
+    "world_model_weight": 0.1
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-134-generic",
+      "system": "Linux",
+      "version": "#134-Ubuntu SMP PREEMPT_DYNAMIC Fri Jun 26 18:43:11 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.7.0+cu126"
+    }
+  },
+  "epoch": 80,
+  "global_step": 966880,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "fca49aa980d01f73d066d767c0446952bc0d8bae",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "fca49aa",
+      "system": "git"
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-134-generic",
+        "system": "Linux",
+        "version": "#134-Ubuntu SMP PREEMPT_DYNAMIC Fri Jun 26 18:43:11 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.7.0+cu126"
+      }
+    }
+  },
+  "metrics": {
+    "accuracy": 0.5820784378619891,
+    "dynamics_semantic_prediction_accuracy": 1.0,
+    "dynamics_semantic_prediction_gate_met": 1.0,
+    "dynamics_semantic_prediction_step_gate_rate": 1.0,
+    "epoch": 80.0,
+    "eval_fixed_action_count_0": 9.0,
+    "eval_fixed_action_count_1": 2817.0,
+    "eval_fixed_action_count_2": 983.0,
+    "eval_fixed_action_count_3": 123.0,
+    "eval_fixed_action_count_4": 30.0,
+    "eval_fixed_action_count_5": 0.0,
+    "eval_fixed_all_noop_action_collapse": 0.0,
+    "eval_mean_return": 33.155833333333334,
+    "eval_monte_carlo_test_action_count_0": 20.0,
+    "eval_monte_carlo_test_action_count_1": 9348.0,
+    "eval_monte_carlo_test_action_count_2": 3208.0,
+    "eval_monte_carlo_test_action_count_3": 123.0,
+    "eval_monte_carlo_test_action_count_4": 30.0,
+    "eval_monte_carlo_test_action_count_5": 0.0,
+    "eval_monte_carlo_test_all_noop_action_collapse": 0.0,
+    "eval_monte_carlo_test_family_gate_met": 0.0,
+    "eval_monte_carlo_test_gate_met": 0.0,
+    "eval_monte_carlo_test_mean_return": 31.853370370370378,
+    "eval_monte_carlo_test_success_rate": 0.37037037037037035,
+    "eval_monte_carlo_validation_action_count_0": 20.0,
+    "eval_monte_carlo_validation_action_count_1": 9404.0,
+    "eval_monte_carlo_validation_action_count_2": 3193.0,
+    "eval_monte_carlo_validation_action_count_3": 120.0,
+    "eval_monte_carlo_validation_action_count_4": 30.0,
+    "eval_monte_carlo_validation_action_count_5": 0.0,
+    "eval_monte_carlo_validation_all_noop_action_collapse": 0.0,
+    "eval_monte_carlo_validation_family_gate_met": 0.0,
+    "eval_monte_carlo_validation_gate_met": 0.0,
+    "eval_monte_carlo_validation_mean_return": 32.12640740740742,
+    "eval_monte_carlo_validation_success_rate": 0.37037037037037035,
+    "eval_success_rate": 0.4583333333333333,
+    "eval_success_thresholds_met_after_semantic_gate": 0.0,
+    "eval_threshold_pass_rate": 0.4375,
+    "eval_tuning_score": 437991.48916666664,
+    "iteration": 0.0,
+    "loss": 1.762230909326387,
+    "loss_action": 1.592424301680559,
+    "loss_dynamics": 0.0043044775803318365,
+    "loss_dynamics_patch_tokens": 4.6636071012902846e-05,
+    "loss_dynamics_position": 0.0007741268797388913,
+    "loss_dynamics_semantic_probabilities": 7.071562166729416e-05,
+    "loss_dynamics_state": 0.00986237416141587,
+    "loss_dynamics_support_state": 0.02442177106049476,
+    "loss_dynamics_terminal_outcome": 0.0033525273501059357,
+    "loss_primitive": 0.3310042336846984,
+    "phase": "teacher_forced",
+    "primitive_duration_supervision_count": 200.0,
+    "primitive_post_release_supervision_count": 3408.0,
+    "primitive_release_positive_count": 200.0,
+    "primitive_release_supervision_count": 3408.0,
+    "primitive_weighted_supervision_count": 10224.0,
+    "semantic_prediction_accuracy_threshold": 0.8,
+    "semantic_prediction_gate_met": 1.0
+  },
+  "model_name": "block_smb_actor_world_model_critic",
+  "specs": {
+    "architecture": {
+      "checkpoint_compatibility_policy": "strict_stage_spec_and_model_state",
+      "checkpoint_model_name": "agent_world_model_critic",
+      "configurable_hyperparameters": {
+        "controller_schedule": "constant",
+        "hidden_dim": 64
+      },
+      "name": "agent_world_model_critic",
+      "output_contract": "agent_world_model_critic.forward.v1",
+      "supported_stage_names": [
+        "synthetic_1d",
+        "block_smb",
+        "full_smb",
+        "pong_block"
+      ]
+    },
+    "architecture_config": {
+      "controller_schedule": "constant",
+      "hidden_dim": 64
+    },
+    "stage": {
+      "name": "block_smb",
+      "ratio_bc": 4,
+      "seq_len_a": 8,
+      "seq_len_b": 16,
+      "seq_len_c": 64,
+      "vocab_size": 20
+    }
+  },
+  "stage": "block_smb",
+  "state_keys": [
+    "model",
+    "numpy_rng",
+    "optimizer",
+    "python_rng",
+    "torch_rng"
+  ]
+}
