@@ -233,6 +233,44 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertEqual(third.action, int(SMBAction.RIGHT))
         self.assertEqual(repeated.action, int(SMBAction.RIGHT))
 
+    def test_parameterized_primitive_executor_uses_release_logit(self):
+        executor = SMBParameterizedPrimitiveExecutor()
+        hold_motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[-1.0, 0.0, 4.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 4.0]),
+            release_logit=torch.tensor([[-4.0]]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+        release_motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[-1.0, 0.0, 4.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 4.0]),
+            release_logit=torch.tensor([[4.0]]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=hold_motor,
+            batch=self._batch_with_vision(self._support_vision(1)),
+        )
+        second = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=release_motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+        )
+        third = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=hold_motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+        )
+
+        self.assertTrue(first.started)
+        self.assertEqual(first.hold_frames, 4)
+        self.assertEqual(second.action, int(SMBAction.RIGHT))
+        self.assertTrue(second.released)
+        self.assertTrue(second.active)
+        self.assertEqual(third.action, int(SMBAction.RIGHT))
+
     def test_parameterized_primitive_executor_requires_non_jump_after_landing(self):
         executor = SMBParameterizedPrimitiveExecutor()
         motor = SimpleNamespace(

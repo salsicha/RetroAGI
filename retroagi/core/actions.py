@@ -500,6 +500,17 @@ class SMBParameterizedPrimitiveExecutor:
                 hold_frames=hold_frames,
             )
 
+        release_requested = self._release_requested(motor_primitives)
+        if not self._released and release_requested:
+            self._released = True
+            return SMBPrimitiveExecution(
+                action=int(release_action),
+                active=True,
+                released=True,
+                duration_bin_index=self._duration_bin_index,
+                hold_frames=self._hold_frames,
+            )
+
         if not self._released and self._hold_frames_remaining > 0:
             self._hold_frames_remaining -= 1
             return SMBPrimitiveExecution(
@@ -538,6 +549,12 @@ class SMBParameterizedPrimitiveExecutor:
         if cancel_logit is None:
             return False
         return bool(cancel_logit > 0.0)
+
+    def _release_requested(self, motor_primitives: Any) -> bool:
+        release_logit = _last_motor_scalar(getattr(motor_primitives, "release_logit", None))
+        if release_logit is None:
+            return False
+        return bool(release_logit > 0.0)
 
     def _clamp_hold_frames(self, value: Any) -> int:
         try:

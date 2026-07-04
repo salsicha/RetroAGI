@@ -5,11 +5,12 @@ import json
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
 
-from retroagi.core import VisionOutput, VisionSpec
+from retroagi.core import DEFAULT_PRIMITIVE_DURATION_BINS, SMBAction, VisionOutput, VisionSpec
 from retroagi.stages.block_smb import distill as distill_module
 from retroagi.stages.block_smb.distill import (
     BlockSMBDistillationConfig,
@@ -110,6 +111,96 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertTrue(all(name in scripts for name, _scenario in scenarios))
         self.assertTrue(any(action == 2 for actions in scripts.values() for action in actions))
 
+    def test_scripted_examples_carry_primitive_duration_release_labels(self):
+        config = BlockSMBDistillationConfig(
+            fixed_scenarios=("level_5_enemy_hop.json",),
+            required_monte_carlo_families=(),
+            rollout_steps=45,
+            episodes_per_scenario=1,
+            evaluation_episodes=1,
+            evaluation_max_steps=45,
+            primitive_hazard_weight_multiplier=3.0,
+            device="cpu",
+        )
+
+        examples = collect_scripted_distillation_examples(
+            config,
+            vision_factory=static_vision_factory,
+        )
+
+        jump_examples = [
+            example
+            for example in examples
+            if example.action == int(SMBAction.RIGHT_JUMP)
+        ]
+        duration_examples = [
+            example
+            for example in examples
+            if example.primitive_duration_mask > 0.0
+        ]
+        release_examples = [
+            example
+            for example in examples
+            if example.primitive_release_mask > 0.0
+        ]
+        positive_release_examples = [
+            example
+            for example in examples
+            if example.primitive_release > 0.0
+        ]
+
+        self.assertEqual(len(jump_examples), 18)
+        self.assertEqual(len(duration_examples), 1)
+        self.assertEqual(
+            duration_examples[0].primitive_duration_bin,
+            int(
+                torch.abs(
+                    torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32)
+                    - 18.0
+                )
+                .argmin()
+                .item()
+            ),
+        )
+        self.assertEqual(len(release_examples), 18)
+        self.assertEqual(len(positive_release_examples), 1)
+        self.assertEqual(
+            {example.primitive_post_release for example in jump_examples},
+            {int(SMBAction.RIGHT)},
+        )
+        self.assertTrue(all(example.primitive_weight == 3.0 for example in jump_examples))
+
+    def test_primitive_loss_uses_scripted_duration_release_targets(self):
+        config = BlockSMBDistillationConfig(
+            fixed_scenarios=("level_5_enemy_hop.json",),
+            required_monte_carlo_families=(),
+            rollout_steps=45,
+            episodes_per_scenario=1,
+            evaluation_episodes=1,
+            evaluation_max_steps=45,
+            device="cpu",
+        )
+        examples = collect_scripted_distillation_examples(
+            config,
+            vision_factory=static_vision_factory,
+        )
+        example = next(
+            example for example in examples if example.primitive_duration_mask > 0.0
+        )
+        motor_primitives = SimpleNamespace(
+            hold_duration_logits=torch.zeros(1, 1, len(DEFAULT_PRIMITIVE_DURATION_BINS)),
+            release_logit=torch.zeros(1, 1),
+            post_release_logits=torch.zeros(1, 1, len(SMBAction)),
+        )
+
+        loss = distill_module._block_smb_distillation_primitive_loss(
+            motor_primitives,
+            [example],
+            device=torch.device("cpu"),
+        )
+
+        self.assertGreater(float(loss.item()), 0.0)
+
     def test_cli_passes_monte_carlo_distillation_config(self):
         with patch(
             "retroagi.stages.block_smb.distill.train_distilled_block_smb_policy",
@@ -125,6 +216,10 @@ class TestBlockSMBDistillation(unittest.TestCase):
                         "data/pipeline/block_vit.pth",
                         "--epochs",
                         "1",
+                        "--primitive-loss-weight",
+                        "0.6",
+                        "--primitive-hazard-weight-multiplier",
+                        "3.5",
                         "--monte-carlo-samples",
                         "3",
                         "--monte-carlo-seed",
@@ -151,6 +246,8 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(config.checkpoint_path, Path("data/block_smb/distilled.pth"))
         self.assertEqual(config.vision_checkpoint, Path("data/pipeline/block_vit.pth"))
         self.assertEqual(config.monte_carlo_samples, 3)
+        self.assertEqual(config.primitive_loss_weight, 0.6)
+        self.assertEqual(config.primitive_hazard_weight_multiplier, 3.5)
         self.assertEqual(config.monte_carlo_seed, 60002)
         self.assertEqual(config.monte_carlo_family_weights, {"flat_run": 1.0})
         self.assertTrue(config.monte_carlo_parameter_sweep)

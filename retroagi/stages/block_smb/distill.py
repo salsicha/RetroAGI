@@ -8,13 +8,22 @@ import json
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-from retroagi.core import StageBatch, VisionEncoder, select_device, to_plain_data
+from retroagi.core import (
+    DEFAULT_PRIMITIVE_DURATION_BINS,
+    SMBAction,
+    StageBatch,
+    VisionEncoder,
+    is_smb_jump_action,
+    select_device,
+    smb_jump_release_action,
+    to_plain_data,
+)
 
 from .adapter import BlockSMBStage
 from .env import MarioScenarioEnv
@@ -63,6 +72,8 @@ class BlockSMBDistillationConfig:
     learning_rate: float = 1e-3
     jump_weight_multiplier: float = 8.0
     dynamics_loss_weight: float = 1.0
+    primitive_loss_weight: float = 0.25
+    primitive_hazard_weight_multiplier: float = 2.0
     world_model_slot_weights: Mapping[str, float] = field(
         default_factory=lambda: {"semantic_probabilities": 4.0}
     )
@@ -143,6 +154,10 @@ class BlockSMBDistillationConfig:
             raise ValueError("jump_weight_multiplier must be positive")
         if self.dynamics_loss_weight < 0:
             raise ValueError("dynamics_loss_weight must be non-negative")
+        if self.primitive_loss_weight < 0:
+            raise ValueError("primitive_loss_weight must be non-negative")
+        if self.primitive_hazard_weight_multiplier <= 0:
+            raise ValueError("primitive_hazard_weight_multiplier must be positive")
         if self.monte_carlo_samples < 0:
             raise ValueError("monte_carlo_samples must be non-negative")
         if not isinstance(self.monte_carlo_parameter_sweep, bool):
@@ -211,6 +226,99 @@ class BlockSMBDistillationExample:
     scenario_name: str
     episode: int
     step_index: int
+    primitive_duration_bin: int = 0
+    primitive_duration_mask: float = 0.0
+    primitive_release: float = 0.0
+    primitive_release_mask: float = 0.0
+    primitive_post_release: int = int(SMBAction.NOOP)
+    primitive_post_release_mask: float = 0.0
+    primitive_weight: float = 1.0
+
+
+_PRIMITIVE_HAZARD_SCENARIO_TOKENS = (
+    "bridge",
+    "chained",
+    "enemy",
+    "gap",
+    "opening",
+    "pipe",
+    "pit",
+    "platform",
+    "stair",
+)
+
+
+def _scripted_primitive_labels(
+    actions: Sequence[int],
+    *,
+    scenario_name: str,
+    scenario: Mapping[str, Any],
+    hazard_weight_multiplier: float,
+) -> list[dict[str, float | int]]:
+    labels = [
+        {
+            "primitive_duration_bin": 0,
+            "primitive_duration_mask": 0.0,
+            "primitive_release": 0.0,
+            "primitive_release_mask": 0.0,
+            "primitive_post_release": int(SMBAction.NOOP),
+            "primitive_post_release_mask": 0.0,
+            "primitive_weight": 1.0,
+        }
+        for _action in actions
+    ]
+    hazard_weight = (
+        float(hazard_weight_multiplier)
+        if _scenario_has_primitive_timing_hazard(scenario_name, scenario)
+        else 1.0
+    )
+    index = 0
+    while index < len(actions):
+        action = int(actions[index])
+        if not is_smb_jump_action(action):
+            index += 1
+            continue
+        end = index + 1
+        while end < len(actions) and int(actions[end]) == action:
+            end += 1
+        duration_bin = _nearest_primitive_duration_bin(end - index)
+        release_action = int(smb_jump_release_action(action))
+        for jump_index in range(index, end):
+            labels[jump_index]["primitive_release_mask"] = 1.0
+            labels[jump_index]["primitive_post_release"] = release_action
+            labels[jump_index]["primitive_post_release_mask"] = 1.0
+            labels[jump_index]["primitive_weight"] = hazard_weight
+        labels[index]["primitive_duration_bin"] = duration_bin
+        labels[index]["primitive_duration_mask"] = 1.0
+        labels[end - 1]["primitive_release"] = 1.0
+        index = end
+    return labels
+
+
+def _nearest_primitive_duration_bin(duration: int | float) -> int:
+    best_index = 0
+    best_distance = float("inf")
+    for index, bin_value in enumerate(DEFAULT_PRIMITIVE_DURATION_BINS):
+        distance = abs(float(bin_value) - float(duration))
+        if distance < best_distance:
+            best_index = index
+            best_distance = distance
+    return best_index
+
+
+def _scenario_has_primitive_timing_hazard(
+    scenario_name: str,
+    scenario: Mapping[str, Any],
+) -> bool:
+    lowered_name = str(scenario_name).lower()
+    if any(token in lowered_name for token in _PRIMITIVE_HAZARD_SCENARIO_TOKENS):
+        return True
+    if bool(scenario.get("enemies")):
+        return True
+    platforms = scenario.get("platforms")
+    if isinstance(platforms, Sequence) and len(platforms) > 1:
+        return True
+    return False
 
 
 def _normalize_distillation_monte_carlo_family_weights(
@@ -582,6 +690,12 @@ def collect_scripted_distillation_examples(
     policy = BlockSMBScriptedPolicy(action_scripts)
     examples: list[BlockSMBDistillationExample] = []
     for scenario_index, (scenario_name, scenario) in enumerate(scenarios):
+        primitive_labels = _scripted_primitive_labels(
+            action_scripts[scenario_name],
+            scenario_name=scenario_name,
+            scenario=scenario,
+            hazard_weight_multiplier=config.primitive_hazard_weight_multiplier,
+        )
         for episode in range(config.episodes_per_scenario):
             env = MarioScenarioEnv()
             stage = BlockSMBStage(env=env, scenario=scenario, vision=vision_factory())
@@ -596,6 +710,7 @@ def collect_scripted_distillation_examples(
                     next_batch = _detach_batch(
                         stage.encode_observation(next_observation, dict(info))
                     )
+                    primitive_label = primitive_labels[min(step_index, len(primitive_labels) - 1)]
                     examples.append(
                         BlockSMBDistillationExample(
                             batch=batch,
@@ -604,6 +719,7 @@ def collect_scripted_distillation_examples(
                             scenario_name=scenario_name,
                             episode=episode,
                             step_index=step_index,
+                            **primitive_label,
                         )
                     )
                     observation = next_observation
@@ -632,6 +748,12 @@ def collect_dagger_distillation_examples(
     model.eval()
     with torch.no_grad():
         for scenario_index, (scenario_name, scenario) in enumerate(scenarios):
+            primitive_labels = _scripted_primitive_labels(
+                action_scripts[scenario_name],
+                scenario_name=scenario_name,
+                scenario=scenario,
+                hazard_weight_multiplier=config.primitive_hazard_weight_multiplier,
+            )
             for episode in range(config.episodes_per_scenario):
                 env = MarioScenarioEnv()
                 stage = BlockSMBStage(env=env, scenario=scenario, vision=vision_factory())
@@ -664,6 +786,7 @@ def collect_dagger_distillation_examples(
                             logits,
                             _next_state_pred,
                             next_world_model_state,
+                            _motor_primitives,
                         ) = _action_logits_with_state(
                             model,
                             src_a,
@@ -678,6 +801,9 @@ def collect_dagger_distillation_examples(
                         next_batch = _detach_batch(
                             stage.encode_observation(next_observation, dict(info))
                         )
+                        primitive_label = primitive_labels[
+                            min(step_index, len(primitive_labels) - 1)
+                        ]
                         examples.append(
                             BlockSMBDistillationExample(
                                 batch=batch,
@@ -687,6 +813,7 @@ def collect_dagger_distillation_examples(
                                 episode=config.episodes_per_scenario * iteration
                                 + episode,
                                 step_index=step_index,
+                                **primitive_label,
                             )
                         )
                         if terminated or truncated:
@@ -809,8 +936,10 @@ def _train_behavior_cloning_epoch_recurrent(
     total_loss = 0.0
     total_action_loss = 0.0
     total_dynamics_loss = 0.0
+    total_primitive_loss = 0.0
     total_semantic_accuracy = 0.0
     total_semantic_gate = 0.0
+    primitive_counts = _empty_primitive_supervision_counts()
     total_slot_losses = {slot_name: 0.0 for slot_name in config.world_model_slot_weights}
     for slot_name in (
         "position",
@@ -826,6 +955,7 @@ def _train_behavior_cloning_epoch_recurrent(
         losses = []
         action_losses = []
         dynamics_losses = []
+        primitive_losses = []
         semantic_accuracies = []
         semantic_gates = []
         slot_losses_by_name: dict[str, list[torch.Tensor]] = {
@@ -835,7 +965,12 @@ def _train_behavior_cloning_epoch_recurrent(
         sequence_correct = 0
         for example in sequence:
             src_a, src_b, src_c, actions, next_c = _stack_examples([example], device)
-            logits, next_state_pred, next_world_model_state = _action_logits_with_state(
+            (
+                logits,
+                next_state_pred,
+                next_world_model_state,
+                motor_primitives,
+            ) = _action_logits_with_state(
                 model,
                 src_a,
                 src_b,
@@ -844,6 +979,11 @@ def _train_behavior_cloning_epoch_recurrent(
             )
             action_loss = F.cross_entropy(logits, actions, reduction="none")
             weighted_action_loss = action_loss.squeeze(0) * class_weights[actions].squeeze(0)
+            primitive_loss = _block_smb_distillation_primitive_loss(
+                motor_primitives,
+                [example],
+                device=device,
+            )
             slot_losses = block_smb_c_stream_dynamics_slot_losses(
                 next_state_pred,
                 next_c.detach(),
@@ -861,9 +1001,15 @@ def _train_behavior_cloning_epoch_recurrent(
                 example.next_batch,
                 semantic_accuracy_threshold=config.semantic_prediction_accuracy_threshold,
             )
-            losses.append(weighted_action_loss + config.dynamics_loss_weight * dynamics_loss)
+            losses.append(
+                weighted_action_loss
+                + config.dynamics_loss_weight * dynamics_loss
+                + config.primitive_loss_weight * primitive_loss
+            )
             action_losses.append(weighted_action_loss)
             dynamics_losses.append(dynamics_loss)
+            primitive_losses.append(primitive_loss)
+            _add_primitive_supervision_counts(primitive_counts, [example])
             semantic_accuracies.append(metrics["dynamics_semantic_prediction_accuracy"])
             semantic_gates.append(metrics["dynamics_semantic_prediction_gate_met"])
             for slot_name, slot_loss in slot_losses.items():
@@ -886,6 +1032,7 @@ def _train_behavior_cloning_epoch_recurrent(
         total_loss += float(loss.detach().cpu().item()) * len(sequence)
         total_action_loss += _tensor_list_mean(action_losses) * len(sequence)
         total_dynamics_loss += _tensor_list_mean(dynamics_losses) * len(sequence)
+        total_primitive_loss += _tensor_list_mean(primitive_losses) * len(sequence)
         total_semantic_accuracy += _tensor_list_mean(semantic_accuracies) * len(sequence)
         total_semantic_gate += _tensor_list_mean(semantic_gates) * len(sequence)
         for slot_name, values in slot_losses_by_name.items():
@@ -894,11 +1041,13 @@ def _train_behavior_cloning_epoch_recurrent(
         total_loss=total_loss,
         total_action_loss=total_action_loss,
         total_dynamics_loss=total_dynamics_loss,
+        total_primitive_loss=total_primitive_loss,
         total_slot_losses=total_slot_losses,
         total_semantic_accuracy=total_semantic_accuracy,
         total_semantic_gate=total_semantic_gate,
         total_correct=total_correct,
         total_seen=total_seen,
+        primitive_counts=primitive_counts,
         semantic_accuracy_threshold=config.semantic_prediction_accuracy_threshold,
     )
 
@@ -918,8 +1067,10 @@ def _train_behavior_cloning_epoch_independent(
     total_loss = 0.0
     total_action_loss = 0.0
     total_dynamics_loss = 0.0
+    total_primitive_loss = 0.0
     total_semantic_accuracy = 0.0
     total_semantic_gate = 0.0
+    primitive_counts = _empty_primitive_supervision_counts()
     total_slot_losses = {slot_name: 0.0 for slot_name in config.world_model_slot_weights}
     for slot_name in (
         "position",
@@ -935,9 +1086,19 @@ def _train_behavior_cloning_epoch_independent(
         batch_indices = indices[start : start + batch_size]
         examples = [dataset[index] for index in batch_indices]
         src_a, src_b, src_c, actions, next_c = _stack_examples(examples, device)
-        logits, next_state_pred = _action_logits_and_prediction(model, src_a, src_b, src_c)
+        logits, next_state_pred, motor_primitives = _action_logits_and_prediction(
+            model,
+            src_a,
+            src_b,
+            src_c,
+        )
         action_loss = F.cross_entropy(logits, actions, reduction="none")
         weighted_action_loss = (action_loss * class_weights[actions]).mean()
+        primitive_loss = _block_smb_distillation_primitive_loss(
+            motor_primitives,
+            examples,
+            device=device,
+        )
         slot_losses = _batched_distillation_slot_losses(next_state_pred, next_c, examples)
         dynamics_loss = block_smb_dynamics_loss(
             next_state_pred,
@@ -945,7 +1106,11 @@ def _train_behavior_cloning_epoch_independent(
             slot_losses,
             world_model_slot_weights=config.world_model_slot_weights,
         )
-        loss = weighted_action_loss + config.dynamics_loss_weight * dynamics_loss
+        loss = (
+            weighted_action_loss
+            + config.dynamics_loss_weight * dynamics_loss
+            + config.primitive_loss_weight * primitive_loss
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -961,6 +1126,10 @@ def _train_behavior_cloning_epoch_independent(
             total_dynamics_loss += (
                 float(dynamics_loss.detach().cpu().item()) * int(actions.numel())
             )
+            total_primitive_loss += (
+                float(primitive_loss.detach().cpu().item()) * int(actions.numel())
+            )
+            _add_primitive_supervision_counts(primitive_counts, examples)
             metrics = _batched_distillation_dynamics_metrics(
                 next_state_pred.detach(),
                 next_c.detach(),
@@ -983,11 +1152,13 @@ def _train_behavior_cloning_epoch_independent(
         total_loss=total_loss,
         total_action_loss=total_action_loss,
         total_dynamics_loss=total_dynamics_loss,
+        total_primitive_loss=total_primitive_loss,
         total_slot_losses=total_slot_losses,
         total_semantic_accuracy=total_semantic_accuracy,
         total_semantic_gate=total_semantic_gate,
         total_correct=total_correct,
         total_seen=total_seen,
+        primitive_counts=primitive_counts,
         semantic_accuracy_threshold=config.semantic_prediction_accuracy_threshold,
     )
 
@@ -998,7 +1169,12 @@ def _action_logits(
     src_b: torch.Tensor,
     src_c: torch.Tensor,
 ) -> torch.Tensor:
-    logits, _next_state_pred = _action_logits_and_prediction(model, src_a, src_b, src_c)
+    logits, _next_state_pred, _motor_primitives = _action_logits_and_prediction(
+        model,
+        src_a,
+        src_b,
+        src_c,
+    )
     return logits
 
 
@@ -1007,14 +1183,18 @@ def _action_logits_and_prediction(
     src_a: torch.Tensor,
     src_b: torch.Tensor,
     src_c: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, Any]:
     _actions1, next_state_pred, _criticism, _actions2, logits_a, _w_b, _b_b = model(
         src_a,
         src_b,
         src_c,
         tau=1.0,
     )
-    return logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT], next_state_pred
+    return (
+        logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT],
+        next_state_pred,
+        getattr(model, "last_motor_primitives", None),
+    )
 
 
 def _action_logits_with_state(
@@ -1024,7 +1204,7 @@ def _action_logits_with_state(
     src_c: torch.Tensor,
     *,
     world_model_state: Any,
-) -> tuple[torch.Tensor, torch.Tensor, Any]:
+) -> tuple[torch.Tensor, torch.Tensor, Any, Any]:
     episode_mask = torch.ones((src_c.size(0),), dtype=src_c.dtype, device=src_c.device)
     (
         _actions1,
@@ -1044,7 +1224,135 @@ def _action_logits_with_state(
         episode_mask=episode_mask,
         return_world_model_state=True,
     )
-    return logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT], next_state_pred, next_world_model_state
+    return (
+        logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT],
+        next_state_pred,
+        next_world_model_state,
+        getattr(model, "last_motor_primitives", None),
+    )
+
+
+def _block_smb_distillation_primitive_loss(
+    motor_primitives: Any,
+    examples: list[BlockSMBDistillationExample],
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    zero = torch.zeros((), dtype=torch.float32, device=device)
+    if motor_primitives is None or not examples:
+        return zero
+    sample_weights = torch.tensor(
+        [float(example.primitive_weight) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    losses: list[torch.Tensor] = []
+
+    hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
+    duration_mask = torch.tensor(
+        [float(example.primitive_duration_mask) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    if (
+        hold_duration_logits is not None
+        and hold_duration_logits.ndim == 3
+        and bool((duration_mask > 0).any().item())
+    ):
+        duration_targets = torch.tensor(
+            [int(example.primitive_duration_bin) for example in examples],
+            dtype=torch.long,
+            device=device,
+        )
+        per_sample = F.cross_entropy(
+            hold_duration_logits[:, -1, :],
+            duration_targets,
+            reduction="none",
+        )
+        weights = duration_mask * sample_weights
+        losses.append((per_sample * weights).sum() / weights.sum().clamp_min(1.0))
+
+    release_logit = getattr(motor_primitives, "release_logit", None)
+    release_mask = torch.tensor(
+        [float(example.primitive_release_mask) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    if (
+        release_logit is not None
+        and release_logit.ndim == 2
+        and bool((release_mask > 0).any().item())
+    ):
+        release_targets = torch.tensor(
+            [float(example.primitive_release) for example in examples],
+            dtype=torch.float32,
+            device=device,
+        )
+        per_sample = F.binary_cross_entropy_with_logits(
+            release_logit[:, -1],
+            release_targets,
+            reduction="none",
+        )
+        weights = release_mask * sample_weights
+        losses.append((per_sample * weights).sum() / weights.sum().clamp_min(1.0))
+
+    post_release_logits = getattr(motor_primitives, "post_release_logits", None)
+    post_release_mask = torch.tensor(
+        [float(example.primitive_post_release_mask) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    if (
+        post_release_logits is not None
+        and post_release_logits.ndim == 3
+        and bool((post_release_mask > 0).any().item())
+    ):
+        post_release_targets = torch.tensor(
+            [int(example.primitive_post_release) for example in examples],
+            dtype=torch.long,
+            device=device,
+        )
+        per_sample = F.cross_entropy(
+            post_release_logits[:, -1, :BLOCK_SMB_ACTION_COUNT],
+            post_release_targets,
+            reduction="none",
+        )
+        weights = post_release_mask * sample_weights
+        losses.append((per_sample * weights).sum() / weights.sum().clamp_min(1.0))
+
+    if not losses:
+        return zero
+    return torch.stack(losses).mean()
+
+
+def _empty_primitive_supervision_counts() -> dict[str, float]:
+    return {
+        "primitive_duration_supervision_count": 0.0,
+        "primitive_release_supervision_count": 0.0,
+        "primitive_release_positive_count": 0.0,
+        "primitive_post_release_supervision_count": 0.0,
+        "primitive_weighted_supervision_count": 0.0,
+    }
+
+
+def _add_primitive_supervision_counts(
+    counts: dict[str, float],
+    examples: list[BlockSMBDistillationExample],
+) -> None:
+    for example in examples:
+        duration_mask = float(example.primitive_duration_mask)
+        release_mask = float(example.primitive_release_mask)
+        post_release_mask = float(example.primitive_post_release_mask)
+        any_mask = max(duration_mask, release_mask, post_release_mask)
+        counts["primitive_duration_supervision_count"] += duration_mask
+        counts["primitive_release_supervision_count"] += release_mask
+        counts["primitive_release_positive_count"] += (
+            release_mask * float(example.primitive_release)
+        )
+        counts["primitive_post_release_supervision_count"] += post_release_mask
+        counts["primitive_weighted_supervision_count"] += any_mask * float(
+            example.primitive_weight
+        )
 
 
 def _batched_distillation_slot_losses(
@@ -1102,11 +1410,13 @@ def _behavior_cloning_epoch_summary(
     total_loss: float,
     total_action_loss: float,
     total_dynamics_loss: float,
+    total_primitive_loss: float,
     total_slot_losses: Mapping[str, float],
     total_semantic_accuracy: float,
     total_semantic_gate: float,
     total_correct: int,
     total_seen: int,
+    primitive_counts: Mapping[str, float],
     semantic_accuracy_threshold: float,
 ) -> dict[str, float]:
     denom = max(total_seen, 1)
@@ -1114,6 +1424,7 @@ def _behavior_cloning_epoch_summary(
         "loss": total_loss / denom,
         "loss_action": total_action_loss / denom,
         "loss_dynamics": total_dynamics_loss / denom,
+        "loss_primitive": total_primitive_loss / denom,
         "accuracy": total_correct / denom,
         "dynamics_semantic_prediction_accuracy": total_semantic_accuracy / denom,
         "dynamics_semantic_prediction_gate_met": float(
@@ -1127,6 +1438,7 @@ def _behavior_cloning_epoch_summary(
             for slot_name, total_slot_loss in total_slot_losses.items()
         }
     )
+    summary.update({key: float(value) for key, value in primitive_counts.items()})
     return summary
 
 
@@ -1281,10 +1593,12 @@ def _dataset_summary(dataset: list[BlockSMBDistillationExample]) -> dict[str, An
     counts: dict[str, int] = {}
     actions = torch.zeros(BLOCK_SMB_ACTION_COUNT, dtype=torch.long)
     max_step = 0
+    primitive_counts = _empty_primitive_supervision_counts()
     for example in dataset:
         counts[example.scenario_name] = counts.get(example.scenario_name, 0) + 1
         actions[example.action] += 1
         max_step = max(max_step, example.step_index)
+        _add_primitive_supervision_counts(primitive_counts, [example])
     return {
         "examples": len(dataset),
         "scenario_examples": counts,
@@ -1292,6 +1606,7 @@ def _dataset_summary(dataset: list[BlockSMBDistillationExample]) -> dict[str, An
             str(index): int(count.item()) for index, count in enumerate(actions)
         },
         "max_step_index": max_step,
+        **primitive_counts,
     }
 
 
@@ -1380,6 +1695,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--dynamics-loss-weight",
         type=float,
         default=BlockSMBDistillationConfig.dynamics_loss_weight,
+    )
+    parser.add_argument(
+        "--primitive-loss-weight",
+        type=float,
+        default=BlockSMBDistillationConfig.primitive_loss_weight,
+        help="weight for scripted Level-B duration/release primitive supervision",
+    )
+    parser.add_argument(
+        "--primitive-hazard-weight-multiplier",
+        type=float,
+        default=BlockSMBDistillationConfig.primitive_hazard_weight_multiplier,
+        help="extra primitive-supervision weight for enemy, pipe, pit, gap, and chain windows",
     )
     parser.add_argument(
         "--world-model-slot-weight",
@@ -1519,6 +1846,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         dynamics_loss_weight=args.dynamics_loss_weight,
+        primitive_loss_weight=args.primitive_loss_weight,
+        primitive_hazard_weight_multiplier=args.primitive_hazard_weight_multiplier,
         world_model_slot_weights=dict(
             args.world_model_slot_weight
             or BlockSMBDistillationConfig.__dataclass_fields__[
