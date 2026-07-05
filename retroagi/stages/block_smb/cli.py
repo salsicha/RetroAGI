@@ -25,11 +25,18 @@ from retroagi.core import (
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES, DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
 from .train import (
+    DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES,
+    DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE,
+    DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE,
+    DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES,
+    DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES,
+    DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES,
     TARGET_NETWORK_MODES,
     BlockSMBAblationConfig,
     BlockSMBTrainingConfig,
     block_smb_architecture_metadata,
     block_smb_monte_carlo_sweep_sample_count,
+    default_block_smb_failure_focus_monte_carlo_family_weights,
     evaluate_block_smb_monte_carlo,
     make_block_smb_model,
     restore_block_smb_checkpoint,
@@ -260,7 +267,10 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--monte-carlo-train-samples-per-epoch",
         type=_non_negative_int,
-        help="number of replayable Monte Carlo train samples in each curriculum epoch",
+        help=(
+            "number of replayable Monte Carlo train samples in each curriculum epoch; "
+            f"fresh train defaults to {DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES}"
+        ),
     )
     parser.add_argument("--monte-carlo-seed", type=int)
     parser.add_argument(
@@ -269,7 +279,10 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         type=_family_weight_item,
         metavar="FAMILY=WEIGHT",
-        help="weighted family sampler override; may be repeated",
+        help=(
+            "weighted train family sampler override; may be repeated; fresh "
+            "real-volume runs default to the failure-focused profile"
+        ),
     )
     parser.set_defaults(monte_carlo_parameter_sweep=None)
     parser.add_argument(
@@ -297,17 +310,26 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--monte-carlo-validation-samples",
         type=_non_negative_int,
-        help="held-out validation samples to attach to Block SMB evaluation",
+        help=(
+            "held-out validation samples to attach to Block SMB evaluation; "
+            f"fresh train defaults to {DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES}"
+        ),
     )
     parser.add_argument(
         "--monte-carlo-test-samples",
         type=_non_negative_int,
-        help="held-out test samples to attach to Block SMB evaluation",
+        help=(
+            "held-out test samples to attach to Block SMB evaluation; "
+            f"fresh train defaults to {DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES}"
+        ),
     )
     parser.add_argument(
         "--monte-carlo-failure-replay-samples-per-epoch",
         type=_non_negative_int,
-        help="additional train samples weighted by recent Monte Carlo validation failures",
+        help=(
+            "additional train samples weighted by recent Monte Carlo validation "
+            f"failures; fresh real-volume train defaults to {DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES}"
+        ),
     )
     parser.add_argument(
         "--monte-carlo-pass-rate-gate",
@@ -601,9 +623,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
     if "world_model_slot_weight" in overrides:
         overrides["world_model_slot_weights"] = dict(overrides.pop("world_model_slot_weight"))
     if "monte_carlo_family_weight" in overrides:
-        overrides["monte_carlo_family_weights"] = dict(
-            overrides.pop("monte_carlo_family_weight")
-        )
+        overrides["monte_carlo_family_weights"] = dict(overrides.pop("monte_carlo_family_weight"))
     return overrides
 
 
@@ -723,6 +743,36 @@ def _checkpoint_config(path: Path) -> dict[str, Any]:
 
 def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
     values = _config_overrides(args)
+    use_real_volume_defaults = not bool(values.get("monte_carlo_parameter_sweep", False))
+    if use_real_volume_defaults and "monte_carlo_train_samples_per_epoch" not in values:
+        values["monte_carlo_train_samples_per_epoch"] = DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES
+    if use_real_volume_defaults and "monte_carlo_validation_samples" not in values:
+        values["monte_carlo_validation_samples"] = DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES
+    if use_real_volume_defaults and "monte_carlo_test_samples" not in values:
+        values["monte_carlo_test_samples"] = DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES
+    train_sample_count = int(values.get("monte_carlo_train_samples_per_epoch", 0))
+    validation_sample_count = int(values.get("monte_carlo_validation_samples", 0))
+    if (
+        use_real_volume_defaults
+        and train_sample_count > 0
+        and "monte_carlo_family_weights" not in values
+    ):
+        values["monte_carlo_family_weights"] = (
+            default_block_smb_failure_focus_monte_carlo_family_weights()
+        )
+    if (
+        use_real_volume_defaults
+        and train_sample_count > 0
+        and validation_sample_count > 0
+        and "monte_carlo_failure_replay_samples_per_epoch" not in values
+    ):
+        values["monte_carlo_failure_replay_samples_per_epoch"] = (
+            DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES
+        )
+    if "monte_carlo_pass_rate_gate" not in values:
+        values["monte_carlo_pass_rate_gate"] = DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE
+    if "monte_carlo_family_pass_rate_gate" not in values:
+        values["monte_carlo_family_pass_rate_gate"] = DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE
     _apply_reward_config_overrides(values, args)
     _apply_ablation_config_overrides(values, args)
     _apply_architecture_overrides(values, args)
@@ -912,8 +962,7 @@ def _run_action_probe(args: argparse.Namespace) -> dict[str, Any]:
         seed=args.seed,
         max_steps=args.max_steps or DEFAULT_BLOCK_SMB_ACTION_PROBE_MAX_STEPS,
         points_per_scenario=(
-            args.points_per_scenario
-            or DEFAULT_BLOCK_SMB_ACTION_PROBE_POINTS_PER_SCENARIO
+            args.points_per_scenario or DEFAULT_BLOCK_SMB_ACTION_PROBE_POINTS_PER_SCENARIO
         ),
         ablation=config.ablation,
     )

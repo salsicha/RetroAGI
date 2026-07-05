@@ -15,6 +15,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from retroagi.core import (
+    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     BASELINE_ARCHITECTURE_NAME,
     POLICY_TUPLE_OUTPUT_CONTRACTS,
     SUPPORTED_CONTROLLER_SCHEDULES,
@@ -22,11 +23,9 @@ from retroagi.core import (
     ExperimentTrackerConfig,
     SMBParameterizedPrimitiveExecutor,
     SMBPrimitiveExecution,
-    SMBWalkActionLimiter,
     StageBatch,
     VisionEncoder,
     WorldModelState,
-    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     action_level_world_model_state_dict,
     build_architecture,
     build_checkpoint,
@@ -45,8 +44,8 @@ from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
     DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
-    block_smb_monte_carlo_oracle_actions,
     block_smb_monte_carlo_metadata,
+    block_smb_monte_carlo_oracle_actions,
     evaluate_block_smb_monte_carlo_gates,
     sample_block_smb_monte_carlo_parameter_sweep,
     sample_block_smb_monte_carlo_split,
@@ -96,6 +95,32 @@ _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES = {
     "patch-tokens": "patch_tokens",
 }
 DEFAULT_BLOCK_SMB_SEMANTIC_PREDICTION_ACCURACY_THRESHOLD = 0.8
+DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES = 512
+DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES = 128
+DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES = 256
+DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE = 0.95
+DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE = 0.90
+DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILIES = (
+    "single_gap",
+    "stair_climb",
+    "platform_chain",
+    "enemy_gap",
+    "retreat_recovery",
+    "wait_timing",
+    "mixed_section",
+    "full_smb_opening_proxy",
+)
+DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
+    ("single_gap", 1.0),
+    ("stair_climb", 1.0),
+    ("platform_chain", 1.0),
+    ("enemy_gap", 1.0),
+    ("retreat_recovery", 1.0),
+    ("wait_timing", 1.0),
+    ("mixed_section", 1.0),
+    ("full_smb_opening_proxy", 4.0),
+)
+DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES = 64
 ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES = (
     "chained_obstacles",
     "chained_enemy_gauntlet",
@@ -116,9 +141,7 @@ def normalize_block_smb_world_model_slot_weights(
 
     normalized: dict[str, float] = {}
     for raw_name, raw_weight in dict(weights or {}).items():
-        slot_name = _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES.get(
-            str(raw_name).strip().lower()
-        )
+        slot_name = _BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_ALIASES.get(str(raw_name).strip().lower())
         if slot_name is None:
             choices = ", ".join(BLOCK_SMB_C_STREAM_DYNAMICS_SLOT_NAMES)
             raise ValueError(f"unknown Block SMB world-model slot {raw_name!r}; expected {choices}")
@@ -127,6 +150,12 @@ def normalize_block_smb_world_model_slot_weights(
             raise ValueError("world_model_slot_weights must contain finite positive values")
         normalized[slot_name] = slot_weight
     return normalized
+
+
+def default_block_smb_failure_focus_monte_carlo_family_weights() -> dict[str, float]:
+    """Return train sampling weights for recently failing Block SMB MC families."""
+
+    return dict(DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS)
 
 
 @dataclass(frozen=True)
@@ -216,8 +245,8 @@ class BlockSMBTrainingConfig:
     monte_carlo_validation_samples: int = 0
     monte_carlo_test_samples: int = 0
     monte_carlo_failure_replay_samples_per_epoch: int = 0
-    monte_carlo_pass_rate_gate: float = 0.95
-    monte_carlo_family_pass_rate_gate: float = 0.90
+    monte_carlo_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE
+    monte_carlo_family_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     checkpoint_path: Optional[Path] = None
@@ -307,9 +336,7 @@ class BlockSMBTrainingConfig:
         object.__setattr__(
             self,
             "monte_carlo_family_weights",
-            normalize_block_smb_monte_carlo_family_weights(
-                self.monte_carlo_family_weights
-            ),
+            normalize_block_smb_monte_carlo_family_weights(self.monte_carlo_family_weights),
         )
         if not isinstance(self.monte_carlo_validate_reachability, bool):
             raise TypeError("monte_carlo_validate_reachability must be a bool")
@@ -612,7 +639,9 @@ def build_monte_carlo_curriculum(
         split=split,
         seed=int(config.monte_carlo_seed if seed is None else seed),
         sample_count=resolved_count,
-        family_weights=config.monte_carlo_family_weights if family_weights is None else family_weights,
+        family_weights=(
+            config.monte_carlo_family_weights if family_weights is None else family_weights
+        ),
         validate_reachability=config.monte_carlo_validate_reachability,
         max_rejections=config.monte_carlo_max_rejections,
     )
@@ -903,7 +932,6 @@ def _action_from_model(
     critic_feedback_enabled: bool = True,
     world_model_enabled: bool = True,
     primitive_executor: SMBParameterizedPrimitiveExecutor | None = None,
-    walk_limiter: SMBWalkActionLimiter | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -956,14 +984,6 @@ def _action_from_model(
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
-    if walk_limiter is not None:
-        filtered_action = walk_limiter.filter_action(int(action_tensor.item()))
-        if filtered_action != int(action_tensor.item()):
-            action_tensor = torch.tensor(
-                [filtered_action],
-                dtype=action_tensor.dtype,
-                device=action_tensor.device,
-            )
     log_prob = distribution.log_prob(action_tensor).squeeze(0)
     log_prob = log_prob + _smb_primitive_duration_log_prob(
         motor_primitives,
@@ -998,11 +1018,7 @@ def _smb_primitive_duration_log_prob(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     zero = torch.zeros((), dtype=dtype, device=device)
-    if (
-        motor_primitives is None
-        or not execution.started
-        or execution.duration_bin_index is None
-    ):
+    if motor_primitives is None or not execution.started or execution.duration_bin_index is None:
         return zero
     logits = getattr(motor_primitives, "hold_duration_logits", None)
     if logits is None:
@@ -1045,9 +1061,7 @@ def _smb_primitive_auxiliary_loss(
             dtype=torch.long,
             device=device,
         )
-        losses.append(
-            F.cross_entropy(post_release_logits[:, -1, :action_count], release_target)
-        )
+        losses.append(F.cross_entropy(post_release_logits[:, -1, :action_count], release_target))
 
     hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
     if (
@@ -1070,9 +1084,7 @@ def _smb_primitive_auxiliary_loss(
             dtype=dtype,
             device=device,
         )
-        losses.append(
-            F.binary_cross_entropy_with_logits(release_logit[:, -1], release_target)
-        )
+        losses.append(F.binary_cross_entropy_with_logits(release_logit[:, -1], release_target))
 
     cancel_logit = getattr(motor_primitives, "cancel_logit", None)
     if cancel_logit is not None and cancel_logit.ndim == 2:
@@ -1081,9 +1093,7 @@ def _smb_primitive_auxiliary_loss(
             dtype=dtype,
             device=device,
         )
-        losses.append(
-            F.binary_cross_entropy_with_logits(cancel_logit[:, -1], cancel_target)
-        )
+        losses.append(F.binary_cross_entropy_with_logits(cancel_logit[:, -1], cancel_target))
 
     if not losses:
         return zero
@@ -1109,7 +1119,6 @@ def collect_trajectory(
         trajectory.frames.append(np.asarray(observation).copy())
     world_model_state: WorldModelState | None = None
     primitive_executor = SMBParameterizedPrimitiveExecutor()
-    walk_limiter = SMBWalkActionLimiter()
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -1133,7 +1142,6 @@ def collect_trajectory(
             critic_feedback_enabled=ablation_config.critic_feedback_enabled,
             world_model_enabled=ablation_config.world_model_enabled,
             primitive_executor=primitive_executor,
-            walk_limiter=walk_limiter,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
@@ -1352,8 +1360,8 @@ def block_smb_c_stream_dynamics_metrics(
         predicted_semantics = prediction[:, semantics_start:semantics_end]
         target_semantics = target[:, semantics_start:semantics_end]
         semantic_accuracy = (
-            predicted_semantics.argmax(dim=1) == target_semantics.argmax(dim=1)
-        ).float().mean()
+            (predicted_semantics.argmax(dim=1) == target_semantics.argmax(dim=1)).float().mean()
+        )
         semantic_cosine = F.cosine_similarity(
             predicted_semantics.float(),
             target_semantics.float(),
@@ -1606,8 +1614,7 @@ def compute_block_smb_losses(
             action_aux_terms.append(step.primitive_aux_loss.to(device=device))
         noop_terms.append(block_smb_noop_suppression_loss(step, device=device))
         critic_terms.append(
-            step.criticism.pow(2).mean()
-            + _critic_action_outcome_loss(model, step, device=device)
+            step.criticism.pow(2).mean() + _critic_action_outcome_loss(model, step, device=device)
         )
     loss_representation = torch.stack(representation_terms).mean()
     loss_dynamics = torch.stack(dynamics_terms).mean()
@@ -1777,7 +1784,7 @@ def evaluate_block_smb_monte_carlo(
             split=split,
             seed=int(config.monte_carlo_seed),
             sample_count=int(sample_count),
-            family_weights=config.monte_carlo_family_weights,
+            family_weights=None,
             validate_reachability=config.monte_carlo_validate_reachability,
             max_rejections=config.monte_carlo_max_rejections,
         )
@@ -1894,9 +1901,7 @@ def evaluate_block_smb_monte_carlo(
         "sample_count": sample_set.sample_count,
         "requested_sample_count": int(sample_count),
         "parameter_sweep": bool(config.monte_carlo_parameter_sweep),
-        "sweep_repeats_per_difficulty": int(
-            config.monte_carlo_sweep_repeats_per_difficulty
-        ),
+        "sweep_repeats_per_difficulty": int(config.monte_carlo_sweep_repeats_per_difficulty),
         "evaluation_episodes": config.evaluation_episodes,
         "evaluation_max_steps": config.evaluation_max_steps,
         "scenarios": scenario_results,

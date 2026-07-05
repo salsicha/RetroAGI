@@ -27,7 +27,6 @@ from retroagi.core import (
     SMBAction,
     SMBParameterizedPrimitiveExecutor,
     SMBPrimitiveExecution,
-    SMBWalkActionLimiter,
     StageBatch,
     WorldModelState,
     action_level_world_model_state_dict,
@@ -157,7 +156,6 @@ _FULL_SMB_DEFAULT_MAX_ABS_LOSS = 1_000_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_SCALED_REWARD = 1_000.0
 _FULL_SMB_DEFAULT_MAX_ABS_PREDICTION = 1_000_000.0
 _FULL_SMB_DEFAULT_WORLD_MODEL_WEIGHT = 0.05
-_FULL_SMB_EMULATOR_FRAMES_PER_SECOND = 60.0
 _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES = (
     "position",
     "semantic_probabilities",
@@ -1198,12 +1196,8 @@ def _full_smb_imitation_warm_start_metrics(
         "imitation_warm_start_decision_frame_skip": _float_metric(
             script.get("decision_frame_skip")
         ),
-        "imitation_warm_start_right_jump_count": _float_metric(
-            script.get("right_jump_count")
-        ),
-        "imitation_warm_start_dataset_max_progress": _float_metric(
-            dataset.get("max_progress")
-        ),
+        "imitation_warm_start_right_jump_count": _float_metric(script.get("right_jump_count")),
+        "imitation_warm_start_dataset_max_progress": _float_metric(dataset.get("max_progress")),
         "imitation_warm_start_final_loss": _float_metric(training.get("final_loss")),
         "imitation_warm_start_final_action_accuracy": _float_metric(
             training.get("final_action_accuracy")
@@ -1276,7 +1270,6 @@ def evaluate_full_smb_policy(
             episode_seed = config.seed + 10_000 + episode_index
             observation = stage.reset(seed=episode_seed)
             primitive_executor = SMBParameterizedPrimitiveExecutor()
-            walk_limiter = _full_smb_walk_action_limiter(stage)
             episode_return = 0.0
             fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
                 stage,
@@ -1305,7 +1298,6 @@ def evaluate_full_smb_policy(
                     motor_primitives=forward.motor_primitives,
                     batch=batch,
                 ).action
-                action = walk_limiter.filter_action(action)
                 observation, reward, terminated, truncated, info = stage.step(action)
                 _update_full_smb_fixed_task_episode_metrics(
                     fixed_task_metrics,
@@ -1338,9 +1330,7 @@ def evaluate_full_smb_policy(
                     fixed_task_metrics,
                     episode_return=float(episode_return),
                 )
-                fixed_task_episode_metrics.setdefault(str(task_name), []).append(
-                    episode_metrics
-                )
+                fixed_task_episode_metrics.setdefault(str(task_name), []).append(episode_metrics)
                 if float(episode_metrics.get("completion_rate", 0.0)) >= 1.0:
                     success_count += 1
             elif terminated:
@@ -1446,7 +1436,6 @@ def play_full_smb_policy(
         episode_seed = config.seed
         observation = stage.reset(seed=episode_seed)
         primitive_executor = SMBParameterizedPrimitiveExecutor()
-        walk_limiter = _full_smb_walk_action_limiter(stage)
         resets += 1
         _render_full_smb_stage(
             stage,
@@ -1487,7 +1476,6 @@ def play_full_smb_policy(
                 episode_seed = config.seed + episode_index
                 observation = stage.reset(seed=episode_seed)
                 primitive_executor.reset()
-                walk_limiter.reset()
                 resets += 1
                 world_model_state = None
                 episode_return = 0.0
@@ -1544,7 +1532,6 @@ def play_full_smb_policy(
                     motor_primitives=forward.motor_primitives,
                     batch=batch,
                 ).action
-                action = walk_limiter.filter_action(action)
                 action_probabilities = _full_smb_action_probabilities(
                     logits,
                     temperature=play_config.sampling_temperature,
@@ -1641,7 +1628,6 @@ def play_full_smb_policy(
                     episode_seed = config.seed + episode_index
                     observation = stage.reset(seed=episode_seed)
                     primitive_executor.reset()
-                    walk_limiter.reset()
                     resets += 1
                     episode_return = 0.0
                     episode_recording = _start_full_smb_episode_recording(
@@ -1662,17 +1648,13 @@ def play_full_smb_policy(
                         semantic_mask=play_config.semantic_mask,
                     )
                     break
-                if (
-                    not play_config.human_control
-                    and repeat_index + 1 < repeated_steps
-                ):
+                if not play_config.human_control and repeat_index + 1 < repeated_steps:
                     repeat_batch = stage.encode_observation(observation, info)
                     action = primitive_executor.execute(
                         action,
                         motor_primitives=current_motor_primitives,
                         batch=repeat_batch,
                     ).action
-                    action = walk_limiter.filter_action(action)
                 _sleep_full_smb_play_frame(play_config.fps)
             if play_config.action_repeat > 1 and not (terminated or truncated):
                 world_model_state = None
@@ -2231,9 +2213,7 @@ def _load_full_smb_policy_state(
     unexpected = tuple(load_result.unexpected_keys)
     allowed_missing_prefixes = ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES
     unsupported_missing = tuple(
-        key
-        for key in load_result.missing_keys
-        if not key.startswith(allowed_missing_prefixes)
+        key for key in load_result.missing_keys if not key.startswith(allowed_missing_prefixes)
     )
     if unexpected or unsupported_missing:
         raise ValueError(
@@ -2539,9 +2519,11 @@ def _full_smb_critic_action_outcome_loss(
     ):
         return forward.next_state_pred.new_zeros(())
     progress_target_value = 1.0 if float(reward) > 0.0 else 0.0
-    death_target_value = 1.0 if any(
-        reason in {"death", "game_over", "life_lost"} for reason in boundary.reasons
-    ) else 0.0
+    death_target_value = (
+        1.0
+        if any(reason in {"death", "game_over", "life_lost"} for reason in boundary.reasons)
+        else 0.0
+    )
     progress_target = torch.tensor(
         [progress_target_value],
         dtype=forward.next_state_pred.dtype,
@@ -2607,7 +2589,6 @@ def _train_episode(
     steps: list[FullSMBRolloutStep] = []
     world_model_state: WorldModelState | None = None
     primitive_executor = SMBParameterizedPrimitiveExecutor()
-    walk_limiter = _full_smb_walk_action_limiter(stage)
     recurrent_state_resets = 1
     boundary_counts: dict[str, int] = {"manual_reset": 1}
     for _step in range(max_steps):
@@ -2632,9 +2613,7 @@ def _train_episode(
         )
         value_prediction_abs_values.append(prediction_metrics["value_prediction_abs_max"])
         reward_prediction_abs_values.append(prediction_metrics["reward_prediction_abs_max"])
-        next_state_prediction_abs_values.append(
-            prediction_metrics["next_state_prediction_abs_max"]
-        )
+        next_state_prediction_abs_values.append(prediction_metrics["next_state_prediction_abs_max"])
         distribution = torch.distributions.Categorical(logits=logits)
         if deterministic_actions:
             action_tensor = logits.argmax(dim=-1)
@@ -2648,13 +2627,6 @@ def _train_episode(
         if execution.action != int(action_tensor.item()):
             action_tensor = torch.tensor(
                 [execution.action],
-                dtype=action_tensor.dtype,
-                device=action_tensor.device,
-            )
-        filtered_action = walk_limiter.filter_action(int(action_tensor.item()))
-        if filtered_action != int(action_tensor.item()):
-            action_tensor = torch.tensor(
-                [filtered_action],
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
@@ -2684,7 +2656,7 @@ def _train_episode(
                     "Full SMB world-model target shape mismatch: "
                     f"prediction={tuple(forward.next_state_pred.shape)}, "
                     f"target={tuple(next_state_target.shape)}"
-            )
+                )
             _finite_tensor_or_raise("next_state_target", next_state_target)
             slot_losses = _full_smb_c_stream_dynamics_slot_losses(
                 forward.next_state_pred,
@@ -2858,11 +2830,7 @@ def _smb_primitive_duration_log_prob(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     zero = torch.zeros((), dtype=dtype, device=device)
-    if (
-        motor_primitives is None
-        or not execution.started
-        or execution.duration_bin_index is None
-    ):
+    if motor_primitives is None or not execution.started or execution.duration_bin_index is None:
         return zero
     logits = getattr(motor_primitives, "hold_duration_logits", None)
     if logits is None:
@@ -2905,9 +2873,7 @@ def _smb_primitive_auxiliary_loss(
             dtype=torch.long,
             device=device,
         )
-        losses.append(
-            F.cross_entropy(post_release_logits[:, -1, :action_count], release_target)
-        )
+        losses.append(F.cross_entropy(post_release_logits[:, -1, :action_count], release_target))
 
     hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
     if (
@@ -2930,9 +2896,7 @@ def _smb_primitive_auxiliary_loss(
             dtype=dtype,
             device=device,
         )
-        losses.append(
-            F.binary_cross_entropy_with_logits(release_logit[:, -1], release_target)
-        )
+        losses.append(F.binary_cross_entropy_with_logits(release_logit[:, -1], release_target))
 
     cancel_logit = getattr(motor_primitives, "cancel_logit", None)
     if cancel_logit is not None and cancel_logit.ndim == 2:
@@ -2941,9 +2905,7 @@ def _smb_primitive_auxiliary_loss(
             dtype=dtype,
             device=device,
         )
-        losses.append(
-            F.binary_cross_entropy_with_logits(cancel_logit[:, -1], cancel_target)
-        )
+        losses.append(F.binary_cross_entropy_with_logits(cancel_logit[:, -1], cancel_target))
 
     if not losses:
         return zero
@@ -3025,9 +2987,7 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
     )
     observation = metadata.get("observation", {})
     camera_enabled = (
-        bool(observation.get("camera_state_enabled"))
-        if isinstance(observation, Mapping)
-        else False
+        bool(observation.get("camera_state_enabled")) if isinstance(observation, Mapping) else False
     )
     state_start, state_end = state
     emulator_end = min(state_end, state_start + _FULL_SMB_SIGNAL_STATE_SLOT_COUNT)
@@ -3116,14 +3076,6 @@ def _policy_action_logits_and_state(
         next_state_pred=next_state_pred,
         criticism=criticism,
         motor_primitives=motor_primitives,
-    )
-
-
-def _full_smb_walk_action_limiter(stage: FullSMBStage) -> SMBWalkActionLimiter:
-    observation_config = getattr(stage, "observation_config", None)
-    frame_skip = int(getattr(observation_config, "frame_skip", 1) or 1)
-    return SMBWalkActionLimiter(
-        actions_per_second=_FULL_SMB_EMULATOR_FRAMES_PER_SECOND / max(frame_skip, 1),
     )
 
 
@@ -4542,9 +4494,8 @@ def _full_smb_fixed_task_completion_proxy(
     threshold = FIXED_FULL_SMB_SUCCESS_THRESHOLDS[task_key]
     max_progress = _max(progress_values)
     final_score = scores[-1] if scores else 0.0
-    return (
-        max_progress >= float(threshold.min_progress)
-        and final_score >= float(threshold.min_mean_score)
+    return max_progress >= float(threshold.min_progress) and final_score >= float(
+        threshold.min_mean_score
     )
 
 

@@ -137,6 +137,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
 
     def test_default_warm_start_covers_fixed_chained_and_full_smb_proxy(self):
         config = BlockSMBDistillationConfig(
+            monte_carlo_samples=0,
             rollout_steps=24,
             episodes_per_scenario=1,
             evaluation_episodes=1,
@@ -165,6 +166,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
     def test_scripted_examples_carry_primitive_duration_release_labels(self):
         config = BlockSMBDistillationConfig(
             fixed_scenarios=("level_5_enemy_hop.json",),
+            monte_carlo_samples=0,
             required_monte_carlo_families=(),
             rollout_steps=45,
             episodes_per_scenario=1,
@@ -410,6 +412,28 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(config.monte_carlo_pass_rate_gate, 0.8)
         self.assertEqual(config.monte_carlo_family_pass_rate_gate, 0.7)
 
+    def test_cli_defaults_to_failure_focused_distillation_weights(self):
+        with patch(
+            "retroagi.stages.block_smb.distill.train_distilled_block_smb_policy",
+            return_value={"ok": True},
+        ) as train:
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                exit_code = distill_main(
+                    [
+                        "--checkpoint",
+                        "data/block_smb/distilled.pth",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stream.getvalue()), {"ok": True})
+        config = train.call_args.args[0]
+        self.assertEqual(
+            config.monte_carlo_family_weights,
+            distill_module.default_block_smb_failure_focus_monte_carlo_family_weights(),
+        )
+
     def test_training_config_preserves_distillation_vision_checkpoint(self):
         config = BlockSMBDistillationConfig(vision_checkpoint=Path("data/pipeline/block_vit.pth"))
 
@@ -421,9 +445,37 @@ class TestBlockSMBDistillation(unittest.TestCase):
         )
         self.assertEqual(
             training_config.monte_carlo_train_samples_per_epoch,
-            len(DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES)
-            * len(distill_module.BLOCK_SMB_MC_DIFFICULTY_BINS),
+            distill_module.DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES,
         )
+        self.assertEqual(
+            training_config.monte_carlo_validation_samples,
+            distill_module.DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES,
+        )
+        self.assertEqual(
+            training_config.monte_carlo_test_samples,
+            distill_module.DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES,
+        )
+
+    def test_monte_carlo_samples_are_total_distillation_volume(self):
+        config = BlockSMBDistillationConfig(
+            fixed_scenarios=(),
+            monte_carlo_samples=50,
+            required_monte_carlo_families=DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
+            required_monte_carlo_repeats_per_difficulty=1,
+            rollout_steps=2,
+            episodes_per_scenario=1,
+            evaluation_episodes=1,
+            evaluation_max_steps=2,
+            device="cpu",
+        )
+
+        scenarios, _scripts, summary = build_block_smb_distillation_scenarios(config)
+        training_config = distill_module._training_config_from_distillation(config)
+
+        self.assertEqual(len(scenarios), 50)
+        self.assertEqual(summary["monte_carlo"]["requested_sample_count"], 50)
+        self.assertEqual(summary["monte_carlo"]["sample_count"], 50)
+        self.assertEqual(training_config.monte_carlo_train_samples_per_epoch, 50)
 
 
 if __name__ == "__main__":

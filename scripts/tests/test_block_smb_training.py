@@ -31,10 +31,11 @@ from retroagi.stages.block_smb import (
     BlockSMBTrainingConfig,
     MarioScenarioEnv,
     SequentialBlockSMBVectorEnv,
+    block_smb_monte_carlo_train_sample_count,
     build_adaptive_monte_carlo_replay_curriculum,
     build_curriculum,
     build_epoch_curriculum,
-    block_smb_monte_carlo_train_sample_count,
+    default_block_smb_failure_focus_monte_carlo_family_weights,
     evaluate_block_smb,
     evaluate_block_smb_monte_carlo,
     restore_block_smb_checkpoint,
@@ -235,12 +236,8 @@ class TestBlockSMBTraining(unittest.TestCase):
             },
         }
 
-        self.assertTrue(
-            block_smb_noop_allowed_for_step("level_12_wait_bridge.json", {}, 19)
-        )
-        self.assertFalse(
-            block_smb_noop_allowed_for_step("level_12_wait_bridge.json", {}, 20)
-        )
+        self.assertTrue(block_smb_noop_allowed_for_step("level_12_wait_bridge.json", {}, 19))
+        self.assertFalse(block_smb_noop_allowed_for_step("level_12_wait_bridge.json", {}, 20))
         self.assertTrue(block_smb_noop_allowed_for_step("mc.wait_timing", wait_scenario, 1))
         self.assertFalse(block_smb_noop_allowed_for_step("mc.wait_timing", wait_scenario, 2))
 
@@ -503,7 +500,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             ),
         )
         try:
-            observation = stage.reset(seed=5)
+            stage.reset(seed=5)
             next_observation, _reward, terminated, truncated, info = stage.step(0)
             next_batch = stage.encode_observation(next_observation, info)
         finally:
@@ -635,6 +632,7 @@ class TestBlockSMBTraining(unittest.TestCase):
     def test_monte_carlo_evaluation_reports_coverage_bins_and_gates(self):
         config = tiny_config(
             generated_scenarios=0,
+            monte_carlo_family_weights=default_block_smb_failure_focus_monte_carlo_family_weights(),
             monte_carlo_validation_samples=len(BLOCK_SMB_MC_FAMILIES),
             monte_carlo_pass_rate_gate=0.1,
             monte_carlo_family_pass_rate_gate=0.1,
@@ -718,7 +716,9 @@ class TestBlockSMBTraining(unittest.TestCase):
         replay_names = [name for name, _scenario in replay]
 
         self.assertEqual(len(replay), 3)
-        self.assertTrue(all(".enemy_gap" in name or ".wait_timing" in name for name in replay_names))
+        self.assertTrue(
+            all(".enemy_gap" in name or ".wait_timing" in name for name in replay_names)
+        )
         self.assertEqual(epoch_curriculum[0][0], "level_1_flat.json")
         self.assertEqual(epoch_curriculum[1:4], replay)
 

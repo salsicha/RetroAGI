@@ -70,21 +70,6 @@ def tiny_stage(vision):
 
 
 class TestFullSMBTraining(unittest.TestCase):
-    def test_full_smb_walk_limiter_accounts_for_frame_skip(self):
-        stage = SimpleNamespace(
-            observation_config=FullSMBObservationConfig(
-                frame_skip=4,
-                frame_stack=2,
-                resize_shape=(16, 20),
-            )
-        )
-        limiter = full_smb_train_module._full_smb_walk_action_limiter(stage)
-
-        self.assertEqual(limiter.max_walk_frames, 15)
-        for _ in range(15):
-            self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
-        self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.NOOP))
-
     def test_scratch_training_uses_shared_architecture_factory_and_stage_batches(self):
         with TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -1024,15 +1009,11 @@ class TestFullSMBTraining(unittest.TestCase):
                 device="cpu",
                 full_smb_vision_checkpoint=full_vision_path,
             )
-            before = {
-                name: value.detach().clone()
-                for name, value in model.state_dict().items()
-            }
+            before = {name: value.detach().clone() for name, value in model.state_dict().items()}
 
             evaluate_full_smb_policy(model, config=config, make_stage=tiny_stage)
             after_evaluation = {
-                name: value.detach().clone()
-                for name, value in model.state_dict().items()
+                name: value.detach().clone() for name, value in model.state_dict().items()
             }
             play_full_smb_policy(
                 model,

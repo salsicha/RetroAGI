@@ -27,10 +27,12 @@ LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES = (
     "agent.fc_primitive_replan.",
     "agent.fc_primitive_post_release.",
 )
+ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES = ("world_model_actor_context.",)
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     *ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
     *LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES,
+    *ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES,
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
 DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
@@ -583,6 +585,8 @@ class MotorPrimitiveController(nn.Module):
 class HierarchicalAdaptiveModel(nn.Module):
     """Three-level actor: Transformer A -> Transformer B -> adaptive controller."""
 
+    uses_world_model_context = True
+
     def __init__(
         self,
         vocab_size,
@@ -668,7 +672,36 @@ class HierarchicalAdaptiveModel(nn.Module):
             raise TypeError("criticism must be a floating-point tensor")
         return encoded_a + criticism.to(dtype=encoded_a.dtype)
 
-    def forward(self, src_A, src_B, src_C, criticism=None, tau=1.0, return_hidden=False):
+    def apply_world_model_context(self, encoded_a, world_model_context):
+        """Inject carried LSTM dynamics context into the A stream."""
+
+        if world_model_context is None:
+            return encoded_a
+        if world_model_context.shape != encoded_a.shape:
+            raise ValueError(
+                "world_model_context shape must match encoded A stream shape "
+                f"{tuple(encoded_a.shape)}, got {tuple(world_model_context.shape)}"
+            )
+        if world_model_context.device != encoded_a.device:
+            raise ValueError(
+                "world_model_context device must match encoded A stream device "
+                f"{encoded_a.device}, got {world_model_context.device}"
+            )
+        if not torch.is_floating_point(world_model_context):
+            raise TypeError("world_model_context must be a floating-point tensor")
+        return encoded_a + world_model_context.to(dtype=encoded_a.dtype)
+
+    def forward(
+        self,
+        src_A,
+        src_B,
+        src_C,
+        criticism=None,
+        tau=1.0,
+        return_hidden=False,
+        *,
+        world_model_context=None,
+    ):
         seq_len_a = src_A.size(1)
         seq_len_b = src_B.size(1)
         ratio_ab = seq_len_b // seq_len_a
@@ -678,6 +711,7 @@ class HierarchicalAdaptiveModel(nn.Module):
 
         x_a = self.embedding(src_A) * math.sqrt(self.d_model)
         x_a = self.pos_encoder(x_a)
+        x_a = self.apply_world_model_context(x_a, world_model_context)
         x_a = self.apply_critic_feedback(x_a, criticism)
 
         hidden_a = self.transformer_A(x_a, mask=causal_mask_a)
@@ -1195,6 +1229,11 @@ class AgentWorldModelCritic(nn.Module):
         )
         self.world_model = WorldModel(ratio_bc=ratio_bc)
         self.critic = Critic(seq_len_c, seq_len_a, d_model)
+        self.world_model_actor_context = nn.Sequential(
+            nn.Linear(self.world_model.hidden_size * 2, d_model),
+            nn.LayerNorm(d_model),
+            nn.Tanh(),
+        )
         self.motor_controller = MotorPrimitiveController(
             ratio_ab=ratio_ab,
             ratio_bc=ratio_bc,
@@ -1203,6 +1242,7 @@ class AgentWorldModelCritic(nn.Module):
         )
         self.last_motor_primitives: MotorPrimitiveOutput | None = None
         self.last_primitive_outcome: PrimitiveOutcomePrediction | None = None
+        self.last_actor_world_model_context: torch.Tensor | None = None
         self.last_action_refinement: ActionRefinementTrace | None = None
         self.transition_representation_head = nn.Sequential(
             nn.Linear(seq_len_c, d_model),
@@ -1258,6 +1298,86 @@ class AgentWorldModelCritic(nn.Module):
             w.repeat_interleave(ratio_bc, dim=1),
             b.repeat_interleave(ratio_bc, dim=1),
         )
+
+    def _actor_episode_mask(self, episode_mask, batch_size, device, dtype):
+        if episode_mask is None:
+            return None
+        mask = torch.as_tensor(episode_mask, device=device, dtype=dtype)
+        if mask.ndim == 0:
+            mask = mask.view(1)
+        if mask.ndim == 2 and tuple(mask.shape) == (batch_size, 1):
+            mask = mask[:, 0]
+        if mask.ndim != 1:
+            raise ValueError(
+                "episode_mask must have shape [batch] or [batch, 1], " f"got {tuple(mask.shape)}"
+            )
+        if mask.numel() == 1 and batch_size != 1:
+            mask = mask.expand(batch_size)
+        if tuple(mask.shape) != (batch_size,):
+            raise ValueError(
+                "episode_mask must have shape [batch] or [batch, 1], " f"got {tuple(mask.shape)}"
+            )
+        if not torch.isfinite(mask).all().item():
+            raise ValueError("episode_mask must contain only finite values")
+        return mask.clamp(0.0, 1.0)
+
+    def _actor_world_model_context(self, world_model_state, src_A, episode_mask=None):
+        if world_model_state is None:
+            return None
+        if isinstance(world_model_state, WorldModelState):
+            hidden, cell = world_model_state.hidden, world_model_state.cell
+        else:
+            hidden, cell = world_model_state
+        if hidden.ndim != 3 or cell.ndim != 3:
+            raise ValueError("world_model_state hidden and cell must be 3D tensors")
+        if tuple(hidden.shape) != tuple(cell.shape):
+            raise ValueError(
+                "world_model_state hidden and cell shapes must match, got "
+                f"{tuple(hidden.shape)} and {tuple(cell.shape)}"
+            )
+        expected_layers = int(getattr(self.world_model, "num_layers", hidden.size(0)))
+        expected_hidden = int(getattr(self.world_model, "hidden_size", hidden.size(2)))
+        expected = (expected_layers, src_A.size(0), expected_hidden)
+        if tuple(hidden.shape) != expected:
+            raise ValueError(
+                "world_model_state hidden and cell shape must match actor context "
+                f"{expected}, got {tuple(hidden.shape)}"
+            )
+        parameter = next(self.world_model_actor_context.parameters())
+        hidden_last = hidden[-1].to(device=src_A.device, dtype=parameter.dtype)
+        cell_last = cell[-1].to(device=src_A.device, dtype=parameter.dtype)
+        recurrent_features = torch.cat((hidden_last, cell_last), dim=-1)
+        mask = self._actor_episode_mask(
+            episode_mask,
+            src_A.size(0),
+            src_A.device,
+            recurrent_features.dtype,
+        )
+        if mask is not None:
+            recurrent_features = recurrent_features * mask.view(-1, 1)
+        context = self.world_model_actor_context(recurrent_features)
+        return context.unsqueeze(1).expand(-1, src_A.size(1), -1)
+
+    def _agent_forward(
+        self,
+        src_A,
+        src_B,
+        src_C,
+        *,
+        criticism=None,
+        tau=1.0,
+        world_model_context=None,
+    ):
+        if bool(getattr(self.agent, "uses_world_model_context", False)):
+            return self.agent(
+                src_A,
+                src_B,
+                src_C,
+                criticism=criticism,
+                tau=tau,
+                world_model_context=world_model_context,
+            )
+        return self.agent(src_A, src_B, src_C, criticism=criticism, tau=tau)
 
     def _world_model_prediction(
         self,
@@ -1577,7 +1697,22 @@ class AgentWorldModelCritic(nn.Module):
         critic_feedback_enabled=True,
         world_model_enabled=True,
     ):
-        logits_a1, actions1, w_1, b_1 = self.agent(src_A, src_B, src_C, criticism=None, tau=tau)
+        actor_world_model_context = self._actor_world_model_context(
+            world_model_state,
+            src_A,
+            episode_mask=episode_mask,
+        )
+        self.last_actor_world_model_context = (
+            None if actor_world_model_context is None else actor_world_model_context.detach()
+        )
+        logits_a1, actions1, w_1, b_1 = self._agent_forward(
+            src_A,
+            src_B,
+            src_C,
+            criticism=None,
+            tau=tau,
+            world_model_context=actor_world_model_context,
+        )
         primitive_params1 = getattr(self.agent, "last_level_b_primitives", None)
         first_candidate = self._candidate_from_actor_outputs(
             src_C,
@@ -1599,12 +1734,13 @@ class AgentWorldModelCritic(nn.Module):
         if critic_feedback_enabled and not accepted:
             actor_criticism = first_candidate.criticism.detach()
             for _pass_index in range(1, self.max_action_refinement_passes):
-                logits_a, actions, w, b = self.agent(
+                logits_a, actions, w, b = self._agent_forward(
                     src_A,
                     src_B,
                     src_C,
                     criticism=actor_criticism,
                     tau=tau,
+                    world_model_context=actor_world_model_context,
                 )
                 primitive_params = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(

@@ -103,9 +103,12 @@ Conceptually, A answers questions such as:
   timing;
 - which high-level action family should dominate over the next short horizon.
 
-The baseline architecture runs this A-level actor twice. The first pass proposes
-actions without feedback. The second pass receives critic feedback derived from
-the LSTM-predicted next state.
+The baseline architecture conditions this A-level actor on carried LSTM world
+model memory before the first pass. `AgentWorldModelCritic` projects
+`WorldModelState(hidden, cell)` into an A-stream `world_model_context` residual,
+so the initial logits can depend on what the LSTM learned about recent dynamics.
+If the first candidate is rejected, a refinement pass can still add critic
+feedback derived from the LSTM-predicted next state.
 
 ## Short-Term Sequencer: B Transformer
 
@@ -167,7 +170,7 @@ primitive metadata:
 | Field | Current Derivation | Intended Meaning |
 | --- | --- | --- |
 | `button_combo_logits` | A logits repeated to B resolution | Candidate button combos. |
-| `hold_duration` | expected value of explicit B-level duration-bin logits; old checkpoints fall back to sigmoid of `w_b` scaled to `[1,max_hold]`; pure SMB `RIGHT`/`LEFT` walk primitives are capped at `1.0` | How long a primitive should last. |
+| `hold_duration` | expected value of explicit B-level duration-bin logits; old checkpoints fall back to sigmoid of `w_b` scaled to `[1,max_hold]` | How long a primitive should last. |
 | `hold_duration_logits` | B-level transformer head over fixed duration bins | Distribution used to choose jump-hold frames. |
 | `release_logit` | explicit B-level release head; old checkpoints fall back to `-b_b` | Tendency to release. |
 | `cancel_logit` | explicit B-level cancel head; old checkpoints fall back to `b_b - w_b` | Tendency to cancel current primitive. |
@@ -176,9 +179,10 @@ primitive metadata:
 | `replan_probability` | sigmoid of interrupt | Probability of choosing a new primitive. |
 | `post_release_logits` | B-level transformer head | Button combo to use after releasing jump. |
 
-The SMB action filter also enforces that cap at runtime: continuous pure
-`RIGHT` or `LEFT` holds are released after one second before a new walk hold can
-begin.
+Pure walk actions are not capped at runtime. Continuous `RIGHT` or `LEFT` holds
+persist until the policy or primitive controller emits a different action, so
+the learned controller remains responsible for releasing, cancelling, or
+replanning movement.
 
 In Full SMB and Block SMB rollouts, `SMBParameterizedPrimitiveExecutor` now uses
 these primitive parameters as an executable option. When the policy starts a
@@ -207,11 +211,13 @@ The world model feeds:
 - dynamics loss during training;
 - value/reward/transition heads;
 - the critic;
-- motor primitive replan signals through predicted motion.
+- motor primitive replan signals through predicted motion;
+- the next initial actor decision through projected recurrent `hidden`/`cell`
+  state.
 
 In other words, the LSTM is the short-term predictive memory of the system. It
-does not directly choose the action, but it predicts what the current action and
-controller parameters will do to the game state.
+does not directly choose the action, but its carried state is now a first-class
+actor input before the policy emits the next initial action.
 
 ## Critic Feedback
 

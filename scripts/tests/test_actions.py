@@ -9,12 +9,12 @@ import torch
 from retroagi.core import (
     SMB_ACTION_SPECS,
     SMB_ACTIONS,
+    ActionSpec,
+    ContinuousControlSpec,
     SMBAction,
     SMBJumpActionTerminator,
     SMBParameterizedPrimitiveExecutor,
     SMBWalkActionLimiter,
-    ActionSpec,
-    ContinuousControlSpec,
     VisionOutput,
     action_backend_id,
     action_button_vector,
@@ -99,12 +99,18 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertIs(smb_jump_release_action(SMBAction.LEFT_JUMP), SMBAction.LEFT)
         self.assertIs(smb_jump_release_action(SMBAction.JUMP), SMBAction.NOOP)
 
-    def test_walk_limiter_releases_after_one_second_window(self):
-        limiter = SMBWalkActionLimiter(max_walk_seconds=1.0, actions_per_second=2.0)
+    def test_walk_limiter_defaults_to_no_walk_cap(self):
+        limiter = SMBWalkActionLimiter(actions_per_second=2.0)
 
         self.assertTrue(is_smb_walk_action(SMBAction.RIGHT))
         self.assertTrue(is_smb_walk_action(SMBAction.LEFT))
         self.assertFalse(is_smb_walk_action(SMBAction.RIGHT_JUMP))
+        for _ in range(5):
+            self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
+
+    def test_walk_limiter_can_be_configured_explicitly(self):
+        limiter = SMBWalkActionLimiter(max_walk_seconds=1.0, actions_per_second=2.0)
+
         self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
         self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.RIGHT))
         self.assertEqual(limiter.filter_action(SMBAction.RIGHT), int(SMBAction.NOOP))

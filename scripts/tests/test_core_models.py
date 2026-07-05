@@ -22,15 +22,30 @@ from retroagi.core import (
 
 
 class RecordingAgent(nn.Module):
+    uses_world_model_context = True
+
     def __init__(self, seq_len_a, seq_len_b, vocab_size):
         super().__init__()
         self.seq_len_a = seq_len_a
         self.seq_len_b = seq_len_b
         self.vocab_size = vocab_size
         self.criticisms = []
+        self.world_model_contexts = []
 
-    def forward(self, src_a, src_b, src_c, criticism=None, tau=1.0):
+    def forward(
+        self,
+        src_a,
+        src_b,
+        src_c,
+        criticism=None,
+        tau=1.0,
+        *,
+        world_model_context=None,
+    ):
         self.criticisms.append(None if criticism is None else criticism.detach().clone())
+        self.world_model_contexts.append(
+            None if world_model_context is None else world_model_context.detach().clone()
+        )
         batch_size = src_a.size(0)
         device = src_a.device
         logits = torch.zeros(batch_size, self.seq_len_a, self.vocab_size, device=device)
@@ -40,6 +55,8 @@ class RecordingAgent(nn.Module):
             actions = src_c.clone()
         else:
             actions = src_c + criticism.mean(dim=(1, 2)).unsqueeze(1)
+        if world_model_context is not None:
+            actions = actions + world_model_context.mean(dim=(1, 2)).unsqueeze(1)
         return logits, actions, w_b, b_b
 
 
@@ -347,7 +364,24 @@ class TestMotorPrimitiveController(unittest.TestCase):
         self.assertTrue(torch.all(bad.predicted_terminal_risk > 0.0))
         self.assertTrue(torch.all(bad.prediction_replan_bias > good.prediction_replan_bias))
 
-    def test_caps_walk_primitives_to_one_second(self):
+    def test_leaves_walk_primitives_uncapped_by_default(self):
+        controller = MotorPrimitiveController(
+            ratio_ab=2,
+            ratio_bc=2,
+            max_hold_duration=5.0,
+        )
+        logits_a = torch.full((1, 3, len(SMBAction)), -10.0)
+        logits_a[0, 0, int(SMBAction.RIGHT)] = 10.0
+        logits_a[0, 1, int(SMBAction.JUMP)] = 10.0
+        logits_a[0, 2, int(SMBAction.LEFT)] = 10.0
+        w_pred = torch.full((1, 6), 10.0)
+        b_pred = torch.zeros(1, 6)
+
+        output = controller(logits_a, w_pred, b_pred)
+
+        self.assertTrue(torch.all(output.hold_duration > 4.9))
+
+    def test_can_cap_walk_primitives_when_configured(self):
         controller = MotorPrimitiveController(
             ratio_ab=2,
             ratio_bc=2,
@@ -455,7 +489,9 @@ class TestCriticFeedbackContract(unittest.TestCase):
 
         self.assertEqual(len(recording_agent.criticisms), 2)
         self.assertIsNone(recording_agent.criticisms[0])
+        self.assertIsNone(recording_agent.world_model_contexts[0])
         torch.testing.assert_close(recording_agent.criticisms[1], fixed_criticism)
+        self.assertIsNone(recording_agent.world_model_contexts[1])
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c + fixed_criticism.mean(dim=(1, 2)).unsqueeze(1))
         self.assertIsNotNone(model.last_action_refinement)
@@ -494,8 +530,105 @@ class TestCriticFeedbackContract(unittest.TestCase):
 
         self.assertEqual(len(recording_agent.criticisms), 1)
         self.assertIsNone(recording_agent.criticisms[0])
+        self.assertIsNone(recording_agent.world_model_contexts[0])
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c)
+
+    def test_world_model_state_conditions_initial_actor_decision(self):
+        seq_len_a = 2
+        seq_len_b = 4
+        seq_len_c = 8
+        d_model = 4
+        vocab_size = 7
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+            max_action_refinement_passes=1,
+        )
+        projection = nn.Linear(model.world_model.hidden_size * 2, d_model, bias=False)
+        with torch.no_grad():
+            projection.weight.zero_()
+            projection.weight[:, 0] = 1.0
+        model.world_model_actor_context = projection
+        recording_agent = RecordingAgent(seq_len_a, seq_len_b, vocab_size)
+        model.agent = recording_agent
+        model.critic = FixedCritic(torch.zeros(1, seq_len_a, d_model))
+        carried_state = WorldModelState(
+            hidden=torch.zeros(model.world_model.num_layers, 1, model.world_model.hidden_size),
+            cell=torch.zeros(model.world_model.num_layers, 1, model.world_model.hidden_size),
+        )
+        carried_state.hidden[:, :, 0] = 2.0
+
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, seq_len_b, dtype=torch.long)
+        src_c = torch.ones(1, seq_len_c)
+
+        actions1, _next_state, _criticism, actions2, _logits_a, _w_b, _b_b = model(
+            src_a,
+            src_b,
+            src_c,
+            world_model_state=carried_state,
+        )
+
+        self.assertEqual(len(recording_agent.world_model_contexts), 1)
+        torch.testing.assert_close(
+            recording_agent.world_model_contexts[0],
+            torch.full((1, seq_len_a, d_model), 2.0),
+        )
+        torch.testing.assert_close(
+            model.last_actor_world_model_context, torch.full((1, seq_len_a, d_model), 2.0)
+        )
+        torch.testing.assert_close(actions1, src_c + 2.0)
+        torch.testing.assert_close(actions2, src_c + 2.0)
+
+    def test_episode_mask_resets_actor_lstm_context(self):
+        seq_len_a = 2
+        seq_len_b = 4
+        seq_len_c = 8
+        d_model = 4
+        vocab_size = 7
+        model = AgentWorldModelCritic(
+            vocab_size=vocab_size,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+            max_action_refinement_passes=1,
+        )
+        projection = nn.Linear(model.world_model.hidden_size * 2, d_model, bias=False)
+        with torch.no_grad():
+            projection.weight.zero_()
+            projection.weight[:, 0] = 1.0
+        model.world_model_actor_context = projection
+        recording_agent = RecordingAgent(seq_len_a, seq_len_b, vocab_size)
+        model.agent = recording_agent
+        model.critic = FixedCritic(torch.zeros(1, seq_len_a, d_model))
+        carried_state = WorldModelState(
+            hidden=torch.zeros(model.world_model.num_layers, 1, model.world_model.hidden_size),
+            cell=torch.zeros(model.world_model.num_layers, 1, model.world_model.hidden_size),
+        )
+        carried_state.hidden[:, :, 0] = 2.0
+
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, seq_len_b, dtype=torch.long)
+        src_c = torch.ones(1, seq_len_c)
+
+        actions1, _next_state, _criticism, _actions2, _logits_a, _w_b, _b_b = model(
+            src_a,
+            src_b,
+            src_c,
+            world_model_state=carried_state,
+            episode_mask=torch.tensor([0.0]),
+        )
+
+        torch.testing.assert_close(
+            recording_agent.world_model_contexts[0],
+            torch.zeros(1, seq_len_a, d_model),
+        )
+        torch.testing.assert_close(actions1, src_c)
 
     def test_action_refinement_retries_death_and_non_progress_predictions(self):
         seq_len_a = 2
@@ -535,8 +668,11 @@ class TestCriticFeedbackContract(unittest.TestCase):
         self.assertEqual(recording_world_model.calls, 3)
         self.assertEqual(len(recording_agent.criticisms), 3)
         self.assertIsNone(recording_agent.criticisms[0])
+        self.assertIsNone(recording_agent.world_model_contexts[0])
         torch.testing.assert_close(recording_agent.criticisms[1], fixed_criticism)
+        self.assertIsNone(recording_agent.world_model_contexts[1])
         torch.testing.assert_close(recording_agent.criticisms[2], fixed_criticism)
+        self.assertIsNone(recording_agent.world_model_contexts[2])
         torch.testing.assert_close(criticism, fixed_criticism)
         torch.testing.assert_close(actions2, src_c + 1.0)
         self.assertIsNotNone(model.last_action_refinement)

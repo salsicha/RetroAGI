@@ -484,13 +484,20 @@ obstacle and enemy-gauntlet families plus a `full_smb_opening_proxy` family so
 Block SMB samples can join multiple hazards into longer-horizon sections rather
 than training only isolated examples. Block SMB training now uses the versioned
 sampler for generated scenarios, can add failure-family replay samples after
-Monte Carlo validation failures, and records curriculum coverage in logs and
-summaries. `retroagi-block-smb evaluate-monte-carlo` evaluates held-out splits
-with per-family, per-bin, action-count, and gate diagnostics. Distillation can
-train from sampled oracle trajectories and can run full family-by-difficulty
-parameter sweeps for deterministic Monte Carlo coverage. Full SMB transfer now
-rejects Block SMB sources without fixed pass rate `1.0` plus passing held-out
-Monte Carlo validation evidence unless explicitly bypassed for debugging.
+Monte Carlo validation failures, defaults fresh CLI training to the initial
+real-volume target of 512 train samples, 128 validation samples, and 256 test
+samples, oversamples the current failure families (`single_gap`, `stair_climb`,
+`platform_chain`, `enemy_gap`, `retreat_recovery`, `wait_timing`,
+`mixed_section`, and especially `full_smb_opening_proxy`), and records
+curriculum coverage in logs and summaries.
+`retroagi-block-smb evaluate-monte-carlo` evaluates held-out splits with
+per-family, per-bin, action-count, and gate diagnostics. Distillation can train
+from sampled oracle trajectories, treats `--monte-carlo-samples` as the target
+total train volume with required coverage included as a floor, and can still run
+full family-by-difficulty parameter sweeps for deterministic coverage smoke.
+Full SMB transfer now rejects Block SMB sources without fixed pass rate `1.0`
+plus passing held-out Monte Carlo validation evidence unless explicitly
+bypassed for debugging.
 
 **Exit criteria:** a Block SMB checkpoint passes the fixed-scenario gate and a
 versioned held-out Monte Carlo distribution gate with documented per-family
@@ -840,9 +847,10 @@ and playable end target.
         context feature for final action selection instead of running the actor
         a second time for critic feedback.
         Result: the experimental single-pass actor variant was removed. The
-        supported policy architecture remains `AgentWorldModelCritic`, with the
-        action-level world model and motor-primitive controller carrying the
-        LSTM prediction signal through the existing trainer-facing tuple.
+        supported policy architecture remains `AgentWorldModelCritic`, and the
+        carried action-level LSTM hidden/cell state is now projected into the
+        actor's initial A-stream decision while the motor-primitive controller
+        continues to consume LSTM-predicted replan signals.
   - [x] Define a new single-pass architecture output contract that preserves
         checkpoint compatibility or provides an explicit migration path from the
         current two-pass `AgentWorldModelCritic` contract.

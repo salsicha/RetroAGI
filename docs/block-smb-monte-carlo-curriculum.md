@@ -116,19 +116,20 @@ The sampler supports:
 - minimum coverage per family and difficulty bin;
 - deterministic replay by scenario ID.
 
-Routine fresh runs that set `--monte-carlo-train-samples-per-epoch` use the
-default family order, but explicit counts are lifted when needed so the train
-stream includes `chained_obstacles`, `chained_enemy_gauntlet`, and
-`full_smb_opening_proxy`. This prevents small smoke-sized fresh runs from
-training only on the early simple families and missing the Block scenarios that
-approximate the first Full SMB 1-1 hazards. Runs that pass
+Routine fresh CLI runs use a failure-focused train sampler over `single_gap`,
+`stair_climb`, `platform_chain`, `enemy_gap`, `retreat_recovery`, `wait_timing`,
+`mixed_section`, and `full_smb_opening_proxy`. The Full SMB opening proxy is
+weighted `4x`; the other weak families are weighted `1x`. Runs that pass
 `--monte-carlo-family-weight` keep the exact requested sample count because
 those are intentionally targeted curricula.
 
 Training can enable failure replay with
 `--monte-carlo-failure-replay-samples-per-epoch N`. After a Monte Carlo
 validation run produces failure bins, later epochs sample additional train
-scenarios weighted by the failing families.
+scenarios weighted by the failing families. Fresh real-volume train CLI runs
+default this replay budget to `64` samples per epoch after validation failures.
+Held-out validation and test sampling stay unweighted so promotion gates still
+measure broad family coverage.
 
 ## Curriculum Schedule
 
@@ -172,6 +173,11 @@ Suggested initial gates for `block_smb_mc_v1`:
 
 These numbers are starting points. The default code gates are configurable with
 `--monte-carlo-pass-rate-gate` and `--monte-carlo-family-pass-rate-gate`.
+Fresh `retroagi-block-smb train` and `retroagi-block-smb-distill` runs now use
+the initial real-volume train/validation/test counts and the failure-focused
+train family weights by default. Pass explicit `0` counts for a smoke run, or
+`--monte-carlo-parameter-sweep` for the deterministic family/difficulty
+coverage sweep.
 
 ## Commands
 
@@ -180,8 +186,19 @@ Train with versioned Monte Carlo samples:
 ```bash
 retroagi-block-smb train \
   --monte-carlo-train-samples-per-epoch 512 \
+  --monte-carlo-family-weight single_gap=1 \
+  --monte-carlo-family-weight stair_climb=1 \
+  --monte-carlo-family-weight platform_chain=1 \
+  --monte-carlo-family-weight enemy_gap=1 \
+  --monte-carlo-family-weight retreat_recovery=1 \
+  --monte-carlo-family-weight wait_timing=1 \
+  --monte-carlo-family-weight mixed_section=1 \
+  --monte-carlo-family-weight full_smb_opening_proxy=4 \
   --monte-carlo-validation-samples 128 \
+  --monte-carlo-test-samples 256 \
   --monte-carlo-failure-replay-samples-per-epoch 64 \
+  --monte-carlo-pass-rate-gate 0.95 \
+  --monte-carlo-family-pass-rate-gate 0.90 \
   --checkpoint data/block_smb/policy.pth \
   --output artifacts/block_smb/latest/run_summary.json
 ```
@@ -202,8 +219,24 @@ Distill from sampled oracle trajectories:
 retroagi-block-smb-distill \
   --checkpoint data/block_smb/distilled_mc.pth \
   --monte-carlo-samples 512 \
-  --monte-carlo-validation-samples 128
+  --monte-carlo-family-weight single_gap=1 \
+  --monte-carlo-family-weight stair_climb=1 \
+  --monte-carlo-family-weight platform_chain=1 \
+  --monte-carlo-family-weight enemy_gap=1 \
+  --monte-carlo-family-weight retreat_recovery=1 \
+  --monte-carlo-family-weight wait_timing=1 \
+  --monte-carlo-family-weight mixed_section=1 \
+  --monte-carlo-family-weight full_smb_opening_proxy=4 \
+  --monte-carlo-validation-samples 128 \
+  --monte-carlo-test-samples 256 \
+  --monte-carlo-pass-rate-gate 0.95 \
+  --monte-carlo-family-pass-rate-gate 0.90
 ```
+
+For distillation, `--monte-carlo-samples` is the target total train volume.
+Required family/difficulty coverage is included in that count and acts as a
+floor, so requesting `512` yields 512 train scenarios rather than a 45-scenario
+coverage sweep plus 512 more samples.
 
 ## Implementation Steps
 

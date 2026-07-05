@@ -259,6 +259,34 @@ class TestBlockSMBCLI(unittest.TestCase):
 
         def fake_train(config, *, vision_factory):
             self.assertEqual(config.vision_checkpoint_path, Path("data/block_vit/block_vit.pth"))
+            self.assertEqual(
+                config.monte_carlo_train_samples_per_epoch,
+                cli.DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES,
+            )
+            self.assertEqual(
+                config.monte_carlo_validation_samples,
+                cli.DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES,
+            )
+            self.assertEqual(
+                config.monte_carlo_test_samples,
+                cli.DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES,
+            )
+            self.assertEqual(
+                config.monte_carlo_family_weights,
+                cli.default_block_smb_failure_focus_monte_carlo_family_weights(),
+            )
+            self.assertEqual(
+                config.monte_carlo_failure_replay_samples_per_epoch,
+                cli.DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES,
+            )
+            self.assertEqual(
+                config.monte_carlo_pass_rate_gate,
+                cli.DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE,
+            )
+            self.assertEqual(
+                config.monte_carlo_family_pass_rate_gate,
+                cli.DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE,
+            )
             self.assertIs(vision_factory(), loaded_model)
             return fake_result()
 
@@ -301,6 +329,42 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(written["vision"], payload["vision"])
         self.assertEqual(written["architecture"], payload["architecture"])
         self.assertEqual(written["curriculum_summary"], payload["curriculum_summary"])
+
+    def test_train_parameter_sweep_keeps_coverage_smoke_defaults(self):
+        def fake_train(config, *, vision_factory):  # noqa: ARG001
+            self.assertTrue(config.monte_carlo_parameter_sweep)
+            self.assertEqual(config.monte_carlo_train_samples_per_epoch, 0)
+            self.assertEqual(config.monte_carlo_validation_samples, 0)
+            self.assertEqual(config.monte_carlo_test_samples, 0)
+            self.assertEqual(config.monte_carlo_family_weights, {})
+            self.assertEqual(config.monte_carlo_failure_replay_samples_per_epoch, 0)
+            self.assertEqual(
+                config.monte_carlo_pass_rate_gate,
+                cli.DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE,
+            )
+            self.assertEqual(
+                config.monte_carlo_family_pass_rate_gate,
+                cli.DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE,
+            )
+            return fake_result()
+
+        with patch(
+            "retroagi.stages.block_smb.cli.train_and_evaluate_block_smb",
+            side_effect=fake_train,
+        ):
+            exit_code, payload = self.run_main(
+                [
+                    "train",
+                    "--monte-carlo-parameter-sweep",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["config"]["monte_carlo_train_samples_per_epoch"], 0)
+        self.assertEqual(payload["config"]["monte_carlo_validation_samples"], 0)
+        self.assertEqual(payload["config"]["monte_carlo_test_samples"], 0)
+        self.assertEqual(payload["config"]["monte_carlo_family_weights"], {})
+        self.assertEqual(payload["config"]["monte_carlo_failure_replay_samples_per_epoch"], 0)
 
     def test_evaluate_command_reuses_checkpoint_vision_path(self):
         loaded_model = object()

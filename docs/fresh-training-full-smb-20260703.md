@@ -223,9 +223,9 @@ sequence.
 The action trace shows the same temporal-control problem seen in earlier runs:
 the policy can choose `RIGHT` and `RIGHT_JUMP`, but it does not yet execute a
 well-timed option. The opening uses a long burst of `RIGHT_JUMP`, then mostly
-`RIGHT`. The generic jump terminator and one-second walk limiter prevent some
-pathological holds, but they are not enough to turn per-frame logits into a
-solved Level 1-1 route.
+`RIGHT`. Jump termination helps prevent pathological jump holds, but walk
+actions are intentionally left uncapped so the learned controller is responsible
+for releasing, cancelling, or replanning movement.
 
 The Monte Carlo sweep path also needs runtime work. Enabling
 `--monte-carlo-parameter-sweep` currently causes Block SMB evaluation to attach

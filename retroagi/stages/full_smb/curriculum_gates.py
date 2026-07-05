@@ -141,9 +141,7 @@ def run_full_smb_curriculum_gate_evaluation(
             episodes=episodes if episodes is not None else gate.episodes,
         )
     gate_count = len(gate_results)
-    gates_passed = sum(
-        1 for result in gate_results.values() if bool(result["threshold_met"])
-    )
+    gates_passed = sum(1 for result in gate_results.values() if bool(result["threshold_met"]))
     gate_pass_rate = gates_passed / gate_count if gate_count else 0.0
     blocking_gates = [
         name for name, result in gate_results.items() if not bool(result["threshold_met"])
@@ -246,7 +244,6 @@ def _run_full_smb_curriculum_gate(
     episodes: int,
 ) -> dict[str, Any]:
     from retroagi.stages.full_smb.train import (
-        _full_smb_walk_action_limiter,
         _policy_action_logits_and_state,
     )
 
@@ -256,7 +253,6 @@ def _run_full_smb_curriculum_gate(
         observation = stage.reset(seed=seed + episode_index)
         world_model_state = None
         primitive_executor = SMBParameterizedPrimitiveExecutor()
-        walk_limiter = _full_smb_walk_action_limiter(stage)
         progress_values: list[float] = []
         score_values: list[float] = []
         coin_values: list[float] = []
@@ -281,7 +277,6 @@ def _run_full_smb_curriculum_gate(
                 motor_primitives=forward.motor_primitives,
                 batch=batch,
             ).action
-            action = walk_limiter.filter_action(action)
             observation, reward, terminated, truncated, info = stage.step(action)
             source = _signal_source(info)
             progress = _signal_progress(source)

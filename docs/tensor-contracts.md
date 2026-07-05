@@ -291,30 +291,38 @@ primitive-outcome target:
 
 ### Actor/Critic Refinement
 
-`AgentWorldModelCritic` runs the shared actor twice for every batch:
+`AgentWorldModelCritic` can run the shared actor once or rerun it for bounded
+critic refinement:
 
-1. The first actor pass receives `src_a`, `src_b`, and `src_c` with
-   `criticism=None`.
+1. The first actor pass receives `src_a`, `src_b`, `src_c`, and an optional
+   `world_model_context` projected from carried LSTM `WorldModelState(hidden,
+   cell)`, with `criticism=None`.
 2. The first pass C actions and B-level controller parameters are expanded to
    C resolution by the selected low-level controller schedule and passed to the
    world model.
 3. The critic maps the predicted C state to a feedback tensor with shape
    `[B, L_A, d_model]`.
-4. The second actor pass receives the original `src_a`, `src_b`, and `src_c`
-   plus that exact critic tensor.
+4. If refinement is enabled and the candidate is rejected, the second actor pass
+   receives the original `src_a`, `src_b`, and `src_c`, the same
+   `world_model_context`, plus that exact critic tensor.
 
-The critic tensor is added as an unscaled residual to the A stream after token
-embedding and positional encoding, and before the A-level transformer:
+The LSTM context and critic tensor are added as separate residuals to the A
+stream after token embedding and positional encoding, and before the A-level
+transformer:
 
 ```text
 encoded_A = positional_encoding(embedding(src_a) * sqrt(d_model))
-refined_A = encoded_A + criticism
+lstm_A = encoded_A + world_model_context
+refined_A = lstm_A + criticism
 ```
 
-No gating, normalization, clipping, detach, or loss weighting is applied inside
-the actor. Loss weights and critic regularization remain trainer-owned. The
-critic output must match the encoded A shape exactly and live on the same
-device.
+`world_model_context` is produced by projecting the last LSTM hidden/cell state
+to `[B, L_A, d_model]`. `episode_mask` zeros that actor context at boundaries so
+memory from a completed episode cannot bias the next initial decision. No
+critic gating, normalization, clipping, detach, or loss weighting is applied
+inside the actor. Loss weights and critic regularization remain trainer-owned.
+Both actor context tensors must match the encoded A shape exactly and live on
+the same device.
 
 ### Low-Level Controller Schedules
 
@@ -331,10 +339,10 @@ The actor still returns `w_b` and `b_b` with shape `[B,L_B]` in both modes.
 that same C-level context to the world model, so dynamics prediction observes
 the low-level gains that produced the C actions.
 
-For SMB stages, the baseline architecture configures the motor primitive
-controller with `RIGHT` and `LEFT` as walk actions. Their decoded
-`hold_duration` is capped at `1.0`, so a walk primitive cannot request more than
-one second of continuous hold before replanning.
+For SMB stages, pure `RIGHT` and `LEFT` walk actions are not capped by a fixed
+one-second runtime release. The learned policy or primitive controller must
+emit a different action when movement should be released, cancelled, or
+replanned.
 
 The B-level transformer also emits explicit primitive-control heads:
 

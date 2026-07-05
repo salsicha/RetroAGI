@@ -129,9 +129,7 @@ def _game_name(value: str) -> str:
     if name in game_plugin_names():
         return name
     available = ", ".join(game_plugin_names())
-    raise argparse.ArgumentTypeError(
-        f"unknown game {value!r}; available game plugins: {available}"
-    )
+    raise argparse.ArgumentTypeError(f"unknown game {value!r}; available game plugins: {available}")
 
 
 def _architecture_config_item(value: str) -> tuple[str, Any]:
@@ -363,6 +361,12 @@ def _block_smb_plan(
         str(args.block_rollout_steps),
         "--generated-scenarios",
         "0",
+        "--monte-carlo-train-samples-per-epoch",
+        "0",
+        "--monte-carlo-validation-samples",
+        "0",
+        "--monte-carlo-test-samples",
+        "0",
         "--evaluation-episodes",
         str(args.block_evaluation_episodes),
         "--evaluation-max-steps",
@@ -413,22 +417,20 @@ def run_experiment(
         if not isinstance(metrics, Mapping):
             metrics = {}
         gate_results = [gate.evaluate(metrics) for gate in gates if gate.applies_to(plan.stage)]
-        stage_result = (
-            {
-                "stage": plan.stage,
-                "game_stage": _stage_game_manifest(plugin, plan.stage),
-                "command": plan.command,
-                "summary_path": str(plan.summary_path),
-                "checkpoint_path": str(plan.checkpoint_path),
-                "log_path": str(plan.log_path) if plan.log_path is not None else None,
-                "recordings": [],
-                "exit_code": exit_code,
-                "config": summary.get("config", {}),
-                "metrics": dict(metrics),
-                "gates": gate_results,
-                "passed": exit_code == 0 and all(result["passed"] for result in gate_results),
-            }
-        )
+        stage_result = {
+            "stage": plan.stage,
+            "game_stage": _stage_game_manifest(plugin, plan.stage),
+            "command": plan.command,
+            "summary_path": str(plan.summary_path),
+            "checkpoint_path": str(plan.checkpoint_path),
+            "log_path": str(plan.log_path) if plan.log_path is not None else None,
+            "recordings": [],
+            "exit_code": exit_code,
+            "config": summary.get("config", {}),
+            "metrics": dict(metrics),
+            "gates": gate_results,
+            "passed": exit_code == 0 and all(result["passed"] for result in gate_results),
+        }
         stage_result["promotion_decision"] = _stage_promotion_decision(
             plugin,
             plan.stage,
@@ -463,9 +465,7 @@ def _manifest(
     variant = build_architecture_variant(args.architecture_config or (), args.ablation or ())
     plugin = _experiment_game_plugin(args)
     promotion_decisions = [
-        stage["promotion_decision"]
-        for stage in stage_results
-        if "promotion_decision" in stage
+        stage["promotion_decision"] for stage in stage_results if "promotion_decision" in stage
     ]
     rung_statuses = {
         rung: decision["status"]
@@ -546,19 +546,14 @@ def _game_manifest(plugin) -> dict[str, Any]:
             }
             for asset in game.asset_requirements
         ],
-        "asset_checklist": [
-            item.to_manifest()
-            for item in game.asset_checklist
-        ],
+        "asset_checklist": [item.to_manifest() for item in game.asset_checklist],
         "licensing": dict(game.licensing),
     }
 
 
 def _stage_game_manifest(plugin, experiment_stage: str) -> dict[str, Any]:
     resolution = _resolve_experiment_game_stage(plugin, experiment_stage)
-    stage = next(
-        stage for stage in plugin.game.stage_ladder if stage.name == resolution.name
-    )
+    stage = next(stage for stage in plugin.game.stage_ladder if stage.name == resolution.name)
     try:
         perception_pipeline = plugin.perception_pipeline(resolution.name)
     except KeyError:
@@ -572,9 +567,7 @@ def _stage_game_manifest(plugin, experiment_stage: str) -> dict[str, Any]:
         "stage_adapter": plugin.stage_adapters.get(resolution.name),
         "vision_encoder": plugin.vision_encoders.get(resolution.name),
         "perception_pipeline": (
-            perception_pipeline.to_manifest()
-            if perception_pipeline is not None
-            else None
+            perception_pipeline.to_manifest() if perception_pipeline is not None else None
         ),
     }
 

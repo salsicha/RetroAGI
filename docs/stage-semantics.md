@@ -146,9 +146,9 @@ duration bin, releases to `RIGHT`, `LEFT`, or `NOOP`, and uses the current ViT
 output from `StageBatch.metadata["vision"]` to terminate on ground/platform
 landing or enemy contact. It also suppresses repeated jump starts until the
 policy emits a non-jump action. `SMBJumpActionTerminator` remains available as a
-lower-level landing-release helper. The same policy paths pass pure walk actions
-through `SMBWalkActionLimiter`, which caps continuous `RIGHT` or `LEFT` holds at
-one second before inserting a release frame.
+lower-level landing-release helper. Pure walk actions are no longer capped by a
+fixed one-second release window; continuous `RIGHT` or `LEFT` holds persist until
+the policy or primitive controller emits a different action.
 
 This transfer vocabulary intentionally leaves NES-only buttons such as `B`,
 `START`, and `SELECT` released. Adding run/fire or menu actions requires an

@@ -23,6 +23,7 @@ The stage code is separated, but all stages share the same core contract:
 observation -> hierarchical actor -> action
 observation + action -> world model prediction
 prediction -> critic -> actor refinement
+carried LSTM state -> next initial actor decision
 ```
 
 Shared actor/world-model/critic components live in `retroagi/core`. Stage
@@ -60,6 +61,10 @@ actor/world-model/critic flow.
   optional TensorBoard or W&B tracking. Generated scenarios now use the
   versioned `block_smb_mc_v1` Monte Carlo distribution so policy training can
   cover parameterized ground-truth tasks rather than only a small fixed set.
+  Fresh Block SMB train/distill CLI runs use the initial real-volume MC target
+  of 512 train, 128 validation, and 256 test samples, with failure-focused
+  train oversampling biased toward `full_smb_opening_proxy`, unless a
+  smoke/sweep override is passed.
 - **Full SMB** has the asset-mock ViT bootstrapping rung, a stable-retro stage
   adapter, headless smoke evaluation, Block SMB policy transfer, continued Full
   SMB training, transfer-vs-scratch comparison tooling, and a documented local

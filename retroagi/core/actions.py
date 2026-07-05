@@ -21,9 +21,7 @@ class ContinuousControlSpec:
         if not self.axis:
             raise ValueError("continuous control axis must be non-empty")
         if not -1.0 <= self.value <= 1.0:
-            raise ValueError(
-                f"continuous control {self.axis!r} value must be in [-1, 1]"
-            )
+            raise ValueError(f"continuous control {self.axis!r} value must be in [-1, 1]")
 
 
 @dataclass(frozen=True)
@@ -48,9 +46,7 @@ class ActionSpec:
         if self.backend_action_id is not None and self.backend_action_id < 0:
             raise ValueError("backend_action_id must be non-negative when declared")
         if self.kind not in {"discrete", "continuous", "hybrid"}:
-            raise ValueError(
-                f"action {self.name!r} kind must be discrete, continuous, or hybrid"
-            )
+            raise ValueError(f"action {self.name!r} kind must be discrete, continuous, or hybrid")
         if len(set(self.buttons)) != len(self.buttons):
             raise ValueError(f"action {self.name!r} has duplicate buttons")
         if len(set(self.release_buttons)) != len(self.release_buttons):
@@ -58,9 +54,7 @@ class ActionSpec:
         if self.kind == "continuous" and self.buttons:
             raise ValueError(f"continuous action {self.name!r} cannot declare buttons")
         if self.kind == "discrete" and self.continuous_controls:
-            raise ValueError(
-                f"discrete action {self.name!r} cannot declare continuous controls"
-            )
+            raise ValueError(f"discrete action {self.name!r} cannot declare continuous controls")
         if self.release_all and self.buttons:
             raise ValueError(f"release-all action {self.name!r} cannot press buttons")
 
@@ -165,9 +159,7 @@ def action_button_vector(action: ActionSpec, buttons: Iterable[str]) -> np.ndarr
     required = tuple(button.upper() for button in action.buttons)
     missing = sorted(set(required).difference(button_names))
     if missing:
-        raise ValueError(
-            f"backend button layout is missing {missing!r} for action {action.name}"
-        )
+        raise ValueError(f"backend button layout is missing {missing!r} for action {action.name}")
 
     release_buttons = tuple(button.upper() for button in action.release_buttons)
     release_missing = sorted(set(release_buttons).difference(button_names))
@@ -230,7 +222,7 @@ SMB_JUMP_RELEASE_ACTIONS = {
 }
 SMB_WALK_ACTIONS = frozenset((SMBAction.RIGHT, SMBAction.LEFT))
 SMB_DEFAULT_ACTIONS_PER_SECOND = 60.0
-SMB_MAX_WALK_ACTION_SECONDS = 1.0
+SMB_MAX_WALK_ACTION_SECONDS: float | None = None
 SMB_SUPPORT_AIR = "air"
 SMB_SUPPORT_GROUND = "ground"
 SMB_SUPPORT_PLATFORM = "platform"
@@ -305,10 +297,7 @@ class SMBJumpActionTerminator:
             self._left_support = True
             return int(action_value)
 
-        landed = (
-            self._left_support
-            and support_name in {SMB_SUPPORT_GROUND, SMB_SUPPORT_PLATFORM}
-        )
+        landed = self._left_support and support_name in {SMB_SUPPORT_GROUND, SMB_SUPPORT_PLATFORM}
         if landed:
             release = smb_jump_release_action(action_value)
             self._jump_active = False
@@ -320,23 +309,27 @@ class SMBJumpActionTerminator:
 
 
 class SMBWalkActionLimiter:
-    """Release pure SMB walk actions after a fixed continuous hold window."""
+    """Optionally release pure SMB walk actions after a fixed hold window."""
 
     def __init__(
         self,
         *,
-        max_walk_seconds: float = SMB_MAX_WALK_ACTION_SECONDS,
+        max_walk_seconds: float | None = SMB_MAX_WALK_ACTION_SECONDS,
         actions_per_second: float = SMB_DEFAULT_ACTIONS_PER_SECOND,
     ) -> None:
-        if float(max_walk_seconds) <= 0.0:
+        if max_walk_seconds is not None and float(max_walk_seconds) <= 0.0:
             raise ValueError("max_walk_seconds must be positive")
         if float(actions_per_second) <= 0.0:
             raise ValueError("actions_per_second must be positive")
-        self.max_walk_seconds = float(max_walk_seconds)
+        self.max_walk_seconds = None if max_walk_seconds is None else float(max_walk_seconds)
         self.actions_per_second = float(actions_per_second)
-        self.max_walk_frames = max(
-            1,
-            int(math.ceil(self.max_walk_seconds * self.actions_per_second)),
+        self.max_walk_frames = (
+            None
+            if self.max_walk_seconds is None
+            else max(
+                1,
+                int(math.ceil(self.max_walk_seconds * self.actions_per_second)),
+            )
         )
         self.reset()
 
@@ -348,6 +341,8 @@ class SMBWalkActionLimiter:
         action_value = coerce_smb_action(action)
         if action_value not in SMB_WALK_ACTIONS:
             self.reset()
+            return int(action_value)
+        if self.max_walk_frames is None:
             return int(action_value)
         if self._walk_action != action_value:
             self._walk_action = action_value
@@ -581,9 +576,7 @@ def _vision_support_name(vision: Any) -> str | None:
         support_logits = _to_numpy(getattr(vision, "support_logits", None))
         if support_logits is not None and support_logits.size:
             support_id = int(
-                np.asarray(support_logits)
-                .reshape((-1, support_logits.shape[-1]))[0]
-                .argmax()
+                np.asarray(support_logits).reshape((-1, support_logits.shape[-1]))[0].argmax()
             )
     if support_id is None:
         return None
@@ -643,12 +636,8 @@ def _semantic_contact_class_ids(
 ) -> tuple[set[int], set[int]]:
     if semantic_classes:
         lowered = tuple(str(name).lower() for name in semantic_classes)
-        agent_ids = {
-            index for index, name in enumerate(lowered) if name in SMB_AGENT_CLASS_NAMES
-        }
-        enemy_ids = {
-            index for index, name in enumerate(lowered) if name in SMB_ENEMY_CLASS_NAMES
-        }
+        agent_ids = {index for index, name in enumerate(lowered) if name in SMB_AGENT_CLASS_NAMES}
+        enemy_ids = {index for index, name in enumerate(lowered) if name in SMB_ENEMY_CLASS_NAMES}
         return agent_ids, enemy_ids
 
     class_count = int(labels.max()) + 1 if labels.size else 0

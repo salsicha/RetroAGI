@@ -10,7 +10,6 @@ from retroagi.core import (
     AgentWorldModelCritic,
     ArchitectureRegistry,
     ArchitectureSpec,
-    SMBAction,
     StageSpec,
     architecture_names,
     build_architecture,
@@ -64,18 +63,15 @@ class TestArchitectureRegistry(unittest.TestCase):
         self.assertEqual(outputs[3].shape, (1, 8))
         self.assertEqual(outputs[4].shape, (1, 2, 6))
 
-    def test_smb_baseline_caps_walk_motor_primitives(self):
+    def test_smb_baseline_leaves_walk_motor_primitives_uncapped(self):
         model = build_architecture(
             BASELINE_ARCHITECTURE_NAME,
             tiny_stage("block_smb"),
             {"hidden_dim": 16},
         )
 
-        self.assertEqual(
-            model.motor_controller.walk_action_ids,
-            (int(SMBAction.RIGHT), int(SMBAction.LEFT)),
-        )
-        self.assertEqual(model.motor_controller.max_walk_action_duration, 1.0)
+        self.assertEqual(model.motor_controller.walk_action_ids, ())
+        self.assertIsNone(model.motor_controller.max_walk_action_duration)
 
         synthetic_model = build_architecture(
             BASELINE_ARCHITECTURE_NAME,
