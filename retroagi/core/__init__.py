@@ -9,13 +9,13 @@ from .ablations import (
 from .actions import (
     SMB_ACTION_SPECS,
     SMB_ACTIONS,
+    ActionSpec,
+    ContinuousControlSpec,
     SMBAction,
     SMBJumpActionTerminator,
     SMBParameterizedPrimitiveExecutor,
     SMBPrimitiveExecution,
     SMBWalkActionLimiter,
-    ActionSpec,
-    ContinuousControlSpec,
     action_backend_id,
     action_button_vector,
     block_smb_action,
@@ -30,8 +30,8 @@ from .actions import (
 from .architectures import (
     ARCHITECTURE_REGISTRY,
     BASELINE_ARCHITECTURE_NAME,
-    BASELINE_OUTPUT_CONTRACT,
     BASELINE_ARCHITECTURE_SPEC,
+    BASELINE_OUTPUT_CONTRACT,
     POLICY_TUPLE_OUTPUT_CONTRACTS,
     ArchitectureFactory,
     ArchitectureRegistry,
@@ -88,6 +88,27 @@ from .config import (
     to_plain_data,
 )
 from .devices import is_mps_available, is_mps_built, select_device
+from .game_plugins import (
+    GAME_PLUGIN_REGISTRY,
+    PONG_GAME_PLUGIN,
+    SMB_GAME_PLUGIN,
+    GamePluginRegistry,
+    GamePluginSpec,
+    game_plugin_names,
+    get_game_plugin,
+)
+from .game_promotion import (
+    COMPARISON_OPERATORS,
+    GAME_PROMOTION_PHASES,
+    METRIC_GATE_OPERATORS,
+    GamePromotionGateSpec,
+    GamePromotionPhase,
+    GamePromotionPlan,
+    PromotionArtifactGateSpec,
+    PromotionMetricGateSpec,
+    PromotionRuntimeGateSpec,
+    build_game_promotion_plan,
+)
 from .games import (
     GAME_SPECS,
     PONG_ACTION_SPECS,
@@ -111,48 +132,27 @@ from .games import (
     get_game_spec,
     validate_game_spec,
 )
-from .game_plugins import (
-    GAME_PLUGIN_REGISTRY,
-    PONG_GAME_PLUGIN,
-    SMB_GAME_PLUGIN,
-    GamePluginRegistry,
-    GamePluginSpec,
-    game_plugin_names,
-    get_game_plugin,
-)
-from .game_promotion import (
-    COMPARISON_OPERATORS,
-    GAME_PROMOTION_PHASES,
-    METRIC_GATE_OPERATORS,
-    GamePromotionGateSpec,
-    GamePromotionPhase,
-    GamePromotionPlan,
-    PromotionArtifactGateSpec,
-    PromotionMetricGateSpec,
-    PromotionRuntimeGateSpec,
-    build_game_promotion_plan,
-)
 from .hierarchy import VisionHierarchyProjector
 from .interfaces import (
+    VISION_SUPPORT_CLASSES,
     AgentStep,
     StageBatch,
     StageSpec,
-    VISION_SUPPORT_CLASSES,
     VisionEncoder,
     VisionOutput,
     VisionSpec,
 )
 from .models import (
+    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES,
-    ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
     DEFAULT_PRIMITIVE_DURATION_BINS,
     LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES,
     SUPPORTED_CONTROLLER_SCHEDULES,
+    ActionRefinementTrace,
     AdaptiveController,
     AgentWorldModelCritic,
-    ActionRefinementTrace,
     Critic,
     CriticActionEvaluation,
     HierarchicalAdaptiveModel,
@@ -160,6 +160,7 @@ from .models import (
     MotorPrimitiveController,
     MotorPrimitiveOutput,
     PositionalEncoding,
+    PrimitiveOutcomePrediction,
     WorldModel,
     WorldModelState,
     action_level_world_model_state_dict,
@@ -181,8 +182,8 @@ from .signals import (
 from .stage_resolution import (
     CANONICAL_STAGE_NAMES,
     OPTIONAL_STAGE_NAMES,
-    STANDARD_STAGE_NAMES,
     STAGE_NAME_ALIASES,
+    STANDARD_STAGE_NAMES,
     StageResolution,
     is_standard_stage_name,
     normalize_stage_name,
@@ -284,6 +285,7 @@ __all__ = [
     "PerceptionDatasetSourceSpec",
     "PerceptionPipelineSpec",
     "PositionalEncoding",
+    "PrimitiveOutcomePrediction",
     "PromotionArtifactGateSpec",
     "PromotionMetricGateSpec",
     "PromotionRuntimeGateSpec",

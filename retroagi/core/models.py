@@ -12,6 +12,8 @@ SUPPORTED_CONTROLLER_SCHEDULES = ("constant", "linear")
 ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES = (
     "world_model.decoder.",
     "world_model.lstm.weight_ih",
+    "world_model.primitive_encoder.",
+    "world_model.primitive_outcome_head.",
 )
 ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES = ("world_model.fc.",)
 ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES = (
@@ -32,6 +34,9 @@ ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
 DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
+WORLD_MODEL_PRIMITIVE_FEATURE_DIM = 9
+WORLD_MODEL_PRIMITIVE_EMBEDDING_DIM = 16
+WORLD_MODEL_PRIMITIVE_OUTCOME_DIM = 7
 MOTOR_PRIMITIVE_PROGRESS_MIN_DELTA = 0.005
 MOTOR_PRIMITIVE_LOW_PROGRESS_SCALE = 10.0
 MOTOR_PRIMITIVE_SUPPORT_RISK_SCALE = 2.0
@@ -75,6 +80,30 @@ class WorldModelState:
 
     def detach(self):
         return WorldModelState(self.hidden.detach(), self.cell.detach())
+
+
+@dataclass(frozen=True)
+class PrimitiveOutcomePrediction:
+    """K-step outcome predicted from a structured B-level primitive."""
+
+    progress_delta: torch.Tensor
+    support_loss_logit: torch.Tensor
+    collision_death_logit: torch.Tensor
+    terminal_logit: torch.Tensor
+    continue_logit: torch.Tensor
+    cancel_logit: torch.Tensor
+    replan_logit: torch.Tensor
+
+    def detach(self):
+        return PrimitiveOutcomePrediction(
+            progress_delta=self.progress_delta.detach(),
+            support_loss_logit=self.support_loss_logit.detach(),
+            collision_death_logit=self.collision_death_logit.detach(),
+            terminal_logit=self.terminal_logit.detach(),
+            continue_logit=self.continue_logit.detach(),
+            cancel_logit=self.cancel_logit.detach(),
+            replan_logit=self.replan_logit.detach(),
+        )
 
 
 @dataclass(frozen=True)
@@ -186,6 +215,7 @@ class _ActionCandidate:
     b: torch.Tensor
     primitive_params: LevelBPrimitiveParameters | None
     next_state_pred: torch.Tensor
+    primitive_outcome: PrimitiveOutcomePrediction | None
     criticism: torch.Tensor
     evaluation: CriticActionEvaluation
     next_world_model_state: WorldModelState | None
@@ -690,25 +720,51 @@ class WorldModel(nn.Module):
     expands that action-level recurrent state back to the C-stream contract.
     """
 
-    def __init__(self, hidden_size=32, num_layers=1, num_freqs=4, ratio_bc=4):
+    uses_primitive_context = True
+
+    def __init__(
+        self,
+        hidden_size=32,
+        num_layers=1,
+        num_freqs=4,
+        ratio_bc=4,
+        primitive_feature_dim=WORLD_MODEL_PRIMITIVE_FEATURE_DIM,
+        primitive_embedding_dim=WORLD_MODEL_PRIMITIVE_EMBEDDING_DIM,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.num_freqs = num_freqs
         self.ratio_bc = ratio_bc
-        input_size = 16
+        self.primitive_feature_dim = int(primitive_feature_dim)
+        self.primitive_embedding_dim = int(primitive_embedding_dim)
+        if self.primitive_feature_dim <= 0:
+            raise ValueError("primitive_feature_dim must be positive")
+        if self.primitive_embedding_dim <= 0:
+            raise ValueError("primitive_embedding_dim must be positive")
+        self.primitive_encoder = nn.Sequential(
+            nn.Linear(self.primitive_feature_dim * 4, self.primitive_embedding_dim),
+            nn.Tanh(),
+        )
+        input_size = 16 + self.primitive_embedding_dim
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
         )
-        decoder_input_size = hidden_size + 4 + num_freqs * 2
+        decoder_input_size = hidden_size + 4 + num_freqs * 2 + self.primitive_embedding_dim
         self.decoder = nn.Sequential(
             nn.Linear(decoder_input_size, hidden_size),
             nn.Tanh(),
             nn.Linear(hidden_size, 1),
         )
+        self.primitive_outcome_head = nn.Sequential(
+            nn.Linear(hidden_size + self.primitive_embedding_dim, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, WORLD_MODEL_PRIMITIVE_OUTCOME_DIM),
+        )
+        self.last_primitive_outcome: PrimitiveOutcomePrediction | None = None
 
     def initial_state(self, batch_size, device, dtype=torch.float32):
         hidden = torch.zeros(
@@ -800,6 +856,61 @@ class WorldModel(nn.Module):
             dim=1,
         )
 
+    def _primitive_summary_features(self, primitive_context, batch_size, device, dtype):
+        feature_count = self.primitive_feature_dim
+        if primitive_context is None:
+            return torch.zeros(
+                batch_size,
+                feature_count * 4,
+                device=device,
+                dtype=dtype,
+            )
+        features = torch.as_tensor(primitive_context, device=device, dtype=dtype)
+        if features.ndim == 2:
+            if tuple(features.shape) != (batch_size, feature_count):
+                raise ValueError(
+                    "primitive_context must have shape "
+                    f"[batch, {feature_count}] or [batch, steps, {feature_count}], "
+                    f"got {tuple(features.shape)}"
+                )
+            zeros = torch.zeros_like(features)
+            return torch.cat((features, zeros, features, features), dim=1)
+        if features.ndim != 3:
+            raise ValueError(
+                "primitive_context must have shape "
+                f"[batch, {feature_count}] or [batch, steps, {feature_count}], "
+                f"got {tuple(features.shape)}"
+            )
+        if features.size(0) != batch_size or features.size(2) != feature_count:
+            raise ValueError(
+                "primitive_context must have shape "
+                f"[batch, steps, {feature_count}], got {tuple(features.shape)}"
+            )
+        if features.size(1) <= 0:
+            raise ValueError("primitive_context step dimension must be positive")
+        summary = torch.stack(
+            (
+                features.mean(dim=1),
+                features.std(dim=1, unbiased=False),
+                features.amin(dim=1),
+                features.amax(dim=1),
+            ),
+            dim=-1,
+        )
+        return summary.reshape(batch_size, feature_count * 4)
+
+    @staticmethod
+    def _decode_primitive_outcome(raw: torch.Tensor) -> PrimitiveOutcomePrediction:
+        return PrimitiveOutcomePrediction(
+            progress_delta=raw[:, 0],
+            support_loss_logit=raw[:, 1],
+            collision_death_logit=raw[:, 2],
+            terminal_logit=raw[:, 3],
+            continue_logit=raw[:, 4],
+            cancel_logit=raw[:, 5],
+            replan_logit=raw[:, 6],
+        )
+
     def forward(
         self,
         state,
@@ -807,6 +918,7 @@ class WorldModel(nn.Module):
         w_context,
         b_context,
         *,
+        primitive_context=None,
         initial_state=None,
         episode_mask=None,
         return_state=False,
@@ -832,12 +944,20 @@ class WorldModel(nn.Module):
             .unsqueeze(0)
             .expand(batch_size, -1, -1)
         )
+        primitive_summary = self._primitive_summary_features(
+            primitive_context,
+            batch_size,
+            device,
+            dtype,
+        )
+        primitive_embedding = self.primitive_encoder(primitive_summary)
         action_features = torch.cat(
             (
                 self._summary_features(state),
                 self._summary_features(action),
                 self._summary_features(w_context),
                 self._summary_features(b_context),
+                primitive_embedding,
             ),
             dim=1,
         ).unsqueeze(1)
@@ -853,8 +973,13 @@ class WorldModel(nn.Module):
         recurrent_state = WorldModelState(hidden, cell)
         action_hidden = out[:, -1, :].unsqueeze(1).expand(-1, seq_len_c, -1)
         slot_features = torch.stack([state, action, w_context, b_context], dim=-1)
-        decoder_input = torch.cat([slot_features, phases, action_hidden], dim=-1)
+        primitive_slots = primitive_embedding.unsqueeze(1).expand(-1, seq_len_c, -1)
+        decoder_input = torch.cat([slot_features, phases, action_hidden, primitive_slots], dim=-1)
         prediction = self.decoder(decoder_input).squeeze(-1)
+        outcome_raw = self.primitive_outcome_head(
+            torch.cat((out[:, -1, :], primitive_embedding), dim=1)
+        )
+        self.last_primitive_outcome = self._decode_primitive_outcome(outcome_raw)
         if return_state:
             return prediction, recurrent_state.detach()
         return prediction
@@ -1054,6 +1179,7 @@ class AgentWorldModelCritic(nn.Module):
         seq_len_b = seq_len_c // ratio_bc
         ratio_ab = seq_len_b // seq_len_a
         self.ratio_bc = ratio_bc
+        self.ratio_ab = ratio_ab
         self.max_action_refinement_passes = int(max_action_refinement_passes)
         self.critic_progress_threshold = float(critic_progress_threshold)
         self.critic_death_threshold = float(critic_death_threshold)
@@ -1076,6 +1202,7 @@ class AgentWorldModelCritic(nn.Module):
             walk_action_ids=walk_action_ids,
         )
         self.last_motor_primitives: MotorPrimitiveOutput | None = None
+        self.last_primitive_outcome: PrimitiveOutcomePrediction | None = None
         self.last_action_refinement: ActionRefinementTrace | None = None
         self.transition_representation_head = nn.Sequential(
             nn.Linear(seq_len_c, d_model),
@@ -1136,9 +1263,11 @@ class AgentWorldModelCritic(nn.Module):
         self,
         src_C,
         actions,
+        logits_a,
         w,
         b,
         *,
+        primitive_params=None,
         world_model_state=None,
         episode_mask=None,
         return_world_model_state=False,
@@ -1146,17 +1275,111 @@ class AgentWorldModelCritic(nn.Module):
     ):
         w_context, b_context = self.controller_context(src_C, w, b)
         if not world_model_enabled:
-            return src_C.detach(), None
+            return src_C.detach(), None, None
+        primitive_context = self._level_b_primitive_context(logits_a, primitive_params, w)
+        supports_primitive_context = bool(
+            getattr(self.world_model, "uses_primitive_context", False)
+        )
         if world_model_state is None and episode_mask is None and not return_world_model_state:
-            return self.world_model(src_C, actions, w_context, b_context), None
-        return self.world_model(
-            src_C,
-            actions,
-            w_context,
-            b_context,
-            initial_state=world_model_state,
-            episode_mask=episode_mask,
-            return_state=True,
+            if supports_primitive_context:
+                prediction = self.world_model(
+                    src_C,
+                    actions,
+                    w_context,
+                    b_context,
+                    primitive_context=primitive_context,
+                )
+            else:
+                prediction = self.world_model(src_C, actions, w_context, b_context)
+            return prediction, None, getattr(self.world_model, "last_primitive_outcome", None)
+        if supports_primitive_context:
+            prediction, next_state = self.world_model(
+                src_C,
+                actions,
+                w_context,
+                b_context,
+                primitive_context=primitive_context,
+                initial_state=world_model_state,
+                episode_mask=episode_mask,
+                return_state=True,
+            )
+        else:
+            prediction, next_state = self.world_model(
+                src_C,
+                actions,
+                w_context,
+                b_context,
+                initial_state=world_model_state,
+                episode_mask=episode_mask,
+                return_state=True,
+            )
+        return prediction, next_state, getattr(self.world_model, "last_primitive_outcome", None)
+
+    def _level_b_primitive_context(
+        self,
+        logits_a: torch.Tensor,
+        primitive_params: LevelBPrimitiveParameters | None,
+        w: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if primitive_params is None:
+            return None
+        if logits_a.ndim != 3 or w.ndim != 2:
+            raise ValueError("logits_a must be [batch, A, vocab] and w must be [batch, B]")
+        batch_size, seq_len_b = w.shape
+        action_probs = F.softmax(logits_a, dim=-1).repeat_interleave(self.ratio_ab, dim=1)
+        if tuple(action_probs.shape[:2]) != (batch_size, seq_len_b):
+            raise ValueError(
+                "expanded action probabilities must align with B stream, got "
+                f"{tuple(action_probs.shape[:2])} and {(batch_size, seq_len_b)}"
+            )
+        vocab_size = action_probs.size(-1)
+        action_ids = torch.linspace(
+            0.0,
+            1.0,
+            vocab_size,
+            device=action_probs.device,
+            dtype=action_probs.dtype,
+        )
+        expected_button = (action_probs * action_ids.view(1, 1, -1)).sum(dim=-1)
+        button_confidence = action_probs.amax(dim=-1)
+        button_entropy = -(action_probs.clamp_min(1e-8).log() * action_probs).sum(
+            dim=-1
+        ) / math.log(max(vocab_size, 2))
+
+        self.motor_controller._validate_primitive_params(primitive_params, w, logits_a)
+        duration_values = self.motor_controller.duration_bin_values.to(
+            device=w.device,
+            dtype=w.dtype,
+        )
+        duration_probs = F.softmax(primitive_params.hold_duration_logits, dim=-1)
+        hold_duration = (duration_probs * duration_values.view(1, 1, -1)).sum(dim=-1)
+        hold_duration = hold_duration / duration_values.amax().clamp_min(1.0)
+
+        post_release_probs = F.softmax(primitive_params.post_release_logits, dim=-1)
+        post_vocab_size = post_release_probs.size(-1)
+        post_release_ids = torch.linspace(
+            0.0,
+            1.0,
+            post_vocab_size,
+            device=post_release_probs.device,
+            dtype=post_release_probs.dtype,
+        )
+        post_release_expected = (post_release_probs * post_release_ids.view(1, 1, -1)).sum(dim=-1)
+        post_release_confidence = post_release_probs.amax(dim=-1)
+
+        return torch.stack(
+            (
+                expected_button,
+                button_confidence,
+                button_entropy,
+                hold_duration,
+                torch.sigmoid(primitive_params.release_logit),
+                torch.sigmoid(primitive_params.cancel_logit),
+                torch.sigmoid(primitive_params.replan_logit),
+                post_release_expected,
+                post_release_confidence,
+            ),
+            dim=-1,
         )
 
     def _critic_evaluation(self, next_state_pred, current_state, logits_a):
@@ -1247,11 +1470,13 @@ class AgentWorldModelCritic(nn.Module):
         return_world_model_state=False,
         world_model_enabled=True,
     ) -> _ActionCandidate:
-        next_state_pred, next_world_model_state = self._world_model_prediction(
+        next_state_pred, next_world_model_state, primitive_outcome = self._world_model_prediction(
             src_C,
             actions,
+            logits_a,
             w,
             b,
+            primitive_params=primitive_params,
             world_model_state=world_model_state,
             episode_mask=episode_mask,
             return_world_model_state=return_world_model_state,
@@ -1265,6 +1490,7 @@ class AgentWorldModelCritic(nn.Module):
             b=b,
             primitive_params=primitive_params,
             next_state_pred=next_state_pred,
+            primitive_outcome=primitive_outcome,
             criticism=evaluation.feedback,
             evaluation=evaluation,
             next_world_model_state=next_world_model_state,
@@ -1418,6 +1644,7 @@ class AgentWorldModelCritic(nn.Module):
             current_state=src_C,
             primitive_params=selected_candidate.primitive_params,
         )
+        self.last_primitive_outcome = selected_candidate.primitive_outcome
 
         outputs = (
             actions1,

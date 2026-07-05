@@ -14,6 +14,8 @@ import torch.nn as nn
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     AgentWorldModelCritic,
+    MotorPrimitiveOutput,
+    PrimitiveOutcomePrediction,
     build_architecture,
     build_checkpoint,
     checkpoint_summary_path,
@@ -29,11 +31,15 @@ from retroagi.stages.synthetic_1d.train import (
     MeanSyntheticBaseline,
     RandomSyntheticBaseline,
     SyntheticBaselinePredictions,
+    SyntheticPrimitiveTargets,
     SyntheticSplitSeeds,
     SyntheticSplitSizes,
     SyntheticTrainingConfig,
     build_synthetic_model,
     compute_synthetic_evaluation_metrics,
+    compute_synthetic_primitive_label_loss,
+    compute_synthetic_primitive_outcome_loss,
+    compute_synthetic_primitive_targets,
     compute_synthetic_training_losses,
     evaluate_synthetic_baselines,
     generate_dataset_splits,
@@ -196,6 +202,8 @@ class TestSynthetic1DLossTracking(unittest.TestCase):
                 "loss_actor_pass1",
                 "loss_actor_pass2",
                 "loss_world_model",
+                "loss_primitive_labels",
+                "loss_primitive_outcome",
                 "loss_critic",
                 "loss_total",
             },
@@ -237,12 +245,20 @@ class TestSynthetic1DLossTracking(unittest.TestCase):
         torch.testing.assert_close(losses["loss_world_model"], expected_world_model)
         torch.testing.assert_close(losses["loss_actor_pass1"], expected_actor_pass1)
         torch.testing.assert_close(losses["loss_actor_pass2"], expected_actor_pass2)
+        torch.testing.assert_close(losses["loss_primitive_labels"], torch.tensor(0.0))
+        torch.testing.assert_close(losses["loss_primitive_outcome"], torch.tensor(0.0))
         torch.testing.assert_close(losses["loss_critic"], expected_critic)
         torch.testing.assert_close(losses["loss_total"], expected_total)
 
     def test_loss_tracking_rejects_negative_critic_weight(self):
         with self.assertRaisesRegex(ValueError, "critic_loss_weight"):
             SyntheticTrainingConfig(critic_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "primitive_loss_weight"):
+            SyntheticTrainingConfig(primitive_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "primitive_outcome_loss_weight"):
+            SyntheticTrainingConfig(primitive_outcome_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "primitive_outcome_horizon"):
+            SyntheticTrainingConfig(primitive_outcome_horizon=0)
         with self.assertRaisesRegex(ValueError, "critic_loss_weight"):
             compute_synthetic_training_losses(
                 torch.zeros(1, 2),
@@ -254,6 +270,184 @@ class TestSynthetic1DLossTracking(unittest.TestCase):
                 nn.MSELoss(),
                 critic_loss_weight=-0.1,
             )
+
+
+class TestSynthetic1DPrimitiveSupervision(unittest.TestCase):
+    def test_primitive_targets_are_derived_from_known_synthetic_state(self):
+        xa, ya, xb, yb, xc, yc = generate_hierarchical_data(
+            3,
+            SYNTHETIC_1D_SPEC.seq_len_a,
+            SYNTHETIC_1D_SPEC.ratio_ab,
+            SYNTHETIC_1D_SPEC.ratio_bc,
+            SYNTHETIC_1D_SPEC.vocab_size,
+            seed=77,
+        )
+        del xa, xb
+
+        targets = compute_synthetic_primitive_targets(
+            ya,
+            yb,
+            xc,
+            yc,
+            outcome_horizon=5,
+        )
+
+        self.assertIsInstance(targets, SyntheticPrimitiveTargets)
+        self.assertEqual(targets.button_combo.shape, yb.shape)
+        self.assertTrue(
+            torch.equal(
+                targets.button_combo,
+                ya.repeat_interleave(SYNTHETIC_1D_SPEC.ratio_ab, dim=1),
+            )
+        )
+        self.assertEqual(targets.hold_duration_bin.shape, yb.shape)
+        self.assertEqual(targets.release.shape, yb.shape)
+        self.assertEqual(targets.post_release_action.shape, yb.shape)
+        self.assertEqual(targets.cancel.shape, yb.shape)
+        self.assertEqual(targets.replan.shape, yb.shape)
+        self.assertEqual(targets.hazard_window.shape, yb.shape)
+        self.assertEqual(targets.outcome_progress_delta.shape, (yb.size(0),))
+        self.assertTrue(torch.all(targets.hold_duration_bin >= 0).item())
+        self.assertTrue(
+            torch.all(targets.hold_duration_bin < 8).item(),
+        )
+        self.assertTrue(
+            torch.all((targets.hazard_window >= 0) & (targets.hazard_window <= 1)).item()
+        )
+        self.assertTrue(
+            torch.equal(
+                targets.outcome_terminal.bool(),
+                targets.outcome_cancel.bool(),
+            )
+        )
+
+    def test_primitive_losses_use_level_b_labels_and_k_step_outcomes(self):
+        _xa, ya, _xb, yb, xc, yc = generate_hierarchical_data(
+            2,
+            SYNTHETIC_1D_SPEC.seq_len_a,
+            SYNTHETIC_1D_SPEC.ratio_ab,
+            SYNTHETIC_1D_SPEC.ratio_bc,
+            SYNTHETIC_1D_SPEC.vocab_size,
+            seed=88,
+        )
+        targets = compute_synthetic_primitive_targets(
+            ya,
+            yb,
+            xc,
+            yc,
+            outcome_horizon=4,
+        )
+        batch_size, seq_len_b = yb.shape
+        vocab_size = SYNTHETIC_1D_SPEC.vocab_size
+        duration_bins = 8
+        motor = MotorPrimitiveOutput(
+            button_combo_logits=torch.zeros(batch_size, seq_len_b, vocab_size, requires_grad=True),
+            hold_duration=torch.ones(batch_size, seq_len_b),
+            release_logit=torch.zeros(batch_size, seq_len_b, requires_grad=True),
+            cancel_logit=torch.zeros(batch_size, seq_len_b, requires_grad=True),
+            confidence=torch.ones(batch_size, seq_len_b),
+            interrupt_logit=torch.zeros(batch_size, seq_len_b, requires_grad=True),
+            replan_probability=torch.full((batch_size, seq_len_b), 0.5, requires_grad=True),
+            hold_duration_logits=torch.zeros(
+                batch_size,
+                seq_len_b,
+                duration_bins,
+                requires_grad=True,
+            ),
+            duration_bin_values=torch.arange(1, duration_bins + 1, dtype=torch.float32),
+            post_release_logits=torch.zeros(
+                batch_size,
+                seq_len_b,
+                vocab_size,
+                requires_grad=True,
+            ),
+        )
+        primitive_outcome = PrimitiveOutcomePrediction(
+            progress_delta=torch.zeros(batch_size, requires_grad=True),
+            support_loss_logit=torch.zeros(batch_size, requires_grad=True),
+            collision_death_logit=torch.zeros(batch_size, requires_grad=True),
+            terminal_logit=torch.zeros(batch_size, requires_grad=True),
+            continue_logit=torch.zeros(batch_size, requires_grad=True),
+            cancel_logit=torch.zeros(batch_size, requires_grad=True),
+            replan_logit=torch.zeros(batch_size, requires_grad=True),
+        )
+
+        label_loss = compute_synthetic_primitive_label_loss(motor, targets)
+        outcome_loss = compute_synthetic_primitive_outcome_loss(primitive_outcome, targets)
+
+        self.assertGreater(label_loss.item(), 0.0)
+        self.assertGreater(outcome_loss.item(), 0.0)
+        total = label_loss + outcome_loss
+        total.backward()
+        self.assertIsNotNone(motor.button_combo_logits.grad)
+        self.assertIsNotNone(motor.hold_duration_logits.grad)
+        self.assertIsNotNone(motor.post_release_logits.grad)
+        self.assertIsNotNone(primitive_outcome.progress_delta.grad)
+
+    def test_training_loss_includes_weighted_primitive_terms(self):
+        _xa, ya, _xb, yb, xc, yc = generate_hierarchical_data(
+            2,
+            SYNTHETIC_1D_SPEC.seq_len_a,
+            SYNTHETIC_1D_SPEC.ratio_ab,
+            SYNTHETIC_1D_SPEC.ratio_bc,
+            SYNTHETIC_1D_SPEC.vocab_size,
+            seed=99,
+        )
+        targets = compute_synthetic_primitive_targets(ya, yb, xc, yc, outcome_horizon=4)
+        batch_size, seq_len_b = yb.shape
+        motor = MotorPrimitiveOutput(
+            button_combo_logits=torch.zeros(
+                batch_size,
+                seq_len_b,
+                SYNTHETIC_1D_SPEC.vocab_size,
+            ),
+            hold_duration=torch.ones(batch_size, seq_len_b),
+            release_logit=torch.zeros(batch_size, seq_len_b),
+            cancel_logit=torch.zeros(batch_size, seq_len_b),
+            confidence=torch.ones(batch_size, seq_len_b),
+            interrupt_logit=torch.zeros(batch_size, seq_len_b),
+            replan_probability=torch.full((batch_size, seq_len_b), 0.5),
+            hold_duration_logits=torch.zeros(batch_size, seq_len_b, 8),
+            duration_bin_values=torch.arange(1, 9, dtype=torch.float32),
+            post_release_logits=torch.zeros(
+                batch_size,
+                seq_len_b,
+                SYNTHETIC_1D_SPEC.vocab_size,
+            ),
+        )
+        primitive_outcome = PrimitiveOutcomePrediction(
+            progress_delta=torch.zeros(batch_size),
+            support_loss_logit=torch.zeros(batch_size),
+            collision_death_logit=torch.zeros(batch_size),
+            terminal_logit=torch.zeros(batch_size),
+            continue_logit=torch.zeros(batch_size),
+            cancel_logit=torch.zeros(batch_size),
+            replan_logit=torch.zeros(batch_size),
+        )
+
+        losses = compute_synthetic_training_losses(
+            torch.zeros_like(xc),
+            torch.zeros_like(xc),
+            torch.zeros(2, SYNTHETIC_1D_SPEC.seq_len_a, 4),
+            torch.zeros_like(xc),
+            xc,
+            yc,
+            nn.MSELoss(),
+            primitive_loss_weight=0.5,
+            primitive_outcome_loss_weight=0.25,
+            motor_primitives=motor,
+            primitive_outcome=primitive_outcome,
+            primitive_targets=targets,
+        )
+
+        expected_total = (
+            losses["loss_actor_pass1"]
+            + losses["loss_actor_pass2"]
+            + losses["loss_world_model"]
+            + 0.5 * losses["loss_primitive_labels"]
+            + 0.25 * losses["loss_primitive_outcome"]
+        )
+        torch.testing.assert_close(losses["loss_total"], expected_total)
 
 
 class TestSynthetic1DEvaluationMetricsAndBaselines(unittest.TestCase):

@@ -271,6 +271,24 @@ not yet instantiate the dataclass.
 the four C targets beneath each B step. The trainer passes these tensors
 directly to the model rather than through a stage adapter.
 
+Synthetic 1D now derives the same primitive-control labels that Block SMB uses
+from this perfect ground truth. `Y_A` is repeated to B resolution for
+`button_combo`, `Y_B % len(DEFAULT_PRIMITIVE_DURATION_BINS)` gives
+`hold_duration_bin`, the next B-resolved combo gives `post_release_action`, and
+known C-target windows provide `release`, `cancel`, `replan`, and
+`hazard_window` timing labels. The stage also derives one sample-level k-step
+primitive-outcome target:
+
+| Target | Shape | Meaning |
+| --- | --- | --- |
+| `outcome_progress_delta` | `[B]` | Mean `Y_C - X_C` over the configured near-future horizon. |
+| `outcome_support_loss` | `[B]` | Whether the horizon enters the synthetic low-support region. |
+| `outcome_collision_death_risk` | `[B]` | Whether the horizon contains an unstable large-magnitude target or delta. |
+| `outcome_terminal` | `[B]` | Support loss or collision/death risk. |
+| `outcome_continue` | `[B]` | Positive progress without terminal risk. |
+| `outcome_cancel` | `[B]` | Terminal-risk label for cancelling the primitive. |
+| `outcome_replan` | `[B]` | Bad progress or terminal-risk label for replanning. |
+
 ### Actor/Critic Refinement
 
 `AgentWorldModelCritic` runs the shared actor twice for every batch:
@@ -327,6 +345,16 @@ The B-level transformer also emits explicit primitive-control heads:
 | `cancel_logit` | `[B,L_B]` | Learned tendency to cancel the active primitive. |
 | `replan_logit` | `[B,L_B]` | Learned tendency to replan after poor predicted motion. |
 | `post_release_logits` | `[B,L_B,V]` | Button combo to use after releasing jump. |
+
+For every stage, the action-level world model summarizes the structured
+B-primitive context into nine features per B token: expected button combo,
+button confidence, button entropy, normalized hold duration, release
+probability, cancel probability, replan probability, expected post-release
+action, and post-release confidence. The LSTM consumes that embedding and emits
+a `PrimitiveOutcomePrediction` with progress, support-loss, collision/death,
+terminal, continue, cancel, and replan logits. Synthetic 1D supervises this
+directly from known sequence targets; Block SMB and Full SMB supervise the same
+contract from rollout outcomes.
 
 `SMBParameterizedPrimitiveExecutor` consumes those heads at runtime. For jump
 and jump-combo actions it commits to the selected duration bin, releases `A`

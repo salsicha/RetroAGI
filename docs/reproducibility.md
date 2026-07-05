@@ -136,7 +136,9 @@ interchangeable training targets:
 
 1. **Synthetic 1D fully validates the architecture.** It should catch tensor
    contract, hierarchy, objective, gradient, baseline, determinism, and
-   checkpoint issues before the concept reaches a game-like stage.
+   checkpoint issues before the concept reaches a game-like stage. It also
+   validates the B-primitive and LSTM primitive-outcome contract now used by
+   Block SMB and Full SMB transfer.
 2. **Block SMB trains the simplified game models.** Use this rung to train the
    Block ViT and the hierarchical actor/world-model/critic policy on the fast
    synthetic SMB environment, fixed scenarios, generated scenarios, and

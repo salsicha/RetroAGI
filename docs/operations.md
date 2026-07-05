@@ -179,14 +179,17 @@ Use the stages in this order when evaluating an architecture concept:
 Synthetic 1D is the full architecture-validation stage. It validates the shared
 actor/world-model/critic stack without game physics or perception and should
 catch architecture-contract, objective, gradient, baseline, and checkpoint
-failures before a concept reaches any game-like environment.
+failures before a concept reaches any game-like environment. It also validates
+the Block SMB primitive-control contract on perfectly known data: button combo,
+hold duration, release, cancel, replan, post-release action, hazard-window
+timing, and k-step primitive outcomes for the LSTM world model.
 
 | Area | Operational Target |
 | --- | --- |
 | Hardware | CPU is sufficient and required. CUDA or MPS may be used through `SyntheticTrainingConfig.device`, but GPU is not required for acceptance. |
 | Runtime | The focused Synthetic 1D test suite is expected to finish in under 20 seconds on the current development machine. The baseline held-out training demonstration is expected to run in about 7 seconds. |
 | Command | `python -m retroagi.stages.synthetic_1d.train` or `retroagi train --game smb --stage synthetic`. |
-| Expected Metrics | `controller_mse`, `controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`. A passing learned policy beats both the seeded random and train-marginal simple baselines, with the tested margin at least 25 percent below the simple baseline on `controller_mse`. |
+| Expected Metrics | `controller_mse`, `controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`. Training history also records `loss_primitive_labels` and `loss_primitive_outcome`. A passing learned policy beats both the seeded random and train-marginal simple baselines, with the tested margin at least 25 percent below the simple baseline on `controller_mse`. |
 | Artifact Locations | No artifact is written by the default CLI path. Programmatic runs that set `SyntheticTrainingConfig(save_checkpoints=True, checkpoint_path=...)` write the versioned checkpoint and sidecar at that checkpoint path. Use `artifacts/synthetic_1d/<run>/` for local run summaries when preserving experiments. |
 
 Validation command:

@@ -382,6 +382,10 @@ a game environment.
   - Add tests proving seeded Python/NumPy/Torch streams reproduce and the train permutation is deterministic.
 
 - [x] Track actor pass 1, actor pass 2, world-model, critic, and total losses.
+- [x] Mirror the Block SMB primitive-control and LSTM outcome contract in
+      Synthetic 1D using perfect ground-truth labels for button combo, hold
+      duration, release, cancel, replan, post-release action, hazard-window
+      timing, and k-step primitive outcomes.
 - [x] Define evaluation metrics and random/simple baseline models.
 - [x] Add a short CPU smoke test that verifies finite gradients and decreasing
       loss.

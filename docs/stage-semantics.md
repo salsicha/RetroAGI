@@ -51,19 +51,30 @@ modulo-20 concepts from randomly selected starts. Each B-level concept defines
 the sine/cosine parameters used to produce the corresponding C-level continuous
 targets.
 
+The trainer also derives primitive supervision from those same known tensors.
+`Y_A` is expanded to B resolution as the expected button-combo label, `Y_B`
+selects duration-bin and post-release labels, and the C target window provides
+deterministic release, cancel, replan, and hazard-window timing signals.
+
 ### Action
 
 There is no external environment action. The model's action is its length-64
 continuous controller prediction for `Y_C`. This is an optimization output, not
-an input to `generate_hierarchical_data`.
+an input to `generate_hierarchical_data`. The B-level primitive outputs are
+also optimization outputs in this stage; no runtime primitive executor steps an
+environment.
 
 ### Reward
 
-There is no scalar environment reward. Training uses four losses:
+There is no scalar environment reward. Training uses six losses:
 
 - first-pass controller mean squared error,
 - second-pass controller mean squared error,
 - world-model mean squared error,
+- B-level primitive-label loss for button combo, hold duration, release,
+  cancel, replan, post-release action, and hazard-window timing,
+- LSTM primitive-outcome loss for k-step progress delta, support loss,
+  collision/death risk, terminal outcome, continue, cancel, and replan,
 - critic feedback magnitude regularization.
 
 Evaluation additionally reports A-token accuracy and B-parameter error.
@@ -77,8 +88,7 @@ or epoch is exhausted.
 ### Reset
 
 There is no `reset` method. Generating a new dataset is the reset-equivalent
-operation. Current generation uses NumPy's global random state, so callers must
-seed NumPy before generation when reproducibility is required.
+operation. Callers pass explicit split seeds to reproduce datasets.
 
 ## Stage 2: Block SMB
 

@@ -17,6 +17,8 @@ def fake_history():
         "loss_actor_pass1": [1.0],
         "loss_actor_pass2": [0.8],
         "loss_world_model": [0.6],
+        "loss_primitive_labels": [0.5],
+        "loss_primitive_outcome": [0.4],
         "loss_critic": [0.2],
         "loss_total": [2.4],
         "controller_mse": [0.4],
@@ -54,6 +56,12 @@ class TestSynthetic1DCLI(unittest.TestCase):
                         "0.01",
                         "--critic-loss-weight",
                         "0.1",
+                        "--primitive-loss-weight",
+                        "0.2",
+                        "--primitive-outcome-loss-weight",
+                        "0.3",
+                        "--primitive-outcome-horizon",
+                        "6",
                         "--tau-start",
                         "4.0",
                         "--tau-end",
@@ -94,6 +102,9 @@ class TestSynthetic1DCLI(unittest.TestCase):
         self.assertEqual(config.batch_size, 4)
         self.assertEqual(config.learning_rate, 0.01)
         self.assertEqual(config.critic_loss_weight, 0.1)
+        self.assertEqual(config.primitive_loss_weight, 0.2)
+        self.assertEqual(config.primitive_outcome_loss_weight, 0.3)
+        self.assertEqual(config.primitive_outcome_horizon, 6)
         self.assertEqual(config.tau_start, 4.0)
         self.assertEqual(config.tau_end, 0.2)
         self.assertEqual(config.device, "cpu")

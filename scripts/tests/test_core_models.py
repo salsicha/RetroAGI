@@ -862,6 +862,72 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
         prediction.sum().backward()
         self.assertIsNotNone(state.grad)
 
+    def test_world_model_conditions_on_structured_b_primitive_context(self):
+        torch.manual_seed(654)
+        model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)
+        state = torch.zeros(1, 4)
+        action = torch.ones(1, 4)
+        w_context = torch.ones(1, 4)
+        b_context = torch.zeros(1, 4)
+        primitive_a = torch.zeros(1, 2, 9)
+        primitive_b = torch.ones(1, 2, 9)
+
+        prediction_a = model(
+            state,
+            action,
+            w_context,
+            b_context,
+            primitive_context=primitive_a,
+        )
+        outcome_a = model.last_primitive_outcome
+        prediction_b = model(
+            state,
+            action,
+            w_context,
+            b_context,
+            primitive_context=primitive_b,
+        )
+        outcome_b = model.last_primitive_outcome
+
+        self.assertIsNotNone(outcome_a)
+        self.assertIsNotNone(outcome_b)
+        self.assertTrue(outcome_a.progress_delta.requires_grad)
+        self.assertTrue(outcome_b.progress_delta.requires_grad)
+        self.assertEqual(outcome_a.progress_delta.shape, (1,))
+        self.assertEqual(outcome_a.cancel_logit.shape, (1,))
+        self.assertGreater(torch.max(torch.abs(prediction_a - prediction_b)).item(), 1e-6)
+        self.assertGreater(
+            torch.max(torch.abs(outcome_a.progress_delta - outcome_b.progress_delta)).item(),
+            1e-6,
+        )
+
+    def test_agent_builds_b_primitive_context_for_world_model(self):
+        model = AgentWorldModelCritic(
+            vocab_size=len(SMBAction),
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+        )
+        logits_a = torch.zeros(1, 2, len(SMBAction))
+        logits_a[:, :, int(SMBAction.RIGHT_JUMP)] = 4.0
+        w_b = torch.zeros(1, 4)
+        hold_logits = torch.full((1, 4, len(DEFAULT_PRIMITIVE_DURATION_BINS)), -8.0)
+        hold_logits[:, :, 4] = 8.0
+        primitive_params = LevelBPrimitiveParameters(
+            hold_duration_logits=hold_logits,
+            release_logit=torch.ones(1, 4),
+            cancel_logit=torch.zeros(1, 4),
+            replan_logit=torch.full((1, 4), -1.0),
+            post_release_logits=torch.zeros(1, 4, len(SMBAction)),
+        )
+
+        context = model._level_b_primitive_context(logits_a, primitive_params, w_b)
+
+        self.assertEqual(context.shape, (1, 4, 9))
+        self.assertTrue(torch.all(context[:, :, 3] > 0.0))
+        self.assertTrue(torch.all(context[:, :, 4] > 0.5))
+
     def test_chunk_episode_masks_are_not_supported_for_action_level_lstm(self):
         torch.manual_seed(456)
         model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)

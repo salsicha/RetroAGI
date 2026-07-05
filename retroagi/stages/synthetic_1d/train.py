@@ -14,6 +14,9 @@ from tqdm import tqdm
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
     BASELINE_ARCHITECTURE_SPEC,
+    DEFAULT_PRIMITIVE_DURATION_BINS,
+    MotorPrimitiveOutput,
+    PrimitiveOutcomePrediction,
     StageSpec,
     build_architecture,
     build_checkpoint,
@@ -52,6 +55,8 @@ SYNTHETIC_LOSS_KEYS = (
     "loss_actor_pass1",
     "loss_actor_pass2",
     "loss_world_model",
+    "loss_primitive_labels",
+    "loss_primitive_outcome",
     "loss_critic",
     "loss_total",
 )
@@ -107,6 +112,24 @@ class SyntheticBaselinePredictions:
 
 
 @dataclass(frozen=True)
+class SyntheticPrimitiveTargets:
+    button_combo: torch.Tensor
+    hold_duration_bin: torch.Tensor
+    release: torch.Tensor
+    post_release_action: torch.Tensor
+    cancel: torch.Tensor
+    replan: torch.Tensor
+    hazard_window: torch.Tensor
+    outcome_progress_delta: torch.Tensor
+    outcome_support_loss: torch.Tensor
+    outcome_collision_death_risk: torch.Tensor
+    outcome_terminal: torch.Tensor
+    outcome_continue: torch.Tensor
+    outcome_cancel: torch.Tensor
+    outcome_replan: torch.Tensor
+
+
+@dataclass(frozen=True)
 class SyntheticTrainingConfig:
     seed: int = 0
     architecture_name: str = BASELINE_ARCHITECTURE_NAME
@@ -117,6 +140,9 @@ class SyntheticTrainingConfig:
     epochs: int = 60
     learning_rate: float = 1e-3
     critic_loss_weight: float = 0.0
+    primitive_loss_weight: float = 0.1
+    primitive_outcome_loss_weight: float = 0.1
+    primitive_outcome_horizon: int = 8
     tau_start: float = 5.0
     tau_end: float = 0.1
     device: str = "auto"
@@ -138,6 +164,12 @@ class SyntheticTrainingConfig:
             raise ValueError("learning_rate must be positive")
         if self.critic_loss_weight < 0:
             raise ValueError("critic_loss_weight must be non-negative")
+        if self.primitive_loss_weight < 0:
+            raise ValueError("primitive_loss_weight must be non-negative")
+        if self.primitive_outcome_loss_weight < 0:
+            raise ValueError("primitive_outcome_loss_weight must be non-negative")
+        if self.primitive_outcome_horizon <= 0:
+            raise ValueError("primitive_outcome_horizon must be positive")
         if self.tau_start <= 0:
             raise ValueError("tau_start must be positive")
         if self.tau_end <= 0:
@@ -193,6 +225,220 @@ def make_empty_history() -> SyntheticHistory:
     return {key: [] for key in (*SYNTHETIC_LOSS_KEYS, *SYNTHETIC_METRIC_KEYS)}
 
 
+def compute_synthetic_primitive_targets(
+    batch_ya: torch.Tensor,
+    batch_yb: torch.Tensor,
+    batch_xc_in: torch.Tensor,
+    batch_yc_target: torch.Tensor,
+    *,
+    spec: StageSpec = SYNTHETIC_1D_SPEC,
+    outcome_horizon: int = 8,
+) -> SyntheticPrimitiveTargets:
+    """Derive deterministic B-primitive and k-step outcome labels.
+
+    Synthetic 1D has no external game engine, so these labels are intentionally
+    simple functions of the known hierarchy. They let Stage 1 validate the same
+    primitive-control and short-horizon world-model contracts used by Block SMB.
+    """
+
+    if outcome_horizon <= 0:
+        raise ValueError("outcome_horizon must be positive")
+    if batch_ya.ndim != 2 or batch_yb.ndim != 2:
+        raise ValueError("batch_ya and batch_yb must have shape [batch, sequence]")
+    if batch_xc_in.ndim != 2 or batch_yc_target.ndim != 2:
+        raise ValueError("batch_xc_in and batch_yc_target must have shape [batch, sequence]")
+    batch_size = batch_ya.size(0)
+    seq_len_a = batch_ya.size(1)
+    seq_len_b = batch_yb.size(1)
+    seq_len_c = batch_xc_in.size(1)
+    if batch_yb.size(0) != batch_size or batch_xc_in.size(0) != batch_size:
+        raise ValueError("primitive target tensors must share batch size")
+    if batch_yc_target.shape != batch_xc_in.shape:
+        raise ValueError("batch_yc_target must match batch_xc_in shape")
+    if seq_len_a != spec.seq_len_a or seq_len_b != spec.seq_len_b:
+        raise ValueError(
+            "primitive targets must match the stage A/B lengths "
+            f"{(spec.seq_len_a, spec.seq_len_b)}, got {(seq_len_a, seq_len_b)}"
+        )
+    if seq_len_c != spec.seq_len_c:
+        raise ValueError(f"primitive targets must use C length {spec.seq_len_c}, got {seq_len_c}")
+    if spec.ratio_ab <= 0 or spec.ratio_bc <= 0:
+        raise ValueError("stage ratios must be positive")
+    if seq_len_b != seq_len_a * spec.ratio_ab:
+        raise ValueError("B sequence length must equal A length times ratio_ab")
+    if seq_len_c != seq_len_b * spec.ratio_bc:
+        raise ValueError("C sequence length must equal B length times ratio_bc")
+
+    button_combo = batch_ya.repeat_interleave(spec.ratio_ab, dim=1).long()
+    post_release_action = torch.roll(button_combo, shifts=-1, dims=1)
+    post_release_action[:, -1] = button_combo[:, -1]
+
+    duration_bin_count = len(DEFAULT_PRIMITIVE_DURATION_BINS)
+    hold_duration_bin = torch.remainder(batch_yb.long(), duration_bin_count)
+
+    target_by_b = batch_yc_target.reshape(batch_size, seq_len_b, spec.ratio_bc)
+    input_by_b = batch_xc_in.reshape(batch_size, seq_len_b, spec.ratio_bc)
+    delta_by_b = target_by_b - input_by_b
+    progress_by_b = delta_by_b.mean(dim=-1)
+    support_loss_by_b = target_by_b.amin(dim=-1).lt(-1.0)
+    collision_death_by_b = torch.maximum(
+        target_by_b.abs().amax(dim=-1),
+        delta_by_b.abs().amax(dim=-1),
+    ).gt(2.0)
+    terminal_by_b = support_loss_by_b | collision_death_by_b
+    bad_progress_by_b = progress_by_b.le(0.0)
+
+    release = (torch.remainder(batch_yb.long(), 4) == 0) | terminal_by_b
+    cancel = collision_death_by_b | terminal_by_b
+    replan = bad_progress_by_b | terminal_by_b
+
+    hazard_source = replan | cancel
+    horizon_b = max(1, (int(outcome_horizon) + spec.ratio_bc - 1) // spec.ratio_bc)
+    hazard_window = torch.zeros(
+        batch_size,
+        seq_len_b,
+        dtype=batch_xc_in.dtype,
+        device=batch_xc_in.device,
+    )
+    for step in range(seq_len_b):
+        future = hazard_source[:, step : min(seq_len_b, step + horizon_b)]
+        if future.numel() == 0:
+            continue
+        weights = torch.linspace(
+            1.0,
+            1.0 / future.size(1),
+            future.size(1),
+            dtype=batch_xc_in.dtype,
+            device=batch_xc_in.device,
+        )
+        hazard_window[:, step] = (future.to(batch_xc_in.dtype) * weights.view(1, -1)).amax(dim=1)
+
+    horizon = min(int(outcome_horizon), seq_len_c)
+    outcome_delta = batch_yc_target[:, :horizon] - batch_xc_in[:, :horizon]
+    outcome_progress_delta = outcome_delta.mean(dim=1)
+    outcome_support_loss = batch_yc_target[:, :horizon].amin(dim=1).lt(-1.0)
+    outcome_collision_death = torch.maximum(
+        batch_yc_target[:, :horizon].abs().amax(dim=1),
+        outcome_delta.abs().amax(dim=1),
+    ).gt(2.0)
+    outcome_terminal = outcome_support_loss | outcome_collision_death
+    outcome_bad_progress = outcome_progress_delta.le(0.0)
+    outcome_cancel = outcome_terminal
+    outcome_replan = outcome_terminal | outcome_bad_progress
+    outcome_continue = ~(outcome_terminal | outcome_bad_progress)
+
+    return SyntheticPrimitiveTargets(
+        button_combo=button_combo,
+        hold_duration_bin=hold_duration_bin.long(),
+        release=release.to(dtype=batch_xc_in.dtype),
+        post_release_action=post_release_action.long(),
+        cancel=cancel.to(dtype=batch_xc_in.dtype),
+        replan=replan.to(dtype=batch_xc_in.dtype),
+        hazard_window=hazard_window,
+        outcome_progress_delta=outcome_progress_delta,
+        outcome_support_loss=outcome_support_loss.to(dtype=batch_xc_in.dtype),
+        outcome_collision_death_risk=outcome_collision_death.to(dtype=batch_xc_in.dtype),
+        outcome_terminal=outcome_terminal.to(dtype=batch_xc_in.dtype),
+        outcome_continue=outcome_continue.to(dtype=batch_xc_in.dtype),
+        outcome_cancel=outcome_cancel.to(dtype=batch_xc_in.dtype),
+        outcome_replan=outcome_replan.to(dtype=batch_xc_in.dtype),
+    )
+
+
+def _synthetic_bce_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return F.binary_cross_entropy_with_logits(logits, targets.to(device=logits.device))
+
+
+def compute_synthetic_primitive_label_loss(
+    motor_primitives: MotorPrimitiveOutput | None,
+    targets: SyntheticPrimitiveTargets | None,
+) -> torch.Tensor:
+    if targets is None:
+        return torch.tensor(0.0)
+    reference = targets.release
+    if motor_primitives is None:
+        return reference.new_tensor(0.0)
+
+    losses: list[torch.Tensor] = []
+    if motor_primitives.button_combo_logits.shape[:2] != targets.button_combo.shape:
+        raise ValueError("button_combo_logits must align with primitive button targets")
+    losses.append(
+        F.cross_entropy(
+            motor_primitives.button_combo_logits.reshape(
+                -1, motor_primitives.button_combo_logits.size(-1)
+            ),
+            targets.button_combo.reshape(-1).to(device=motor_primitives.button_combo_logits.device),
+        )
+    )
+    if motor_primitives.hold_duration_logits is not None:
+        if motor_primitives.hold_duration_logits.shape[:2] != targets.hold_duration_bin.shape:
+            raise ValueError("hold_duration_logits must align with primitive duration targets")
+        losses.append(
+            F.cross_entropy(
+                motor_primitives.hold_duration_logits.reshape(
+                    -1, motor_primitives.hold_duration_logits.size(-1)
+                ),
+                targets.hold_duration_bin.reshape(-1).to(
+                    device=motor_primitives.hold_duration_logits.device
+                ),
+            )
+        )
+    losses.extend(
+        (
+            _synthetic_bce_loss(motor_primitives.release_logit, targets.release),
+            _synthetic_bce_loss(motor_primitives.cancel_logit, targets.cancel),
+            _synthetic_bce_loss(motor_primitives.interrupt_logit, targets.replan),
+            F.mse_loss(
+                motor_primitives.replan_probability,
+                targets.hazard_window.to(device=motor_primitives.replan_probability.device),
+            ),
+        )
+    )
+    if motor_primitives.post_release_logits is not None:
+        if motor_primitives.post_release_logits.shape[:2] != targets.post_release_action.shape:
+            raise ValueError("post_release_logits must align with post-release targets")
+        losses.append(
+            F.cross_entropy(
+                motor_primitives.post_release_logits.reshape(
+                    -1, motor_primitives.post_release_logits.size(-1)
+                ),
+                targets.post_release_action.reshape(-1).to(
+                    device=motor_primitives.post_release_logits.device
+                ),
+            )
+        )
+    return torch.stack(losses).mean() if losses else reference.new_tensor(0.0)
+
+
+def compute_synthetic_primitive_outcome_loss(
+    primitive_outcome: PrimitiveOutcomePrediction | None,
+    targets: SyntheticPrimitiveTargets | None,
+) -> torch.Tensor:
+    if targets is None:
+        return torch.tensor(0.0)
+    reference = targets.outcome_progress_delta
+    if primitive_outcome is None:
+        return reference.new_tensor(0.0)
+
+    device = primitive_outcome.progress_delta.device
+    losses = (
+        F.mse_loss(
+            primitive_outcome.progress_delta,
+            targets.outcome_progress_delta.to(device=device),
+        ),
+        _synthetic_bce_loss(primitive_outcome.support_loss_logit, targets.outcome_support_loss),
+        _synthetic_bce_loss(
+            primitive_outcome.collision_death_logit,
+            targets.outcome_collision_death_risk,
+        ),
+        _synthetic_bce_loss(primitive_outcome.terminal_logit, targets.outcome_terminal),
+        _synthetic_bce_loss(primitive_outcome.continue_logit, targets.outcome_continue),
+        _synthetic_bce_loss(primitive_outcome.cancel_logit, targets.outcome_cancel),
+        _synthetic_bce_loss(primitive_outcome.replan_logit, targets.outcome_replan),
+    )
+    return torch.stack(losses).mean()
+
+
 def compute_synthetic_training_losses(
     actions1: torch.Tensor,
     next_state_pred: torch.Tensor,
@@ -202,22 +448,46 @@ def compute_synthetic_training_losses(
     batch_yc_target: torch.Tensor,
     criterion: nn.Module,
     critic_loss_weight: float = 0.0,
+    primitive_loss_weight: float = 0.0,
+    primitive_outcome_loss_weight: float = 0.0,
+    motor_primitives: MotorPrimitiveOutput | None = None,
+    primitive_outcome: PrimitiveOutcomePrediction | None = None,
+    primitive_targets: SyntheticPrimitiveTargets | None = None,
 ) -> SyntheticLosses:
     if critic_loss_weight < 0:
         raise ValueError("critic_loss_weight must be non-negative")
+    if primitive_loss_weight < 0:
+        raise ValueError("primitive_loss_weight must be non-negative")
+    if primitive_outcome_loss_weight < 0:
+        raise ValueError("primitive_outcome_loss_weight must be non-negative")
 
     true_next_state = batch_xc_in + actions1.detach()
     loss_world_model = criterion(next_state_pred, true_next_state)
     loss_actor_pass1 = criterion(actions1, batch_yc_target)
     loss_actor_pass2 = criterion(actions2, batch_yc_target)
+    loss_primitive_labels = compute_synthetic_primitive_label_loss(
+        motor_primitives,
+        primitive_targets,
+    ).to(device=loss_actor_pass1.device)
+    loss_primitive_outcome = compute_synthetic_primitive_outcome_loss(
+        primitive_outcome,
+        primitive_targets,
+    ).to(device=loss_actor_pass1.device)
     loss_critic = criticism.pow(2).mean()
     loss_total = (
-        loss_actor_pass1 + loss_actor_pass2 + loss_world_model + critic_loss_weight * loss_critic
+        loss_actor_pass1
+        + loss_actor_pass2
+        + loss_world_model
+        + primitive_loss_weight * loss_primitive_labels
+        + primitive_outcome_loss_weight * loss_primitive_outcome
+        + critic_loss_weight * loss_critic
     )
     return {
         "loss_actor_pass1": loss_actor_pass1,
         "loss_actor_pass2": loss_actor_pass2,
         "loss_world_model": loss_world_model,
+        "loss_primitive_labels": loss_primitive_labels,
+        "loss_primitive_outcome": loss_primitive_outcome,
         "loss_critic": loss_critic,
         "loss_total": loss_total,
     }
@@ -475,7 +745,6 @@ def train_synthetic_epoch(
     device: torch.device,
 ) -> dict[str, float]:
     train_xa, train_ya, train_xb, train_yb, train_xc, train_yc = train_dataset
-    del train_ya, train_yb
     model.train()
     permutation = make_train_permutation(train_xa.size(0), config, epoch).to(device)
     epoch_losses = {key: 0.0 for key in SYNTHETIC_LOSS_KEYS}
@@ -489,9 +758,18 @@ def train_synthetic_epoch(
     for start in range(0, train_xa.size(0), config.batch_size):
         indices = permutation[start : start + config.batch_size]
         batch_xa = train_xa[indices]
+        batch_ya = train_ya[indices]
         batch_xb = train_xb[indices]
+        batch_yb = train_yb[indices]
         batch_xc_in = train_xc[indices]
         batch_yc_target = train_yc[indices]
+        primitive_targets = compute_synthetic_primitive_targets(
+            batch_ya,
+            batch_yb,
+            batch_xc_in,
+            batch_yc_target,
+            outcome_horizon=config.primitive_outcome_horizon,
+        )
 
         optimizer.zero_grad()
         actions1, next_state_pred, criticism, actions2, _logits_a, _w_b, _b_b = model(
@@ -506,6 +784,11 @@ def train_synthetic_epoch(
             batch_yc_target,
             criterion,
             critic_loss_weight=config.critic_loss_weight,
+            primitive_loss_weight=config.primitive_loss_weight,
+            primitive_outcome_loss_weight=config.primitive_outcome_loss_weight,
+            motor_primitives=getattr(model, "last_motor_primitives", None),
+            primitive_outcome=getattr(model, "last_primitive_outcome", None),
+            primitive_targets=primitive_targets,
         )
         losses["loss_total"].backward()
         optimizer.step()
@@ -747,6 +1030,8 @@ def train_and_evaluate(config: Optional[SyntheticTrainingConfig] = None):
                 f"Actor P1: {avg_losses['loss_actor_pass1']:.4f} -> "
                 f"P2: {avg_losses['loss_actor_pass2']:.4f} | "
                 f"WM: {avg_losses['loss_world_model']:.4f} | "
+                f"Primitive: {avg_losses['loss_primitive_labels']:.4f}/"
+                f"{avg_losses['loss_primitive_outcome']:.4f} | "
                 f"Critic: {avg_losses['loss_critic']:.4f} | "
                 f"Total: {avg_losses['loss_total']:.4f} | "
                 f"C MSE: {metrics['controller_mse']:.4f} | "

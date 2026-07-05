@@ -6,7 +6,8 @@ promoting an architecture toward full Super Mario Bros:
 
 1. **Synthetic 1D** fully validates the architecture on procedural sequence
    data: tensor contracts, hierarchy behavior, losses, gradients, baselines,
-   checkpointing, and deterministic metrics.
+   primitive labels, k-step world-model outcomes, checkpointing, and
+   deterministic metrics.
 2. **Block SMB** trains all trainable game-facing models on a simplified
    synthetic version of SMB: Block ViT perception plus the hierarchical
    actor/world-model/critic policy in fast scenario-driven tasks.
@@ -51,7 +52,8 @@ actor/world-model/critic flow.
 
 - **Synthetic 1D** is the architecture validation stage and is reproducible from
   a clean checkout with deterministic datasets, baselines, checkpoint
-  save/restore, and held-out metrics.
+  save/restore, primitive-control supervision, k-step primitive-outcome
+  supervision, and held-out metrics.
 - **Block SMB** is the simplified synthetic game-training stage. It has a
   pygame-ce environment, fixed success thresholds, Block ViT perception, policy
   training, evaluation, resume, recording, ablations, structured logs, and
@@ -273,8 +275,13 @@ python scripts/vit/train_block_vit.py --epochs 40 --resume data/block_vit/block_
 
 ### Synthetic 1D validation
 
-Stage 1 currently trains the shared hierarchical actor/world-model/critic stack
-on synthetic data. The deterministic validation path is covered by:
+Stage 1 trains the shared hierarchical actor/world-model/critic stack on
+synthetic data. It now mirrors the Block SMB controller contract: the B-level
+primitive decoder is supervised for button combo, hold duration, release,
+cancel, replan, post-release action, and hazard-window timing, and the LSTM
+world model predicts k-step primitive outcomes for progress, support loss,
+collision/death risk, terminal outcome, continue, cancel, and replan. The
+deterministic validation path is covered by:
 
 ```bash
 timeout 120s python3 -m unittest -v scripts.tests.test_synthetic_1d
@@ -289,7 +296,10 @@ seeded `random` and train-marginal `simple`, with an asserted margin of at least
 25% below the simple baseline. The same suite also verifies finite CPU gradients,
 decreasing total loss, deterministic data/permutation seeding, shared-schema
 checkpoint save/restore, and these evaluation metrics: `controller_mse`,
-`controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`.
+`controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`. Training
+history additionally records `loss_primitive_labels` and
+`loss_primitive_outcome` so architecture ideas fail early if the primitive
+contract does not learn on perfectly known 1-D ground truth.
 
 Block SMB policy training uses `AgentWorldModelCritic` through the shared stage
 contract and can be run, resumed, evaluated, and recorded from the CLI. Full SMB

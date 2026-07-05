@@ -97,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--batch-size", type=_positive_int)
     train.add_argument("--learning-rate", type=_positive_float)
     train.add_argument("--critic-loss-weight", type=_non_negative_float)
+    train.add_argument("--primitive-loss-weight", type=_non_negative_float)
+    train.add_argument("--primitive-outcome-loss-weight", type=_non_negative_float)
+    train.add_argument("--primitive-outcome-horizon", type=_positive_int)
     train.add_argument("--tau-start", type=_positive_float)
     train.add_argument("--tau-end", type=_positive_float)
     train.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"))
@@ -151,6 +154,9 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "batch_size",
         "learning_rate",
         "critic_loss_weight",
+        "primitive_loss_weight",
+        "primitive_outcome_loss_weight",
+        "primitive_outcome_horizon",
         "tau_start",
         "tau_end",
         "device",

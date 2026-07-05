@@ -10,7 +10,13 @@ from unittest.mock import patch
 
 import torch
 
-from retroagi.core import DEFAULT_PRIMITIVE_DURATION_BINS, SMBAction, VisionOutput, VisionSpec
+from retroagi.core import (
+    DEFAULT_PRIMITIVE_DURATION_BINS,
+    SMBAction,
+    StageBatch,
+    VisionOutput,
+    VisionSpec,
+)
 from retroagi.stages.block_smb import distill as distill_module
 from retroagi.stages.block_smb.distill import (
     DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
@@ -53,6 +59,51 @@ class StaticBlockVision:
 
 def static_vision_factory():
     return StaticBlockVision()
+
+
+def _primitive_outcome_batch(
+    *,
+    x: float,
+    support: tuple[float, float, float] = (0.0, 1.0, 0.0),
+    death: bool = False,
+    terminated: bool = False,
+    truncated: bool = False,
+) -> StageBatch:
+    src_c = torch.zeros(1, 40)
+    src_c[:, 0] = float(x)
+    src_c[:, 9:12] = torch.tensor([support], dtype=torch.float32)
+    src_c[:, 36] = float(death)
+    src_c[:, 37] = float(terminated)
+    src_c[:, 38] = float(truncated)
+    return StageBatch(
+        src_a=torch.zeros(1, 8, dtype=torch.long),
+        target_a=None,
+        src_b=torch.zeros(1, 16, dtype=torch.long),
+        target_b=None,
+        src_c=src_c,
+        target_c=None,
+        metadata={
+            "vision_fusion": {
+                "c_position": (0, 2),
+                "c_semantic_probabilities": (2, 9),
+                "c_support_state": (9, 12),
+                "c_state": (12, 39),
+                "c_patch_tokens": (39, 40),
+            },
+            "episode": {"terminated": terminated, "truncated": truncated},
+            "info": {
+                "death": death,
+                "terminated": terminated,
+                "truncated": truncated,
+                "reward_terms": {
+                    "enemy_hit": -10.0 if death else 0.0,
+                    "fall_death": 0.0,
+                    "goal": 0.0,
+                    "progress": 0.0,
+                },
+            },
+        },
+    )
 
 
 class TestBlockSMBDistillation(unittest.TestCase):
@@ -184,6 +235,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
             summary["primitive_hazard_window_positive_count"],
             float(len(hazard_window_examples)),
         )
+        self.assertEqual(summary["primitive_outcome_supervision_count"], len(examples))
 
     def test_primitive_loss_uses_scripted_duration_release_targets(self):
         config = BlockSMBDistillationConfig(
@@ -217,6 +269,80 @@ class TestBlockSMBDistillation(unittest.TestCase):
 
         self.assertGreater(float(loss.item()), 0.0)
 
+    def test_k_step_primitive_outcome_targets_capture_bad_future(self):
+        first = distill_module.BlockSMBDistillationExample(
+            batch=_primitive_outcome_batch(x=0.0),
+            next_batch=_primitive_outcome_batch(x=0.05),
+            action=int(SMBAction.RIGHT_JUMP),
+            scenario_name="synthetic_gap",
+            episode=0,
+            step_index=0,
+        )
+        second = distill_module.BlockSMBDistillationExample(
+            batch=_primitive_outcome_batch(x=0.05),
+            next_batch=_primitive_outcome_batch(
+                x=0.05,
+                support=(1.0, 0.0, 0.0),
+                death=True,
+                terminated=True,
+            ),
+            action=int(SMBAction.RIGHT_JUMP),
+            scenario_name="synthetic_gap",
+            episode=0,
+            step_index=1,
+            primitive_cancel=1.0,
+            primitive_replan=1.0,
+        )
+
+        annotated = distill_module._annotate_primitive_outcomes(
+            [first, second],
+            horizon=2,
+        )
+
+        self.assertEqual(annotated[0].primitive_outcome_mask, 1.0)
+        self.assertGreater(annotated[0].primitive_outcome_progress_delta, 0.0)
+        self.assertEqual(annotated[0].primitive_outcome_support_loss, 1.0)
+        self.assertEqual(annotated[0].primitive_outcome_collision_death_risk, 1.0)
+        self.assertEqual(annotated[0].primitive_outcome_terminal, 1.0)
+        self.assertEqual(annotated[0].primitive_outcome_continue, 0.0)
+        self.assertEqual(annotated[0].primitive_outcome_cancel, 1.0)
+        self.assertEqual(annotated[0].primitive_outcome_replan, 1.0)
+
+    def test_primitive_outcome_loss_uses_k_step_targets(self):
+        example = distill_module.BlockSMBDistillationExample(
+            batch=_primitive_outcome_batch(x=0.0),
+            next_batch=_primitive_outcome_batch(x=0.1),
+            action=int(SMBAction.RIGHT),
+            scenario_name="synthetic_flat",
+            episode=0,
+            step_index=0,
+            primitive_outcome_mask=1.0,
+            primitive_outcome_progress_delta=0.1,
+            primitive_outcome_support_loss=0.0,
+            primitive_outcome_collision_death_risk=0.0,
+            primitive_outcome_terminal=0.0,
+            primitive_outcome_continue=1.0,
+            primitive_outcome_cancel=0.0,
+            primitive_outcome_replan=0.0,
+        )
+        primitive_outcome = SimpleNamespace(
+            progress_delta=torch.tensor([0.0]),
+            support_loss_logit=torch.tensor([0.0]),
+            collision_death_logit=torch.tensor([0.0]),
+            terminal_logit=torch.tensor([0.0]),
+            continue_logit=torch.tensor([0.0]),
+            cancel_logit=torch.tensor([0.0]),
+            replan_logit=torch.tensor([0.0]),
+        )
+
+        loss = distill_module._block_smb_distillation_primitive_outcome_loss(
+            primitive_outcome,
+            [example],
+            device=torch.device("cpu"),
+        )
+
+        self.assertGreater(float(loss.item()), 0.0)
+
     def test_cli_passes_monte_carlo_distillation_config(self):
         with patch(
             "retroagi.stages.block_smb.distill.train_distilled_block_smb_policy",
@@ -236,6 +362,10 @@ class TestBlockSMBDistillation(unittest.TestCase):
                         "0.6",
                         "--primitive-hazard-weight-multiplier",
                         "3.5",
+                        "--primitive-outcome-loss-weight",
+                        "0.7",
+                        "--primitive-outcome-horizon",
+                        "6",
                         "--monte-carlo-samples",
                         "3",
                         "--monte-carlo-seed",
@@ -264,6 +394,8 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(config.monte_carlo_samples, 3)
         self.assertEqual(config.primitive_loss_weight, 0.6)
         self.assertEqual(config.primitive_hazard_weight_multiplier, 3.5)
+        self.assertEqual(config.primitive_outcome_loss_weight, 0.7)
+        self.assertEqual(config.primitive_outcome_horizon, 6)
         self.assertEqual(config.monte_carlo_seed, 60002)
         self.assertEqual(config.monte_carlo_family_weights, {"flat_run": 1.0})
         self.assertTrue(config.monte_carlo_parameter_sweep)

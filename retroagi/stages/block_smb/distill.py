@@ -6,7 +6,7 @@ import argparse
 import copy
 import json
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -16,6 +16,7 @@ import torch.optim as optim
 
 from retroagi.core import (
     DEFAULT_PRIMITIVE_DURATION_BINS,
+    PrimitiveOutcomePrediction,
     SMBAction,
     StageBatch,
     VisionEncoder,
@@ -47,6 +48,7 @@ from .train import (
     block_smb_action_count_metric_values,
     block_smb_c_stream_dynamics_metrics,
     block_smb_c_stream_dynamics_slot_losses,
+    block_smb_c_stream_slot_spans,
     block_smb_dynamics_loss,
     block_smb_monte_carlo_eval_metrics,
     evaluate_block_smb,
@@ -74,6 +76,8 @@ class BlockSMBDistillationConfig:
     dynamics_loss_weight: float = 1.0
     primitive_loss_weight: float = 0.25
     primitive_hazard_weight_multiplier: float = 2.0
+    primitive_outcome_loss_weight: float = 0.25
+    primitive_outcome_horizon: int = 8
     world_model_slot_weights: Mapping[str, float] = field(
         default_factory=lambda: {"semantic_probabilities": 4.0}
     )
@@ -156,6 +160,10 @@ class BlockSMBDistillationConfig:
             raise ValueError("primitive_loss_weight must be non-negative")
         if self.primitive_hazard_weight_multiplier <= 0:
             raise ValueError("primitive_hazard_weight_multiplier must be positive")
+        if self.primitive_outcome_loss_weight < 0:
+            raise ValueError("primitive_outcome_loss_weight must be non-negative")
+        if self.primitive_outcome_horizon <= 0:
+            raise ValueError("primitive_outcome_horizon must be positive")
         if self.monte_carlo_samples < 0:
             raise ValueError("monte_carlo_samples must be non-negative")
         if not isinstance(self.monte_carlo_parameter_sweep, bool):
@@ -235,6 +243,14 @@ class BlockSMBDistillationExample:
     primitive_hazard_window: float = 0.0
     primitive_hazard_window_mask: float = 0.0
     primitive_weight: float = 1.0
+    primitive_outcome_mask: float = 0.0
+    primitive_outcome_progress_delta: float = 0.0
+    primitive_outcome_support_loss: float = 0.0
+    primitive_outcome_collision_death_risk: float = 0.0
+    primitive_outcome_terminal: float = 0.0
+    primitive_outcome_continue: float = 0.0
+    primitive_outcome_cancel: float = 0.0
+    primitive_outcome_replan: float = 0.0
 
 
 _PRIMITIVE_HAZARD_SCENARIO_TOKENS = (
@@ -346,6 +362,172 @@ def _scenario_has_primitive_timing_hazard(
     if isinstance(platforms, Sequence) and len(platforms) > 1:
         return True
     return False
+
+
+def _annotate_primitive_outcomes(
+    examples: Sequence[BlockSMBDistillationExample],
+    *,
+    horizon: int,
+) -> list[BlockSMBDistillationExample]:
+    if not examples:
+        return []
+    resolved_horizon = max(1, int(horizon))
+    return [
+        replace(
+            example,
+            **_primitive_outcome_target_fields(
+                examples,
+                index,
+                horizon=resolved_horizon,
+            ),
+        )
+        for index, example in enumerate(examples)
+    ]
+
+
+def _primitive_outcome_target_fields(
+    examples: Sequence[BlockSMBDistillationExample],
+    index: int,
+    *,
+    horizon: int,
+) -> dict[str, float]:
+    current = examples[index]
+    future_end = min(len(examples) - 1, index + max(1, int(horizon)) - 1)
+    future_examples = examples[index + 1 : future_end + 1]
+    future_terminal_examples = examples[index : future_end + 1]
+    future_batch = examples[future_end].next_batch
+
+    progress_delta = _c_stream_progress_x(future_batch) - _c_stream_progress_x(current.batch)
+    support_loss = _c_stream_support_loss(
+        current.batch,
+        [example.next_batch for example in future_terminal_examples],
+    )
+    collision_death_risk = max(
+        _batch_collision_death_risk(example.next_batch) for example in future_terminal_examples
+    )
+    terminal_outcome = max(
+        _batch_terminal_outcome(example.next_batch) for example in future_terminal_examples
+    )
+    future_replan = (
+        max(float(example.primitive_replan) for example in future_examples)
+        if future_examples
+        else 0.0
+    )
+    future_cancel = (
+        max(float(example.primitive_cancel) for example in future_examples)
+        if future_examples
+        else 0.0
+    )
+    bad_progress = 1.0 if progress_delta <= 0.0 and terminal_outcome <= 0.0 else 0.0
+    cancel = max(future_cancel, collision_death_risk)
+    replan = max(future_replan, bad_progress, terminal_outcome)
+    should_continue = (
+        1.0
+        if future_examples
+        and cancel <= 0.0
+        and replan <= 0.0
+        and terminal_outcome <= 0.0
+        and support_loss < 0.75
+        else 0.0
+    )
+    return {
+        "primitive_outcome_mask": 1.0,
+        "primitive_outcome_progress_delta": float(progress_delta),
+        "primitive_outcome_support_loss": float(support_loss),
+        "primitive_outcome_collision_death_risk": float(collision_death_risk),
+        "primitive_outcome_terminal": float(terminal_outcome),
+        "primitive_outcome_continue": float(should_continue),
+        "primitive_outcome_cancel": float(cancel),
+        "primitive_outcome_replan": float(replan),
+    }
+
+
+def _c_stream_progress_x(batch: StageBatch) -> float:
+    info = _batch_info(batch)
+    state_vec = info.get("state_vec")
+    if state_vec is not None:
+        try:
+            return float(state_vec[0])
+        except (TypeError, ValueError, IndexError):
+            pass
+    spans = block_smb_c_stream_slot_spans(batch)
+    start, end = spans.get("position", (0, 0))
+    if end > start:
+        return float(batch.src_c[:, start].detach().float().mean().cpu().item())
+    if batch.src_c.numel() == 0:
+        return 0.0
+    return float(batch.src_c[:, 0].detach().float().mean().cpu().item())
+
+
+def _c_stream_support_loss(
+    current_batch: StageBatch,
+    future_batches: Sequence[StageBatch],
+) -> float:
+    spans = block_smb_c_stream_slot_spans(current_batch)
+    start, end = spans.get("support_state", (0, 0))
+    if end - start < 2:
+        return 0.0
+    current_support = current_batch.src_c[:, start:end].detach().float().clamp(0.0, 1.0)
+    current_air = current_support[:, 0]
+    current_stable = current_support[:, 1:].amax(dim=1)
+    risks = []
+    for batch in future_batches:
+        future_spans = block_smb_c_stream_slot_spans(batch)
+        future_start, future_end = future_spans.get("support_state", (0, 0))
+        if future_end - future_start != end - start:
+            continue
+        future_support = batch.src_c[:, future_start:future_end].detach().float().clamp(0.0, 1.0)
+        future_air = future_support[:, 0]
+        future_stable = future_support[:, 1:].amax(dim=1)
+        risks.append(
+            torch.maximum(
+                (future_air - current_air).clamp_min(0.0),
+                (current_stable - future_stable).clamp_min(0.0),
+            )
+        )
+    if not risks:
+        return 0.0
+    return float(torch.stack(risks, dim=0).amax().clamp(0.0, 1.0).cpu().item())
+
+
+def _batch_info(batch: StageBatch) -> Mapping[str, Any]:
+    metadata = batch.metadata if isinstance(batch.metadata, Mapping) else {}
+    info = metadata.get("info", {})
+    return info if isinstance(info, Mapping) else {}
+
+
+def _batch_episode(batch: StageBatch) -> Mapping[str, Any]:
+    metadata = batch.metadata if isinstance(batch.metadata, Mapping) else {}
+    episode = metadata.get("episode", {})
+    return episode if isinstance(episode, Mapping) else {}
+
+
+def _batch_collision_death_risk(batch: StageBatch) -> float:
+    info = _batch_info(batch)
+    if bool(info.get("death", False)):
+        return 1.0
+    reward_terms = info.get("reward_terms", {})
+    if isinstance(reward_terms, Mapping):
+        if float(reward_terms.get("fall_death", 0.0) or 0.0) < 0.0:
+            return 1.0
+        if float(reward_terms.get("enemy_hit", 0.0) or 0.0) < 0.0:
+            return 1.0
+    return 0.0
+
+
+def _batch_terminal_outcome(batch: StageBatch) -> float:
+    info = _batch_info(batch)
+    episode = _batch_episode(batch)
+    if bool(info.get("terminated", False)) or bool(info.get("truncated", False)):
+        return 1.0
+    if bool(episode.get("terminated", False)) or bool(episode.get("truncated", False)):
+        return 1.0
+    spans = block_smb_c_stream_slot_spans(batch)
+    start, end = spans.get("terminal_outcome", (0, 0))
+    if end > start:
+        terminal_score = batch.src_c[:, start:end].detach().float().clamp(0.0, 1.0).amax()
+        return float((terminal_score > 0.5).to(dtype=torch.float32).cpu().item())
+    return 0.0
 
 
 def _normalize_distillation_monte_carlo_family_weights(
@@ -724,6 +906,7 @@ def collect_scripted_distillation_examples(
         for episode in range(config.episodes_per_scenario):
             env = MarioScenarioEnv()
             stage = BlockSMBStage(env=env, scenario=scenario, vision=vision_factory())
+            episode_examples: list[BlockSMBDistillationExample] = []
             try:
                 observation = stage.reset(seed=config.seed + scenario_index * 10_000 + episode)
                 for step_index in range(config.rollout_steps):
@@ -734,7 +917,7 @@ def collect_scripted_distillation_examples(
                         stage.encode_observation(next_observation, dict(info))
                     )
                     primitive_label = primitive_labels[min(step_index, len(primitive_labels) - 1)]
-                    examples.append(
+                    episode_examples.append(
                         BlockSMBDistillationExample(
                             batch=batch,
                             next_batch=next_batch,
@@ -750,6 +933,12 @@ def collect_scripted_distillation_examples(
                         break
             finally:
                 env.close()
+            examples.extend(
+                _annotate_primitive_outcomes(
+                    episode_examples,
+                    horizon=config.primitive_outcome_horizon,
+                )
+            )
     if not examples:
         raise ValueError("scripted distillation dataset is empty")
     return examples
@@ -780,6 +969,7 @@ def collect_dagger_distillation_examples(
             for episode in range(config.episodes_per_scenario):
                 env = MarioScenarioEnv()
                 stage = BlockSMBStage(env=env, scenario=scenario, vision=vision_factory())
+                episode_examples: list[BlockSMBDistillationExample] = []
                 try:
                     observation = stage.reset(
                         seed=config.seed
@@ -827,7 +1017,7 @@ def collect_dagger_distillation_examples(
                         primitive_label = primitive_labels[
                             min(step_index, len(primitive_labels) - 1)
                         ]
-                        examples.append(
+                        episode_examples.append(
                             BlockSMBDistillationExample(
                                 batch=batch,
                                 next_batch=next_batch,
@@ -848,6 +1038,12 @@ def collect_dagger_distillation_examples(
                         )
                 finally:
                     env.close()
+                examples.extend(
+                    _annotate_primitive_outcomes(
+                        episode_examples,
+                        horizon=config.primitive_outcome_horizon,
+                    )
+                )
     if not examples:
         raise ValueError("DAgger distillation dataset is empty")
     return examples
@@ -959,6 +1155,7 @@ def _train_behavior_cloning_epoch_recurrent(
     total_action_loss = 0.0
     total_dynamics_loss = 0.0
     total_primitive_loss = 0.0
+    total_primitive_outcome_loss = 0.0
     total_semantic_accuracy = 0.0
     total_semantic_gate = 0.0
     primitive_counts = _empty_primitive_supervision_counts()
@@ -979,6 +1176,7 @@ def _train_behavior_cloning_epoch_recurrent(
         action_losses = []
         dynamics_losses = []
         primitive_losses = []
+        primitive_outcome_losses = []
         semantic_accuracies = []
         semantic_gates = []
         slot_losses_by_name: dict[str, list[torch.Tensor]] = {
@@ -1007,6 +1205,11 @@ def _train_behavior_cloning_epoch_recurrent(
                 [example],
                 device=device,
             )
+            primitive_outcome_loss = _block_smb_distillation_primitive_outcome_loss(
+                getattr(model, "last_primitive_outcome", None),
+                [example],
+                device=device,
+            )
             slot_losses = block_smb_c_stream_dynamics_slot_losses(
                 next_state_pred,
                 next_c.detach(),
@@ -1028,10 +1231,12 @@ def _train_behavior_cloning_epoch_recurrent(
                 weighted_action_loss
                 + config.dynamics_loss_weight * dynamics_loss
                 + config.primitive_loss_weight * primitive_loss
+                + config.primitive_outcome_loss_weight * primitive_outcome_loss
             )
             action_losses.append(weighted_action_loss)
             dynamics_losses.append(dynamics_loss)
             primitive_losses.append(primitive_loss)
+            primitive_outcome_losses.append(primitive_outcome_loss)
             _add_primitive_supervision_counts(primitive_counts, [example])
             semantic_accuracies.append(metrics["dynamics_semantic_prediction_accuracy"])
             semantic_gates.append(metrics["dynamics_semantic_prediction_gate_met"])
@@ -1054,6 +1259,7 @@ def _train_behavior_cloning_epoch_recurrent(
         total_action_loss += _tensor_list_mean(action_losses) * len(sequence)
         total_dynamics_loss += _tensor_list_mean(dynamics_losses) * len(sequence)
         total_primitive_loss += _tensor_list_mean(primitive_losses) * len(sequence)
+        total_primitive_outcome_loss += _tensor_list_mean(primitive_outcome_losses) * len(sequence)
         total_semantic_accuracy += _tensor_list_mean(semantic_accuracies) * len(sequence)
         total_semantic_gate += _tensor_list_mean(semantic_gates) * len(sequence)
         for slot_name, values in slot_losses_by_name.items():
@@ -1063,6 +1269,7 @@ def _train_behavior_cloning_epoch_recurrent(
         total_action_loss=total_action_loss,
         total_dynamics_loss=total_dynamics_loss,
         total_primitive_loss=total_primitive_loss,
+        total_primitive_outcome_loss=total_primitive_outcome_loss,
         total_slot_losses=total_slot_losses,
         total_semantic_accuracy=total_semantic_accuracy,
         total_semantic_gate=total_semantic_gate,
@@ -1089,6 +1296,7 @@ def _train_behavior_cloning_epoch_independent(
     total_action_loss = 0.0
     total_dynamics_loss = 0.0
     total_primitive_loss = 0.0
+    total_primitive_outcome_loss = 0.0
     total_semantic_accuracy = 0.0
     total_semantic_gate = 0.0
     primitive_counts = _empty_primitive_supervision_counts()
@@ -1121,6 +1329,11 @@ def _train_behavior_cloning_epoch_independent(
             examples,
             device=device,
         )
+        primitive_outcome_loss = _block_smb_distillation_primitive_outcome_loss(
+            getattr(model, "last_primitive_outcome", None),
+            examples,
+            device=device,
+        )
         slot_losses = _batched_distillation_slot_losses(next_state_pred, next_c, examples)
         dynamics_loss = block_smb_dynamics_loss(
             next_state_pred,
@@ -1132,6 +1345,7 @@ def _train_behavior_cloning_epoch_independent(
             weighted_action_loss
             + config.dynamics_loss_weight * dynamics_loss
             + config.primitive_loss_weight * primitive_loss
+            + config.primitive_outcome_loss_weight * primitive_outcome_loss
         )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -1149,6 +1363,9 @@ def _train_behavior_cloning_epoch_independent(
             total_primitive_loss += float(primitive_loss.detach().cpu().item()) * int(
                 actions.numel()
             )
+            total_primitive_outcome_loss += float(
+                primitive_outcome_loss.detach().cpu().item()
+            ) * int(actions.numel())
             _add_primitive_supervision_counts(primitive_counts, examples)
             metrics = _batched_distillation_dynamics_metrics(
                 next_state_pred.detach(),
@@ -1171,6 +1388,7 @@ def _train_behavior_cloning_epoch_independent(
         total_action_loss=total_action_loss,
         total_dynamics_loss=total_dynamics_loss,
         total_primitive_loss=total_primitive_loss,
+        total_primitive_outcome_loss=total_primitive_outcome_loss,
         total_slot_losses=total_slot_losses,
         total_semantic_accuracy=total_semantic_accuracy,
         total_semantic_gate=total_semantic_gate,
@@ -1418,6 +1636,111 @@ def _block_smb_distillation_primitive_loss(
     return torch.stack(losses).mean()
 
 
+def _block_smb_distillation_primitive_outcome_loss(
+    primitive_outcome: PrimitiveOutcomePrediction | None,
+    examples: list[BlockSMBDistillationExample],
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    zero = torch.zeros((), dtype=torch.float32, device=device)
+    if primitive_outcome is None or not examples:
+        return zero
+    mask = torch.tensor(
+        [float(example.primitive_outcome_mask) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    if not bool((mask > 0).any().item()):
+        return zero
+    progress_targets = torch.tensor(
+        [float(example.primitive_outcome_progress_delta) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    support_targets = torch.tensor(
+        [float(example.primitive_outcome_support_loss) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    collision_death_targets = torch.tensor(
+        [float(example.primitive_outcome_collision_death_risk) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    terminal_targets = torch.tensor(
+        [float(example.primitive_outcome_terminal) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    continue_targets = torch.tensor(
+        [float(example.primitive_outcome_continue) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    cancel_targets = torch.tensor(
+        [float(example.primitive_outcome_cancel) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    replan_targets = torch.tensor(
+        [float(example.primitive_outcome_replan) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    def masked_mean(values: torch.Tensor) -> torch.Tensor:
+        return (values * mask).sum() / mask.sum().clamp_min(1.0)
+
+    losses = [
+        masked_mean(
+            F.mse_loss(primitive_outcome.progress_delta, progress_targets, reduction="none")
+        ),
+        masked_mean(
+            F.binary_cross_entropy_with_logits(
+                primitive_outcome.support_loss_logit,
+                support_targets,
+                reduction="none",
+            )
+        ),
+        masked_mean(
+            F.binary_cross_entropy_with_logits(
+                primitive_outcome.collision_death_logit,
+                collision_death_targets,
+                reduction="none",
+            )
+        ),
+        masked_mean(
+            F.binary_cross_entropy_with_logits(
+                primitive_outcome.terminal_logit,
+                terminal_targets,
+                reduction="none",
+            )
+        ),
+        masked_mean(
+            F.binary_cross_entropy_with_logits(
+                primitive_outcome.continue_logit,
+                continue_targets,
+                reduction="none",
+            )
+        ),
+        masked_mean(
+            F.binary_cross_entropy_with_logits(
+                primitive_outcome.cancel_logit,
+                cancel_targets,
+                reduction="none",
+            )
+        ),
+        masked_mean(
+            F.binary_cross_entropy_with_logits(
+                primitive_outcome.replan_logit,
+                replan_targets,
+                reduction="none",
+            )
+        ),
+    ]
+    return torch.stack(losses).mean()
+
+
 def _empty_primitive_supervision_counts() -> dict[str, float]:
     return {
         "primitive_button_combo_supervision_count": 0.0,
@@ -1432,6 +1755,12 @@ def _empty_primitive_supervision_counts() -> dict[str, float]:
         "primitive_hazard_window_supervision_count": 0.0,
         "primitive_hazard_window_positive_count": 0.0,
         "primitive_weighted_supervision_count": 0.0,
+        "primitive_outcome_supervision_count": 0.0,
+        "primitive_outcome_continue_positive_count": 0.0,
+        "primitive_outcome_cancel_positive_count": 0.0,
+        "primitive_outcome_replan_positive_count": 0.0,
+        "primitive_outcome_collision_death_positive_count": 0.0,
+        "primitive_outcome_terminal_positive_count": 0.0,
     }
 
 
@@ -1447,6 +1776,7 @@ def _add_primitive_supervision_counts(
         cancel_mask = float(example.primitive_cancel_mask)
         replan_mask = float(example.primitive_replan_mask)
         hazard_window_mask = float(example.primitive_hazard_window_mask)
+        outcome_mask = float(example.primitive_outcome_mask)
         any_timing_mask = max(
             duration_mask,
             release_mask,
@@ -1472,6 +1802,22 @@ def _add_primitive_supervision_counts(
         )
         counts["primitive_weighted_supervision_count"] += any_timing_mask * float(
             example.primitive_weight
+        )
+        counts["primitive_outcome_supervision_count"] += outcome_mask
+        counts["primitive_outcome_continue_positive_count"] += outcome_mask * float(
+            example.primitive_outcome_continue
+        )
+        counts["primitive_outcome_cancel_positive_count"] += outcome_mask * float(
+            example.primitive_outcome_cancel
+        )
+        counts["primitive_outcome_replan_positive_count"] += outcome_mask * float(
+            example.primitive_outcome_replan
+        )
+        counts["primitive_outcome_collision_death_positive_count"] += outcome_mask * float(
+            example.primitive_outcome_collision_death_risk
+        )
+        counts["primitive_outcome_terminal_positive_count"] += outcome_mask * float(
+            example.primitive_outcome_terminal
         )
 
 
@@ -1529,6 +1875,7 @@ def _behavior_cloning_epoch_summary(
     total_action_loss: float,
     total_dynamics_loss: float,
     total_primitive_loss: float,
+    total_primitive_outcome_loss: float,
     total_slot_losses: Mapping[str, float],
     total_semantic_accuracy: float,
     total_semantic_gate: float,
@@ -1543,6 +1890,7 @@ def _behavior_cloning_epoch_summary(
         "loss_action": total_action_loss / denom,
         "loss_dynamics": total_dynamics_loss / denom,
         "loss_primitive": total_primitive_loss / denom,
+        "loss_primitive_outcome": total_primitive_outcome_loss / denom,
         "accuracy": total_correct / denom,
         "dynamics_semantic_prediction_accuracy": total_semantic_accuracy / denom,
         "dynamics_semantic_prediction_gate_met": float(
@@ -1824,6 +2172,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="extra primitive-supervision weight for enemy, pipe, pit, gap, and chain windows",
     )
     parser.add_argument(
+        "--primitive-outcome-loss-weight",
+        type=float,
+        default=BlockSMBDistillationConfig.primitive_outcome_loss_weight,
+        help=(
+            "weight for k-step B-primitive outcome supervision: progress, support loss, "
+            "collision/death risk, terminal outcome, continue, cancel, and replan"
+        ),
+    )
+    parser.add_argument(
+        "--primitive-outcome-horizon",
+        type=int,
+        default=BlockSMBDistillationConfig.primitive_outcome_horizon,
+        help="number of future Block SMB steps used for B-primitive outcome targets",
+    )
+    parser.add_argument(
         "--world-model-slot-weight",
         action="append",
         default=None,
@@ -1963,6 +2326,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         dynamics_loss_weight=args.dynamics_loss_weight,
         primitive_loss_weight=args.primitive_loss_weight,
         primitive_hazard_weight_multiplier=args.primitive_hazard_weight_multiplier,
+        primitive_outcome_loss_weight=args.primitive_outcome_loss_weight,
+        primitive_outcome_horizon=args.primitive_outcome_horizon,
         world_model_slot_weights=dict(
             args.world_model_slot_weight
             or BlockSMBDistillationConfig.__dataclass_fields__[
