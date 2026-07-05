@@ -13,8 +13,8 @@ import torch
 from retroagi.core import DEFAULT_PRIMITIVE_DURATION_BINS, SMBAction, VisionOutput, VisionSpec
 from retroagi.stages.block_smb import distill as distill_module
 from retroagi.stages.block_smb.distill import (
-    BlockSMBDistillationConfig,
     DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
+    BlockSMBDistillationConfig,
     build_block_smb_distillation_scenarios,
     collect_scripted_distillation_examples,
 )
@@ -129,34 +129,36 @@ class TestBlockSMBDistillation(unittest.TestCase):
         )
 
         jump_examples = [
-            example
-            for example in examples
-            if example.action == int(SMBAction.RIGHT_JUMP)
+            example for example in examples if example.action == int(SMBAction.RIGHT_JUMP)
         ]
         duration_examples = [
-            example
-            for example in examples
-            if example.primitive_duration_mask > 0.0
+            example for example in examples if example.primitive_duration_mask > 0.0
         ]
-        release_examples = [
-            example
-            for example in examples
-            if example.primitive_release_mask > 0.0
-        ]
+        release_examples = [example for example in examples if example.primitive_release_mask > 0.0]
         positive_release_examples = [
-            example
-            for example in examples
-            if example.primitive_release > 0.0
+            example for example in examples if example.primitive_release > 0.0
+        ]
+        hazard_window_examples = [
+            example for example in examples if example.primitive_hazard_window > 0.0
+        ]
+        positive_cancel_examples = [
+            example for example in examples if example.primitive_cancel > 0.0
+        ]
+        positive_replan_examples = [
+            example for example in examples if example.primitive_replan > 0.0
         ]
 
         self.assertEqual(len(jump_examples), 18)
+        self.assertTrue(
+            all(example.primitive_button_combo == example.action for example in examples)
+        )
+        self.assertTrue(all(example.primitive_button_combo_mask == 1.0 for example in examples))
         self.assertEqual(len(duration_examples), 1)
         self.assertEqual(
             duration_examples[0].primitive_duration_bin,
             int(
                 torch.abs(
-                    torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32)
-                    - 18.0
+                    torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32) - 18.0
                 )
                 .argmin()
                 .item()
@@ -168,7 +170,20 @@ class TestBlockSMBDistillation(unittest.TestCase):
             {example.primitive_post_release for example in jump_examples},
             {int(SMBAction.RIGHT)},
         )
+        self.assertGreater(len(hazard_window_examples), len(jump_examples))
+        self.assertEqual(len(positive_cancel_examples), 1)
+        self.assertGreaterEqual(len(positive_replan_examples), 3)
         self.assertTrue(all(example.primitive_weight == 3.0 for example in jump_examples))
+        summary = distill_module._dataset_summary(examples)
+        self.assertEqual(summary["primitive_button_combo_supervision_count"], len(examples))
+        self.assertEqual(
+            summary["primitive_cancel_positive_count"],
+            float(len(positive_cancel_examples)),
+        )
+        self.assertEqual(
+            summary["primitive_hazard_window_positive_count"],
+            float(len(hazard_window_examples)),
+        )
 
     def test_primitive_loss_uses_scripted_duration_release_targets(self):
         config = BlockSMBDistillationConfig(
@@ -184,12 +199,13 @@ class TestBlockSMBDistillation(unittest.TestCase):
             config,
             vision_factory=static_vision_factory,
         )
-        example = next(
-            example for example in examples if example.primitive_duration_mask > 0.0
-        )
+        example = next(example for example in examples if example.primitive_duration_mask > 0.0)
         motor_primitives = SimpleNamespace(
+            button_combo_logits=torch.zeros(1, 1, len(SMBAction)),
             hold_duration_logits=torch.zeros(1, 1, len(DEFAULT_PRIMITIVE_DURATION_BINS)),
             release_logit=torch.zeros(1, 1),
+            cancel_logit=torch.zeros(1, 1),
+            interrupt_logit=torch.zeros(1, 1),
             post_release_logits=torch.zeros(1, 1, len(SMBAction)),
         )
 
@@ -263,9 +279,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(config.monte_carlo_family_pass_rate_gate, 0.7)
 
     def test_training_config_preserves_distillation_vision_checkpoint(self):
-        config = BlockSMBDistillationConfig(
-            vision_checkpoint=Path("data/pipeline/block_vit.pth")
-        )
+        config = BlockSMBDistillationConfig(vision_checkpoint=Path("data/pipeline/block_vit.pth"))
 
         training_config = distill_module._training_config_from_distillation(config)
 

@@ -12,8 +12,8 @@ from retroagi.core import (
     AgentWorldModelCritic,
     CriticActionEvaluation,
     HierarchicalAdaptiveModel,
-    MotorPrimitiveController,
     LevelBPrimitiveParameters,
+    MotorPrimitiveController,
     SMBAction,
     WorldModel,
     WorldModelState,
@@ -299,6 +299,54 @@ class TestMotorPrimitiveController(unittest.TestCase):
         self.assertIs(output.hold_duration_logits, hold_logits)
         self.assertIs(output.post_release_logits, primitive_params.post_release_logits)
 
+    def test_lstm_prediction_risk_biases_cancel_release_and_replan(self):
+        controller = MotorPrimitiveController(ratio_ab=2, ratio_bc=2)
+        logits_a = torch.zeros(1, 2, len(SMBAction))
+        w_pred = torch.zeros(1, 4)
+        b_pred = torch.zeros(1, 4)
+        hold_logits = torch.full((1, 4, len(DEFAULT_PRIMITIVE_DURATION_BINS)), -8.0)
+        hold_logits[:, :, 2] = 8.0
+        primitive_params = LevelBPrimitiveParameters(
+            hold_duration_logits=hold_logits,
+            release_logit=torch.full((1, 4), -4.0),
+            cancel_logit=torch.full((1, 4), -4.0),
+            replan_logit=torch.full((1, 4), -4.0),
+            post_release_logits=torch.zeros(1, 4, len(SMBAction)),
+        )
+        current_state = torch.zeros(1, 64)
+        current_state[:, 9:12] = torch.tensor([[0.0, 1.0, 0.0]])
+        next_good = current_state.clone()
+        next_good[:, 0] = 0.03
+        next_bad = current_state.clone()
+        next_bad[:, 0] = -0.02
+        next_bad[:, 9:12] = torch.tensor([[1.0, 0.0, 0.0]])
+        next_bad[:, 36:39] = torch.tensor([[1.0, 1.0, 0.0]])
+
+        good = controller(
+            logits_a,
+            w_pred,
+            b_pred,
+            current_state=current_state,
+            next_state_pred=next_good,
+            primitive_params=primitive_params,
+        )
+        bad = controller(
+            logits_a,
+            w_pred,
+            b_pred,
+            current_state=current_state,
+            next_state_pred=next_bad,
+            primitive_params=primitive_params,
+        )
+
+        self.assertTrue(torch.all(bad.cancel_logit > good.cancel_logit))
+        self.assertTrue(torch.all(bad.release_logit > good.release_logit))
+        self.assertTrue(torch.all(bad.interrupt_logit > good.interrupt_logit))
+        self.assertTrue(torch.all(bad.replan_probability > good.replan_probability))
+        self.assertTrue(torch.all(bad.predicted_support_risk > 0.0))
+        self.assertTrue(torch.all(bad.predicted_terminal_risk > 0.0))
+        self.assertTrue(torch.all(bad.prediction_replan_bias > good.prediction_replan_bias))
+
     def test_caps_walk_primitives_to_one_second(self):
         controller = MotorPrimitiveController(
             ratio_ab=2,
@@ -368,7 +416,9 @@ class TestCriticFeedbackContract(unittest.TestCase):
         model = HierarchicalAdaptiveModel(vocab_size=5, d_model=4, nhead=2, num_layers=1)
 
         with self.assertRaisesRegex(TypeError, "floating-point"):
-            model.apply_critic_feedback(torch.zeros(2, 3, 4), torch.zeros(2, 3, 4, dtype=torch.long))
+            model.apply_critic_feedback(
+                torch.zeros(2, 3, 4), torch.zeros(2, 3, 4, dtype=torch.long)
+            )
 
     def test_agent_second_pass_receives_exact_critic_output(self):
         seq_len_a = 2
@@ -399,7 +449,9 @@ class TestCriticFeedbackContract(unittest.TestCase):
         src_b = torch.zeros(2, seq_len_b, dtype=torch.long)
         src_c = torch.ones(2, seq_len_c)
 
-        _actions1, _next_state, criticism, actions2, _logits_a, _w_b, _b_b = model(src_a, src_b, src_c)
+        _actions1, _next_state, criticism, actions2, _logits_a, _w_b, _b_b = model(
+            src_a, src_b, src_c
+        )
 
         self.assertEqual(len(recording_agent.criticisms), 2)
         self.assertIsNone(recording_agent.criticisms[0])

@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 SUPPORTED_CONTROLLER_SCHEDULES = ("constant", "linear")
 ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES = (
     "world_model.decoder.",
@@ -33,6 +32,13 @@ ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
 DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
+MOTOR_PRIMITIVE_PROGRESS_MIN_DELTA = 0.005
+MOTOR_PRIMITIVE_LOW_PROGRESS_SCALE = 10.0
+MOTOR_PRIMITIVE_SUPPORT_RISK_SCALE = 2.0
+MOTOR_PRIMITIVE_TERMINAL_RISK_SCALE = 4.0
+_MOTOR_PRIMITIVE_SUPPORT_SPANS = ((9, 12), (15, 18))
+_MOTOR_PRIMITIVE_TERMINAL_SPANS = ((24, 27), (36, 39))
+_MOTOR_PRIMITIVE_PROGRESS_SLOTS = (0, 18)
 
 
 def action_level_world_model_state_dict(
@@ -85,6 +91,10 @@ class MotorPrimitiveOutput:
     hold_duration_logits: torch.Tensor | None = None
     duration_bin_values: torch.Tensor | None = None
     post_release_logits: torch.Tensor | None = None
+    predicted_progress_delta: torch.Tensor | None = None
+    predicted_support_risk: torch.Tensor | None = None
+    predicted_terminal_risk: torch.Tensor | None = None
+    prediction_replan_bias: torch.Tensor | None = None
 
     def detach(self):
         return MotorPrimitiveOutput(
@@ -101,13 +111,29 @@ class MotorPrimitiveOutput:
                 else None
             ),
             duration_bin_values=(
-                self.duration_bin_values.detach()
-                if self.duration_bin_values is not None
-                else None
+                self.duration_bin_values.detach() if self.duration_bin_values is not None else None
             ),
             post_release_logits=(
-                self.post_release_logits.detach()
-                if self.post_release_logits is not None
+                self.post_release_logits.detach() if self.post_release_logits is not None else None
+            ),
+            predicted_progress_delta=(
+                self.predicted_progress_delta.detach()
+                if self.predicted_progress_delta is not None
+                else None
+            ),
+            predicted_support_risk=(
+                self.predicted_support_risk.detach()
+                if self.predicted_support_risk is not None
+                else None
+            ),
+            predicted_terminal_risk=(
+                self.predicted_terminal_risk.detach()
+                if self.predicted_terminal_risk is not None
+                else None
+            ),
+            prediction_replan_bias=(
+                self.prediction_replan_bias.detach()
+                if self.prediction_replan_bias is not None
                 else None
             ),
         )
@@ -200,13 +226,11 @@ class AdaptiveController(nn.Module):
             raise ValueError(f"w and b shapes must match, got {w.shape} and {b.shape}")
         if x_c.size(0) != w.size(0):
             raise ValueError(
-                "x_c, w, and b batch sizes must match, got "
-                f"{x_c.size(0)} and {w.size(0)}"
+                "x_c, w, and b batch sizes must match, got " f"{x_c.size(0)} and {w.size(0)}"
             )
         if x_c.size(1) % w.size(1) != 0:
             raise ValueError(
-                "C length must be divisible by B length, got "
-                f"{x_c.size(1)} and {w.size(1)}"
+                "C length must be divisible by B length, got " f"{x_c.size(1)} and {w.size(1)}"
             )
         ratio_bc = x_c.size(1) // w.size(1)
         if self.schedule == "constant":
@@ -215,10 +239,7 @@ class AdaptiveController(nn.Module):
                 b.repeat_interleave(ratio_bc, dim=1),
             )
 
-        phase = (
-            torch.arange(ratio_bc, device=x_c.device, dtype=x_c.dtype)
-            / float(ratio_bc)
-        )
+        phase = torch.arange(ratio_bc, device=x_c.device, dtype=x_c.dtype) / float(ratio_bc)
         w = w.to(device=x_c.device, dtype=x_c.dtype)
         b = b.to(device=x_c.device, dtype=x_c.dtype)
         w_next = torch.cat((w[:, 1:], w[:, -1:]), dim=1)
@@ -261,10 +282,7 @@ class MotorPrimitiveController(nn.Module):
             raise ValueError("ratio_bc must be positive")
         if float(max_hold_duration) < 1.0:
             raise ValueError("max_hold_duration must be at least 1")
-        if (
-            max_walk_action_duration is not None
-            and float(max_walk_action_duration) < 1.0
-        ):
+        if max_walk_action_duration is not None and float(max_walk_action_duration) < 1.0:
             raise ValueError("max_walk_action_duration must be at least 1 when set")
         resolved_walk_action_ids = tuple(int(action_id) for action_id in walk_action_ids)
         if any(action_id < 0 for action_id in resolved_walk_action_ids):
@@ -282,9 +300,7 @@ class MotorPrimitiveController(nn.Module):
         self.ratio_bc = int(ratio_bc)
         self.max_hold_duration = float(max_hold_duration)
         self.max_walk_action_duration = (
-            None
-            if max_walk_action_duration is None
-            else float(max_walk_action_duration)
+            None if max_walk_action_duration is None else float(max_walk_action_duration)
         )
         self.walk_action_ids = resolved_walk_action_ids
         self.register_buffer(
@@ -309,8 +325,7 @@ class MotorPrimitiveController(nn.Module):
             raise ValueError("w_pred and b_pred must have shape [batch, seq_len_b]")
         if w_pred.shape != b_pred.shape:
             raise ValueError(
-                "w_pred and b_pred shapes must match, got "
-                f"{w_pred.shape} and {b_pred.shape}"
+                "w_pred and b_pred shapes must match, got " f"{w_pred.shape} and {b_pred.shape}"
             )
         if logits_a.size(0) != w_pred.size(0):
             raise ValueError(
@@ -325,14 +340,21 @@ class MotorPrimitiveController(nn.Module):
 
         button_combo_logits = logits_a.repeat_interleave(self.ratio_ab, dim=1)
         confidence = torch.sigmoid(w_pred.abs() + b_pred.abs())
-        motion = self._predicted_motion(next_state_pred, current_state, w_pred)
+        prediction_signals = self._prediction_control_signals(
+            next_state_pred,
+            current_state,
+            w_pred,
+        )
+        motion = prediction_signals["motion"]
+        prediction_replan_bias = prediction_signals["replan_bias"]
         hold_duration_logits = None
         post_release_logits = None
         if primitive_params is None:
             hold_duration = 1.0 + (self.max_hold_duration - 1.0) * torch.sigmoid(w_pred)
             release_logit = -b_pred
-            cancel_logit = b_pred - w_pred
-            interrupt_logit = cancel_logit + (0.05 - motion)
+            cancel_logit = b_pred - w_pred + prediction_replan_bias
+            release_logit = release_logit + 0.5 * prediction_replan_bias
+            interrupt_logit = cancel_logit + (0.05 - motion) + prediction_replan_bias
         else:
             self._validate_primitive_params(primitive_params, w_pred, logits_a)
             hold_duration_logits = primitive_params.hold_duration_logits
@@ -343,9 +365,11 @@ class MotorPrimitiveController(nn.Module):
             )
             hold_probabilities = F.softmax(hold_duration_logits, dim=-1)
             hold_duration = (hold_probabilities * duration_values.view(1, 1, -1)).sum(dim=-1)
-            release_logit = primitive_params.release_logit
-            cancel_logit = primitive_params.cancel_logit
-            interrupt_logit = primitive_params.replan_logit + (0.05 - motion)
+            release_logit = primitive_params.release_logit + 0.5 * prediction_replan_bias
+            cancel_logit = primitive_params.cancel_logit + prediction_replan_bias
+            interrupt_logit = (
+                primitive_params.replan_logit + (0.05 - motion) + prediction_replan_bias
+            )
         hold_duration = self._cap_walk_hold_duration(hold_duration, button_combo_logits)
         replan_probability = torch.sigmoid(interrupt_logit)
         return MotorPrimitiveOutput(
@@ -362,6 +386,10 @@ class MotorPrimitiveController(nn.Module):
                 dtype=hold_duration.dtype,
             ),
             post_release_logits=post_release_logits,
+            predicted_progress_delta=prediction_signals["progress_delta"],
+            predicted_support_risk=prediction_signals["support_risk"],
+            predicted_terminal_risk=prediction_signals["terminal_risk"],
+            prediction_replan_bias=prediction_replan_bias,
         )
 
     def _validate_primitive_params(
@@ -407,9 +435,50 @@ class MotorPrimitiveController(nn.Module):
         )
         return torch.where(walk_mask, torch.minimum(hold_duration, cap), hold_duration)
 
-    def _predicted_motion(self, next_state_pred, current_state, reference):
+    def _prediction_control_signals(self, next_state_pred, current_state, reference):
+        zeros = torch.zeros_like(reference)
         if next_state_pred is None or current_state is None:
-            return torch.zeros_like(reference)
+            return {
+                "motion": zeros,
+                "progress_delta": zeros,
+                "support_risk": zeros,
+                "terminal_risk": zeros,
+                "replan_bias": zeros,
+            }
+        self._validate_prediction_state(next_state_pred, current_state)
+        motion = self._predicted_motion(next_state_pred, current_state, reference)
+        progress_delta = self._predicted_progress_delta(
+            next_state_pred,
+            current_state,
+            reference,
+        )
+        support_risk = self._predicted_support_risk(
+            next_state_pred,
+            current_state,
+            reference,
+        )
+        terminal_risk = self._predicted_terminal_risk(
+            next_state_pred,
+            current_state,
+            reference,
+        )
+        low_progress = (MOTOR_PRIMITIVE_PROGRESS_MIN_DELTA - progress_delta).clamp_min(
+            0.0
+        ) * MOTOR_PRIMITIVE_LOW_PROGRESS_SCALE
+        replan_bias = (
+            low_progress
+            + MOTOR_PRIMITIVE_SUPPORT_RISK_SCALE * support_risk
+            + MOTOR_PRIMITIVE_TERMINAL_RISK_SCALE * terminal_risk
+        ).clamp_min(0.0)
+        return {
+            "motion": motion,
+            "progress_delta": progress_delta,
+            "support_risk": support_risk,
+            "terminal_risk": terminal_risk,
+            "replan_bias": replan_bias,
+        }
+
+    def _validate_prediction_state(self, next_state_pred, current_state) -> None:
         if next_state_pred.shape != current_state.shape:
             raise ValueError(
                 "next_state_pred and current_state must have the same shape for "
@@ -417,9 +486,10 @@ class MotorPrimitiveController(nn.Module):
                 f"{next_state_pred.shape} and {current_state.shape}"
             )
         if next_state_pred.ndim != 2:
-            raise ValueError(
-                "next_state_pred and current_state must have shape [batch, seq_len_c]"
-            )
+            raise ValueError("next_state_pred and current_state must have shape [batch, seq_len_c]")
+
+    def _predicted_motion(self, next_state_pred, current_state, reference):
+        self._validate_prediction_state(next_state_pred, current_state)
         usable = reference.size(1) * self.ratio_bc
         if next_state_pred.size(1) < usable:
             raise ValueError(
@@ -428,6 +498,56 @@ class MotorPrimitiveController(nn.Module):
             )
         delta = next_state_pred[:, :usable] - current_state[:, :usable]
         return delta.reshape(delta.size(0), reference.size(1), self.ratio_bc).abs().mean(dim=-1)
+
+    def _predicted_progress_delta(self, next_state_pred, current_state, reference):
+        deltas = []
+        for slot in _MOTOR_PRIMITIVE_PROGRESS_SLOTS:
+            if next_state_pred.size(1) > slot:
+                deltas.append(next_state_pred[:, slot] - current_state[:, slot])
+        if not deltas:
+            return torch.zeros_like(reference)
+        progress_delta = torch.stack(deltas, dim=1).amax(dim=1)
+        return progress_delta.unsqueeze(1).expand_as(reference)
+
+    def _predicted_support_risk(self, next_state_pred, current_state, reference):
+        risks = []
+        for start, end in _MOTOR_PRIMITIVE_SUPPORT_SPANS:
+            if next_state_pred.size(1) < end:
+                continue
+            current_support = current_state[:, start:end].clamp(0.0, 1.0)
+            predicted_support = next_state_pred[:, start:end].clamp(0.0, 1.0)
+            support_score = (current_support.sum(dim=1) - 1.0).abs() + (
+                predicted_support.sum(dim=1) - 1.0
+            ).abs()
+            current_air = current_support[:, 0]
+            predicted_air = predicted_support[:, 0]
+            current_stable = current_support[:, 1:].amax(dim=1)
+            predicted_stable = predicted_support[:, 1:].amax(dim=1)
+            air_risk = (predicted_air - current_air).clamp_min(0.0)
+            support_loss = (current_stable - predicted_stable).clamp_min(0.0)
+            risk = torch.maximum(air_risk, support_loss)
+            risks.append(torch.where(support_score <= 0.5, risk, torch.zeros_like(risk)))
+        if not risks:
+            return torch.zeros_like(reference)
+        support_risk = torch.stack(risks, dim=1).amax(dim=1).clamp(0.0, 1.0)
+        return support_risk.unsqueeze(1).expand_as(reference)
+
+    def _predicted_terminal_risk(self, next_state_pred, current_state, reference):
+        risks = []
+        for start, end in _MOTOR_PRIMITIVE_TERMINAL_SPANS:
+            if next_state_pred.size(1) < end:
+                continue
+            current_terminal = current_state[:, start:end]
+            predicted_terminal = next_state_pred[:, start:end]
+            current_valid = ((current_terminal >= -0.05) & (current_terminal <= 1.05)).all(dim=1)
+            predicted_probability = predicted_terminal.clamp(0.0, 1.0).amax(dim=1)
+            rising_probability = (predicted_terminal - current_terminal).clamp_min(0.0).amax(dim=1)
+            risk = torch.maximum(predicted_probability, rising_probability).clamp(0.0, 1.0)
+            risks.append(torch.where(current_valid, risk, torch.zeros_like(risk)))
+        if not risks:
+            return torch.zeros_like(reference)
+        terminal_risk = torch.stack(risks, dim=1).amax(dim=1).clamp(0.0, 1.0)
+        return terminal_risk.unsqueeze(1).expand_as(reference)
 
 
 class HierarchicalAdaptiveModel(nn.Module):
@@ -538,8 +658,12 @@ class HierarchicalAdaptiveModel(nn.Module):
 
         x_b = self.embedding(src_B) * math.sqrt(self.d_model)
         x_b = self.pos_encoder(x_b)
-        cross_mask = self.generate_cross_causal_mask(seq_len_b, seq_len_a, ratio_ab).to(src_B.device)
-        hidden_b = self.transformer_B(tgt=x_b, memory=pred_emb_a, tgt_mask=causal_mask_b, memory_mask=cross_mask)
+        cross_mask = self.generate_cross_causal_mask(seq_len_b, seq_len_a, ratio_ab).to(
+            src_B.device
+        )
+        hidden_b = self.transformer_B(
+            tgt=x_b, memory=pred_emb_a, tgt_mask=causal_mask_b, memory_mask=cross_mask
+        )
 
         controller_params = self.fc_controller_params(hidden_b)
         w_pred = controller_params[:, :, 0]
@@ -642,8 +766,7 @@ class WorldModel(nn.Module):
                 )
         else:
             raise ValueError(
-                "episode_mask must have shape [batch] or [batch, 1], "
-                f"got {tuple(mask.shape)}"
+                "episode_mask must have shape [batch] or [batch, 1], " f"got {tuple(mask.shape)}"
             )
         if not torch.isfinite(chunk_masks).all().item():
             raise ValueError("episode_mask must contain only finite values")
@@ -720,9 +843,7 @@ class WorldModel(nn.Module):
         ).unsqueeze(1)
 
         recurrent_state = self._coerce_state(initial_state, batch_size, device, dtype)
-        chunk_masks = self._normalize_episode_mask(
-            episode_mask, batch_size, 1, device, dtype
-        )
+        chunk_masks = self._normalize_episode_mask(episode_mask, batch_size, 1, device, dtype)
 
         recurrent_state = self._mask_state(recurrent_state, chunk_masks[:, 0])
         out, (hidden, cell) = self.lstm(
@@ -754,9 +875,7 @@ def action_motion_score(
             f"{next_state_pred.shape} and {current_state.shape}"
         )
     if next_state_pred.ndim != 2:
-        raise ValueError(
-            "next_state_pred and current_state must have shape [batch, seq_len_c]"
-        )
+        raise ValueError("next_state_pred and current_state must have shape [batch, seq_len_c]")
     if motion_position_dims is None:
         end = next_state_pred.size(1)
     else:
@@ -802,8 +921,7 @@ def action_rejection_mask(
         mask = mask.expand(reference.size(0))
     if tuple(mask.shape) != (reference.size(0),):
         raise ValueError(
-            "critic rejection mask must have shape [batch] or scalar, got "
-            f"{tuple(mask.shape)}"
+            "critic rejection mask must have shape [batch] or scalar, got " f"{tuple(mask.shape)}"
         )
     return mask
 
@@ -815,7 +933,9 @@ class Critic(nn.Module):
         super().__init__()
         self.seq_len_a = seq_len_a
         self.d_model = d_model
-        self.net = nn.Sequential(nn.Linear(seq_len_c, 128), nn.ReLU(), nn.Linear(128, seq_len_a * d_model))
+        self.net = nn.Sequential(
+            nn.Linear(seq_len_c, 128), nn.ReLU(), nn.Linear(128, seq_len_a * d_model)
+        )
         self.progress_head = nn.Sequential(
             nn.Linear(seq_len_c, 64),
             nn.ReLU(),
@@ -919,7 +1039,10 @@ class AgentWorldModelCritic(nn.Module):
             raise ValueError("critic_progress_threshold must be finite")
         if not 0.0 < float(critic_death_threshold) < 1.0:
             raise ValueError("critic_death_threshold must be in (0, 1)")
-        if not math.isfinite(float(critic_motion_threshold)) or float(critic_motion_threshold) < 0.0:
+        if (
+            not math.isfinite(float(critic_motion_threshold))
+            or float(critic_motion_threshold) < 0.0
+        ):
             raise ValueError("critic_motion_threshold must be finite and non-negative")
         resolved_pause_action_ids = tuple(int(action_id) for action_id in pause_action_ids)
         if any(action_id < 0 for action_id in resolved_pause_action_ids):
@@ -1024,11 +1147,7 @@ class AgentWorldModelCritic(nn.Module):
         w_context, b_context = self.controller_context(src_C, w, b)
         if not world_model_enabled:
             return src_C.detach(), None
-        if (
-            world_model_state is None
-            and episode_mask is None
-            and not return_world_model_state
-        ):
+        if world_model_state is None and episode_mask is None and not return_world_model_state:
             return self.world_model(src_C, actions, w_context, b_context), None
         return self.world_model(
             src_C,
@@ -1183,7 +1302,9 @@ class AgentWorldModelCritic(nn.Module):
     ) -> tuple[_ActionCandidate, int]:
         if not candidates:
             raise ValueError("at least one action candidate is required")
-        best_index = max(range(len(candidates)), key=lambda index: self._candidate_rank(candidates[index]))
+        best_index = max(
+            range(len(candidates)), key=lambda index: self._candidate_rank(candidates[index])
+        )
         return candidates[best_index], best_index + 1
 
     def _record_refinement_trace(

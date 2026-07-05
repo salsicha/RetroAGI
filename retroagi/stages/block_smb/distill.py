@@ -94,9 +94,7 @@ class BlockSMBDistillationConfig:
     monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
     monte_carlo_parameter_sweep: bool = False
     monte_carlo_sweep_repeats_per_difficulty: int = 1
-    required_monte_carlo_families: tuple[str, ...] = (
-        DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES
-    )
+    required_monte_carlo_families: tuple[str, ...] = DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES
     required_monte_carlo_repeats_per_difficulty: int = 1
     monte_carlo_validation_samples: int = 0
     monte_carlo_test_samples: int = 0
@@ -175,16 +173,12 @@ class BlockSMBDistillationConfig:
         object.__setattr__(
             self,
             "monte_carlo_family_weights",
-            _normalize_distillation_monte_carlo_family_weights(
-                self.monte_carlo_family_weights
-            ),
+            _normalize_distillation_monte_carlo_family_weights(self.monte_carlo_family_weights),
         )
         object.__setattr__(
             self,
             "required_monte_carlo_families",
-            _normalize_distillation_monte_carlo_families(
-                self.required_monte_carlo_families
-            ),
+            _normalize_distillation_monte_carlo_families(self.required_monte_carlo_families),
         )
         if not 0.0 <= self.monte_carlo_pass_rate_gate <= 1.0:
             raise ValueError("monte_carlo_pass_rate_gate must be between 0 and 1")
@@ -226,12 +220,20 @@ class BlockSMBDistillationExample:
     scenario_name: str
     episode: int
     step_index: int
+    primitive_button_combo: int = int(SMBAction.NOOP)
+    primitive_button_combo_mask: float = 0.0
     primitive_duration_bin: int = 0
     primitive_duration_mask: float = 0.0
     primitive_release: float = 0.0
     primitive_release_mask: float = 0.0
     primitive_post_release: int = int(SMBAction.NOOP)
     primitive_post_release_mask: float = 0.0
+    primitive_cancel: float = 0.0
+    primitive_cancel_mask: float = 0.0
+    primitive_replan: float = 0.0
+    primitive_replan_mask: float = 0.0
+    primitive_hazard_window: float = 0.0
+    primitive_hazard_window_mask: float = 0.0
     primitive_weight: float = 1.0
 
 
@@ -257,32 +259,50 @@ def _scripted_primitive_labels(
 ) -> list[dict[str, float | int]]:
     labels = [
         {
+            "primitive_button_combo": int(action),
+            "primitive_button_combo_mask": 1.0,
             "primitive_duration_bin": 0,
             "primitive_duration_mask": 0.0,
             "primitive_release": 0.0,
             "primitive_release_mask": 0.0,
             "primitive_post_release": int(SMBAction.NOOP),
             "primitive_post_release_mask": 0.0,
+            "primitive_cancel": 0.0,
+            "primitive_cancel_mask": 0.0,
+            "primitive_replan": (
+                1.0 if index == 0 or int(action) != int(actions[index - 1]) else 0.0
+            ),
+            "primitive_replan_mask": 1.0,
+            "primitive_hazard_window": 0.0,
+            "primitive_hazard_window_mask": 0.0,
             "primitive_weight": 1.0,
         }
-        for _action in actions
+        for index, action in enumerate(actions)
     ]
-    hazard_weight = (
-        float(hazard_weight_multiplier)
-        if _scenario_has_primitive_timing_hazard(scenario_name, scenario)
-        else 1.0
-    )
+    has_timing_hazard = _scenario_has_primitive_timing_hazard(scenario_name, scenario)
+    hazard_weight = float(hazard_weight_multiplier) if has_timing_hazard else 1.0
     index = 0
     while index < len(actions):
         action = int(actions[index])
-        if not is_smb_jump_action(action):
-            index += 1
-            continue
         end = index + 1
         while end < len(actions) and int(actions[end]) == action:
             end += 1
+        if has_timing_hazard and action == int(SMBAction.NOOP):
+            for wait_index in range(index, end):
+                labels[wait_index]["primitive_hazard_window"] = 1.0
+                labels[wait_index]["primitive_hazard_window_mask"] = 1.0
+                labels[wait_index]["primitive_weight"] = hazard_weight
+            labels[end - 1]["primitive_replan"] = 1.0
+        if not is_smb_jump_action(action):
+            index = end
+            continue
         duration_bin = _nearest_primitive_duration_bin(end - index)
         release_action = int(smb_jump_release_action(action))
+        hazard_start = max(0, index - 1) if has_timing_hazard else index
+        for hazard_index in range(hazard_start, end):
+            labels[hazard_index]["primitive_hazard_window"] = 1.0
+            labels[hazard_index]["primitive_hazard_window_mask"] = 1.0
+            labels[hazard_index]["primitive_weight"] = hazard_weight
         for jump_index in range(index, end):
             labels[jump_index]["primitive_release_mask"] = 1.0
             labels[jump_index]["primitive_post_release"] = release_action
@@ -290,7 +310,14 @@ def _scripted_primitive_labels(
             labels[jump_index]["primitive_weight"] = hazard_weight
         labels[index]["primitive_duration_bin"] = duration_bin
         labels[index]["primitive_duration_mask"] = 1.0
+        labels[index]["primitive_replan"] = 1.0
         labels[end - 1]["primitive_release"] = 1.0
+        if has_timing_hazard:
+            labels[end - 1]["primitive_cancel"] = 1.0
+            labels[end - 1]["primitive_cancel_mask"] = 1.0
+            labels[end - 1]["primitive_replan"] = 1.0
+        for jump_index in range(index, end - 1):
+            labels[jump_index]["primitive_cancel_mask"] = 1.0
         index = end
     return labels
 
@@ -329,7 +356,9 @@ def _normalize_distillation_monte_carlo_family_weights(
         family = str(raw_family)
         if family not in BLOCK_SMB_MC_FAMILIES:
             choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
-            raise ValueError(f"unknown Block SMB Monte Carlo family {raw_family!r}; expected {choices}")
+            raise ValueError(
+                f"unknown Block SMB Monte Carlo family {raw_family!r}; expected {choices}"
+            )
         weight = float(raw_weight)
         if weight < 0.0:
             raise ValueError("monte_carlo_family_weights must be non-negative")
@@ -596,9 +625,7 @@ def _distillation_monte_carlo_samples(
                     distribution_id=config.monte_carlo_distribution_id,
                     split="train",
                     seed=config.monte_carlo_seed,
-                    repeats_per_difficulty=(
-                        config.required_monte_carlo_repeats_per_difficulty
-                    ),
+                    repeats_per_difficulty=(config.required_monte_carlo_repeats_per_difficulty),
                     families=config.required_monte_carlo_families,
                 ),
             )
@@ -654,9 +681,7 @@ def _distillation_monte_carlo_samples(
         "seed": int(config.monte_carlo_seed),
         "sample_count": len(selected_samples),
         "required_families": list(config.required_monte_carlo_families),
-        "required_repeats_per_difficulty": int(
-            config.required_monte_carlo_repeats_per_difficulty
-        ),
+        "required_repeats_per_difficulty": int(config.required_monte_carlo_repeats_per_difficulty),
         "source_selected_counts": source_selected_counts,
         "sources": source_manifests,
         "coverage": summarize_block_smb_monte_carlo_samples(selected_samples),
@@ -700,9 +725,7 @@ def collect_scripted_distillation_examples(
             env = MarioScenarioEnv()
             stage = BlockSMBStage(env=env, scenario=scenario, vision=vision_factory())
             try:
-                observation = stage.reset(
-                    seed=config.seed + scenario_index * 10_000 + episode
-                )
+                observation = stage.reset(seed=config.seed + scenario_index * 10_000 + episode)
                 for step_index in range(config.rollout_steps):
                     action = policy.action(scenario_name, step_index)
                     batch = _detach_batch(stage.encode_observation(observation))
@@ -810,8 +833,7 @@ def collect_dagger_distillation_examples(
                                 next_batch=next_batch,
                                 action=int(teacher_action),
                                 scenario_name=scenario_name,
-                                episode=config.episodes_per_scenario * iteration
-                                + episode,
+                                episode=config.episodes_per_scenario * iteration + episode,
                                 step_index=step_index,
                                 **primitive_label,
                             )
@@ -1019,9 +1041,7 @@ def _train_behavior_cloning_epoch_recurrent(
                 prediction = int(logits.argmax(dim=-1).item())
                 sequence_correct += int(prediction == int(actions.item()))
             world_model_state = (
-                next_world_model_state.detach()
-                if next_world_model_state is not None
-                else None
+                next_world_model_state.detach() if next_world_model_state is not None else None
             )
         loss = torch.stack(losses).mean()
         optimizer.zero_grad(set_to_none=True)
@@ -1122,14 +1142,12 @@ def _train_behavior_cloning_epoch_independent(
             total_correct += int((predictions == actions).sum().item())
             total_seen += int(actions.numel())
             total_loss += float(loss.detach().cpu().item()) * int(actions.numel())
-            total_action_loss += (
-                float(weighted_action_loss.detach().cpu().item()) * int(actions.numel())
+            total_action_loss += float(weighted_action_loss.detach().cpu().item()) * int(
+                actions.numel()
             )
-            total_dynamics_loss += (
-                float(dynamics_loss.detach().cpu().item()) * int(actions.numel())
-            )
-            total_primitive_loss += (
-                float(primitive_loss.detach().cpu().item()) * int(actions.numel())
+            total_dynamics_loss += float(dynamics_loss.detach().cpu().item()) * int(actions.numel())
+            total_primitive_loss += float(primitive_loss.detach().cpu().item()) * int(
+                actions.numel()
             )
             _add_primitive_supervision_counts(primitive_counts, examples)
             metrics = _batched_distillation_dynamics_metrics(
@@ -1138,17 +1156,15 @@ def _train_behavior_cloning_epoch_independent(
                 examples,
                 semantic_accuracy_threshold=config.semantic_prediction_accuracy_threshold,
             )
-            total_semantic_accuracy += (
-                float(metrics["dynamics_semantic_prediction_accuracy"].detach().cpu().item())
-                * int(actions.numel())
-            )
-            total_semantic_gate += (
-                float(metrics["dynamics_semantic_prediction_gate_met"].detach().cpu().item())
-                * int(actions.numel())
-            )
+            total_semantic_accuracy += float(
+                metrics["dynamics_semantic_prediction_accuracy"].detach().cpu().item()
+            ) * int(actions.numel())
+            total_semantic_gate += float(
+                metrics["dynamics_semantic_prediction_gate_met"].detach().cpu().item()
+            ) * int(actions.numel())
             for slot_name, slot_loss in slot_losses.items():
-                total_slot_losses[slot_name] += (
-                    float(slot_loss.detach().cpu().item()) * int(actions.numel())
+                total_slot_losses[slot_name] += float(slot_loss.detach().cpu().item()) * int(
+                    actions.numel()
                 )
     return _behavior_cloning_epoch_summary(
         total_loss=total_loss,
@@ -1250,6 +1266,26 @@ def _block_smb_distillation_primitive_loss(
     )
     losses: list[torch.Tensor] = []
 
+    combo_logits = getattr(motor_primitives, "button_combo_logits", None)
+    combo_mask = torch.tensor(
+        [float(example.primitive_button_combo_mask) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    if combo_logits is not None and combo_logits.ndim == 3 and bool((combo_mask > 0).any().item()):
+        combo_targets = torch.tensor(
+            [int(example.primitive_button_combo) for example in examples],
+            dtype=torch.long,
+            device=device,
+        )
+        per_sample = F.cross_entropy(
+            combo_logits[:, -1, :BLOCK_SMB_ACTION_COUNT],
+            combo_targets,
+            reduction="none",
+        )
+        weights = combo_mask * sample_weights
+        losses.append((per_sample * weights).sum() / weights.sum().clamp_min(1.0))
+
     hold_duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
     duration_mask = torch.tensor(
         [float(example.primitive_duration_mask) for example in examples],
@@ -1322,6 +1358,61 @@ def _block_smb_distillation_primitive_loss(
         weights = post_release_mask * sample_weights
         losses.append((per_sample * weights).sum() / weights.sum().clamp_min(1.0))
 
+    cancel_logit = getattr(motor_primitives, "cancel_logit", None)
+    cancel_mask = torch.tensor(
+        [float(example.primitive_cancel_mask) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    if cancel_logit is not None and cancel_logit.ndim == 2 and bool((cancel_mask > 0).any().item()):
+        cancel_targets = torch.tensor(
+            [float(example.primitive_cancel) for example in examples],
+            dtype=torch.float32,
+            device=device,
+        )
+        per_sample = F.binary_cross_entropy_with_logits(
+            cancel_logit[:, -1],
+            cancel_targets,
+            reduction="none",
+        )
+        weights = cancel_mask * sample_weights
+        losses.append((per_sample * weights).sum() / weights.sum().clamp_min(1.0))
+
+    replan_signal = getattr(motor_primitives, "interrupt_logit", None)
+    replan_uses_logits = replan_signal is not None
+    if replan_signal is None:
+        replan_signal = getattr(motor_primitives, "replan_probability", None)
+    replan_mask = torch.tensor(
+        [float(example.primitive_replan_mask) for example in examples],
+        dtype=torch.float32,
+        device=device,
+    )
+    if (
+        replan_signal is not None
+        and replan_signal.ndim == 2
+        and bool((replan_mask > 0).any().item())
+    ):
+        replan_targets = torch.tensor(
+            [float(example.primitive_replan) for example in examples],
+            dtype=torch.float32,
+            device=device,
+        )
+        if replan_uses_logits:
+            per_sample = F.binary_cross_entropy_with_logits(
+                replan_signal[:, -1],
+                replan_targets,
+                reduction="none",
+            )
+        else:
+            probabilities = replan_signal[:, -1].clamp(1e-6, 1.0 - 1e-6)
+            per_sample = F.binary_cross_entropy(
+                probabilities,
+                replan_targets,
+                reduction="none",
+            )
+        weights = replan_mask * sample_weights
+        losses.append((per_sample * weights).sum() / weights.sum().clamp_min(1.0))
+
     if not losses:
         return zero
     return torch.stack(losses).mean()
@@ -1329,10 +1420,17 @@ def _block_smb_distillation_primitive_loss(
 
 def _empty_primitive_supervision_counts() -> dict[str, float]:
     return {
+        "primitive_button_combo_supervision_count": 0.0,
         "primitive_duration_supervision_count": 0.0,
         "primitive_release_supervision_count": 0.0,
         "primitive_release_positive_count": 0.0,
         "primitive_post_release_supervision_count": 0.0,
+        "primitive_cancel_supervision_count": 0.0,
+        "primitive_cancel_positive_count": 0.0,
+        "primitive_replan_supervision_count": 0.0,
+        "primitive_replan_positive_count": 0.0,
+        "primitive_hazard_window_supervision_count": 0.0,
+        "primitive_hazard_window_positive_count": 0.0,
         "primitive_weighted_supervision_count": 0.0,
     }
 
@@ -1342,17 +1440,37 @@ def _add_primitive_supervision_counts(
     examples: list[BlockSMBDistillationExample],
 ) -> None:
     for example in examples:
+        combo_mask = float(example.primitive_button_combo_mask)
         duration_mask = float(example.primitive_duration_mask)
         release_mask = float(example.primitive_release_mask)
         post_release_mask = float(example.primitive_post_release_mask)
-        any_mask = max(duration_mask, release_mask, post_release_mask)
+        cancel_mask = float(example.primitive_cancel_mask)
+        replan_mask = float(example.primitive_replan_mask)
+        hazard_window_mask = float(example.primitive_hazard_window_mask)
+        any_timing_mask = max(
+            duration_mask,
+            release_mask,
+            post_release_mask,
+            cancel_mask,
+            hazard_window_mask,
+            replan_mask * float(example.primitive_replan),
+        )
+        counts["primitive_button_combo_supervision_count"] += combo_mask
         counts["primitive_duration_supervision_count"] += duration_mask
         counts["primitive_release_supervision_count"] += release_mask
-        counts["primitive_release_positive_count"] += (
-            release_mask * float(example.primitive_release)
+        counts["primitive_release_positive_count"] += release_mask * float(
+            example.primitive_release
         )
         counts["primitive_post_release_supervision_count"] += post_release_mask
-        counts["primitive_weighted_supervision_count"] += any_mask * float(
+        counts["primitive_cancel_supervision_count"] += cancel_mask
+        counts["primitive_cancel_positive_count"] += cancel_mask * float(example.primitive_cancel)
+        counts["primitive_replan_supervision_count"] += replan_mask
+        counts["primitive_replan_positive_count"] += replan_mask * float(example.primitive_replan)
+        counts["primitive_hazard_window_supervision_count"] += hazard_window_mask
+        counts["primitive_hazard_window_positive_count"] += hazard_window_mask * float(
+            example.primitive_hazard_window
+        )
+        counts["primitive_weighted_supervision_count"] += any_timing_mask * float(
             example.primitive_weight
         )
 
@@ -1396,9 +1514,7 @@ def _batched_distillation_dynamics_metrics(
         for name, value in metrics.items():
             metrics_by_name.setdefault(name, []).append(value)
     metrics = {
-        name: torch.stack(values).mean()
-        for name, values in metrics_by_name.items()
-        if values
+        name: torch.stack(values).mean() for name, values in metrics_by_name.items() if values
     }
     if "dynamics_semantic_prediction_accuracy" in metrics:
         metrics["dynamics_semantic_prediction_gate_met"] = (
@@ -1507,9 +1623,7 @@ def _action_class_weights(
         counts[int(example.action)] += 1.0
     nonzero = counts > 0
     weights = torch.zeros_like(counts)
-    weights[nonzero] = counts[nonzero].sum() / (
-        float(nonzero.sum().item()) * counts[nonzero]
-    )
+    weights[nonzero] = counts[nonzero].sum() / (float(nonzero.sum().item()) * counts[nonzero])
     if BLOCK_SMB_ACTION_COUNT > 2:
         weights[2] *= float(jump_weight_multiplier)
     weights[~nonzero] = 0.0
@@ -1553,9 +1667,7 @@ def _training_config_from_distillation(
         monte_carlo_seed=config.monte_carlo_seed,
         monte_carlo_family_weights=config.monte_carlo_family_weights,
         monte_carlo_parameter_sweep=config.monte_carlo_parameter_sweep,
-        monte_carlo_sweep_repeats_per_difficulty=(
-            config.monte_carlo_sweep_repeats_per_difficulty
-        ),
+        monte_carlo_sweep_repeats_per_difficulty=(config.monte_carlo_sweep_repeats_per_difficulty),
         monte_carlo_validation_samples=config.monte_carlo_validation_samples,
         monte_carlo_test_samples=config.monte_carlo_test_samples,
         monte_carlo_pass_rate_gate=config.monte_carlo_pass_rate_gate,
@@ -1604,9 +1716,7 @@ def _dataset_summary(dataset: list[BlockSMBDistillationExample]) -> dict[str, An
     return {
         "examples": len(dataset),
         "scenario_examples": counts,
-        "action_counts": {
-            str(index): int(count.item()) for index, count in enumerate(actions)
-        },
+        "action_counts": {str(index): int(count.item()) for index, count in enumerate(actions)},
         "max_step_index": max_step,
         **primitive_counts,
     }
@@ -1702,7 +1812,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--primitive-loss-weight",
         type=float,
         default=BlockSMBDistillationConfig.primitive_loss_weight,
-        help="weight for scripted Level-B duration/release primitive supervision",
+        help=(
+            "weight for scripted Level-B button-combo, duration, release, "
+            "post-release, cancel, replan, and hazard-window supervision"
+        ),
     )
     parser.add_argument(
         "--primitive-hazard-weight-multiplier",
@@ -1870,9 +1983,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         monte_carlo_seed=args.monte_carlo_seed,
         monte_carlo_family_weights=dict(args.monte_carlo_family_weight or ()),
         monte_carlo_parameter_sweep=args.monte_carlo_parameter_sweep,
-        monte_carlo_sweep_repeats_per_difficulty=(
-            args.monte_carlo_sweep_repeats_per_difficulty
-        ),
+        monte_carlo_sweep_repeats_per_difficulty=(args.monte_carlo_sweep_repeats_per_difficulty),
         required_monte_carlo_families=(
             tuple(args.required_monte_carlo_families)
             if args.required_monte_carlo_families is not None
