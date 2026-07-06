@@ -249,6 +249,11 @@ class BlockSMBTrainingConfig:
     monte_carlo_family_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
+    cover_curriculum_per_epoch: bool = True
+    update_batch_episodes: int = 16
+    action_gate_min_distinct_actions: int = 2
+    action_gate_max_dominant_fraction: float = 0.95
+    action_gate_required_actions: tuple[int, ...] = (1, 2)
     checkpoint_path: Optional[Path] = None
     resume_path: Optional[Path] = None
     save_checkpoints: bool = False
@@ -308,6 +313,8 @@ class BlockSMBTrainingConfig:
             "evaluation_max_steps",
             "num_envs",
             "evaluation_interval_epochs",
+            "update_batch_episodes",
+            "action_gate_min_distinct_actions",
         )
         for name in positive_ints:
             if getattr(self, name) <= 0:
@@ -321,6 +328,8 @@ class BlockSMBTrainingConfig:
             raise ValueError("monte_carlo_train_samples_per_epoch must be non-negative")
         if not isinstance(self.monte_carlo_parameter_sweep, bool):
             raise TypeError("monte_carlo_parameter_sweep must be a bool")
+        if not isinstance(self.cover_curriculum_per_epoch, bool):
+            raise TypeError("cover_curriculum_per_epoch must be a bool")
         if self.monte_carlo_sweep_repeats_per_difficulty <= 0:
             raise ValueError("monte_carlo_sweep_repeats_per_difficulty must be positive")
         if self.monte_carlo_max_rejections < 0:
@@ -344,6 +353,14 @@ class BlockSMBTrainingConfig:
             raise ValueError("monte_carlo_pass_rate_gate must be between 0 and 1")
         if not 0.0 <= self.monte_carlo_family_pass_rate_gate <= 1.0:
             raise ValueError("monte_carlo_family_pass_rate_gate must be between 0 and 1")
+        if not 0.0 <= self.action_gate_max_dominant_fraction <= 1.0:
+            raise ValueError("action_gate_max_dominant_fraction must be between 0 and 1")
+        required_actions = tuple(int(action) for action in self.action_gate_required_actions)
+        if any(action < 0 or action >= BLOCK_SMB_ACTION_COUNT for action in required_actions):
+            raise ValueError(
+                "action_gate_required_actions must contain valid Block SMB action indices"
+            )
+        object.__setattr__(self, "action_gate_required_actions", required_actions)
         if self.imagined_rollout_horizon < 0:
             raise ValueError("imagined_rollout_horizon must be non-negative")
         if self.target_network_mode not in TARGET_NETWORK_MODES:
@@ -1706,9 +1723,51 @@ def train_block_smb_epoch(
     if target_model is not None:
         target_model.eval()
     replay = BlockSMBReplayBuffer()
-    for episode in range(config.episodes_per_epoch):
+    episode_count = max(config.episodes_per_epoch, len(curriculum)) if (
+        config.cover_curriculum_per_epoch
+    ) else config.episodes_per_epoch
+    update_batch_size = min(max(1, int(config.update_batch_episodes)), episode_count)
+    metric_totals: dict[str, float] = {}
+    total_update_episodes = 0
+    total_returns: list[float] = []
+    all_actions: list[int] = []
+    update_count = 0
+
+    def flush_update_batch() -> None:
+        nonlocal replay, total_update_episodes, update_count
+        if not replay.trajectories:
+            return
+        losses = compute_block_smb_losses(
+            model,
+            replay.transitions(),
+            config,
+            device,
+            trajectories=replay.trajectories,
+            target_model=target_model,
+        )
+        optimizer.zero_grad(set_to_none=True)
+        losses["loss_total"].backward()
+        check_model_gradients(model)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), config.gradient_clip_norm
+        )
+        if not torch.isfinite(grad_norm).item():
+            raise FloatingPointError("gradient norm is NaN or infinite")
+        optimizer.step()
+        if target_model is not None:
+            update_target_network(target_model, model, config.target_network_tau)
+        batch_episodes = len(replay.trajectories)
+        batch_losses = {key: float(value.detach().cpu()) for key, value in losses.items()}
+        batch_losses["gradient_norm"] = float(grad_norm.detach().cpu())
+        for key, value in batch_losses.items():
+            metric_totals[key] = metric_totals.get(key, 0.0) + value * batch_episodes
+        total_update_episodes += batch_episodes
+        update_count += 1
+        replay.clear()
+
+    for episode in range(episode_count):
         scenario_name, scenario = curriculum[
-            (epoch * config.episodes_per_epoch + episode) % len(curriculum)
+            (epoch * episode_count + episode) % len(curriculum)
         ]
         stage = BlockSMBStage(
             env=MarioScenarioEnv(reward_config=config.reward_config),
@@ -1729,29 +1788,31 @@ def train_block_smb_epoch(
         finally:
             stage.env.close()
         replay.add(trajectory)
+        total_returns.append(trajectory.total_return)
+        all_actions.extend(step.action for step in trajectory.transitions)
+        if len(replay.trajectories) >= update_batch_size:
+            flush_update_batch()
 
-    losses = compute_block_smb_losses(
-        model,
-        replay.transitions(),
-        config,
-        device,
-        trajectories=replay.trajectories,
-        target_model=target_model,
+    flush_update_batch()
+    if total_update_episodes <= 0:
+        raise ValueError("no Block SMB rollout episodes were collected")
+    epoch_losses = {
+        key: value / float(total_update_episodes) for key, value in metric_totals.items()
+    }
+    epoch_losses["mean_return"] = float(np.mean(total_returns)) if total_returns else 0.0
+    epoch_losses["episodes"] = float(total_update_episodes)
+    epoch_losses["optimizer_updates"] = float(update_count)
+    action_counts = summarize_block_smb_monte_carlo_action_counts(all_actions)
+    epoch_losses.update(block_smb_action_count_metric_values("train", action_counts))
+    epoch_losses.update(
+        block_smb_action_distribution_gate_metrics(
+            "train",
+            action_counts,
+            min_distinct_actions=config.action_gate_min_distinct_actions,
+            max_dominant_fraction=config.action_gate_max_dominant_fraction,
+            required_actions=config.action_gate_required_actions,
+        )
     )
-    optimizer.zero_grad(set_to_none=True)
-    losses["loss_total"].backward()
-    check_model_gradients(model)
-    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
-    if not torch.isfinite(grad_norm).item():
-        raise FloatingPointError("gradient norm is NaN or infinite")
-    optimizer.step()
-    if target_model is not None:
-        update_target_network(target_model, model, config.target_network_tau)
-    epoch_losses = {key: float(value.detach().cpu()) for key, value in losses.items()}
-    epoch_losses["gradient_norm"] = float(grad_norm.detach().cpu())
-    epoch_losses["mean_return"] = float(np.mean([t.total_return for t in replay.trajectories]))
-    epoch_losses["episodes"] = float(len(replay.trajectories))
-    replay.clear()
     return epoch_losses, replay
 
 
@@ -2013,6 +2074,46 @@ def block_smb_action_count_metric_values(
         block_smb_action_counts_all_noop(action_counts)
     )
     return metrics
+
+
+def block_smb_action_distribution_gate_metrics(
+    prefix: str,
+    action_counts: Mapping[str, Any],
+    *,
+    min_distinct_actions: int,
+    max_dominant_fraction: float,
+    required_actions: tuple[int, ...],
+) -> dict[str, float]:
+    """Summarize whether rollout actions avoid degenerate single-action collapse."""
+
+    counts: dict[int, float] = {}
+    for raw_action, raw_count in action_counts.items():
+        try:
+            action = int(raw_action)
+            count = float(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if action < 0 or action >= BLOCK_SMB_ACTION_COUNT:
+            continue
+        counts[action] = max(0.0, count)
+    total = float(sum(counts.values()))
+    active = {action: count for action, count in counts.items() if count > 0.0}
+    dominant_fraction = (max(active.values()) / total) if total > 0.0 and active else 0.0
+    missing_required = sum(1 for action in required_actions if counts.get(action, 0.0) <= 0.0)
+    distinct_gate_met = len(active) >= int(min_distinct_actions)
+    dominant_gate_met = total > 0.0 and dominant_fraction <= float(max_dominant_fraction)
+    required_gate_met = missing_required == 0
+    gate_met = distinct_gate_met and dominant_gate_met and required_gate_met
+    return {
+        f"{prefix}_total_actions": total,
+        f"{prefix}_distinct_actions": float(len(active)),
+        f"{prefix}_dominant_action_fraction": float(dominant_fraction),
+        f"{prefix}_missing_required_actions": float(missing_required),
+        f"{prefix}_distinct_gate_met": float(distinct_gate_met),
+        f"{prefix}_dominant_gate_met": float(dominant_gate_met),
+        f"{prefix}_required_gate_met": float(required_gate_met),
+        f"{prefix}_distribution_gate_met": float(gate_met),
+    }
 
 
 def evaluate_block_smb(
@@ -2425,6 +2526,15 @@ def train_and_evaluate_block_smb(
                 block_smb_action_count_metric_values(
                     "eval_fixed",
                     evaluation.get("action_counts", {}),
+                )
+            )
+            last_metrics.update(
+                block_smb_action_distribution_gate_metrics(
+                    "eval_fixed",
+                    evaluation.get("action_counts", {}),
+                    min_distinct_actions=config.action_gate_min_distinct_actions,
+                    max_dominant_fraction=config.action_gate_max_dominant_fraction,
+                    required_actions=config.action_gate_required_actions,
                 )
             )
             last_metrics.update(block_smb_monte_carlo_eval_metrics(evaluation))

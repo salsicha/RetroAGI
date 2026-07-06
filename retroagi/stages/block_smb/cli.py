@@ -355,6 +355,34 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--evaluation-episodes", type=_positive_int)
     parser.add_argument("--evaluation-max-steps", type=_positive_int)
     parser.add_argument("--evaluation-interval-epochs", type=_positive_int)
+    parser.add_argument(
+        "--update-batch-episodes",
+        type=_positive_int,
+        help="number of rollout episodes to retain per optimizer update",
+    )
+    parser.set_defaults(cover_curriculum_per_epoch=None)
+    parser.add_argument(
+        "--cover-curriculum-per-epoch",
+        action="store_true",
+        dest="cover_curriculum_per_epoch",
+        help="train on at least one rollout from every fixed and Monte Carlo scenario each epoch",
+    )
+    parser.add_argument(
+        "--sample-episodes-per-epoch",
+        action="store_false",
+        dest="cover_curriculum_per_epoch",
+        help="train only --episodes-per-epoch sampled rollouts instead of covering the curriculum",
+    )
+    parser.add_argument("--action-gate-min-distinct-actions", type=_positive_int)
+    parser.add_argument("--action-gate-max-dominant-fraction", type=float)
+    parser.add_argument(
+        "--action-gate-required-action",
+        action="append",
+        default=None,
+        type=_non_negative_int,
+        dest="action_gate_required_actions",
+        help="action index that must appear in rollout action counts; may be repeated",
+    )
     parser.add_argument("--semantic-prediction-accuracy-threshold", type=float)
     parser.add_argument("--log-path", type=Path)
     parser.add_argument("--tracking-backend", choices=TRACKING_BACKENDS)
@@ -603,6 +631,11 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",
+        "update_batch_episodes",
+        "cover_curriculum_per_epoch",
+        "action_gate_min_distinct_actions",
+        "action_gate_max_dominant_fraction",
+        "action_gate_required_actions",
         "semantic_prediction_accuracy_threshold",
         "log_path",
         "tracking_backend",

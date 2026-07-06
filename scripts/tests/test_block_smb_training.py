@@ -201,6 +201,12 @@ class TestBlockSMBTraining(unittest.TestCase):
             tiny_config(target_network_mode="sometimes")
         with self.assertRaisesRegex(ValueError, "target_network_tau"):
             tiny_config(target_network_tau=1.5)
+        with self.assertRaisesRegex(ValueError, "action_gate_min_distinct_actions"):
+            tiny_config(action_gate_min_distinct_actions=0)
+        with self.assertRaisesRegex(ValueError, "action_gate_max_dominant_fraction"):
+            tiny_config(action_gate_max_dominant_fraction=1.5)
+        with self.assertRaisesRegex(ValueError, "action_gate_required_actions"):
+            tiny_config(action_gate_required_actions=(99,))
 
     def test_collect_trajectory_records_episode_masks(self):
         config = tiny_config(generated_scenarios=0)
@@ -395,6 +401,59 @@ class TestBlockSMBTraining(unittest.TestCase):
         self.assertEqual(metrics["episodes"], 1.0)
         self.assertEqual(replay.trajectories, [])
         self.assertEqual(replay.transitions(), [])
+        for key in (
+            "train_action_count_0",
+            "train_action_count_1",
+            "train_action_count_2",
+            "train_action_count_3",
+            "train_action_count_4",
+            "train_action_count_5",
+            "train_total_actions",
+            "train_distinct_actions",
+            "train_dominant_action_fraction",
+            "train_distribution_gate_met",
+        ):
+            self.assertIn(key, metrics)
+
+    def test_train_epoch_covers_full_monte_carlo_curriculum_by_default(self):
+        config = tiny_config(generated_scenarios=2, rollout_steps=1)
+        model = make_block_smb_model(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+        curriculum = build_curriculum(config)
+
+        metrics, _replay = train_block_smb_epoch(
+            model,
+            optimizer,
+            curriculum,
+            config,
+            epoch=0,
+            device=torch.device("cpu"),
+            vision_factory=static_vision_factory,
+        )
+
+        self.assertEqual(len(curriculum), 3)
+        self.assertEqual(metrics["episodes"], 3.0)
+
+    def test_train_epoch_can_preserve_sampled_episode_count_for_smoke_runs(self):
+        config = tiny_config(
+            generated_scenarios=2,
+            rollout_steps=1,
+            cover_curriculum_per_epoch=False,
+        )
+        model = make_block_smb_model(config)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+
+        metrics, _replay = train_block_smb_epoch(
+            model,
+            optimizer,
+            build_curriculum(config),
+            config,
+            epoch=0,
+            device=torch.device("cpu"),
+            vision_factory=static_vision_factory,
+        )
+
+        self.assertEqual(metrics["episodes"], 1.0)
 
     def test_target_network_auto_activation_and_ema_update(self):
         config = tiny_config(
@@ -546,7 +605,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             self.assertEqual(saved["model_name"], BLOCK_SMB_MODEL_NAME)
             self.assertEqual(saved["checkpoint_kind"], BLOCK_SMB_CHECKPOINT_KIND)
             self.assertEqual(saved["epoch"], 1)
-            self.assertEqual(saved["global_step"], 1)
+            self.assertEqual(saved["global_step"], 2)
             self.assertEqual(saved["config"]["reward_config"]["goal"], 70.0)
             self.assertEqual(saved["config"]["architecture_name"], BASELINE_ARCHITECTURE_NAME)
             self.assertEqual(
@@ -607,6 +666,12 @@ class TestBlockSMBTraining(unittest.TestCase):
                 "eval_fixed_action_count_4",
                 "eval_fixed_action_count_5",
                 "eval_fixed_all_noop_action_collapse",
+                "train_distinct_actions",
+                "train_dominant_action_fraction",
+                "train_distribution_gate_met",
+                "eval_fixed_distinct_actions",
+                "eval_fixed_dominant_action_fraction",
+                "eval_fixed_distribution_gate_met",
             ):
                 self.assertTrue(torch.isfinite(torch.tensor(result["metrics"][key])).item())
 
@@ -621,7 +686,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             )
             resumed_checkpoint = load_checkpoint(checkpoint)
             self.assertEqual(resumed_checkpoint["epoch"], 2)
-            self.assertEqual(resumed_checkpoint["global_step"], 2)
+            self.assertEqual(resumed_checkpoint["global_step"], 4)
             self.assertEqual(len(resumed["history"]), 1)
 
             model = make_block_smb_model(config)
