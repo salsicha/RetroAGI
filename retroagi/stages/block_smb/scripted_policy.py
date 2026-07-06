@@ -37,36 +37,21 @@ def fixed_scenario_action_scripts(
         "level_3_stairs.json": [2] * 8 + [1] * 2 + [2] * 6 + [1] * max_steps,
         "level_4_platforms.json": [1] * 8 + [2] * 16 + [1] * max_steps,
         "level_5_enemy_hop.json": [1] * 20 + [2] * 18 + [1] * max_steps,
-        "level_6_enemy_patrol.json": (
-            [1] * 12 + [2] * 18 + [1] * 18 + [2] * 18 + [1] * max_steps
-        ),
-        "level_7_moving_bridge.json": (
-            [1] * 10 + [2] * 14 + [1] * 8 + [2] * 14 + [1] * max_steps
-        ),
-        "level_8_enemy_gap.json": (
-            [1] * 10 + [2] * 17 + [1] * 8 + [2] * 18 + [1] * max_steps
-        ),
+        "level_6_enemy_patrol.json": ([1] * 12 + [2] * 18 + [1] * 18 + [2] * 18 + [1] * max_steps),
+        "level_7_moving_bridge.json": ([1] * 10 + [2] * 14 + [1] * 8 + [2] * 14 + [1] * max_steps),
+        "level_8_enemy_gap.json": ([1] * 10 + [2] * 17 + [1] * 8 + [2] * 18 + [1] * max_steps),
         "level_9_enemy_stomp.json": [1] * 8 + [2] * 14 + [1] * max_steps,
         "level_10_left_retreat.json": [3] * max_steps,
         "level_11_left_jump_recovery.json": [4] * 22 + [3] * max_steps,
         "level_12_wait_bridge.json": [0] * 20 + [1] * 20 + [2] * 16 + [1] * max_steps,
         "level_13_variable_pits.json": (
-            [1] * 8
-            + [2] * 18
-            + [1] * 24
-            + [2] * 18
-            + [1] * 28
-            + [2] * 20
-            + [1] * max_steps
+            [1] * 8 + [2] * 18 + [1] * 24 + [2] * 18 + [1] * 28 + [2] * 20 + [1] * max_steps
         ),
         "level_14_under_enemy_platform.json": [1] * max_steps,
         "level_15_wait_long_bridge.json": [0] * 28 + [1] * 32 + [2] * 16 + [1] * max_steps,
         "level_16_wait_enemy_gate.json": [0] * 50 + [2] * 18 + [1] * max_steps,
     }
-    return {
-        scenario_name: actions[:max_steps]
-        for scenario_name, actions in scripts.items()
-    }
+    return {scenario_name: actions[:max_steps] for scenario_name, actions in scripts.items()}
 
 
 class BlockSMBScriptedPolicy:
@@ -90,9 +75,7 @@ class BlockSMBScriptedPolicy:
 def _goal_reached(env: MarioScenarioEnv) -> bool:
     if env.goal is None:
         return False
-    mario_rect = pygame.Rect(
-        env.mario["x"], env.mario["y"], env.mario["w"], env.mario["h"]
-    )
+    mario_rect = pygame.Rect(env.mario["x"], env.mario["y"], env.mario["w"], env.mario["h"])
     return bool(mario_rect.colliderect(env.goal))
 
 
@@ -171,12 +154,13 @@ def evaluate_scripted_block_smb_policy(
         "fixed_scenarios": results,
         "mean_return": float(np.mean(returns)) if returns else 0.0,
         "success_rate": float(np.mean(successes)) if successes else 0.0,
-        "success_thresholds_met": all(
-            threshold_result["threshold_met"]
-            for threshold_result in threshold_results.values()
-        )
-        if threshold_results
-        else False,
+        "success_thresholds_met": (
+            all(
+                threshold_result["threshold_met"] for threshold_result in threshold_results.values()
+            )
+            if threshold_results
+            else False
+        ),
     }
 
 
@@ -215,6 +199,7 @@ def save_scripted_block_smb_checkpoint(
                 "seq_len_b": BLOCK_SMB_SPEC.seq_len_b,
                 "seq_len_c": BLOCK_SMB_SPEC.seq_len_c,
                 "vocab_size": BLOCK_SMB_SPEC.vocab_size,
+                "action_count": BLOCK_SMB_SPEC.action_count,
             }
         },
         states={"action_scripts": policy.action_scripts},

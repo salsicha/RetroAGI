@@ -15,6 +15,7 @@ from retroagi.core import (
     build_architecture,
     get_architecture,
 )
+from retroagi.stages.block_smb import BLOCK_SMB_SPEC
 
 
 def tiny_stage(name="synthetic_1d"):
@@ -62,6 +63,44 @@ class TestArchitectureRegistry(unittest.TestCase):
         self.assertEqual(outputs[1].shape, (1, 8))
         self.assertEqual(outputs[3].shape, (1, 8))
         self.assertEqual(outputs[4].shape, (1, 2, 6))
+
+    def test_smb_architecture_uses_action_count_head_not_semantic_vocab(self):
+        model = build_architecture(
+            BASELINE_ARCHITECTURE_NAME,
+            BLOCK_SMB_SPEC,
+            {"hidden_dim": 16},
+        )
+
+        self.assertEqual(model.vocab_size, 20)
+        self.assertEqual(model.action_vocab_size, BLOCK_SMB_SPEC.action_count)
+        self.assertEqual(model.agent.embedding.num_embeddings, BLOCK_SMB_SPEC.vocab_size)
+        self.assertEqual(
+            model.agent.action_embedding.num_embeddings,
+            BLOCK_SMB_SPEC.action_count,
+        )
+        src_a = torch.full(
+            (1, BLOCK_SMB_SPEC.seq_len_a),
+            BLOCK_SMB_SPEC.vocab_size - 1,
+            dtype=torch.long,
+        )
+        src_b = torch.full(
+            (1, BLOCK_SMB_SPEC.seq_len_b),
+            BLOCK_SMB_SPEC.vocab_size - 1,
+            dtype=torch.long,
+        )
+        src_c = torch.zeros((1, BLOCK_SMB_SPEC.seq_len_c), dtype=torch.float32)
+
+        outputs = model(src_a, src_b, src_c, tau=1.0)
+
+        self.assertEqual(
+            outputs[4].shape,
+            (1, BLOCK_SMB_SPEC.seq_len_a, BLOCK_SMB_SPEC.action_count),
+        )
+        self.assertIsNotNone(model.last_motor_primitives)
+        self.assertEqual(
+            model.last_motor_primitives.button_combo_logits.shape,
+            (1, BLOCK_SMB_SPEC.seq_len_b, BLOCK_SMB_SPEC.action_count),
+        )
 
     def test_smb_baseline_leaves_walk_motor_primitives_uncapped(self):
         model = build_architecture(

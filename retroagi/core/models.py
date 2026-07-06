@@ -27,11 +27,17 @@ LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES = (
     "agent.fc_primitive_replan.",
     "agent.fc_primitive_post_release.",
 )
+ACTION_HEAD_ALLOWED_MISSING_PREFIXES = (
+    "agent.action_embedding.",
+    "agent.fc_out_A.",
+    "agent.fc_primitive_post_release.",
+)
 ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES = ("world_model_actor_context.",)
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     *ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
     *LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES,
+    *ACTION_HEAD_ALLOWED_MISSING_PREFIXES,
     *ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES,
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
@@ -52,7 +58,7 @@ def action_level_world_model_state_dict(
     model: nn.Module,
     state_dict: Mapping[str, torch.Tensor],
 ) -> tuple[dict[str, torch.Tensor], tuple[str, ...]]:
-    """Drop obsolete token-level world-model tensors before policy loading."""
+    """Drop obsolete tensors before loading older policy checkpoints."""
 
     current = model.state_dict()
     migrated: dict[str, torch.Tensor] = {}
@@ -65,6 +71,13 @@ def action_level_world_model_state_dict(
         if (
             expected is not None
             and key.startswith("world_model.")
+            and tuple(value.shape) != tuple(expected.shape)
+        ):
+            skipped.append(key)
+            continue
+        if (
+            expected is not None
+            and key.startswith(ACTION_HEAD_ALLOWED_MISSING_PREFIXES)
             and tuple(value.shape) != tuple(expected.shape)
         ):
             skipped.append(key)
@@ -590,22 +603,37 @@ class HierarchicalAdaptiveModel(nn.Module):
     def __init__(
         self,
         vocab_size,
+        action_vocab_size=None,
         d_model=64,
         nhead=4,
         num_layers=2,
         controller_schedule="constant",
     ):
         super().__init__()
+        vocab_size = int(vocab_size)
+        action_vocab_size = vocab_size if action_vocab_size is None else int(action_vocab_size)
+        if vocab_size <= 0:
+            raise ValueError("vocab_size must be positive")
+        if action_vocab_size <= 0:
+            raise ValueError("action_vocab_size must be positive")
+        if action_vocab_size > vocab_size:
+            raise ValueError(
+                "action_vocab_size must be less than or equal to vocab_size, got "
+                f"{action_vocab_size} and {vocab_size}"
+            )
         self.d_model = d_model
+        self.vocab_size = vocab_size
+        self.action_vocab_size = action_vocab_size
 
         self.embedding = nn.Embedding(vocab_size, d_model)
+        self.action_embedding = nn.Embedding(action_vocab_size, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
 
         encoder_layers_a = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, batch_first=True
         )
         self.transformer_A = nn.TransformerEncoder(encoder_layers_a, num_layers)
-        self.fc_out_A = nn.Linear(d_model, vocab_size)
+        self.fc_out_A = nn.Linear(d_model, action_vocab_size)
 
         decoder_layers_b = nn.TransformerDecoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, batch_first=True
@@ -619,7 +647,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         self.fc_primitive_release = nn.Linear(d_model, 1)
         self.fc_primitive_cancel = nn.Linear(d_model, 1)
         self.fc_primitive_replan = nn.Linear(d_model, 1)
-        self.fc_primitive_post_release = nn.Linear(d_model, vocab_size)
+        self.fc_primitive_post_release = nn.Linear(d_model, action_vocab_size)
         self.last_level_b_primitives: LevelBPrimitiveParameters | None = None
         self._initialize_primitive_heads()
 
@@ -718,7 +746,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         logits_a = self.fc_out_A(hidden_a)
 
         probs_a = F.gumbel_softmax(logits_a, tau=tau, hard=True, dim=-1)
-        pred_emb_a = torch.matmul(probs_a, self.embedding.weight)
+        pred_emb_a = torch.matmul(probs_a, self.action_embedding.weight)
 
         x_b = self.embedding(src_B) * math.sqrt(self.d_model)
         x_b = self.pos_encoder(x_b)
@@ -1180,6 +1208,7 @@ class AgentWorldModelCritic(nn.Module):
         seq_len_a,
         seq_len_c,
         ratio_bc,
+        action_vocab_size=None,
         d_model=64,
         controller_schedule="constant",
         max_walk_action_duration=None,
@@ -1194,6 +1223,17 @@ class AgentWorldModelCritic(nn.Module):
         super().__init__()
         if int(max_action_refinement_passes) <= 0:
             raise ValueError("max_action_refinement_passes must be positive")
+        vocab_size = int(vocab_size)
+        action_vocab_size = vocab_size if action_vocab_size is None else int(action_vocab_size)
+        if vocab_size <= 0:
+            raise ValueError("vocab_size must be positive")
+        if action_vocab_size <= 0:
+            raise ValueError("action_vocab_size must be positive")
+        if action_vocab_size > vocab_size:
+            raise ValueError(
+                "action_vocab_size must be less than or equal to vocab_size, got "
+                f"{action_vocab_size} and {vocab_size}"
+            )
         if not math.isfinite(float(critic_progress_threshold)):
             raise ValueError("critic_progress_threshold must be finite")
         if not 0.0 < float(critic_death_threshold) < 1.0:
@@ -1206,6 +1246,8 @@ class AgentWorldModelCritic(nn.Module):
         resolved_pause_action_ids = tuple(int(action_id) for action_id in pause_action_ids)
         if any(action_id < 0 for action_id in resolved_pause_action_ids):
             raise ValueError("pause_action_ids must be non-negative")
+        if any(action_id >= action_vocab_size for action_id in resolved_pause_action_ids):
+            raise ValueError("pause_action_ids must be smaller than action_vocab_size")
         if len(set(resolved_pause_action_ids)) != len(resolved_pause_action_ids):
             raise ValueError("pause_action_ids must be unique")
         if motion_position_dims is not None and int(motion_position_dims) < 0:
@@ -1214,6 +1256,8 @@ class AgentWorldModelCritic(nn.Module):
         ratio_ab = seq_len_b // seq_len_a
         self.ratio_bc = ratio_bc
         self.ratio_ab = ratio_ab
+        self.vocab_size = vocab_size
+        self.action_vocab_size = action_vocab_size
         self.max_action_refinement_passes = int(max_action_refinement_passes)
         self.critic_progress_threshold = float(critic_progress_threshold)
         self.critic_death_threshold = float(critic_death_threshold)
@@ -1224,6 +1268,7 @@ class AgentWorldModelCritic(nn.Module):
         )
         self.agent = HierarchicalAdaptiveModel(
             vocab_size,
+            action_vocab_size=action_vocab_size,
             d_model=d_model,
             controller_schedule=controller_schedule,
         )

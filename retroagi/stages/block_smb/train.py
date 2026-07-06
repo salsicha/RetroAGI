@@ -30,6 +30,7 @@ from retroagi.core import (
     build_architecture,
     build_checkpoint,
     get_architecture,
+    is_smb_jump_action,
     load_checkpoint,
     make_experiment_tracker,
     save_checkpoint,
@@ -202,6 +203,7 @@ class BlockSMBTrainingConfig:
     reward_loss_weight: float = 0.01
     value_loss_weight: float = 0.25
     action_aux_weight: float = 0.01
+    oracle_action_loss_weight: float = 1.0
     noop_loss_weight: float = 0.25
     critic_loss_weight: float = 0.001
     imagined_rollout_weight: float = 0.0
@@ -388,6 +390,7 @@ class BlockSMBTrainingConfig:
             self.reward_loss_weight,
             self.value_loss_weight,
             self.action_aux_weight,
+            self.oracle_action_loss_weight,
             self.noop_loss_weight,
             self.critic_loss_weight,
             self.imagined_rollout_weight,
@@ -427,6 +430,7 @@ class BlockSMBTransition:
     criticism: torch.Tensor
     logits_a: torch.Tensor
     primitive_aux_loss: torch.Tensor | None = None
+    oracle_action: int | None = None
     step_index: int = 0
     noop_allowed: bool = False
 
@@ -939,6 +943,87 @@ def apply_block_smb_ablations(
     )
 
 
+def block_smb_oracle_actions_for_rollout(
+    scenario: Mapping[str, Any] | None,
+    *,
+    rollout_steps: int,
+) -> tuple[int, ...]:
+    """Return validated Monte Carlo oracle actions for one rollout, when present."""
+
+    if not isinstance(scenario, Mapping):
+        return ()
+    metadata = block_smb_monte_carlo_metadata(scenario)
+    if not metadata:
+        return ()
+    try:
+        actions = block_smb_monte_carlo_oracle_actions(
+            scenario,
+            max_steps=max(1, int(rollout_steps)),
+        )
+    except ValueError:
+        return ()
+    validated = []
+    for action in actions:
+        value = int(action)
+        if 0 <= value < BLOCK_SMB_ACTION_COUNT:
+            validated.append(value)
+    return tuple(validated)
+
+
+def _oracle_hold_frames(actions: tuple[int, ...], step_index: int) -> int | None:
+    if step_index < 0 or step_index >= len(actions):
+        return None
+    action = int(actions[step_index])
+    if not is_smb_jump_action(action):
+        return None
+    end = step_index
+    while end < len(actions) and int(actions[end]) == action:
+        end += 1
+    return max(1, end - step_index)
+
+
+def _oracle_duration_bin_index(
+    motor_primitives: Any,
+    hold_frames: int | None,
+) -> int | None:
+    if hold_frames is None:
+        return None
+    duration_values = getattr(motor_primitives, "duration_bin_values", None)
+    if duration_values is None:
+        return None
+    if isinstance(duration_values, torch.Tensor):
+        values = duration_values.detach().cpu().reshape(-1).numpy()
+    else:
+        values = np.asarray(duration_values, dtype=np.float32).reshape(-1)
+    if values.size == 0:
+        return None
+    return int(np.abs(values.astype(np.float32) - float(hold_frames)).argmin())
+
+
+def _oracle_primitive_execution(
+    action: int,
+    *,
+    next_action: int | None,
+    hold_frames: int | None,
+    motor_primitives: Any,
+) -> SMBPrimitiveExecution:
+    action_value = int(action)
+    started = is_smb_jump_action(action_value)
+    duration_bin_index = _oracle_duration_bin_index(motor_primitives, hold_frames)
+    released = False
+    if started and next_action is not None:
+        released = int(next_action) == int(smb_jump_release_action(action_value))
+    return SMBPrimitiveExecution(
+        action=action_value,
+        started=started,
+        active=started,
+        released=released,
+        cancelled=False,
+        duration_bin_index=duration_bin_index,
+        hold_frames=hold_frames,
+    )
+
+
 def _action_from_model(
     model: torch.nn.Module,
     batch: StageBatch,
@@ -949,6 +1034,9 @@ def _action_from_model(
     critic_feedback_enabled: bool = True,
     world_model_enabled: bool = True,
     primitive_executor: SMBParameterizedPrimitiveExecutor | None = None,
+    oracle_action: int | None = None,
+    oracle_next_action: int | None = None,
+    oracle_hold_frames: int | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -986,10 +1074,31 @@ def _action_from_model(
     action_logits = logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT]
     finite_or_raise("action_logits", action_logits)
     distribution = torch.distributions.Categorical(logits=action_logits)
-    action_tensor = action_logits.argmax(dim=-1) if deterministic else distribution.sample()
     motor_primitives = getattr(model, "last_motor_primitives", None)
+    oracle_action_tensor = None
+    if oracle_action is not None:
+        action_value = int(oracle_action)
+        if action_value < 0 or action_value >= BLOCK_SMB_ACTION_COUNT:
+            raise ValueError(f"oracle_action must be in [0, {BLOCK_SMB_ACTION_COUNT})")
+        oracle_action_tensor = torch.tensor(
+            [action_value],
+            dtype=torch.long,
+            device=action_logits.device,
+        )
+    action_tensor = (
+        oracle_action_tensor
+        if oracle_action_tensor is not None
+        else (action_logits.argmax(dim=-1) if deterministic else distribution.sample())
+    )
     execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
-    if primitive_executor is not None:
+    if oracle_action_tensor is not None:
+        execution = _oracle_primitive_execution(
+            int(action_tensor.item()),
+            next_action=oracle_next_action,
+            hold_frames=oracle_hold_frames,
+            motor_primitives=motor_primitives,
+        )
+    elif primitive_executor is not None:
         execution = primitive_executor.execute(
             int(action_tensor.item()),
             motor_primitives=motor_primitives,
@@ -1011,7 +1120,7 @@ def _action_from_model(
     entropy = distribution.entropy().squeeze(0)
     primitive_aux_loss = _smb_primitive_auxiliary_loss(
         motor_primitives,
-        action_tensor,
+        oracle_action_tensor,
         execution,
         action_count=BLOCK_SMB_ACTION_COUNT,
         device=action_logits.device,
@@ -1052,7 +1161,7 @@ def _smb_primitive_duration_log_prob(
 
 def _smb_primitive_auxiliary_loss(
     motor_primitives: Any,
-    action_tensor: torch.Tensor,
+    oracle_action_tensor: torch.Tensor | None,
     execution: SMBPrimitiveExecution,
     *,
     action_count: int,
@@ -1060,9 +1169,9 @@ def _smb_primitive_auxiliary_loss(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     zero = torch.zeros((), dtype=dtype, device=device)
-    if motor_primitives is None:
+    if motor_primitives is None or oracle_action_tensor is None:
         return zero
-    target = action_tensor.detach().to(device=device, dtype=torch.long).view(-1)
+    target = oracle_action_tensor.detach().to(device=device, dtype=torch.long).view(-1)
     if target.numel() != 1:
         return zero
 
@@ -1128,6 +1237,7 @@ def collect_trajectory(
     device: torch.device,
     record_frames: bool = False,
     ablation: BlockSMBAblationConfig | Mapping[str, Any] | None = None,
+    use_oracle_actions: bool = False,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
@@ -1136,6 +1246,14 @@ def collect_trajectory(
         trajectory.frames.append(np.asarray(observation).copy())
     world_model_state: WorldModelState | None = None
     primitive_executor = SMBParameterizedPrimitiveExecutor()
+    oracle_actions = (
+        block_smb_oracle_actions_for_rollout(
+            stage.scenario,
+            rollout_steps=rollout_steps,
+        )
+        if use_oracle_actions
+        else ()
+    )
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -1143,6 +1261,12 @@ def collect_trajectory(
         batch.src_b = batch.src_b.to(device)
         batch.src_c = batch.src_c.to(device)
         carried_state = world_model_state if ablation_config.recurrent_state_enabled else None
+        oracle_action = (
+            int(oracle_actions[step_index]) if step_index < len(oracle_actions) else None
+        )
+        oracle_next_action = (
+            int(oracle_actions[step_index + 1]) if step_index + 1 < len(oracle_actions) else None
+        )
         (
             action,
             log_prob,
@@ -1159,6 +1283,9 @@ def collect_trajectory(
             critic_feedback_enabled=ablation_config.critic_feedback_enabled,
             world_model_enabled=ablation_config.world_model_enabled,
             primitive_executor=primitive_executor,
+            oracle_action=oracle_action,
+            oracle_next_action=oracle_next_action,
+            oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
@@ -1190,6 +1317,7 @@ def collect_trajectory(
                 criticism=criticism,
                 logits_a=logits_a,
                 primitive_aux_loss=primitive_aux_loss,
+                oracle_action=oracle_action,
                 step_index=step_index,
                 noop_allowed=block_smb_noop_allowed_for_step(
                     scenario_name,
@@ -1552,6 +1680,26 @@ def block_smb_noop_suppression_loss(
     return F.softplus(noop_logit - non_noop_logsumexp).mean()
 
 
+def block_smb_oracle_action_loss(
+    step: BlockSMBTransition,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Supervise policy logits from scenario oracle actions when available."""
+
+    logits = step.logits_a.to(device=device)
+    zero = logits.new_zeros(())
+    if step.oracle_action is None:
+        return zero
+    oracle_action = int(step.oracle_action)
+    if oracle_action < 0 or oracle_action >= BLOCK_SMB_ACTION_COUNT:
+        return zero
+    if logits.ndim != 3 or logits.size(-1) <= oracle_action:
+        return zero
+    target = torch.tensor([oracle_action], dtype=torch.long, device=device)
+    return F.cross_entropy(logits[:, -1, :BLOCK_SMB_ACTION_COUNT], target)
+
+
 def compute_block_smb_losses(
     model: torch.nn.Module,
     transitions: list[BlockSMBTransition],
@@ -1582,8 +1730,10 @@ def compute_block_smb_losses(
     reward_terms = []
     value_terms = []
     action_aux_terms = []
+    oracle_action_terms = []
     noop_terms = []
     critic_terms = []
+    oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
         return_target = returns[index].view(1)
         reward_target = torch.tensor([step.reward], dtype=torch.float32, device=device)
@@ -1629,6 +1779,10 @@ def compute_block_smb_losses(
             action_aux_terms.append(step.log_prob.new_zeros(()))
         else:
             action_aux_terms.append(step.primitive_aux_loss.to(device=device))
+        oracle_loss = block_smb_oracle_action_loss(step, device=device)
+        oracle_action_terms.append(oracle_loss)
+        if step.oracle_action is not None:
+            oracle_supervised_steps += 1
         noop_terms.append(block_smb_noop_suppression_loss(step, device=device))
         critic_terms.append(
             step.criticism.pow(2).mean() + _critic_action_outcome_loss(model, step, device=device)
@@ -1639,6 +1793,7 @@ def compute_block_smb_losses(
     loss_value = torch.stack(value_terms).mean()
     loss_policy = torch.stack(policy_terms).mean()
     loss_action_aux = torch.stack(action_aux_terms).mean()
+    loss_oracle_action = torch.stack(oracle_action_terms).mean()
     loss_noop = torch.stack(noop_terms).mean()
     loss_critic_feedback = torch.stack(critic_terms).mean()
     entropy_bonus = torch.stack(entropy_terms).mean()
@@ -1654,6 +1809,7 @@ def compute_block_smb_losses(
         + config.value_loss_weight * loss_value
         + config.policy_loss_weight * loss_policy
         + config.action_aux_weight * loss_action_aux
+        + config.oracle_action_loss_weight * loss_oracle_action
         + config.noop_loss_weight * loss_noop
         + config.critic_loss_weight * loss_critic_feedback
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
@@ -1677,6 +1833,12 @@ def compute_block_smb_losses(
         "loss_value": loss_value,
         "loss_policy": loss_policy,
         "loss_action_aux": loss_action_aux,
+        "loss_oracle_action": loss_oracle_action,
+        "oracle_action_supervised_steps": torch.tensor(
+            float(oracle_supervised_steps),
+            dtype=torch.float32,
+            device=device,
+        ),
         "loss_noop": loss_noop,
         "loss_critic_feedback": loss_critic_feedback,
         **imagined_losses,
@@ -1723,9 +1885,11 @@ def train_block_smb_epoch(
     if target_model is not None:
         target_model.eval()
     replay = BlockSMBReplayBuffer()
-    episode_count = max(config.episodes_per_epoch, len(curriculum)) if (
-        config.cover_curriculum_per_epoch
-    ) else config.episodes_per_epoch
+    episode_count = (
+        max(config.episodes_per_epoch, len(curriculum))
+        if (config.cover_curriculum_per_epoch)
+        else config.episodes_per_epoch
+    )
     update_batch_size = min(max(1, int(config.update_batch_episodes)), episode_count)
     metric_totals: dict[str, float] = {}
     total_update_episodes = 0
@@ -1748,9 +1912,7 @@ def train_block_smb_epoch(
         optimizer.zero_grad(set_to_none=True)
         losses["loss_total"].backward()
         check_model_gradients(model)
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            model.parameters(), config.gradient_clip_norm
-        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
         if not torch.isfinite(grad_norm).item():
             raise FloatingPointError("gradient norm is NaN or infinite")
         optimizer.step()
@@ -1766,9 +1928,7 @@ def train_block_smb_epoch(
         replay.clear()
 
     for episode in range(episode_count):
-        scenario_name, scenario = curriculum[
-            (epoch * episode_count + episode) % len(curriculum)
-        ]
+        scenario_name, scenario = curriculum[(epoch * episode_count + episode) % len(curriculum)]
         stage = BlockSMBStage(
             env=MarioScenarioEnv(reward_config=config.reward_config),
             scenario=scenario,
@@ -1784,6 +1944,7 @@ def train_block_smb_epoch(
                 deterministic=False,
                 device=device,
                 ablation=config.ablation,
+                use_oracle_actions=True,
             )
         finally:
             stage.env.close()
@@ -2283,6 +2444,7 @@ def save_block_smb_checkpoint(
                 "seq_len_c": BLOCK_SMB_SPEC.seq_len_c,
                 "ratio_bc": BLOCK_SMB_SPEC.ratio_bc,
                 "vocab_size": BLOCK_SMB_SPEC.vocab_size,
+                "action_count": BLOCK_SMB_SPEC.action_count,
             },
             **block_smb_architecture_specs(config),
         },

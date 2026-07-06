@@ -25,11 +25,11 @@ from retroagi.core import (
     validate_checkpoint_compatibility,
 )
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
+from retroagi.stages.block_smb.monte_carlo import DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
 from retroagi.stages.block_smb.train import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
 )
-from retroagi.stages.block_smb.monte_carlo import DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
 from retroagi.stages.block_smb.vision import (
     DEFAULT_BLOCK_VIT_CHECKPOINT,
     load_block_vit_checkpoint,
@@ -400,9 +400,7 @@ def block_smb_checkpoint_transfer_source_gate(
         ),
         "monte_carlo_validation_gate_met": bool(monte_carlo_gate_met),
         "monte_carlo_validation_action_counts": monte_carlo_validation_action_counts,
-        "monte_carlo_validation_all_noop_action_collapse": (
-            monte_carlo_validation_action_collapse
-        ),
+        "monte_carlo_validation_all_noop_action_collapse": (monte_carlo_validation_action_collapse),
         "monte_carlo_validation_action_collapse_gate_met": bool(
             monte_carlo_validation_action_gate_met
         ),
@@ -504,6 +502,7 @@ def _validate_transfer_dimensions(checkpoint: Mapping[str, Any]) -> None:
         "seq_len_c": FULL_SMB_SPEC.seq_len_c,
         "ratio_bc": FULL_SMB_SPEC.ratio_bc,
         "vocab_size": FULL_SMB_SPEC.vocab_size,
+        "action_count": FULL_SMB_SPEC.action_count,
     }
     for key, value in expected.items():
         if int(stage.get(key, value)) != value:
@@ -641,6 +640,7 @@ def _build_transfer_checkpoint(
         "seq_len_c": FULL_SMB_SPEC.seq_len_c,
         "ratio_bc": FULL_SMB_SPEC.ratio_bc,
         "vocab_size": FULL_SMB_SPEC.vocab_size,
+        "action_count": FULL_SMB_SPEC.action_count,
     }
     if hidden_dim is not None:
         model_config["hidden_dim"] = int(hidden_dim)
@@ -667,6 +667,7 @@ def _build_transfer_checkpoint(
                 "seq_len_c": FULL_SMB_SPEC.seq_len_c,
                 "ratio_bc": FULL_SMB_SPEC.ratio_bc,
                 "vocab_size": FULL_SMB_SPEC.vocab_size,
+                "action_count": FULL_SMB_SPEC.action_count,
             },
             "vision": asdict(vision.spec),
             "architecture": architecture["spec"],

@@ -31,6 +31,7 @@ from retroagi.stages.block_smb import (
     BlockSMBTrainingConfig,
     MarioScenarioEnv,
     SequentialBlockSMBVectorEnv,
+    block_smb_monte_carlo_oracle_actions,
     block_smb_monte_carlo_train_sample_count,
     build_adaptive_monte_carlo_replay_curriculum,
     build_curriculum,
@@ -48,6 +49,8 @@ from retroagi.stages.block_smb.train import (
     block_smb_c_stream_slot_spans,
     block_smb_noop_allowed_for_step,
     block_smb_noop_suppression_loss,
+    block_smb_oracle_action_loss,
+    block_smb_oracle_actions_for_rollout,
     collect_trajectory,
     compute_block_smb_losses,
     compute_imagined_rollout_losses,
@@ -275,6 +278,84 @@ class TestBlockSMBTraining(unittest.TestCase):
         step.noop_allowed = True
         exempt_loss = block_smb_noop_suppression_loss(step, device=torch.device("cpu"))
         self.assertEqual(exempt_loss.item(), 0.0)
+
+    def test_unlabeled_rollout_does_not_self_label_primitive_auxiliary_loss(self):
+        config = tiny_config(generated_scenarios=0, rollout_steps=1)
+        model = make_block_smb_model(config)
+        scenario_name, scenario = build_curriculum(config)[0]
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                scenario_name,
+                rollout_steps=1,
+                seed=4,
+                deterministic=False,
+                device=torch.device("cpu"),
+                use_oracle_actions=True,
+            )
+        finally:
+            stage.env.close()
+
+        step = trajectory.transitions[0]
+        self.assertIsNone(step.oracle_action)
+        self.assertEqual(step.primitive_aux_loss.item(), 0.0)
+        self.assertEqual(
+            block_smb_oracle_action_loss(step, device=torch.device("cpu")).item(),
+            0.0,
+        )
+
+    def test_monte_carlo_oracle_actions_supervise_rollout_and_losses(self):
+        config = tiny_config(generated_scenarios=1, rollout_steps=2)
+        model = make_block_smb_model(config)
+        scenario_name, scenario = build_curriculum(config)[1]
+        expected_actions = block_smb_monte_carlo_oracle_actions(
+            scenario,
+            max_steps=config.rollout_steps,
+        )
+        self.assertEqual(
+            block_smb_oracle_actions_for_rollout(
+                scenario,
+                rollout_steps=config.rollout_steps,
+            ),
+            tuple(expected_actions),
+        )
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                scenario_name,
+                rollout_steps=config.rollout_steps,
+                seed=5,
+                deterministic=False,
+                device=torch.device("cpu"),
+                use_oracle_actions=True,
+            )
+        finally:
+            stage.env.close()
+
+        self.assertGreaterEqual(len(trajectory.transitions), 1)
+        for index, step in enumerate(trajectory.transitions):
+            self.assertEqual(step.oracle_action, expected_actions[index])
+            self.assertEqual(step.action, expected_actions[index])
+            self.assertTrue(torch.isfinite(step.primitive_aux_loss).item())
+
+        losses = compute_block_smb_losses(
+            model,
+            trajectory.transitions,
+            config,
+            torch.device("cpu"),
+            trajectories=[trajectory],
+        )
+
+        self.assertEqual(
+            losses["oracle_action_supervised_steps"].item(),
+            float(len(trajectory.transitions)),
+        )
+        self.assertGreater(losses["loss_oracle_action"].item(), 0.0)
+        self.assertTrue(torch.isfinite(losses["loss_action_aux"]).item())
 
     def test_imagined_rollout_loss_unrolls_within_trajectory(self):
         config = tiny_config(

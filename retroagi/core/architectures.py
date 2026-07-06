@@ -140,11 +140,13 @@ def make_agent_world_model_critic(
     if stage.name in SMB_STAGE_NAMES:
         pause_action_ids = (int(SMBAction.NOOP),)
         motion_position_dims = 2
+    action_vocab_size = stage.action_count if stage.action_count is not None else stage.vocab_size
     return AgentWorldModelCritic(
         stage.vocab_size,
         stage.seq_len_a,
         stage.seq_len_c,
         stage.ratio_bc,
+        action_vocab_size=action_vocab_size,
         d_model=hidden_dim,
         controller_schedule=controller_schedule,
         pause_action_ids=pause_action_ids,

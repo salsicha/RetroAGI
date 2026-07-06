@@ -2309,6 +2309,7 @@ def build_full_smb_policy_checkpoint(
                 "seq_len_c": FULL_SMB_SPEC.seq_len_c,
                 "ratio_bc": FULL_SMB_SPEC.ratio_bc,
                 "vocab_size": FULL_SMB_SPEC.vocab_size,
+                "action_count": FULL_SMB_SPEC.action_count,
             }
         },
         states=states,

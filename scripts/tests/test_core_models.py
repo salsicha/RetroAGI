@@ -421,6 +421,63 @@ class TestMotorPrimitiveController(unittest.TestCase):
 
 
 class TestCriticFeedbackContract(unittest.TestCase):
+    def test_actor_action_head_can_be_smaller_than_semantic_vocab(self):
+        model = HierarchicalAdaptiveModel(
+            vocab_size=20,
+            action_vocab_size=len(SMBAction),
+            d_model=8,
+            nhead=2,
+            num_layers=1,
+        )
+        src_a = torch.tensor([[0, 5]], dtype=torch.long)
+        src_b = torch.tensor([[0, 19, 5, 18]], dtype=torch.long)
+        src_c = torch.ones(1, 8)
+
+        logits, actions, w_b, b_b = model(src_a, src_b, src_c, tau=1.0)
+
+        self.assertEqual(model.embedding.num_embeddings, 20)
+        self.assertEqual(model.action_embedding.num_embeddings, len(SMBAction))
+        self.assertEqual(logits.shape, (1, 2, len(SMBAction)))
+        self.assertEqual(actions.shape, (1, 8))
+        self.assertEqual(w_b.shape, (1, 4))
+        self.assertEqual(b_b.shape, (1, 4))
+        self.assertIsNotNone(model.last_level_b_primitives)
+        self.assertEqual(
+            model.last_level_b_primitives.post_release_logits.shape,
+            (1, 4, len(SMBAction)),
+        )
+
+    def test_policy_checkpoint_migration_skips_obsolete_action_head_shapes(self):
+        old_model = AgentWorldModelCritic(
+            vocab_size=20,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+        )
+        new_model = AgentWorldModelCritic(
+            vocab_size=20,
+            action_vocab_size=len(SMBAction),
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+        )
+
+        migrated, skipped = action_level_world_model_state_dict(
+            new_model,
+            old_model.state_dict(),
+        )
+        load_result = new_model.load_state_dict(migrated, strict=False)
+
+        self.assertIn("agent.action_embedding.weight", skipped)
+        self.assertIn("agent.fc_out_A.weight", skipped)
+        self.assertIn("agent.fc_out_A.bias", skipped)
+        self.assertIn("agent.fc_primitive_post_release.weight", skipped)
+        self.assertIn("agent.fc_primitive_post_release.bias", skipped)
+        self.assertEqual(tuple(load_result.unexpected_keys), ())
+        self.assertEqual(set(load_result.missing_keys), set(skipped))
+
     def test_critic_feedback_is_additive_a_stream_residual(self):
         model = HierarchicalAdaptiveModel(vocab_size=5, d_model=4, nhead=2, num_layers=1)
         encoded_a = torch.tensor(
