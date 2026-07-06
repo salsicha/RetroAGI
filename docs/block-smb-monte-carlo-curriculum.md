@@ -70,8 +70,16 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `mixed_section` | sampled composition of two or three families in one level |
 
 The first implementation should keep geometry ranges conservative enough that a
-scripted oracle can solve every sampled scenario. Harder ranges should be added
-as named distribution versions instead of silently changing the old one.
+scripted bootstrap oracle can solve every sampled scenario. Harder ranges
+should be added as named distribution versions instead of silently changing the
+old one.
+
+The scripted oracle is a bootstrap teacher, not the long-term architecture.
+Future Block-level learning should be guided by the learned cross-game oracle
+described in [Universal Retro Oracle Roadmap](universal-retro-oracle.md). The
+Monte Carlo sampler should therefore record enough action, primitive, outcome,
+confidence, and provenance metadata that scripted traces can become training
+data for the universal oracle and later be replaced by learned labels.
 
 ## Parameter Schema
 

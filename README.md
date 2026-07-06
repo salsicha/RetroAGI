@@ -92,6 +92,9 @@ The [Block SMB Monte Carlo curriculum plan](docs/block-smb-monte-carlo-curriculu
 defines the generalization gate: parameterized scenario families, sampled
 train/validation/test/stress splits, coverage metrics, held-out evaluation, and
 distribution-level promotion criteria before Full SMB transfer.
+The [universal retro oracle roadmap](docs/universal-retro-oracle.md) lays out
+the path from scripted Block SMB oracle labels to a learned cross-game AI
+teacher that improves through maximum-likelihood training and EM relabeling.
 The current known-good baseline is a scripted policy artifact at
 `artifacts/block_smb/known_good_scripted_seed20260622/`.
 Full SMB cannot commit ROM-derived emulator artifacts, so its checked-in

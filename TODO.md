@@ -959,6 +959,71 @@ policy, resume it, evaluate it against documented fixed-task thresholds, record
 deterministic rollouts, and play the saved policy with live rendering and
 diagnostic overlays.
 
+## P10: Universal Retro AI Oracle
+
+The current Block SMB oracle is scripted and game-specific. Keep it as
+bootstrap data and a regression sentinel, but build toward a general purpose
+AI oracle trained across retro-style games. The oracle should guide Block-level
+learning with action labels, motor-primitive labels, k-step outcome targets,
+uncertainty, and alternate action expectations, then improve through an
+iterative maximum-likelihood and expectation-maximization loop.
+
+Research recommendation: use a hybrid architecture. The policy teacher should
+be a multi-game transformer in the spirit of Multi-Game Decision Transformers
+and Gato. The outcome/planning teacher should use a Dreamer/IRIS/STORM-style
+latent world model, with optional MuZero/EfficientZero-style search for
+high-risk states. VPT/Genie-style inverse or latent action models should
+bootstrap labels from unlabeled gameplay and replay data.
+
+- [ ] Define a versioned `UniversalOracleTrace` contract with game ID, stage,
+      task, seed, distribution ID, observation tokens, game-native action,
+      button vector, primitive labels, k-step outcome targets, confidence, and
+      provenance.
+- [ ] Add a game-neutral action and primitive ontology covering button combos,
+      hold duration, release, post-release action, cancel, replan, hazard
+      windows, no-op/release behavior, and game-specific action mappings.
+- [ ] Export existing Block SMB fixed-scenario and Monte Carlo scripted oracle
+      trajectories into the universal oracle trace format.
+- [ ] Export at least one non-SMB block-game trajectory source so the first
+      oracle dataset is genuinely multi-game.
+- [ ] Build a multi-game trajectory dataset command with train, validation,
+      test, and stress splits; record source provenance, label source,
+      confidence, seed policy, and licensing/content restrictions.
+- [ ] Train a supervised universal transformer oracle baseline using maximum
+      likelihood over action labels, primitive labels, and observed outcomes.
+- [ ] Add validation metrics for oracle action accuracy, primitive accuracy,
+      outcome calibration, confidence calibration, per-game performance, and
+      student pass-rate lift when used for Block distillation.
+- [ ] Add a latent world-model head that predicts primitive-conditioned
+      progress delta, support loss, collision/death risk, reward, terminal
+      outcome, and continue/cancel/replan targets.
+- [ ] Add an inverse or latent action model for unlabeled gameplay sequences,
+      modeled after VPT/Genie-style label bootstrapping.
+- [ ] Implement an EM relabeling job: maximum-likelihood supervised training,
+      expectation/planning relabeling, confidence filtering, dataset refresh,
+      and repeated retraining.
+- [ ] Add optional search over candidate primitive sequences for high-risk,
+      low-confidence, or transfer-sensitive states.
+- [ ] Add a pluggable `OracleProvider` interface for Block trainers and
+      distillers with `scripted`, `learned`, and `hybrid` modes.
+- [ ] Record oracle provider mode, oracle checkpoint, model version, confidence
+      thresholds, and label provenance in Block policy checkpoints and
+      promotion artifacts.
+- [ ] Gate learned-oracle replacement on matching or beating the scripted
+      oracle on fixed Block scenarios, held-out Monte Carlo validation,
+      per-family failure bins, and Block-to-Full transfer metrics.
+- [ ] Feed student failures and Full-fidelity emulator failures back into the
+      oracle dataset so the teacher learns where its guidance was wrong.
+- [ ] Document operational commands, artifact layout, expected budgets, and
+      promotion reports for training, evaluating, and comparing oracle
+      versions.
+
+**Exit criteria:** Block-level training can use a learned or hybrid universal
+oracle for at least two retro-style game profiles, records label provenance and
+confidence in every artifact, and matches or beats the scripted-oracle baseline
+on fixed scenarios, held-out Monte Carlo gates, and Block-to-Full transfer
+metrics.
+
 ## Definition of Done
 
 The full system is working when a clean checkout can:
