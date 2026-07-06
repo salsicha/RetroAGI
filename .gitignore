@@ -9,3 +9,8 @@ notebooks/ctm/data/
 .venv/
 graphify-out/
 local/full_smb/
+
+# Local Block SMB training/evaluation runs.
+artifacts/block_alpha_*/
+artifacts/full_block_smb_*/
+data/full_block_smb_*/
