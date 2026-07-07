@@ -16,3 +16,5 @@ artifacts/full_block_smb_*/
 data/full_block_smb_*/
 artifacts/block_smb/full_distill_*/
 data/block_smb/full_distill_*/
+artifacts/block_smb/full_sequence_*/
+artifacts/block_smb/latest_full_sequence_*/
