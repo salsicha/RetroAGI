@@ -101,9 +101,14 @@ def run_full_smb_action_contract_diagnostic(
         progress_gate=progress_gate,
     )
     block_reference = scripted_block_smb_action_reference(max_steps=max(samples, 1))
+    observed_counts = (
+        recording_summary["action_counts"]
+        if recording_summary["steps"] > 0
+        else deterministic_summary["counts"]
+    )
     comparison = compare_full_smb_action_distribution(
         block_reference["action_counts"],
-        recording_summary["action_counts"] or deterministic_summary["counts"],
+        observed_counts,
     )
     canonical_max_progress = max(progress_values, default=0.0)
     flags = _action_contract_flags(

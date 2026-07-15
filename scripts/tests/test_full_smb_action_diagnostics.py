@@ -99,6 +99,12 @@ class TestFullSMBActionDiagnostics(unittest.TestCase):
         self.assertTrue(result["flags"]["overactive_right_jump_when_stalled"])
         self.assertFalse(result["flags"]["missing_right_jump_when_stalled"])
         self.assertIn("RIGHT_JUMP", result["transfer_action_comparison"]["fraction_delta"])
+        # Without recordings the comparison must fall back to the canonical
+        # deterministic rollout counts instead of an empty recording summary.
+        self.assertEqual(result["transfer_action_comparison"]["observed_total"], 4)
+        self.assertGreater(
+            result["transfer_action_comparison"]["fraction_delta"]["RIGHT_JUMP"], 0.0
+        )
 
     def test_recording_summary_flags_missing_right_jump_under_progress_gate(self):
         with TemporaryDirectory() as tmpdir:

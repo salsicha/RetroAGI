@@ -188,7 +188,7 @@ class RamPositionRetroEnv(GymnasiumRetroEnv):
             0.0,
             False,
             False,
-            {"xscrollHi": 0, "xscrollLo": 12, "score": 0, "coins": 0, "lives": 3},
+            {"xscrollHi": 0, "xscrollLo": 200, "score": 0, "coins": 0, "lives": 3},
         )
 
 
@@ -609,12 +609,15 @@ class TestFullSMBStage(unittest.TestCase):
         finally:
             stage.close()
 
+        # After the camera scrolls (scroll_x=200), the target is Mario's true
+        # screen x (level_x - scroll_x = 304 - 200 = 104), not the raw
+        # page-relative RAM byte (48).
         np.testing.assert_allclose(
             info["vision_position_target"],
-            np.asarray([48.0 / 256.0, 160.0 / 240.0], dtype=np.float32),
+            np.asarray([104.0 / 256.0, 160.0 / 240.0], dtype=np.float32),
         )
         self.assertEqual(
-            info["vision_position_target_raw"]["player_screen_x_address"],
+            info["vision_position_target_raw"]["player_page_x_address"],
             0x86,
         )
         self.assertEqual(
@@ -625,12 +628,18 @@ class TestFullSMBStage(unittest.TestCase):
             info["vision_position_target_raw"]["player_level_page_address"],
             0x6D,
         )
-        self.assertEqual(info["player_screen_x"], 48.0)
+        self.assertEqual(info["vision_position_target_raw"]["player_page_x"], 48.0)
+        self.assertEqual(info["vision_position_target_raw"]["scroll_x"], 200.0)
+        self.assertEqual(info["player_screen_x"], 104.0)
         self.assertEqual(info["player_screen_y"], 160.0)
         self.assertEqual(info["player_level_page"], 1.0)
         self.assertEqual(info["player_level_x"], 304.0)
         self.assertEqual(info["full_smb_signals"]["position"], (304.0, 160.0))
         self.assertEqual(info["full_smb_signals"]["progress"], 304.0)
+        # camera_vec screen-x (element 1) must agree with player_camera_x
+        # (element 3), both derived from the same scroll source.
+        self.assertAlmostEqual(float(info["camera_vec"][1]), float(info["camera_vec"][3]))
+        self.assertAlmostEqual(float(info["camera_vec"][1]), 104.0 / 256.0, places=6)
 
     def test_make_stable_retro_env_reports_missing_backend_setup(self):
         with patch.dict(sys.modules, {"retro": None}):

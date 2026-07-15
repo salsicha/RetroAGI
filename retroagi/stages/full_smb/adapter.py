@@ -431,8 +431,8 @@ PLAYER_LEVEL_X_KEYS = (
 SCREEN_X_KEYS = ("screen_x", "screenX", "x_screen", "player_screen_x", "mario_screen_x")
 SCREEN_Y_KEYS = ("screen_y", "screenY", "y_screen", "player_screen_y", "mario_screen_y")
 SCROLL_X_KEYS = ("xscroll", "x_scroll", "scroll_x", "camera_x", "scrolling")
-SCROLL_X_LO_KEYS = ("xscrollLo", "x_scroll_lo", "scroll_x_lo", "levelLo")
-SCROLL_X_HI_KEYS = ("xscrollHi", "x_scroll_hi", "scroll_x_hi", "levelHi")
+SCROLL_X_LO_KEYS = ("xscrollLo", "x_scroll_lo", "scroll_x_lo")
+SCROLL_X_HI_KEYS = ("xscrollHi", "x_scroll_hi", "scroll_x_hi")
 SCORE_KEYS = ("score", "Score")
 COIN_KEYS = ("coins", "coin", "coin_count", "coins_collected")
 LIFE_KEYS = ("lives", "life", "lives_left")
@@ -904,10 +904,15 @@ class FullSMBStage:
             return
         if ram.size <= max(SMB_RAM_PLAYER_SCREEN_X, SMB_RAM_PLAYER_SCREEN_Y):
             return
-        screen_x = float(ram[SMB_RAM_PLAYER_SCREEN_X])
+        page_x = float(ram[SMB_RAM_PLAYER_SCREEN_X])
         screen_y = float(ram[SMB_RAM_PLAYER_SCREEN_Y])
         level_page = float(ram[SMB_RAM_PLAYER_LEVEL_PAGE]) if ram.size > SMB_RAM_PLAYER_LEVEL_PAGE else 0.0
-        level_x = level_page * SMB_SCREEN_WIDTH + screen_x
+        level_x = level_page * SMB_SCREEN_WIDTH + page_x
+        scroll_x = _raw_scroll_x(info)
+        if scroll_x is None:
+            screen_x = page_x
+        else:
+            screen_x = min(max(level_x - scroll_x, 0.0), SMB_SCREEN_WIDTH - 1.0)
         target = np.asarray(
             [
                 _normalize_feature(screen_x, SMB_SCREEN_WIDTH),
@@ -918,10 +923,12 @@ class FullSMBStage:
         info["vision_position_target"] = target
         info["vision_position_target_raw"] = {
             "source": "nes_ram",
-            "player_screen_x_address": SMB_RAM_PLAYER_SCREEN_X,
+            "player_page_x_address": SMB_RAM_PLAYER_SCREEN_X,
             "player_screen_y_address": SMB_RAM_PLAYER_SCREEN_Y,
+            "player_page_x": page_x,
             "player_screen_x": screen_x,
             "player_screen_y": screen_y,
+            "scroll_x": scroll_x,
             "player_level_page_address": SMB_RAM_PLAYER_LEVEL_PAGE,
             "player_level_page": level_page,
             "player_level_x": level_x,
