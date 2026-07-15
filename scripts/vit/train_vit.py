@@ -256,7 +256,7 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
-    best_miou = 0.0
+    best_miou = None
     for epoch in range(args.epochs):
         model.train(); running = 0.0
         for x, y in train_ld:
@@ -274,8 +274,10 @@ def main():
         print(f"Epoch {epoch+1:02d}/{args.epochs} | loss {running/len(train_ds):.4f} "
               f"| acc {m['acc']*100:5.2f}% | fg_acc {m['fg_acc']*100:5.2f}% "
               f"| mIoU {m['miou']*100:5.2f}% | support_acc {m['support_accuracy']*100:5.2f}%")
-        if m["miou"] > best_miou:
-            best_miou = m["miou"]
+        # Always checkpoint the first epoch (and skip NaN mIoU comparisons) so a
+        # checkpoint exists for the final report step below.
+        if best_miou is None or (not np.isnan(m["miou"]) and m["miou"] > best_miou):
+            best_miou = -float("inf") if np.isnan(m["miou"]) else m["miou"]
             save_training_checkpoint(model, args, epoch=epoch + 1, metrics=m)
 
     # final per-class report

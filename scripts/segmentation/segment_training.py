@@ -17,14 +17,18 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.io as sio
+import pandas as pd
 import random
 import sys
 import argparse
 import os
+import shutil
+import multiprocessing
 import time
 from pathlib import Path
 from os.path import join
 import csv
+from tqdm import tqdm
 
 import cv2
 
@@ -62,17 +66,21 @@ class Configuration:
     self.test_batch_size = 4  # Test batch size
     self.model_file_name = "MarioSegmentationModel.pth"
     
-    self.dataset_root = "/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset"
+    # Root for all generated data (sprites, dataset, models). Repo-relative by default.
+    self.dataset_root = str(Path(__file__).resolve().parent / "dataset_generator")
     self.download   = False
-    
+
     self.seed = 271828
+
+
+# Single source of truth for dataset/sprite/model paths (see Configuration.dataset_root).
+DATASET_ROOT = Configuration().dataset_root
 
 
 class MarioDataset(data.Dataset):
     def __init__(self, args, mode, transform_input=transforms.ToTensor(), transform_mask=transforms.ToTensor()):
         self.args = args
-        # self.folder = args.dataset_root
-        self.folder = "/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset"
+        self.folder = join(args.dataset_root, "dataset")
 
         #If you change how you create the dataset you may need to modify this:
         self.images_in_dataset = len(os.listdir(self.folder+"/PNG"))
@@ -110,21 +118,23 @@ class MarioDataset(data.Dataset):
     
     def __getitem__(self, index):
 
+        img_id = self.imgs[index]
+
         if self.mode == 'test':
-            img = Image.open(+self.folder+"/PNG/"+str(index)+".png").convert('RGB')
-            if self.transform is not None:
-                img = self.transform(img)
-            return str(index), img
+            img = Image.open(self.folder+"/PNG/"+str(img_id)+".png").convert('RGB')
+            if self.transform_input is not None:
+                img = self.transform_input(img)
+            return str(img_id), img
 
             #Load RGB image
-        img = Image.open(self.folder+"/PNG/"+str(index)+".png").convert('RGB')
+        img = Image.open(self.folder+"/PNG/"+str(img_id)+".png").convert('RGB')
 
         if self.mode == 'train':
 
             #Load class mask
-            mask = Image.open(self.folder+"/Labels/"+str(index)+".png")
+            mask = Image.open(self.folder+"/Labels/"+str(img_id)+".png")
         else:
-            mask = Image.open(self.folder+"/Labels/"+str(index)+".png")
+            mask = Image.open(self.folder+"/Labels/"+str(img_id)+".png")
 
             ##Transform using default transformations
         if self.mode=="train":
@@ -628,22 +638,22 @@ class SpriteLoader():
 
     def loadFloor(level=0):
         level = str(level)
-        floor =  cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_0_7.png")[...,::-1]
+        floor =  cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_0_7.png")[...,::-1]
         return floor
 
     def loadBox(level=0):
         level = str(level)
-        box = cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_0_3.png")[...,::-1]
+        box = cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_0_3.png")[...,::-1]
         return box
 
     def loadBrick(level=0):
         level = str(level)
-        box = cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_1_5.png")[...,::-1]
+        box = cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_1_5.png")[...,::-1]
         return box
 
     def loadBlock(level=0):
         level = str(level)
-        block = cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_5_3.png")[...,::-1]
+        block = cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_5_3.png")[...,::-1]
         return block
 
     def loadClouds(level=0):
@@ -651,12 +661,12 @@ class SpriteLoader():
         level = str(level)
 
         #Read clouds sprites
-        clouds = {'[cloud_tl]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_13_3.png")[...,::-1],
-                    '[cloud_bl]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_13_4.png")[...,::-1],
-                    '[cloud_tm]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_14_3.png")[...,::-1],
-                    '[cloud_bm]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_14_4.png")[...,::-1],
-                    '[cloud_tr]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_15_3.png")[...,::-1],
-                    '[cloud_br]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_15_4.png")[...,::-1]
+        clouds = {'[cloud_tl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_3.png")[...,::-1],
+                    '[cloud_bl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_4.png")[...,::-1],
+                    '[cloud_tm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_3.png")[...,::-1],
+                    '[cloud_bm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_4.png")[...,::-1],
+                    '[cloud_tr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_15_3.png")[...,::-1],
+                    '[cloud_br]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_15_4.png")[...,::-1]
                     }
         return clouds
 
@@ -665,9 +675,9 @@ class SpriteLoader():
         #Convert to str to be able to concatenate it.
         level = str(level)
         #Read bushes sprites
-        bushes = {'[bush_l]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_13_5.png")[...,::-1],
-                        '[bush_m]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_14_5.png")[...,::-1],
-                        '[bush_r]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_15_5.png")[...,::-1],
+        bushes = {'[bush_l]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_5.png")[...,::-1],
+                        '[bush_m]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_5.png")[...,::-1],
+                        '[bush_r]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_15_5.png")[...,::-1],
                         }
         return bushes
 
@@ -676,15 +686,15 @@ class SpriteLoader():
         #Convert to str to be able to concatenate it.
         level = str(level)
         #Load hill sprites
-        hill     =   {'[hill_t]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_10_3.png")[...,::-1],
-                       '[hill_ml]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_9_4.png")[...,::-1],
-                       '[hill_mm]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_10_4.png")[...,::-1],
-                       '[hill_mr]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_11_4.png")[...,::-1],
-                       '[hill_bll]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_8_5.png")[...,::-1],
-                       '[hill_bl]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_9_5.png")[...,::-1],
-                       '[hill_bm]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_10_5.png")[...,::-1],
-                       '[hill_br]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_11_5.png")[...,::-1],
-                       '[hill_brr]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_12_5.png")[...,::-1]
+        hill     =   {'[hill_t]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_10_3.png")[...,::-1],
+                       '[hill_ml]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_9_4.png")[...,::-1],
+                       '[hill_mm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_10_4.png")[...,::-1],
+                       '[hill_mr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_11_4.png")[...,::-1],
+                       '[hill_bll]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_8_5.png")[...,::-1],
+                       '[hill_bl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_9_5.png")[...,::-1],
+                       '[hill_bm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_10_5.png")[...,::-1],
+                       '[hill_br]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_11_5.png")[...,::-1],
+                       '[hill_brr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_12_5.png")[...,::-1]
                         }
 
         return hill
@@ -693,10 +703,10 @@ class SpriteLoader():
         #to str for concatenation
         level = str(level)
         #load tree sprites
-        tree = {'[tree_trunk]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_14_2.png")[...,::-1],
-                '[tree_tb]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_14_1.png")[...,::-1],
-                '[tree_tt]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_14_0.png")[...,::-1],
-                '[tree_small]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_13_1.png")[...,::-1]
+        tree = {'[tree_trunk]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_2.png")[...,::-1],
+                '[tree_tb]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_1.png")[...,::-1],
+                '[tree_tt]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_0.png")[...,::-1],
+                '[tree_small]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_1.png")[...,::-1]
                 }
         return tree
 
@@ -706,38 +716,38 @@ class SpriteLoader():
         #Convert to str to be able to concatenate it.
         level = str(level)
         #Load sprites
-        pipe = {'[pipe_tl]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_6_2.png")[...,::-1],
-                '[pipe_tr]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_7_2.png")[...,::-1],
-                '[pipe_bl]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_6_3.png")[...,::-1],
-                '[pipe_br]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite"+level+"_7_3.png")[...,::-1]
+        pipe = {'[pipe_tl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_6_2.png")[...,::-1],
+                '[pipe_tr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_7_2.png")[...,::-1],
+                '[pipe_bl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_6_3.png")[...,::-1],
+                '[pipe_br]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_7_3.png")[...,::-1]
             }
         return pipe
 
     #MARIO LOADER
     def loadMario():
-        mario = {'[mario_idle]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/MarioSprites/idle.png")[...,::-1],
-                      '[mario_walk1]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/MarioSprites/walk1.png")[...,::-1],
-                      '[mario_walk2]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/MarioSprites/walk2.png")[...,::-1],
-                      '[mario_walk3]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/MarioSprites/walk3.png")[...,::-1],
-                      '[mario_jump]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/MarioSprites/jump.png")[...,::-1]
+        mario = {'[mario_idle]':cv2.imread(DATASET_ROOT + "/MarioSprites/idle.png")[...,::-1],
+                      '[mario_walk1]':cv2.imread(DATASET_ROOT + "/MarioSprites/walk1.png")[...,::-1],
+                      '[mario_walk2]':cv2.imread(DATASET_ROOT + "/MarioSprites/walk2.png")[...,::-1],
+                      '[mario_walk3]':cv2.imread(DATASET_ROOT + "/MarioSprites/walk3.png")[...,::-1],
+                      '[mario_jump]':cv2.imread(DATASET_ROOT + "/MarioSprites/jump.png")[...,::-1]
                       }
         return mario
     
     #ENEMY LOADERS
     def loadGoombas(tileset = 0 ):
-        mushroom = {'[mush_1]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/EnemySprites/mushroom_"+str(tileset)+"_0.png")[...,::-1],
-                    '[mush_2]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/EnemySprites/mushroom_"+str(tileset)+"_1.png")[...,::-1]}
+        mushroom = {'[mush_1]':cv2.imread(DATASET_ROOT + "/EnemySprites/mushroom_"+str(tileset)+"_0.png")[...,::-1],
+                    '[mush_2]':cv2.imread(DATASET_ROOT + "/EnemySprites/mushroom_"+str(tileset)+"_1.png")[...,::-1]}
         return mushroom
     
     def loadKoopa(tileset = 0):
-        koopa = {'[koopa_1]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/EnemySprites/koopa_"+str(tileset)+"_0.png")[...,::-1],
-                 '[koopa_2]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/EnemySprites/koopa_"+str(tileset)+"_1.png")[...,::-1]}
+        koopa = {'[koopa_1]':cv2.imread(DATASET_ROOT + "/EnemySprites/koopa_"+str(tileset)+"_0.png")[...,::-1],
+                 '[koopa_2]':cv2.imread(DATASET_ROOT + "/EnemySprites/koopa_"+str(tileset)+"_1.png")[...,::-1]}
         
         return koopa
 
     def loadPiranha(tileset = 0):
-        piranha = {'[piranha_1]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/EnemySprites/piranha_"+str(tileset)+"_0.png")[...,::-1],
-                   '[piranha_2]':cv2.imread("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/EnemySprites/piranha_"+str(tileset)+"_1.png")[...,::-1]}
+        piranha = {'[piranha_1]':cv2.imread(DATASET_ROOT + "/EnemySprites/piranha_"+str(tileset)+"_0.png")[...,::-1],
+                   '[piranha_2]':cv2.imread(DATASET_ROOT + "/EnemySprites/piranha_"+str(tileset)+"_1.png")[...,::-1]}
         
         return piranha
 
@@ -787,7 +797,7 @@ class FrameGenerator():
         its segmentation
         '''
 
-    def __init__(self, sprite_dataset="/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/label_assignment/sprite_labels_correspondence.csv", cores=1):
+    def __init__(self, sprite_dataset=join(DATASET_ROOT, "label_assignment", "sprite_labels_correspondence.csv"), cores=1):
         '''Initializes the frame generator'''
         # For faster generation
         self.cores = cores
@@ -1124,11 +1134,11 @@ class FrameGenerator():
             #level = np.random.choice([0,1])
             frame, sframe, classframe = self.generate_frame(level)
             frame = cv2.cvtColor(frame.astype(np.uint8), cv2.COLOR_RGB2BGR)
-            cv2.imwrite("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/PNG/%d.png" % (i), frame)
+            cv2.imwrite(join(DATASET_ROOT, "dataset", "PNG", "%d.png" % (i)), frame)
             sframe = cv2.cvtColor(sframe.astype(np.uint8), cv2.COLOR_RGB2BGR)
-            cv2.imwrite("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Segmentation/%d.png" % (i), sframe)
+            cv2.imwrite(join(DATASET_ROOT, "dataset", "Segmentation", "%d.png" % (i)), sframe)
             # labels = framegen.GenerateLabelImageFromSegmentation(sframe) #Esto habra que cambiarlo para que segun genere la segmentacion lo haga
-            cv2.imwrite("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Labels/%s.png" % (i), classframe)
+            cv2.imwrite(join(DATASET_ROOT, "dataset", "Labels", "%s.png" % (i)), classframe)
         # image_list.write(str(filename))
 
     def GenerateDataset(self, samples):
@@ -1140,27 +1150,19 @@ class FrameGenerator():
         seeds = np.random.randint(100, size=threads)
 
         #creates the folder (removes if previously exists)
-        dir = '/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset'
+        dir = join(DATASET_ROOT, 'dataset')
         if os.path.exists(dir):
-            # shutil.rmtree(dir)
-            os.system("sudo rm -rf /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset")
-        # os.makedirs(dir)
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/")
-        
+            shutil.rmtree(dir)
+
         #and subfolders
-        # os.makedirs('/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/PNG/')
-        # os.makedirs('/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Segmentation/')
-        # os.makedirs('/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Labels/')
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/PNG/")
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Segmentation/")
-        os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/Labels/")
-        
-        os.system("sudo chown -R 1000:1000 /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/dataset/")
-        
+        os.makedirs(join(dir, 'PNG'))
+        os.makedirs(join(dir, 'Segmentation'))
+        os.makedirs(join(dir, 'Labels'))
+
         # If only uses one core, execute the function once
         if self.cores == 1:
-            level = np.random.choice([0, 1])
-            self.GenerateSamples(0, samples, level, w_tqdm=True)
+            seed = int(np.random.randint(100))
+            self.GenerateSamples(0, samples, seed, w_tqdm=True)
         else:
             # otherwise, distribute amount of samples between threads.
             step = samples//self.cores
@@ -1171,8 +1173,8 @@ class FrameGenerator():
                 ranges[:-1], ranges[1:], seeds))
 
         # The above fails so trying this for now:
-        # level = np.random.choice([0, 1])
-        # self.GenerateSamples(0, samples, level, w_tqdm=True)
+        # seed = int(np.random.randint(100))
+        # self.GenerateSamples(0, samples, seed, w_tqdm=True)
 
         end = time.time()
 
@@ -1264,7 +1266,7 @@ class TrainingUtils():
 
         hist = np.zeros((args.num_classes, args.num_classes))
         for lp, lt in zip(predictions_all, gts_all):
-            hist += _fast_hist(lp.flatten(), lt.flatten(), args.num_classes)
+            hist += self._fast_hist(lp.flatten(), lt.flatten(), args.num_classes)
 
         iou = np.diag(hist) / (hist.sum(axis=1) + hist.sum(axis=0) - np.diag(hist))
 
@@ -1286,6 +1288,12 @@ class TrainingUtils():
     This script is used to extract the single sprites included in the tileset.png in the same folder.
     '''
     def ExtractTiles(self, path):
+        # Prepare the output folder (removes if previously exists)
+        sprites_dir = join(DATASET_ROOT, 'Sprites')
+        if os.path.exists(sprites_dir):
+            shutil.rmtree(sprites_dir)
+        os.makedirs(sprites_dir)
+
         # Load the tileset
         tileset = cv2.imread(path)[..., ::-1]
 
@@ -1332,8 +1340,8 @@ class TrainingUtils():
                                         x_offset:x_offset+grid_size[0], :]
 
                     sprite_write = cv2.cvtColor(sprite, cv2.COLOR_RGB2BGR)
-                    cv2.imwrite("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites/Sprite%d_%d_%d.png" %
-                                (level, x_i, y_i), sprite_write)
+                    cv2.imwrite(join(sprites_dir, "Sprite%d_%d_%d.png" %
+                                (level, x_i, y_i)), sprite_write)
 
 
 
@@ -1372,7 +1380,7 @@ class TrainingUtils():
         out = net(input_image)['out'][0]
         
         segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
-        segm_rgb = decode_segmap(segm)
+        segm_rgb = self.decode_segmap(segm)
         plt.imshow(segm_rgb)
         plt.axis('off')
         #plt.savefig('1_1.png', format='png',dpi=300,bbox_inches = "tight")
@@ -1387,7 +1395,7 @@ class TrainingUtils():
         out = net(input_image)['out'][0]
         
         segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
-        segm_rgb = decode_segmap(segm)
+        segm_rgb = self.decode_segmap(segm)
         plt.imshow(segm_rgb)
         plt.axis('off'); plt.show()
 
@@ -1395,7 +1403,7 @@ class TrainingUtils():
         out = net2(input_image)['out'][0]
         
         segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
-        segm_rgb = decode_segmap(segm)
+        segm_rgb = self.decode_segmap(segm)
         plt.imshow(segm_rgb); plt.axis('off'); plt.show()
 
 
@@ -1407,6 +1415,8 @@ class TrainingUtils():
 
 ## Create arguments object
 args = Configuration()
+
+training_utils = TrainingUtils()
 
 device = select_device("auto")
 
@@ -1459,18 +1469,11 @@ print("done")
 
 #########################################################################
 
-path_tileset = "/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/tilesets/tileset.png"
+path_tileset = join(DATASET_ROOT, "tilesets", "tileset.png")
 
-sprites_dir = '/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites'
-if os.path.exists(sprites_dir):
-    os.system("sudo rm -rf /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites")
-# os.makedirs(sprites_dir)
-os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites")
-os.system("sudo chown -R 1000:1000 /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/Sprites")
-
-# Cut sprites from tileset
+# Cut sprites from tileset (ExtractTiles resets the Sprites folder itself)
 print(path_tileset)
-TrainingUtils.ExtractTiles(path_tileset)
+training_utils.ExtractTiles(path_tileset)
 
 
 ## Step 6: Frame generator
@@ -1520,20 +1523,19 @@ new_labels = []
 
 cont = 0
 
-os.system("sudo mkdir /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/")
-os.system("sudo chown -R 1000:1000 /Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/")
+os.makedirs(join(DATASET_ROOT, "models"), exist_ok=True)
 
 for epoch in range(1, args.epoch + 1):
     st = time.time()
-    
+
     print("DeepLabV3_Resnet50 training, epoch " + str(epoch))
-    loss_per_epoch = TrainingUtils.train_epoch(args,model,device,train_loader,optimizer,scheduler)
+    loss_per_epoch = training_utils.train_epoch(args,model,device,train_loader,optimizer,epoch)
 
     loss_train_epoch += [loss_per_epoch]
 
     scheduler.step()
 
-    loss_per_epoch_test, acc_val_per_epoch_i = TrainingUtils.testing(args,model,device,test_loader)
+    loss_per_epoch_test, acc_val_per_epoch_i = training_utils.testing(args,model,device,test_loader)
 
     loss_test_epoch += loss_per_epoch_test
     acc_test_per_epoch += [acc_val_per_epoch_i]
@@ -1546,7 +1548,7 @@ for epoch in range(1, args.epoch + 1):
             best_acc_val = acc_val_per_epoch_i
 
     if epoch==args.epoch:
-        torch.save(model.state_dict(), "/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/"+args.model_file_name)
+        torch.save(model.state_dict(), join(DATASET_ROOT, "models", args.model_file_name))
 
     cont += 1
 
@@ -1586,8 +1588,8 @@ model = models.segmentation.deeplabv3_resnet50(
 # Added a Sigmoid activation after the last convolution layer
 model.classifier = DeepLabHead(2048, 6)
 
-# model.load_state_dict(torch.load("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/resnet_50.pth"))
-model.load_state_dict(torch.load("/Semantic-Segmentation-Boost-Reinforcement-Learning/dataset_generator/models/MarioSegmentationModel.pth"))
+# model.load_state_dict(torch.load(join(DATASET_ROOT, "models", "resnet_50.pth")))
+model.load_state_dict(torch.load(join(DATASET_ROOT, "models", "MarioSegmentationModel.pth")))
 model = model.to(device)
 
 
@@ -1600,14 +1602,14 @@ model = model.to(device)
 
 model.eval() #Or batch normalization gives error
 
-frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/1_1/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/1_2/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/6_2/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/4_1/4.png"
-# frame = "/Semantic-Segmentation-Boost-Reinforcement-Learning/Semantic segmentation/real_frames/6_1/4.png"
+frame = join(DATASET_ROOT, "real_frames", "1_1", "4.png")
+# frame = join(DATASET_ROOT, "real_frames", "1_2", "4.png")
+# frame = join(DATASET_ROOT, "real_frames", "6_2", "4.png")
+# frame = join(DATASET_ROOT, "real_frames", "4_1", "4.png")
+# frame = join(DATASET_ROOT, "real_frames", "6_1", "4.png")
 
 print(frame)
-TrainingUtils.segment(model,frame)
+training_utils.segment(model,frame)
 
 
 

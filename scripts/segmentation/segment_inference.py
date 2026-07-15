@@ -31,17 +31,22 @@ import csv
 from torchvision.models.segmentation.deeplabv3 import DeepLabHead,DeepLabV3
 from torchvision import models
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[1]
 if str(PROJECT_ROOT) not in sys.path:
   sys.path.insert(0, str(PROJECT_ROOT))
 
 from retroagi.core import select_device
 
+# Defaults resolved relative to this file (not the CWD).
+DEFAULT_MODEL_PATH = str(SCRIPT_DIR / "MarioSegmentationModel.pth")
+DEFAULT_FRAME_PATH = str(PROJECT_ROOT / "data" / "vit" / "preview_0.png")
+
 
 class SegmenInf:
 
 
-  def __init__(self, model_path="/models/segmentation/MarioSegmentationModel.pth", device="auto"):
+  def __init__(self, model_path=DEFAULT_MODEL_PATH, device="auto"):
     self.device = select_device(device)
     self.model = models.segmentation.deeplabv3_resnet50(pretrained=True, progress=True)
     self.model.classifier = DeepLabHead(2048, 6)
@@ -113,15 +118,15 @@ class SegmenInf:
 
     input_image = transform(img).unsqueeze(0).to(dev)
     out = net2(input_image)['out'][0]
-    
-    segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
-    segm_rgb = self.decode_segmap(segm)
-    # plt.imshow(segm_rgb); plt.axis('off'); plt.show()
 
-    self.model.eval() #Or batch normalization gives error
+    segm2 = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
+    segm_rgb2 = self.decode_segmap(segm2)
+    # plt.imshow(segm_rgb2); plt.axis('off'); plt.show()
+
+    return segm_rgb, segm_rgb2
 
 
-  def run(self, frame="/examples/example_frames/1.png"):
+  def run(self, frame=DEFAULT_FRAME_PATH):
 
     # print(frame)
 

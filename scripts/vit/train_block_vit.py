@@ -425,12 +425,20 @@ def train(
         config.evaluation.seed,
     )
 
+    # Namespace train-collection seeds strictly above the validation scenario
+    # seed range [evaluation.seed, evaluation.seed + evaluation.samples) so
+    # train/val scenarios can never collide, for any epoch count.
+    train_seed_base = max(
+        config.environment.seed + 2_000_000,
+        config.evaluation.seed + config.evaluation.samples + 1,
+    )
+
     best_iou = -1.0
     final_metrics = {}
     for epoch in range(start_epoch, config.training.epochs):
         train_frames = collect_procedural_frames(
             config.training.samples_per_epoch,
-            config.environment.seed + epoch * 10_000,
+            train_seed_base + epoch * 10_000,
             config.environment.rollout_steps,
             show_progress=True,
         )
