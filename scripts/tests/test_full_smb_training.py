@@ -1389,8 +1389,17 @@ class TestFullSMBTraining(unittest.TestCase):
             FullSMBTrainingConfig(world_model_slot_weights={"unknown": 1.0})
         with self.assertRaisesRegex(ValueError, "non-negative"):
             FullSMBTrainingConfig(world_model_slot_weights={"position": -1.0})
+        zero_slot_config = FullSMBTrainingConfig(world_model_slot_weights={"position": 0.0})
+        self.assertEqual(zero_slot_config.world_model_slot_weights, {"position": 0.0})
         with self.assertRaisesRegex(ValueError, "positive"):
-            FullSMBTrainingConfig(world_model_slot_weights={"position": 0.0})
+            FullSMBTrainingConfig(
+                world_model_slot_weights={
+                    slot_name: 0.0
+                    for slot_name in (
+                        full_smb_train_module._FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
+                    )
+                }
+            )
         with self.assertRaisesRegex(ValueError, "max_abs_loss"):
             FullSMBTrainingConfig(max_abs_loss=0)
         with self.assertRaisesRegex(ValueError, "max_abs_scaled_reward"):

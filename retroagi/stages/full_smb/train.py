@@ -306,8 +306,14 @@ def _normalize_full_smb_world_model_slot_weights(
         if weight < 0.0 or not math.isfinite(weight):
             raise ValueError("world_model_slot_weights must contain finite non-negative values")
         normalized[slot_name] = weight
-    if normalized and all(weight == 0.0 for weight in normalized.values()):
-        raise ValueError("at least one world_model_slot_weight must be positive")
+    if (
+        set(normalized) == set(_FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES)
+        and all(weight == 0.0 for weight in normalized.values())
+    ):
+        raise ValueError(
+            "at least one world_model_slot_weight must be positive when every "
+            "C-stream slot is specified; unspecified slots default to 1.0"
+        )
     return normalized
 
 
@@ -817,7 +823,11 @@ def train_full_smb_policy(
     )
     if config.resume_path is not None and checkpoint is not None:
         training_source["restored_rng_state"] = _restore_resume_rng_state(checkpoint)
-    history: dict[str, list[float]] = {"episode_return": [], "policy_loss": []}
+    history: dict[str, list[float]] = {
+        "episode_return": [],
+        "policy_loss": [],
+        "total_loss": [],
+    }
     rollouts: list[FullSMBRolloutStorage] = []
     evaluations: list[dict[str, Any]] = []
     _initialize_full_smb_log(config)
@@ -869,8 +879,11 @@ def train_full_smb_policy(
                             reward_scale=config.reward_scale,
                             entropy_weight=config.entropy_weight,
                             policy_loss_weight=config.policy_loss_weight,
+                            representation_weight=config.representation_weight,
                             world_model_weight=config.world_model_weight,
                             world_model_slot_weights=config.world_model_slot_weights,
+                            reward_loss_weight=config.reward_loss_weight,
+                            value_loss_weight=config.value_loss_weight,
                             action_aux_weight=config.action_aux_weight,
                             critic_loss_weight=config.critic_loss_weight,
                             gradient_clip_norm=config.gradient_clip_norm,
@@ -895,7 +908,8 @@ def train_full_smb_policy(
                     rollouts.append(episode.rollout)
                     global_step += int(metrics["steps"])
                     history["episode_return"].append(float(metrics["return"]))
-                    history["policy_loss"].append(float(metrics["loss"]))
+                    history["policy_loss"].append(float(metrics["loss_policy"]))
+                    history["total_loss"].append(float(metrics["loss"]))
                     for metric_name, metric_value in metrics.items():
                         if metric_name in {"return", "loss", "steps"}:
                             continue
@@ -985,8 +999,12 @@ def train_full_smb_policy(
             metrics={
                 "mean_train_return": _mean(history["episode_return"]),
                 "mean_policy_loss": _mean(history["policy_loss"]),
+                "mean_total_loss": _mean(history["total_loss"]),
                 "mean_loss_dynamics": _mean(history.get("loss_dynamics", [])),
                 "mean_loss_world_model": _mean(history.get("loss_world_model", [])),
+                "mean_loss_representation": _mean(history.get("loss_representation", [])),
+                "mean_loss_reward": _mean(history.get("loss_reward", [])),
+                "mean_loss_value": _mean(history.get("loss_value", [])),
                 "mean_loss_critic": _mean(history.get("loss_critic", [])),
                 **{
                     f"mean_loss_dynamics_{slot_name}": _mean(
@@ -1271,6 +1289,9 @@ def evaluate_full_smb_policy(
             observation = stage.reset(seed=episode_seed)
             primitive_executor = SMBParameterizedPrimitiveExecutor()
             episode_return = 0.0
+            terminated = False
+            truncated = False
+            world_model_state: WorldModelState | None = None
             fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
                 stage,
                 stage.last_info,
@@ -1289,6 +1310,7 @@ def evaluate_full_smb_policy(
                         model,
                         batch,
                         device=resolved_device,
+                        world_model_state=world_model_state,
                     )
                 )
                 logits = forward.logits
@@ -1299,6 +1321,17 @@ def evaluate_full_smb_policy(
                     batch=batch,
                 ).action
                 observation, reward, terminated, truncated, info = stage.step(action)
+                boundary = _full_smb_rollout_boundary(
+                    terminated=terminated,
+                    truncated=truncated,
+                    info=info,
+                )
+                if boundary.reset_recurrent_state:
+                    world_model_state = None
+                elif forward.next_world_model_state is not None:
+                    world_model_state = forward.next_world_model_state.detach()
+                else:
+                    world_model_state = None
                 _update_full_smb_fixed_task_episode_metrics(
                     fixed_task_metrics,
                     stage,
@@ -1443,6 +1476,7 @@ def play_full_smb_policy(
             semantic_mask=play_config.semantic_mask,
         )
         episode_return = 0.0
+        episode_steps = 0
         episode_recording = _start_full_smb_episode_recording(
             episode_index=episode_index,
             seed=episode_seed,
@@ -1479,6 +1513,7 @@ def play_full_smb_policy(
                 resets += 1
                 world_model_state = None
                 episode_return = 0.0
+                episode_steps = 0
                 episode_recording = _start_full_smb_episode_recording(
                     episode_index=episode_index,
                     seed=episode_seed,
@@ -1558,6 +1593,7 @@ def play_full_smb_policy(
                     )
                 actions.append(action)
                 action_names.append(SMB_ACTIONS[action].name)
+                episode_steps += 1
                 total_return += float(reward)
                 episode_return += float(reward)
                 _render_full_smb_stage(
@@ -1630,6 +1666,7 @@ def play_full_smb_policy(
                     primitive_executor.reset()
                     resets += 1
                     episode_return = 0.0
+                    episode_steps = 0
                     episode_recording = _start_full_smb_episode_recording(
                         episode_index=episode_index,
                         seed=episode_seed,
@@ -1658,8 +1695,10 @@ def play_full_smb_policy(
                 _sleep_full_smb_play_frame(play_config.fps)
             if play_config.action_repeat > 1 and not (terminated or truncated):
                 world_model_state = None
+            if not episode_open:
+                break
         if episode_open:
-            if episode_return or not episode_returns:
+            if episode_steps or not episode_returns:
                 episode_returns.append(float(episode_return))
             if recording_targets["enabled"]:
                 _finish_full_smb_play_recording_episode(
@@ -2557,8 +2596,11 @@ def _train_episode(
     reward_scale: float,
     entropy_weight: float,
     policy_loss_weight: float,
+    representation_weight: float,
     world_model_weight: float,
     world_model_slot_weights: Mapping[str, float],
+    reward_loss_weight: float,
+    value_loss_weight: float,
     action_aux_weight: float,
     critic_loss_weight: float,
     gradient_clip_norm: float,
@@ -2585,6 +2627,9 @@ def _train_episode(
         slot_name: [] for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
     }
     world_model_losses: list[float] = []
+    representation_losses: list[float] = []
+    reward_losses: list[float] = []
+    value_losses: list[float] = []
     action_aux_losses: list[float] = []
     critic_losses: list[float] = []
     steps: list[FullSMBRolloutStep] = []
@@ -2647,8 +2692,12 @@ def _train_episode(
             info=info,
         )
         loss_dynamics = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
+        loss_representation = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
         slot_losses: dict[str, torch.Tensor] = {}
-        if world_model_weight > 0.0 and forward.next_state_pred is not None:
+        next_state_target: torch.Tensor | None = None
+        if (
+            world_model_weight > 0.0 or representation_weight > 0.0
+        ) and forward.next_state_pred is not None:
             with torch.no_grad():
                 next_batch = stage.encode_observation(observation, info)
                 next_state_target = next_batch.src_c.to(device).detach()
@@ -2659,6 +2708,7 @@ def _train_episode(
                     f"target={tuple(next_state_target.shape)}"
                 )
             _finite_tensor_or_raise("next_state_target", next_state_target)
+        if world_model_weight > 0.0 and next_state_target is not None:
             slot_losses = _full_smb_c_stream_dynamics_slot_losses(
                 forward.next_state_pred,
                 next_state_target,
@@ -2671,6 +2721,16 @@ def _train_episode(
                 world_model_slot_weights=world_model_slot_weights,
             )
             _finite_tensor_or_raise("loss_dynamics", loss_dynamics)
+        if (
+            representation_weight > 0.0
+            and next_state_target is not None
+            and hasattr(model, "transition_representation")
+        ):
+            predicted_representation = model.transition_representation(forward.next_state_pred)
+            with torch.no_grad():
+                target_representation = model.transition_representation(next_state_target)
+            loss_representation = F.mse_loss(predicted_representation, target_representation)
+            _finite_tensor_or_raise("loss_representation", loss_representation)
         loss_world_model = loss_dynamics * float(world_model_weight)
         _finite_tensor_or_raise("loss_world_model", loss_world_model)
         action = int(action_tensor.item())
@@ -2705,6 +2765,22 @@ def _train_episode(
         entropy = distribution.entropy().mean()
         _finite_tensor_or_raise("action_entropy", entropy)
         policy_loss = -(log_prob.mean() * scaled_reward.detach())
+        loss_reward = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
+        if (
+            reward_loss_weight > 0.0
+            and forward.next_state_pred is not None
+            and hasattr(model, "predict_reward")
+        ):
+            reward_pred = model.predict_reward(forward.next_state_pred)
+            reward_target = torch.full_like(reward_pred, float(scaled_reward_value))
+            loss_reward = F.mse_loss(reward_pred, reward_target)
+            _finite_tensor_or_raise("loss_reward", loss_reward)
+        loss_value = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
+        if value_loss_weight > 0.0 and hasattr(model, "predict_value"):
+            value_pred = model.predict_value(batch.src_c.to(device).detach())
+            value_target = torch.full_like(value_pred, float(scaled_reward_value))
+            loss_value = F.mse_loss(value_pred, value_target)
+            _finite_tensor_or_raise("loss_value", loss_value)
         loss_action_aux = _smb_primitive_auxiliary_loss(
             forward.motor_primitives,
             action_tensor,
@@ -2726,7 +2802,10 @@ def _train_episode(
         weighted_critic_loss = float(critic_loss_weight) * loss_critic
         loss = (
             policy_loss_weight * policy_loss
+            + float(representation_weight) * loss_representation
             + loss_world_model
+            + float(reward_loss_weight) * loss_reward
+            + float(value_loss_weight) * loss_value
             + float(action_aux_weight) * loss_action_aux
             + weighted_critic_loss
             - entropy_weight * entropy
@@ -2756,6 +2835,9 @@ def _train_episode(
                 slot_value = float(slot_loss.detach().cpu().item())
             dynamics_slot_losses[slot_name].append(slot_value)
         world_model_losses.append(float(loss_world_model.detach().cpu().item()))
+        representation_losses.append(float(loss_representation.detach().cpu().item()))
+        reward_losses.append(float(loss_reward.detach().cpu().item()))
+        value_losses.append(float(loss_value.detach().cpu().item()))
         action_aux_losses.append(float(loss_action_aux.detach().cpu().item()))
         critic_losses.append(float(loss_critic.detach().cpu().item()))
         entropies.append(float(entropy.detach().cpu().item()))
@@ -2788,6 +2870,9 @@ def _train_episode(
             for slot_name, values in dynamics_slot_losses.items()
         },
         "loss_world_model": _mean(world_model_losses),
+        "loss_representation": _mean(representation_losses),
+        "loss_reward": _mean(reward_losses),
+        "loss_value": _mean(value_losses),
         "loss_action_aux": _mean(action_aux_losses),
         "loss_critic": _mean(critic_losses),
         "mean_entropy": _mean(entropies),
