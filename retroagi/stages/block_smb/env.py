@@ -311,13 +311,16 @@ class MarioScenarioEnv:
             if not plat["moving"]:
                 continue
             old_px = plat["rect"].x
-            plat["rect"].x += int(plat["move_speed"] * plat["move_dir"])
-            if plat["rect"].x <= plat["move_min"]:
-                plat["rect"].x = plat["move_min"]
+            # Track a float position so fractional speeds accumulate instead of
+            # truncating to zero motion every frame.
+            plat["move_x"] += plat["move_speed"] * plat["move_dir"]
+            if plat["move_x"] <= plat["move_min"]:
+                plat["move_x"] = float(plat["move_min"])
                 plat["move_dir"] = 1
-            elif plat["rect"].x >= plat["move_max"]:
-                plat["rect"].x = plat["move_max"]
+            elif plat["move_x"] >= plat["move_max"]:
+                plat["move_x"] = float(plat["move_max"])
                 plat["move_dir"] = -1
+            plat["rect"].x = int(round(plat["move_x"]))
             plat["delta_x"] = plat["rect"].x - old_px
 
         # ── 6. Resolve X collisions ───────────────────────────────────────────
@@ -399,6 +402,7 @@ class MarioScenarioEnv:
             self.mario["x"] = self.camera_x
         if self.mario["x"] > self.world_width - self.mario["w"]:
             self.mario["x"] = self.world_width - self.mario["w"]
+        mario_rect.x = self.mario["x"]
 
         # ── 12. Rightward-progress reward ─────────────────────────────────────
         if self.mario["x"] > self._max_x_reached:
@@ -787,6 +791,7 @@ class MarioScenarioEnv:
             "move_dir": 1,
             "delta_x": 0,
         }
+        plat["move_x"] = float(plat["rect"].x)
         return plat
 
     @staticmethod

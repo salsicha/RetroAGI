@@ -311,8 +311,13 @@ def sample_block_smb_monte_carlo_scenario(
     family_weights: Optional[Mapping[str, float]] = None,
     validate_reachability: bool = True,
     max_rejections: int = 32,
+    rejection_counter: Optional[Counter[str]] = None,
 ) -> BlockSMBScenarioSample:
-    """Sample one replayable scenario from the versioned distribution."""
+    """Sample one replayable scenario from the versioned distribution.
+
+    When ``rejection_counter`` is provided, every rejected attempt (including
+    attempts preceding an eventual success) is tallied into it by reason.
+    """
 
     if split not in BLOCK_SMB_MC_SPLITS:
         raise ValueError(f"split must be one of {BLOCK_SMB_MC_SPLITS}")
@@ -324,6 +329,7 @@ def sample_block_smb_monte_carlo_scenario(
         raise ValueError("max_rejections must be non-negative")
     specs = block_smb_monte_carlo_family_specs(distribution_id)
     rejected: Counter[str] = Counter()
+    rejected_fingerprints: set[str] = set()
     for attempt in range(max_rejections + 1):
         sample_seed = stable_block_smb_monte_carlo_seed(
             distribution_id,
@@ -342,6 +348,12 @@ def sample_block_smb_monte_carlo_scenario(
             split=split,
             difficulty=difficulty,
         )
+        fingerprint = repr((selected_family, scenario, actions))
+        if fingerprint in rejected_fingerprints:
+            # Fail fast: a retry regenerated an already-rejected scenario, so
+            # further identical attempts can never rescue this sample.
+            rejected["duplicate_regeneration"] += 1
+            break
         constraints = specs[selected_family].constraints
         scenario_id = _scenario_id(
             distribution_id,
@@ -396,8 +408,13 @@ def sample_block_smb_monte_carlo_scenario(
             ),
         )
         if bool(reachability.get("reachable", False)):
+            if rejection_counter is not None:
+                rejection_counter.update(rejected)
             return sample
         rejected[str(reachability.get("rejection_reason", "unreachable"))] += 1
+        rejected_fingerprints.add(fingerprint)
+    if rejection_counter is not None:
+        rejection_counter.update(rejected)
     reasons = ", ".join(f"{key}={value}" for key, value in sorted(rejected.items()))
     raise ValueError(
         "failed to sample a reachable Block SMB Monte Carlo scenario "
@@ -422,23 +439,17 @@ def sample_block_smb_monte_carlo_split(
     samples: list[BlockSMBScenarioSample] = []
     rejected_counts: Counter[str] = Counter()
     for sample_index in range(sample_count):
-        before = len(samples)
-        try:
-            sample = sample_block_smb_monte_carlo_scenario(
-                distribution_id=distribution_id,
-                split=split,
-                seed=seed,
-                sample_index=sample_index,
-                family_weights=family_weights,
-                validate_reachability=validate_reachability,
-                max_rejections=max_rejections,
-            )
-        except ValueError as exc:
-            rejected_counts[str(exc)] += 1
-            raise
+        sample = sample_block_smb_monte_carlo_scenario(
+            distribution_id=distribution_id,
+            split=split,
+            seed=seed,
+            sample_index=sample_index,
+            family_weights=family_weights,
+            validate_reachability=validate_reachability,
+            max_rejections=max_rejections,
+            rejection_counter=rejected_counts,
+        )
         samples.append(sample)
-        if len(samples) == before:
-            rejected_counts["unknown"] += 1
     return BlockSMBMonteCarloSampleSet(
         schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
         distribution_id=distribution_id,
@@ -480,20 +491,17 @@ def sample_block_smb_monte_carlo_parameter_sweep(
     for family in selected_families:
         for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
             for repeat in range(int(repeats_per_difficulty)):
-                try:
-                    candidate = sample_block_smb_monte_carlo_scenario(
-                        distribution_id=distribution_id,
-                        split=split,
-                        seed=seed,
-                        sample_index=sample_index,
-                        family=family,
-                        difficulty=difficulty,
-                        validate_reachability=validate_reachability,
-                        max_rejections=max_rejections,
-                    )
-                except ValueError as exc:
-                    rejected_counts[str(exc)] += 1
-                    raise
+                candidate = sample_block_smb_monte_carlo_scenario(
+                    distribution_id=distribution_id,
+                    split=split,
+                    seed=seed,
+                    sample_index=sample_index,
+                    family=family,
+                    difficulty=difficulty,
+                    validate_reachability=validate_reachability,
+                    max_rejections=max_rejections,
+                    rejection_counter=rejected_counts,
+                )
                 sample = _with_sweep_metadata(candidate, repeat=repeat)
                 samples.append(sample)
                 sample_index += 1
@@ -532,7 +540,7 @@ def validate_block_smb_monte_carlo_oracle(
         if not reachable and completion_steps is None:
             completion_steps = max_steps
         max_progress = float(last_info.get("max_x_reached", env._max_x_reached))
-        reason = None if reachable else _oracle_rejection_reason(env, last_info)
+        reason = None if reachable else _oracle_rejection_reason(env, last_info, max_steps)
         return {
             "reachable": bool(reachable),
             "completion_steps": completion_steps,
@@ -676,7 +684,8 @@ def block_smb_transfer_gate_metrics_from_evaluation(
         fixed_pass_rate >= 1.0
     )
     monte_carlo = evaluation.get("monte_carlo_validation", {})
-    mc_gate_met = True
+    # Fail closed: without Monte Carlo validation evidence the gate is not met.
+    mc_gate_met = False
     mc_pass_rate = None
     if isinstance(monte_carlo, Mapping) and monte_carlo:
         gates = monte_carlo.get("gates", {})
@@ -800,13 +809,18 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
     return bool(mario_rect.colliderect(env.goal))
 
 
-def _oracle_rejection_reason(env: MarioScenarioEnv, info: Mapping[str, Any]) -> str:
+def _oracle_rejection_reason(
+    env: MarioScenarioEnv,
+    info: Mapping[str, Any],
+    max_steps: int,
+) -> str:
     if env.mario["y"] > env.height:
         return "fall_death"
     terms = info.get("reward_terms", {}) if isinstance(info, Mapping) else {}
     if isinstance(terms, Mapping) and float(terms.get("enemy_hit", 0.0)) < 0:
         return "enemy_hit"
-    if env.steps >= env.max_steps:
+    # Compare against the oracle step budget, not the env's much larger cap.
+    if env.steps >= max_steps:
         return "timeout"
     return "goal_not_reached"
 
@@ -887,13 +901,14 @@ def _flat_run(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict
 
 def _single_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     first_width = 100
-    gap_width = {"easy": 44, "medium": 48, "hard": 50}[difficulty]
+    gap_width = {"easy": 44, "medium": 48, "hard": 50}[difficulty] + rng.randint(-2, 1)
+    coin_x = rng.randint(112, 128)
     landing_x = first_width + gap_width
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
         "platforms": [[0, 220, first_width, 20], [landing_x, 220, 256 - landing_x, 20]],
-        "coins": [[120, 160, 10, 10]],
+        "coins": [[coin_x, 160, 10, 10]],
         "goal": [220, 200, 16, 20],
     }
     actions = _pad([1] * 10 + [2] * 17 + [1])
@@ -902,6 +917,9 @@ def _single_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], di
 
 def _stair_climb(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     step_height = {"easy": 28, "medium": 30, "hard": 30}[difficulty]
+    coin_a_x = rng.randint(70, 82)
+    coin_b_x = rng.randint(110, 122)
+    goal_x = rng.randint(216, 228)
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
@@ -911,14 +929,21 @@ def _stair_climb(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], d
             [100, 160, 40, 80],
             [140, 130, 116, 110],
         ],
-        "coins": [[75, 170, 10, 10], [115, 140, 10, 10]],
-        "goal": [220, 110, 16, 20],
+        "coins": [[coin_a_x, 170, 10, 10], [coin_b_x, 140, 10, 10]],
+        "goal": [goal_x, 110, 16, 20],
     }
     actions = _pad([2] * 8 + [1] * 2 + [2] * 6 + [1])
-    return scenario, {"step_count": 3, "step_height": step_height, "difficulty_bin": difficulty}, actions
+    return (
+        scenario,
+        {"step_count": 3, "step_height": step_height, "goal_x": goal_x, "difficulty_bin": difficulty},
+        actions,
+    )
 
 
 def _platform_chain(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    coin_a_x = rng.randint(78, 96)
+    coin_b_x = rng.randint(142, 168)
+    goal_x = rng.randint(224, 234)
     scenario = {
         "world_width": 256,
         "mario": [20, 100],
@@ -928,15 +953,16 @@ def _platform_chain(rng: random.Random, difficulty: str) -> tuple[dict[str, Any]
             [140, 120, 40, 10],
             [200, 220, 56, 20],
         ],
-        "coins": [[85, 140, 10, 10], [155, 100, 10, 10]],
-        "goal": [230, 200, 16, 20],
+        "coins": [[coin_a_x, 140, 10, 10], [coin_b_x, 100, 10, 10]],
+        "goal": [goal_x, 200, 16, 20],
     }
     actions = _pad([1] * 8 + [2] * 16 + [1])
-    return scenario, {"platform_count": 4, "difficulty_bin": difficulty}, actions
+    return scenario, {"platform_count": 4, "goal_x": goal_x, "difficulty_bin": difficulty}, actions
 
 
 def _moving_bridge(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    speed = {"easy": 0.5, "medium": 0.7, "hard": 0.9}[difficulty]
+    speed_range = {"easy": (0.45, 0.55), "medium": (0.65, 0.75), "hard": (0.85, 0.92)}[difficulty]
+    speed = round(rng.uniform(*speed_range), 3)
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
@@ -953,13 +979,14 @@ def _moving_bridge(rng: random.Random, difficulty: str) -> tuple[dict[str, Any],
 
 
 def _enemy_hop(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    enemy_x = {"easy": 104, "medium": 106, "hard": 108}[difficulty]
+    enemy_x = {"easy": 104, "medium": 106, "hard": 108}[difficulty] + rng.randint(-2, 2)
+    coin_x = rng.randint(140, 152)
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
         "platforms": [[0, 220, 256, 20]],
         "enemies": [[enemy_x, 206, enemy_x, enemy_x, 0]],
-        "coins": [[145, 190, 10, 10]],
+        "coins": [[coin_x, 190, 10, 10]],
         "goal": [230, 200, 16, 20],
     }
     actions = _pad([1] * 20 + [2] * 18 + [1])
@@ -967,7 +994,9 @@ def _enemy_hop(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dic
 
 
 def _enemy_patrol(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    speed = {"easy": 0.5, "medium": 0.6, "hard": 0.7}[difficulty]
+    speed = round(
+        {"easy": 0.5, "medium": 0.6, "hard": 0.7}[difficulty] + rng.uniform(-0.05, 0.05), 3
+    )
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
@@ -984,14 +1013,15 @@ def _enemy_patrol(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], 
 
 
 def _enemy_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    gap_width = {"easy": 46, "medium": 48, "hard": 50}[difficulty]
+    gap_width = {"easy": 46, "medium": 48, "hard": 50}[difficulty] + rng.randint(-2, 1)
+    enemy_speed = round(0.4 + rng.uniform(-0.05, 0.05), 3)
     first_width = 100
     landing_x = first_width + gap_width
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
         "platforms": [[0, 220, first_width, 20], [landing_x, 220, 256 - landing_x, 20]],
-        "enemies": [[178, 206, 168, 206, 0.4]],
+        "enemies": [[178, 206, 168, 206, enemy_speed]],
         "coins": [[120, 160, 10, 10], [205, 185, 10, 10]],
         "goal": [230, 200, 16, 20],
     }
@@ -1000,13 +1030,14 @@ def _enemy_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dic
 
 
 def _enemy_stomp(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    enemy_x = {"easy": 108, "medium": 110, "hard": 112}[difficulty]
+    enemy_x = {"easy": 108, "medium": 110, "hard": 112}[difficulty] + rng.randint(-1, 1)
+    coin_x = rng.randint(146, 156)
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
         "platforms": [[0, 220, 256, 20]],
         "enemies": [[enemy_x, 206, enemy_x, enemy_x, 0]],
-        "coins": [[150, 185, 10, 10]],
+        "coins": [[coin_x, 185, 10, 10]],
         "goal": [230, 200, 16, 20],
     }
     actions = _pad([1] * 8 + [2] * 14 + [1])
@@ -1014,43 +1045,64 @@ def _enemy_stomp(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], d
 
 
 def _retreat_recovery(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    start_x = {"easy": 190, "medium": 200, "hard": 205}[difficulty]
+    start_x = {"easy": 190, "medium": 200, "hard": 205}[difficulty] + rng.randint(-2, 3)
+    coin_x = rng.randint(110, 130)
     scenario = {
         "world_width": 256,
         "mario": [start_x, 200],
         "platforms": [[0, 220, 256, 20]],
-        "coins": [[120, 200, 10, 10]],
+        "coins": [[coin_x, 200, 10, 10]],
         "goal": [35, 200, 16, 20],
     }
     return scenario, {"start_x": start_x, "goal_x": 35, "difficulty_bin": difficulty}, _pad([3])
 
 
 def _wait_timing(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    wait = {"easy": 18, "medium": 20, "hard": 22}[difficulty]
-    speed = {"easy": 0.8, "medium": 1.0, "hard": 1.0}[difficulty]
+    wait = {"easy": 18, "medium": 20, "hard": 22}[difficulty] + rng.randint(-1, 1)
+    # The easy bin pairs a slow fractional bridge with a shorter travel range so
+    # the bridge stays close enough to cross with the shared action script.
+    if difficulty == "easy":
+        speed = round(rng.uniform(0.78, 0.88), 3)
+        move_min = 100
+    else:
+        speed = round(rng.uniform(0.95, 1.0), 3)
+        move_min = 90
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
         "platforms": [
             [0, 220, 85, 20],
-            {"x": 130, "y": 220, "w": 50, "h": 20, "moving": [90, 130, speed]},
+            {"x": 130, "y": 220, "w": 50, "h": 20, "moving": [move_min, 130, speed]},
             [180, 220, 76, 20],
         ],
         "coins": [[130, 190, 10, 10]],
         "goal": [230, 200, 16, 20],
     }
     actions = _pad([0] * wait + [1] * 20 + [2] * 16 + [1])
-    return scenario, {"wait_window": wait, "platform_speed": speed, "difficulty_bin": difficulty}, actions
+    return (
+        scenario,
+        {
+            "wait_window": wait,
+            "platform_speed": speed,
+            "platform_range": [move_min, 130],
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
 
 
 def _chained_obstacles(
     rng: random.Random,
     difficulty: str,
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    enemy_x = {"easy": 94, "medium": 96, "hard": 98}[difficulty]
-    pipe_a_h = {"easy": 34, "medium": 38, "hard": 42}[difficulty]
-    pipe_b_h = {"easy": 48, "medium": 54, "hard": 58}[difficulty]
-    second_enemy_speed = {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty]
+    enemy_x = {"easy": 94, "medium": 96, "hard": 98}[difficulty] + rng.randint(-2, 2)
+    pipe_a_h = {"easy": 34, "medium": 38, "hard": 42}[difficulty] + rng.randint(-2, 2)
+    pipe_b_h = {"easy": 48, "medium": 54, "hard": 58}[difficulty] + rng.randint(-2, 2)
+    # Below ~0.255 the patrol phase collides with the shared oracle script, so
+    # keep the jitter floor above that for the easy bin.
+    second_enemy_speed = round(
+        {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty] + rng.uniform(-0.02, 0.05), 3
+    )
     scenario = {
         "world_width": 512,
         "mario": [20, 200],
@@ -1104,10 +1156,12 @@ def _chained_enemy_gauntlet(
     rng: random.Random,
     difficulty: str,
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    gap_width = {"easy": 48, "medium": 50, "hard": 52}[difficulty]
+    gap_width = {"easy": 48, "medium": 50, "hard": 52}[difficulty] + rng.randint(-1, 1)
     landing_x = 180 + gap_width
-    pipe_h = {"easy": 40, "medium": 44, "hard": 48}[difficulty]
-    patrol_speed = {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty]
+    pipe_h = {"easy": 40, "medium": 44, "hard": 48}[difficulty] + rng.randint(-2, 2)
+    patrol_speed = round(
+        {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty] + rng.uniform(-0.05, 0.05), 3
+    )
     scenario = {
         "world_width": 544,
         "mario": [20, 200],
@@ -1169,7 +1223,7 @@ def _full_smb_opening_proxy(
     # taller pipe, and another enemy before the level can stabilize.
     scenario, params, actions = _chained_obstacles(rng, difficulty)
     scenario = copy.deepcopy(scenario)
-    tall_pipe_h = {"easy": 50, "medium": 56, "hard": 60}[difficulty]
+    tall_pipe_h = {"easy": 50, "medium": 56, "hard": 60}[difficulty] + rng.randint(-2, 2)
     scenario["platforms"][2] = [318, 220 - tall_pipe_h, 32, tall_pipe_h]
     params = {
         **params,
