@@ -310,6 +310,66 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(annotated[0].primitive_outcome_cancel, 1.0)
         self.assertEqual(annotated[0].primitive_outcome_replan, 1.0)
 
+    def test_detached_death_rollout_produces_nonzero_collision_death_risk_targets(self):
+        def assert_no_tensors(value):
+            self.assertNotIsInstance(value, torch.Tensor)
+            if isinstance(value, dict):
+                for item in value.values():
+                    assert_no_tensors(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    assert_no_tensors(item)
+
+        _name, scenario = distill_module.load_fixed_scenarios(("level_2_gap.json",))[0]
+        env = distill_module.MarioScenarioEnv()
+        stage = distill_module.BlockSMBStage(
+            env=env,
+            scenario=scenario,
+            vision=static_vision_factory(),
+        )
+        examples = []
+        try:
+            observation = stage.reset(seed=7)
+            for step_index in range(80):
+                action = int(SMBAction.RIGHT)  # walk into the gap until Mario dies
+                batch = distill_module._detach_batch(stage.encode_observation(observation))
+                next_observation, _reward, terminated, truncated, info = stage.step(action)
+                next_batch = distill_module._detach_batch(
+                    stage.encode_observation(next_observation, dict(info))
+                )
+                examples.append(
+                    distill_module.BlockSMBDistillationExample(
+                        batch=batch,
+                        next_batch=next_batch,
+                        action=action,
+                        scenario_name="level_2_gap.json",
+                        episode=0,
+                        step_index=step_index,
+                    )
+                )
+                observation = next_observation
+                if terminated or truncated:
+                    break
+        finally:
+            env.close()
+
+        self.assertTrue(examples[-1].next_batch.metadata["info"]["death"])
+        for example in examples:
+            for batch in (example.batch, example.next_batch):
+                assert_no_tensors(batch.metadata.get("info"))
+                assert_no_tensors(batch.metadata.get("episode"))
+
+        annotated = distill_module._annotate_primitive_outcomes(examples, horizon=8)
+
+        self.assertGreater(
+            max(example.primitive_outcome_collision_death_risk for example in annotated),
+            0.0,
+        )
+        self.assertGreater(
+            max(example.primitive_outcome_terminal for example in annotated),
+            0.0,
+        )
+
     def test_primitive_outcome_loss_uses_k_step_targets(self):
         example = distill_module.BlockSMBDistillationExample(
             batch=_primitive_outcome_batch(x=0.0),

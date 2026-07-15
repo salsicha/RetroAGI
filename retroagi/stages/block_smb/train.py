@@ -1713,9 +1713,18 @@ def compute_block_smb_losses(
     target_instability = measured_dynamics_instability(transitions, device)
     target_active = target_network_is_active(config, target_model, target_instability)
     target_model_for_loss = target_model if target_active else model
+    masks = [step.episode_mask for step in transitions]
+    if trajectories and sum(len(t.transitions) for t in trajectories) == len(masks):
+        # Terminate the return scan at every trajectory boundary so returns from
+        # one trajectory never leak into a preceding, budget-truncated trajectory.
+        boundary_index = -1
+        for trajectory in trajectories:
+            boundary_index += len(trajectory.transitions)
+            if boundary_index >= 0:
+                masks[boundary_index] = 0.0
     returns = discounted_returns(
         [step.reward for step in transitions],
-        [step.episode_mask for step in transitions],
+        masks,
         config.gamma,
         device,
     )
@@ -2496,6 +2505,7 @@ def restore_block_smb_checkpoint(
     target_model: Optional[torch.nn.Module] = None,
     architecture_name: Optional[str] = None,
     architecture_config: Optional[Mapping[str, Any]] = None,
+    restore_rng: bool = True,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
@@ -2558,12 +2568,13 @@ def restore_block_smb_checkpoint(
         )
         target_model.load_state_dict(target_state, strict=False)
         target_model.eval()
-    if "torch_rng" in states:
-        torch.set_rng_state(states["torch_rng"].cpu())
-    if "python_rng" in states:
-        random.setstate(states["python_rng"])
-    if "numpy_rng" in states:
-        np.random.set_state(states["numpy_rng"])
+    if restore_rng:
+        if "torch_rng" in states:
+            torch.set_rng_state(states["torch_rng"].cpu())
+        if "python_rng" in states:
+            random.setstate(states["python_rng"])
+        if "numpy_rng" in states:
+            np.random.set_state(states["numpy_rng"])
     return checkpoint
 
 

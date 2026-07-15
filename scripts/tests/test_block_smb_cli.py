@@ -598,6 +598,7 @@ class TestBlockSMBCLI(unittest.TestCase):
             "success_rate": 0.0,
             "gates": {"gate_met": False},
         }
+        stderr = io.StringIO()
         with patch("retroagi.stages.block_smb.cli.load_checkpoint", return_value=checkpoint):
             with patch(
                 "retroagi.stages.block_smb.cli.make_block_smb_model",
@@ -611,34 +612,38 @@ class TestBlockSMBCLI(unittest.TestCase):
                         "retroagi.stages.block_smb.cli.evaluate_block_smb_monte_carlo",
                         return_value=fake_evaluation,
                     ) as evaluate:
-                        exit_code, payload = self.run_main(
-                            [
-                                "evaluate-monte-carlo",
-                                "--checkpoint",
-                                "data/block_smb/policy.pth",
-                                "--split",
-                                "test",
-                                "--samples",
-                                "5",
-                                "--device",
-                                "cpu",
-                                "--monte-carlo-parameter-sweep",
-                                "--monte-carlo-sweep-repeats-per-difficulty",
-                                "2",
-                                "--monte-carlo-pass-rate-gate",
-                                "0.8",
-                                "--monte-carlo-family-pass-rate-gate",
-                                "0.7",
-                                "--record-dir",
-                                "artifacts/block_smb/mc_eval",
-                            ]
-                        )
+                        with redirect_stderr(stderr):
+                            exit_code, payload = self.run_main(
+                                [
+                                    "evaluate-monte-carlo",
+                                    "--checkpoint",
+                                    "data/block_smb/policy.pth",
+                                    "--split",
+                                    "test",
+                                    "--samples",
+                                    "5",
+                                    "--device",
+                                    "cpu",
+                                    "--monte-carlo-parameter-sweep",
+                                    "--monte-carlo-sweep-repeats-per-difficulty",
+                                    "2",
+                                    "--monte-carlo-pass-rate-gate",
+                                    "0.8",
+                                    "--monte-carlo-family-pass-rate-gate",
+                                    "0.7",
+                                    "--record-dir",
+                                    "artifacts/block_smb/mc_eval",
+                                ]
+                            )
 
         self.assertEqual(exit_code, 0)
         make_model.assert_called_once()
         restore.assert_called_once()
         config = evaluate.call_args.args[1]
-        self.assertTrue(config.monte_carlo_parameter_sweep)
+        # An explicit --samples overrides the parameter sweep so the requested
+        # sample count is honored.
+        self.assertFalse(config.monte_carlo_parameter_sweep)
+        self.assertIn("overrides monte_carlo_parameter_sweep", stderr.getvalue())
         self.assertEqual(config.monte_carlo_sweep_repeats_per_difficulty, 2)
         self.assertEqual(config.monte_carlo_pass_rate_gate, 0.8)
         self.assertEqual(config.monte_carlo_family_pass_rate_gate, 0.7)
@@ -650,6 +655,66 @@ class TestBlockSMBCLI(unittest.TestCase):
         )
         self.assertEqual(payload["evaluation"], fake_evaluation)
         self.assertEqual(payload["checkpoint"]["path"], "data/block_smb/policy.pth")
+
+    def test_evaluate_monte_carlo_command_keeps_sweep_without_explicit_samples(self):
+        class FakeModel:
+            def to(self, _device):
+                return self
+
+        checkpoint = {
+            "epoch": 3,
+            "global_step": 9,
+            "config": {
+                "seed": 5,
+                "epochs": 3,
+                "hidden_dim": 8,
+                "architecture_config": {
+                    "hidden_dim": 8,
+                    "controller_schedule": "constant",
+                },
+            },
+        }
+        fake_evaluation = {
+            "split": "test",
+            "sample_count": 72,
+            "success_rate": 0.0,
+            "gates": {"gate_met": False},
+        }
+        with patch("retroagi.stages.block_smb.cli.load_checkpoint", return_value=checkpoint):
+            with patch(
+                "retroagi.stages.block_smb.cli.make_block_smb_model",
+                return_value=FakeModel(),
+            ):
+                with patch(
+                    "retroagi.stages.block_smb.cli.restore_block_smb_checkpoint",
+                    return_value=checkpoint,
+                ):
+                    with patch(
+                        "retroagi.stages.block_smb.cli.evaluate_block_smb_monte_carlo",
+                        return_value=fake_evaluation,
+                    ) as evaluate:
+                        exit_code, _payload = self.run_main(
+                            [
+                                "evaluate-monte-carlo",
+                                "--checkpoint",
+                                "data/block_smb/policy.pth",
+                                "--split",
+                                "test",
+                                "--device",
+                                "cpu",
+                                "--monte-carlo-parameter-sweep",
+                                "--monte-carlo-sweep-repeats-per-difficulty",
+                                "2",
+                            ]
+                        )
+
+        self.assertEqual(exit_code, 0)
+        config = evaluate.call_args.args[1]
+        self.assertTrue(config.monte_carlo_parameter_sweep)
+        self.assertEqual(
+            evaluate.call_args.kwargs["sample_count"],
+            cli.block_smb_monte_carlo_sweep_sample_count(config),
+        )
 
     def test_diagnose_vision_command_reports_perception_metrics(self):
         loaded_model = object()

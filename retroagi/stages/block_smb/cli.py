@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import random
-from dataclasses import asdict
+import sys
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -1030,6 +1031,13 @@ def _monte_carlo_cli_sample_count(
 
 def _run_monte_carlo_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     config = _make_checkpoint_config(args, record=False)
+    if args.samples is not None and config.monte_carlo_parameter_sweep:
+        print(
+            "--samples overrides monte_carlo_parameter_sweep; "
+            f"evaluating {args.samples} sampled scenarios instead of the sweep",
+            file=sys.stderr,
+        )
+        config = replace(config, monte_carlo_parameter_sweep=False)
     device = select_device(config.device)
     model = make_block_smb_model(config).to(device)
     restore_block_smb_checkpoint(

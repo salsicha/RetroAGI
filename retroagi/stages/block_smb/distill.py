@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -592,6 +593,7 @@ def train_distilled_block_smb_policy(
             map_location=device,
             architecture_name=training_config.architecture_name,
             architecture_config=training_config.architecture_config,
+            restore_rng=False,
         )
     vision_factory = vision_factory or _cached_vision_factory(config.vision_checkpoint, device)
     dataset = collect_scripted_distillation_examples(
@@ -663,7 +665,7 @@ def train_distilled_block_smb_policy(
             training_config,
             device=device,
             vision_factory=vision_factory,
-            phase="dagger",
+            phase=f"dagger_{dagger_iteration}",
             iteration=dagger_iteration,
         )
         evaluations.append(evaluation)
@@ -1948,12 +1950,36 @@ def _stack_examples(
     return src_a, src_b, src_c, actions, next_c
 
 
+def _plain_metadata_value(value: Any) -> Any:
+    """Copy metadata leaves into plain python, dropping tensor/graph references."""
+
+    if isinstance(value, torch.Tensor):
+        detached = value.detach().cpu()
+        return detached.item() if detached.ndim == 0 else detached.tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Mapping):
+        return {str(key): _plain_metadata_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_metadata_value(item) for item in value]
+    return value
+
+
 def _detach_batch(batch: StageBatch) -> StageBatch:
-    metadata = None
+    metadata: dict[str, Any] | None = None
     if isinstance(batch.metadata, Mapping):
+        metadata = {}
         fusion = batch.metadata.get("vision_fusion")
         if isinstance(fusion, Mapping):
-            metadata = {"vision_fusion": dict(fusion)}
+            metadata["vision_fusion"] = dict(fusion)
+        for key in ("info", "episode"):
+            value = batch.metadata.get(key)
+            if isinstance(value, Mapping):
+                metadata[key] = _plain_metadata_value(value)
+        if not metadata:
+            metadata = None
     return StageBatch(
         src_a=batch.src_a.detach().cpu(),
         target_a=batch.target_a.detach().cpu() if batch.target_a is not None else None,
@@ -1977,8 +2003,9 @@ def _action_class_weights(
     nonzero = counts > 0
     weights = torch.zeros_like(counts)
     weights[nonzero] = counts[nonzero].sum() / (float(nonzero.sum().item()) * counts[nonzero])
-    if BLOCK_SMB_ACTION_COUNT > 2:
-        weights[2] *= float(jump_weight_multiplier)
+    for action in range(BLOCK_SMB_ACTION_COUNT):
+        if is_smb_jump_action(action):
+            weights[action] *= float(jump_weight_multiplier)
     weights[~nonzero] = 0.0
     return weights.to(device)
 
