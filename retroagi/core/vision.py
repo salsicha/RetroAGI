@@ -293,11 +293,13 @@ class PatchVisionTransformer(nn.Module):
         """Load ViT checkpoints while allowing legacy checkpoints without support head."""
 
         result = self.load_state_dict(state_dict, strict=False)
+        if not strict:
+            return result
         allowed_missing = set(SUPPORT_HEAD_STATE_KEYS)
         missing = list(result.missing_keys)
         unexpected = list(result.unexpected_keys)
         unsupported_missing = [
-            key for key in missing if strict and key not in allowed_missing
+            key for key in missing if key not in allowed_missing
         ]
         if unsupported_missing or unexpected:
             messages = []

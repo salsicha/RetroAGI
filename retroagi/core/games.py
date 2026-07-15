@@ -370,7 +370,10 @@ class GameSpec:
                 if action.name == value:
                     return action
             raise KeyError(f"unknown action {value!r} for game {self.name!r}")
-        return self.action_space[int(value)]
+        index = int(value)
+        if not 0 <= index < len(self.action_space):
+            raise KeyError(f"unknown action {value!r} for game {self.name!r}")
+        return self.action_space[index]
 
     def action_backend_id(self, value: int | str) -> int:
         """Return the stage-native discrete ID for a policy action."""

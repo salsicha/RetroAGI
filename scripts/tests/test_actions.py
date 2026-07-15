@@ -333,6 +333,25 @@ class TestSMBActionVocabulary(unittest.TestCase):
             int(SMBAction.RIGHT_JUMP),
         )
 
+    def test_parameterized_primitive_executor_times_out_without_landing_signal(self):
+        executor = SMBParameterizedPrimitiveExecutor(default_hold_frames=1, max_hold_frames=2)
+
+        first = executor.execute(SMBAction.RIGHT_JUMP)
+        self.assertTrue(first.started)
+        for _ in range(executor.max_active_frames):
+            step = executor.execute(SMBAction.RIGHT_JUMP)
+            self.assertFalse(step.started)
+        restarted = executor.execute(SMBAction.RIGHT_JUMP)
+        self.assertTrue(restarted.started)
+
+        executor.reset()
+        executor.execute(SMBAction.RIGHT_JUMP)
+        for _ in range(executor.max_active_frames):
+            executor.execute(SMBAction.RIGHT_JUMP)
+        recovered = executor.execute(SMBAction.LEFT)
+        self.assertEqual(recovered.action, int(SMBAction.LEFT))
+        self.assertFalse(executor.active)
+
     @staticmethod
     def _batch_with_vision(vision: VisionOutput):
         return SimpleNamespace(metadata={"vision": vision})

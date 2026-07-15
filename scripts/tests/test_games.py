@@ -177,6 +177,20 @@ class TestGameSpec(unittest.TestCase):
             "retroagi.stages.full_smb.adapter.FullSMBStage",
         )
 
+        self.assertEqual(PONG_GAME_PLUGIN.resolve_stage("pong_block").name, "block")
+        self.assertEqual(
+            PONG_GAME_PLUGIN.perception_pipeline("pong_block").stage_name,
+            "block",
+        )
+        self.assertEqual(
+            PONG_GAME_PLUGIN.stage_adapter("pong-full"),
+            "retroagi.stages.pong_full.adapter.PongFullStage",
+        )
+        with self.assertRaisesRegex(KeyError, "does not define stage"):
+            PONG_GAME_PLUGIN.resolve_stage("missing")
+        with self.assertRaisesRegex(KeyError, "does not define stage"):
+            resolve_game_stage(SMB_GAME_SPEC, "pong_block")
+
     def test_smb_game_plugin_loads_profile_and_components_by_name(self):
         plugin = get_game_plugin("smb")
 
@@ -331,6 +345,10 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(spec.action(5).name, "jump")
         with self.assertRaisesRegex(KeyError, "unknown action"):
             spec.action("dash")
+        with self.assertRaisesRegex(KeyError, "unknown action"):
+            spec.action(-1)
+        with self.assertRaisesRegex(KeyError, "unknown action"):
+            spec.action(len(spec.action_space))
 
     def test_registered_games_map_policy_actions_to_backend_controls(self):
         for game in GAME_SPECS.values():

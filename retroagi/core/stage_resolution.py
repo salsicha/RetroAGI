@@ -63,9 +63,13 @@ def is_standard_stage_name(value: str) -> bool:
 def resolve_game_stage(game, value: str) -> StageResolution:
     """Resolve a stage token against one game's declared stage ladder."""
 
-    name = normalize_stage_name(value)
+    spec_name = value.strip().lower().replace("-", "_")
+    try:
+        name = normalize_stage_name(value)
+    except ValueError:
+        name = None
     for stage in game.stage_ladder:
-        if stage.name == name:
+        if stage.name == name or (name is None and stage.stage_spec_name == spec_name):
             return StageResolution(
                 name=stage.name,
                 stage_spec_name=stage.stage_spec_name,
@@ -73,5 +77,5 @@ def resolve_game_stage(game, value: str) -> StageResolution:
             )
     available = ", ".join(game.stage_names)
     raise KeyError(
-        f"game {game.name!r} does not define stage {name!r}; available: {available}"
+        f"game {game.name!r} does not define stage {value!r}; available: {available}"
     )

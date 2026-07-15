@@ -156,6 +156,19 @@ class TestVisionInterface(unittest.TestCase):
 
         self.assertEqual(support_targets.tolist(), [1, 2, 0])
 
+    def test_load_compatible_state_dict_strict_flag_controls_key_tolerance(self):
+        encoder = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        state = {key: value.clone() for key, value in encoder.state_dict().items()}
+        del state["head.weight"]
+        state["bogus.weight"] = torch.zeros(1)
+
+        with self.assertRaisesRegex(RuntimeError, "head.weight"):
+            encoder.load_compatible_state_dict(state)
+
+        result = encoder.load_compatible_state_dict(state, strict=False)
+        self.assertIn("head.weight", result.missing_keys)
+        self.assertIn("bogus.weight", result.unexpected_keys)
+
     def test_block_vit_perception_diagnostic_accepts_oracle_predictions(self):
         encoder = OracleBlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
         stage = BlockSMBStage(vision=encoder)

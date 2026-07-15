@@ -354,6 +354,9 @@ class SMBWalkActionLimiter:
         return int(action_value)
 
 
+_JUMP_LANDING_ALLOWANCE_FRAMES = 60
+
+
 @dataclass(frozen=True)
 class SMBPrimitiveExecution:
     """One action emitted by a stateful SMB parameterized primitive executor."""
@@ -378,6 +381,7 @@ class SMBParameterizedPrimitiveExecutor:
             raise ValueError("max_hold_frames must be positive")
         self.default_hold_frames = int(default_hold_frames)
         self.max_hold_frames = int(max_hold_frames)
+        self.max_active_frames = self.max_hold_frames + _JUMP_LANDING_ALLOWANCE_FRAMES
         self.reset()
 
     @property
@@ -393,6 +397,7 @@ class SMBParameterizedPrimitiveExecutor:
         self._suppress_until_non_jump = False
         self._duration_bin_index: int | None = None
         self._hold_frames: int | None = None
+        self._active_frames = 0
 
     def filter_action(
         self,
@@ -435,12 +440,17 @@ class SMBParameterizedPrimitiveExecutor:
             )
 
         if self._active_jump is not None:
-            return self._execute_active_primitive(
-                action_value,
-                motor_primitives=motor_primitives,
-                support_name=support_name,
-                enemy_contact=enemy_contact,
-            )
+            self._active_frames += 1
+            if self._active_frames <= self.max_active_frames:
+                return self._execute_active_primitive(
+                    action_value,
+                    motor_primitives=motor_primitives,
+                    support_name=support_name,
+                    enemy_contact=enemy_contact,
+                )
+            # Safety valve: vision never reported a landing, so stop overriding
+            # the policy and process the current action from a clean state.
+            self.reset()
 
         if action_value not in SMB_JUMP_ACTIONS:
             self.reset()
@@ -454,6 +464,7 @@ class SMBParameterizedPrimitiveExecutor:
         self._hold_frames_remaining = max(0, hold_frames - 1)
         self._released = False
         self._left_support = support_name == SMB_SUPPORT_AIR
+        self._active_frames = 0
         return SMBPrimitiveExecution(
             action=int(action_value),
             started=True,
@@ -604,7 +615,7 @@ def _vision_enemy_contact(vision: Any) -> bool:
     semantic_classes = _metadata_tuple(vision, "semantic_classes") or _metadata_tuple(
         vision, "checkpoint_classes"
     )
-    agent_ids, enemy_ids = _semantic_contact_class_ids(semantic_classes, labels)
+    agent_ids, enemy_ids = _semantic_contact_class_ids(semantic_classes)
     if not agent_ids or not enemy_ids:
         return False
 
@@ -632,22 +643,15 @@ def _semantic_labels(vision: Any) -> np.ndarray | None:
 
 def _semantic_contact_class_ids(
     semantic_classes: tuple[str, ...],
-    labels: np.ndarray,
 ) -> tuple[set[int], set[int]]:
-    if semantic_classes:
-        lowered = tuple(str(name).lower() for name in semantic_classes)
-        agent_ids = {index for index, name in enumerate(lowered) if name in SMB_AGENT_CLASS_NAMES}
-        enemy_ids = {index for index, name in enumerate(lowered) if name in SMB_ENEMY_CLASS_NAMES}
-        return agent_ids, enemy_ids
-
-    class_count = int(labels.max()) + 1 if labels.size else 0
-    if class_count == 7:
-        return {1}, {5}
-    if class_count == 13:
-        return {8}, {6, 7}
-    if class_count == 6:
-        return {5}, {3}
-    return set(), set()
+    if not semantic_classes:
+        # Without declared class names the label ids are ambiguous, so skip
+        # enemy-contact inference instead of guessing a vocabulary.
+        return set(), set()
+    lowered = tuple(str(name).lower() for name in semantic_classes)
+    agent_ids = {index for index, name in enumerate(lowered) if name in SMB_AGENT_CLASS_NAMES}
+    enemy_ids = {index for index, name in enumerate(lowered) if name in SMB_ENEMY_CLASS_NAMES}
+    return agent_ids, enemy_ids
 
 
 def _metadata_tuple(vision: Any, key: str) -> tuple[str, ...]:

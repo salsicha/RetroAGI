@@ -985,12 +985,12 @@ class WorldModel(nn.Module):
         episode_mask=None,
         return_state=False,
     ):
+        if state.ndim != 2:
+            raise ValueError("state must have shape [batch, seq_len_c]")
         batch_size = state.size(0)
         seq_len_c = state.size(1)
         device = state.device
         dtype = state.dtype
-        if state.ndim != 2:
-            raise ValueError("state must have shape [batch, seq_len_c]")
         if (
             action.shape != state.shape
             or w_context.shape != state.shape

@@ -992,6 +992,13 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
         self.assertEqual(unsupported_missing, ())
         self.assertEqual(tuple(load_result.unexpected_keys), ())
 
+    def test_world_model_rejects_non_2d_state_with_value_error(self):
+        model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)
+        flat = torch.zeros(4)
+
+        with self.assertRaisesRegex(ValueError, "state must have shape"):
+            model(flat, flat, flat, flat)
+
     def test_episode_mask_resets_initial_recurrent_state(self):
         torch.manual_seed(123)
         model = WorldModel(hidden_size=4, num_freqs=0, ratio_bc=2)

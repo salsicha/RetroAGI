@@ -190,7 +190,7 @@ def _normalize_config_values(values: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _checkpoint_config(path: Path) -> dict[str, Any]:
+def _checkpoint_config(path: Path, *, epochs_override: int | None = None) -> dict[str, Any]:
     checkpoint = load_checkpoint(path)
     config = checkpoint.get("config", {})
     if not isinstance(config, Mapping):
@@ -198,10 +198,17 @@ def _checkpoint_config(path: Path) -> dict[str, Any]:
     values = _normalize_config_values(config)
     values["resume_path"] = path
     values["save_checkpoints"] = False
+    completed_epochs = int(checkpoint.get("epoch", 0))
+    if epochs_override is not None and int(epochs_override) <= completed_epochs:
+        raise ValueError(
+            f"--epochs {int(epochs_override)} must exceed the {completed_epochs} "
+            f"epoch(s) already completed by checkpoint {path}; resuming would "
+            "train zero epochs"
+        )
     if "epochs" not in values:
         values["epochs"] = max(1, int(checkpoint.get("epoch", 1)))
     else:
-        values["epochs"] = max(int(values["epochs"]), int(checkpoint.get("epoch", 0)))
+        values["epochs"] = max(int(values["epochs"]), completed_epochs)
     return values
 
 
@@ -285,7 +292,11 @@ def _apply_architecture_overrides(values: dict[str, Any], args: argparse.Namespa
 
 
 def _make_train_config(args: argparse.Namespace) -> SyntheticTrainingConfig:
-    values = _checkpoint_config(args.resume) if args.resume is not None else {}
+    values = (
+        _checkpoint_config(args.resume, epochs_override=args.epochs)
+        if args.resume is not None
+        else {}
+    )
     values.update(_config_overrides(args))
     _apply_split_overrides(values, args)
     _apply_architecture_overrides(values, args)

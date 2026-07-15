@@ -183,6 +183,26 @@ class TestSynthetic1DCLI(unittest.TestCase):
         self.assertEqual(payload["config"]["resume_path"], "data/synthetic_1d/old.pth")
         self.assertEqual(payload["config"]["checkpoint_path"], "data/synthetic_1d/new.pth")
 
+    def test_resume_command_rejects_epochs_at_or_below_completed_epochs(self):
+        checkpoint = {
+            "epoch": 60,
+            "global_step": 120,
+            "config": {"seed": 5, "epochs": 60, "device": "cpu"},
+        }
+        with patch("retroagi.stages.synthetic_1d.cli.load_checkpoint", return_value=checkpoint):
+            with self.assertRaisesRegex(ValueError, "already completed"):
+                cli.run(
+                    cli.build_parser().parse_args(
+                        [
+                            "train",
+                            "--resume",
+                            "data/synthetic_1d/old.pth",
+                            "--epochs",
+                            "30",
+                        ]
+                    )
+                )
+
     def test_architecture_config_requires_key_value_syntax(self):
         with redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as raised:
