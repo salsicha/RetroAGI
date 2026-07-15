@@ -255,7 +255,6 @@ def full_smb_documented_benchmark_manifest(
             "compare": (
                 "retroagi compare --game smb --stage full "
                 f"--transfer-checkpoint {files['transferred_policy_checkpoint']} "
-                f"--scratch-trained-checkpoint {layout.checkpoints_dir / 'scratch_policy.pth'} "
                 f"--fine-tuned-checkpoint {files['policy_checkpoint']} "
                 f"--known-good-checkpoint {files['policy_checkpoint']} "
                 "--full-smb-vision-checkpoint data/vit/full_smb_vit.pth "

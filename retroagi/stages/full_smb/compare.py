@@ -20,11 +20,13 @@ from retroagi.core import (
     load_checkpoint,
 )
 from retroagi.stages.full_smb.adapter import FullSMBEnvConfig, FullSMBStage
+from retroagi.stages.full_smb.save_states import load_full_smb_save_state_payload
 from retroagi.stages.full_smb.tasks import (
     FULL_SMB_TASK_SET_NAMES,
     FullSMBTaskSpec,
     full_smb_task_catalog,
 )
+from retroagi.stages.full_smb.train import _apply_full_smb_motor_primitive_bias
 from retroagi.stages.full_smb.transfer import (
     load_transferred_full_smb_policy,
     make_full_smb_policy_model,
@@ -239,6 +241,7 @@ def compare_full_smb_policy_suite(
     stream_results: list[Mapping[str, Any]] = []
 
     for task in tasks:
+        start_state = _comparison_task_start_state(task)
         for seed in config.seeds:
             stage = make_stage(vision, task)
             try:
@@ -248,6 +251,7 @@ def compare_full_smb_policy_suite(
                         stage,
                         seed=seed,
                         task=task,
+                        start_state=start_state,
                         config=config,
                         accumulators=policy_accumulators,
                     )
@@ -377,11 +381,12 @@ def _compare_loaded_policies_on_stage(
     *,
     seed: int,
     task: Optional[FullSMBTaskSpec],
+    start_state: Any = None,
     config: FullSMBPolicySuiteComparisonConfig,
     accumulators: dict[str, dict[str, list[Any]]],
 ) -> dict[str, Any]:
     rng = random.Random(seed)
-    observation = stage.reset(seed=seed)
+    observation = _reset_comparison_stage(stage, seed=seed, start_state=start_state)
     resets = 1
     completed_episodes = 0
     terminated_count = 0
@@ -425,7 +430,11 @@ def _compare_loaded_policies_on_stage(
         if terminated or truncated:
             completed_episodes += 1
             if config.reset_on_done and step_index + 1 < config.steps:
-                observation = stage.reset(seed=seed + resets)
+                observation = _reset_comparison_stage(
+                    stage,
+                    seed=seed + resets,
+                    start_state=start_state,
+                )
                 resets += 1
 
     return {
@@ -461,6 +470,35 @@ def _comparison_tasks(
     if task_set is not None:
         return catalog.tasks_for_set(task_set)
     return (None,)
+
+
+def _comparison_task_start_state(task: Optional[FullSMBTaskSpec]) -> Any:
+    if task is None or task.start.mode != "save_state_artifact":
+        return None
+    path = task.start.save_state_path
+    if path is None or not Path(path).exists():
+        raise FileNotFoundError(
+            f"Full SMB comparison task {task.name!r} requires the local save-state "
+            f"artifact {path}; create it with "
+            "`python -m retroagi.stages.full_smb.save_states create` before comparing."
+        )
+    return load_full_smb_save_state_payload(Path(path))["state"]
+
+
+def _reset_comparison_stage(
+    stage: FullSMBStage,
+    *,
+    seed: int,
+    start_state: Any,
+) -> Any:
+    observation = stage.reset(seed=seed)
+    if start_state is None:
+        return observation
+    observation = stage.load_emulator_state(start_state)
+    reset_frame_stack = getattr(stage, "_reset_frame_stack", None)
+    if callable(reset_frame_stack):
+        reset_frame_stack(observation)
+    return observation
 
 
 def _comparison_task_manifest(task: Optional[FullSMBTaskSpec]) -> dict[str, Any]:
@@ -718,7 +756,12 @@ def _policy_action_logits(
             episode_mask=episode_mask,
         )
     logits_a = outputs[4]
-    return logits_a[:, -1, : len(SMB_ACTIONS)].detach().cpu()
+    logits = logits_a[:, -1, : len(SMB_ACTIONS)]
+    logits = _apply_full_smb_motor_primitive_bias(
+        logits,
+        getattr(model, "last_motor_primitives", None),
+    )
+    return logits.detach().cpu()
 
 
 def _entropy(logits: torch.Tensor) -> float:

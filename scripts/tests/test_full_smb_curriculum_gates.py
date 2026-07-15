@@ -106,6 +106,31 @@ class TestFullSMBCurriculumGates(unittest.TestCase):
         self.assertEqual(gate_result["action_fractions"]["RIGHT_JUMP"], 1.0)
         self.assertTrue(result["summary"]["full_benchmark_allowed"])
 
+    def test_gate_aggregate_reports_observed_max_episode_steps(self):
+        gate = FullSMBCurriculumGateThreshold(
+            name="unit_budget",
+            min_progress=1.0,
+            max_steps=10,
+            rationale="unit",
+        )
+        stage = tiny_stage()
+        try:
+            result = run_full_smb_curriculum_gate_evaluation(
+                RightJumpPolicy(),
+                stage,
+                device=torch.device("cpu"),
+                gates=(gate,),
+                seed=0,
+            )
+        finally:
+            stage.close()
+
+        gate_result = result["gates"]["unit_budget"]
+        # TinyFullSMBEnv terminates after 8 steps, below the 10-step budget;
+        # the aggregate must report the observed maximum, not the budget itself.
+        self.assertEqual(gate_result["max_steps_per_episode"], 8)
+        self.assertTrue(gate_result["threshold_diagnostics"]["within_step_budget"])
+
     def test_gate_evaluation_blocks_full_benchmark_when_pass_rate_is_low(self):
         passing_gate = FullSMBCurriculumGateThreshold(
             name="passing",

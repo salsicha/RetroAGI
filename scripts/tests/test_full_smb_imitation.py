@@ -209,6 +209,93 @@ class TestFullSMBImitationWarmStart(unittest.TestCase):
 
         self.assertEqual(targets["explicit_duration_mask"].tolist(), [0.0, 1.0])
         self.assertEqual(targets["duration_bin"].tolist()[1], 3)
+        # The obstacle sample deliberately ships a zero release mask; implicit
+        # jump-release labels must not override that explicit contract.
+        self.assertEqual(targets["release_mask"].tolist(), [0.0, 0.0])
+        self.assertEqual(targets["release"].tolist(), [0.0, 0.0])
+
+    def test_primitive_targets_do_not_bridge_runs_across_merged_sources(self):
+        def scripted(actions):
+            count = len(actions)
+            return {
+                "src_a": torch.zeros((count, 4), dtype=torch.long),
+                "src_b": torch.zeros((count, 4), dtype=torch.long),
+                "src_c": torch.zeros((count, 4), dtype=torch.float32),
+                "actions": torch.tensor(actions, dtype=torch.long),
+                "metrics": {"samples": float(count), "max_progress": 0.0},
+            }
+
+        merged = merge_full_smb_imitation_datasets((scripted([2, 2]), scripted([2, 2])))
+        targets = full_smb_imitation_module._full_smb_imitation_primitive_targets(
+            merged["actions"],
+            dataset=merged,
+        )
+
+        self.assertEqual(merged["sample_trajectory_ids"].tolist(), [0, 0, 1, 1])
+        # Each source trajectory holds its own run of two jumps, not one run of four.
+        self.assertEqual(targets["duration_mask"].tolist(), [1.0, 0.0, 1.0, 0.0])
+        self.assertEqual(targets["duration_bin"].tolist()[0], 1)
+        self.assertEqual(targets["duration_bin"].tolist()[2], 1)
+        self.assertEqual(targets["release"].tolist(), [0.0, 1.0, 0.0, 1.0])
+        self.assertEqual(targets["release_mask"].tolist(), [1.0, 1.0, 1.0, 1.0])
+
+    def test_obstacle_window_sweep_skips_spec_when_warmup_terminates(self):
+        spec = FullSMBObstacleWindowDurationSpec(
+            name="unit_warmup_death",
+            save_state_artifact="section_1_1_first_enemy_approach",
+            obstacle_kind="enemy",
+            warmup_script=((2, 2), (1, 1)),
+            candidate_hold_decisions=(2, 4),
+            settle_frames=4,
+            minimum_progress_delta=1.0,
+        )
+        stage = FullSMBStage(
+            env=SweepFullSMBEnv(),
+            vision=StaticFullSMBVision(),
+            observation_config=FullSMBObservationConfig(
+                frame_skip=1,
+                frame_stack=2,
+                resize_shape=(16, 20),
+            ),
+        )
+        try:
+            stage.reset(seed=23)
+            state = stage.save_emulator_state()
+            with TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                state_path = (
+                    root
+                    / "local/full_smb/states/curriculum/1_1_first_enemy_approach.state"
+                )
+                state_path.parent.mkdir(parents=True)
+                with state_path.open("wb") as handle:
+                    pickle.dump(
+                        {
+                            "kind": FULL_SMB_SAVE_STATE_KIND,
+                            "schema_version": FULL_SMB_SAVE_STATE_SCHEMA_VERSION,
+                            "spec": {"name": spec.save_state_artifact},
+                            "state": state,
+                        },
+                        handle,
+                    )
+
+                dataset = collect_full_smb_obstacle_window_duration_dataset(
+                    stage,
+                    repository_root=root,
+                    decision_frame_skip=1,
+                    specs=(spec,),
+                    seed=23,
+                )
+        finally:
+            stage.close()
+
+        self.assertEqual(int(dataset["actions"].numel()), 0)
+        self.assertEqual(dataset["metrics"]["windows_labeled"], 0.0)
+        self.assertEqual(dataset["metrics"]["trial_count"], 0.0)
+        self.assertEqual(
+            dataset["metrics"]["skipped"],
+            ({"name": "unit_warmup_death", "reason": "warmup_terminated"},),
+        )
 
     def test_collect_and_train_imitation_warm_start_updates_policy_head(self):
         stage = FullSMBStage(

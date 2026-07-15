@@ -1,6 +1,8 @@
 """Tests for transferring Block SMB checkpoints into Full SMB."""
 
 import json
+import os
+import pickle
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -40,6 +42,10 @@ from retroagi.stages.full_smb.compare import (
     compare_full_smb_policy_suite,
     compare_transferred_checkpoint_with_scratch,
     save_full_smb_policy_comparison,
+)
+from retroagi.stages.full_smb.save_states import (
+    FULL_SMB_SAVE_STATE_KIND,
+    FULL_SMB_SAVE_STATE_SCHEMA_VERSION,
 )
 from retroagi.stages.full_smb.transfer import (
     FULL_SMB_TRANSFER_CHECKPOINT_KIND,
@@ -104,6 +110,20 @@ class TinyFullSMBEnv:
             ),
             axis=-1,
         ).astype(np.uint8)
+
+
+class StatefulTinyFullSMBEnv(TinyFullSMBEnv):
+    def __init__(self):
+        super().__init__()
+        self.set_state_calls = 0
+
+    def get_state(self):
+        return {"seed": self.seed, "step_count": self.step_count}
+
+    def set_state(self, state):
+        self.set_state_calls += 1
+        self.seed = int(state["seed"])
+        self.step_count = int(state["step_count"])
 
 
 def tiny_block_config(**overrides):
@@ -687,6 +707,102 @@ class TestFullSMBTransfer(unittest.TestCase):
         )
         self.assertEqual(saved["evaluated_steps"], 12)
         self.assertEqual(saved["streams"][0]["task"]["name"], "benchmark_1_1_start")
+
+    def test_policy_suite_comparison_honors_save_state_task_starts(self):
+        class _NoopVision:
+            def encode(self, observation):
+                raise RuntimeError("snapshot stage does not encode observations")
+
+        def observation_config():
+            return FullSMBObservationConfig(
+                frame_skip=1,
+                frame_stack=2,
+                resize_shape=(16, 20),
+            )
+
+        comparison_envs = []
+
+        def task_stage(vision, task):
+            env = StatefulTinyFullSMBEnv()
+            comparison_envs.append(env)
+            return FullSMBStage(
+                env=env,
+                vision=vision,
+                observation_config=observation_config(),
+            )
+
+        original_cwd = Path.cwd()
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            transfer_path = tmp / "full_smb_transfer.pth"
+            write_block_policy_checkpoint(source_policy_path)
+            write_full_smb_vision_checkpoint(full_vision_path)
+            transfer_block_smb_checkpoint_to_full_smb(
+                source_policy_path,
+                output_checkpoint=transfer_path,
+                full_smb_vision_checkpoint=full_vision_path,
+                block_vision_checkpoint=None,
+                device="cpu",
+            )
+
+            snapshot_stage = FullSMBStage(
+                env=StatefulTinyFullSMBEnv(),
+                vision=_NoopVision(),
+                observation_config=observation_config(),
+            )
+            try:
+                snapshot_stage.reset(seed=7)
+                snapshot = snapshot_stage.save_emulator_state()
+            finally:
+                snapshot_stage.close()
+
+            config = FullSMBPolicySuiteComparisonConfig(
+                steps=2,
+                seeds=(5,),
+                scratch_seed=99,
+                device="cpu",
+            )
+            os.chdir(tmp)
+            try:
+                with self.assertRaisesRegex(FileNotFoundError, "curriculum_1_1_midpipe"):
+                    compare_full_smb_policy_suite(
+                        transfer_path,
+                        make_stage=task_stage,
+                        full_smb_vision_checkpoint=full_vision_path,
+                        config=config,
+                        task_names=("curriculum_1_1_midpipe",),
+                    )
+                self.assertEqual(comparison_envs, [])
+
+                state_path = Path("local/full_smb/states/curriculum/1_1_midpipe.state")
+                state_path.parent.mkdir(parents=True)
+                with state_path.open("wb") as handle:
+                    pickle.dump(
+                        {
+                            "kind": FULL_SMB_SAVE_STATE_KIND,
+                            "schema_version": FULL_SMB_SAVE_STATE_SCHEMA_VERSION,
+                            "spec": {"name": "section_1_1_midpipe"},
+                            "state": snapshot,
+                        },
+                        handle,
+                    )
+                result = compare_full_smb_policy_suite(
+                    transfer_path,
+                    make_stage=task_stage,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    config=config,
+                    task_names=("curriculum_1_1_midpipe",),
+                )
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(result.task_names, ("curriculum_1_1_midpipe",))
+        self.assertEqual(result.streams[0]["task"]["start_mode"], "save_state_artifact")
+        self.assertEqual(len(comparison_envs), 1)
+        self.assertEqual(comparison_envs[0].set_state_calls, 1)
+        self.assertEqual(comparison_envs[0].seed, 7)
 
 
 if __name__ == "__main__":

@@ -166,7 +166,6 @@ Compare policy roles on identical seeded task streams:
 ```bash
 retroagi compare --game smb --stage full \
   --transfer-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/transferred_policy.pth \
-  --scratch-trained-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/scratch_policy.pth \
   --fine-tuned-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/policy.pth \
   --known-good-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/policy.pth \
   --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \

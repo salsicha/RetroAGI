@@ -362,7 +362,9 @@ def _aggregate_gate_episodes(
     return {
         "gate": gate.name,
         "episodes": int(len(episodes)),
-        "max_steps_per_episode": int(gate.max_steps),
+        "max_steps_per_episode": int(
+            max((int(episode.get("steps", 0)) for episode in episodes), default=0)
+        ),
         "steps": int(sum(int(episode.get("steps", 0)) for episode in episodes)),
         "max_progress": float(max(max_progress, default=0.0)),
         "mean_max_progress": _mean(max_progress),

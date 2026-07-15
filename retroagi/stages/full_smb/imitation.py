@@ -278,6 +278,9 @@ def collect_full_smb_obstacle_window_duration_dataset(
                 spec,
                 decision_frame_skip=int(decision_frame_skip),
             )
+        except _FullSMBObstacleWindowWarmupTerminated:
+            skipped.append({"name": spec.name, "reason": "warmup_terminated"})
+            continue
         except Exception as exc:
             skipped.append({"name": spec.name, "reason": f"{type(exc).__name__}: {exc}"})
             continue
@@ -333,6 +336,10 @@ def collect_full_smb_obstacle_window_duration_dataset(
         "primitive_release": torch.as_tensor(release_targets, dtype=torch.float32),
         "primitive_release_mask": torch.as_tensor(release_masks, dtype=torch.float32),
         "primitive_post_release": torch.as_tensor(post_release_targets, dtype=torch.long),
+        # Every obstacle-window sample carries authoritative primitive targets
+        # (including deliberate zero masks) and is an independent decision point.
+        "primitive_explicit_mask": torch.ones(len(actions), dtype=torch.float32),
+        "sample_trajectory_ids": torch.arange(len(actions), dtype=torch.long),
         "metrics": metrics,
     }
 
@@ -364,6 +371,7 @@ def merge_full_smb_imitation_datasets(
         "primitive_release": torch.float32,
         "primitive_release_mask": torch.float32,
         "primitive_post_release": torch.long,
+        "primitive_explicit_mask": torch.float32,
     }
     for key, dtype in optional_specs.items():
         if not any(key in dataset for dataset in non_empty):
@@ -386,6 +394,18 @@ def merge_full_smb_imitation_datasets(
             else:
                 values.append(torch.zeros((sample_count,), dtype=dtype))
         merged[key] = torch.cat(values, dim=0)
+    trajectory_ids: list[torch.Tensor] = []
+    next_trajectory_id = 0
+    for dataset in non_empty:
+        sample_count = int(torch.as_tensor(dataset["actions"]).numel())
+        if "sample_trajectory_ids" in dataset:
+            ids = torch.as_tensor(dataset["sample_trajectory_ids"], dtype=torch.long)
+            ids = ids + next_trajectory_id
+        else:
+            ids = torch.full((sample_count,), next_trajectory_id, dtype=torch.long)
+        trajectory_ids.append(ids)
+        next_trajectory_id = int(ids.max().item()) + 1
+    merged["sample_trajectory_ids"] = torch.cat(trajectory_ids, dim=0)
     merged["metrics"] = {
         "samples": float(int(merged["actions"].numel())),
         "max_progress": float(
@@ -436,6 +456,10 @@ def _empty_obstacle_window_duration_dataset(
     }
 
 
+class _FullSMBObstacleWindowWarmupTerminated(RuntimeError):
+    """The warmup script hit a terminal state before the sweep snapshot."""
+
+
 def _collect_obstacle_window_duration_label(
     stage: FullSMBStage,
     state: Any,
@@ -444,6 +468,8 @@ def _collect_obstacle_window_duration_label(
     decision_frame_skip: int,
 ) -> dict[str, Any]:
     _load_obstacle_window_state(stage, state)
+    terminated = False
+    truncated = False
     for action, frames in spec.warmup_script:
         for _ in range(_decision_count(frames, decision_frame_skip)):
             _observation, _reward, terminated, truncated, _info = stage.step(action)
@@ -451,6 +477,10 @@ def _collect_obstacle_window_duration_label(
                 break
         if terminated or truncated:
             break
+    if terminated or truncated:
+        raise _FullSMBObstacleWindowWarmupTerminated(
+            f"obstacle window {spec.name!r} warmup script terminated before its sweep"
+        )
     snapshot = stage.save_emulator_state()
     label_observation = _load_obstacle_window_state(stage, snapshot)
     label_batch = stage.encode_observation(label_observation)
@@ -707,23 +737,35 @@ def _full_smb_imitation_primitive_targets(
         int(SMBAction.JUMP),
     }
     action_values = [int(action) for action in actions.detach().cpu().tolist()]
+    sample_count = len(action_values)
+    explicit_values = _explicit_sample_flags(dataset, sample_count=sample_count)
+    trajectory_values = _sample_trajectory_values(dataset, sample_count=sample_count)
+
+    def _same_run(index: int, other: int) -> bool:
+        return (
+            0 <= other < sample_count
+            and action_values[other] == action_values[index]
+            and trajectory_values[other] == trajectory_values[index]
+            and not explicit_values[other]
+        )
+
     for index, action in enumerate(action_values):
         post_release_targets[index] = int(smb_jump_release_action(action))
-        if action not in jump_actions:
+        if explicit_values[index] or action not in jump_actions:
             continue
         release_mask[index] = 1.0
-        is_run_start = index == 0 or action_values[index - 1] != action
+        is_run_start = not _same_run(index, index - 1)
         run_length = 1
-        for next_index in range(index + 1, len(action_values)):
-            if action_values[next_index] != action:
-                break
+        next_index = index + 1
+        while _same_run(index, next_index):
             run_length += 1
+            next_index += 1
         if is_run_start:
             duration_mask[index] = 1.0
             duration_targets[index] = int(
                 torch.abs(duration_bins - float(run_length)).argmin().item()
             )
-        if index + 1 >= len(action_values) or action_values[index + 1] != action:
+        if not _same_run(index, index + 1):
             release_targets[index] = 1.0
     targets = {
         "duration_bin": duration_targets.long(),
@@ -745,6 +787,12 @@ def _overlay_explicit_primitive_targets(
     *,
     sample_count: int,
 ) -> None:
+    explicit_samples = _optional_target_tensor(
+        dataset,
+        "primitive_explicit_mask",
+        sample_count=sample_count,
+        dtype=torch.float32,
+    )
     explicit_duration_mask = _optional_target_tensor(
         dataset,
         "primitive_duration_mask",
@@ -758,7 +806,11 @@ def _overlay_explicit_primitive_targets(
         dtype=torch.long,
     )
     if explicit_duration_mask is not None and explicit_duration_bin is not None:
-        mask = explicit_duration_mask > 0
+        # Explicit samples are authoritative for every target, including zero
+        # masks that deliberately withhold supervision.
+        mask = (
+            explicit_samples > 0 if explicit_samples is not None else explicit_duration_mask > 0
+        )
         targets["duration_bin"][mask] = explicit_duration_bin[mask]
         targets["duration_mask"][mask] = explicit_duration_mask[mask]
         targets["explicit_duration_mask"][mask] = explicit_duration_mask[mask]
@@ -776,7 +828,9 @@ def _overlay_explicit_primitive_targets(
         dtype=torch.float32,
     )
     if explicit_release_mask is not None and explicit_release is not None:
-        mask = explicit_release_mask > 0
+        mask = (
+            explicit_samples > 0 if explicit_samples is not None else explicit_release_mask > 0
+        )
         targets["release"][mask] = explicit_release[mask]
         targets["release_mask"][mask] = explicit_release_mask[mask]
 
@@ -788,6 +842,42 @@ def _overlay_explicit_primitive_targets(
     )
     if explicit_post_release is not None:
         targets["post_release"] = explicit_post_release
+
+
+def _explicit_sample_flags(
+    dataset: Optional[Mapping[str, Any]],
+    *,
+    sample_count: int,
+) -> list[bool]:
+    if dataset is None:
+        return [False] * sample_count
+    tensor = _optional_target_tensor(
+        dataset,
+        "primitive_explicit_mask",
+        sample_count=sample_count,
+        dtype=torch.float32,
+    )
+    if tensor is None:
+        return [False] * sample_count
+    return [bool(value > 0.0) for value in tensor.tolist()]
+
+
+def _sample_trajectory_values(
+    dataset: Optional[Mapping[str, Any]],
+    *,
+    sample_count: int,
+) -> list[int]:
+    if dataset is None:
+        return [0] * sample_count
+    tensor = _optional_target_tensor(
+        dataset,
+        "sample_trajectory_ids",
+        sample_count=sample_count,
+        dtype=torch.long,
+    )
+    if tensor is None:
+        return [0] * sample_count
+    return [int(value) for value in tensor.tolist()]
 
 
 def _optional_target_tensor(
