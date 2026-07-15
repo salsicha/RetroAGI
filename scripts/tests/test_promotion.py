@@ -269,7 +269,9 @@ class TestPromotionPipeline(unittest.TestCase):
     def test_full_smb_transfer_smoke_runs_handoff_and_continued_training(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            source_checkpoint = root / "artifacts" / "block_smb_smoke" / "checkpoint.pth"
+            source_checkpoint = (
+                root / "artifacts" / "block_smb_smoke" / "block_smb" / "checkpoint.pth"
+            )
             source_checkpoint.parent.mkdir(parents=True, exist_ok=True)
             write_block_policy_checkpoint(source_checkpoint)
 

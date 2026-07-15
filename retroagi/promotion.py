@@ -153,6 +153,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "rollout_steps": 2,
             "evaluation_episodes": 1,
             "evaluation_max_steps": 2,
+            "monte_carlo_validation_samples": 2,
             "success_rate_threshold": 0.0,
             "runtime_seconds": 60.0,
         },
@@ -216,6 +217,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "rollout_steps": 8,
             "evaluation_episodes": 2,
             "evaluation_max_steps": 64,
+            "monte_carlo_validation_samples": 4,
             "success_rate_threshold": 0.0,
             "runtime_seconds": 180.0,
         },
@@ -279,6 +281,7 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "rollout_steps": 16,
             "evaluation_episodes": 3,
             "evaluation_max_steps": 128,
+            "monte_carlo_validation_samples": 8,
             "success_rate_threshold": 0.0,
             "runtime_seconds": 300.0,
         },
@@ -471,6 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--block-smoke-rollout-steps", type=int, default=None)
     parser.add_argument("--block-smoke-evaluation-episodes", type=int, default=None)
     parser.add_argument("--block-smoke-evaluation-max-steps", type=int, default=None)
+    parser.add_argument("--block-smoke-monte-carlo-validation-samples", type=int, default=None)
     parser.add_argument("--block-smoke-success-rate", type=float, default=None)
     parser.add_argument("--block-smoke-runtime-seconds", type=float, default=None)
     return parser
@@ -493,52 +497,48 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
             continue
         if rung.status == UNSUPPORTED_RUNG_STATUS:
             results.append(_skipped_rung(rung, budgets[rung.name]))
-        elif rung.name == "interface-smoke":
-            results.append(
-                _run_interface_smoke(
-                    args,
-                    variant,
-                    budgets[rung.name],
-                    game_plugin.promotion_gate(rung.name),
-                )
-            )
-        elif rung.name == "synthetic-concept":
-            results.append(
-                _run_synthetic_concept(
-                    args,
-                    variant,
-                    budgets[rung.name],
-                    game_plugin.promotion_gate(rung.name),
-                )
-            )
-        elif rung.name == "block-smb-smoke":
-            results.append(
-                _run_block_smb_smoke(
-                    args,
-                    variant,
-                    budgets[rung.name],
-                    game_plugin.promotion_gate(rung.name),
-                )
-            )
-        elif rung.name == "full-smb-asset-mock-perception":
-            results.append(
-                _run_full_smb_asset_mock_perception(
-                    args,
-                    budgets[rung.name],
-                    game_plugin.promotion_gate(rung.name),
-                )
-            )
-        elif rung.name == "full-smb-transfer-smoke":
-            results.append(
-                _run_full_smb_transfer_smoke(
-                    args,
-                    variant,
-                    budgets[rung.name],
-                    game_plugin.promotion_gate(rung.name),
-                )
-            )
         else:
-            raise ValueError(f"unsupported promotion rung {rung.name!r}")
+            try:
+                if rung.name == "interface-smoke":
+                    result = _run_interface_smoke(
+                        args,
+                        variant,
+                        budgets[rung.name],
+                        game_plugin.promotion_gate(rung.name),
+                    )
+                elif rung.name == "synthetic-concept":
+                    result = _run_synthetic_concept(
+                        args,
+                        variant,
+                        budgets[rung.name],
+                        game_plugin.promotion_gate(rung.name),
+                    )
+                elif rung.name == "block-smb-smoke":
+                    result = _run_block_smb_smoke(
+                        args,
+                        variant,
+                        budgets[rung.name],
+                        game_plugin.promotion_gate(rung.name),
+                    )
+                elif rung.name == "full-smb-asset-mock-perception":
+                    result = _run_full_smb_asset_mock_perception(
+                        args,
+                        budgets[rung.name],
+                        game_plugin.promotion_gate(rung.name),
+                    )
+                elif rung.name == "full-smb-transfer-smoke":
+                    result = _run_full_smb_transfer_smoke(
+                        args,
+                        variant,
+                        budgets[rung.name],
+                        game_plugin.promotion_gate(rung.name),
+                    )
+                else:
+                    raise ValueError(f"unsupported promotion rung {rung.name!r}")
+            except Exception as error:
+                results.append(_errored_rung(rung, budgets[rung.name], error))
+            else:
+                results.append(result)
         if results[-1]["status"] == "failed":
             stopping_reason = f"{rung.name} failed automatic promotion gates"
 
@@ -646,6 +646,11 @@ def _resolve_budgets(args: argparse.Namespace) -> dict[str, dict[str, int | floa
     )
     _apply_budget_override(
         budgets["block-smb-smoke"],
+        "monte_carlo_validation_samples",
+        args.block_smoke_monte_carlo_validation_samples,
+    )
+    _apply_budget_override(
+        budgets["block-smb-smoke"],
         "success_rate_threshold",
         args.block_smoke_success_rate,
     )
@@ -684,6 +689,19 @@ def _stopped_rung(
         "status": "stopped",
         "passed": None,
         "reason": reason,
+        "budget": dict(budget),
+    }
+
+
+def _errored_rung(
+    rung: PromotionRung, budget: Mapping[str, int | float], error: Exception
+) -> dict[str, Any]:
+    return {
+        "name": rung.name,
+        "description": rung.description,
+        "status": "failed",
+        "passed": False,
+        "error": f"{type(error).__name__}: {error}",
         "budget": dict(budget),
     }
 
@@ -796,6 +814,7 @@ def _run_synthetic_concept(
 ) -> dict[str, Any]:
     experiment_args = argparse.Namespace(
         stage=["synthetic-1d"],
+        game=args.game,
         output=args.artifacts_dir / "synthetic_concept" / "manifest.json",
         artifacts_dir=args.artifacts_dir / "synthetic_concept",
         seed=args.seed,
@@ -836,6 +855,7 @@ def _run_block_smb_smoke(
 ) -> dict[str, Any]:
     experiment_args = argparse.Namespace(
         stage=["block-smb"],
+        game=args.game,
         output=args.artifacts_dir / "block_smb_smoke" / "manifest.json",
         artifacts_dir=args.artifacts_dir / "block_smb_smoke",
         seed=args.seed,
@@ -857,6 +877,9 @@ def _run_block_smb_smoke(
         block_rollout_steps=int(budget["rollout_steps"]),
         block_evaluation_episodes=int(budget["evaluation_episodes"]),
         block_evaluation_max_steps=int(budget["evaluation_max_steps"]),
+        block_monte_carlo_validation_samples=int(
+            budget.get("monte_carlo_validation_samples", 0)
+        ),
         block_fixed_scenario=None,
         enable_block_checkpoint_transfer=False,
     )
@@ -918,6 +941,15 @@ def _run_full_smb_asset_mock_perception(
         gate_spec=gate_spec,
     )
     passed = all(gate["passed"] for gate in automatic_gates)
+    _asset_mock_gate_status_path(checkpoint_path).write_text(
+        json.dumps(
+            {"passed": passed, "automatic_gates": to_plain_data(automatic_gates)},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return {
         "name": "full-smb-asset-mock-perception",
         "description": (
@@ -1351,13 +1383,16 @@ def _ensure_handoff_source_checkpoint(
     variant: Any,
     rung_dir: Path,
 ) -> Path:
-    previous_checkpoint = args.artifacts_dir / "block_smb_smoke" / "checkpoint.pth"
+    previous_checkpoint = (
+        args.artifacts_dir / "block_smb_smoke" / "block_smb" / "checkpoint.pth"
+    )
     if previous_checkpoint.exists():
         return previous_checkpoint
 
-    block_budget = PROMOTION_BUDGETS[args.budget]["block-smb-smoke"]
+    block_budget = _resolve_budgets(args)["block-smb-smoke"]
     experiment_args = argparse.Namespace(
         stage=["block-smb"],
+        game=args.game,
         output=rung_dir / "source_block_smb" / "manifest.json",
         artifacts_dir=rung_dir / "source_block_smb",
         seed=args.seed,
@@ -1375,6 +1410,9 @@ def _ensure_handoff_source_checkpoint(
         block_rollout_steps=int(block_budget["rollout_steps"]),
         block_evaluation_episodes=int(block_budget["evaluation_episodes"]),
         block_evaluation_max_steps=int(block_budget["evaluation_max_steps"]),
+        block_monte_carlo_validation_samples=int(
+            block_budget.get("monte_carlo_validation_samples", 0)
+        ),
         block_fixed_scenario=None,
         enable_block_checkpoint_transfer=False,
     )
@@ -1394,11 +1432,26 @@ def _ensure_handoff_source_checkpoint(
     return source_checkpoint
 
 
+def _asset_mock_gate_status_path(checkpoint_path: Path) -> Path:
+    return checkpoint_path.with_suffix(".gates.json")
+
+
+def _asset_mock_checkpoint_gates_passed(checkpoint_path: Path) -> bool:
+    status_path = _asset_mock_gate_status_path(checkpoint_path)
+    if not status_path.exists():
+        return False
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(status, Mapping) and bool(status.get("passed"))
+
+
 def _ensure_asset_mock_perception_checkpoint(args: argparse.Namespace) -> Path:
     checkpoint_path = (
         args.artifacts_dir / "full_smb_asset_mock_perception" / "full_smb_vit.pth"
     )
-    if checkpoint_path.exists():
+    if checkpoint_path.exists() and _asset_mock_checkpoint_gates_passed(checkpoint_path):
         return checkpoint_path
     budget = PROMOTION_BUDGETS[args.budget]["full-smb-asset-mock-perception"]
     gate_spec = get_game_plugin(args.game).promotion_gate("full-smb-asset-mock-perception")
@@ -1418,6 +1471,9 @@ def _run_deterministic_full_smb_inference(
     seed: int,
     device: torch.device,
 ) -> dict[str, Any]:
+    # The model forward samples Gumbel noise even in eval mode, so the reported
+    # "deterministic" metrics are only reproducible if torch RNG is pinned here.
+    torch.manual_seed(seed)
     stage = _make_promotion_full_smb_stage(vision)
     try:
         observation = stage.reset(seed=seed)

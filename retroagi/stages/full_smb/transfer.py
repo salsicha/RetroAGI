@@ -267,6 +267,15 @@ def select_transferred_full_smb_action(
         episode_mask=episode_mask,
     )[:5]
     action_logits = logits_a[:, -1, : len(SMB_ACTIONS)]
+    # Match the action-selection rule used by training, evaluation, and play:
+    # bias the logits with the model's motor-primitive signals before argmax.
+    # Imported lazily because train.py imports this module at load time.
+    from retroagi.stages.full_smb.train import _apply_full_smb_motor_primitive_bias
+
+    action_logits = _apply_full_smb_motor_primitive_bias(
+        action_logits,
+        getattr(model, "last_motor_primitives", None),
+    )
     if deterministic:
         action_tensor = action_logits.argmax(dim=-1)
     else:

@@ -241,6 +241,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--block-rollout-steps", type=int, default=2)
     parser.add_argument("--block-evaluation-episodes", type=int, default=1)
     parser.add_argument("--block-evaluation-max-steps", type=int, default=2)
+    parser.add_argument("--block-monte-carlo-train-samples-per-epoch", type=int, default=0)
+    parser.add_argument("--block-monte-carlo-validation-samples", type=int, default=0)
+    parser.add_argument("--block-monte-carlo-test-samples", type=int, default=0)
     parser.add_argument("--block-fixed-scenario", action="append", default=None)
     parser.add_argument(
         "--enable-block-checkpoint-transfer",
@@ -362,11 +365,11 @@ def _block_smb_plan(
         "--generated-scenarios",
         "0",
         "--monte-carlo-train-samples-per-epoch",
-        "0",
+        str(getattr(args, "block_monte_carlo_train_samples_per_epoch", 0)),
         "--monte-carlo-validation-samples",
-        "0",
+        str(getattr(args, "block_monte_carlo_validation_samples", 0)),
         "--monte-carlo-test-samples",
-        "0",
+        str(getattr(args, "block_monte_carlo_test_samples", 0)),
         "--evaluation-episodes",
         str(args.block_evaluation_episodes),
         "--evaluation-max-steps",
