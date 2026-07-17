@@ -155,13 +155,16 @@ def _promotion_rows(
             continue
         rung_name = str(rung.get("name", "unknown-rung"))
         row = _base_row(path, run, kind="rung", name=rung_name)
+        rung_metrics = rung.get("metrics", {})
         row.update(
             {
                 "rung": rung_name,
                 "status": rung.get("status"),
                 "passed": rung.get("passed"),
                 "runtime_seconds": rung.get("runtime_seconds"),
-                "metrics": {},
+                # Rungs without a nested experiment (e.g. the Full SMB rungs)
+                # carry their metrics directly on the rung record.
+                "metrics": dict(rung_metrics) if isinstance(rung_metrics, Mapping) else {},
                 "gates": list(rung.get("automatic_gates", [])),
                 "artifacts": _rung_artifacts(rung),
             }
@@ -265,6 +268,11 @@ def _artifact_paths(stage: Mapping[str, Any]) -> dict[str, str]:
 
 def _rung_artifacts(rung: Mapping[str, Any]) -> dict[str, str]:
     artifacts = {}
+    rung_artifacts = rung.get("artifacts")
+    if isinstance(rung_artifacts, Mapping):
+        for key, value in rung_artifacts.items():
+            if value is not None:
+                artifacts[str(key)] = str(value)
     value = rung.get("experiment_manifest_path")
     if value is not None:
         artifacts["experiment_manifest_path"] = str(value)

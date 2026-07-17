@@ -35,7 +35,10 @@ FULL_SMB_VIT_CLASSES = (
     "cloud",
     "bush",
 )
-FULL_SMB_DEEPLAB_CLASSES = ("background", "floor", "box", "enemy", "brick", "mario")
+# Index order must match the training labels in scripts/segmentation/segment_training.py
+# (default=0, floor=1, brick=2, box=3, enemy=4, mario=5) — the shipped checkpoint
+# predicts channels in that order.
+FULL_SMB_DEEPLAB_CLASSES = ("background", "floor", "brick", "box", "enemy", "mario")
 FULL_SMB_SEMANTIC_CLASSES = FULL_SMB_VIT_CLASSES
 DEFAULT_FULL_SMB_VIT_CHECKPOINT = Path("data/vit/full_smb_vit.pth")
 FALLBACK_FULL_SMB_VIT_CHECKPOINT = Path("data/vit/vit_smb.pth")

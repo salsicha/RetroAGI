@@ -19,6 +19,7 @@ Outputs:
     data/vit/predictions.png      side-by-side scene / GT / prediction
 """
 import os
+import sys
 import argparse
 from pathlib import Path
 import numpy as np
@@ -26,6 +27,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from retroagi.core import save_checkpoint as save_versioned_checkpoint, select_device
 from retroagi.stages.full_smb.vision import (
     FullSMBVisionTransformer,

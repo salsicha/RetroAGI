@@ -768,10 +768,9 @@ def _checkpoint_config(path: Path) -> dict[str, Any]:
     values["resume_path"] = path
     values["save_checkpoints"] = False
     values["record_videos"] = False
-    if "epochs" not in values:
-        values["epochs"] = max(1, int(checkpoint.get("epoch", 1)))
-    else:
-        values["epochs"] = max(int(values["epochs"]), int(checkpoint.get("epoch", 0)))
+    # Pin the epoch budget to the checkpoint's completed epochs: evaluation-style
+    # commands must never resume training from an unfinished run's checkpoint.
+    values["epochs"] = max(1, int(checkpoint.get("epoch", 1)))
     return values
 
 

@@ -185,7 +185,6 @@ def validate_architecture_checkpoint_extension(
         "checkpoint_model_name": spec.checkpoint_model_name,
         "checkpoint_compatibility_policy": spec.checkpoint_compatibility_policy,
         "output_contract": spec.output_contract,
-        "supported_stage_names": list(spec.supported_stage_names),
     }
     for key, expected_value in expected.items():
         actual_value = to_plain_data(extension.get(key))
@@ -195,6 +194,18 @@ def validate_architecture_checkpoint_extension(
                 f"{key} {actual_value!r} does not match registered "
                 f"{architecture_name!r} value {expected_value!r}"
             )
+    # A checkpoint saved before new stages were registered must keep loading, so
+    # the stored stage list only needs to be a subset of the registered one.
+    stored_stage_names = to_plain_data(extension.get("supported_stage_names"))
+    if not isinstance(stored_stage_names, list) or not set(stored_stage_names) <= set(
+        spec.supported_stage_names
+    ):
+        raise ValueError(
+            "checkpoint architecture extension "
+            f"supported_stage_names {stored_stage_names!r} is not a subset of registered "
+            f"{architecture_name!r} value {list(spec.supported_stage_names)!r}"
+        )
+    expected["supported_stage_names"] = list(spec.supported_stage_names)
 
     architecture_config = extension.get("config", {})
     if architecture_config is None:

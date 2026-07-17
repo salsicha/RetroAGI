@@ -542,6 +542,41 @@ class TestBlockSMBCLI(unittest.TestCase):
             {"hidden_dim": 18, "controller_schedule": "linear"},
         )
 
+    def test_evaluate_command_does_not_resume_training_from_unfinished_checkpoint(self):
+        checkpoint = {
+            "epoch": 4,
+            "config": {
+                "seed": 11,
+                "epochs": 10,
+                "architecture_name": BASELINE_ARCHITECTURE_NAME,
+                "architecture_config": {
+                    "hidden_dim": 16,
+                    "controller_schedule": "constant",
+                },
+                "hidden_dim": 16,
+                "fixed_scenarios": ["level_2_gap.json"],
+            },
+        }
+        with patch("retroagi.stages.block_smb.cli.load_checkpoint", return_value=checkpoint):
+            with patch(
+                "retroagi.stages.block_smb.cli.train_and_evaluate_block_smb",
+                return_value=fake_result(),
+            ) as train:
+                exit_code, _payload = self.run_main(
+                    [
+                        "evaluate",
+                        "--checkpoint",
+                        "data/block_smb/policy.pth",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        config = train.call_args.args[0]
+        # Pinning epochs to the checkpoint's completed epoch count keeps the
+        # trainer's range(start_epoch, epochs) empty: evaluation must report
+        # the checkpoint's weights, not silently train 6 more epochs.
+        self.assertEqual(config.epochs, 4)
+
     def test_record_command_enables_recording_with_checkpoint_config(self):
         checkpoint = {
             "epoch": 2,

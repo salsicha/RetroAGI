@@ -886,7 +886,7 @@ class FrameGenerator():
         self.sbrick = SpriteLoader.SpriteSSGT(
             self.brick, self.classcolors['brick'])
         self.sblock = SpriteLoader.SpriteSSGT(
-            self.brick, self.classcolors['floor'])
+            self.block, self.classcolors['floor'])
 
     def LoadSprites(self, level):
         '''Load sprites for mario, enemies and generates their ground truth.'''
@@ -1273,7 +1273,10 @@ class TrainingUtils():
         plt.figure()
         plt.bar(np.arange(args.num_classes), iou)
         plt.title('Class Accuracy in the validation set ')
-        plt.show()
+        # show() blocks per-epoch on interactive backends; save instead so the
+        # 45-epoch training loop can run unattended.
+        plt.savefig('validation_class_iou.png')
+        plt.close()
 
         mean_iou = np.nanmean(iou)
 

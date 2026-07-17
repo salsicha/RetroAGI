@@ -129,7 +129,6 @@ def validate_checkpoint_compatibility(
                 "checkpoint_model_name",
                 "checkpoint_compatibility_policy",
                 "output_contract",
-                "supported_stage_names",
             ):
                 if actual.get(key) != expected.get(key):
                     _fail(
@@ -137,6 +136,18 @@ def validate_checkpoint_compatibility(
                         f"architecture {key} {actual.get(key)!r} does not match expected "
                         f"{expected.get(key)!r}",
                     )
+            # Checkpoints saved before new stages were registered stay valid, so
+            # the stored stage list only needs to be a subset of the current one.
+            stored_stage_names = actual.get("supported_stage_names")
+            expected_stage_names = expected.get("supported_stage_names") or []
+            if not isinstance(stored_stage_names, list) or not set(stored_stage_names) <= set(
+                expected_stage_names
+            ):
+                _fail(
+                    context,
+                    f"architecture supported_stage_names {stored_stage_names!r} is not a "
+                    f"subset of expected {expected_stage_names!r}",
+                )
         elif config_architecture_name is not None:
             if str(config_architecture_name) != architecture.name:
                 _fail(

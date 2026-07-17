@@ -206,7 +206,6 @@ def _pose_on_surface(surface, rng, *, mw, mh):
 
 
 def make_split(n, sprites, seed):
-    rng = np.random.RandomState(seed)
     import random as pyr
     r = pyr.Random(seed)
     imgs = np.zeros((n, H, W, 3), np.uint8)

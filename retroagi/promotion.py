@@ -30,6 +30,7 @@ from retroagi.core import (
     game_plugin_names,
     get_game_plugin,
     get_architecture,
+    load_checkpoint,
     parse_architecture_ablation_item,
     save_checkpoint,
     select_device,
@@ -44,6 +45,7 @@ from retroagi.stages.full_smb.adapter import (
 from retroagi.stages.full_smb.train import FullSMBTrainingConfig, train_full_smb_policy
 from retroagi.stages.full_smb.transfer import (
     load_transferred_full_smb_policy,
+    policy_architecture_from_checkpoint,
     select_transferred_full_smb_action,
     transfer_block_smb_checkpoint_to_full_smb,
 )
@@ -1378,6 +1380,32 @@ def _run_full_smb_transfer_smoke(
     }
 
 
+def _handoff_checkpoint_matches_run(
+    checkpoint_path: Path,
+    args: argparse.Namespace,
+    variant: Any,
+) -> bool:
+    """Only reuse an existing Block SMB checkpoint with matching architecture.
+
+    A shared artifacts dir can hold a checkpoint from a different architecture
+    variant; reusing it would attribute that run's weights to this variant.
+    """
+
+    try:
+        checkpoint = load_checkpoint(checkpoint_path)
+        architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
+    except (ValueError, KeyError, RuntimeError, OSError):
+        return False
+    if architecture_name != args.architecture_name:
+        return False
+    variant_config = dict(getattr(variant, "architecture_config", {}) or {})
+    resolved_config = dict(architecture_config or {})
+    for key, value in variant_config.items():
+        if key not in resolved_config or resolved_config[key] != value:
+            return False
+    return True
+
+
 def _ensure_handoff_source_checkpoint(
     args: argparse.Namespace,
     variant: Any,
@@ -1386,7 +1414,11 @@ def _ensure_handoff_source_checkpoint(
     previous_checkpoint = (
         args.artifacts_dir / "block_smb_smoke" / "block_smb" / "checkpoint.pth"
     )
-    if previous_checkpoint.exists():
+    if previous_checkpoint.exists() and _handoff_checkpoint_matches_run(
+        previous_checkpoint,
+        args,
+        variant,
+    ):
         return previous_checkpoint
 
     block_budget = _resolve_budgets(args)["block-smb-smoke"]

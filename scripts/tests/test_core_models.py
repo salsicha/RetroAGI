@@ -933,6 +933,29 @@ class TestCriticFeedbackContract(unittest.TestCase):
         torch.testing.assert_close(criticism, fixed_criticism)
         self.assertIsNone(next_world_model_state)
 
+    def test_disabled_world_model_skips_motion_gate(self):
+        model = AgentWorldModelCritic(
+            vocab_size=7,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+        )
+        model.eval()
+        src_a = torch.zeros(1, 2, dtype=torch.long)
+        src_b = torch.zeros(1, 4, dtype=torch.long)
+        src_c = torch.arange(8, dtype=torch.float32).view(1, 8)
+
+        with torch.no_grad():
+            model(src_a, src_b, src_c, world_model_enabled=False)
+
+        trace = model.last_action_refinement
+        # With the world model ablated the "prediction" equals the current
+        # state, so the no-motion gate must be skipped; otherwise every
+        # non-pause candidate is flagged predicts_no_motion and rejected.
+        self.assertIsNotNone(trace.predicts_no_motion)
+        self.assertFalse(bool(trace.predicts_no_motion.any()))
+
     def test_auxiliary_objective_heads_produce_scalar_reward_value_and_representation(self):
         model = AgentWorldModelCritic(
             vocab_size=7,

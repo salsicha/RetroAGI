@@ -540,8 +540,10 @@ class FullSMBStage:
         reward_config: FullSMBRewardConfig = DEFAULT_FULL_SMB_REWARD_CONFIG,
         vision: Optional[VisionEncoder] = None,
         env_kwargs: Optional[Mapping[str, Any]] = None,
+        start_emulator_state: Optional["FullSMBEmulatorState"] = None,
     ):
         self.env_config = env_config
+        self.start_emulator_state = start_emulator_state
         self.content_spec = content_spec
         self.signal_config = signal_config
         self.observation_config = observation_config
@@ -585,6 +587,10 @@ class FullSMBStage:
         self._last_truncated = False
         self._reset_frame_stack(observation)
         self._last_observation = observation.copy()
+        if self.start_emulator_state is not None:
+            # Tasks that start from a mid-level snapshot must begin every
+            # episode from that snapshot, not the backend's default spawn.
+            observation = self.load_emulator_state(self.start_emulator_state)
         return observation
 
     def step(

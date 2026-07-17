@@ -83,14 +83,16 @@ def main():
     save(crop(level, 144, 200, 16, 16), "ground")
 
     # ── Pipe / hill / cloud / bush — auto-cropped from the baked level ────────
+    # The ground band in level_1.png starts at y=200, so these crops must extend
+    # to y=200 or the sprite bottoms are truncated.
     # A clean 2-tile pipe (lip + body) lives just left of x=640 in level_1.png.
-    save(autocrop_sky(crop(level, 600, 144, 40, 48)), "pipe")
+    save(autocrop_sky(crop(level, 600, 144, 40, 56)), "pipe")
     # Big green hill at the very start of the level.
-    save(autocrop_sky(crop(level, 0,   128, 80, 64)), "hill")
+    save(autocrop_sky(crop(level, 0,   128, 80, 72)), "hill")
     # First cloud, upper area.
     save(autocrop_sky(crop(level, 145, 32, 56, 40)),  "cloud")
     # Bush cluster mid-screen.
-    save(autocrop_sky(crop(level, 376, 160, 64, 32)), "bush")
+    save(autocrop_sky(crop(level, 376, 160, 64, 40)), "bush")
 
     print(f"Done. Sprites in {OUT_DIR}")
 

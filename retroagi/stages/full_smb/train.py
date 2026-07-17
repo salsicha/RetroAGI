@@ -99,6 +99,7 @@ _FULL_SMB_TRAINING_MODE_ALIASES = {
 }
 FULL_SMB_INIT_SOURCE_BLOCK_POLICY = "block_smb_policy_checkpoint"
 FULL_SMB_INIT_SOURCE_TRANSFER = "full_smb_transfer_checkpoint"
+FULL_SMB_INIT_SOURCE_POLICY_TRAINER = "full_smb_policy_trainer_checkpoint"
 FULL_SMB_PERCEPTION_FREEZE = "freeze"
 FULL_SMB_PERCEPTION_FINE_TUNE = "fine_tune"
 FULL_SMB_PERCEPTION_REPLACE = "replace"
@@ -1291,6 +1292,7 @@ def evaluate_full_smb_policy(
             episode_return = 0.0
             terminated = False
             truncated = False
+            episode_boundary_reasons: tuple[str, ...] = ()
             world_model_state: WorldModelState | None = None
             fixed_task_metrics = _start_full_smb_fixed_task_episode_metrics(
                 stage,
@@ -1326,6 +1328,7 @@ def evaluate_full_smb_policy(
                     truncated=truncated,
                     info=info,
                 )
+                episode_boundary_reasons = boundary.reasons
                 if boundary.reset_recurrent_state:
                     world_model_state = None
                 elif forward.next_world_model_state is not None:
@@ -1366,7 +1369,13 @@ def evaluate_full_smb_policy(
                 fixed_task_episode_metrics.setdefault(str(task_name), []).append(episode_metrics)
                 if float(episode_metrics.get("completion_rate", 0.0)) >= 1.0:
                     success_count += 1
-            elif terminated:
+            elif (
+                terminated
+                and "level_completion" in episode_boundary_reasons
+                and "death" not in episode_boundary_reasons
+            ):
+                # Termination alone is not success: the adapter also terminates
+                # on death, so require an explicit level-completion signal.
                 success_count += 1
             if recording_targets["enabled"]:
                 recording_artifacts.append(
@@ -2537,8 +2546,55 @@ def _load_init_training_state(
         )
         return model, 0, 0, architecture_name, dict(architecture_config), checkpoint, vision, source
 
+    if _matches_checkpoint_identity(
+        init_checkpoint,
+        stage=FULL_SMB_SPEC.name,
+        model_name=FULL_SMB_POLICY_MODEL_NAME,
+        checkpoint_kind=FULL_SMB_POLICY_CHECKPOINT_KIND,
+    ):
+        # Accept trainer-kind checkpoints (e.g. imitation warm starts) as weight
+        # initializers with a fresh optimizer: the imitation CLI saves an
+        # optimizer built over only the warm-started head parameters, so a
+        # strict resume would always fail on the optimizer state.
+        _validate_full_smb_policy_checkpoint(init_checkpoint)
+        architecture_name, architecture_config = policy_architecture_from_checkpoint(
+            init_checkpoint
+        )
+        model = make_full_smb_policy_model(
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+        ).to(device)
+        skipped_world_model_keys = _load_full_smb_policy_state(
+            model,
+            init_checkpoint["states"]["model"],
+        )
+        source = _training_source_metadata(
+            FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT,
+            checkpoint_path=config.init_checkpoint,
+            checkpoint=init_checkpoint,
+            architecture_name=architecture_name,
+            architecture_config=architecture_config,
+        )
+        source["init_checkpoint_source"] = FULL_SMB_INIT_SOURCE_POLICY_TRAINER
+        if skipped_world_model_keys:
+            source["world_model_migration"] = {
+                "kind": "action_level_lstm_reinitialized",
+                "skipped_keys": skipped_world_model_keys,
+            }
+        return (
+            model,
+            0,
+            0,
+            architecture_name,
+            dict(architecture_config),
+            init_checkpoint,
+            None,
+            source,
+        )
+
     raise ValueError(
-        "init_checkpoint must be a Block SMB policy checkpoint or a Full SMB " "transfer checkpoint"
+        "init_checkpoint must be a Block SMB policy checkpoint, a Full SMB "
+        "transfer checkpoint, or a Full SMB policy trainer checkpoint"
     )
 
 
@@ -3408,6 +3464,30 @@ def _reason_matches_info(info: Mapping[str, Any], patterns: tuple[str, ...]) -> 
     return any(pattern in normalized for pattern in patterns)
 
 
+def _task_start_emulator_state(config: FullSMBTrainingConfig) -> Any:
+    """Load the save-state snapshot for tasks that start mid-level."""
+
+    task_name = getattr(config, "task_name", None)
+    if task_name is None:
+        return None
+    try:
+        task = full_smb_task_catalog().task(str(task_name))
+    except KeyError:
+        return None
+    if task.start.mode != "save_state_artifact":
+        return None
+    path = task.start.save_state_path
+    if path is None or not Path(path).exists():
+        raise FileNotFoundError(
+            f"Full SMB task {task.name!r} requires the local save-state artifact "
+            f"{path}; create it with `python -m retroagi.stages.full_smb.save_states "
+            "create` before training or evaluating this task."
+        )
+    from retroagi.stages.full_smb.save_states import load_full_smb_save_state_payload
+
+    return load_full_smb_save_state_payload(Path(path))["state"]
+
+
 def _make_stage(
     make_stage: Optional[StageFactory],
     vision: FullSMBSegmentationVision,
@@ -3427,6 +3507,7 @@ def _make_stage(
         vision=vision,
         observation_config=observation_config,
         reward_config=config.reward_config,
+        start_emulator_state=_task_start_emulator_state(config),
     )
 
 
@@ -3525,8 +3606,10 @@ def _restore_optimizer_state(
     except ValueError as exc:
         if strict:
             raise ValueError(
-                "checkpoint optimizer state is incompatible with the selected "
-                "Full SMB perception mode"
+                "checkpoint optimizer state does not match the trainer's parameter "
+                "groups; checkpoints whose optimizer covered only a parameter "
+                "subset (e.g. imitation warm starts) cannot be resumed — pass "
+                "them via --init-checkpoint instead"
             ) from exc
 
 

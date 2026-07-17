@@ -112,6 +112,35 @@ class TestCheckpointSchema(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "architecture extension config"):
             validate_checkpoint(checkpoint)
 
+    def test_accepts_extension_saved_before_new_stages_were_registered(self):
+        checkpoint = self.make_checkpoint()
+        extension = build_architecture_checkpoint_extension(
+            BASELINE_ARCHITECTURE_NAME,
+            {"hidden_dim": 8},
+        )
+        registered_stage_names = list(extension["supported_stage_names"])
+        extension["supported_stage_names"] = registered_stage_names[:-1]
+        checkpoint[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY] = extension
+
+        normalized = validate_checkpoint(checkpoint)
+
+        self.assertEqual(
+            normalized[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY]["supported_stage_names"],
+            registered_stage_names,
+        )
+
+    def test_rejects_extension_with_unregistered_stage_names(self):
+        checkpoint = self.make_checkpoint()
+        extension = build_architecture_checkpoint_extension(
+            BASELINE_ARCHITECTURE_NAME,
+            {"hidden_dim": 8},
+        )
+        extension["supported_stage_names"] = ["synthetic_1d", "unknown_game"]
+        checkpoint[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY] = extension
+
+        with self.assertRaisesRegex(ValueError, "supported_stage_names"):
+            validate_checkpoint(checkpoint)
+
     def test_round_trips_through_torch_file_and_writes_sidecar_summary(self):
         checkpoint = self.make_checkpoint()
         with TemporaryDirectory() as tmpdir:

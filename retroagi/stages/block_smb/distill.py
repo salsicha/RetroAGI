@@ -425,7 +425,21 @@ def _primitive_outcome_target_fields(
         if future_examples
         else 0.0
     )
-    bad_progress = 1.0 if progress_delta <= 0.0 and terminal_outcome <= 0.0 else 0.0
+    # "Progress" is direction-aware: retreat scenarios move left on purpose and
+    # wait scenarios hold still on purpose, so only judge progress against the
+    # direction the teacher's own action commands.
+    action = int(current.action)
+    if action in (int(SMBAction.RIGHT), int(SMBAction.RIGHT_JUMP)):
+        directed_delta = progress_delta
+    elif action in (int(SMBAction.LEFT), int(SMBAction.LEFT_JUMP)):
+        directed_delta = -progress_delta
+    else:
+        directed_delta = None
+    bad_progress = (
+        1.0
+        if directed_delta is not None and directed_delta <= 0.0 and terminal_outcome <= 0.0
+        else 0.0
+    )
     cancel = max(future_cancel, collision_death_risk)
     replan = max(future_replan, bad_progress, terminal_outcome)
     should_continue = (

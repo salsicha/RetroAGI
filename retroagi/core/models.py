@@ -935,8 +935,11 @@ class WorldModel(nn.Module):
                     f"[batch, {feature_count}] or [batch, steps, {feature_count}], "
                     f"got {tuple(features.shape)}"
                 )
+            # Match the interleaved [f0_mean, f0_std, f0_min, f0_max, f1_mean, ...]
+            # layout produced by the [batch, steps, F] branch below.
             zeros = torch.zeros_like(features)
-            return torch.cat((features, zeros, features, features), dim=1)
+            summary = torch.stack((features, zeros, features, features), dim=-1)
+            return summary.reshape(batch_size, feature_count * 4)
         if features.ndim != 3:
             raise ValueError(
                 "primitive_context must have shape "
@@ -1547,7 +1550,9 @@ class AgentWorldModelCritic(nn.Module):
             dim=-1,
         )
 
-    def _critic_evaluation(self, next_state_pred, current_state, logits_a):
+    def _critic_evaluation(
+        self, next_state_pred, current_state, logits_a, *, motion_gate_enabled=True
+    ):
         critic = getattr(self, "critic", None)
         if hasattr(critic, "evaluate_action"):
             evaluation = critic.evaluate_action(
@@ -1561,6 +1566,7 @@ class AgentWorldModelCritic(nn.Module):
                 next_state_pred,
                 current_state,
                 logits_a,
+                gate_enabled=motion_gate_enabled,
             )
 
         feedback = self.critic(next_state_pred)
@@ -1581,6 +1587,7 @@ class AgentWorldModelCritic(nn.Module):
             next_state_pred,
             current_state,
             logits_a,
+            gate_enabled=motion_gate_enabled,
         )
 
     def _candidate_pause_mask(self, logits_a: torch.Tensor) -> torch.Tensor:
@@ -1602,14 +1609,22 @@ class AgentWorldModelCritic(nn.Module):
         next_state_pred: torch.Tensor,
         current_state: torch.Tensor,
         logits_a: torch.Tensor,
+        *,
+        gate_enabled: bool = True,
     ) -> CriticActionEvaluation:
-        motion_score = action_motion_score(
-            next_state_pred,
-            current_state,
-            motion_position_dims=self.motion_position_dims,
-        )
         pause_mask = self._candidate_pause_mask(logits_a)
-        predicts_no_motion = (motion_score <= self.critic_motion_threshold) & ~pause_mask
+        if gate_enabled:
+            motion_score = action_motion_score(
+                next_state_pred,
+                current_state,
+                motion_position_dims=self.motion_position_dims,
+            )
+            predicts_no_motion = (motion_score <= self.critic_motion_threshold) & ~pause_mask
+        else:
+            # With the world model ablated the "prediction" is the current state,
+            # so a motion gate would reject every non-pause candidate.
+            motion_score = action_motion_score(next_state_pred, None)
+            predicts_no_motion = torch.zeros_like(pause_mask)
         return CriticActionEvaluation(
             feedback=evaluation.feedback,
             progress_score=evaluation.progress_score,
@@ -1647,7 +1662,12 @@ class AgentWorldModelCritic(nn.Module):
             return_world_model_state=return_world_model_state,
             world_model_enabled=world_model_enabled,
         )
-        evaluation = self._critic_evaluation(next_state_pred, src_C, logits_a)
+        evaluation = self._critic_evaluation(
+            next_state_pred,
+            src_C,
+            logits_a,
+            motion_gate_enabled=world_model_enabled,
+        )
         return _ActionCandidate(
             logits_a=logits_a,
             actions=actions,

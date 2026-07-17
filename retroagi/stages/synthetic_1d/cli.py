@@ -209,6 +209,12 @@ def _checkpoint_config(path: Path, *, epochs_override: int | None = None) -> dic
         values["epochs"] = max(1, int(checkpoint.get("epoch", 1)))
     else:
         values["epochs"] = max(int(values["epochs"]), completed_epochs)
+    if epochs_override is None and int(values["epochs"]) <= completed_epochs:
+        raise ValueError(
+            f"checkpoint {path} already completed {completed_epochs} of "
+            f"{int(values['epochs'])} epoch(s); pass --epochs above "
+            f"{completed_epochs} to continue training"
+        )
     return values
 
 

@@ -29,7 +29,6 @@ from os.path import join
 import csv
 
 from torchvision.models.segmentation.deeplabv3 import DeepLabHead,DeepLabV3
-from torchvision import models
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[1]

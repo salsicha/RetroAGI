@@ -288,6 +288,11 @@ class MarioScenarioEnv:
             if not was_jump_held:
                 # Fresh press — register in buffer regardless of ground state
                 self.mario["jump_buffer"] = JUMP_BUFFER_FRAMES
+            # NOTE: while the button stays held the buffer deliberately does not
+            # decay, so a held jump re-fires on landing. This diverges from real
+            # SMB (holding A does not re-jump) but the scripted teacher
+            # curriculum and Monte Carlo oracles are tuned to this behavior;
+            # changing it requires re-tuning every scenario script.
         else:
             self.mario["jump_buffer"] = max(0, self.mario["jump_buffer"] - 1)
 
@@ -334,6 +339,13 @@ class MarioScenarioEnv:
                     mario_rect.right = r.left
                 elif self.mario["vx"] < 0:
                     mario_rect.left = r.right
+                elif plat.get("delta_x", 0) > 0:
+                    # A platform sliding into a stationary Mario pushes him
+                    # instead of leaving the overlap for the Y pass to resolve
+                    # (which would teleport him on top).
+                    mario_rect.left = r.right
+                elif plat.get("delta_x", 0) < 0:
+                    mario_rect.right = r.left
                 self.mario["x"] = mario_rect.x
                 self.mario["vx"] = 0
 
