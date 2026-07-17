@@ -1,3 +1,10 @@
+"""EXAMPLE ONLY: legacy CNN (DeepLab) segmentation inference.
+
+Kept as a reference for the original CNN-based approach; not part of the
+supported pipeline. All supported vision paths use the ViT-backed
+FullSMBSegmentationVision in retroagi.stages.full_smb.vision.
+"""
+
 import os
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"

@@ -1,3 +1,12 @@
+"""EXAMPLE ONLY: legacy CNN (DeepLab) segmentation trainer.
+
+This script is kept as a reference for the original CNN-based approach and is
+not part of the supported pipeline — all supported vision training uses the
+ViT path (scripts/vit/train_vit.py, scripts/vit/train_block_vit.py). Its input
+assets (tilesets, sprite CSVs, real frames) are not checked into the repo, so
+it cannot run as-is.
+"""
+
 import os
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"

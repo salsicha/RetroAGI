@@ -527,21 +527,10 @@ mushroom, hill, cloud, bush`.
 
 ### Full SMB Legacy DeepLab
 
-`FullSMBDeepLabSegmentationVision` preserves the previous checkpoint wrapper for
-inspection and migration. For normalized model input `[B,3,H,W]`:
-
-| Field | Shape | Range |
-| --- | --- | --- |
-| `position` | `[B,2]` | `[0,1]`, `(x,y)`, probability-weighted Mario pixel center. |
-| `semantic_logits` | `[B,6,H,W]` | Unbounded six-class logits. |
-| `semantic_ids` | `[B,H,W]` | IDs `[0,5]`. |
-| `tokens` | `[B,240,6]` | Logits pooled to 15x16 and flattened row-major; unbounded. |
-| `support_logits` | `[B,3]` | Air/ground/platform logits inferred from semantic contact. |
-| `support_ids` | `[B]` | Air/ground/platform IDs. |
-
-DeepLab preserves input spatial size. Its token width is six class logits, not
-a learned embedding width comparable to ViT tokens. New Full SMB policy code
-should use the ViT-backed `FullSMBSegmentationVision`.
+The six-class CNN (DeepLab) segmenter is an example only and is not part of the
+`retroagi` package: its training and inference scripts live in
+`scripts/segmentation/`. All supported vision training and evaluation paths use
+the ViT-backed `FullSMBSegmentationVision`.
 
 ## Consumer Requirements
 

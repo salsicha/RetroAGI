@@ -393,9 +393,9 @@ normalized into `full_smb_signals` and `state_vec`. Frame skipping, resizing,
 normalization, stacking, and episode masks are implemented. Emulator state
 snapshots are implemented for repeatable evaluation through the backend
 adapter's `env` or `env.em` save/load state API. `FullSMBSegmentationVision`
-now defaults to the versioned 13-class patch-level Vision Transformer
-checkpoint; the previous six-class DeepLab wrapper remains available as
-`FullSMBDeepLabSegmentationVision` for legacy checkpoint inspection.
+defaults to the versioned 13-class patch-level Vision Transformer checkpoint
+and is the only supported vision path; the six-class DeepLab CNN exists solely
+as an example under `scripts/segmentation/` and is not part of the package.
 
 Backend-specific values must be normalized at this boundary rather than leaking
 into shared training code.

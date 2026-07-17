@@ -6,17 +6,14 @@ from typing import Any, Mapping, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from retroagi.core import (
     PatchVisionTransformer,
     VisionOutput,
-    VisionSpec,
     build_checkpoint,
     is_versioned_checkpoint,
     load_checkpoint,
 )
-from retroagi.core.vision import image_tensor, infer_agent_support_logits
 
 FULL_SMB_VIT_MODEL_NAME = "full_smb_vit"
 FULL_SMB_VIT_CHECKPOINT_KIND = "vision_encoder"
@@ -35,16 +32,9 @@ FULL_SMB_VIT_CLASSES = (
     "cloud",
     "bush",
 )
-# Index order must match the training labels in scripts/segmentation/segment_training.py
-# (default=0, floor=1, brick=2, box=3, enemy=4, mario=5) — the shipped checkpoint
-# predicts channels in that order.
-FULL_SMB_DEEPLAB_CLASSES = ("background", "floor", "brick", "box", "enemy", "mario")
 FULL_SMB_SEMANTIC_CLASSES = FULL_SMB_VIT_CLASSES
 DEFAULT_FULL_SMB_VIT_CHECKPOINT = Path("data/vit/full_smb_vit.pth")
 FALLBACK_FULL_SMB_VIT_CHECKPOINT = Path("data/vit/vit_smb.pth")
-LEGACY_DEEPLAB_CHECKPOINT = (
-    Path(__file__).parents[3] / "scripts" / "segmentation" / "MarioSegmentationModel.pth"
-)
 DEFAULT_CHECKPOINT = DEFAULT_FULL_SMB_VIT_CHECKPOINT
 GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
 
@@ -136,82 +126,6 @@ class FullSMBSegmentationVision(nn.Module):
 
     def forward(self, observation: Any) -> VisionOutput:
         return self.model.encode(observation)
-
-    def encode(self, observation: Any) -> VisionOutput:
-        return self.forward(observation)
-
-
-class FullSMBDeepLabSegmentationVision(nn.Module):
-    """Legacy wrapper for the previous six-class DeepLab checkpoint."""
-
-    def __init__(
-        self,
-        checkpoint: Optional[Path] = LEGACY_DEEPLAB_CHECKPOINT,
-        device: Optional[torch.device] = None,
-    ):
-        super().__init__()
-        from torchvision.models.segmentation import deeplabv3_resnet50
-        from torchvision.models.segmentation.deeplabv3 import DeepLabHead
-
-        self.spec = VisionSpec(
-            "full_smb_deeplab",
-            FULL_SMB_DEEPLAB_CLASSES,
-            token_dim=len(FULL_SMB_DEEPLAB_CLASSES),
-        )
-        self.model = deeplabv3_resnet50(weights=None, weights_backbone=None, aux_loss=True)
-        self.model.classifier = DeepLabHead(2048, self.spec.num_classes)
-        if checkpoint is not None:
-            state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-            self.model.load_state_dict(state)
-        if device is not None:
-            self.to(device)
-        self.model.eval()
-
-    def forward(self, observation: Any) -> VisionOutput:
-        device = next(self.model.parameters()).device
-        image = image_tensor(observation, device=device)
-        logits = self.model(image)["out"]
-        semantic_ids = logits.argmax(dim=1)
-        probabilities = logits.softmax(dim=1)
-
-        mario = probabilities[:, self.spec.semantic_classes.index("mario")]
-        weights = mario / mario.sum(dim=(1, 2), keepdim=True).clamp_min(1e-6)
-        height, width = mario.shape[-2:]
-        y = torch.linspace(0, 1, height, device=device)
-        x = torch.linspace(0, 1, width, device=device)
-        position = torch.stack(
-            (
-                (weights * x.view(1, 1, width)).sum(dim=(1, 2)),
-                (weights * y.view(1, height, 1)).sum(dim=(1, 2)),
-            ),
-            dim=-1,
-        )
-
-        token_logits = F.adaptive_avg_pool2d(logits, (15, 16))
-        tokens = token_logits.flatten(2).transpose(1, 2)
-        support_logits = infer_agent_support_logits(
-            logits,
-            semantic_classes=self.spec.semantic_classes,
-            agent_class="mario",
-            ground_classes=("floor",),
-            platform_classes=("box", "brick"),
-            support_classes=self.spec.support_classes,
-        )
-        return VisionOutput(
-            position=position,
-            semantic_logits=logits,
-            semantic_ids=semantic_ids,
-            tokens=tokens,
-            metadata={
-                "checkpoint_classes": self.spec.semantic_classes,
-                "semantic_classes": self.spec.semantic_classes,
-                "support_classes": self.spec.support_classes,
-                "legacy_encoder": "deeplabv3_resnet50",
-                "support_source": "semantic_contact",
-            },
-            support_logits=support_logits,
-            support_ids=support_logits.argmax(dim=1) if support_logits is not None else None,
-        )
 
     def encode(self, observation: Any) -> VisionOutput:
         return self.forward(observation)

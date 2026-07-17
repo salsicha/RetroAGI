@@ -29,7 +29,11 @@ BLOCK_SEMANTIC_CLASSES = (
 
 BLOCK_CLASS_COLORS = {
     "background": ((107, 140, 255),),
-    "mario": ((255, 0, 0), (255, 220, 0)),
+    # White eye pixels are drawn on both Mario and live enemies; exact color
+    # matching cannot tell them apart, so white is assigned to Mario (his eye
+    # is always present, enemy eyes are 2px circles). Without this entry eye
+    # pixels silently fell through to the background class.
+    "mario": ((255, 0, 0), (255, 220, 0), (255, 255, 255)),
     "platform": ((139, 69, 19),),
     "coin": ((255, 215, 0),),
     "goal": ((0, 255, 0),),

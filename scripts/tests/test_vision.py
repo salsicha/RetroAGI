@@ -479,16 +479,6 @@ class TestFullSMBVision(unittest.TestCase):
         self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
         self.assertEqual(output.support_logits.shape, (1, 3))
 
-    def test_existing_deeplab_checkpoint_loads(self):
-        from retroagi.stages.full_smb import FullSMBDeepLabSegmentationVision
-
-        checkpoint = Path("scripts/segmentation/MarioSegmentationModel.pth")
-        skip_unavailable_checkpoint(self, checkpoint, "trained DeepLab")
-
-        model = FullSMBDeepLabSegmentationVision(checkpoint=checkpoint)
-        self.assertEqual(model.spec.num_classes, 6)
-        self.assertEqual(model.spec.semantic_classes[-1], "mario")
-
 
 if __name__ == "__main__":
     unittest.main()
