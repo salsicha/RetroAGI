@@ -22,6 +22,7 @@ from retroagi.stages.block_smb.distill import (
     DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
     BlockSMBDistillationConfig,
     build_block_smb_distillation_scenarios,
+    collect_dagger_distillation_examples,
     collect_scripted_distillation_examples,
 )
 from retroagi.stages.block_smb.distill import (
@@ -59,6 +60,49 @@ class StaticBlockVision:
 
 def static_vision_factory():
     return StaticBlockVision()
+
+
+class _FixedActionDaggerModel(torch.nn.Module):
+    """Stub student policy whose argmax action is always the same."""
+
+    def __init__(self, action: int):
+        super().__init__()
+        self._action = int(action)
+
+    def forward(self, _src_a, _src_b, src_c, **_kwargs):
+        logits = torch.full((src_c.size(0), 1, distill_module.BLOCK_SMB_ACTION_COUNT), -8.0)
+        logits[:, :, self._action] = 8.0
+        return (None, None, None, None, logits, None, None, None)
+
+
+class _ScriptReplayDaggerModel(torch.nn.Module):
+    """Stub student policy that replays a fixed action script step by step."""
+
+    def __init__(self, actions):
+        super().__init__()
+        self._actions = [int(action) for action in actions]
+        self._calls = 0
+
+    def forward(self, _src_a, _src_b, src_c, **_kwargs):
+        action = self._actions[min(self._calls, len(self._actions) - 1)]
+        self._calls += 1
+        logits = torch.full((src_c.size(0), 1, distill_module.BLOCK_SMB_ACTION_COUNT), -8.0)
+        logits[:, :, action] = 8.0
+        return (None, None, None, None, logits, None, None, None)
+
+
+def _gap_dagger_config() -> BlockSMBDistillationConfig:
+    return BlockSMBDistillationConfig(
+        fixed_scenarios=("level_2_gap.json",),
+        monte_carlo_samples=0,
+        required_monte_carlo_families=(),
+        rollout_steps=40,
+        episodes_per_scenario=1,
+        evaluation_episodes=1,
+        evaluation_max_steps=40,
+        dagger_iterations=1,
+        device="cpu",
+    )
 
 
 def _primitive_outcome_batch(
@@ -162,6 +206,78 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertTrue(any(".full_smb_opening_proxy." in name for name, _scenario in scenarios))
         self.assertTrue(all(name in scripts for name, _scenario in scenarios))
         self.assertTrue(any(action == 2 for actions in scripts.values() for action in actions))
+
+    def test_dagger_alignment_rejects_diverged_and_offtimeline_states(self):
+        reference = [{"x": 36.5, "y": 204.0, "vx": 3.0, "vy": 0.0, "on_ground": True}]
+
+        def aligned(mario, step_index=0):
+            return distill_module._dagger_teacher_alignment(
+                reference,
+                step_index,
+                mario,
+                position_tolerance=4.0,
+                velocity_tolerance=1.0,
+            )
+
+        on_track = {"x": 34.0, "y": 204.0, "vx": 2.5, "vy": 0.0, "on_ground": True}
+        self.assertTrue(aligned(on_track))
+        self.assertFalse(aligned({**on_track, "x": 20.0}))
+        self.assertFalse(aligned({**on_track, "y": 150.0}))
+        self.assertFalse(aligned({**on_track, "vx": 0.0}))
+        self.assertFalse(aligned({**on_track, "on_ground": False}))
+        self.assertFalse(aligned(on_track, step_index=1))
+
+    def test_teacher_reference_states_follow_script_timeline(self):
+        config = _gap_dagger_config()
+        scenarios, scripts, _summary = build_block_smb_distillation_scenarios(config)
+        scenario_name, scenario = scenarios[0]
+
+        states = distill_module._scripted_teacher_reference_states(scenario, scripts[scenario_name])
+
+        self.assertEqual(states[0]["x"], float(scenario["mario"][0]))
+        jump_start = scripts[scenario_name].index(int(SMBAction.RIGHT_JUMP))
+        self.assertTrue(states[jump_start]["on_ground"])
+        self.assertGreater(states[jump_start]["x"], states[0]["x"] + 12.0)
+
+    def test_dagger_diverged_student_gets_no_time_indexed_jump_labels(self):
+        config = _gap_dagger_config()
+        model = _FixedActionDaggerModel(int(SMBAction.NOOP))
+
+        examples = collect_dagger_distillation_examples(
+            model,
+            config,
+            vision_factory=static_vision_factory,
+            device=torch.device("cpu"),
+            iteration=1,
+        )
+
+        # The stationary student never reaches the scripted jump window, so the
+        # script's step-indexed RIGHT_JUMP labels must not attach to its states.
+        self.assertGreater(len(examples), 0)
+        self.assertTrue(all(example.action != int(SMBAction.RIGHT_JUMP) for example in examples))
+        self.assertTrue(
+            all(example.primitive_button_combo != int(SMBAction.RIGHT_JUMP) for example in examples)
+        )
+        jump_start = 10
+        self.assertLess(max(example.step_index for example in examples), jump_start)
+
+    def test_dagger_aligned_student_keeps_time_indexed_jump_labels(self):
+        config = _gap_dagger_config()
+        _scenarios, scripts, _summary = build_block_smb_distillation_scenarios(config)
+        model = _ScriptReplayDaggerModel(scripts["level_2_gap.json"])
+
+        examples = collect_dagger_distillation_examples(
+            model,
+            config,
+            vision_factory=static_vision_factory,
+            device=torch.device("cpu"),
+            iteration=1,
+        )
+
+        # A student that tracks the teacher's timeline stays aligned, so the
+        # rejection filter must not discard its jump-window labels.
+        self.assertTrue(any(example.action == int(SMBAction.RIGHT_JUMP) for example in examples))
+        self.assertGreaterEqual(max(example.step_index for example in examples), 10)
 
     def test_scripted_examples_carry_primitive_duration_release_labels(self):
         config = BlockSMBDistillationConfig(

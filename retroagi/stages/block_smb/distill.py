@@ -95,6 +95,8 @@ class BlockSMBDistillationConfig:
     sequence_training: bool = True
     dagger_iterations: int = 0
     dagger_epochs_per_iteration: int = 20
+    dagger_position_tolerance: float = 4.0
+    dagger_velocity_tolerance: float = 1.0
     rollout_steps: int = 200
     episodes_per_scenario: int = 3
     evaluation_episodes: int = 3
@@ -159,6 +161,10 @@ class BlockSMBDistillationConfig:
                 raise ValueError(f"{name} must be positive")
         if self.learning_rate <= 0:
             raise ValueError("learning_rate must be positive")
+        if self.dagger_position_tolerance < 0:
+            raise ValueError("dagger_position_tolerance must be non-negative")
+        if self.dagger_velocity_tolerance < 0:
+            raise ValueError("dagger_velocity_tolerance must be non-negative")
         if self.jump_weight_multiplier <= 0:
             raise ValueError("jump_weight_multiplier must be positive")
         if self.dynamics_loss_weight < 0:
@@ -965,6 +971,69 @@ def collect_scripted_distillation_examples(
     return examples
 
 
+def _scripted_teacher_reference_states(
+    scenario: Mapping[str, Any],
+    actions: Sequence[int],
+) -> list[dict[str, float | bool]]:
+    """Replay the teacher script and record Mario's pre-action state per step.
+
+    Scenario rollouts are deterministic given the scenario dict (the env seed
+    only drives procedural generation), so a single replay yields the exact
+    state the time-indexed script expects at every step index.
+    """
+
+    env = MarioScenarioEnv()
+    states: list[dict[str, float | bool]] = []
+    try:
+        env.reset(scenario=copy.deepcopy(dict(scenario)))
+        for action in actions:
+            states.append(
+                {
+                    "x": float(env.mario["x"]),
+                    "y": float(env.mario["y"]),
+                    "vx": float(env.mario["vx"]),
+                    "vy": float(env.mario["vy"]),
+                    "on_ground": bool(env.mario["on_ground"]),
+                }
+            )
+            _observation, _reward, terminated, truncated, _info = env.step(int(action))
+            if terminated or truncated:
+                break
+    finally:
+        env.close()
+    return states
+
+
+def _dagger_teacher_alignment(
+    reference_states: Sequence[Mapping[str, float | bool]],
+    step_index: int,
+    mario: Mapping[str, Any],
+    *,
+    position_tolerance: float,
+    velocity_tolerance: float,
+) -> bool:
+    """Whether a student state may inherit the teacher's time-indexed label.
+
+    The scripted teacher is open-loop, so its action at ``step_index`` is only
+    corrective for states kinematically close to the state the script expects
+    there. Velocity is checked alongside position because scripted jumps rely
+    on the teacher's momentum: a slower student at the same position would
+    undershoot the same jump.
+    """
+
+    if step_index >= len(reference_states):
+        return False
+    reference = reference_states[step_index]
+    if bool(reference["on_ground"]) != bool(mario["on_ground"]):
+        return False
+    return (
+        abs(float(mario["x"]) - float(reference["x"])) <= float(position_tolerance)
+        and abs(float(mario["y"]) - float(reference["y"])) <= float(position_tolerance)
+        and abs(float(mario["vx"]) - float(reference["vx"])) <= float(velocity_tolerance)
+        and abs(float(mario["vy"]) - float(reference["vy"])) <= float(velocity_tolerance)
+    )
+
+
 def collect_dagger_distillation_examples(
     model: torch.nn.Module,
     config: BlockSMBDistillationConfig,
@@ -973,11 +1042,21 @@ def collect_dagger_distillation_examples(
     device: torch.device,
     iteration: int,
 ) -> list[BlockSMBDistillationExample]:
-    """Collect corrective labels from states visited by the current neural policy."""
+    """Collect corrective labels from states visited by the current neural policy.
+
+    The teacher is an open-loop, time-indexed script, so its label is only
+    corrective while the student stays on the teacher's timeline. Each student
+    step is compared against the teacher's replayed state at the same step
+    index and dropped when Mario has diverged beyond the configured position
+    and velocity tolerances, so a lagging student is never taught to jump from
+    a position where the scripted jump lands in a pit.
+    """
 
     scenarios, action_scripts, _summary = build_block_smb_distillation_scenarios(config)
     policy = BlockSMBScriptedPolicy(action_scripts)
     examples: list[BlockSMBDistillationExample] = []
+    kept_by_scenario: dict[str, int] = {}
+    rejected_by_scenario: dict[str, int] = {}
     model.eval()
     with torch.no_grad():
         for scenario_index, (scenario_name, scenario) in enumerate(scenarios):
@@ -987,10 +1066,15 @@ def collect_dagger_distillation_examples(
                 scenario=scenario,
                 hazard_weight_multiplier=config.primitive_hazard_weight_multiplier,
             )
+            reference_states = _scripted_teacher_reference_states(
+                scenario,
+                action_scripts[scenario_name],
+            )
             for episode in range(config.episodes_per_scenario):
                 env = MarioScenarioEnv()
                 stage = BlockSMBStage(env=env, scenario=scenario, vision=vision_factory())
                 episode_examples: list[BlockSMBDistillationExample] = []
+                episode_alignment: list[bool] = []
                 try:
                     observation = stage.reset(
                         seed=config.seed
@@ -1002,6 +1086,15 @@ def collect_dagger_distillation_examples(
                     world_model_state = None
                     for step_index in range(config.rollout_steps):
                         teacher_action = policy.action(scenario_name, step_index)
+                        episode_alignment.append(
+                            _dagger_teacher_alignment(
+                                reference_states,
+                                step_index,
+                                env.mario,
+                                position_tolerance=config.dagger_position_tolerance,
+                                velocity_tolerance=config.dagger_velocity_tolerance,
+                            )
+                        )
                         batch = _detach_batch(stage.encode_observation(observation))
                         src_a, src_b, src_c, _actions, _next_c = _stack_examples(
                             [
@@ -1059,12 +1152,35 @@ def collect_dagger_distillation_examples(
                         )
                 finally:
                     env.close()
-                examples.extend(
-                    _annotate_primitive_outcomes(
-                        episode_examples,
-                        horizon=config.primitive_outcome_horizon,
-                    )
+                # Outcome targets need the true (unfiltered) future steps, so
+                # annotate the whole episode before dropping diverged states.
+                annotated_examples = _annotate_primitive_outcomes(
+                    episode_examples,
+                    horizon=config.primitive_outcome_horizon,
                 )
+                examples.extend(
+                    annotated
+                    for annotated, aligned in zip(annotated_examples, episode_alignment)
+                    if aligned
+                )
+                kept = sum(episode_alignment)
+                kept_by_scenario[scenario_name] = kept_by_scenario.get(scenario_name, 0) + kept
+                rejected_by_scenario[scenario_name] = rejected_by_scenario.get(scenario_name, 0) + (
+                    len(episode_alignment) - kept
+                )
+    _append_jsonl(
+        config.log_path,
+        {
+            "event": "dagger_alignment_filter",
+            "iteration": iteration,
+            "position_tolerance": float(config.dagger_position_tolerance),
+            "velocity_tolerance": float(config.dagger_velocity_tolerance),
+            "kept_examples": sum(kept_by_scenario.values()),
+            "rejected_examples": sum(rejected_by_scenario.values()),
+            "kept_by_scenario": kept_by_scenario,
+            "rejected_by_scenario": rejected_by_scenario,
+        },
+    )
     if not examples:
         raise ValueError("DAgger distillation dataset is empty")
     return examples
@@ -2275,6 +2391,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=BlockSMBDistillationConfig.dagger_epochs_per_iteration,
     )
     parser.add_argument(
+        "--dagger-position-tolerance",
+        type=float,
+        default=BlockSMBDistillationConfig.dagger_position_tolerance,
+    )
+    parser.add_argument(
+        "--dagger-velocity-tolerance",
+        type=float,
+        default=BlockSMBDistillationConfig.dagger_velocity_tolerance,
+    )
+    parser.add_argument(
         "--jump-weight-multiplier",
         type=float,
         default=BlockSMBDistillationConfig.jump_weight_multiplier,
@@ -2419,6 +2545,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         require_semantic_prediction_gate=args.require_semantic_prediction_gate,
         dagger_iterations=args.dagger_iterations,
         dagger_epochs_per_iteration=args.dagger_epochs_per_iteration,
+        dagger_position_tolerance=args.dagger_position_tolerance,
+        dagger_velocity_tolerance=args.dagger_velocity_tolerance,
         jump_weight_multiplier=args.jump_weight_multiplier,
         rollout_steps=args.rollout_steps,
         episodes_per_scenario=args.episodes_per_scenario,
