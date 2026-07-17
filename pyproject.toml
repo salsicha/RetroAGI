@@ -75,7 +75,9 @@ pythonpath = ["."]
 [tool.black]
 line-length = 100
 target-version = ["py312"]
-extend-exclude = '''
+# CI formats changed files by explicit path; force-exclude keeps the excludes
+# effective for explicitly-passed files too.
+force-exclude = '''
 /(
     notebooks
   | scripts/segmentation/segment_training\.py
@@ -85,6 +87,9 @@ extend-exclude = '''
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# CI lints changed files by explicit path; force-exclude keeps the excludes
+# effective for explicitly-passed files too.
+force-exclude = true
 extend-exclude = [
     "notebooks",
     "scripts/segmentation/segment_training.py",

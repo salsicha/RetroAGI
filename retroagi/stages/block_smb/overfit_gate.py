@@ -146,14 +146,23 @@ def run_block_smb_overfit_gate(
     model = make_block_smb_model(training_config).to(resolved_device)
     optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
     if vision_factory is None:
-        if vision_checkpoint is None and DEFAULT_BLOCK_VIT_CHECKPOINT.exists():
-            # A trained ViT separates adjacent frames far better than random
-            # features, so memorization is measured on realistic inputs.
-            vision_checkpoint = DEFAULT_BLOCK_VIT_CHECKPOINT
         if vision_checkpoint is not None:
             vision_factory = _cached_vision_factory(vision_checkpoint, resolved_device)
         else:
+            # A trained ViT separates adjacent frames far better than random
+            # features, so prefer the shipped checkpoint — but fall back to an
+            # untrained encoder when the blob is absent (e.g. a Git LFS
+            # pointer in CI checkouts).
             vision_factory = _untrained_vision_factory(resolved_device)
+            if DEFAULT_BLOCK_VIT_CHECKPOINT.exists():
+                candidate = _cached_vision_factory(DEFAULT_BLOCK_VIT_CHECKPOINT, resolved_device)
+                try:
+                    candidate()
+                except Exception:  # noqa: BLE001 - any load failure means fallback
+                    pass
+                else:
+                    vision_checkpoint = DEFAULT_BLOCK_VIT_CHECKPOINT
+                    vision_factory = candidate
 
     dataset = collect_scripted_distillation_examples(config, vision_factory=vision_factory)
     initial_accuracy = _teacher_action_accuracy(model, dataset, resolved_device)
