@@ -94,6 +94,7 @@ class BlockSMBDistillationConfig:
     )
     require_semantic_prediction_gate: bool = True
     sequence_training: bool = True
+    require_overfit_gate: bool = False
     dagger_iterations: int = 0
     dagger_epochs_per_iteration: int = 20
     dagger_labeler: str = "geometry_expert"
@@ -604,6 +605,25 @@ def train_distilled_block_smb_policy(
     """Train and evaluate a neural policy that imitates scripted fixed scenarios."""
 
     config = config or BlockSMBDistillationConfig()
+    overfit_gate_summary = None
+    if config.require_overfit_gate:
+        from retroagi.stages.block_smb.overfit_gate import run_block_smb_overfit_gate
+
+        overfit_gate_summary = run_block_smb_overfit_gate(
+            seed=config.seed,
+            device=config.device,
+            architecture_name=config.architecture_name,
+            architecture_config=dict(config.architecture_config),
+        )
+        if not overfit_gate_summary["passed"]:
+            raise RuntimeError(
+                "tiny-overfit sanity gate failed "
+                f"(teacher_action_accuracy="
+                f"{overfit_gate_summary['teacher_action_accuracy']:.3f} < "
+                f"{overfit_gate_summary['accuracy_threshold']}): the policy cannot "
+                "memorize a tiny scenario set, so a full curriculum run would be "
+                "wasted; fix supervision/optimization first"
+            )
     seed_everything(config.seed, deterministic=config.deterministic)
     device = select_device(config.device)
     training_config = _training_config_from_distillation(config)
@@ -778,6 +798,7 @@ def train_distilled_block_smb_policy(
     result = {
         "config": to_plain_data(config),
         "training_config": to_plain_data(training_config),
+        "overfit_gate": overfit_gate_summary,
         "distillation_sources": distillation_sources,
         "dataset": _dataset_summary(dataset),
         "history": all_history,
@@ -2410,6 +2431,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="require_semantic_prediction_gate",
     )
+    parser.set_defaults(require_overfit_gate=BlockSMBDistillationConfig.require_overfit_gate)
+    parser.add_argument(
+        "--require-overfit-gate",
+        action="store_true",
+        dest="require_overfit_gate",
+        help="run the tiny-overfit sanity gate before curriculum training",
+    )
     parser.add_argument(
         "--dagger-iterations",
         type=int,
@@ -2583,6 +2611,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
         semantic_prediction_accuracy_threshold=args.semantic_prediction_accuracy_threshold,
         require_semantic_prediction_gate=args.require_semantic_prediction_gate,
+        require_overfit_gate=args.require_overfit_gate,
         dagger_iterations=args.dagger_iterations,
         dagger_epochs_per_iteration=args.dagger_epochs_per_iteration,
         dagger_labeler=args.dagger_labeler,
