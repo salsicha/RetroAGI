@@ -40,6 +40,44 @@ COYOTE_FRAMES = 5  # frames after leaving a ledge where jumping is still allowed
 JUMP_BUFFER_FRAMES = 6  # frames before landing where a queued jump fires on contact
 JUMP_CUT_FACTOR = 0.45  # vy multiplier when jump is released early (variable height)
 
+# ── Known divergences from real Super Mario Bros control semantics ────────────
+#
+# Block SMB is the transfer source for the real-emulator Full SMB stage, so
+# every intentional difference in how actions map to motion is recorded here
+# and pinned by scripts/tests/test_block_smb_action_semantics.py. Changing any
+# of these behaviors requires updating this registry AND re-tuning the scripted
+# teacher curriculum and Monte Carlo oracles that were calibrated against it.
+KNOWN_REAL_SMB_DIVERGENCES = (
+    {
+        "name": "held_jump_rebounds_on_landing",
+        "block_behavior": (
+            "while the jump button stays held the jump buffer does not decay, "
+            "so landing with the button held immediately launches another jump"
+        ),
+        "real_behavior": "holding A does not re-jump on landing; A must be released first",
+        "reason": (
+            "the scripted teacher curriculum and Monte Carlo oracles hold "
+            "RIGHT_JUMP through landings and are tuned to the rebound"
+        ),
+    },
+    {
+        "name": "coyote_time",
+        "block_behavior": (
+            f"jumping is allowed up to {COYOTE_FRAMES} frames after walking off a ledge"
+        ),
+        "real_behavior": "no coyote time; jumps require ground contact on the press frame",
+        "reason": "quality-of-life forgiveness that eases early policy learning",
+    },
+    {
+        "name": "jump_buffer",
+        "block_behavior": (
+            f"a press up to {JUMP_BUFFER_FRAMES} frames before landing fires on contact"
+        ),
+        "real_behavior": "no jump buffering; presses before landing are dropped",
+        "reason": "quality-of-life forgiveness that eases early policy learning",
+    },
+)
+
 
 @dataclass(frozen=True)
 class BlockSMBRewardConfig:
@@ -291,8 +329,8 @@ class MarioScenarioEnv:
             # NOTE: while the button stays held the buffer deliberately does not
             # decay, so a held jump re-fires on landing. This diverges from real
             # SMB (holding A does not re-jump) but the scripted teacher
-            # curriculum and Monte Carlo oracles are tuned to this behavior;
-            # changing it requires re-tuning every scenario script.
+            # curriculum and Monte Carlo oracles are tuned to this behavior —
+            # see KNOWN_REAL_SMB_DIVERGENCES and the action-semantics tests.
         else:
             self.mario["jump_buffer"] = max(0, self.mario["jump_buffer"] - 1)
 
