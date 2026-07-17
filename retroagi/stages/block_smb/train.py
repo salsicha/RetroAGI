@@ -26,6 +26,7 @@ from retroagi.core import (
     StageBatch,
     VisionEncoder,
     WorldModelState,
+    action_distribution_stats,
     action_level_world_model_state_dict,
     build_architecture,
     build_checkpoint,
@@ -2149,6 +2150,9 @@ def evaluate_block_smb_monte_carlo(
     }
     evaluation["action_collapse"] = {
         "all_noop": block_smb_action_counts_all_noop(evaluation["action_counts"]),
+        **action_distribution_stats(
+            evaluation["action_counts"], action_count=BLOCK_SMB_ACTION_COUNT
+        ),
     }
     evaluation["gates"] = evaluate_block_smb_monte_carlo_gates(
         evaluation,
@@ -2243,6 +2247,10 @@ def block_smb_action_count_metric_values(
     metrics[f"{prefix}_all_noop_action_collapse"] = float(
         block_smb_action_counts_all_noop(action_counts)
     )
+    stats = action_distribution_stats(action_counts, action_count=BLOCK_SMB_ACTION_COUNT)
+    metrics[f"{prefix}_action_entropy"] = stats["normalized_entropy"]
+    metrics[f"{prefix}_action_dominant_share"] = stats["dominant_share"]
+    metrics[f"{prefix}_action_collapse"] = float(stats["collapsed"])
     return metrics
 
 
@@ -2387,6 +2395,9 @@ def evaluate_block_smb(
     }
     evaluation["action_collapse"] = {
         "all_noop": block_smb_action_counts_all_noop(evaluation["action_counts"]),
+        **action_distribution_stats(
+            evaluation["action_counts"], action_count=BLOCK_SMB_ACTION_COUNT
+        ),
     }
     if config.monte_carlo_validation_samples > 0 or config.monte_carlo_parameter_sweep:
         validation_record_dir = record_dir / "monte_carlo" if record_dir is not None else None

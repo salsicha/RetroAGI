@@ -29,6 +29,7 @@ from retroagi.core import (
     SMBPrimitiveExecution,
     StageBatch,
     WorldModelState,
+    action_distribution_stats,
     action_level_world_model_state_dict,
     build_checkpoint,
     load_checkpoint,
@@ -554,6 +555,8 @@ class FullSMBEvaluationResult:
     fixed_task_results: Mapping[str, Any] = field(default_factory=dict)
     tuning_metrics: Mapping[str, float] = field(default_factory=dict)
     success_thresholds_met: bool = False
+    action_counts: Mapping[str, int] = field(default_factory=dict)
+    action_collapse: Mapping[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return to_plain_data(asdict(self))
@@ -1280,6 +1283,7 @@ def evaluate_full_smb_policy(
     terminated_count = 0
     truncated_count = 0
     success_count = 0
+    evaluation_action_counts: dict[str, int] = {}
     recording_targets = _resolve_full_smb_recording_targets(config, recording_prefix)
     recording_artifacts: list[dict[str, Any]] = []
     fixed_task_episode_metrics: dict[str, list[dict[str, float]]] = {}
@@ -1316,6 +1320,9 @@ def evaluate_full_smb_policy(
                 )
                 logits = forward.logits
                 action = int(logits.argmax(dim=-1).item())
+                evaluation_action_counts[str(action)] = (
+                    evaluation_action_counts.get(str(action), 0) + 1
+                )
                 action = primitive_executor.execute(
                     action,
                     motor_primitives=forward.motor_primitives,
@@ -1421,6 +1428,11 @@ def evaluate_full_smb_policy(
         success_rate=float(success_count / episodes) if episodes else 0.0,
         terminated_count=terminated_count,
         truncated_count=truncated_count,
+        action_counts=dict(evaluation_action_counts),
+        action_collapse=action_distribution_stats(
+            evaluation_action_counts,
+            action_count=len(SMBAction),
+        ),
         recording=recording_manifest,
         fixed_task_results=fixed_task_results,
         tuning_metrics=tuning_metrics,

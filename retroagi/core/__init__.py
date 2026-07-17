@@ -6,6 +6,10 @@ from .ablations import (
     build_architecture_variant,
     parse_architecture_ablation_item,
 )
+from .action_stats import (
+    DEFAULT_COLLAPSE_SHARE_THRESHOLD,
+    action_distribution_stats,
+)
 from .actions import (
     SMB_ACTION_SPECS,
     SMB_ACTIONS,
@@ -213,6 +217,8 @@ __all__ = [
     "ArchitectureFactory",
     "ArchitectureRegistry",
     "ArchitectureSpec",
+    "DEFAULT_COLLAPSE_SHARE_THRESHOLD",
+    "action_distribution_stats",
     "AssetChecklistItem",
     "AssetRequirement",
     "ArchitectureVariant",
