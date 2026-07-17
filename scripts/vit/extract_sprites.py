@@ -13,16 +13,18 @@ Run:
 Outputs:
     assets/sprites/<name>.png   (one transparent sprite per semantic class)
 """
+
 import os
+
 import numpy as np
 from PIL import Image
 
-HERE        = os.path.dirname(os.path.abspath(__file__))
-PROJECT     = os.path.dirname(os.path.dirname(HERE))
-SHEET_DIR   = os.path.join(PROJECT, "assets", "spritesheets")
-OUT_DIR     = os.path.join(PROJECT, "assets", "sprites")
+HERE = os.path.dirname(os.path.abspath(__file__))
+PROJECT = os.path.dirname(os.path.dirname(HERE))
+SHEET_DIR = os.path.join(PROJECT, "assets", "spritesheets")
+OUT_DIR = os.path.join(PROJECT, "assets", "sprites")
 
-SKY_RGB = (107, 140, 255)   # cornflower-blue SMB sky (sampled from level_1.png)
+SKY_RGB = (107, 140, 255)  # cornflower-blue SMB sky (sampled from level_1.png)
 
 
 def load(name):
@@ -44,7 +46,7 @@ def autocrop_sky(img, sky=SKY_RGB, tol=12):
     ys, xs = np.where(arr[..., 3] > 0)
     if len(xs) == 0:
         return Image.fromarray(arr)
-    return Image.fromarray(arr[ys.min():ys.max() + 1, xs.min():xs.max() + 1])
+    return Image.fromarray(arr[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1])
 
 
 def save(img, name):
@@ -56,14 +58,14 @@ def save(img, name):
 def main():
     print("Extracting sprites...")
 
-    tile  = load("tile_set")          # bricks, question blocks
-    item  = load("item_objects")      # coins, mushroom
-    enem  = load("smb_enemies_sheet") # goomba, koopa
-    level = load("level_1")           # baked level: ground / pipe / hill / cloud / bush
+    tile = load("tile_set")  # bricks, question blocks
+    item = load("item_objects")  # coins, mushroom
+    enem = load("smb_enemies_sheet")  # goomba, koopa
+    level = load("level_1")  # baked level: ground / pipe / hill / cloud / bush
 
     # ── Blocks (coords from data/components/bricks.py & coin_box.py) ──────────
-    save(crop(tile, 16,  0, 16, 16), "brick")          # overworld brick
-    save(crop(tile, 384, 0, 16, 16), "question_block") # ? block frame 0
+    save(crop(tile, 16, 0, 16, 16), "brick")  # overworld brick
+    save(crop(tile, 384, 0, 16, 16), "question_block")  # ? block frame 0
 
     # ── Coin (round gold collectible coin from item_objects sheet) ────────────
     save(crop(item, 0, 96, 16, 16), "coin")
@@ -72,12 +74,12 @@ def main():
     save(crop(item, 0, 0, 16, 16), "mushroom")
 
     # ── Enemies (data/components/enemies.py, smb_enemies_sheet) ───────────────
-    save(crop(enem, 0,   4, 16, 16), "goomba")
+    save(crop(enem, 0, 4, 16, 16), "goomba")
     save(crop(enem, 150, 0, 16, 24), "koopa")
 
     # ── Mario (data/components/mario.py, mario_bros sheet) ────────────────────
     mario = load("mario_bros")
-    save(crop(mario, 178, 32, 12, 16), "mario")        # small Mario, standing right
+    save(crop(mario, 178, 32, 12, 16), "mario")  # small Mario, standing right
 
     # ── Ground tile (clean overworld ground brick, away from hills/bushes) ────
     save(crop(level, 144, 200, 16, 16), "ground")
@@ -88,9 +90,9 @@ def main():
     # A clean 2-tile pipe (lip + body) lives just left of x=640 in level_1.png.
     save(autocrop_sky(crop(level, 600, 144, 40, 56)), "pipe")
     # Big green hill at the very start of the level.
-    save(autocrop_sky(crop(level, 0,   128, 80, 72)), "hill")
+    save(autocrop_sky(crop(level, 0, 128, 80, 72)), "hill")
     # First cloud, upper area.
-    save(autocrop_sky(crop(level, 145, 32, 56, 40)),  "cloud")
+    save(autocrop_sky(crop(level, 145, 32, 56, 40)), "cloud")
     # Bush cluster mid-screen.
     save(autocrop_sky(crop(level, 376, 160, 64, 40)), "bush")
 

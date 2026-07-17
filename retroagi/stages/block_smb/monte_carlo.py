@@ -145,14 +145,12 @@ class BlockSMBMonteCarloSampleSet:
 
     def scenarios(self) -> list[tuple[str, dict]]:
         return [
-            (sample.scenario_id, copy.deepcopy(dict(sample.scenario)))
-            for sample in self.samples
+            (sample.scenario_id, copy.deepcopy(dict(sample.scenario))) for sample in self.samples
         ]
 
     def manifest(self, *, include_scenarios: bool = False) -> dict[str, Any]:
         sample_records = [
-            sample.to_dict() if include_scenarios else sample.metadata()
-            for sample in self.samples
+            sample.to_dict() if include_scenarios else sample.metadata() for sample in self.samples
         ]
         return {
             "schema_version": self.schema_version,
@@ -676,9 +674,7 @@ def block_smb_transfer_gate_metrics_from_evaluation(
 
     tuning = evaluation.get("tuning_metrics", {})
     fixed_pass_rate = (
-        float(tuning.get("threshold_pass_rate", 0.0))
-        if isinstance(tuning, Mapping)
-        else 0.0
+        float(tuning.get("threshold_pass_rate", 0.0)) if isinstance(tuning, Mapping) else 0.0
     )
     fixed_gate_met = bool(evaluation.get("success_thresholds_met", False)) and (
         fixed_pass_rate >= 1.0
@@ -739,9 +735,7 @@ def _with_sample_metadata(
         existing = {}
     enriched["metadata"] = {
         **dict(existing),
-        "block_smb_monte_carlo": {
-            key: copy.deepcopy(value) for key, value in metadata.items()
-        },
+        "block_smb_monte_carlo": {key: copy.deepcopy(value) for key, value in metadata.items()},
     }
     return enriched
 
@@ -751,9 +745,7 @@ def _with_sweep_metadata(
     *,
     repeat: int,
 ) -> BlockSMBScenarioSample:
-    scenario_id = (
-        f"{sample.scenario_id}.{sample.difficulty_bin}.sweep_r{int(repeat):02d}"
-    )
+    scenario_id = f"{sample.scenario_id}.{sample.difficulty_bin}.sweep_r{int(repeat):02d}"
     parameters = {
         **dict(sample.parameters),
         "parameter_sweep": True,
@@ -886,7 +878,9 @@ def _pad(actions: list[int], max_steps: int = DEFAULT_BLOCK_SMB_MC_MAX_STEPS) ->
     return actions + [actions[-1] if actions else 0] * (max_steps - len(actions))
 
 
-def _flat_run(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _flat_run(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     goal_x = rng.randint(224, 232)
     coin_x = rng.randint(110, 150)
     scenario = {
@@ -896,10 +890,16 @@ def _flat_run(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict
         "coins": [[coin_x, 200, 10, 10]],
         "goal": [goal_x, 200, 16, 20],
     }
-    return scenario, {"goal_x": goal_x, "coin_x": coin_x, "difficulty_bin": difficulty}, _right_actions()
+    return (
+        scenario,
+        {"goal_x": goal_x, "coin_x": coin_x, "difficulty_bin": difficulty},
+        _right_actions(),
+    )
 
 
-def _single_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _single_gap(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     first_width = 100
     gap_width = {"easy": 44, "medium": 48, "hard": 50}[difficulty] + rng.randint(-2, 1)
     coin_x = rng.randint(112, 128)
@@ -912,10 +912,16 @@ def _single_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], di
         "goal": [220, 200, 16, 20],
     }
     actions = _pad([1] * 10 + [2] * 17 + [1])
-    return scenario, {"gap_x": first_width, "gap_width": gap_width, "difficulty_bin": difficulty}, actions
+    return (
+        scenario,
+        {"gap_x": first_width, "gap_width": gap_width, "difficulty_bin": difficulty},
+        actions,
+    )
 
 
-def _stair_climb(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _stair_climb(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     step_height = {"easy": 28, "medium": 30, "hard": 30}[difficulty]
     coin_a_x = rng.randint(70, 82)
     coin_b_x = rng.randint(110, 122)
@@ -935,12 +941,19 @@ def _stair_climb(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], d
     actions = _pad([2] * 8 + [1] * 2 + [2] * 6 + [1])
     return (
         scenario,
-        {"step_count": 3, "step_height": step_height, "goal_x": goal_x, "difficulty_bin": difficulty},
+        {
+            "step_count": 3,
+            "step_height": step_height,
+            "goal_x": goal_x,
+            "difficulty_bin": difficulty,
+        },
         actions,
     )
 
 
-def _platform_chain(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _platform_chain(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     coin_a_x = rng.randint(78, 96)
     coin_b_x = rng.randint(142, 168)
     goal_x = rng.randint(224, 234)
@@ -960,7 +973,9 @@ def _platform_chain(rng: random.Random, difficulty: str) -> tuple[dict[str, Any]
     return scenario, {"platform_count": 4, "goal_x": goal_x, "difficulty_bin": difficulty}, actions
 
 
-def _moving_bridge(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _moving_bridge(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     speed_range = {"easy": (0.45, 0.55), "medium": (0.65, 0.75), "hard": (0.85, 0.92)}[difficulty]
     speed = round(rng.uniform(*speed_range), 3)
     scenario = {
@@ -978,7 +993,9 @@ def _moving_bridge(rng: random.Random, difficulty: str) -> tuple[dict[str, Any],
     return scenario, {"platform_speed": speed, "difficulty_bin": difficulty}, actions
 
 
-def _enemy_hop(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _enemy_hop(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     enemy_x = {"easy": 104, "medium": 106, "hard": 108}[difficulty] + rng.randint(-2, 2)
     coin_x = rng.randint(140, 152)
     scenario = {
@@ -993,7 +1010,9 @@ def _enemy_hop(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dic
     return scenario, {"enemy_x": enemy_x, "difficulty_bin": difficulty}, actions
 
 
-def _enemy_patrol(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _enemy_patrol(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     speed = round(
         {"easy": 0.5, "medium": 0.6, "hard": 0.7}[difficulty] + rng.uniform(-0.05, 0.05), 3
     )
@@ -1012,7 +1031,9 @@ def _enemy_patrol(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], 
     return scenario, {"enemy_count": 2, "enemy_speed": speed, "difficulty_bin": difficulty}, actions
 
 
-def _enemy_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _enemy_gap(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     gap_width = {"easy": 46, "medium": 48, "hard": 50}[difficulty] + rng.randint(-2, 1)
     enemy_speed = round(0.4 + rng.uniform(-0.05, 0.05), 3)
     first_width = 100
@@ -1026,10 +1047,16 @@ def _enemy_gap(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dic
         "goal": [230, 200, 16, 20],
     }
     actions = _pad([1] * 10 + [2] * 17 + [1] * 8 + [2] * 18 + [1])
-    return scenario, {"gap_width": gap_width, "enemy_gap_offset": 178 - landing_x, "difficulty_bin": difficulty}, actions
+    return (
+        scenario,
+        {"gap_width": gap_width, "enemy_gap_offset": 178 - landing_x, "difficulty_bin": difficulty},
+        actions,
+    )
 
 
-def _enemy_stomp(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _enemy_stomp(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     enemy_x = {"easy": 108, "medium": 110, "hard": 112}[difficulty] + rng.randint(-1, 1)
     coin_x = rng.randint(146, 156)
     scenario = {
@@ -1044,7 +1071,9 @@ def _enemy_stomp(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], d
     return scenario, {"enemy_x": enemy_x, "stomp_window": 14, "difficulty_bin": difficulty}, actions
 
 
-def _retreat_recovery(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _retreat_recovery(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     start_x = {"easy": 190, "medium": 200, "hard": 205}[difficulty] + rng.randint(-2, 3)
     coin_x = rng.randint(110, 130)
     scenario = {
@@ -1057,7 +1086,9 @@ def _retreat_recovery(rng: random.Random, difficulty: str) -> tuple[dict[str, An
     return scenario, {"start_x": start_x, "goal_x": 35, "difficulty_bin": difficulty}, _pad([3])
 
 
-def _wait_timing(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _wait_timing(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     wait = {"easy": 18, "medium": 20, "hard": 22}[difficulty] + rng.randint(-1, 1)
     # The easy bin pairs a slow fractional bridge with a shorter travel range so
     # the bridge stays close enough to cross with the shared action script.
@@ -1129,15 +1160,7 @@ def _chained_obstacles(
         ],
         "goal": [482, 200, 16, 20],
     }
-    actions = _pad(
-        [1] * 16
-        + [2] * 18
-        + [1] * 30
-        + [2] * 20
-        + [1] * 44
-        + [2] * 20
-        + [1] * 90
-    )
+    actions = _pad([1] * 16 + [2] * 18 + [1] * 30 + [2] * 20 + [1] * 44 + [2] * 20 + [1] * 90)
     return (
         scenario,
         {
@@ -1235,7 +1258,9 @@ def _full_smb_opening_proxy(
     return scenario, params, actions
 
 
-def _mixed_section(rng: random.Random, difficulty: str) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+def _mixed_section(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     scenario, params, actions = _chained_enemy_gauntlet(rng, difficulty)
     params = {
         **params,

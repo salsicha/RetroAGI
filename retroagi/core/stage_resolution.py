@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 CANONICAL_STAGE_NAMES = ("synthetic", "block", "full")
 OPTIONAL_STAGE_NAMES = ("symbolic", "tile", "sprite", "emulator", "full_asset_mock")
 STANDARD_STAGE_NAMES = CANONICAL_STAGE_NAMES + OPTIONAL_STAGE_NAMES
@@ -76,6 +75,4 @@ def resolve_game_stage(game, value: str) -> StageResolution:
                 role=stage.role,
             )
     available = ", ".join(game.stage_names)
-    raise KeyError(
-        f"game {game.name!r} does not define stage {value!r}; available: {available}"
-    )
+    raise KeyError(f"game {game.name!r} does not define stage {value!r}; available: {available}")

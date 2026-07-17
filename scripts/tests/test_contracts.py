@@ -1,7 +1,7 @@
 """Shared contract tests for implemented adapters and vision encoders."""
 
-from collections.abc import Mapping
 import unittest
+from collections.abc import Mapping
 
 import numpy as np
 import torch

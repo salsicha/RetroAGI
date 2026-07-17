@@ -48,8 +48,7 @@ class PromotionMetricGateSpec:
             raise ValueError("metric gate metric must be non-empty")
         if self.operator not in METRIC_GATE_OPERATORS:
             raise ValueError(
-                f"metric gate {self.metric!r} operator must be one of "
-                f"{METRIC_GATE_OPERATORS}"
+                f"metric gate {self.metric!r} operator must be one of " f"{METRIC_GATE_OPERATORS}"
             )
         if not self.reason:
             raise ValueError(f"metric gate {self.metric!r} reason must be non-empty")
@@ -119,9 +118,7 @@ class GamePromotionGateSpec:
     """Game-owned automatic gates for one architecture promotion rung."""
 
     rung_name: str
-    runtime: PromotionRuntimeGateSpec | None = field(
-        default_factory=PromotionRuntimeGateSpec
-    )
+    runtime: PromotionRuntimeGateSpec | None = field(default_factory=PromotionRuntimeGateSpec)
     metric_gates: tuple[PromotionMetricGateSpec, ...] = ()
     artifact_gates: tuple[PromotionArtifactGateSpec, ...] = ()
     failure_reason: str = "game promotion gates failed"
@@ -169,9 +166,7 @@ class GamePromotionPhase:
         if not self.description:
             raise ValueError(f"game promotion phase {self.name!r} must define description")
         if not self.architecture_rungs:
-            raise ValueError(
-                f"game promotion phase {self.name!r} must define architecture_rungs"
-            )
+            raise ValueError(f"game promotion phase {self.name!r} must define architecture_rungs")
 
 
 @dataclass(frozen=True)
@@ -188,9 +183,7 @@ class GamePromotionPlan:
             raise ValueError(f"game promotion plan {self.game_name!r} must define phases")
         names = [phase.name for phase in self.phases]
         if len(set(names)) != len(names):
-            raise ValueError(
-                f"game promotion plan {self.game_name!r} phase names must be unique"
-            )
+            raise ValueError(f"game promotion plan {self.game_name!r} phase names must be unique")
 
     def phase(self, name: str) -> GamePromotionPhase:
         for phase in self.phases:

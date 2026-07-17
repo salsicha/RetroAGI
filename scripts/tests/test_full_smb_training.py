@@ -1395,9 +1395,7 @@ class TestFullSMBTraining(unittest.TestCase):
             FullSMBTrainingConfig(
                 world_model_slot_weights={
                     slot_name: 0.0
-                    for slot_name in (
-                        full_smb_train_module._FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES
-                    )
+                    for slot_name in (full_smb_train_module._FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES)
                 }
             )
         with self.assertRaisesRegex(ValueError, "max_abs_loss"):

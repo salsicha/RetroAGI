@@ -10,6 +10,5 @@ if str(PROJECT_ROOT) not in sys.path:
 from retroagi.stages.synthetic_1d.train import *  # noqa: F401,F403
 from retroagi.stages.synthetic_1d.train import train_and_evaluate
 
-
 if __name__ == "__main__":
     train_and_evaluate()

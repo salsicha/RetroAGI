@@ -155,9 +155,7 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                     1,
                 )
         self.assertTrue(all(sample.reachability["reachable"] for sample in sample_set.samples))
-        self.assertTrue(
-            all(sample.parameters["parameter_sweep"] for sample in sample_set.samples)
-        )
+        self.assertTrue(all(sample.parameters["parameter_sweep"] for sample in sample_set.samples))
 
 
 if __name__ == "__main__":

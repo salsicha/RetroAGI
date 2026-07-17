@@ -123,9 +123,7 @@ def infer_agent_support_ids_from_labels(
             for row in range(bottom + 1, row_end):
                 window = labels[batch_index, row, col_start:col_end]
                 matches = [
-                    int(value)
-                    for value in window.flatten().tolist()
-                    if int(value) in terrain_ids
+                    int(value) for value in window.flatten().tolist() if int(value) in terrain_ids
                 ]
                 if not matches:
                     continue
@@ -298,9 +296,7 @@ class PatchVisionTransformer(nn.Module):
         allowed_missing = set(SUPPORT_HEAD_STATE_KEYS)
         missing = list(result.missing_keys)
         unexpected = list(result.unexpected_keys)
-        unsupported_missing = [
-            key for key in missing if key not in allowed_missing
-        ]
+        unsupported_missing = [key for key in missing if key not in allowed_missing]
         if unsupported_missing or unexpected:
             messages = []
             if unsupported_missing:
@@ -323,8 +319,8 @@ class PatchVisionTransformer(nn.Module):
         tokens = features.flatten(2).transpose(1, 2)
         tokens = self.encoder(self.dropout(tokens + self.pos_embed))
         tokens = self.norm(tokens)
-        logits = self.head(tokens).transpose(1, 2).reshape(
-            batch, self.spec.num_classes, grid_h, grid_w
+        logits = (
+            self.head(tokens).transpose(1, 2).reshape(batch, self.spec.num_classes, grid_h, grid_w)
         )
         support_logits = self.support_head(self._support_context(tokens, logits))
         support_source = "learned_head"

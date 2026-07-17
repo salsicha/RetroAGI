@@ -109,9 +109,7 @@ def run_block_smb_action_probe(
                     model,
                     batch,
                     world_model_state=(
-                        world_model_state
-                        if ablation_config.recurrent_state_enabled
-                        else None
+                        world_model_state if ablation_config.recurrent_state_enabled else None
                     ),
                     ablation=ablation_config,
                 )
@@ -142,9 +140,7 @@ def run_block_smb_action_probe(
             stage.env.close()
 
         collected_steps = {
-            sample["step_index"]
-            for sample in samples
-            if sample["scenario_name"] == scenario_name
+            sample["step_index"] for sample in samples if sample["scenario_name"] == scenario_name
         }
         for step_index in candidate_steps:
             if step_index not in collected_steps:
@@ -169,9 +165,7 @@ def run_block_smb_action_probe(
                 "critic_feedback_enabled": bool(ablation_config.critic_feedback_enabled),
                 "hierarchy_enabled": bool(ablation_config.hierarchy_enabled),
                 "recurrent_state_enabled": bool(ablation_config.recurrent_state_enabled),
-                "checkpoint_transfer_enabled": bool(
-                    ablation_config.checkpoint_transfer_enabled
-                ),
+                "checkpoint_transfer_enabled": bool(ablation_config.checkpoint_transfer_enabled),
             },
         },
         "samples": samples,
@@ -273,9 +267,9 @@ def _policy_probe_forward(
         "motor_biased_logits": motor_biased_logits,
         "next_state_pred": next_state_pred.detach().float(),
         "criticism": criticism.detach().float(),
-        "motor_primitives": motor_primitives.detach()
-        if hasattr(motor_primitives, "detach")
-        else motor_primitives,
+        "motor_primitives": (
+            motor_primitives.detach() if hasattr(motor_primitives, "detach") else motor_primitives
+        ),
         "next_world_model_state": next_world_model_state,
     }
 
@@ -385,10 +379,7 @@ def _probe_label(
 
 def _logits_by_action(logits: torch.Tensor) -> dict[str, float]:
     values = logits.detach().float().cpu()
-    return {
-        action.name: float(values[int(action)].item())
-        for action in SMB_ACTIONS
-    }
+    return {action.name: float(values[int(action)].item()) for action in SMB_ACTIONS}
 
 
 def _right_jump_margins(
@@ -435,11 +426,15 @@ def _predicted_motion_summary(
         }
     delta = next_state_pred[:, :usable] - current_state[:, :usable]
     signed = delta.reshape(delta.size(0), seq_len_b, BLOCK_SMB_SPEC.ratio_bc).mean(dim=-1)
-    absolute = delta.abs().reshape(
-        delta.size(0),
-        seq_len_b,
-        BLOCK_SMB_SPEC.ratio_bc,
-    ).mean(dim=-1)
+    absolute = (
+        delta.abs()
+        .reshape(
+            delta.size(0),
+            seq_len_b,
+            BLOCK_SMB_SPEC.ratio_bc,
+        )
+        .mean(dim=-1)
+    )
     return {
         "available": 1.0,
         "absolute_last": float(absolute[:, -1].mean().cpu().item()),
@@ -483,8 +478,7 @@ def _state_summary(info: Mapping[str, Any]) -> dict[str, Any]:
         mario = {}
     return {
         "mario": {
-            name: _finite_float(mario.get(name))
-            for name in ("x", "y", "vx", "vy", "on_ground")
+            name: _finite_float(mario.get(name)) for name in ("x", "y", "vx", "vy", "on_ground")
         },
         "support_right_dx": _finite_float(info.get("support_right_dx")),
         "next_platform_delta": _finite_mapping(info.get("next_platform_delta")),
@@ -498,9 +492,7 @@ def _finite_mapping(value: Any) -> dict[str, float]:
     if not isinstance(value, Mapping):
         return {}
     return {
-        str(key): number
-        for key, raw in value.items()
-        if (number := _finite_float(raw)) is not None
+        str(key): number for key, raw in value.items() if (number := _finite_float(raw)) is not None
     }
 
 
@@ -515,13 +507,9 @@ def _finite_float(value: Any) -> float | None:
 def _probe_summary(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     raw_actions = [str(sample["raw_action_name"]) for sample in samples]
     motor_actions = [str(sample["motor_biased_action_name"]) for sample in samples]
-    margins = [
-        float(sample["margins"]["raw_right_minus_right_jump"])
-        for sample in samples
-    ]
+    margins = [float(sample["margins"]["raw_right_minus_right_jump"]) for sample in samples]
     motor_margins = [
-        float(sample["margins"]["motor_biased_right_minus_right_jump"])
-        for sample in samples
+        float(sample["margins"]["motor_biased_right_minus_right_jump"]) for sample in samples
     ]
     critic_norms = [float(sample["critic"]["norm"]) for sample in samples]
     return {
@@ -536,8 +524,7 @@ def _probe_summary(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 def _count_names(names: Sequence[str]) -> dict[str, int]:
     return {
-        action.name: int(sum(1 for name in names if name == action.name))
-        for action in SMB_ACTIONS
+        action.name: int(sum(1 for name in names if name == action.name)) for action in SMB_ACTIONS
     }
 
 

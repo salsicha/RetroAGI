@@ -104,8 +104,15 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"scripts/segmentation/segment_inference.py" = ["F401"]
+# E402: these scripts insert the project root into sys.path before importing
+# retroagi, so their imports legitimately follow module-level code.
+"scripts/mario_scenario_env.py" = ["E402"]
+"scripts/run.py" = ["E402"]
+"scripts/segmentation/segment_inference.py" = ["F401", "E402"]
 "scripts/semantic_segmentation.py" = ["E402"]
+"scripts/simple_transformer.py" = ["E402"]
+"scripts/vit/train_block_vit.py" = ["E402"]
+"scripts/vit/train_vit.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["retroagi"]

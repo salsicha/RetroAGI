@@ -75,12 +75,7 @@ def evaluate_success_threshold(
     within_step_budget = evaluation_max_steps <= threshold.max_steps
     meets_success_rate = success_rate >= threshold.min_success_rate
     meets_return = mean_return >= threshold.min_mean_return
-    threshold_met = (
-        enough_episodes
-        and within_step_budget
-        and meets_success_rate
-        and meets_return
-    )
+    threshold_met = enough_episodes and within_step_budget and meets_success_rate and meets_return
     return {
         "threshold": threshold.to_dict(),
         "evaluation_episodes": evaluation_episodes,
@@ -123,9 +118,7 @@ def summarize_fixed_success_metrics(
     higher reward in one unsolved scenario.
     """
     scenario_names = [
-        name
-        for name in FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS
-        if name in fixed_scenario_results
+        name for name in FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS if name in fixed_scenario_results
     ]
     if not scenario_names:
         return {
@@ -142,12 +135,10 @@ def summarize_fixed_success_metrics(
         if bool(threshold_results.get(name, {}).get("threshold_met", False))
     ) / len(scenario_names)
     mean_success_rate = sum(
-        float(fixed_scenario_results[name].get("success_rate", 0.0))
-        for name in scenario_names
+        float(fixed_scenario_results[name].get("success_rate", 0.0)) for name in scenario_names
     ) / len(scenario_names)
     mean_return = sum(
-        float(fixed_scenario_results[name].get("return", 0.0))
-        for name in scenario_names
+        float(fixed_scenario_results[name].get("return", 0.0)) for name in scenario_names
     ) / len(scenario_names)
     score = threshold_pass_rate * 1_000_000.0 + mean_success_rate * 1_000.0 + mean_return
     return {

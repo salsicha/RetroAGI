@@ -6,7 +6,6 @@ from typing import Optional
 
 import torch
 
-
 _MPS_ALIASES = {
     "apple",
     "apple-silicon",
@@ -66,7 +65,9 @@ def select_device(name: Optional[str | torch.device] = "auto") -> torch.device:
         if not is_mps_built():
             raise RuntimeError("Apple Silicon MPS was requested, but this PyTorch build lacks MPS")
         if not is_mps_available():
-            raise RuntimeError("Apple Silicon MPS was requested, but it is unavailable on this machine")
+            raise RuntimeError(
+                "Apple Silicon MPS was requested, but it is unavailable on this machine"
+            )
         return device
 
     raise ValueError(

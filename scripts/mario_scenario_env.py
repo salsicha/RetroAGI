@@ -10,6 +10,5 @@ if str(PROJECT_ROOT) not in sys.path:
 from retroagi.stages.block_smb.env import *  # noqa: F401,F403
 from retroagi.stages.block_smb.env import main
 
-
 if __name__ == "__main__":
     main()

@@ -12,9 +12,9 @@ import numpy as np
 
 from retroagi import experiments
 from retroagi.core import (
-    AgentWorldModelCritic,
     BASELINE_ARCHITECTURE_NAME,
     PONG_GAME_SPEC,
+    AgentWorldModelCritic,
     PongSignalExtractor,
     StageSpec,
     build_architecture,

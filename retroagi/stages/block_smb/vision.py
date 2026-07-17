@@ -8,15 +8,14 @@ import torch
 import torch.nn.functional as F
 
 from retroagi.core import (
-    build_checkpoint,
     ModelConfig,
     PatchVisionTransformer,
     VisionOutput,
+    build_checkpoint,
     load_checkpoint,
     validate_checkpoint_compatibility,
 )
 from retroagi.core.vision import image_tensor
-
 
 BLOCK_SEMANTIC_CLASSES = (
     "background",
@@ -287,9 +286,7 @@ def evaluate_block_vit_perception(
         position_delta = output.position - positions
         position_squared_error += position_delta.pow(2).sum().item()
         position_error = torch.linalg.vector_norm(position_delta, dim=1)
-        position_within_tolerance += (
-            position_error <= thresholds.position_tolerance
-        ).sum().item()
+        position_within_tolerance += (position_error <= thresholds.position_tolerance).sum().item()
         for class_id in range(model.spec.num_classes):
             predicted = prediction == class_id
             target = labels == class_id
@@ -301,22 +298,18 @@ def evaluate_block_vit_perception(
     valid = unions > 0
     per_class_iou = {
         class_name: (
-            float((intersections[index] / unions[index]).item())
-            if bool(valid[index])
-            else None
+            float((intersections[index] / unions[index]).item()) if bool(valid[index]) else None
         )
         for index, class_name in enumerate(model.spec.semantic_classes)
     }
     mean_iou = (
-        float((intersections[valid] / unions[valid]).mean().item())
-        if bool(valid.any())
-        else 0.0
+        float((intersections[valid] / unions[valid]).mean().item()) if bool(valid.any()) else 0.0
     )
     accuracy = correct / max(patches, 1)
     foreground_accuracy = foreground_correct / max(foreground_total, 1)
     support_accuracy = support_correct / max(support_total, 1)
     position_mse = position_squared_error / max(samples * model.spec.position_dim, 1)
-    position_rmse = position_mse ** 0.5
+    position_rmse = position_mse**0.5
     position_within_rate = position_within_tolerance / max(samples, 1)
     bottleneck_reasons = []
     if accuracy < thresholds.min_accuracy:
@@ -377,7 +370,9 @@ class BlockVisionTransformer(PatchVisionTransformer):
     @torch.no_grad()
     def semantic_targets(self, observation: Any) -> torch.Tensor:
         """Build exact pixel labels from the simplified renderer's fixed palette."""
-        image = (image_tensor(observation, device=self.pos_embed.device) * 255).round().to(torch.uint8)
+        image = (
+            (image_tensor(observation, device=self.pos_embed.device) * 255).round().to(torch.uint8)
+        )
         labels = torch.zeros(
             image.shape[0], image.shape[2], image.shape[3], dtype=torch.long, device=image.device
         )
@@ -402,7 +397,9 @@ class BlockVisionTransformer(PatchVisionTransformer):
     @torch.no_grad()
     def position_targets(self, observation: Any) -> torch.Tensor:
         """Return the normalized center of Mario from exact renderer labels."""
-        mario_pixels = self.semantic_targets(observation) == self.spec.semantic_classes.index("mario")
+        mario_pixels = self.semantic_targets(observation) == self.spec.semantic_classes.index(
+            "mario"
+        )
         mass = mario_pixels.sum(dim=(1, 2)).clamp_min(1)
         height, width = mario_pixels.shape[-2:]
         y = torch.linspace(0, 1, height, device=mario_pixels.device)

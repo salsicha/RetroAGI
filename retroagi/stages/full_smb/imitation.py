@@ -298,13 +298,7 @@ def collect_full_smb_obstacle_window_duration_dataset(
         release_targets.append(0.0)
         release_masks.append(0.0)
         post_release_targets.append(int(label["post_release_action"]))
-        labels.append(
-            {
-                key: value
-                for key, value in label.items()
-                if key not in {"batch", "state"}
-            }
-        )
+        labels.append({key: value for key, value in label.items() if key not in {"batch", "state"}})
 
     metrics = {
         "source": "full_smb_obstacle_window_save_state_sweeps",
@@ -697,17 +691,15 @@ def train_full_smb_imitation_warm_start(
             "trainable_prefixes": tuple(trainable_prefixes),
             "mean_loss": float(sum(losses) / len(losses)) if losses else 0.0,
             "final_loss": float(losses[-1]) if losses else 0.0,
-            "mean_action_loss": float(sum(action_losses) / len(action_losses))
-            if action_losses
-            else 0.0,
+            "mean_action_loss": (
+                float(sum(action_losses) / len(action_losses)) if action_losses else 0.0
+            ),
             "final_action_loss": float(action_losses[-1]) if action_losses else 0.0,
-            "mean_primitive_loss": float(sum(primitive_losses) / len(primitive_losses))
-            if primitive_losses
-            else 0.0,
+            "mean_primitive_loss": (
+                float(sum(primitive_losses) / len(primitive_losses)) if primitive_losses else 0.0
+            ),
             "final_primitive_loss": float(primitive_losses[-1]) if primitive_losses else 0.0,
-            "mean_action_accuracy": float(sum(accuracies) / len(accuracies))
-            if accuracies
-            else 0.0,
+            "mean_action_accuracy": float(sum(accuracies) / len(accuracies)) if accuracies else 0.0,
             "final_action_accuracy": float(accuracies[-1]) if accuracies else 0.0,
             "duration_supervision_count": float(primitive_targets["duration_mask"].sum().item()),
             "release_supervision_count": float(primitive_targets["release_mask"].sum().item()),
@@ -808,9 +800,7 @@ def _overlay_explicit_primitive_targets(
     if explicit_duration_mask is not None and explicit_duration_bin is not None:
         # Explicit samples are authoritative for every target, including zero
         # masks that deliberately withhold supervision.
-        mask = (
-            explicit_samples > 0 if explicit_samples is not None else explicit_duration_mask > 0
-        )
+        mask = explicit_samples > 0 if explicit_samples is not None else explicit_duration_mask > 0
         targets["duration_bin"][mask] = explicit_duration_bin[mask]
         targets["duration_mask"][mask] = explicit_duration_mask[mask]
         targets["explicit_duration_mask"][mask] = explicit_duration_mask[mask]
@@ -828,9 +818,7 @@ def _overlay_explicit_primitive_targets(
         dtype=torch.float32,
     )
     if explicit_release_mask is not None and explicit_release is not None:
-        mask = (
-            explicit_samples > 0 if explicit_samples is not None else explicit_release_mask > 0
-        )
+        mask = explicit_samples > 0 if explicit_samples is not None else explicit_release_mask > 0
         targets["release"][mask] = explicit_release[mask]
         targets["release_mask"][mask] = explicit_release_mask[mask]
 
@@ -1064,9 +1052,7 @@ def run_full_smb_imitation_warm_start(
             "imitation_release_supervision_count": float(
                 training_metrics["release_supervision_count"]
             ),
-            "imitation_release_positive_count": float(
-                training_metrics["release_positive_count"]
-            ),
+            "imitation_release_positive_count": float(training_metrics["release_positive_count"]),
             "imitation_explicit_duration_supervision_count": float(
                 training_metrics["explicit_duration_supervision_count"]
             ),

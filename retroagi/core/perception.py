@@ -30,13 +30,9 @@ class SemanticVocabularySpec:
         if not self.classes:
             raise ValueError(f"semantic vocabulary {self.name!r} must define classes")
         if any(not class_name for class_name in self.classes):
-            raise ValueError(
-                f"semantic vocabulary {self.name!r} class names must be non-empty"
-            )
+            raise ValueError(f"semantic vocabulary {self.name!r} class names must be non-empty")
         if len(set(self.classes)) != len(self.classes):
-            raise ValueError(
-                f"semantic vocabulary {self.name!r} class names must be unique"
-            )
+            raise ValueError(f"semantic vocabulary {self.name!r} class names must be unique")
         if self.background_class is not None and self.background_class not in self.classes:
             raise ValueError(
                 f"semantic vocabulary {self.name!r} background class "
@@ -89,9 +85,7 @@ class PerceptionDatasetSourceSpec:
                 f"{PERCEPTION_DATASET_SOURCE_KINDS}"
             )
         if not self.stage_names:
-            raise ValueError(
-                f"perception dataset source {self.name!r} must define stage_names"
-            )
+            raise ValueError(f"perception dataset source {self.name!r} must define stage_names")
         empty_stages = [stage for stage in self.stage_names if not stage]
         if empty_stages:
             raise ValueError(
@@ -102,20 +96,12 @@ class PerceptionDatasetSourceSpec:
                 f"perception dataset source {self.name!r} must define observation_source"
             )
         if not self.label_source:
-            raise ValueError(
-                f"perception dataset source {self.name!r} must define label_source"
-            )
+            raise ValueError(f"perception dataset source {self.name!r} must define label_source")
         if not isinstance(self.entrypoint, str):
-            raise ValueError(
-                f"perception dataset source {self.name!r} entrypoint must be a string"
-            )
-        empty_artifacts = [
-            artifact for artifact in self.dataset_artifacts if not artifact
-        ]
+            raise ValueError(f"perception dataset source {self.name!r} entrypoint must be a string")
+        empty_artifacts = [artifact for artifact in self.dataset_artifacts if not artifact]
         if empty_artifacts:
-            raise ValueError(
-                f"perception dataset source {self.name!r} artifacts must be non-empty"
-            )
+            raise ValueError(f"perception dataset source {self.name!r} artifacts must be non-empty")
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -162,9 +148,7 @@ class PerceptionPipelineSpec:
             if value is not None and not value:
                 raise ValueError(f"perception pipeline {field_name} must be non-empty")
         if not self.diagnostic_thresholds:
-            raise ValueError(
-                f"perception pipeline {self.name!r} must define diagnostic thresholds"
-            )
+            raise ValueError(f"perception pipeline {self.name!r} must define diagnostic thresholds")
         invalid_thresholds = [
             name
             for name, value in self.diagnostic_thresholds.items()
@@ -177,9 +161,7 @@ class PerceptionPipelineSpec:
                 f"perception pipeline {self.name!r} diagnostic thresholds must be "
                 f"finite numbers: {invalid_thresholds}"
             )
-        empty_artifacts = [
-            artifact for artifact in self.dataset_artifacts if not artifact
-        ]
+        empty_artifacts = [artifact for artifact in self.dataset_artifacts if not artifact]
         if empty_artifacts:
             raise ValueError(
                 f"perception pipeline {self.name!r} dataset artifacts must be non-empty"
@@ -190,8 +172,7 @@ class PerceptionPipelineSpec:
                 f"perception pipeline {self.name!r} dataset source names must be unique"
             )
         uses_asset_synthetic = any(
-            source.source_kind == "asset_synthetic"
-            for source in self.dataset_sources
+            source.source_kind == "asset_synthetic" for source in self.dataset_sources
         )
         if not self.dataset_sources or uses_asset_synthetic:
             if not self.asset_extraction or not self.synthetic_frame_composition:
@@ -222,13 +203,9 @@ class PerceptionPipelineSpec:
             "synthetic_frame_composition": self.synthetic_frame_composition,
             "checkpoint_path": self.checkpoint_path,
             "diagnostic_thresholds": {
-                name: float(value)
-                for name, value in self.diagnostic_thresholds.items()
+                name: float(value) for name, value in self.diagnostic_thresholds.items()
             },
             "dataset_artifacts": list(self.dataset_artifacts),
-            "dataset_sources": [
-                source.to_manifest()
-                for source in self.dataset_sources
-            ],
+            "dataset_sources": [source.to_manifest() for source in self.dataset_sources],
             "metadata": dict(self.metadata),
         }

@@ -27,9 +27,7 @@ from retroagi.stages.full_smb.adapter import FULL_SMB_SPEC
 from retroagi.stages.full_smb.transfer import make_full_smb_policy_model
 
 FULL_SMB_ARCHITECTURE_BENCHMARK_SCHEMA_VERSION = 1
-DEFAULT_FULL_SMB_ARCHITECTURE_BENCHMARK_ARCHITECTURES = (
-    BASELINE_ARCHITECTURE_NAME,
-)
+DEFAULT_FULL_SMB_ARCHITECTURE_BENCHMARK_ARCHITECTURES = (BASELINE_ARCHITECTURE_NAME,)
 
 
 def benchmark_full_smb_policy_architectures(

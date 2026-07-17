@@ -72,9 +72,7 @@ class TestCompatibilityValidation(unittest.TestCase):
             validate_stage_spec(replace(stage, vocab_size=3))
 
         with self.assertRaisesRegex(CompatibilityError, "action_names must be unique"):
-            validate_stage_spec(
-                replace(stage, action_names=("noop", "right", "right", "jump"))
-            )
+            validate_stage_spec(replace(stage, action_names=("noop", "right", "right", "jump")))
 
     def test_rejects_model_vision_mismatch(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)

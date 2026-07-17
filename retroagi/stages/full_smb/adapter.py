@@ -912,7 +912,9 @@ class FullSMBStage:
             return
         page_x = float(ram[SMB_RAM_PLAYER_SCREEN_X])
         screen_y = float(ram[SMB_RAM_PLAYER_SCREEN_Y])
-        level_page = float(ram[SMB_RAM_PLAYER_LEVEL_PAGE]) if ram.size > SMB_RAM_PLAYER_LEVEL_PAGE else 0.0
+        level_page = (
+            float(ram[SMB_RAM_PLAYER_LEVEL_PAGE]) if ram.size > SMB_RAM_PLAYER_LEVEL_PAGE else 0.0
+        )
         level_x = level_page * SMB_SCREEN_WIDTH + page_x
         scroll_x = _raw_scroll_x(info)
         if scroll_x is None:
@@ -957,9 +959,11 @@ class FullSMBStage:
         config = self.reward_config
         terms = {
             "emulator_progress": float(backend_reward) * config.emulator_progress,
-            "signal_progress": _progress_delta(previous, current) * config.emulator_progress
-            if float(backend_reward) == 0.0
-            else 0.0,
+            "signal_progress": (
+                _progress_delta(previous, current) * config.emulator_progress
+                if float(backend_reward) == 0.0
+                else 0.0
+            ),
             "completion": _event_started(previous, current, "completion") * config.completion,
             "survival": _survival_indicator(current) * config.survival,
             "score": _positive_signal_delta(previous, current, "score") * config.score,

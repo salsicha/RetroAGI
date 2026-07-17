@@ -1,5 +1,6 @@
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 import torch
 import torchvision
@@ -11,7 +12,8 @@ from torchvision import datasets, transforms, models
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from torch.utils.data import Dataset
-#from torchvision.datasets.utils import download_file_from_google_drive
+
+# from torchvision.datasets.utils import download_file_from_google_drive
 
 from PIL import Image
 import numpy as np
@@ -32,7 +34,7 @@ from tqdm import tqdm
 
 import cv2
 
-from torchvision.models.segmentation.deeplabv3 import DeepLabHead,DeepLabV3
+from torchvision.models.segmentation.deeplabv3 import DeepLabHead, DeepLabV3
 from torchvision import models
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -41,36 +43,35 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from retroagi.core import select_device
 
-print('PyTorch version:', torch.__version__)
-
-
-
+print("PyTorch version:", torch.__version__)
 
 
 class Configuration:
-  def __init__(self):
-    self.experiment_name = "Training the Super Mario Segmentation Model"
-    
-    # Paramters for the first part
-    self.pre_load    = "True" ## Load dataset in memory
-    self.pre_trained = "True"
-    self.num_classes = 6
-    self.ignore_label = 255
-    self.training_data_proportion = 0.8 # Proportion of images of the dataset to be used for training
+    def __init__(self):
+        self.experiment_name = "Training the Super Mario Segmentation Model"
 
-    self.lr    = 0.001  # 0.001 if pretrained weights from pytorch. 0.1 if scratch
-    self.epoch = 45     # Play with this if training takes too long
-    self.M = [37,42]         # If training from scratch, reduce learning rate at some point
+        # Paramters for the first part
+        self.pre_load = "True"  ## Load dataset in memory
+        self.pre_trained = "True"
+        self.num_classes = 6
+        self.ignore_label = 255
+        self.training_data_proportion = (
+            0.8  # Proportion of images of the dataset to be used for training
+        )
 
-    self.batch_size = 4  # Training batch size
-    self.test_batch_size = 4  # Test batch size
-    self.model_file_name = "MarioSegmentationModel.pth"
-    
-    # Root for all generated data (sprites, dataset, models). Repo-relative by default.
-    self.dataset_root = str(Path(__file__).resolve().parent / "dataset_generator")
-    self.download   = False
+        self.lr = 0.001  # 0.001 if pretrained weights from pytorch. 0.1 if scratch
+        self.epoch = 45  # Play with this if training takes too long
+        self.M = [37, 42]  # If training from scratch, reduce learning rate at some point
 
-    self.seed = 271828
+        self.batch_size = 4  # Training batch size
+        self.test_batch_size = 4  # Test batch size
+        self.model_file_name = "MarioSegmentationModel.pth"
+
+        # Root for all generated data (sprites, dataset, models). Repo-relative by default.
+        self.dataset_root = str(Path(__file__).resolve().parent / "dataset_generator")
+        self.download = False
+
+        self.seed = 271828
 
 
 # Single source of truth for dataset/sprite/model paths (see Configuration.dataset_root).
@@ -78,17 +79,27 @@ DATASET_ROOT = Configuration().dataset_root
 
 
 class MarioDataset(data.Dataset):
-    def __init__(self, args, mode, transform_input=transforms.ToTensor(), transform_mask=transforms.ToTensor()):
+    def __init__(
+        self,
+        args,
+        mode,
+        transform_input=transforms.ToTensor(),
+        transform_mask=transforms.ToTensor(),
+    ):
         self.args = args
         self.folder = join(args.dataset_root, "dataset")
 
-        #If you change how you create the dataset you may need to modify this:
-        self.images_in_dataset = len(os.listdir(self.folder+"/PNG"))
-        training_images_no = int(self.images_in_dataset*0.8)
-        self.imgs = np.arange(training_images_no) if mode == 'train' else np.arange(training_images_no,self.images_in_dataset)
+        # If you change how you create the dataset you may need to modify this:
+        self.images_in_dataset = len(os.listdir(self.folder + "/PNG"))
+        training_images_no = int(self.images_in_dataset * 0.8)
+        self.imgs = (
+            np.arange(training_images_no)
+            if mode == "train"
+            else np.arange(training_images_no, self.images_in_dataset)
+        )
 
         if len(self.imgs) == 0:
-            raise RuntimeError('Found 0 images, please check the data set or proportions')
+            raise RuntimeError("Found 0 images, please check the data set or proportions")
 
         self.mode = mode
         self.transform_input = transform_input
@@ -97,55 +108,55 @@ class MarioDataset(data.Dataset):
     # Default trasnformations on train data
     def transform(self, image, mask):
 
-        i, j, h, w = transforms.RandomCrop.get_params(image, (224,224))
-        
-        image = TF.crop(image,i,j,h,w)
-        mask  = TF.crop(mask,i,j,h,w)
+        i, j, h, w = transforms.RandomCrop.get_params(image, (224, 224))
+
+        image = TF.crop(image, i, j, h, w)
+        mask = TF.crop(mask, i, j, h, w)
 
         if random.random() > 0.5:
             image = TF.hflip(image)
-            mask  = TF.hflip(mask)
+            mask = TF.hflip(mask)
 
         return image, mask
 
     # Default trasnformations on test data
     def test_transform(self, image, mask):
-        #224x224 center crop: 
-        image = TF.center_crop(image,[224,224])
-        mask  = TF.center_crop(mask,[224,224])
+        # 224x224 center crop:
+        image = TF.center_crop(image, [224, 224])
+        mask = TF.center_crop(mask, [224, 224])
 
         return image, mask
-    
+
     def __getitem__(self, index):
 
         img_id = self.imgs[index]
 
-        if self.mode == 'test':
-            img = Image.open(self.folder+"/PNG/"+str(img_id)+".png").convert('RGB')
+        if self.mode == "test":
+            img = Image.open(self.folder + "/PNG/" + str(img_id) + ".png").convert("RGB")
             if self.transform_input is not None:
                 img = self.transform_input(img)
             return str(img_id), img
 
-            #Load RGB image
-        img = Image.open(self.folder+"/PNG/"+str(img_id)+".png").convert('RGB')
+            # Load RGB image
+        img = Image.open(self.folder + "/PNG/" + str(img_id) + ".png").convert("RGB")
 
-        if self.mode == 'train':
+        if self.mode == "train":
 
-            #Load class mask
-            mask = Image.open(self.folder+"/Labels/"+str(img_id)+".png")
+            # Load class mask
+            mask = Image.open(self.folder + "/Labels/" + str(img_id) + ".png")
         else:
-            mask = Image.open(self.folder+"/Labels/"+str(img_id)+".png")
+            mask = Image.open(self.folder + "/Labels/" + str(img_id) + ".png")
 
             ##Transform using default transformations
-        if self.mode=="train":
-              img, mask = self.transform(img,mask)
+        if self.mode == "train":
+            img, mask = self.transform(img, mask)
         else:
-              img, mask = self.test_transform(img,mask)
+            img, mask = self.test_transform(img, mask)
 
         if self.transform_input is not None:
-           img = self.transform_input(img)
+            img = self.transform_input(img)
         if self.transform_mask is not None:
-            mask = 255*self.transform_mask(mask)
+            mask = 255 * self.transform_mask(mask)
 
         return img, mask.long()
 
@@ -153,15 +164,18 @@ class MarioDataset(data.Dataset):
         return len(self.imgs)
 
 
-
-
-class GridGenerator():
+class GridGenerator:
 
     def __init__(self, width=17, height=15):
         self.grid_w = width
         self.grid_h = height
-        self.grid = np.array([[['[background]', 'Empty', 'Empty'] for a in np.arange(
-            self.grid_w)] for b in np.arange(self.grid_h)], dtype='object')
+        self.grid = np.array(
+            [
+                [["[background]", "Empty", "Empty"] for a in np.arange(self.grid_w)]
+                for b in np.arange(self.grid_h)
+            ],
+            dtype="object",
+        )
         self.free_floor = np.arange(self.grid_w)
         self.havefloor = []
         self.floor_level = 12
@@ -170,7 +184,7 @@ class GridGenerator():
         # Rows 9,10 over the floor
         block_n = np.random.choice(np.arange(3), p=[0.1, 0.5, 0.4])
         # To not overlap hills and clouds
-        #hill_av = np.arange(16)
+        # hill_av = np.arange(16)
         if block_n != 0:
             # where are they placed
             block_l = np.random.permutation(self.grid_w)[:block_n]
@@ -181,29 +195,29 @@ class GridGenerator():
                 # what type are the blocks. Bricks? or boxes?
                 for k in np.arange(size):
                     # to place lengthy blocks around initial position
-                    offset = np.power(-1, k)*((k+1)//2)
-                    position = block_l[i]+offset
+                    offset = np.power(-1, k) * ((k + 1) // 2)
+                    position = block_l[i] + offset
                     # if position is inside the grid, set the label
                     if position >= 0 and position < self.grid_w:
                         # np.delete(hill_av,position)
                         if k < size - 2:
-                            self.grid[2, position, 0] = '[cloud_tm]'
-                            self.grid[3, position, 0] = '[cloud_bm]'
+                            self.grid[2, position, 0] = "[cloud_tm]"
+                            self.grid[3, position, 0] = "[cloud_bm]"
                         else:
                             if offset < 0:
-                                if 'cloud' in self.grid[2, position, 0]:
-                                    self.grid[2, position, 0] = '[cloud_tm]'
-                                    self.grid[3, position, 0] = '[cloud_bm]'
+                                if "cloud" in self.grid[2, position, 0]:
+                                    self.grid[2, position, 0] = "[cloud_tm]"
+                                    self.grid[3, position, 0] = "[cloud_bm]"
                                 else:
-                                    self.grid[2, position, 0] = '[cloud_tl]'
-                                    self.grid[3, position, 0] = '[cloud_bl]'
+                                    self.grid[2, position, 0] = "[cloud_tl]"
+                                    self.grid[3, position, 0] = "[cloud_bl]"
                             else:
-                                if 'cloud' in self.grid[2, position, 0]:
-                                    self.grid[2, position, 0] = '[cloud_tm]'
-                                    self.grid[3, position, 0] = '[cloud_bm]'
+                                if "cloud" in self.grid[2, position, 0]:
+                                    self.grid[2, position, 0] = "[cloud_tm]"
+                                    self.grid[3, position, 0] = "[cloud_bm]"
                                 else:
-                                    self.grid[2, position, 0] = '[cloud_tr]'
-                                    self.grid[3, position, 0] = '[cloud_br]'
+                                    self.grid[2, position, 0] = "[cloud_tr]"
+                                    self.grid[3, position, 0] = "[cloud_br]"
 
     def GenerateHills(self):
         # Generate hills.
@@ -213,40 +227,49 @@ class GridGenerator():
         if block_n != 0:
             block_h = np.random.choice([0, 1], size=block_n, p=[0.5, 0.5])
             # generate placements (doesnt take into account hill height)
-            block_l = [5*i + x for i,
-                       x in enumerate(sorted(np.random.randint(0, 7, size=3)))]
+            block_l = [5 * i + x for i, x in enumerate(sorted(np.random.randint(0, 7, size=3)))]
 
             free_floor_for_hills = self.free_floor
             for i in np.arange(block_n):
                 # place tip
-                self.grid[10+block_h[i], block_l[i], 0] = '[hill_t]'
+                self.grid[10 + block_h[i], block_l[i], 0] = "[hill_t]"
                 # middle row
-                self.grid[11+block_h[i], block_l[i], 0] = '[hill_mm]'
-                if block_l[i]-1 >= 0:
-                    self.grid[11+block_h[i], block_l[i]-1, 0] = '[hill_ml]'
+                self.grid[11 + block_h[i], block_l[i], 0] = "[hill_mm]"
+                if block_l[i] - 1 >= 0:
+                    self.grid[11 + block_h[i], block_l[i] - 1, 0] = "[hill_ml]"
                     # bottom row, saves 1 comparison
-                    self.grid[12+block_h[i], block_l[i]-1, 0] = '[hill_bl]'
+                    self.grid[12 + block_h[i], block_l[i] - 1, 0] = "[hill_bl]"
 
-                if block_l[i]+1 < self.grid_w:
-                    self.grid[11+block_h[i], block_l[i]+1, 0] = '[hill_mr]'
+                if block_l[i] + 1 < self.grid_w:
+                    self.grid[11 + block_h[i], block_l[i] + 1, 0] = "[hill_mr]"
                     # bottom row, saves 1 comparison
-                    self.grid[12+block_h[i], block_l[i]+1, 0] = '[hill_br]'
+                    self.grid[12 + block_h[i], block_l[i] + 1, 0] = "[hill_br]"
 
                 # The rest of the bottom row
                 if block_l[i] - 2 >= 0:
-                    self.grid[12+block_h[i], block_l[i]-2, 0] = '[hill_bll]'
-                if block_l[i]+2 < self.grid_w:
-                    self.grid[12+block_h[i], block_l[i]+2, 0] = '[hill_brr]'
+                    self.grid[12 + block_h[i], block_l[i] - 2, 0] = "[hill_bll]"
+                if block_l[i] + 2 < self.grid_w:
+                    self.grid[12 + block_h[i], block_l[i] + 2, 0] = "[hill_brr]"
 
-                self.grid[12+block_h[i], block_l[i], 0] = '[hill_bm]'
+                self.grid[12 + block_h[i], block_l[i], 0] = "[hill_bm]"
 
-                free_floor_for_hills = [x for x in free_floor_for_hills if x not in [
-                    block_l[i]-2, block_l[i]-1, block_l[i], block_l[i]+1, block_l[i]+2]]
+                free_floor_for_hills = [
+                    x
+                    for x in free_floor_for_hills
+                    if x
+                    not in [
+                        block_l[i] - 2,
+                        block_l[i] - 1,
+                        block_l[i],
+                        block_l[i] + 1,
+                        block_l[i] + 2,
+                    ]
+                ]
 
     def GenerateBushes(self):
         # Generates bushes (1 to 2 per image)
         block_n = np.random.choice(np.arange(1, 3), p=[0.6, 0.4])
-        #print("Free floor for bushes: ",free_floor)
+        # print("Free floor for bushes: ",free_floor)
         if block_n != 0:
             # where are they placed
             block_l = np.random.permutation(self.free_floor)[:block_n]
@@ -257,25 +280,25 @@ class GridGenerator():
                 # what type are the blocks. Bricks? or boxes?
                 for k in np.arange(size):
                     # to place lengthy blocks around initial position
-                    offset = np.power(-1, k)*((k+1)//2)
-                    position = block_l[i]+offset
+                    offset = np.power(-1, k) * ((k + 1) // 2)
+                    position = block_l[i] + offset
                     # if position is inside the grid, set the label
 
                     if position >= 0 and position < self.grid_w:
                         # np.delete(hill_av,position)
                         if k < size - 2:
-                            self.grid[12, position, 1] = '[bush_m]'
+                            self.grid[12, position, 1] = "[bush_m]"
                         else:
                             if offset < 0:
-                                if 'bush' in self.grid[12, position, 1]:
-                                    self.grid[12, position, 1] = '[bush_m]'
+                                if "bush" in self.grid[12, position, 1]:
+                                    self.grid[12, position, 1] = "[bush_m]"
                                 else:
-                                    self.grid[12, position, 1] = '[bush_l]'
+                                    self.grid[12, position, 1] = "[bush_l]"
                             else:
-                                if 'bush' in self.grid[12, position, 1]:
-                                    self.grid[12, position, 1] = '[bush_m]'
+                                if "bush" in self.grid[12, position, 1]:
+                                    self.grid[12, position, 1] = "[bush_m]"
                                 else:
-                                    self.grid[12, position, 1] = '[bush_r]'
+                                    self.grid[12, position, 1] = "[bush_r]"
 
     def GenerateFloor(self):
         # Generate floor tiles
@@ -293,13 +316,12 @@ class GridGenerator():
                 holes.append(i)
                 continue
             else:  # no hole, fill with floor
-                self.grid[13, i, 1] = '[floor]'
-                self.grid[14, i, 1] = '[floor]'
+                self.grid[13, i, 1] = "[floor]"
+                self.grid[14, i, 1] = "[floor]"
                 self.havefloor.append(i)
 
         for i in holes:
-            self.free_floor = np.delete(
-                self.free_floor, np.where(self.free_floor == i), axis=0)
+            self.free_floor = np.delete(self.free_floor, np.where(self.free_floor == i), axis=0)
 
     def GenerateTrees(self):
         # Get the number of available slots in the floor.
@@ -310,7 +332,8 @@ class GridGenerator():
             for tree in np.arange(trees):
                 if len(self.havefloor) == 0:
                     print(
-                        "There is no floor... Have you called GenerateFloor before placing trees? Placing them anywhere")
+                        "There is no floor... Have you called GenerateFloor before placing trees? Placing them anywhere"
+                    )
                     place = np.random.choice(np.arange(self.grid_w))
                 else:
                     place = np.random.choice(self.havefloor)
@@ -318,20 +341,19 @@ class GridGenerator():
                 tree_type = np.random.choice(np.arange(0, 2))
 
                 if tree_type == 0:  # trunk 2 top
-                    self.grid[self.floor_level, place, 1] = '[tree_trunk]'
-                    self.grid[self.floor_level-1, place, 1] = '[tree_tb]'
-                    self.grid[self.floor_level-2, place, 1] = '[tree_tt]'
+                    self.grid[self.floor_level, place, 1] = "[tree_trunk]"
+                    self.grid[self.floor_level - 1, place, 1] = "[tree_tb]"
+                    self.grid[self.floor_level - 2, place, 1] = "[tree_tt]"
                 else:
-                    self.grid[self.floor_level, place, 1] = '[tree_trunk]'
-                    self.grid[self.floor_level-1, place, 1] = '[tree_small]'
+                    self.grid[self.floor_level, place, 1] = "[tree_trunk]"
+                    self.grid[self.floor_level - 1, place, 1] = "[tree_small]"
 
     def GenerateBlocks(self):
         # This function places unbrickable blocks
         # Must work similar to placing bricks
         max_blocks = 4
-        block_number = np.random.choice(
-            np.arange(0, max_blocks), p=[0.7, 0.20, 0.07, 0.03])
-        #print("Free floor before blocks {}".format(self.free_floor))
+        block_number = np.random.choice(np.arange(0, max_blocks), p=[0.7, 0.20, 0.07, 0.03])
+        # print("Free floor before blocks {}".format(self.free_floor))
 
         placed_block = []
 
@@ -339,7 +361,8 @@ class GridGenerator():
             for block in np.arange(block_number):
                 if len(self.havefloor) == 0:
                     print(
-                        "There is no floor... Have you called GenerateFloor before generating blocks? Placing them anywhere")
+                        "There is no floor... Have you called GenerateFloor before generating blocks? Placing them anywhere"
+                    )
                     place = np.random.choice(np.arange(self.grid_w))
                 else:
                     place = np.random.choice(self.havefloor)
@@ -348,7 +371,7 @@ class GridGenerator():
 
                 # First place the main block
                 for k in np.arange(block_group_height):
-                    self.grid[self.floor_level-k, place, 2] = '[block_hard]'
+                    self.grid[self.floor_level - k, place, 2] = "[block_hard]"
 
                 placed_block.append(place)
 
@@ -357,35 +380,33 @@ class GridGenerator():
                 grow = np.random.choice([-1, 0, 1], p=[0.1, 0.8, 0.1])
 
                 if grow != 0:
-                    grow_n = np.random.randint(0, max_blocks-block_number)
+                    grow_n = np.random.randint(0, max_blocks - block_number)
                     for block_strip in np.arange(grow_n):
-                        loc = place + block_strip*grow
+                        loc = place + block_strip * grow
 
                         if loc > 0 and loc < self.grid_w:
-                            height = np.random.choice(
-                                np.arange(1, block_group_height+1))
+                            height = np.random.choice(np.arange(1, block_group_height + 1))
                             for i in np.arange(height):
-                                self.grid[self.floor_level-i,
-                                          loc, 2] = '[block_hard]'
+                                self.grid[self.floor_level - i, loc, 2] = "[block_hard]"
 
                             placed_block.append(loc)
 
             for i in placed_block:
-                self.free_floor = np.delete(
-                    self.free_floor, np.where(self.free_floor == i), axis=0)
-            #print("Free floor after blocks {}".format(self.free_floor))
+                self.free_floor = np.delete(self.free_floor, np.where(self.free_floor == i), axis=0)
+            # print("Free floor after blocks {}".format(self.free_floor))
 
     def GeneratePipes(self):
         # Over those that have floor, pipes can appear, with low probability.
         pipes = np.random.choice(np.arange(0, 4), p=[0.7, 0.20, 0.07, 0.03])
         placed_pipes = []
-        #print("Free floor before pipes {}".format(self.free_floor))
+        # print("Free floor before pipes {}".format(self.free_floor))
         if pipes != 0:
             for pipe in np.arange(pipes):
                 # find where to place it (part of the pipe can be over a hole)
                 if len(self.havefloor) == 0:
                     print(
-                        "There is no floor... Have you called GenerateFloor before generating pipes? Placing them anywhere")
+                        "There is no floor... Have you called GenerateFloor before generating pipes? Placing them anywhere"
+                    )
                     place = np.random.choice(np.arange(self.grid_w))
                 else:
                     place = np.random.choice(self.havefloor)
@@ -393,56 +414,53 @@ class GridGenerator():
 
                 if place == 0:  # only the right part of the pipe will be visible
                     # if there is already a pipe there skip this one.
-                    if ('pipe' in self.grid[12, place, 2]):
+                    if "pipe" in self.grid[12, place, 2]:
                         continue
 
-                    self.grid[12, place, 2] = '[pipe_br]'
+                    self.grid[12, place, 2] = "[pipe_br]"
 
                     if pipeH == 2:
-                        self.grid[11, place, 2] = '[pipe_tr]'
+                        self.grid[11, place, 2] = "[pipe_tr]"
                     else:
-                        self.grid[11, place, 2] = '[pipe_br]'
-                        self.grid[10, place, 2] = '[pipe_tr]'
+                        self.grid[11, place, 2] = "[pipe_br]"
+                        self.grid[10, place, 2] = "[pipe_tr]"
 
                     placed_pipes.append(place)
                     enemy = np.random.choice([0, 1, 2], p=[0.5, 0.25, 0.25])
 
                     if enemy > 0:
-                        self.grid[12-pipeH, place,
-                                  2] = '[piranha_'+str(enemy)+']'
-                        self.grid[12-pipeH, place,
-                                  2] = '[piranha_'+str(enemy)+']'
+                        self.grid[12 - pipeH, place, 2] = "[piranha_" + str(enemy) + "]"
+                        self.grid[12 - pipeH, place, 2] = "[piranha_" + str(enemy) + "]"
                 else:
-                    if ('pipe' in self.grid[12, place, 2]) or ('pipe' in self.grid[12, place-1, 2]):
+                    if ("pipe" in self.grid[12, place, 2]) or (
+                        "pipe" in self.grid[12, place - 1, 2]
+                    ):
                         continue
 
-                    self.grid[12, place, 2] = '[pipe_br]'
-                    self.grid[12, place-1, 2] = '[pipe_bl]'
+                    self.grid[12, place, 2] = "[pipe_br]"
+                    self.grid[12, place - 1, 2] = "[pipe_bl]"
 
                     if pipeH == 2:
-                        self.grid[11, place, 2] = '[pipe_tr]'
-                        self.grid[11, place-1, 2] = '[pipe_tl]'
+                        self.grid[11, place, 2] = "[pipe_tr]"
+                        self.grid[11, place - 1, 2] = "[pipe_tl]"
                     else:
-                        self.grid[11, place, 2] = '[pipe_br]'
-                        self.grid[11, place-1, 2] = '[pipe_bl]'
-                        self.grid[10, place, 2] = '[pipe_tr]'
-                        self.grid[10, place-1, 2] = '[pipe_tl]'
+                        self.grid[11, place, 2] = "[pipe_br]"
+                        self.grid[11, place - 1, 2] = "[pipe_bl]"
+                        self.grid[10, place, 2] = "[pipe_tr]"
+                        self.grid[10, place - 1, 2] = "[pipe_tl]"
 
-                    placed_pipes.append(place-1)
+                    placed_pipes.append(place - 1)
                     placed_pipes.append(place)
 
                     # Does it have an enemy?
                     enemy = np.random.choice([0, 1, 2], p=[0.5, 0.25, 0.25])
                     if enemy > 0:
-                        self.grid[12-pipeH, place,
-                                  2] = '[piranha_'+str(enemy)+']'
-                        self.grid[12-pipeH, place-1,
-                                  2] = '[piranha_'+str(enemy)+']'
+                        self.grid[12 - pipeH, place, 2] = "[piranha_" + str(enemy) + "]"
+                        self.grid[12 - pipeH, place - 1, 2] = "[piranha_" + str(enemy) + "]"
 
         for i in placed_pipes:
-            self.free_floor = np.delete(
-                self.free_floor, np.where(self.free_floor == i), axis=0)
-        #print("Free floor after pipes {}".format(self.free_floor))
+            self.free_floor = np.delete(self.free_floor, np.where(self.free_floor == i), axis=0)
+        # print("Free floor after pipes {}".format(self.free_floor))
 
     def PlaceBlocks(self, level=0):
         if level == 0:
@@ -458,19 +476,17 @@ class GridGenerator():
 
                 for i in np.arange(block_n):
                     # how many blocks stick together:
-                    size = np.random.choice(
-                        np.arange(1, 7), p=[0.05, 0.1, 0.23, 0.3, 0.22, 0.1])
+                    size = np.random.choice(np.arange(1, 7), p=[0.05, 0.1, 0.23, 0.3, 0.22, 0.1])
                     # what type are the blocks. Bricks? or boxes?
-                    b_type = np.random.choice(
-                        np.arange(2), size=size, p=[0.8, 0.2])
+                    b_type = np.random.choice(np.arange(2), size=size, p=[0.8, 0.2])
                     for k in np.arange(size):
-                        b_label = '[brick]'
+                        b_label = "[brick]"
                         if b_type[k] == 1:
-                            b_label = '[box]'
+                            b_label = "[box]"
 
                         # to place lengthy blocks around initial position
-                        offset = np.power(-1, k)*((k+1)//2)
-                        position = block_l[i]+offset
+                        offset = np.power(-1, k) * ((k + 1) // 2)
+                        position = block_l[i] + offset
                         # if position is inside the grid, set the label
                         if position >= 0 and position < self.grid_w:
                             self.grid[9, position, 1] = b_label
@@ -483,19 +499,17 @@ class GridGenerator():
 
                 for i in np.arange(block_n):
                     # how many blocks stick together:
-                    size = np.random.choice(
-                        np.arange(1, 4), p=[0.65, 0.25, 0.1])
+                    size = np.random.choice(np.arange(1, 4), p=[0.65, 0.25, 0.1])
                     # what type are the blocks. Bricks? or boxes?
-                    b_type = np.random.choice(
-                        np.arange(2), size=size, p=[0.7, 0.3])
+                    b_type = np.random.choice(np.arange(2), size=size, p=[0.7, 0.3])
                     for k in np.arange(size):
-                        b_label = '[brick]'
+                        b_label = "[brick]"
                         if b_type[k] == 1:
-                            b_label = '[box]'
+                            b_label = "[box]"
 
                         # to place lengthy blocks around initial position
-                        offset = np.power(-1, k)*((k+1)//2)
-                        position = block_l[i]+offset
+                        offset = np.power(-1, k) * ((k + 1) // 2)
+                        position = block_l[i] + offset
                         # if position is inside the grid, set the label
                         if position >= 0 and position < self.grid_w:
                             self.grid[5, position, 1] = b_label
@@ -512,12 +526,11 @@ class GridGenerator():
             size = np.random.choice(np.arange(1, 4), p=[0.65, 0.25, 0.1])
 
             for i in np.arange(block_n):
-                b_type = np.random.choice(
-                    np.arange(2), size=size, p=[0.5, 0.5])
+                b_type = np.random.choice(np.arange(2), size=size, p=[0.5, 0.5])
                 for k in np.arange(size):
-                    b_label = '[mush_1]'
+                    b_label = "[mush_1]"
                     if b_type[k] == 1:
-                        b_label = '[mush_2]'
+                        b_label = "[mush_2]"
 
                     self.grid[12, block_l[i], 2] = b_label
 
@@ -534,12 +547,11 @@ class GridGenerator():
             size = np.random.choice(np.arange(1, 4), p=[0.65, 0.25, 0.1])
 
             for i in np.arange(koopa_n):
-                b_type = np.random.choice(
-                    np.arange(2), size=size, p=[0.5, 0.5])
+                b_type = np.random.choice(np.arange(2), size=size, p=[0.5, 0.5])
                 for k in np.arange(size):
-                    b_label = '[koopa_1]'
+                    b_label = "[koopa_1]"
                     if b_type[k] == 1:
-                        b_label = '[koopa_2]'
+                        b_label = "[koopa_2]"
 
                     self.grid[12, block_l[i], 2] = b_label
 
@@ -549,14 +561,15 @@ class GridGenerator():
 
     def GenerateMario(self):
         # at last, place mario. For this, first choose if he's on the floor or jumping
-        mario_state = np.random.choice(['floor', 'jump'], p=[0.8, 0.2])
+        mario_state = np.random.choice(["floor", "jump"], p=[0.8, 0.2])
 
-        if mario_state == 'floor':
+        if mario_state == "floor":
             # can be one of four states
-            mario_state = np.random.choice(['idle', 'walk1', 'walk2', 'walk3'], p=[
-                                           0.25, 0.25, 0.25, 0.25])
+            mario_state = np.random.choice(
+                ["idle", "walk1", "walk2", "walk3"], p=[0.25, 0.25, 0.25, 0.25]
+            )
             # has to be placed on a free slot in the floor
-            label = '[mario_' + mario_state + ']'
+            label = "[mario_" + mario_state + "]"
 
             self.grid[12, self.free_floor[0], 2] = label
             # print(grid[12,free_floor[0],2])
@@ -567,36 +580,36 @@ class GridGenerator():
             # CHECK AGAIN SEEMS LIKE NO MARIOS ON SECOND ROW
             placed = False
             while placed == False:
-                position = np.random.randint(0, 9*17)
+                position = np.random.randint(0, 9 * 17)
                 x = position % 17
-                y = position//17
-                #print("Jump", position,"x", x,"y",y)
-                if self.grid[2+y, x, 1] == 'Empty' and self.grid[2+y, x, 2] == 'Empty':
-                    self.grid[2+y, x, 2] = '[mario_jump]'
+                y = position // 17
+                # print("Jump", position,"x", x,"y",y)
+                if self.grid[2 + y, x, 1] == "Empty" and self.grid[2 + y, x, 2] == "Empty":
+                    self.grid[2 + y, x, 2] = "[mario_jump]"
                     placed = True
 
     def GenerateGrid(self, level):
-        '''This function generates the grid with the elements that will be displayed in the image.
-            Elements may vary depeding on the type of level being played, using a flag variable.
+        """This function generates the grid with the elements that will be displayed in the image.
+        Elements may vary depeding on the type of level being played, using a flag variable.
 
-            Level = 'xyz' with:
-            x - Level tileset to use (not relevant for grid generation)
-            y - type of level:
-                - 0 means default level, with bushes and hills in the background
-                - 1 means default level with trees in the background
-                - 2 means underground level. No trees or bushes in the background
-                - 3 means castle level (not implemented)
-                - 4 means mushroom level (not implemented)
+        Level = 'xyz' with:
+        x - Level tileset to use (not relevant for grid generation)
+        y - type of level:
+            - 0 means default level, with bushes and hills in the background
+            - 1 means default level with trees in the background
+            - 2 means underground level. No trees or bushes in the background
+            - 3 means castle level (not implemented)
+            - 4 means mushroom level (not implemented)
 
-                - O means default level with alternate bushes   
-                - I means default level with alternate trees
-            z - background color (not relevant for grid generation)
-                - 0 default blue
-                - 1 black 
+            - O means default level with alternate bushes
+            - I means default level with alternate trees
+        z - background color (not relevant for grid generation)
+            - 0 default blue
+            - 1 black
 
-        '''
+        """
         # If level is type default
-        if level[1] == '0' or level[1] == '1' or level[1] == 'O' or level[1] == 'I':
+        if level[1] == "0" or level[1] == "1" or level[1] == "O" or level[1] == "I":
             self.GenerateClouds()
 
         # Common for all levels
@@ -605,10 +618,10 @@ class GridGenerator():
         self.PlaceBlocks()
 
         # Background decoration
-        if level[1] == '0' or level[1] == 'O':
+        if level[1] == "0" or level[1] == "O":
             self.GenerateHills()
             self.GenerateBushes()
-        elif level[1] == '1' or level[1] == 'I':
+        elif level[1] == "1" or level[1] == "I":
             self.GenerateTrees()
 
         # Generate pipes
@@ -623,192 +636,270 @@ class GridGenerator():
         return self.grid
 
 
-
-
-'''
+"""
 This file stores all loaders for all the supported sprites. All loaders receive a parameter to properly load
 correct sprite based on appearance.
-'''
-class SpriteLoader():
-    ''' Class with different load functtions which return a dictionary with pairs
-        of <str:label,cv2.mat: sprite>
-    '''
+"""
+
+
+class SpriteLoader:
+    """Class with different load functtions which return a dictionary with pairs
+    of <str:label,cv2.mat: sprite>
+    """
 
     ###ENVIRONMENT LOADERS
 
     def loadFloor(level=0):
         level = str(level)
-        floor =  cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_0_7.png")[...,::-1]
+        floor = cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_0_7.png")[..., ::-1]
         return floor
 
     def loadBox(level=0):
         level = str(level)
-        box = cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_0_3.png")[...,::-1]
+        box = cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_0_3.png")[..., ::-1]
         return box
 
     def loadBrick(level=0):
         level = str(level)
-        box = cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_1_5.png")[...,::-1]
+        box = cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_1_5.png")[..., ::-1]
         return box
 
     def loadBlock(level=0):
         level = str(level)
-        block = cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_5_3.png")[...,::-1]
+        block = cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_5_3.png")[..., ::-1]
         return block
 
     def loadClouds(level=0):
-        #Convert to str to be able to concatenate it
+        # Convert to str to be able to concatenate it
         level = str(level)
 
-        #Read clouds sprites
-        clouds = {'[cloud_tl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_3.png")[...,::-1],
-                    '[cloud_bl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_4.png")[...,::-1],
-                    '[cloud_tm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_3.png")[...,::-1],
-                    '[cloud_bm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_4.png")[...,::-1],
-                    '[cloud_tr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_15_3.png")[...,::-1],
-                    '[cloud_br]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_15_4.png")[...,::-1]
-                    }
+        # Read clouds sprites
+        clouds = {
+            "[cloud_tl]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_13_3.png")[
+                ..., ::-1
+            ],
+            "[cloud_bl]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_13_4.png")[
+                ..., ::-1
+            ],
+            "[cloud_tm]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_14_3.png")[
+                ..., ::-1
+            ],
+            "[cloud_bm]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_14_4.png")[
+                ..., ::-1
+            ],
+            "[cloud_tr]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_15_3.png")[
+                ..., ::-1
+            ],
+            "[cloud_br]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_15_4.png")[
+                ..., ::-1
+            ],
+        }
         return clouds
 
     def loadBushes(level=0):
 
-        #Convert to str to be able to concatenate it.
+        # Convert to str to be able to concatenate it.
         level = str(level)
-        #Read bushes sprites
-        bushes = {'[bush_l]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_5.png")[...,::-1],
-                        '[bush_m]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_5.png")[...,::-1],
-                        '[bush_r]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_15_5.png")[...,::-1],
-                        }
+        # Read bushes sprites
+        bushes = {
+            "[bush_l]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_13_5.png")[
+                ..., ::-1
+            ],
+            "[bush_m]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_14_5.png")[
+                ..., ::-1
+            ],
+            "[bush_r]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_15_5.png")[
+                ..., ::-1
+            ],
+        }
         return bushes
 
     def loadHills(level=0):
 
-        #Convert to str to be able to concatenate it.
+        # Convert to str to be able to concatenate it.
         level = str(level)
-        #Load hill sprites
-        hill     =   {'[hill_t]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_10_3.png")[...,::-1],
-                       '[hill_ml]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_9_4.png")[...,::-1],
-                       '[hill_mm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_10_4.png")[...,::-1],
-                       '[hill_mr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_11_4.png")[...,::-1],
-                       '[hill_bll]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_8_5.png")[...,::-1],
-                       '[hill_bl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_9_5.png")[...,::-1],
-                       '[hill_bm]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_10_5.png")[...,::-1],
-                       '[hill_br]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_11_5.png")[...,::-1],
-                       '[hill_brr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_12_5.png")[...,::-1]
-                        }
+        # Load hill sprites
+        hill = {
+            "[hill_t]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_10_3.png")[
+                ..., ::-1
+            ],
+            "[hill_ml]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_9_4.png")[
+                ..., ::-1
+            ],
+            "[hill_mm]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_10_4.png")[
+                ..., ::-1
+            ],
+            "[hill_mr]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_11_4.png")[
+                ..., ::-1
+            ],
+            "[hill_bll]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_8_5.png")[
+                ..., ::-1
+            ],
+            "[hill_bl]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_9_5.png")[
+                ..., ::-1
+            ],
+            "[hill_bm]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_10_5.png")[
+                ..., ::-1
+            ],
+            "[hill_br]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_11_5.png")[
+                ..., ::-1
+            ],
+            "[hill_brr]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_12_5.png")[
+                ..., ::-1
+            ],
+        }
 
         return hill
 
     def loadTrees(level=0):
-        #to str for concatenation
+        # to str for concatenation
         level = str(level)
-        #load tree sprites
-        tree = {'[tree_trunk]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_2.png")[...,::-1],
-                '[tree_tb]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_1.png")[...,::-1],
-                '[tree_tt]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_14_0.png")[...,::-1],
-                '[tree_small]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_13_1.png")[...,::-1]
-                }
+        # load tree sprites
+        tree = {
+            "[tree_trunk]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_14_2.png")[
+                ..., ::-1
+            ],
+            "[tree_tb]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_14_1.png")[
+                ..., ::-1
+            ],
+            "[tree_tt]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_14_0.png")[
+                ..., ::-1
+            ],
+            "[tree_small]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_13_1.png")[
+                ..., ::-1
+            ],
+        }
         return tree
 
-
-
     def loadPipes(level=0):
-        #Convert to str to be able to concatenate it.
+        # Convert to str to be able to concatenate it.
         level = str(level)
-        #Load sprites
-        pipe = {'[pipe_tl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_6_2.png")[...,::-1],
-                '[pipe_tr]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_7_2.png")[...,::-1],
-                '[pipe_bl]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_6_3.png")[...,::-1],
-                '[pipe_br]':cv2.imread(DATASET_ROOT + "/Sprites/Sprite"+level+"_7_3.png")[...,::-1]
-            }
+        # Load sprites
+        pipe = {
+            "[pipe_tl]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_6_2.png")[
+                ..., ::-1
+            ],
+            "[pipe_tr]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_7_2.png")[
+                ..., ::-1
+            ],
+            "[pipe_bl]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_6_3.png")[
+                ..., ::-1
+            ],
+            "[pipe_br]": cv2.imread(DATASET_ROOT + "/Sprites/Sprite" + level + "_7_3.png")[
+                ..., ::-1
+            ],
+        }
         return pipe
 
-    #MARIO LOADER
+    # MARIO LOADER
     def loadMario():
-        mario = {'[mario_idle]':cv2.imread(DATASET_ROOT + "/MarioSprites/idle.png")[...,::-1],
-                      '[mario_walk1]':cv2.imread(DATASET_ROOT + "/MarioSprites/walk1.png")[...,::-1],
-                      '[mario_walk2]':cv2.imread(DATASET_ROOT + "/MarioSprites/walk2.png")[...,::-1],
-                      '[mario_walk3]':cv2.imread(DATASET_ROOT + "/MarioSprites/walk3.png")[...,::-1],
-                      '[mario_jump]':cv2.imread(DATASET_ROOT + "/MarioSprites/jump.png")[...,::-1]
-                      }
+        mario = {
+            "[mario_idle]": cv2.imread(DATASET_ROOT + "/MarioSprites/idle.png")[..., ::-1],
+            "[mario_walk1]": cv2.imread(DATASET_ROOT + "/MarioSprites/walk1.png")[..., ::-1],
+            "[mario_walk2]": cv2.imread(DATASET_ROOT + "/MarioSprites/walk2.png")[..., ::-1],
+            "[mario_walk3]": cv2.imread(DATASET_ROOT + "/MarioSprites/walk3.png")[..., ::-1],
+            "[mario_jump]": cv2.imread(DATASET_ROOT + "/MarioSprites/jump.png")[..., ::-1],
+        }
         return mario
-    
-    #ENEMY LOADERS
-    def loadGoombas(tileset = 0 ):
-        mushroom = {'[mush_1]':cv2.imread(DATASET_ROOT + "/EnemySprites/mushroom_"+str(tileset)+"_0.png")[...,::-1],
-                    '[mush_2]':cv2.imread(DATASET_ROOT + "/EnemySprites/mushroom_"+str(tileset)+"_1.png")[...,::-1]}
+
+    # ENEMY LOADERS
+    def loadGoombas(tileset=0):
+        mushroom = {
+            "[mush_1]": cv2.imread(
+                DATASET_ROOT + "/EnemySprites/mushroom_" + str(tileset) + "_0.png"
+            )[..., ::-1],
+            "[mush_2]": cv2.imread(
+                DATASET_ROOT + "/EnemySprites/mushroom_" + str(tileset) + "_1.png"
+            )[..., ::-1],
+        }
         return mushroom
-    
-    def loadKoopa(tileset = 0):
-        koopa = {'[koopa_1]':cv2.imread(DATASET_ROOT + "/EnemySprites/koopa_"+str(tileset)+"_0.png")[...,::-1],
-                 '[koopa_2]':cv2.imread(DATASET_ROOT + "/EnemySprites/koopa_"+str(tileset)+"_1.png")[...,::-1]}
-        
+
+    def loadKoopa(tileset=0):
+        koopa = {
+            "[koopa_1]": cv2.imread(
+                DATASET_ROOT + "/EnemySprites/koopa_" + str(tileset) + "_0.png"
+            )[..., ::-1],
+            "[koopa_2]": cv2.imread(
+                DATASET_ROOT + "/EnemySprites/koopa_" + str(tileset) + "_1.png"
+            )[..., ::-1],
+        }
+
         return koopa
 
-    def loadPiranha(tileset = 0):
-        piranha = {'[piranha_1]':cv2.imread(DATASET_ROOT + "/EnemySprites/piranha_"+str(tileset)+"_0.png")[...,::-1],
-                   '[piranha_2]':cv2.imread(DATASET_ROOT + "/EnemySprites/piranha_"+str(tileset)+"_1.png")[...,::-1]}
-        
+    def loadPiranha(tileset=0):
+        piranha = {
+            "[piranha_1]": cv2.imread(
+                DATASET_ROOT + "/EnemySprites/piranha_" + str(tileset) + "_0.png"
+            )[..., ::-1],
+            "[piranha_2]": cv2.imread(
+                DATASET_ROOT + "/EnemySprites/piranha_" + str(tileset) + "_1.png"
+            )[..., ::-1],
+        }
+
         return piranha
 
+    # GENERATE SEGMENTATION GT FOR SOME SPRITES
 
-    #GENERATE SEGMENTATION GT FOR SOME SPRITES
-
-    def GenerateSSGT(object,class_color, no_label_color = [0,0,0], background_color= np.array([147,187,236])):
-        #First create dictionary to hold images and keys
+    def GenerateSSGT(
+        object, class_color, no_label_color=[0, 0, 0], background_color=np.array([147, 187, 236])
+    ):
+        # First create dictionary to hold images and keys
         ssgt = {}
 
-        #Iterate over already loaded object
+        # Iterate over already loaded object
         for key, value in object.items():
-                #copy the sprite
-                ssgt[key] = value.copy()
+            # copy the sprite
+            ssgt[key] = value.copy()
 
-                #modify the sprite
-                for i in np.arange(value.shape[0]):
-                    for j in np.arange(value.shape[1]):                
-                        if (value[i,j,:] == background_color).all():
-                            ssgt[key][i,j,:] = no_label_color
-                        else:
-                            ssgt[key][i,j,:] = class_color
+            # modify the sprite
+            for i in np.arange(value.shape[0]):
+                for j in np.arange(value.shape[1]):
+                    if (value[i, j, :] == background_color).all():
+                        ssgt[key][i, j, :] = no_label_color
+                    else:
+                        ssgt[key][i, j, :] = class_color
 
         return ssgt
-    def SpriteSSGT(frame,class_color, no_label_color = [0,0,0], background_color= np.array([147,187,236])):
+
+    def SpriteSSGT(
+        frame, class_color, no_label_color=[0, 0, 0], background_color=np.array([147, 187, 236])
+    ):
 
         ssf = frame.copy()
 
         for i in np.arange(frame.shape[0]):
-                    for j in np.arange(frame.shape[1]):                
-                        if (frame[i,j,:] == background_color).all():
-                            ssf[i,j,:] = no_label_color
-                        else:
-                            ssf[i,j,:] = class_color
+            for j in np.arange(frame.shape[1]):
+                if (frame[i, j, :] == background_color).all():
+                    ssf[i, j, :] = no_label_color
+                else:
+                    ssf[i, j, :] = class_color
 
         return ssf
 
 
+class FrameGenerator:
+    """Super mario frames have a dimension of
+    256 x 240 x 3 (x,y,c)
+    The idea is to place labels inside a grid
+    and then fill with the corresponding image and
+    its segmentation
+    """
 
-
-
-class FrameGenerator():
-    ''' Super mario frames have a dimension of
-        256 x 240 x 3 (x,y,c)
-        The idea is to place labels inside a grid
-        and then fill with the corresponding image and
-        its segmentation
-        '''
-
-    def __init__(self, sprite_dataset=join(DATASET_ROOT, "label_assignment", "sprite_labels_correspondence.csv"), cores=1):
-        '''Initializes the frame generator'''
+    def __init__(
+        self,
+        sprite_dataset=join(DATASET_ROOT, "label_assignment", "sprite_labels_correspondence.csv"),
+        cores=1,
+    ):
+        """Initializes the frame generator"""
         # For faster generation
         self.cores = cores
         # load all sprites (routes of)
-        self.sprites = pd.read_csv(sprite_dataset, sep=',')
+        self.sprites = pd.read_csv(sprite_dataset, sep=",")
         # available classes
         self.labels = self.sprites.Label.unique()
         # background color (for level 1)
 
-        self.background_colors = {0: np.array(
-            [147, 187, 236]), 1: np.array([0, 0, 0])}
+        self.background_colors = {0: np.array([147, 187, 236]), 1: np.array([0, 0, 0])}
         self.sprite_bg_color = np.array([147, 187, 236])
         # load all sprites and semantically segment them
 
@@ -819,55 +910,52 @@ class FrameGenerator():
         self.grid_w = 17
 
         # Set existing classes
-        self.classes = {"default": 0,
-                        'floor': 1,
-                        'brick': 2,
-                        'box': 3,
-                        'enemy': 4,
-                        'mario': 5}
+        self.classes = {"default": 0, "floor": 1, "brick": 2, "box": 3, "enemy": 4, "mario": 5}
 
         # For segmented frames, set a color per class.
-        self.classcolors = {"default": [0, 0, 0],
-                            'floor': [0, 0, 255],
-                            'brick': [127, 127, 0],
-                            'box': [0, 255, 0],
-                            'enemy': [255, 0, 0],
-                            'mario': [255, 255, 0]}
+        self.classcolors = {
+            "default": [0, 0, 0],
+            "floor": [0, 0, 255],
+            "brick": [127, 127, 0],
+            "box": [0, 255, 0],
+            "enemy": [255, 0, 0],
+            "mario": [255, 255, 0],
+        }
 
     def SetLevelSprites(self, level):
-        '''This function loads sprites and textures that will be used in the image.
-            Level = 'xyz' with:
-            x - Level tileset to use (not relevant for grid generation)
-            y - type of level:
-                - 0 means default level, with bushes and hills in the background
-                - 1 means default level with trees in the background
-                - 2 means underground level. No trees or bushes in the background
-                - 3 means castle level (not implemented)
-                - 4 means mushroom level (not implemented)
-                - O means default level with alternate bushes
-                - I means default level with alternate trees
+        """This function loads sprites and textures that will be used in the image.
+        Level = 'xyz' with:
+        x - Level tileset to use (not relevant for grid generation)
+        y - type of level:
+            - 0 means default level, with bushes and hills in the background
+            - 1 means default level with trees in the background
+            - 2 means underground level. No trees or bushes in the background
+            - 3 means castle level (not implemented)
+            - 4 means mushroom level (not implemented)
+            - O means default level with alternate bushes
+            - I means default level with alternate trees
 
-            z - background color (not relevant for grid generation)
-                - 0 default blue
-                - 1 black 
+        z - background color (not relevant for grid generation)
+            - 0 default blue
+            - 1 black
 
-        '''
+        """
         # Parameter is tileset to choose from.
         tileset = int(level[0])
 
-        if level[1] == '2':
+        if level[1] == "2":
             tileset = 1
 
-       # For background elements
+        # For background elements
         self.floor = SpriteLoader.loadFloor(tileset)
         self.box = SpriteLoader.loadBox(tileset)
         self.brick = SpriteLoader.loadBrick(tileset)
         self.pipe = SpriteLoader.loadPipes(tileset)
         self.block = SpriteLoader.loadBlock(tileset)
 
-        if level[1] == '0' or level[1] == '1':
+        if level[1] == "0" or level[1] == "1":
             tileset = 0
-        elif level[1] == 'O' or level[1] == 'I':
+        elif level[1] == "O" or level[1] == "I":
             tileset = 3
         else:
             tileset = 0
@@ -878,41 +966,33 @@ class FrameGenerator():
         self.trees = SpriteLoader.loadTrees(tileset)
 
         # Generate segmentation gt for level elements
-        self.spipe = SpriteLoader.GenerateSSGT(
-            self.pipe, self.classcolors['floor'])
-        self.seg_floor = SpriteLoader.SpriteSSGT(
-            self.floor, self.classcolors['floor'])
-        self.sbox = SpriteLoader.SpriteSSGT(self.box, self.classcolors['box'])
-        self.sbrick = SpriteLoader.SpriteSSGT(
-            self.brick, self.classcolors['brick'])
-        self.sblock = SpriteLoader.SpriteSSGT(
-            self.block, self.classcolors['floor'])
+        self.spipe = SpriteLoader.GenerateSSGT(self.pipe, self.classcolors["floor"])
+        self.seg_floor = SpriteLoader.SpriteSSGT(self.floor, self.classcolors["floor"])
+        self.sbox = SpriteLoader.SpriteSSGT(self.box, self.classcolors["box"])
+        self.sbrick = SpriteLoader.SpriteSSGT(self.brick, self.classcolors["brick"])
+        self.sblock = SpriteLoader.SpriteSSGT(self.block, self.classcolors["floor"])
 
     def LoadSprites(self, level):
-        '''Load sprites for mario, enemies and generates their ground truth.'''
+        """Load sprites for mario, enemies and generates their ground truth."""
         # cave sprites
-        if level[1] == '2':
+        if level[1] == "2":
             tileset = 1
         else:
             tileset = 0
 
         # Load Enemies
         self.mushroom = SpriteLoader.loadGoombas(tileset)
-        self.smushroom = SpriteLoader.GenerateSSGT(
-            self.mushroom, self.classcolors['enemy'])
+        self.smushroom = SpriteLoader.GenerateSSGT(self.mushroom, self.classcolors["enemy"])
         self.koopa = SpriteLoader.loadKoopa(tileset)
-        self.skoopa = SpriteLoader.GenerateSSGT(
-            self.koopa, self.classcolors['enemy'])
+        self.skoopa = SpriteLoader.GenerateSSGT(self.koopa, self.classcolors["enemy"])
         self.piranha = SpriteLoader.loadPiranha(tileset)
-        self.spiranha = SpriteLoader.GenerateSSGT(
-            self.piranha, self.classcolors['enemy'])
+        self.spiranha = SpriteLoader.GenerateSSGT(self.piranha, self.classcolors["enemy"])
 
         # Load mario sprites
         self.mario = SpriteLoader.loadMario()
-        self.smario = SpriteLoader.GenerateSSGT(
-            self.mario, self.classcolors['mario'])
+        self.smario = SpriteLoader.GenerateSSGT(self.mario, self.classcolors["mario"])
 
-    def generate_frame(self, level='000', grid=[]):
+    def generate_frame(self, level="000", grid=[]):
         # Generate the grid for the level
         if grid == []:
             grid = self.generate_grid(level)
@@ -921,16 +1001,16 @@ class FrameGenerator():
 
         self.LoadSprites(level)
 
-        if level[1] == '2':
+        if level[1] == "2":
             bg_color = 1
         else:
             bg_color = int(level[2])
 
         self.background_color = self.background_colors[bg_color]
-        frame = np.zeros((16*15, 16*self.grid_w, 3))
+        frame = np.zeros((16 * 15, 16 * self.grid_w, 3))
         frame = frame + self.background_color
-        sframe = np.zeros((16*15, 16*self.grid_w, 3))
-        classframe = np.zeros((16*15, 16*self.grid_w))
+        sframe = np.zeros((16 * 15, 16 * self.grid_w, 3))
+        classframe = np.zeros((16 * 15, 16 * self.grid_w))
 
         missing_right = False  # for piranha
 
@@ -938,100 +1018,112 @@ class FrameGenerator():
         for row in np.arange(grid.shape[0]):
             frow = row * 16  # index iterator
             for column in np.arange(grid.shape[1]):
-                fcol = column*16  # index iterator
+                fcol = column * 16  # index iterator
                 # Print tile
                 # First print background for the tile
-                if grid[row, column, 0] == '[background]':
+                if grid[row, column, 0] == "[background]":
                     # Iterate over pixels of the grid
                     for i in np.arange(16):
                         for j in np.arange(16):
-                            frame[frow+i, fcol+j, :] = self.background_color
-                            sframe[frow+i, fcol+j] = [0, 0, 0]
-                elif grid[row, column, 0][1:6] == 'cloud':
+                            frame[frow + i, fcol + j, :] = self.background_color
+                            sframe[frow + i, fcol + j] = [0, 0, 0]
+                elif grid[row, column, 0][1:6] == "cloud":
                     for i in np.arange(16):
                         for j in np.arange(16):
-                            if (self.clouds[grid[row, column, 0]][i, j] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j,
-                                      :] = self.clouds[grid[row, column, 0]][i, j]
-                elif grid[row, column, 0][1:5] == 'hill':
+                            if (
+                                self.clouds[grid[row, column, 0]][i, j] != self.sprite_bg_color
+                            ).any():
+                                frame[frow + i, fcol + j, :] = self.clouds[grid[row, column, 0]][
+                                    i, j
+                                ]
+                elif grid[row, column, 0][1:5] == "hill":
                     for i in np.arange(16):
                         for j in np.arange(16):
-                            if (self.hill[grid[row, column, 0]][i, j] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j,
-                                      :] = self.hill[grid[row, column, 0]][i, j]
+                            if (
+                                self.hill[grid[row, column, 0]][i, j] != self.sprite_bg_color
+                            ).any():
+                                frame[frow + i, fcol + j, :] = self.hill[grid[row, column, 0]][i, j]
                 else:
                     for i in np.arange(16):
                         for j in np.arange(16):
-                            frame[frow+i, fcol+j] = [255, 255, 255]
-                            sframe[frow+i, fcol+j] = [255, 255, 255]
+                            frame[frow + i, fcol + j] = [255, 255, 255]
+                            sframe[frow + i, fcol + j] = [255, 255, 255]
 
                 # Paint "mid depth"
                 # paint floor
-                if grid[row, column, 1] == '[floor]':
+                if grid[row, column, 1] == "[floor]":
                     for i in np.arange(16):
                         for j in np.arange(16):
-                            frame[frow+i, fcol+j, :] = self.floor[i, j]
-                            sframe[frow+i, fcol+j, :] = self.seg_floor[i, j]
-                            classframe[frow+i, fcol+j] = self.classes['floor']
-                elif grid[row, column, 1] == '[box]':
+                            frame[frow + i, fcol + j, :] = self.floor[i, j]
+                            sframe[frow + i, fcol + j, :] = self.seg_floor[i, j]
+                            classframe[frow + i, fcol + j] = self.classes["floor"]
+                elif grid[row, column, 1] == "[box]":
                     for i in np.arange(16):
                         for j in np.arange(16):
                             if (self.box[i, j, :] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j, :] = self.box[i, j]
-                                sframe[frow+i, fcol+j, :] = self.sbox[i, j]
-                                classframe[frow+i, fcol +
-                                           j] = self.classes['box']
+                                frame[frow + i, fcol + j, :] = self.box[i, j]
+                                sframe[frow + i, fcol + j, :] = self.sbox[i, j]
+                                classframe[frow + i, fcol + j] = self.classes["box"]
 
-                elif grid[row, column, 1] == '[brick]':
+                elif grid[row, column, 1] == "[brick]":
                     for i in np.arange(16):
                         for j in np.arange(16):
                             if (self.brick[i, j, :] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j, :] = self.brick[i, j]
-                                sframe[frow+i, fcol+j, :] = self.sbrick[i, j]
-                                classframe[frow+i, fcol +
-                                           j] = self.classes['brick']
+                                frame[frow + i, fcol + j, :] = self.brick[i, j]
+                                sframe[frow + i, fcol + j, :] = self.sbrick[i, j]
+                                classframe[frow + i, fcol + j] = self.classes["brick"]
 
-                elif grid[row, column, 1][1:5] == 'bush':
+                elif grid[row, column, 1][1:5] == "bush":
                     for i in np.arange(16):
                         for j in np.arange(16):
-                            if (self.bushes[grid[row, column, 1]][i, j, :] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j,
-                                      :] = self.bushes[grid[row, column, 1]][i, j]
+                            if (
+                                self.bushes[grid[row, column, 1]][i, j, :] != self.sprite_bg_color
+                            ).any():
+                                frame[frow + i, fcol + j, :] = self.bushes[grid[row, column, 1]][
+                                    i, j
+                                ]
 
-                elif grid[row, column, 1][1:5] == 'tree':
+                elif grid[row, column, 1][1:5] == "tree":
                     for i in np.arange(16):
                         for j in np.arange(16):
-                            if (self.trees[grid[row, column, 1]][i, j, :] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j,
-                                      :] = self.trees[grid[row, column, 1]][i, j]
+                            if (
+                                self.trees[grid[row, column, 1]][i, j, :] != self.sprite_bg_color
+                            ).any():
+                                frame[frow + i, fcol + j, :] = self.trees[grid[row, column, 1]][
+                                    i, j
+                                ]
 
                 # Print characters
-                if grid[row, column, 2][1:5] == 'mush':
+                if grid[row, column, 2][1:5] == "mush":
                     for i in np.arange(16):
                         for j in np.arange(16):
                             # Only print non background pixels
-                            if (self.mushroom[grid[row, column, 2]][i, j] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j,
-                                      :] = self.mushroom[grid[row, column, 2]][i, j]
-                                sframe[frow+i, fcol+j,
-                                       :] = self.smushroom[grid[row, column, 2]][i, j]
-                                classframe[frow+i, fcol +
-                                           j] = self.classes['enemy']
+                            if (
+                                self.mushroom[grid[row, column, 2]][i, j] != self.sprite_bg_color
+                            ).any():
+                                frame[frow + i, fcol + j, :] = self.mushroom[grid[row, column, 2]][
+                                    i, j
+                                ]
+                                sframe[frow + i, fcol + j, :] = self.smushroom[
+                                    grid[row, column, 2]
+                                ][i, j]
+                                classframe[frow + i, fcol + j] = self.classes["enemy"]
 
-                if grid[row, column, 2][1:6] == 'koopa':
+                if grid[row, column, 2][1:6] == "koopa":
                     for i in np.arange(32):
                         for j in np.arange(16):
-                            row_off = frow+i-16
+                            row_off = frow + i - 16
                             # Only print non background pixels
-                            if (self.koopa[grid[row, column, 2]][i, j] != self.sprite_bg_color).any():
-                                frame[row_off, fcol+j,
-                                      :] = self.koopa[grid[row, column, 2]][i, j]
-                                sframe[row_off, fcol+j,
-                                       :] = self.skoopa[grid[row, column, 2]][i, j]
-                                classframe[row_off, fcol +
-                                           j] = self.classes['enemy']
+                            if (
+                                self.koopa[grid[row, column, 2]][i, j] != self.sprite_bg_color
+                            ).any():
+                                frame[row_off, fcol + j, :] = self.koopa[grid[row, column, 2]][i, j]
+                                sframe[row_off, fcol + j, :] = self.skoopa[grid[row, column, 2]][
+                                    i, j
+                                ]
+                                classframe[row_off, fcol + j] = self.classes["enemy"]
 
-                if grid[row, column, 2][1:8] == 'piranha':
+                if grid[row, column, 2][1:8] == "piranha":
                     # Columns go from 0 to x, increasing, so first reaches left side of a "piranha cell"
                     # Special case is for column 0 where it could be a right side so it should offset left.
                     if missing_right == False:
@@ -1039,75 +1131,85 @@ class FrameGenerator():
 
                         piranha_height = np.random.choice([0, y])
 
-                    if grid[row+1, column, 2] == '[pipe_tl]':  # then only print half piranha
+                    if grid[row + 1, column, 2] == "[pipe_tl]":  # then only print half piranha
 
                         for i in np.arange(32):
                             for j in np.arange(8):
-                                row_off = frow+i-16 + piranha_height
-                                col_off = fcol+j + 8
-                                if (self.piranha[grid[row, column, 2]][i, j] != self.sprite_bg_color).any():
-                                    frame[row_off, col_off,
-                                          :] = self.piranha[grid[row, column, 2]][i, j]
-                                    sframe[row_off, col_off,
-                                           :] = self.spiranha[grid[row, column, 2]][i, j]
-                                    classframe[row_off,
-                                               col_off] = self.classes['enemy']
+                                row_off = frow + i - 16 + piranha_height
+                                col_off = fcol + j + 8
+                                if (
+                                    self.piranha[grid[row, column, 2]][i, j] != self.sprite_bg_color
+                                ).any():
+                                    frame[row_off, col_off, :] = self.piranha[grid[row, column, 2]][
+                                        i, j
+                                    ]
+                                    sframe[row_off, col_off, :] = self.spiranha[
+                                        grid[row, column, 2]
+                                    ][i, j]
+                                    classframe[row_off, col_off] = self.classes["enemy"]
                         missing_right = True
 
-                    if grid[row+1, column, 2] == '[pipe_tr]':  # then only print half piranha
+                    if grid[row + 1, column, 2] == "[pipe_tr]":  # then only print half piranha
 
                         for i in np.arange(32):
                             for j in np.arange(8):
-                                row_off = frow+i-16 + piranha_height
-                                col_off = fcol+j
+                                row_off = frow + i - 16 + piranha_height
+                                col_off = fcol + j
 
-                                if (self.piranha[grid[row, column, 2]][i, j+8] != self.sprite_bg_color).any():
-                                    frame[row_off, col_off,
-                                          :] = self.piranha[grid[row, column, 2]][i, j+8]
-                                    sframe[row_off, col_off,
-                                           :] = self.spiranha[grid[row, column, 2]][i, j+8]
-                                    classframe[row_off,
-                                               col_off] = self.classes['enemy']
+                                if (
+                                    self.piranha[grid[row, column, 2]][i, j + 8]
+                                    != self.sprite_bg_color
+                                ).any():
+                                    frame[row_off, col_off, :] = self.piranha[grid[row, column, 2]][
+                                        i, j + 8
+                                    ]
+                                    sframe[row_off, col_off, :] = self.spiranha[
+                                        grid[row, column, 2]
+                                    ][i, j + 8]
+                                    classframe[row_off, col_off] = self.classes["enemy"]
                         missing_right = False
 
-                if grid[row, column, 2][1:5] == 'pipe':
+                if grid[row, column, 2][1:5] == "pipe":
                     for i in np.arange(16):
                         for j in np.arange(16):
                             # Only print non background pixels
-                            if (self.pipe[grid[row, column, 2]][i, j] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j,
-                                      :] = self.pipe[grid[row, column, 2]][i, j]
-                                #print("Saved color",frame[frow+i,fcol+j])
-                                sframe[frow+i, fcol+j,
-                                       :] = self.spipe[grid[row, column, 2]][i, j]
-                                classframe[frow+i, fcol +
-                                           j] = self.classes['floor']
+                            if (
+                                self.pipe[grid[row, column, 2]][i, j] != self.sprite_bg_color
+                            ).any():
+                                frame[frow + i, fcol + j, :] = self.pipe[grid[row, column, 2]][i, j]
+                                # print("Saved color",frame[frow+i,fcol+j])
+                                sframe[frow + i, fcol + j, :] = self.spipe[grid[row, column, 2]][
+                                    i, j
+                                ]
+                                classframe[frow + i, fcol + j] = self.classes["floor"]
 
-                if grid[row, column, 2][1:6] == 'block':
+                if grid[row, column, 2][1:6] == "block":
                     for i in np.arange(16):
                         for j in np.arange(16):
                             # Only print non background pixels
                             if (self.block[i, j] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j, :] = self.block[i, j]
-                                #print("Saved color",frame[frow+i,fcol+j])
-                                sframe[frow+i, fcol+j, :] = self.sblock[i, j]
-                                classframe[frow+i, fcol +
-                                           j] = self.classes['floor']
+                                frame[frow + i, fcol + j, :] = self.block[i, j]
+                                # print("Saved color",frame[frow+i,fcol+j])
+                                sframe[frow + i, fcol + j, :] = self.sblock[i, j]
+                                classframe[frow + i, fcol + j] = self.classes["floor"]
 
                 # Print characters
-                if grid[row, column, 2][1:6] == 'mario':
+                if grid[row, column, 2][1:6] == "mario":
                     for i in np.arange(16):
                         for j in np.arange(16):
                             # print("Color",self.floor[i,j])
                             # Only print non background pixels
-                            if (self.mario[grid[row, column, 2]][i, j] != self.sprite_bg_color).any():
-                                frame[frow+i, fcol+j,
-                                      :] = self.mario[grid[row, column, 2]][i, j]
-                                #print("Saved color",frame[frow+i,fcol+j])
-                                sframe[frow+i, fcol+j,
-                                       :] = self.smario[grid[row, column, 2]][i, j]
-                                classframe[frow+i, fcol +
-                                           j] = self.classes['mario']
+                            if (
+                                self.mario[grid[row, column, 2]][i, j] != self.sprite_bg_color
+                            ).any():
+                                frame[frow + i, fcol + j, :] = self.mario[grid[row, column, 2]][
+                                    i, j
+                                ]
+                                # print("Saved color",frame[frow+i,fcol+j])
+                                sframe[frow + i, fcol + j, :] = self.smario[grid[row, column, 2]][
+                                    i, j
+                                ]
+                                classframe[frow + i, fcol + j] = self.classes["mario"]
 
         return frame, sframe, classframe
 
@@ -1127,11 +1229,11 @@ class FrameGenerator():
         else:
             files = np.arange(init_filenumber, end_filenumber)
         for i in files:
-            x = '0'  # np.random.choice(['0','1'])
-            y = np.random.choice(['0', '1', '2', 'O', 'I'])
-            z = np.random.choice(['0', '1'], p=[.8, .2])
+            x = "0"  # np.random.choice(['0','1'])
+            y = np.random.choice(["0", "1", "2", "O", "I"])
+            z = np.random.choice(["0", "1"], p=[0.8, 0.2])
             level = x + y + z
-            #level = np.random.choice([0,1])
+            # level = np.random.choice([0,1])
             frame, sframe, classframe = self.generate_frame(level)
             frame = cv2.cvtColor(frame.astype(np.uint8), cv2.COLOR_RGB2BGR)
             cv2.imwrite(join(DATASET_ROOT, "dataset", "PNG", "%d.png" % (i)), frame)
@@ -1142,22 +1244,22 @@ class FrameGenerator():
         # image_list.write(str(filename))
 
     def GenerateDataset(self, samples):
-        '''Generates a dataset of a given size.'''
+        """Generates a dataset of a given size."""
         start = time.time()
         # gets number of available threads
         threads = self.cores
         # generates different random seeds for each thread to avoid repetitions in the dataset
         seeds = np.random.randint(100, size=threads)
 
-        #creates the folder (removes if previously exists)
-        dir = join(DATASET_ROOT, 'dataset')
+        # creates the folder (removes if previously exists)
+        dir = join(DATASET_ROOT, "dataset")
         if os.path.exists(dir):
             shutil.rmtree(dir)
 
-        #and subfolders
-        os.makedirs(join(dir, 'PNG'))
-        os.makedirs(join(dir, 'Segmentation'))
-        os.makedirs(join(dir, 'Labels'))
+        # and subfolders
+        os.makedirs(join(dir, "PNG"))
+        os.makedirs(join(dir, "Segmentation"))
+        os.makedirs(join(dir, "Labels"))
 
         # If only uses one core, execute the function once
         if self.cores == 1:
@@ -1165,12 +1267,11 @@ class FrameGenerator():
             self.GenerateSamples(0, samples, seed, w_tqdm=True)
         else:
             # otherwise, distribute amount of samples between threads.
-            step = samples//self.cores
+            step = samples // self.cores
             ppool = multiprocessing.Pool(threads)
-            ranges = step*np.arange(self.cores+1)
+            ranges = step * np.arange(self.cores + 1)
             print("ranges: ", ranges)
-            ppool.starmap(self.GenerateSamples, zip(
-                ranges[:-1], ranges[1:], seeds))
+            ppool.starmap(self.GenerateSamples, zip(ranges[:-1], ranges[1:], seeds))
 
         # The above fails so trying this for now:
         # seed = int(np.random.randint(100))
@@ -1178,19 +1279,17 @@ class FrameGenerator():
 
         end = time.time()
 
-        print("Elapsed time:", end-start)
+        print("Elapsed time:", end - start)
 
 
+class TrainingUtils:
+    """ """
 
-
-class TrainingUtils():
-    ''' 
-    '''
-
-    def __init__(self, ):
-        '''Initializes utils'''
-        # 
-
+    def __init__(
+        self,
+    ):
+        """Initializes utils"""
+        #
 
     def train_epoch(self, args, model, device, train_loader, optimizer, epoch):
         # switch to train mode
@@ -1200,16 +1299,16 @@ class TrainingUtils():
         counter = 1
 
         criterion = nn.CrossEntropyLoss(ignore_index=255)
-        
+
         gts_all, predictions_all = [], []
 
         for batch_idx, (images, mask) in enumerate(train_loader):
 
             images, mask = images.to(device), mask.to(device)
 
-            outputs = model(images)['out']
-    
-            #Aggregated per-pixel loss
+            outputs = model(images)["out"]
+
+            # Aggregated per-pixel loss
             loss = criterion(outputs, mask.squeeze(1))
             train_loss.append(loss.item())
 
@@ -1220,21 +1319,25 @@ class TrainingUtils():
             optimizer.step()
 
             if counter % 15 == 0:
-                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Learning rate: {:.6f}'.format(
-                    epoch, int(counter * len(images)), len(train_loader.dataset),
-                    100. * counter / len(train_loader), loss.item(),
-                    optimizer.param_groups[0]['lr']))
+                print(
+                    "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, Learning rate: {:.6f}".format(
+                        epoch,
+                        int(counter * len(images)),
+                        len(train_loader.dataset),
+                        100.0 * counter / len(train_loader),
+                        loss.item(),
+                        optimizer.param_groups[0]["lr"],
+                    )
+                )
             counter = counter + 1
-        
-        return sum(train_loss) / len(train_loss) # per batch averaged loss for the current epoch.
 
-
+        return sum(train_loss) / len(train_loss)  # per batch averaged loss for the current epoch.
 
     def _fast_hist(self, label_pred, label_true, num_classes):
         mask = (label_true >= 0) & (label_true < num_classes)
         hist = np.bincount(
-            num_classes * label_true[mask].astype(int) +
-            label_pred[mask], minlength=num_classes ** 2).reshape(num_classes, num_classes)
+            num_classes * label_true[mask].astype(int) + label_pred[mask], minlength=num_classes**2
+        ).reshape(num_classes, num_classes)
         return hist
 
     def testing(self, args, model, device, test_loader):
@@ -1252,9 +1355,9 @@ class TrainingUtils():
 
                 images, mask = images.to(device), mask.to(device)
 
-                outputs = model(images)['out']
+                outputs = model(images)["out"]
 
-                loss = criterion(outputs,mask.squeeze(1))
+                loss = criterion(outputs, mask.squeeze(1))
                 loss_per_batch.append(loss.item())
 
                 # Adapt output size for histogram calculation.
@@ -1272,27 +1375,29 @@ class TrainingUtils():
 
         plt.figure()
         plt.bar(np.arange(args.num_classes), iou)
-        plt.title('Class Accuracy in the validation set ')
+        plt.title("Class Accuracy in the validation set ")
         # show() blocks per-epoch on interactive backends; save instead so the
         # 45-epoch training loop can run unattended.
-        plt.savefig('validation_class_iou.png')
+        plt.savefig("validation_class_iou.png")
         plt.close()
 
         mean_iou = np.nanmean(iou)
 
-        print('\nTest set ({:.0f}): Average loss: {:.4f}, mIoU: {:.4f}\n'.format(
-            len(test_loader.dataset), loss_per_epoch[-1], mean_iou))
+        print(
+            "\nTest set ({:.0f}): Average loss: {:.4f}, mIoU: {:.4f}\n".format(
+                len(test_loader.dataset), loss_per_epoch[-1], mean_iou
+            )
+        )
 
         return (loss_per_epoch, mean_iou)
 
-
-
-    '''
+    """
     This script is used to extract the single sprites included in the tileset.png in the same folder.
-    '''
+    """
+
     def ExtractTiles(self, path):
         # Prepare the output folder (removes if previously exists)
-        sprites_dir = join(DATASET_ROOT, 'Sprites')
+        sprites_dir = join(DATASET_ROOT, "Sprites")
         if os.path.exists(sprites_dir):
             shutil.rmtree(sprites_dir)
         os.makedirs(sprites_dir)
@@ -1309,109 +1414,142 @@ class TrainingUtils():
         # Each region has 9 x 16 (hxw) sprites, with the 6 in the bottom right corner being 2x as high.
 
         # Width and height for each level set of tiles
-        lvl_wide = x//3
-        lvl_height = y//2
+        lvl_wide = x // 3
+        lvl_height = y // 2
 
         # size for each tile
         grid_size = (16, 16)  # y,x
 
         # Extract all sprites for all valid levels
-        #(Overworld, Underwold,Underwater and Castle)
+        # (Overworld, Underwold,Underwater and Castle)
         for level in np.arange(4):
             # offsets for each level
-            x_offset_lvl = 1 + (lvl_wide+1)*(level % 3)
-            y_offset_lvl = 12 + (level//3)*(37+136)
+            x_offset_lvl = 1 + (lvl_wide + 1) * (level % 3)
+            y_offset_lvl = 12 + (level // 3) * (37 + 136)
 
             # extract per row
-            for y_i in np.arange(136//grid_size[0]):
+            for y_i in np.arange(136 // grid_size[0]):
                 # extract per column
-                y_offset = (grid_size[0]+1)*y_i + y_offset_lvl
-                for x_i in np.arange((x//3)//grid_size[1]-1):
-                    x_offset = (grid_size[1]+1)*x_i + x_offset_lvl
+                y_offset = (grid_size[0] + 1) * y_i + y_offset_lvl
+                for x_i in np.arange((x // 3) // grid_size[1] - 1):
+                    x_offset = (grid_size[1] + 1) * x_i + x_offset_lvl
 
                     # if row is 6 and column is 10 or bigger, skip as those are 2x height sprites
                     # probably resized on input tho
-                    if (y_i == 6 and x_i > 9):
+                    if y_i == 6 and x_i > 9:
                         continue
                     # Get the 2x height sprites
-                    elif (y_i == 7 and x_i > 9):
-                        sprite = tileset[y_offset-grid_size[0]-1:y_offset +
-                                        grid_size[0]-1, x_offset:x_offset+grid_size[0], :]
+                    elif y_i == 7 and x_i > 9:
+                        sprite = tileset[
+                            y_offset - grid_size[0] - 1 : y_offset + grid_size[0] - 1,
+                            x_offset : x_offset + grid_size[0],
+                            :,
+                        ]
 
                     else:
-                        sprite = tileset[y_offset:y_offset+grid_size[0],
-                                        x_offset:x_offset+grid_size[0], :]
+                        sprite = tileset[
+                            y_offset : y_offset + grid_size[0],
+                            x_offset : x_offset + grid_size[0],
+                            :,
+                        ]
 
                     sprite_write = cv2.cvtColor(sprite, cv2.COLOR_RGB2BGR)
-                    cv2.imwrite(join(sprites_dir, "Sprite%d_%d_%d.png" %
-                                (level, x_i, y_i)), sprite_write)
-
-
+                    cv2.imwrite(
+                        join(sprites_dir, "Sprite%d_%d_%d.png" % (level, x_i, y_i)), sprite_write
+                    )
 
     # Define the helper function
     def decode_segmap(self, image, nc=21):
         ## Color palette for visualization of the 21 classes
-        label_colors = np.array([(0, 0, 0),  # 0=background
-                    # 1=aeroplane, 2=bicycle, 3=bird, 4=boat, 5=bottle
-                    (0, 0,255), (127, 127, 0), (0, 255, 0), (255, 0, 0), (255, 255, 0),
-                    # 6=bus, 7=car, 8=cat, 9=chair, 10=cow
-                    (0, 128, 128), (128, 128, 128), (64, 0, 0), (192, 0, 0), (64, 128, 0),
-                    # 11=dining table, 12=dog, 13=horse, 14=motorbike, 15=person
-                    (192, 128, 0), (64, 0, 128), (192, 0, 128), (64, 128, 128), (192, 128, 128),
-                    # 16=potted plant, 17=sheep, 18=sofa, 19=train, 20=tv/monitor
-                    (0, 64, 0), (128, 64, 0), (0, 192, 0), (128, 192, 0), (0, 64, 128)])
+        label_colors = np.array(
+            [
+                (0, 0, 0),  # 0=background
+                # 1=aeroplane, 2=bicycle, 3=bird, 4=boat, 5=bottle
+                (0, 0, 255),
+                (127, 127, 0),
+                (0, 255, 0),
+                (255, 0, 0),
+                (255, 255, 0),
+                # 6=bus, 7=car, 8=cat, 9=chair, 10=cow
+                (0, 128, 128),
+                (128, 128, 128),
+                (64, 0, 0),
+                (192, 0, 0),
+                (64, 128, 0),
+                # 11=dining table, 12=dog, 13=horse, 14=motorbike, 15=person
+                (192, 128, 0),
+                (64, 0, 128),
+                (192, 0, 128),
+                (64, 128, 128),
+                (192, 128, 128),
+                # 16=potted plant, 17=sheep, 18=sofa, 19=train, 20=tv/monitor
+                (0, 64, 0),
+                (128, 64, 0),
+                (0, 192, 0),
+                (128, 192, 0),
+                (0, 64, 128),
+            ]
+        )
 
         r = np.zeros_like(image).astype(np.uint8)
         g = np.zeros_like(image).astype(np.uint8)
         b = np.zeros_like(image).astype(np.uint8)
-        
+
         for l in range(0, nc):
             idx = image == l
             r[idx] = label_colors[l, 0]
             g[idx] = label_colors[l, 1]
             b[idx] = label_colors[l, 2]
-            
+
         rgb = np.stack([r, g, b], axis=2)
         return rgb
 
-    def segment(self, net, path, show_orig=True,transform=transforms.ToTensor(), dev=None):
+    def segment(self, net, path, show_orig=True, transform=transforms.ToTensor(), dev=None):
         dev = device if dev is None else select_device(dev)
         img = Image.open(path)
-        if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
-        
+        if show_orig:
+            plt.imshow(img)
+            plt.axis("off")
+            plt.show()
+
         input_image = transform(img).unsqueeze(0).to(dev)
-        out = net(input_image)['out'][0]
-        
+        out = net(input_image)["out"][0]
+
         segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
         segm_rgb = self.decode_segmap(segm)
         plt.imshow(segm_rgb)
-        plt.axis('off')
-        #plt.savefig('1_1.png', format='png',dpi=300,bbox_inches = "tight")
+        plt.axis("off")
+        # plt.savefig('1_1.png', format='png',dpi=300,bbox_inches = "tight")
         plt.show()
 
-    def compare(self, net,net2, path, show_orig=True,transform=transforms.ToTensor(), dev=None):
+    def compare(self, net, net2, path, show_orig=True, transform=transforms.ToTensor(), dev=None):
         dev = device if dev is None else select_device(dev)
         img = Image.open(path)
-        if show_orig: plt.imshow(img); plt.axis('off'); plt.show()
-        
+        if show_orig:
+            plt.imshow(img)
+            plt.axis("off")
+            plt.show()
+
         input_image = transform(img).unsqueeze(0).to(dev)
-        out = net(input_image)['out'][0]
-        
+        out = net(input_image)["out"][0]
+
         segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
         segm_rgb = self.decode_segmap(segm)
         plt.imshow(segm_rgb)
-        plt.axis('off'); plt.show()
+        plt.axis("off")
+        plt.show()
 
         input_image = transform(img).unsqueeze(0).to(dev)
-        out = net2(input_image)['out'][0]
-        
+        out = net2(input_image)["out"][0]
+
         segm = torch.argmax(out.squeeze(), dim=0).detach().cpu().numpy()
         segm_rgb = self.decode_segmap(segm)
-        plt.imshow(segm_rgb); plt.axis('off'); plt.show()
+        plt.imshow(segm_rgb)
+        plt.axis("off")
+        plt.show()
 
 
-
-## Step 1: 
+## Step 1:
 
 ## Set up Hyperparameters and enable GPU acceleration
 
@@ -1435,7 +1573,6 @@ np.random.seed(args.seed)
 print("done")
 
 
-
 ## Step 2: Training Epoch
 
 ## per pixel cross-entropy loss is to be computed
@@ -1445,12 +1582,12 @@ print("done")
 
 ## Step 3: Validation Epoch
 
-## Per pixel cross entropy loss 
+## Per pixel cross entropy loss
 
 # moved
 
 
-## Step 4: 
+## Step 4:
 
 ## Populate sprites
 
@@ -1481,8 +1618,8 @@ training_utils.ExtractTiles(path_tileset)
 
 ## Step 6: Frame generator
 
-cores = 1 # numbers greater than 1 don't seem to work
-samples = 1000 # how many should this be???? 1000s???
+cores = 1  # numbers greater than 1 don't seem to work
+samples = 1000  # how many should this be???? 1000s???
 
 # Generate the dataset
 framegen = FrameGenerator(cores=cores)
@@ -1491,13 +1628,17 @@ framegen.GenerateDataset(samples)
 
 ## Step 7: data loader definition
 
-workers = 2 #Anything over 0 will crash on windows. On linux it works fine.
+workers = 2  # Anything over 0 will crash on windows. On linux it works fine.
 
-trainset = MarioDataset(args, 'train')
-train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=workers, pin_memory=True)
+trainset = MarioDataset(args, "train")
+train_loader = torch.utils.data.DataLoader(
+    trainset, batch_size=args.batch_size, shuffle=True, num_workers=workers, pin_memory=True
+)
 
-testset = MarioDataset(args, 'val')
-test_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=workers, pin_memory=True)
+testset = MarioDataset(args, "val")
+test_loader = torch.utils.data.DataLoader(
+    testset, batch_size=args.test_batch_size, shuffle=False, num_workers=workers, pin_memory=True
+)
 
 print("done")
 
@@ -1532,25 +1673,27 @@ for epoch in range(1, args.epoch + 1):
     st = time.time()
 
     print("DeepLabV3_Resnet50 training, epoch " + str(epoch))
-    loss_per_epoch = training_utils.train_epoch(args,model,device,train_loader,optimizer,epoch)
+    loss_per_epoch = training_utils.train_epoch(args, model, device, train_loader, optimizer, epoch)
 
     loss_train_epoch += [loss_per_epoch]
 
     scheduler.step()
 
-    loss_per_epoch_test, acc_val_per_epoch_i = training_utils.testing(args,model,device,test_loader)
+    loss_per_epoch_test, acc_val_per_epoch_i = training_utils.testing(
+        args, model, device, test_loader
+    )
 
     loss_test_epoch += loss_per_epoch_test
     acc_test_per_epoch += [acc_val_per_epoch_i]
 
     if epoch == 1:
         best_acc_val = acc_val_per_epoch_i
-        
+
     else:
         if acc_val_per_epoch_i > best_acc_val:
             best_acc_val = acc_val_per_epoch_i
 
-    if epoch==args.epoch:
+    if epoch == args.epoch:
         torch.save(model.state_dict(), join(DATASET_ROOT, "models", args.model_file_name))
 
     cont += 1
@@ -1558,36 +1701,35 @@ for epoch in range(1, args.epoch + 1):
 
 ## Step 11: accuracy and loss curves
 
-#Accuracy
-acc_test  = np.asarray(acc_test_per_epoch)
+# Accuracy
+acc_test = np.asarray(acc_test_per_epoch)
 
-#Loss per epoch
-loss_test  = np.asarray(loss_test_epoch)
+# Loss per epoch
+loss_test = np.asarray(loss_test_epoch)
 loss_train = np.asarray(loss_train_epoch)
 
 numEpochs = len(acc_test)
 epochs = range(numEpochs)
 
 plt.figure(1)
-plt.plot(epochs, acc_test, label='Test Semantic, max acc: ' + str(np.max(acc_test)))
-plt.ylabel('Accuracy')
-plt.xlabel('Epoch')
-plt.legend(loc='lower right')
+plt.plot(epochs, acc_test, label="Test Semantic, max acc: " + str(np.max(acc_test)))
+plt.ylabel("Accuracy")
+plt.xlabel("Epoch")
+plt.legend(loc="lower right")
 
 plt.figure(2)
-plt.plot(epochs, loss_test, label='Test Semantic, min loss: ' + str(np.min(loss_test)))
-plt.plot(epochs, loss_train, label='Train Semantic, min loss: ' + str(np.min(loss_train)))
-plt.ylabel('Loss')
-plt.xlabel('Epoch')
-plt.legend(loc='upper right')
+plt.plot(epochs, loss_test, label="Test Semantic, min loss: " + str(np.min(loss_test)))
+plt.plot(epochs, loss_train, label="Train Semantic, min loss: " + str(np.min(loss_train)))
+plt.ylabel("Loss")
+plt.xlabel("Epoch")
+plt.legend(loc="upper right")
 
 plt.show()
 
 
 ## Step 12: load and test model
 
-model = models.segmentation.deeplabv3_resnet50(
-        pretrained=True, progress=True)
+model = models.segmentation.deeplabv3_resnet50(pretrained=True, progress=True)
 # Added a Sigmoid activation after the last convolution layer
 model.classifier = DeepLabHead(2048, 6)
 
@@ -1603,7 +1745,7 @@ model = model.to(device)
 
 ## Step 14: eval
 
-model.eval() #Or batch normalization gives error
+model.eval()  # Or batch normalization gives error
 
 frame = join(DATASET_ROOT, "real_frames", "1_1", "4.png")
 # frame = join(DATASET_ROOT, "real_frames", "1_2", "4.png")
@@ -1612,9 +1754,7 @@ frame = join(DATASET_ROOT, "real_frames", "1_1", "4.png")
 # frame = join(DATASET_ROOT, "real_frames", "6_1", "4.png")
 
 print(frame)
-training_utils.segment(model,frame)
-
-
+training_utils.segment(model, frame)
 
 
 ## TODO:

@@ -105,24 +105,14 @@ class TestExperimentRunner(unittest.TestCase):
         self.assertTrue(backend_contract["capabilities"]["save_load_state"])
         self.assertEqual(backend_contract["metadata"]["game"], "SuperMarioBros-Nes")
         self.assertTrue(
-            any(
-                content["name"] == "smb_rom"
-                for content in manifest["game"]["content_identifiers"]
-            )
+            any(content["name"] == "smb_rom" for content in manifest["game"]["content_identifiers"])
         )
         self.assertTrue(
-            any(
-                asset["name"] == "smb_sprites"
-                for asset in manifest["game"]["asset_provenance"]
-            )
+            any(asset["name"] == "smb_sprites" for asset in manifest["game"]["asset_provenance"])
         )
         checklist = manifest["game"]["asset_checklist"]
-        self.assertTrue(
-            any(item["target"] == "smb_rom" for item in checklist)
-        )
-        self.assertTrue(
-            any(item["target"] == "generated_data" for item in checklist)
-        )
+        self.assertTrue(any(item["target"] == "smb_rom" for item in checklist))
+        self.assertTrue(any(item["target"] == "generated_data" for item in checklist))
         self.assertEqual(
             [stage["stage"] for stage in manifest["stages"]], ["synthetic-1d", "block-smb"]
         )
@@ -138,9 +128,7 @@ class TestExperimentRunner(unittest.TestCase):
             "data/block_vit/block_vit.pth",
         )
         self.assertEqual(
-            block["game_stage"]["perception_pipeline"]["semantic_vocabulary"]["classes"][
-                1
-            ],
+            block["game_stage"]["perception_pipeline"]["semantic_vocabulary"]["classes"][1],
             "mario",
         )
         self.assertIn(
@@ -148,9 +136,7 @@ class TestExperimentRunner(unittest.TestCase):
             block["game_stage"]["perception_pipeline"]["diagnostic_thresholds"],
         )
         self.assertEqual(
-            block["game_stage"]["perception_pipeline"]["dataset_sources"][0][
-                "source_kind"
-            ],
+            block["game_stage"]["perception_pipeline"]["dataset_sources"][0]["source_kind"],
             "emulator_state",
         )
         self.assertEqual(synthetic["metrics"]["controller_mse"], 0.4)
@@ -175,9 +161,7 @@ class TestExperimentRunner(unittest.TestCase):
             ["synthetic-concept"],
         )
         self.assertEqual(
-            manifest["game_promotion"]["phases"][1]["rung_statuses"][
-                "synthetic-concept"
-            ],
+            manifest["game_promotion"]["phases"][1]["rung_statuses"]["synthetic-concept"],
             "passed",
         )
 

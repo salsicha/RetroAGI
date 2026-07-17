@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
 import hashlib
 import inspect
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 import numpy as np
@@ -84,9 +84,7 @@ class GameBackendSpec:
             "step_api",
         ):
             if not getattr(self, field_name):
-                raise ValueError(
-                    f"backend spec {self.name!r} must define {field_name}"
-                )
+                raise ValueError(f"backend spec {self.name!r} must define {field_name}")
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -245,10 +243,7 @@ class GymnasiumBackendAdapter:
         if len(result) == 4:
             observation, reward, done, info = result
             info = _info(info, context=self.context)
-            truncated = bool(
-                info.get("truncated", False)
-                or info.get("TimeLimit.truncated", False)
-            )
+            truncated = bool(info.get("truncated", False) or info.get("TimeLimit.truncated", False))
             return BackendStepResult(
                 observation=observation,
                 reward=float(reward),
@@ -257,8 +252,7 @@ class GymnasiumBackendAdapter:
                 info=info,
             )
         raise ValueError(
-            f"{self.context} step must return 4 values (Gym) or 5 values "
-            "(Gymnasium)"
+            f"{self.context} step must return 4 values (Gym) or 5 values " "(Gymnasium)"
         )
 
     def render(self) -> Any:
@@ -284,17 +278,11 @@ class GymnasiumBackendAdapter:
         emulator = getattr(self.env, "em", None)
         if _has_state_api(emulator):
             return emulator
-        raise RuntimeError(
-            f"{self.context} must expose get_state/set_state on env or env.em"
-        )
+        raise RuntimeError(f"{self.context} must expose get_state/set_state on env or env.em")
 
     @staticmethod
     def _unpack_reset(result: Any) -> BackendResetResult:
-        if (
-            isinstance(result, tuple)
-            and len(result) == 2
-            and isinstance(result[1], Mapping)
-        ):
+        if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], Mapping):
             return BackendResetResult(result[0], dict(result[1]))
         return BackendResetResult(result, {})
 
@@ -327,9 +315,7 @@ def probe_backend_capabilities(
     )
     save_load_state = run(
         "save_load_state",
-        lambda: _save_load_replays_step(
-            backend, seed=config.seed, action=config.action
-        ),
+        lambda: _save_load_replays_step(backend, seed=config.seed, action=config.action),
     )
     action_repeat = run(
         "action_repeat",

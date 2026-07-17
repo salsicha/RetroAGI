@@ -1,5 +1,13 @@
 """Stage 3: full Super Mario Bros emulator integration."""
 
+from .action_diagnostics import (
+    DEFAULT_FULL_SMB_ACTION_PROGRESS_GATE,
+    FULL_SMB_ACTION_DIAGNOSTIC_SCHEMA_VERSION,
+    compare_full_smb_action_distribution,
+    run_full_smb_action_contract_diagnostic,
+    scripted_block_smb_action_reference,
+    summarize_full_smb_action_recordings,
+)
 from .adapter import (
     DEFAULT_FULL_SMB_CONTENT,
     DEFAULT_FULL_SMB_REWARD_CONFIG,
@@ -18,6 +26,11 @@ from .adapter import (
     extract_full_smb_signals,
     make_stable_retro_env,
 )
+from .architecture_benchmark import (
+    DEFAULT_FULL_SMB_ARCHITECTURE_BENCHMARK_ARCHITECTURES,
+    FULL_SMB_ARCHITECTURE_BENCHMARK_SCHEMA_VERSION,
+    benchmark_full_smb_policy_architectures,
+)
 from .artifacts import (
     DEFAULT_FULL_SMB_ARTIFACT_ROOT,
     DEFAULT_FULL_SMB_ARTIFACT_RUN_NAME,
@@ -31,14 +44,6 @@ from .artifacts import (
     full_smb_documented_benchmark_manifest,
     validate_full_smb_documented_benchmark_manifest,
 )
-from .action_diagnostics import (
-    DEFAULT_FULL_SMB_ACTION_PROGRESS_GATE,
-    FULL_SMB_ACTION_DIAGNOSTIC_SCHEMA_VERSION,
-    compare_full_smb_action_distribution,
-    run_full_smb_action_contract_diagnostic,
-    scripted_block_smb_action_reference,
-    summarize_full_smb_action_recordings,
-)
 from .benchmark import (
     FullSMBThroughputBenchmarkConfig,
     FullSMBThroughputBenchmarkResult,
@@ -46,11 +51,6 @@ from .benchmark import (
     recommended_full_smb_runtime_settings,
     run_full_smb_throughput_benchmark,
     save_full_smb_throughput_benchmark,
-)
-from .architecture_benchmark import (
-    DEFAULT_FULL_SMB_ARCHITECTURE_BENCHMARK_ARCHITECTURES,
-    FULL_SMB_ARCHITECTURE_BENCHMARK_SCHEMA_VERSION,
-    benchmark_full_smb_policy_architectures,
 )
 from .capabilities import (
     FullSMBEnvironmentCapabilityResult,
@@ -76,8 +76,8 @@ from .diagnostics import (
     run_full_smb_perception_diagnostic,
 )
 from .imitation import (
-    DEFAULT_FULL_SMB_OBSTACLE_WINDOW_DURATION_SPECS,
     DEFAULT_FULL_SMB_IMITATION_STEPS,
+    DEFAULT_FULL_SMB_OBSTACLE_WINDOW_DURATION_SPECS,
     FullSMBObstacleWindowDurationSpec,
     collect_full_smb_imitation_dataset,
     collect_full_smb_obstacle_window_duration_dataset,

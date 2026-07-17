@@ -110,9 +110,7 @@ class TestPromotionPipeline(unittest.TestCase):
                 "game-full-training",
             ],
         )
-        synthetic_gate = manifest["game_promotion"]["phases"][1]["rung_gates"][
-            "synthetic-concept"
-        ]
+        synthetic_gate = manifest["game_promotion"]["phases"][1]["rung_gates"]["synthetic-concept"]
         self.assertEqual(
             synthetic_gate["metrics"][0]["threshold_key"],
             "controller_mse_threshold",
@@ -296,9 +294,7 @@ class TestPromotionPipeline(unittest.TestCase):
                 manifest["rungs"][0]["artifacts"]["continued_checkpoint_path"]
             ).exists()
             summary_exists = Path(manifest["rungs"][0]["summary_path"]).exists()
-            summary_payload = json.loads(
-                Path(manifest["rungs"][0]["summary_path"]).read_text()
-            )
+            summary_payload = json.loads(Path(manifest["rungs"][0]["summary_path"]).read_text())
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(manifest["passed"])

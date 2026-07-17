@@ -71,12 +71,8 @@ class BlockSMBStage:
             self.vision.eval()
         self.vision_projector = VisionHierarchyProjector(self.spec)
         self.last_info: Mapping[str, Any] = {}
-        self._frame_stack: deque[torch.Tensor] = deque(
-            maxlen=self.observation_config.frame_stack
-        )
-        self._frame_mask: deque[bool] = deque(
-            maxlen=self.observation_config.frame_stack
-        )
+        self._frame_stack: deque[torch.Tensor] = deque(maxlen=self.observation_config.frame_stack)
+        self._frame_mask: deque[bool] = deque(maxlen=self.observation_config.frame_stack)
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
@@ -91,9 +87,7 @@ class BlockSMBStage:
         return obs
 
     def step(self, action: SMBAction | int):
-        obs, reward, terminated, truncated, info = self.env.step(
-            block_smb_action(action)
-        )
+        obs, reward, terminated, truncated, info = self.env.step(block_smb_action(action))
         self.last_info = info
         self._last_episode_mask = 0.0 if terminated or truncated else 1.0
         self._last_terminal = terminated
@@ -176,9 +170,7 @@ class BlockSMBStage:
         )
 
     def _observation_metadata(self, device: torch.device) -> dict[str, Any]:
-        frame_stack = torch.stack(tuple(self._frame_stack), dim=0).permute(
-            0, 3, 1, 2
-        )
+        frame_stack = torch.stack(tuple(self._frame_stack), dim=0).permute(0, 3, 1, 2)
         return {
             "frame_stack": frame_stack.unsqueeze(0).to(device),
             "frame_mask": torch.tensor(

@@ -25,11 +25,11 @@ from retroagi.core import (
     PromotionMetricGateSpec,
     StageSpec,
     architecture_names,
-    build_game_promotion_plan,
     build_architecture_variant,
+    build_game_promotion_plan,
     game_plugin_names,
-    get_game_plugin,
     get_architecture,
+    get_game_plugin,
     load_checkpoint,
     parse_architecture_ablation_item,
     save_checkpoint,
@@ -404,9 +404,7 @@ def _game_name(value: str) -> str:
     if name in game_plugin_names():
         return name
     available = ", ".join(game_plugin_names())
-    raise argparse.ArgumentTypeError(
-        f"unknown game {value!r}; available game plugins: {available}"
-    )
+    raise argparse.ArgumentTypeError(f"unknown game {value!r}; available game plugins: {available}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -879,9 +877,7 @@ def _run_block_smb_smoke(
         block_rollout_steps=int(budget["rollout_steps"]),
         block_evaluation_episodes=int(budget["evaluation_episodes"]),
         block_evaluation_max_steps=int(budget["evaluation_max_steps"]),
-        block_monte_carlo_validation_samples=int(
-            budget.get("monte_carlo_validation_samples", 0)
-        ),
+        block_monte_carlo_validation_samples=int(budget.get("monte_carlo_validation_samples", 0)),
         block_fixed_scenario=None,
         enable_block_checkpoint_transfer=False,
     )
@@ -1411,9 +1407,7 @@ def _ensure_handoff_source_checkpoint(
     variant: Any,
     rung_dir: Path,
 ) -> Path:
-    previous_checkpoint = (
-        args.artifacts_dir / "block_smb_smoke" / "block_smb" / "checkpoint.pth"
-    )
+    previous_checkpoint = args.artifacts_dir / "block_smb_smoke" / "block_smb" / "checkpoint.pth"
     if previous_checkpoint.exists() and _handoff_checkpoint_matches_run(
         previous_checkpoint,
         args,
@@ -1480,9 +1474,7 @@ def _asset_mock_checkpoint_gates_passed(checkpoint_path: Path) -> bool:
 
 
 def _ensure_asset_mock_perception_checkpoint(args: argparse.Namespace) -> Path:
-    checkpoint_path = (
-        args.artifacts_dir / "full_smb_asset_mock_perception" / "full_smb_vit.pth"
-    )
+    checkpoint_path = args.artifacts_dir / "full_smb_asset_mock_perception" / "full_smb_vit.pth"
     if checkpoint_path.exists() and _asset_mock_checkpoint_gates_passed(checkpoint_path):
         return checkpoint_path
     budget = PROMOTION_BUDGETS[args.budget]["full-smb-asset-mock-perception"]
@@ -1588,9 +1580,7 @@ def _controller_adaptation_metrics(
         }
     deltas = [(transferred[key] - continued[key]).abs().reshape(-1) for key in keys]
     concatenated = torch.cat(deltas)
-    changed_tensors = sum(
-        1 for key in keys if not torch.equal(transferred[key], continued[key])
-    )
+    changed_tensors = sum(1 for key in keys if not torch.equal(transferred[key], continued[key]))
     return {
         "controller_adaptation_key_count": float(len(keys)),
         "controller_adaptation_changed_tensors": float(changed_tensors),
@@ -1827,9 +1817,7 @@ def _runtime_gates(
         return []
     budget_key = gate_spec.runtime.budget_key if gate_spec is not None else "runtime_seconds"
     reason = (
-        gate_spec.runtime.reason
-        if gate_spec is not None
-        else "runtime exceeded promotion budget"
+        gate_spec.runtime.reason if gate_spec is not None else "runtime exceeded promotion budget"
     )
     return [_runtime_gate(budget, elapsed_seconds, budget_key, reason)]
 

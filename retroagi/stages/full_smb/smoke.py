@@ -1,8 +1,8 @@
 """Headless smoke checks for the Full SMB stage adapter."""
 
-from dataclasses import asdict, dataclass
 import hashlib
 import random
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 import numpy as np
@@ -93,9 +93,7 @@ def run_headless_random_agent_smoke(
         action_ids.append(int(action))
         final_checksum = _observation_checksum(observation)
         last_info = info
-        encoded_observations += _maybe_encode(
-            stage, observation, config.encode_observations, info
-        )
+        encoded_observations += _maybe_encode(stage, observation, config.encode_observations, info)
         _maybe_render(stage, config.render)
 
         if terminated:
@@ -142,9 +140,7 @@ def run_deterministic_reset_smoke(
 
     if steps < 0:
         raise ValueError("steps must be non-negative")
-    action_sequence = (
-        tuple(actions) if actions is not None else _seeded_actions(seed, steps)
-    )
+    action_sequence = tuple(actions) if actions is not None else _seeded_actions(seed, steps)
 
     first_stage = make_stage()
     try:
@@ -203,9 +199,7 @@ def _rollout_trace(
         truncated_values.append(bool(truncated))
         signals.append(dict(info.get("full_smb_signals", {})))
         action_ids.append(int(shared_action))
-        encoded_observations += _maybe_encode(
-            stage, observation, encode_observations, info
-        )
+        encoded_observations += _maybe_encode(stage, observation, encode_observations, info)
         if terminated or truncated:
             break
 
@@ -226,9 +220,7 @@ def _seeded_actions(seed: int, steps: int) -> tuple[SMBAction, ...]:
     return tuple(rng.choice(SMB_ACTIONS) for _ in range(steps))
 
 
-def _trace_mismatch(
-    first: FullSMBRolloutTrace, second: FullSMBRolloutTrace
-) -> Optional[str]:
+def _trace_mismatch(first: FullSMBRolloutTrace, second: FullSMBRolloutTrace) -> Optional[str]:
     for field in (
         "observation_checksums",
         "rewards",

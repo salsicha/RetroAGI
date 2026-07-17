@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from retroagi.core import MotorPrimitiveOutput, SMB_ACTIONS, SMBAction
+from retroagi.core import SMB_ACTIONS, MotorPrimitiveOutput, SMBAction
 from retroagi.stages.block_smb import run_block_smb_action_probe
 from scripts.tests.test_block_smb_training import static_vision_factory
 

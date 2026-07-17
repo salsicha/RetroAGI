@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import torch
 
-from retroagi.core import MotorPrimitiveOutput, SMB_ACTIONS, SMBAction
+from retroagi.core import SMB_ACTIONS, MotorPrimitiveOutput, SMBAction
 from retroagi.stages.full_smb import (
     FullSMBObservationConfig,
     FullSMBStage,
@@ -109,10 +109,7 @@ class TestFullSMBActionDiagnostics(unittest.TestCase):
     def test_recording_summary_flags_missing_right_jump_under_progress_gate(self):
         with TemporaryDirectory() as tmpdir:
             recording = Path(tmpdir) / "episode.npz"
-            signals = [
-                json.dumps({"progress": progress})
-                for progress in (12.0, 18.0, 20.0)
-            ]
+            signals = [json.dumps({"progress": progress}) for progress in (12.0, 18.0, 20.0)]
             np.savez_compressed(
                 recording,
                 actions=np.asarray([int(SMBAction.RIGHT)] * 3, dtype=np.int64),

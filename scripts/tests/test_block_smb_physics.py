@@ -147,9 +147,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
         env = self.make_env(
             {
                 "mario": [50, 184],
-                "platforms": [
-                    {"x": 40, "y": 200, "w": 80, "h": 10, "moving": [40, 80, 2]}
-                ],
+                "platforms": [{"x": 40, "y": 200, "w": 80, "h": 10, "moving": [40, 80, 2]}],
             }
         )
         try:

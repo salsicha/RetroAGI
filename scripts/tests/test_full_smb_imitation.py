@@ -1,17 +1,17 @@
 """Tests for Full SMB real-emulator imitation warm starts."""
 
 import pickle
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 import numpy as np
 import torch
 
 import retroagi.stages.full_smb.imitation as full_smb_imitation_module
 from retroagi.stages.full_smb import (
-    FullSMBObstacleWindowDurationSpec,
     FullSMBObservationConfig,
+    FullSMBObstacleWindowDurationSpec,
     FullSMBStage,
     collect_full_smb_imitation_dataset,
     collect_full_smb_obstacle_window_duration_dataset,
@@ -161,8 +161,7 @@ class TestFullSMBImitationWarmStart(unittest.TestCase):
             with TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
                 state_path = (
-                    root
-                    / "local/full_smb/states/curriculum/1_1_first_enemy_approach.state"
+                    root / "local/full_smb/states/curriculum/1_1_first_enemy_approach.state"
                 )
                 state_path.parent.mkdir(parents=True)
                 with state_path.open("wb") as handle:
@@ -264,8 +263,7 @@ class TestFullSMBImitationWarmStart(unittest.TestCase):
             with TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
                 state_path = (
-                    root
-                    / "local/full_smb/states/curriculum/1_1_first_enemy_approach.state"
+                    root / "local/full_smb/states/curriculum/1_1_first_enemy_approach.state"
                 )
                 state_path.parent.mkdir(parents=True)
                 with state_path.open("wb") as handle:

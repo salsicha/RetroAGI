@@ -41,9 +41,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
         batch = self.projector.project(self.make_vision())
 
         self.assertEqual(batch.src_a.tolist(), [[0, 1, 2, 3, 4, 5, 6, 1]])
-        self.assertEqual(
-            batch.src_b.tolist(), [[0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 1, 1]]
-        )
+        self.assertEqual(batch.src_b.tolist(), [[0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 1, 1]])
 
     def test_c_stream_has_stable_position_semantic_state_and_token_slots(self):
         state = torch.linspace(-1, 1, 14)
@@ -66,9 +64,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
         changed_position = self.projector.project(
             self.make_vision(position=[[0.75, 0.25]]), state=state
         )
-        changed_tokens = self.projector.project(
-            self.make_vision(token_offset=1.0), state=state
-        )
+        changed_tokens = self.projector.project(self.make_vision(token_offset=1.0), state=state)
 
         torch.testing.assert_close(baseline.src_c[:, 2:], changed_position.src_c[:, 2:])
         self.assertFalse(torch.equal(baseline.src_c[:, :2], changed_position.src_c[:, :2]))
@@ -133,12 +129,8 @@ class TestVisionHierarchyProjector(unittest.TestCase):
             batch = stage.encode_observation(observation, info)
             observation_meta = batch.metadata["observation"]
 
-            self.assertEqual(
-                observation_meta["frame_stack"].shape, (1, 3, 3, 240, 256)
-            )
-            self.assertEqual(
-                observation_meta["frame_mask"].tolist(), [[False, False, True]]
-            )
+            self.assertEqual(observation_meta["frame_stack"].shape, (1, 3, 3, 240, 256))
+            self.assertEqual(observation_meta["frame_mask"].tolist(), [[False, False, True]])
             self.assertEqual(batch.metadata["episode"]["mask"].tolist(), [1.0])
             self.assertEqual(capture.inputs[-1].dtype, torch.float32)
             self.assertTrue(torch.all(capture.inputs[-1] == 1.0))
@@ -182,9 +174,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
             self.assertTrue(truncated)
             self.assertEqual(batch.metadata["episode"]["mask"].tolist(), [0.0])
             self.assertEqual(batch.metadata["episode"]["truncated"], True)
-            self.assertEqual(
-                batch.metadata["observation"]["frame_mask"].tolist(), [[True, True]]
-            )
+            self.assertEqual(batch.metadata["observation"]["frame_mask"].tolist(), [[True, True]])
         finally:
             stage.env.close()
 

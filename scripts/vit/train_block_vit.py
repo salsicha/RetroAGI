@@ -9,8 +9,8 @@ Example:
 
 import argparse
 import random
-from dataclasses import asdict, dataclass, field
 import sys
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -32,14 +32,15 @@ from retroagi.core import (
     TrainingConfig,
     build_checkpoint,
     is_versioned_checkpoint,
-    save_checkpoint as save_versioned_checkpoint,
     select_device,
     validate_checkpoint_compatibility,
     validate_model_vision_compatibility,
     validate_stage_spec,
 )
+from retroagi.core import (
+    save_checkpoint as save_versioned_checkpoint,
+)
 from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockVisionTransformer, MarioScenarioEnv
-
 
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "block_vit" / "block_vit.pth"
 DEFAULT_EPOCHS = 20
@@ -377,9 +378,7 @@ def train(
         patch_size=config.model.patch_size or DEFAULT_PATCH_SIZE,
         drop=config.model.dropout,
     ).to(device)
-    validate_model_vision_compatibility(
-        config.model, model.spec, context="Block ViT startup model"
-    )
+    validate_model_vision_compatibility(config.model, model.spec, context="Block ViT startup model")
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config.training.learning_rate,

@@ -11,7 +11,7 @@ from .game_promotion import (
     PromotionArtifactGateSpec,
     PromotionMetricGateSpec,
 )
-from .games import GameSpec, PONG_GAME_SPEC, SMB_GAME_SPEC
+from .games import PONG_GAME_SPEC, SMB_GAME_SPEC, GameSpec
 from .perception import (
     PerceptionDatasetSourceSpec,
     PerceptionPipelineSpec,
@@ -31,9 +31,7 @@ class GamePluginSpec:
     stage_adapters: Mapping[str, str]
     vision_encoders: Mapping[str, str]
     asset_pipelines: Mapping[str, str] = field(default_factory=dict)
-    perception_pipelines: Mapping[str, PerceptionPipelineSpec] = field(
-        default_factory=dict
-    )
+    perception_pipelines: Mapping[str, PerceptionPipelineSpec] = field(default_factory=dict)
     signal_extractors: Mapping[str, str] = field(default_factory=dict)
     reward_schema: RewardConfigSchema | None = None
     success_thresholds: Mapping[str, TaskSuccessThreshold] = field(default_factory=dict)
@@ -44,8 +42,7 @@ class GamePluginSpec:
             raise ValueError("game plugin name must be non-empty")
         if self.name != self.game.name:
             raise ValueError(
-                f"game plugin {self.name!r} must match game profile "
-                f"{self.game.name!r}"
+                f"game plugin {self.name!r} must match game profile " f"{self.game.name!r}"
             )
         if not self.stage_adapters:
             raise ValueError(f"game plugin {self.name!r} must define stage_adapters")
@@ -80,9 +77,7 @@ class GamePluginSpec:
             )
         self._validate_perception_pipelines()
         unknown_gate_names = sorted(
-            name
-            for name, gate in self.promotion_gates.items()
-            if name != gate.rung_name
+            name for name, gate in self.promotion_gates.items() if name != gate.rung_name
         )
         if unknown_gate_names:
             raise ValueError(
@@ -103,9 +98,7 @@ class GamePluginSpec:
             )
         empty = sorted(name for name, entrypoint in components.items() if not entrypoint)
         if empty:
-            raise ValueError(
-                f"game plugin {self.name!r} {kind}s must define entrypoints: {empty}"
-            )
+            raise ValueError(f"game plugin {self.name!r} {kind}s must define entrypoints: {empty}")
 
     def _validate_perception_pipelines(self) -> None:
         for name, pipeline in self.perception_pipelines.items():
@@ -178,9 +171,7 @@ class GamePluginSpec:
         for pipeline in self.perception_pipelines.values():
             if pipeline.stage_name == stage.name:
                 return pipeline
-        raise KeyError(
-            f"unknown perception pipeline {name!r} for game plugin {self.name!r}"
-        )
+        raise KeyError(f"unknown perception pipeline {name!r} for game plugin {self.name!r}")
 
     def signal_extractor(self, name: str) -> str:
         stage = self.resolve_stage(name)
@@ -227,9 +218,7 @@ class GamePluginRegistry:
             return self._plugins[name]
         except KeyError as exc:
             available = ", ".join(self.names())
-            raise KeyError(
-                f"unknown game plugin {name!r}; available: {available}"
-            ) from exc
+            raise KeyError(f"unknown game plugin {name!r}; available: {available}") from exc
 
     def game(self, name: str) -> GameSpec:
         return self.get(name).game
@@ -320,12 +309,9 @@ SMB_GAME_PLUGIN = GamePluginSpec(
             ),
             vision_encoder="retroagi.stages.block_smb.vision.BlockVisionTransformer",
             asset_extraction=(
-                "retroagi.stages.block_smb.vision.BlockVisionTransformer."
-                "semantic_targets"
+                "retroagi.stages.block_smb.vision.BlockVisionTransformer." "semantic_targets"
             ),
-            synthetic_frame_composition=(
-                "retroagi.stages.block_smb.env.MarioScenarioEnv"
-            ),
+            synthetic_frame_composition=("retroagi.stages.block_smb.env.MarioScenarioEnv"),
             checkpoint_path="data/block_vit/block_vit.pth",
             diagnostic_thresholds={
                 "min_accuracy": 0.95,

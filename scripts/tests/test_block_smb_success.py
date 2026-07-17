@@ -108,12 +108,8 @@ class TestBlockSMBSuccessThresholds(unittest.TestCase):
             evaluation_max_steps=200,
         )
 
-        passing = summarize_fixed_success_metrics(
-            passing_results, passing_thresholds
-        )
-        unsolved = summarize_fixed_success_metrics(
-            high_return_unsolved, unsolved_thresholds
-        )
+        passing = summarize_fixed_success_metrics(passing_results, passing_thresholds)
+        unsolved = summarize_fixed_success_metrics(high_return_unsolved, unsolved_thresholds)
 
         self.assertEqual(passing["threshold_pass_rate"], 1.0)
         self.assertEqual(unsolved["threshold_pass_rate"], 0.0)

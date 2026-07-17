@@ -307,9 +307,8 @@ def _normalize_full_smb_world_model_slot_weights(
         if weight < 0.0 or not math.isfinite(weight):
             raise ValueError("world_model_slot_weights must contain finite non-negative values")
         normalized[slot_name] = weight
-    if (
-        set(normalized) == set(_FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES)
-        and all(weight == 0.0 for weight in normalized.values())
+    if set(normalized) == set(_FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES) and all(
+        weight == 0.0 for weight in normalized.values()
     ):
         raise ValueError(
             "at least one world_model_slot_weight must be positive when every "

@@ -187,7 +187,9 @@ class TestFullSMBPerceptionDiagnostics(unittest.TestCase):
         self.assertFalse(metrics["vision_position_bottleneck"])
         self.assertTrue(metrics["signal_extraction_bottleneck"])
         self.assertEqual(metrics["position_samples"], 0.0)
-        self.assertEqual(metrics["signal_extraction_bottleneck_reasons"], ["missing_position_targets"])
+        self.assertEqual(
+            metrics["signal_extraction_bottleneck_reasons"], ["missing_position_targets"]
+        )
         self.assertIn("missing_position_targets", metrics["bottleneck_reasons"])
 
     def test_explicit_vision_position_target_overrides_camera_fallback(self):

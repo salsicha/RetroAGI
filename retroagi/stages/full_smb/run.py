@@ -6,13 +6,13 @@ import sys
 
 # Add the project root directory to the Python path
 # This allows package imports to work when this file is executed directly.
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from retroagi.stages.full_smb import (  # noqa: E402
-    FullSMBStage,
     FullSMBSmokeConfig,
+    FullSMBStage,
     run_headless_random_agent_smoke,
 )
 
@@ -61,4 +61,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"An error occurred: {e}")
         import traceback
+
         traceback.print_exc()

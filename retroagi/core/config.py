@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional
 
-
 CheckpointMode = Literal["min", "max"]
 ConfigPrimitive = str | int | float | bool | None
 ConfigValue = ConfigPrimitive | tuple[ConfigPrimitive, ...] | Mapping[str, ConfigPrimitive]

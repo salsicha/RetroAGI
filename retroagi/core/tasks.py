@@ -69,9 +69,7 @@ class GameTaskSpec:
         if self.task_type == "fixed" and self.success_threshold is None:
             raise ValueError(f"fixed task {self.name!r} must define success_threshold")
         if self.task_type != "fixed" and self.generation_seed is None:
-            raise ValueError(
-                f"{self.task_type} task {self.name!r} must define generation_seed"
-            )
+            raise ValueError(f"{self.task_type} task {self.name!r} must define generation_seed")
 
 
 @dataclass(frozen=True)

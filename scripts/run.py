@@ -9,7 +9,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from retroagi.stages.full_smb.run import main
 
-
 if __name__ == "__main__":
     steps = 200
     if len(sys.argv) > 2 and sys.argv[1] == "--steps":

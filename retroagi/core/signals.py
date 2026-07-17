@@ -178,9 +178,7 @@ def _int_value(info: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:
     return int(value)
 
 
-def _bool_value(
-    info: Mapping[str, Any], keys: tuple[str, ...], *, default: bool
-) -> bool:
+def _bool_value(info: Mapping[str, Any], keys: tuple[str, ...], *, default: bool) -> bool:
     for key in keys:
         value = info.get(key)
         if value is not None:

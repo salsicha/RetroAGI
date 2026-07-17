@@ -47,9 +47,7 @@ class SyntheticDataSpec:
         if not self.stage_name:
             raise ValueError(f"synthetic data spec {self.name!r} must declare stage_name")
         if not self.observation_kind:
-            raise ValueError(
-                f"synthetic data spec {self.name!r} must declare observation_kind"
-            )
+            raise ValueError(f"synthetic data spec {self.name!r} must declare observation_kind")
         if not self.target_kind:
             raise ValueError(f"synthetic data spec {self.name!r} must declare target_kind")
         if not self.generator:
@@ -63,9 +61,7 @@ class SyntheticDataSpec:
         if len(set(split_seeds)) != len(split_seeds):
             raise ValueError(f"synthetic data spec {self.name!r} split seeds must be unique")
         if not self.shape_contract:
-            raise ValueError(
-                f"synthetic data spec {self.name!r} must declare shape_contract"
-            )
+            raise ValueError(f"synthetic data spec {self.name!r} must declare shape_contract")
 
     def split(self, name: str) -> SyntheticSplitSpec:
         for split in self.splits:

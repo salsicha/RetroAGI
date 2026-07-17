@@ -15,9 +15,9 @@ from retroagi.stages.block_smb import (
     SCRIPTED_BLOCK_SMB_SEED,
     BlockSMBScriptedPolicy,
     evaluate_scripted_block_smb_policy,
+    fixed_scenario_action_scripts,
     load_scripted_block_smb_checkpoint,
     save_scripted_block_smb_checkpoint,
-    fixed_scenario_action_scripts,
 )
 
 

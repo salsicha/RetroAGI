@@ -294,9 +294,7 @@ class TestFullSMBTransfer(unittest.TestCase):
             )
             self.assertTrue(result.source_transfer_gate["transfer_source_gate_met"])
             self.assertTrue(
-                result.checkpoint["metadata"]["source_transfer_gate"][
-                    "transfer_source_gate_met"
-                ]
+                result.checkpoint["metadata"]["source_transfer_gate"]["transfer_source_gate_met"]
             )
             self.assertEqual(
                 result.checkpoint["architecture"]["name"],

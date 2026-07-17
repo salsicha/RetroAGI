@@ -141,9 +141,7 @@ def run_full_smb_action_contract_diagnostic(
         "block_smb_scripted_reference": block_reference,
         "transfer_action_comparison": comparison,
         "flags": flags,
-        "bottleneck_reasons": [
-            name for name, value in flags.items() if bool(value)
-        ],
+        "bottleneck_reasons": [name for name, value in flags.items() if bool(value)],
     }
 
 
@@ -249,12 +247,10 @@ def _action_contract_flags(
     deterministic_fractions = deterministic_summary["fractions"]
     canonical_stalled = canonical_max_progress < progress_gate
     missing_canonical = (
-        canonical_stalled
-        and deterministic_counts.get(SMBAction.RIGHT_JUMP.name, 0) == 0
+        canonical_stalled and deterministic_counts.get(SMBAction.RIGHT_JUMP.name, 0) == 0
     )
     overactive_canonical = (
-        canonical_stalled
-        and deterministic_fractions.get(SMBAction.RIGHT_JUMP.name, 0.0) >= 0.95
+        canonical_stalled and deterministic_fractions.get(SMBAction.RIGHT_JUMP.name, 0.0) >= 0.95
     )
     return {
         "missing_right_jump_when_stalled": bool(
@@ -394,7 +390,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample-repeats", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--progress-gate", type=float, default=DEFAULT_FULL_SMB_ACTION_PROGRESS_GATE)
+    parser.add_argument(
+        "--progress-gate", type=float, default=DEFAULT_FULL_SMB_ACTION_PROGRESS_GATE
+    )
     parser.add_argument("--game-id", default=DEFAULT_FULL_SMB_CONTENT.game)
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--frame-skip", type=int, default=1)

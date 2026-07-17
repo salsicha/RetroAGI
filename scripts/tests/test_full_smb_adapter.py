@@ -603,9 +603,7 @@ class TestFullSMBStage(unittest.TestCase):
                 (40.0, 176.0),
             )
             self.assertEqual(stage.last_info["full_smb_signals"]["progress"], 40.0)
-            _observation, _reward, _terminated, _truncated, info = stage.step(
-                SMBAction.RIGHT
-            )
+            _observation, _reward, _terminated, _truncated, info = stage.step(SMBAction.RIGHT)
         finally:
             stage.close()
 
@@ -1114,9 +1112,7 @@ class TestFullSMBStage(unittest.TestCase):
         )
         try:
             observation = stage.reset(seed=123)
-            next_observation, reward, terminated, truncated, info = stage.step(
-                SMBAction.RIGHT
-            )
+            next_observation, reward, terminated, truncated, info = stage.step(SMBAction.RIGHT)
             signals = info["full_smb_signals"]
             self.assertTrue(terminated)
             self.assertFalse(truncated)
@@ -1141,9 +1137,7 @@ class TestFullSMBStage(unittest.TestCase):
         )
         try:
             stage.reset(seed=123)
-            _observation, _reward, _terminated, _truncated, info = stage.step(
-                SMBAction.RIGHT_JUMP
-            )
+            _observation, _reward, _terminated, _truncated, info = stage.step(SMBAction.RIGHT_JUMP)
             np.testing.assert_array_equal(
                 env.actions[-1],
                 full_smb_action(SMBAction.RIGHT_JUMP, env.buttons),

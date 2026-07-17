@@ -79,16 +79,10 @@ class VisionHierarchyProjector:
         if vision.position.ndim != 2 or vision.position.shape[0] != batch_size:
             raise ValueError("position must have shape [B, P]")
         if vision.support_logits is not None:
-            if (
-                vision.support_logits.ndim != 2
-                or vision.support_logits.shape[0] != batch_size
-            ):
+            if vision.support_logits.ndim != 2 or vision.support_logits.shape[0] != batch_size:
                 raise ValueError("support_logits must have shape [B, S]")
         if vision.support_ids is not None:
-            if (
-                vision.support_ids.ndim != 1
-                or vision.support_ids.shape[0] != batch_size
-            ):
+            if vision.support_ids.ndim != 1 or vision.support_ids.shape[0] != batch_size:
                 raise ValueError("support_ids must have shape [B]")
         if vision.tokens.ndim != 3 or vision.tokens.shape[0] != batch_size:
             raise ValueError("tokens must have shape [B, N, D]")
@@ -97,9 +91,7 @@ class VisionHierarchyProjector:
     def _semantic_stream(probabilities: torch.Tensor, length: int) -> torch.Tensor:
         regions = F.adaptive_max_pool2d(probabilities, (1, length)).squeeze(2)
         if regions.shape[1] == 1:
-            return torch.zeros(
-                (regions.shape[0], length), dtype=torch.long, device=regions.device
-            )
+            return torch.zeros((regions.shape[0], length), dtype=torch.long, device=regions.device)
 
         foreground_score, foreground_id = regions[:, 1:].max(dim=1)
         background_score = regions[:, 0]
@@ -128,7 +120,5 @@ class VisionHierarchyProjector:
     ) -> torch.Tensor:
         if vision.support_logits is None:
             return torch.empty((batch_size, 0), dtype=torch.float32, device=device)
-        support_logits = torch.as_tensor(
-            vision.support_logits, dtype=torch.float32, device=device
-        )
+        support_logits = torch.as_tensor(vision.support_logits, dtype=torch.float32, device=device)
         return support_logits.softmax(dim=1)
