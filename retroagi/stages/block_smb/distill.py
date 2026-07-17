@@ -29,6 +29,7 @@ from retroagi.core import (
 
 from .adapter import BlockSMBStage
 from .env import MarioScenarioEnv
+from .geometry_expert import BlockSMBGeometryExpert
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
@@ -95,6 +96,7 @@ class BlockSMBDistillationConfig:
     sequence_training: bool = True
     dagger_iterations: int = 0
     dagger_epochs_per_iteration: int = 20
+    dagger_labeler: str = "geometry_expert"
     dagger_position_tolerance: float = 4.0
     dagger_velocity_tolerance: float = 1.0
     rollout_steps: int = 200
@@ -161,6 +163,8 @@ class BlockSMBDistillationConfig:
                 raise ValueError(f"{name} must be positive")
         if self.learning_rate <= 0:
             raise ValueError("learning_rate must be positive")
+        if self.dagger_labeler not in ("geometry_expert", "script"):
+            raise ValueError("dagger_labeler must be 'geometry_expert' or 'script'")
         if self.dagger_position_tolerance < 0:
             raise ValueError("dagger_position_tolerance must be non-negative")
         if self.dagger_velocity_tolerance < 0:
@@ -1044,16 +1048,23 @@ def collect_dagger_distillation_examples(
 ) -> list[BlockSMBDistillationExample]:
     """Collect corrective labels from states visited by the current neural policy.
 
-    The teacher is an open-loop, time-indexed script, so its label is only
-    corrective while the student stays on the teacher's timeline. Each student
-    step is compared against the teacher's replayed state at the same step
-    index and dropped when Mario has diverged beyond the configured position
-    and velocity tolerances, so a lagging student is never taught to jump from
-    a position where the scripted jump lands in a pit.
+    With the default ``dagger_labeler='geometry_expert'`` every visited state
+    is labeled by the state-conditional lookahead expert, so labels stay
+    corrective no matter how far the student diverges from any script.
+
+    With ``dagger_labeler='script'`` the teacher is the open-loop, time-indexed
+    script, whose label is only corrective while the student stays on the
+    script's timeline: each student step is compared against the teacher's
+    replayed state at the same step index and dropped when Mario has diverged
+    beyond the configured position and velocity tolerances.
     """
 
     scenarios, action_scripts, _summary = build_block_smb_distillation_scenarios(config)
     policy = BlockSMBScriptedPolicy(action_scripts)
+    use_expert = config.dagger_labeler == "geometry_expert"
+    # The student, not the expert, drives the rollout, so any cached plan is
+    # stale after one step — replan on every query.
+    expert = BlockSMBGeometryExpert(replan_interval=1) if use_expert else None
     examples: list[BlockSMBDistillationExample] = []
     kept_by_scenario: dict[str, int] = {}
     rejected_by_scenario: dict[str, int] = {}
@@ -1066,15 +1077,21 @@ def collect_dagger_distillation_examples(
                 scenario=scenario,
                 hazard_weight_multiplier=config.primitive_hazard_weight_multiplier,
             )
-            reference_states = _scripted_teacher_reference_states(
-                scenario,
-                action_scripts[scenario_name],
+            reference_states = (
+                []
+                if use_expert
+                else _scripted_teacher_reference_states(
+                    scenario,
+                    action_scripts[scenario_name],
+                )
             )
             for episode in range(config.episodes_per_scenario):
                 env = MarioScenarioEnv()
                 stage = BlockSMBStage(env=env, scenario=scenario, vision=vision_factory())
                 episode_examples: list[BlockSMBDistillationExample] = []
                 episode_alignment: list[bool] = []
+                if expert is not None:
+                    expert.reset()
                 try:
                     observation = stage.reset(
                         seed=config.seed
@@ -1085,16 +1102,22 @@ def collect_dagger_distillation_examples(
                     )
                     world_model_state = None
                     for step_index in range(config.rollout_steps):
-                        teacher_action = policy.action(scenario_name, step_index)
-                        episode_alignment.append(
-                            _dagger_teacher_alignment(
-                                reference_states,
-                                step_index,
-                                env.mario,
-                                position_tolerance=config.dagger_position_tolerance,
-                                velocity_tolerance=config.dagger_velocity_tolerance,
+                        if expert is not None:
+                            teacher_action = expert.action(env)
+                            # The expert labels the visited state itself, so
+                            # every example is corrective by construction.
+                            episode_alignment.append(True)
+                        else:
+                            teacher_action = policy.action(scenario_name, step_index)
+                            episode_alignment.append(
+                                _dagger_teacher_alignment(
+                                    reference_states,
+                                    step_index,
+                                    env.mario,
+                                    position_tolerance=config.dagger_position_tolerance,
+                                    velocity_tolerance=config.dagger_velocity_tolerance,
+                                )
                             )
-                        )
                         batch = _detach_batch(stage.encode_observation(observation))
                         src_a, src_b, src_c, _actions, _next_c = _stack_examples(
                             [
@@ -1128,9 +1151,15 @@ def collect_dagger_distillation_examples(
                         next_batch = _detach_batch(
                             stage.encode_observation(next_observation, dict(info))
                         )
-                        primitive_label = primitive_labels[
-                            min(step_index, len(primitive_labels) - 1)
-                        ]
+                        # Script-indexed primitive labels only describe the
+                        # script's own timeline; expert-labeled states leave
+                        # the primitive masks zeroed (the scripted phase
+                        # already supervises primitives on-policy).
+                        primitive_label = (
+                            {}
+                            if expert is not None
+                            else primitive_labels[min(step_index, len(primitive_labels) - 1)]
+                        )
                         episode_examples.append(
                             BlockSMBDistillationExample(
                                 batch=batch,
@@ -1173,6 +1202,7 @@ def collect_dagger_distillation_examples(
         {
             "event": "dagger_alignment_filter",
             "iteration": iteration,
+            "labeler": config.dagger_labeler,
             "position_tolerance": float(config.dagger_position_tolerance),
             "velocity_tolerance": float(config.dagger_velocity_tolerance),
             "kept_examples": sum(kept_by_scenario.values()),
@@ -2391,6 +2421,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=BlockSMBDistillationConfig.dagger_epochs_per_iteration,
     )
     parser.add_argument(
+        "--dagger-labeler",
+        choices=("geometry_expert", "script"),
+        default=BlockSMBDistillationConfig.dagger_labeler,
+        help=(
+            "geometry_expert labels every visited state with the "
+            "state-conditional lookahead expert; script uses the open-loop "
+            "time-indexed teacher with kinematic divergence filtering"
+        ),
+    )
+    parser.add_argument(
         "--dagger-position-tolerance",
         type=float,
         default=BlockSMBDistillationConfig.dagger_position_tolerance,
@@ -2545,6 +2585,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         require_semantic_prediction_gate=args.require_semantic_prediction_gate,
         dagger_iterations=args.dagger_iterations,
         dagger_epochs_per_iteration=args.dagger_epochs_per_iteration,
+        dagger_labeler=args.dagger_labeler,
         dagger_position_tolerance=args.dagger_position_tolerance,
         dagger_velocity_tolerance=args.dagger_velocity_tolerance,
         jump_weight_multiplier=args.jump_weight_multiplier,

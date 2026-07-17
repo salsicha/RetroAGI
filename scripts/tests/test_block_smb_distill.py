@@ -91,8 +91,8 @@ class _ScriptReplayDaggerModel(torch.nn.Module):
         return (None, None, None, None, logits, None, None, None)
 
 
-def _gap_dagger_config() -> BlockSMBDistillationConfig:
-    return BlockSMBDistillationConfig(
+def _gap_dagger_config(**overrides) -> BlockSMBDistillationConfig:
+    values = dict(
         fixed_scenarios=("level_2_gap.json",),
         monte_carlo_samples=0,
         required_monte_carlo_families=(),
@@ -103,6 +103,8 @@ def _gap_dagger_config() -> BlockSMBDistillationConfig:
         dagger_iterations=1,
         device="cpu",
     )
+    values.update(overrides)
+    return BlockSMBDistillationConfig(**values)
 
 
 def _primitive_outcome_batch(
@@ -240,7 +242,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertGreater(states[jump_start]["x"], states[0]["x"] + 12.0)
 
     def test_dagger_diverged_student_gets_no_time_indexed_jump_labels(self):
-        config = _gap_dagger_config()
+        config = _gap_dagger_config(dagger_labeler="script")
         model = _FixedActionDaggerModel(int(SMBAction.NOOP))
 
         examples = collect_dagger_distillation_examples(
@@ -262,7 +264,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertLess(max(example.step_index for example in examples), jump_start)
 
     def test_dagger_aligned_student_keeps_time_indexed_jump_labels(self):
-        config = _gap_dagger_config()
+        config = _gap_dagger_config(dagger_labeler="script")
         _scenarios, scripts, _summary = build_block_smb_distillation_scenarios(config)
         model = _ScriptReplayDaggerModel(scripts["level_2_gap.json"])
 
@@ -278,6 +280,28 @@ class TestBlockSMBDistillation(unittest.TestCase):
         # rejection filter must not discard its jump-window labels.
         self.assertTrue(any(example.action == int(SMBAction.RIGHT_JUMP) for example in examples))
         self.assertGreaterEqual(max(example.step_index for example in examples), 10)
+
+    def test_dagger_expert_labeler_covers_diverged_states_with_state_labels(self):
+        config = _gap_dagger_config(dagger_labeler="geometry_expert", rollout_steps=15)
+        model = _FixedActionDaggerModel(int(SMBAction.NOOP))
+
+        examples = collect_dagger_distillation_examples(
+            model,
+            config,
+            vision_factory=static_vision_factory,
+            device=torch.device("cpu"),
+            iteration=1,
+        )
+
+        # The stationary student never advances, so the expert labels every
+        # visited state (no rejection) with the action correct for the state
+        # itself: run toward the gap, never the script's time-indexed jump
+        # from a standstill at spawn.
+        self.assertEqual(len(examples), config.rollout_steps)
+        self.assertEqual(max(example.step_index for example in examples), config.rollout_steps - 1)
+        self.assertTrue(all(example.action == int(SMBAction.RIGHT) for example in examples))
+        # Expert-labeled states never inherit the script's primitive masks.
+        self.assertTrue(all(example.primitive_button_combo_mask == 0.0 for example in examples))
 
     def test_scripted_examples_carry_primitive_duration_release_labels(self):
         config = BlockSMBDistillationConfig(

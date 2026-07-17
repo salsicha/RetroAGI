@@ -14,6 +14,10 @@ from .adapter import (
     BlockSMBStage,
 )
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
+from .geometry_expert import (
+    BlockSMBGeometryExpert,
+    evaluate_block_smb_geometry_expert,
+)
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
@@ -171,6 +175,8 @@ __all__ = [
     "FALLBACK_BLOCK_VIT_CHECKPOINT",
     "FIXED_BLOCK_SMB_SUCCESS_THRESHOLDS",
     "MarioScenarioEnv",
+    "BlockSMBGeometryExpert",
+    "evaluate_block_smb_geometry_expert",
     "SCRIPTED_BLOCK_SMB_CHECKPOINT_KIND",
     "SCRIPTED_BLOCK_SMB_EVALUATION_EPISODES",
     "SCRIPTED_BLOCK_SMB_EVALUATION_MAX_STEPS",
