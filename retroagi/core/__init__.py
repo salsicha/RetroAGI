@@ -170,6 +170,12 @@ from .models import (
     WorldModelState,
     action_level_world_model_state_dict,
 )
+from .multi_seed import (
+    DEFAULT_EVALUATION_SEED_COUNT,
+    aggregate_seed_metrics,
+    evaluate_over_seeds,
+    evaluation_seeds,
+)
 from .perception import (
     PERCEPTION_DATASET_SOURCE_KINDS,
     PerceptionDatasetSourceSpec,
@@ -218,7 +224,11 @@ __all__ = [
     "ArchitectureRegistry",
     "ArchitectureSpec",
     "DEFAULT_COLLAPSE_SHARE_THRESHOLD",
+    "DEFAULT_EVALUATION_SEED_COUNT",
     "action_distribution_stats",
+    "aggregate_seed_metrics",
+    "evaluate_over_seeds",
+    "evaluation_seeds",
     "AssetChecklistItem",
     "AssetRequirement",
     "ArchitectureVariant",

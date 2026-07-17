@@ -8,7 +8,7 @@ import math
 import random
 import sys
 import time
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -32,6 +32,7 @@ from retroagi.core import (
     action_distribution_stats,
     action_level_world_model_state_dict,
     build_checkpoint,
+    evaluate_over_seeds,
     load_checkpoint,
     make_experiment_tracker,
     save_checkpoint,
@@ -1437,6 +1438,46 @@ def evaluate_full_smb_policy(
         fixed_task_results=fixed_task_results,
         tuning_metrics=tuning_metrics,
         success_thresholds_met=success_thresholds_met,
+    )
+
+
+@torch.no_grad()
+def evaluate_full_smb_policy_multi_seed(
+    model: torch.nn.Module,
+    *,
+    config: FullSMBTrainingConfig = FullSMBTrainingConfig(),
+    make_stage: Optional[StageFactory] = None,
+    vision: Optional[FullSMBSegmentationVision] = None,
+    device: Optional[torch.device] = None,
+    seed_count: int = 3,
+) -> dict[str, Any]:
+    """Evaluate across several seeds and report metric dispersion.
+
+    Episode seeds derive from ``config.seed``, so one evaluation is a single
+    draw; go/no-go comparisons should weigh mean/std/min/max across seeds.
+    """
+
+    def _evaluate(seed: int) -> dict[str, Any]:
+        result = evaluate_full_smb_policy(
+            model,
+            config=replace(config, seed=seed),
+            make_stage=make_stage,
+            vision=vision,
+            device=device,
+        )
+        return {
+            "success_rate": float(result.success_rate),
+            "mean_return": float(result.mean_return),
+            "steps": float(result.steps),
+            "terminated_count": float(result.terminated_count),
+            "truncated_count": float(result.truncated_count),
+            "action_collapse": float(bool(result.action_collapse.get("collapsed"))),
+        }
+
+    return evaluate_over_seeds(
+        _evaluate,
+        base_seed=config.seed,
+        seed_count=seed_count,
     )
 
 

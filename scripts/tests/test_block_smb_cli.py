@@ -577,6 +577,47 @@ class TestBlockSMBCLI(unittest.TestCase):
         # the checkpoint's weights, not silently train 6 more epochs.
         self.assertEqual(config.epochs, 4)
 
+    def test_evaluate_command_routes_multi_seed_evaluation(self):
+        checkpoint = {
+            "epoch": 3,
+            "config": {
+                "seed": 9,
+                "epochs": 3,
+                "architecture_name": BASELINE_ARCHITECTURE_NAME,
+                "architecture_config": {
+                    "hidden_dim": 16,
+                    "controller_schedule": "constant",
+                },
+                "hidden_dim": 16,
+                "fixed_scenarios": ["level_1_flat.json"],
+            },
+        }
+        multi_seed_result = {
+            "seeds": [9, 1009],
+            "seed_count": 2,
+            "per_seed": [],
+            "aggregate": {"success_rate": {"mean": 0.5}},
+        }
+        with patch("retroagi.stages.block_smb.cli.load_checkpoint", return_value=checkpoint):
+            with patch("retroagi.stages.block_smb.cli.restore_block_smb_checkpoint"):
+                with patch(
+                    "retroagi.stages.block_smb.cli.evaluate_block_smb_multi_seed",
+                    return_value=multi_seed_result,
+                ) as evaluate:
+                    exit_code, payload = self.run_main(
+                        [
+                            "evaluate",
+                            "--checkpoint",
+                            "data/block_smb/policy.pth",
+                            "--evaluation-seeds",
+                            "2",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(evaluate.call_args.kwargs["seed_count"], 2)
+        self.assertEqual(payload["multi_seed_evaluation"], multi_seed_result)
+
     def test_record_command_enables_recording_with_checkpoint_config(self):
         checkpoint = {
             "epoch": 2,

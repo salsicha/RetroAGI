@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -17,6 +17,7 @@ import torch.optim as optim
 from retroagi.core import (
     ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     BASELINE_ARCHITECTURE_NAME,
+    DEFAULT_EVALUATION_SEED_COUNT,
     POLICY_TUPLE_OUTPUT_CONTRACTS,
     SUPPORTED_CONTROLLER_SCHEDULES,
     TRACKING_BACKENDS,
@@ -30,6 +31,7 @@ from retroagi.core import (
     action_level_world_model_state_dict,
     build_architecture,
     build_checkpoint,
+    evaluate_over_seeds,
     get_architecture,
     is_smb_jump_action,
     load_checkpoint,
@@ -2426,6 +2428,42 @@ def evaluate_block_smb(
             record_dir=test_record_dir,
         )
     return evaluation
+
+
+def evaluate_block_smb_multi_seed(
+    model: torch.nn.Module,
+    config: BlockSMBTrainingConfig,
+    *,
+    device: torch.device,
+    vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
+    seed_count: int = DEFAULT_EVALUATION_SEED_COUNT,
+) -> dict[str, Any]:
+    """Evaluate across several seeds and report metric dispersion.
+
+    Fixed-scenario evaluation seeds every episode from ``config.seed``, so a
+    single run is one draw; go/no-go comparisons should look at the
+    mean/std/min/max across seeds instead of a point estimate.
+    """
+
+    def _evaluate(seed: int) -> dict[str, Any]:
+        evaluation = evaluate_block_smb(
+            model,
+            replace(config, seed=seed),
+            device=device,
+            vision_factory=vision_factory,
+        )
+        return {
+            "success_rate": float(evaluation.get("success_rate", 0.0)),
+            "mean_return": float(evaluation.get("mean_return", 0.0)),
+            "success_thresholds_met": float(bool(evaluation.get("success_thresholds_met"))),
+            "action_collapse": float(bool(evaluation.get("action_collapse", {}).get("collapsed"))),
+        }
+
+    return evaluate_over_seeds(
+        _evaluate,
+        base_seed=config.seed,
+        seed_count=seed_count,
+    )
 
 
 def save_block_smb_checkpoint(

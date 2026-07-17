@@ -39,6 +39,7 @@ from .train import (
     block_smb_monte_carlo_sweep_sample_count,
     default_block_smb_failure_focus_monte_carlo_family_weights,
     evaluate_block_smb_monte_carlo,
+    evaluate_block_smb_multi_seed,
     make_block_smb_model,
     restore_block_smb_checkpoint,
     train_and_evaluate_block_smb,
@@ -508,6 +509,15 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = subparsers.add_parser("evaluate", help="evaluate a saved Block SMB checkpoint")
     _add_common_config_args(evaluate)
     evaluate.add_argument("--checkpoint", type=Path, required=True)
+    evaluate.add_argument(
+        "--evaluation-seeds",
+        type=_positive_int,
+        default=1,
+        help=(
+            "evaluate across this many seeds and report mean/std/min/max per "
+            "metric instead of a single-seed point estimate"
+        ),
+    )
 
     record = subparsers.add_parser(
         "record", help="evaluate a saved Block SMB checkpoint and write trajectory files"
@@ -1091,10 +1101,42 @@ def _public_result(
     }
 
 
+def _run_multi_seed_evaluation(args: argparse.Namespace) -> dict[str, Any]:
+    config = _make_checkpoint_config(args, record=False)
+    device = select_device(config.device)
+    model = make_block_smb_model(config).to(device)
+    restore_block_smb_checkpoint(
+        args.checkpoint,
+        model,
+        map_location=device,
+        architecture_name=config.architecture_name,
+        architecture_config=config.architecture_config,
+    )
+    vision_factory, vision_info = _make_vision_factory(
+        config,
+        getattr(args, "vision_checkpoint", None),
+    )
+    result = evaluate_block_smb_multi_seed(
+        model,
+        config,
+        device=device,
+        vision_factory=vision_factory,
+        seed_count=int(args.evaluation_seeds),
+    )
+    return {
+        "checkpoint": {"path": str(args.checkpoint)},
+        "architecture": block_smb_architecture_metadata(config),
+        "vision": vision_info,
+        "multi_seed_evaluation": result,
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "train":
         config = _make_train_config(args)
     elif args.command == "evaluate":
+        if int(getattr(args, "evaluation_seeds", 1)) > 1:
+            return _run_multi_seed_evaluation(args)
         config = _make_checkpoint_config(args, record=False)
     elif args.command == "record":
         config = _make_checkpoint_config(args, record=True)
