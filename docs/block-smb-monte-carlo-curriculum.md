@@ -68,6 +68,7 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `chained_enemy_gauntlet` | enemy, gap, patrol, and pipe sequence in one level |
 | `full_smb_opening_proxy` | Block SMB approximation of the early Full SMB 1-1 demands |
 | `mixed_section` | sampled composition of two or three families in one level |
+| `tall_pipe_jump` | a single tall pipe (56-68px, taller than other pipe families) that must be mounted and cleared, staying under the jump-height ceiling so the scripted oracle remains reachable |
 
 The first implementation should keep geometry ranges conservative enough that a
 scripted bootstrap oracle can solve every sampled scenario. Harder ranges

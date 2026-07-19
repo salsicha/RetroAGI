@@ -113,6 +113,7 @@ DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILIES = (
     "wait_timing",
     "mixed_section",
     "full_smb_opening_proxy",
+    "tall_pipe_jump",
 )
 DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
     ("single_gap", 1.0),
@@ -123,6 +124,7 @@ DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
     ("wait_timing", 1.0),
     ("mixed_section", 1.0),
     ("full_smb_opening_proxy", 4.0),
+    ("tall_pipe_jump", 2.0),
 )
 DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES = 64
 ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES = (
