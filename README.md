@@ -80,6 +80,10 @@ execution is the baseline; CUDA and Apple Metal/MPS acceleration are selected
 automatically when available. CUDA 12.8 is the primary Linux GPU target, CUDA
 13.0 is the secondary Linux GPU target, and MPS is the native macOS GPU target.
 
+Reference training runs were performed on an Intel NUC with a 12th-generation
+Intel processor and 64 GB of RAM, connected over Thunderbolt to a Razer Core X
+V2 external GPU enclosure housing an NVIDIA Tesla V100 with 32 GB of memory.
+
 See the [compatibility matrix and installation commands](docs/compatibility.md)
 before creating an environment.
 
