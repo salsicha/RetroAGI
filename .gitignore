@@ -18,3 +18,10 @@ artifacts/block_smb/full_distill_*/
 data/block_smb/full_distill_*/
 artifacts/block_smb/full_sequence_*/
 artifacts/block_smb/latest_full_sequence_*
+# Local fresh pipeline, full-volume, distill, and ad-hoc training-run outputs
+# (logs, checkpoints, summaries, recordings). These are per-run artifacts, not
+# repo deliverables — commit only curated results under a stable path.
+artifacts/fresh_full_smb_*/
+artifacts/block_smb/full_default_*/
+artifacts/block_smb/distill_dagger_*/
+artifacts/full_smb/gamma_fix_ab_*/
