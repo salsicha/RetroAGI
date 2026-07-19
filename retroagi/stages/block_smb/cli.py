@@ -32,6 +32,9 @@ from .train import (
     DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES,
     DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES,
     DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES,
+    DEFAULT_BLOCK_SMB_REAL_VOLUME_EPOCHS,
+    DEFAULT_BLOCK_SMB_REAL_VOLUME_EVALUATION_INTERVAL_EPOCHS,
+    DEFAULT_BLOCK_SMB_REAL_VOLUME_ROLLOUT_STEPS,
     TARGET_NETWORK_MODES,
     BlockSMBAblationConfig,
     BlockSMBTrainingConfig,
@@ -787,6 +790,18 @@ def _checkpoint_config(path: Path) -> dict[str, Any]:
 def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
     values = _config_overrides(args)
     use_real_volume_defaults = not bool(values.get("monte_carlo_parameter_sweep", False))
+    # Fresh real-volume runs train ~1000x longer than the tiny dataclass defaults
+    # (epochs 1, rollout 32) unless the operator overrides them or opts into a
+    # smoke/sweep run. Explicit --epochs / --rollout-steps / --evaluation-interval
+    # -epochs always win because they are captured in ``values`` above.
+    if use_real_volume_defaults and "epochs" not in values:
+        values["epochs"] = DEFAULT_BLOCK_SMB_REAL_VOLUME_EPOCHS
+    if use_real_volume_defaults and "rollout_steps" not in values:
+        values["rollout_steps"] = DEFAULT_BLOCK_SMB_REAL_VOLUME_ROLLOUT_STEPS
+    if use_real_volume_defaults and "evaluation_interval_epochs" not in values:
+        values["evaluation_interval_epochs"] = (
+            DEFAULT_BLOCK_SMB_REAL_VOLUME_EVALUATION_INTERVAL_EPOCHS
+        )
     if use_real_volume_defaults and "monte_carlo_train_samples_per_epoch" not in values:
         values["monte_carlo_train_samples_per_epoch"] = DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES
     if use_real_volume_defaults and "monte_carlo_validation_samples" not in values:

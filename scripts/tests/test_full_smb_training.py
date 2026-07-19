@@ -2509,5 +2509,57 @@ def _write_checkpoint_for_comparison(path: Path, config: FullSMBTrainingConfig) 
     return path
 
 
+class TestFullSMBDiscountedReturns(unittest.TestCase):
+    def test_matches_block_smb_discounted_returns(self):
+        from retroagi.stages.block_smb.train import discounted_returns as block_returns
+
+        rewards = [1.0, 0.0, 2.0, -1.0, 0.5]
+        masks = [1.0, 1.0, 1.0, 1.0, 1.0]
+        device = torch.device("cpu")
+        full = full_smb_train_module._full_smb_discounted_returns(rewards, masks, 0.99, device)
+        block = block_returns(rewards, masks, 0.99, device)
+        torch.testing.assert_close(full, block)
+
+    def test_propagates_future_reward_backwards(self):
+        # A single terminal reward should discount back through earlier steps.
+        rewards = [0.0, 0.0, 0.0, 1.0]
+        masks = [1.0, 1.0, 1.0, 1.0]
+        device = torch.device("cpu")
+        raw = full_smb_train_module._full_smb_discounted_returns(rewards, masks, 0.9, device)
+        # Standardized, so the earliest step (smallest raw return 0.9^3) is the
+        # most negative and the terminal step (raw 1.0) the most positive.
+        self.assertTrue(bool(raw[0] < raw[1] < raw[2] < raw[3]))
+
+    def test_boundary_mask_stops_credit_leak(self):
+        # A terminal reward after a mid-sequence boundary must not flow back into
+        # steps before the boundary. rewards=[0,0,5] with a boundary after step 1
+        # isolates the final reward to steps 1-2, changing credit assignment for
+        # step 0 versus a boundary-free scan. (Standardization is shift/scale
+        # invariant, so we compare the full tensors, not an absolute value.)
+        rewards = [0.0, 0.0, 5.0]
+        device = torch.device("cpu")
+        blocked = full_smb_train_module._full_smb_discounted_returns(
+            rewards, [1.0, 0.0, 1.0], 0.99, device
+        )
+        leaked = full_smb_train_module._full_smb_discounted_returns(
+            rewards, [1.0, 1.0, 1.0], 0.99, device
+        )
+        self.assertFalse(bool(torch.allclose(blocked, leaked)))
+
+    def test_single_step_is_not_standardized(self):
+        device = torch.device("cpu")
+        one = full_smb_train_module._full_smb_discounted_returns([3.0], [1.0], 0.99, device)
+        self.assertEqual(one.numel(), 1)
+        self.assertAlmostEqual(float(one[0]), 3.0)
+
+    def test_gamma_config_validation(self):
+        with self.assertRaises(ValueError):
+            full_smb_train_module.FullSMBTrainingConfig(gamma=0.0)
+        with self.assertRaises(ValueError):
+            full_smb_train_module.FullSMBTrainingConfig(gamma=1.5)
+        # Boundary value 1.0 is allowed (undiscounted).
+        self.assertEqual(full_smb_train_module.FullSMBTrainingConfig(gamma=1.0).gamma, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

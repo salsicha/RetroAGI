@@ -131,6 +131,39 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         )
         self.assertTrue(reachability["reachable"])
 
+    def test_tall_pipe_jump_is_taller_than_other_pipes_and_reachable(self):
+        self.assertIn("tall_pipe_jump", BLOCK_SMB_MC_FAMILIES)
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+            for seed in range(6):
+                sample = sample_block_smb_monte_carlo_scenario(
+                    split="validation",
+                    seed=seed,
+                    sample_index=0,
+                    family="tall_pipe_jump",
+                    difficulty=difficulty,
+                )
+                self.assertEqual(sample.family, "tall_pipe_jump")
+                pipe_height = int(sample.parameters["pipe_height"])
+                # Taller than the other single-pipe families' typical max (~60)
+                # yet under the ~68px jump-height ceiling so the oracle clears it.
+                self.assertGreaterEqual(pipe_height, 56)
+                self.assertLessEqual(pipe_height, 68)
+                self.assertTrue(sample.reachability["reachable"])
+                reachability = validate_block_smb_monte_carlo_oracle(
+                    sample.scenario,
+                    sample.oracle["actions"],
+                )
+                self.assertTrue(reachability["reachable"])
+        # Hard tall pipes must exceed the tallest full_smb_opening_proxy pipe.
+        hard = sample_block_smb_monte_carlo_scenario(
+            split="stress",
+            seed=7,
+            sample_index=0,
+            family="tall_pipe_jump",
+            difficulty="hard",
+        )
+        self.assertGreaterEqual(int(hard.parameters["pipe_height"]), 62)
+
     def test_parameter_sweep_covers_every_family_and_difficulty(self):
         sample_set = sample_block_smb_monte_carlo_parameter_sweep(
             split="validation",

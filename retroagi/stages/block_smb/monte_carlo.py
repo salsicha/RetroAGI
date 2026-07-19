@@ -33,6 +33,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "chained_enemy_gauntlet",
     "full_smb_opening_proxy",
     "mixed_section",
+    "tall_pipe_jump",
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 200
 
@@ -266,6 +267,12 @@ def block_smb_monte_carlo_family_specs(
                 "enemy_patrol",
                 "pipe_jump",
             ],
+        },
+        "tall_pipe_jump": {
+            "pipe_x": [180, 180],
+            "pipe_width": [30, 30],
+            "pipe_height": [56, 68],
+            "goal_x": [266, 276],
         },
     }
     return {
@@ -870,6 +877,8 @@ def _generate_family_scenario(
         return _full_smb_opening_proxy(rng, difficulty)
     if family == "mixed_section":
         return _mixed_section(rng, difficulty)
+    if family == "tall_pipe_jump":
+        return _tall_pipe_jump(rng, difficulty)
     raise ValueError(f"unknown Block SMB Monte Carlo family {family!r}")
 
 
@@ -1281,3 +1290,39 @@ def _mixed_section(
         "difficulty_bin": difficulty,
     }
     return scenario, params, actions
+
+
+def _tall_pipe_jump(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # A single tall pipe that must be jumped over/onto to reach the goal beyond
+    # it. Heights climb with difficulty and stay under the ~68px jump ceiling so
+    # the scripted oracle can always clear them: the two-phase RIGHT_JUMP burst
+    # mounts the pipe top, then jumps off the far side. Existing pipe families
+    # top out near 60px, so this exposes the policy to a taller-yet-jumpable
+    # pipe it otherwise never sees.
+    pipe_h = {"easy": 58, "medium": 62, "hard": 66}[difficulty] + rng.randint(-2, 2)
+    pipe_x, pipe_w = 180, 30
+    goal_x = rng.randint(266, 276)
+    scenario = {
+        "world_width": 320,
+        "mario": [20, 200],
+        "platforms": [
+            [0, 220, 320, 20],
+            [pipe_x, 220 - pipe_h, pipe_w, pipe_h],
+        ],
+        "coins": [[pipe_x + 10, 220 - pipe_h - 20, 10, 10]],
+        "goal": [goal_x, 200, 16, 20],
+    }
+    actions = _pad([1] * 8 + [2] * 12 + [1] * 2 + [2] * 14 + [1] * 120)
+    return (
+        scenario,
+        {
+            "pipe_x": pipe_x,
+            "pipe_width": pipe_w,
+            "pipe_height": pipe_h,
+            "goal_x": goal_x,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )

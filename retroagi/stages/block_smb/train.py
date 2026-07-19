@@ -102,6 +102,18 @@ DEFAULT_BLOCK_SMB_SEMANTIC_PREDICTION_ACCURACY_THRESHOLD = 0.8
 DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES = 512
 DEFAULT_BLOCK_SMB_MC_VALIDATION_SAMPLES = 128
 DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES = 256
+# Real-volume training defaults for fresh (non-smoke, non-sweep) CLI runs.
+# The dataclass defaults below stay tiny so unit tests and directly-constructed
+# configs remain fast; these are injected by the CLI's real-volume path only.
+# They raise the training budget ~3 orders of magnitude over the previous
+# real-volume shape (epochs 1, rollout 32 -> 200 x (160/32) = ~1000x the env
+# frames / gradient signal). rollout_steps 32 was also too short to reach most
+# scenario goals (Mario travels ~3px/step, goals sit at x>=230), so 160 is both
+# a volume increase and a correctness fix. Evaluation is spaced out so the
+# held-out gate sweeps do not dominate the longer run.
+DEFAULT_BLOCK_SMB_REAL_VOLUME_EPOCHS = 200
+DEFAULT_BLOCK_SMB_REAL_VOLUME_ROLLOUT_STEPS = 160
+DEFAULT_BLOCK_SMB_REAL_VOLUME_EVALUATION_INTERVAL_EPOCHS = 25
 DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE = 0.95
 DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE = 0.90
 DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILIES = (
@@ -113,6 +125,7 @@ DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILIES = (
     "wait_timing",
     "mixed_section",
     "full_smb_opening_proxy",
+    "tall_pipe_jump",
 )
 DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
     ("single_gap", 1.0),
@@ -123,6 +136,7 @@ DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
     ("wait_timing", 1.0),
     ("mixed_section", 1.0),
     ("full_smb_opening_proxy", 4.0),
+    ("tall_pipe_jump", 2.0),
 )
 DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES = 64
 ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES = (
