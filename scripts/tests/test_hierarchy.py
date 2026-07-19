@@ -43,6 +43,20 @@ class TestVisionHierarchyProjector(unittest.TestCase):
         self.assertEqual(batch.src_a.tolist(), [[0, 1, 2, 3, 4, 5, 6, 1]])
         self.assertEqual(batch.src_b.tolist(), [[0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 1, 1]])
 
+    def test_foreground_presence_wins_over_more_confident_background_patch(self):
+        logits = torch.full((1, 7, 2, 4), -20.0)
+        logits[:, 0, 0, :] = 20.0
+        logits[:, 0, 1, :] = 20.0
+
+        for column, class_id in enumerate((1, 2, 5)):
+            logits[0, 0, 1, column] = 9.0
+            logits[0, class_id, 1, column] = 10.0
+
+        probabilities = logits.softmax(dim=1)
+        stream = self.projector._semantic_stream(probabilities, length=4)
+
+        self.assertEqual(stream.tolist(), [[1, 2, 5, 0]])
+
     def test_c_stream_has_stable_position_semantic_state_and_token_slots(self):
         state = torch.linspace(-1, 1, 14)
         batch = self.projector.project(self.make_vision(), state=state)

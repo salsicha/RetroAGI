@@ -242,9 +242,11 @@ not `[B, L_C, features]`.
 
 Environment stages use `VisionHierarchyProjector`:
 
-- A is the dominant semantic class after class probabilities are averaged over
-  the full image height and `L_A` ordered horizontal regions.
-- B uses the same operation with `L_B` horizontal regions.
+- A divides the image into `L_A` ordered horizontal regions. If any patch in a
+  region is classified as foreground, the strongest locally predicted
+  foreground class becomes the token; background is used only when every patch
+  in the region is classified as background.
+- B uses the same foreground-priority operation with `L_B` horizontal regions.
 - C concatenates normalized position, global mean semantic probabilities,
   optional stage state, and pooled patch-token content in that order.
 - Patch-token content is bounded with `tanh`, flattened in token/channel order,
@@ -401,9 +403,10 @@ larger batches, but batched environment metadata is not yet defined.
 `VisionHierarchyProjector` applies this contract:
 
 1. Apply semantic softmax over classes.
-2. Average probabilities over the full image height and eight horizontal
-   regions; the dominant class IDs form A.
-3. Repeat at sixteen horizontal regions; the dominant class IDs form B.
+2. Divide the image into eight horizontal regions. In each region, select the
+   strongest foreground class among patches locally classified as foreground;
+   use background only when no foreground patch is present. These IDs form A.
+3. Repeat at sixteen horizontal regions to form B.
 4. Build C with fixed, non-overlapping slots:
    - `[0:2]`: normalized `(x,y)` position;
    - `[2:9]`: seven global mean semantic probabilities;

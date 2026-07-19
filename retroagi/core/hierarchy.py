@@ -89,14 +89,26 @@ class VisionHierarchyProjector:
 
     @staticmethod
     def _semantic_stream(probabilities: torch.Tensor, length: int) -> torch.Tensor:
-        regions = F.adaptive_max_pool2d(probabilities, (1, length)).squeeze(2)
-        if regions.shape[1] == 1:
-            return torch.zeros((regions.shape[0], length), dtype=torch.long, device=regions.device)
+        if probabilities.shape[1] == 1:
+            return torch.zeros(
+                (probabilities.shape[0], length),
+                dtype=torch.long,
+                device=probabilities.device,
+            )
 
-        foreground_score, foreground_id = regions[:, 1:].max(dim=1)
-        background_score = regions[:, 0]
+        semantic_ids = probabilities.argmax(dim=1, keepdim=True)
+        foreground_mask = semantic_ids.ne(0)
+        foreground_present = F.adaptive_max_pool2d(
+            foreground_mask.float(), (1, length)
+        ).squeeze((1, 2)).bool()
+
+        foreground_probabilities = probabilities[:, 1:] * foreground_mask
+        foreground_regions = F.adaptive_max_pool2d(
+            foreground_probabilities, (1, length)
+        ).squeeze(2)
+        _, foreground_id = foreground_regions.max(dim=1)
         return torch.where(
-            foreground_score >= background_score,
+            foreground_present,
             foreground_id + 1,
             torch.zeros_like(foreground_id),
         ).long()
