@@ -525,6 +525,7 @@ def validate_block_smb_monte_carlo_oracle(
     total_return = 0.0
     completion_steps: int | None = None
     last_info: Mapping[str, Any] = {}
+    reached_goal = False
     try:
         env.reset(scenario=copy.deepcopy(dict(scenario)), seed=0)
         for step_index, action in enumerate(list(actions)[:max_steps]):
@@ -533,8 +534,20 @@ def validate_block_smb_monte_carlo_oracle(
             total_return += float(reward)
             if terminated or truncated:
                 completion_steps = step_index + 1
+                # Trust the env's own goal event. The env fires the goal reward
+                # and terminates without a death when Mario reaches the goal.
+                # The positional _goal_reached() re-check rebuilds an int rect
+                # from Mario's float x, dropping sub-pixel goal touches (right
+                # edge 230.5 vs goal left 230) and spuriously rejecting oracles
+                # that actually complete the level.
+                terms = info.get("reward_terms", {}) if isinstance(info, Mapping) else {}
+                goal_credit = (
+                    float(terms.get("goal", 0.0) or 0.0) if isinstance(terms, Mapping) else 0.0
+                )
+                if terminated and not bool(info.get("death", False)) and goal_credit > 0.0:
+                    reached_goal = True
                 break
-        reachable = _goal_reached(env)
+        reachable = reached_goal or _goal_reached(env)
         if not reachable and completion_steps is None:
             completion_steps = max_steps
         max_progress = float(last_info.get("max_x_reached", env._max_x_reached))
