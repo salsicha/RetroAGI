@@ -447,6 +447,80 @@ class TestCriticFeedbackContract(unittest.TestCase):
             (1, 4, len(SMBAction)),
         )
 
+    def test_eval_hierarchy_forward_is_deterministic(self):
+        model = HierarchicalAdaptiveModel(
+            vocab_size=7,
+            action_vocab_size=len(SMBAction),
+            seq_len_c=8,
+            d_model=4,
+            nhead=2,
+            num_layers=1,
+        )
+        model.eval()
+        src_a = torch.tensor([[0, 1]], dtype=torch.long)
+        src_b = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
+        src_c = torch.linspace(-1.0, 1.0, 8).unsqueeze(0)
+
+        with torch.no_grad():
+            first = model(src_a, src_b, src_c)
+            second = model(src_a, src_b, src_c)
+
+        for first_tensor, second_tensor in zip(first, second):
+            torch.testing.assert_close(first_tensor, second_tensor)
+
+    def test_c_state_directly_conditions_a_action_logits(self):
+        model = HierarchicalAdaptiveModel(
+            vocab_size=7,
+            action_vocab_size=len(SMBAction),
+            seq_len_c=8,
+            d_model=4,
+            nhead=2,
+            num_layers=1,
+        )
+        self.assertEqual(int(torch.count_nonzero(model.c_state_context.weight)), 0)
+        with torch.no_grad():
+            values = torch.arange(32, dtype=torch.float32).reshape(4, 8) / 32.0
+            model.c_state_context.weight.copy_(values)
+        model.eval()
+        src_a = torch.tensor([[0, 1]], dtype=torch.long)
+        src_b = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
+
+        with torch.no_grad():
+            zero_logits = model(src_a, src_b, torch.zeros(1, 8))[0]
+            state_logits = model(src_a, src_b, torch.ones(1, 8))[0]
+
+        self.assertFalse(torch.equal(zero_logits, state_logits))
+        with self.assertRaisesRegex(ValueError, "src_C must have shape"):
+            model(src_a, src_b, torch.ones(1, 7))
+
+    def test_old_checkpoint_may_omit_c_state_context(self):
+        model = AgentWorldModelCritic(
+            vocab_size=7,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+            direct_c_state_context=True,
+        )
+        old_state = {
+            key: value
+            for key, value in model.state_dict().items()
+            if not key.startswith("agent.c_state_context.")
+        }
+
+        load_result = model.load_state_dict(old_state, strict=False)
+        unsupported = [
+            key
+            for key in load_result.missing_keys
+            if not key.startswith(ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES)
+        ]
+
+        self.assertEqual(
+            set(load_result.missing_keys),
+            {"agent.c_state_context.weight", "agent.c_state_context.bias"},
+        )
+        self.assertEqual(unsupported, [])
+
     def test_policy_checkpoint_migration_skips_obsolete_action_head_shapes(self):
         old_model = AgentWorldModelCritic(
             vocab_size=20,

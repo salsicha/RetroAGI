@@ -33,12 +33,14 @@ ACTION_HEAD_ALLOWED_MISSING_PREFIXES = (
     "agent.fc_primitive_post_release.",
 )
 ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES = ("world_model_actor_context.",)
+ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context.",)
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     *ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
     *LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES,
     *ACTION_HEAD_ALLOWED_MISSING_PREFIXES,
     *ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES,
+    *ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
 DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
@@ -608,6 +610,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         nhead=4,
         num_layers=2,
         controller_schedule="constant",
+        seq_len_c=None,
     ):
         super().__init__()
         vocab_size = int(vocab_size)
@@ -624,10 +627,21 @@ class HierarchicalAdaptiveModel(nn.Module):
         self.d_model = d_model
         self.vocab_size = vocab_size
         self.action_vocab_size = action_vocab_size
+        self.seq_len_c = None if seq_len_c is None else int(seq_len_c)
+        if self.seq_len_c is not None and self.seq_len_c <= 0:
+            raise ValueError("seq_len_c must be positive when provided")
 
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.action_embedding = nn.Embedding(action_vocab_size, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
+        rng_state = torch.get_rng_state() if self.seq_len_c is not None else None
+        self.c_state_context = (
+            None if self.seq_len_c is None else nn.Linear(self.seq_len_c, d_model)
+        )
+        if self.c_state_context is not None:
+            nn.init.zeros_(self.c_state_context.weight)
+            nn.init.zeros_(self.c_state_context.bias)
+            torch.set_rng_state(rng_state)
 
         encoder_layers_a = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, batch_first=True
@@ -739,13 +753,23 @@ class HierarchicalAdaptiveModel(nn.Module):
 
         x_a = self.embedding(src_A) * math.sqrt(self.d_model)
         x_a = self.pos_encoder(x_a)
+        if self.c_state_context is not None:
+            if src_C.ndim != 2 or src_C.shape != (src_A.size(0), self.seq_len_c):
+                raise ValueError(
+                    f"src_C must have shape [batch, {self.seq_len_c}], got {tuple(src_C.shape)}"
+                )
+            c_context = torch.tanh(self.c_state_context(src_C.float()))
+            x_a = x_a + c_context.to(dtype=x_a.dtype).unsqueeze(1)
         x_a = self.apply_world_model_context(x_a, world_model_context)
         x_a = self.apply_critic_feedback(x_a, criticism)
 
         hidden_a = self.transformer_A(x_a, mask=causal_mask_a)
         logits_a = self.fc_out_A(hidden_a)
 
-        probs_a = F.gumbel_softmax(logits_a, tau=tau, hard=True, dim=-1)
+        if self.training:
+            probs_a = F.gumbel_softmax(logits_a, tau=tau, hard=True, dim=-1)
+        else:
+            probs_a = F.softmax(logits_a, dim=-1)
         pred_emb_a = torch.matmul(probs_a, self.action_embedding.weight)
 
         x_b = self.embedding(src_B) * math.sqrt(self.d_model)
@@ -1222,6 +1246,7 @@ class AgentWorldModelCritic(nn.Module):
         critic_progress_threshold=0.0,
         critic_death_threshold=0.75,
         critic_motion_threshold=DEFAULT_ACTION_MOTION_THRESHOLD,
+        direct_c_state_context=False,
     ):
         super().__init__()
         if int(max_action_refinement_passes) <= 0:
@@ -1272,6 +1297,7 @@ class AgentWorldModelCritic(nn.Module):
         self.agent = HierarchicalAdaptiveModel(
             vocab_size,
             action_vocab_size=action_vocab_size,
+            seq_len_c=seq_len_c if direct_c_state_context else None,
             d_model=d_model,
             controller_schedule=controller_schedule,
         )

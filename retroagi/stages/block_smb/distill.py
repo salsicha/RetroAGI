@@ -1247,6 +1247,7 @@ def _train_behavior_cloning(
     epochs: int,
     phase: str,
     iteration: int = 0,
+    epoch_end_callback: Optional[Callable[[torch.nn.Module, int, Mapping[str, Any]], bool]] = None,
 ) -> list[dict[str, float]]:
     history: list[dict[str, float]] = []
     rng = random.Random(config.seed + iteration)
@@ -1287,6 +1288,8 @@ def _train_behavior_cloning(
         }
         history.append(record)
         _append_jsonl(config.log_path, {"event": "distill_epoch", **record})
+        if epoch_end_callback is not None and epoch_end_callback(model, epoch + 1, record):
+            break
     return history
 
 

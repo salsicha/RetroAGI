@@ -151,6 +151,7 @@ def make_agent_world_model_critic(
         controller_schedule=controller_schedule,
         pause_action_ids=pause_action_ids,
         motion_position_dims=motion_position_dims,
+        direct_c_state_context=stage.name in SMB_STAGE_NAMES,
     )
 
 

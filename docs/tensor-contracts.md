@@ -308,22 +308,28 @@ critic refinement:
    receives the original `src_a`, `src_b`, and `src_c`, the same
    `world_model_context`, plus that exact critic tensor.
 
-The LSTM context and critic tensor are added as separate residuals to the A
-stream after token embedding and positional encoding, and before the A-level
+For SMB stages, the full C stream is projected directly into the A action stream.
+That current-state projection, the LSTM context, and the critic tensor are separate
+residuals after token embedding and positional encoding, and before the A-level
 transformer:
 
 ```text
 encoded_A = positional_encoding(embedding(src_a) * sqrt(d_model))
-lstm_A = encoded_A + world_model_context
+state_A = encoded_A + tanh(c_state_context(src_c))
+lstm_A = state_A + world_model_context
 refined_A = lstm_A + criticism
 ```
 
+The C-state projection is zero-initialized so older checkpoints retain their
+previous action behavior while fine-tuning learns the new direct path.
+Training uses hard Gumbel sampling for the A-to-B action embedding; evaluation
+uses ordinary softmax, making repeated gate and deployment forwards deterministic.
 `world_model_context` is produced by projecting the last LSTM hidden/cell state
 to `[B, L_A, d_model]`. `episode_mask` zeros that actor context at boundaries so
 memory from a completed episode cannot bias the next initial decision. No
 critic gating, normalization, clipping, detach, or loss weighting is applied
 inside the actor. Loss weights and critic regularization remain trainer-owned.
-Both actor context tensors must match the encoded A shape exactly and live on
+All actor residual tensors must match the encoded A shape exactly and live on
 the same device.
 
 ### Low-Level Controller Schedules

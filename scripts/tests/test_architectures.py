@@ -52,6 +52,7 @@ class TestArchitectureRegistry(unittest.TestCase):
         )
 
         self.assertIsInstance(model, AgentWorldModelCritic)
+        self.assertIsNone(model.agent.c_state_context)
         src_a = torch.zeros((1, 2), dtype=torch.long)
         src_b = torch.zeros((1, 4), dtype=torch.long)
         src_c = torch.zeros((1, 8), dtype=torch.float32)
@@ -73,6 +74,7 @@ class TestArchitectureRegistry(unittest.TestCase):
 
         self.assertEqual(model.vocab_size, 20)
         self.assertEqual(model.action_vocab_size, BLOCK_SMB_SPEC.action_count)
+        self.assertIsNotNone(model.agent.c_state_context)
         self.assertEqual(model.agent.embedding.num_embeddings, BLOCK_SMB_SPEC.vocab_size)
         self.assertEqual(
             model.agent.action_embedding.num_embeddings,

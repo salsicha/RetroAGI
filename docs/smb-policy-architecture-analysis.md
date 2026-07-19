@@ -94,6 +94,7 @@ Implementation:
 - `HierarchicalAdaptiveModel.transformer_A`
 - causal self-attention over `src_A`
 - learned token embedding plus sinusoidal positional encoding
+- zero-initialized learned projection of the full C state into every A token
 - output head `fc_out_A` produces A-level logits
 
 Conceptually, A answers questions such as:
@@ -102,6 +103,10 @@ Conceptually, A answers questions such as:
 - whether the current section is flat movement, a gap, a pipe, stairs, or enemy
   timing;
 - which high-level action family should dominate over the next short horizon.
+
+The direct C-state projection gives the action head access to current position,
+kinematics, support, hazards, and visual-token content. Precise timing therefore
+does not depend exclusively on the carried recurrent state or critic refinement.
 
 The baseline architecture conditions this A-level actor on carried LSTM world
 model memory before the first pass. `AgentWorldModelCritic` projects
@@ -232,7 +237,8 @@ directly to the A embeddings:
 
 ```text
 encoded_A = positional_encoding(embedding(src_a) * sqrt(d_model))
-refined_A = encoded_A + criticism
+state_A = encoded_A + tanh(c_state_context(src_c))
+refined_A = state_A + criticism
 ```
 
 There is intentionally no detach, clamp, gate, or normalization inside the actor
