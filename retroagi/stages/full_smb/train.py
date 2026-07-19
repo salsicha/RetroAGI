@@ -334,6 +334,7 @@ class FullSMBTrainingConfig:
     rollout_length: Optional[int] = None
     vector_env_count: int = 1
     learning_rate: float = 1e-4
+    gamma: float = 0.99
     entropy_weight: float = 0.01
     policy_loss_weight: float = 1.0
     representation_weight: float = 0.0
@@ -442,6 +443,8 @@ class FullSMBTrainingConfig:
         ):
             if float(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if not 0.0 < float(self.gamma) <= 1.0:
+            raise ValueError("gamma must be in (0, 1]")
         loss_weights = _loss_weight_metadata(self).values()
         if any(weight < 0 for weight in loss_weights):
             raise ValueError("loss weights must be non-negative")
@@ -880,6 +883,7 @@ def train_full_smb_policy(
                             seed=episode_seed,
                             max_steps=config.rollout_length,
                             device=device,
+                            gamma=config.gamma,
                             reward_scale=config.reward_scale,
                             entropy_weight=config.entropy_weight,
                             policy_loss_weight=config.policy_loss_weight,
@@ -2693,6 +2697,28 @@ def _full_smb_critic_action_outcome_loss(
     ) + F.binary_cross_entropy_with_logits(death_logit, death_target)
 
 
+def _full_smb_discounted_returns(
+    rewards: list[float], masks: list[float], gamma: float, device: torch.device
+) -> torch.Tensor:
+    """Standardized discounted return-to-go, matching the Block SMB trainer.
+
+    ``masks[i]`` is the episode-continuation mask AFTER step ``i`` (0.0 at an
+    episode boundary), so the return scan never leaks credit across boundaries.
+    Standardizing to zero-mean/unit-std keeps the value-head target O(1) so the
+    bounded head can represent it and the advantage signal stays well scaled.
+    """
+    returns: list[float] = []
+    running = 0.0
+    for reward, mask in zip(reversed(rewards), reversed(masks)):
+        running = reward + gamma * running * mask
+        returns.append(running)
+    returns.reverse()
+    values = torch.tensor(returns, dtype=torch.float32, device=device)
+    if values.numel() > 1:
+        values = (values - values.mean()) / values.std().clamp_min(1e-6)
+    return values
+
+
 def _train_episode(
     model: torch.nn.Module,
     optimizer: optim.Optimizer,
@@ -2701,6 +2727,7 @@ def _train_episode(
     seed: int,
     max_steps: int,
     device: torch.device,
+    gamma: float,
     reward_scale: float,
     entropy_weight: float,
     policy_loss_weight: float,
@@ -2741,6 +2768,20 @@ def _train_episode(
     action_aux_losses: list[float] = []
     critic_losses: list[float] = []
     steps: list[FullSMBRolloutStep] = []
+    # Buffered per-step tensors/values retained for a single end-of-rollout
+    # optimizer step so the policy gradient can use discounted return-to-go
+    # advantages instead of immediate reward. Recurrent world-model state is
+    # detached between steps (below), so each step's graph is independent and
+    # holding them all for one backward introduces no cross-step BPTT chain.
+    log_prob_terms: list[torch.Tensor] = []
+    entropy_terms: list[torch.Tensor] = []
+    world_model_terms: list[torch.Tensor] = []
+    representation_terms: list[torch.Tensor] = []
+    reward_terms: list[torch.Tensor] = []
+    action_aux_terms: list[torch.Tensor] = []
+    critic_terms: list[torch.Tensor] = []
+    value_inputs: list[torch.Tensor] = []
+    step_masks: list[float] = []
     world_model_state: WorldModelState | None = None
     primitive_executor = SMBParameterizedPrimitiveExecutor()
     recurrent_state_resets = 1
@@ -2865,14 +2906,8 @@ def _train_episode(
             reward_scale=reward_scale,
             max_abs_scaled_reward=max_abs_scaled_reward,
         )
-        scaled_reward = torch.as_tensor(
-            scaled_reward_value,
-            dtype=log_prob.dtype,
-            device=log_prob.device,
-        )
         entropy = distribution.entropy().mean()
         _finite_tensor_or_raise("action_entropy", entropy)
-        policy_loss = -(log_prob.mean() * scaled_reward.detach())
         loss_reward = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
         if (
             reward_loss_weight > 0.0
@@ -2883,12 +2918,13 @@ def _train_episode(
             reward_target = torch.full_like(reward_pred, float(scaled_reward_value))
             loss_reward = F.mse_loss(reward_pred, reward_target)
             _finite_tensor_or_raise("loss_reward", loss_reward)
-        loss_value = torch.zeros((), dtype=log_prob.dtype, device=log_prob.device)
         if value_loss_weight > 0.0 and hasattr(model, "predict_value"):
-            value_pred = model.predict_value(batch.src_c.to(device).detach())
-            value_target = torch.full_like(value_pred, float(scaled_reward_value))
-            loss_value = F.mse_loss(value_pred, value_target)
-            _finite_tensor_or_raise("loss_value", loss_value)
+            # The value target is the discounted return-to-go, which is only
+            # known once the rollout ends. Buffer the (detached) value-head
+            # input and compute the value loss in the end-of-rollout update.
+            value_inputs.append(batch.src_c.to(device).detach())
+        else:
+            value_inputs.append(None)
         loss_action_aux = _smb_primitive_auxiliary_loss(
             forward.motor_primitives,
             action_tensor,
@@ -2907,33 +2943,17 @@ def _train_episode(
                 boundary=boundary,
                 device=device,
             )
-        weighted_critic_loss = float(critic_loss_weight) * loss_critic
-        loss = (
-            policy_loss_weight * policy_loss
-            + float(representation_weight) * loss_representation
-            + loss_world_model
-            + float(reward_loss_weight) * loss_reward
-            + float(value_loss_weight) * loss_value
-            + float(action_aux_weight) * loss_action_aux
-            + weighted_critic_loss
-            - entropy_weight * entropy
-        )
-        _finite_tensor_or_raise("policy_loss", policy_loss)
         _finite_tensor_or_raise("loss_action_aux", loss_action_aux)
         _finite_tensor_or_raise("loss_critic", loss_critic)
-        _finite_tensor_or_raise("loss", loss)
-        _bounded_tensor_or_raise("loss", loss.detach(), max_abs_loss)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        _check_gradients_or_raise(gradient_parameters)
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            gradient_parameters,
-            gradient_clip_norm,
-        )
-        _finite_tensor_or_raise("gradient_norm", grad_norm)
-        optimizer.step()
-        losses.append(float(loss.detach().cpu().item()))
-        policy_losses.append(float(policy_loss.detach().cpu().item()))
+        # Buffer graph-carrying terms for a single end-of-rollout backward.
+        log_prob_terms.append(log_prob.mean())
+        entropy_terms.append(entropy)
+        world_model_terms.append(loss_world_model)
+        representation_terms.append(loss_representation)
+        reward_terms.append(loss_reward)
+        action_aux_terms.append(loss_action_aux)
+        critic_terms.append(loss_critic)
+        step_masks.append(float(boundary.episode_mask))
         dynamics_losses.append(float(loss_dynamics.detach().cpu().item()))
         for slot_name in _FULL_SMB_C_STREAM_DYNAMICS_SLOT_NAMES:
             slot_loss = slot_losses.get(slot_name)
@@ -2945,14 +2965,9 @@ def _train_episode(
         world_model_losses.append(float(loss_world_model.detach().cpu().item()))
         representation_losses.append(float(loss_representation.detach().cpu().item()))
         reward_losses.append(float(loss_reward.detach().cpu().item()))
-        value_losses.append(float(loss_value.detach().cpu().item()))
         action_aux_losses.append(float(loss_action_aux.detach().cpu().item()))
         critic_losses.append(float(loss_critic.detach().cpu().item()))
         entropies.append(float(entropy.detach().cpu().item()))
-        gradient_norm = float(grad_norm.detach().cpu().item())
-        gradient_norms.append(gradient_norm)
-        if gradient_norm > gradient_clip_norm:
-            gradient_clip_events += 1
         scaled_rewards.append(float(scaled_reward_value))
         total_return += float(reward)
         if boundary.reset_recurrent_state:
@@ -2966,10 +2981,64 @@ def _train_episode(
             world_model_state = None
         if terminated or truncated:
             break
+    # End-of-rollout update: turn buffered rewards into standardized discounted
+    # return-to-go, use it as an advantage for the policy gradient and as the
+    # value-head target, then take a single optimizer step over the rollout.
+    step_count = len(log_prob_terms)
+    if step_count > 0:
+        returns = _full_smb_discounted_returns(scaled_rewards, step_masks, gamma, device)
+        value_enabled = value_loss_weight > 0.0 and hasattr(model, "predict_value")
+        policy_terms: list[torch.Tensor] = []
+        value_terms: list[torch.Tensor] = []
+        for index in range(step_count):
+            return_target = returns[index]
+            value_input = value_inputs[index]
+            if value_enabled and value_input is not None:
+                value_pred = model.predict_value(value_input)
+                value_target = torch.full_like(value_pred, float(return_target.item()))
+                value_terms.append(F.mse_loss(value_pred, value_target))
+                baseline = value_pred.detach().mean()
+            else:
+                baseline = torch.zeros((), dtype=return_target.dtype, device=device)
+            advantage = (return_target - baseline).detach()
+            policy_terms.append(-log_prob_terms[index] * advantage)
+        policy_loss = torch.stack(policy_terms).mean()
+        entropy_mean = torch.stack(entropy_terms).mean()
+        loss = (
+            policy_loss_weight * policy_loss
+            + float(representation_weight) * torch.stack(representation_terms).mean()
+            + torch.stack(world_model_terms).mean()
+            + float(reward_loss_weight) * torch.stack(reward_terms).mean()
+            + float(action_aux_weight) * torch.stack(action_aux_terms).mean()
+            + float(critic_loss_weight) * torch.stack(critic_terms).mean()
+            - entropy_weight * entropy_mean
+        )
+        value_loss_mean: torch.Tensor | None = None
+        if value_terms:
+            value_loss_mean = torch.stack(value_terms).mean()
+            loss = loss + float(value_loss_weight) * value_loss_mean
+        _finite_tensor_or_raise("policy_loss", policy_loss)
+        _finite_tensor_or_raise("loss", loss)
+        _bounded_tensor_or_raise("loss", loss.detach(), max_abs_loss)
+        # Record float metrics before the graph is freed by backward().
+        losses.append(float(loss.detach().cpu().item()))
+        policy_losses.append(float(policy_loss.detach().cpu().item()))
+        if value_loss_mean is not None:
+            value_losses.append(float(value_loss_mean.detach().cpu().item()))
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        _check_gradients_or_raise(gradient_parameters)
+        grad_norm = torch.nn.utils.clip_grad_norm_(gradient_parameters, gradient_clip_norm)
+        _finite_tensor_or_raise("gradient_norm", grad_norm)
+        optimizer.step()
+        grad_norm_value = float(grad_norm.detach().cpu().item())
+        gradient_norms.append(grad_norm_value)
+        if grad_norm_value > gradient_clip_norm:
+            gradient_clip_events += 1
     metrics = {
         "return": total_return,
         "loss": _mean(losses),
-        "steps": float(len(losses)),
+        "steps": float(step_count),
         "recurrent_state_resets": float(recurrent_state_resets),
         "loss_policy": _mean(policy_losses),
         "loss_dynamics": _mean(dynamics_losses),
@@ -5059,6 +5128,12 @@ def _add_training_update_args(
         )
     parser.add_argument("--vector-env-count", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.99,
+        help="discount factor for return-to-go used by the policy-gradient advantage",
+    )
     parser.add_argument("--entropy-weight", type=float, default=0.01)
     parser.add_argument("--policy-loss-weight", type=float, default=1.0)
     parser.add_argument("--representation-weight", type=float, default=0.0)
@@ -5453,6 +5528,7 @@ def _config_from_args(args: argparse.Namespace) -> FullSMBTrainingConfig:
         rollout_length=getattr(args, "rollout_length", None),
         vector_env_count=getattr(args, "vector_env_count", 1),
         learning_rate=getattr(args, "learning_rate", 1e-4),
+        gamma=getattr(args, "gamma", 0.99),
         entropy_weight=getattr(args, "entropy_weight", 0.01),
         policy_loss_weight=getattr(args, "policy_loss_weight", 1.0),
         representation_weight=getattr(args, "representation_weight", 0.0),
