@@ -158,6 +158,17 @@ names.
 The policy should continue to see fixed scenarios during training, but those
 scenarios should be a small sentinel fraction rather than the whole curriculum.
 
+## Gate Integrity
+
+**Never force-pass the gates.** A gate failure means the source policy is not
+ready, not that the gate is in the way. Do not use `--allow-ungated-block-source`
+(or any equivalent bypass) to promote, transfer-for-keeps, or ship a policy; the
+only legitimate use of that flag is a one-off measurement of an ungated policy's
+Full SMB behavior, and its results must never be presented as a passing run.
+When a gate fails, fix the Block SMB policy — train longer, improve coverage,
+break action collapse — until it passes honestly. Reported "passes" must always
+be real gate passes.
+
 ## Metrics And Gates
 
 Block SMB promotion to Full SMB should require:
@@ -187,6 +198,14 @@ the initial real-volume train/validation/test counts and the failure-focused
 train family weights by default. Pass explicit `0` counts for a smoke run, or
 `--monte-carlo-parameter-sweep` for the deterministic family/difficulty
 coverage sweep.
+
+Fresh `retroagi train --stage block` runs also default to a real training
+budget: `200` epochs at `160` rollout steps (evaluating every `25` epochs),
+roughly three orders of magnitude more environment frames and gradient updates
+than the previous single-epoch/32-step shape, which was too short for Mario to
+even reach most scenario goals. Pass explicit `--epochs`, `--rollout-steps`, or
+`--evaluation-interval-epochs` to override, or `--monte-carlo-parameter-sweep`
+for the tiny coverage sweep. Expect a fresh run to take hours on a single GPU.
 
 ## Commands
 

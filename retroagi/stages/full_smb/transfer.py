@@ -759,7 +759,13 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--allow-ungated-block-source",
         action="store_true",
-        help="bypass fixed plus Monte Carlo Block SMB transfer-source gates",
+        help=(
+            "bypass fixed plus Monte Carlo Block SMB transfer-source gates. "
+            "POLICY: never force-pass the gates. This is for one-off measurement "
+            "of an ungated policy's Full SMB behavior only, never to promote or "
+            "ship a policy. A gate failure means the source is not ready; fix the "
+            "Block SMB policy until it passes, do not bypass the gate."
+        ),
     )
     args = parser.parse_args(argv)
 
