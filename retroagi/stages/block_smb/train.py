@@ -1970,7 +1970,7 @@ def train_block_smb_epoch(
                 deterministic=False,
                 device=device,
                 ablation=config.ablation,
-                use_oracle_actions=True,
+                use_oracle_actions=False,
             )
         finally:
             stage.env.close()
