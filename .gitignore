@@ -25,3 +25,17 @@ artifacts/fresh_full_smb_*/
 artifacts/block_smb/full_default_*/
 artifacts/block_smb/distill_dagger_*/
 artifacts/full_smb/gamma_fix_ab_*/
+artifacts/full_volume_*/
+# Ad-hoc sweep/probe/eval outputs from local experiments. Emulator .npz
+# recordings under these paths are ROM-derived and must never be committed.
+artifacts/block_smb/current_*
+artifacts/block_smb/sweep_chained_*
+artifacts/full_smb/current_*
+artifacts/full_smb/life_boundary_*
+artifacts/full_smb/run_button_*
+artifacts/full_smb/scripted_probe_*
+artifacts/full_smb/show_me_*
+artifacts/full_smb/sweep_chained_*
+# Uncurated fresh Block SMB run left local; its curated sibling
+# (fresh_block_smb_20260704_005140) is committed, so no broad pattern here.
+artifacts/fresh_block_smb_20260703_234530/
