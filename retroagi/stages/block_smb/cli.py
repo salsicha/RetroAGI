@@ -401,6 +401,23 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         dest="ranked_candidate_search",
         help="use single-pass action selection with critic-feedback refinement",
     )
+    parser.set_defaults(deterministic_critic_gates=None)
+    parser.add_argument(
+        "--deterministic-critic-gates",
+        action="store_true",
+        dest="deterministic_critic_gates",
+        help=(
+            "gate candidates mechanistically: progress = predicted goal-distance "
+            "decrease, death = the LSTM world model's predicted death flag "
+            "(default; bypasses the learned progress/death MLP heads)"
+        ),
+    )
+    parser.add_argument(
+        "--no-deterministic-critic-gates",
+        action="store_false",
+        dest="deterministic_critic_gates",
+        help="gate candidates with the learned critic progress/death MLP heads",
+    )
     parser.set_defaults(monte_carlo_validate_reachability=None)
     parser.add_argument(
         "--validate-monte-carlo-reachability",
@@ -701,6 +718,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "mastery_retention_weight",
         "use_oracle_actions",
         "ranked_candidate_search",
+        "deterministic_critic_gates",
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",

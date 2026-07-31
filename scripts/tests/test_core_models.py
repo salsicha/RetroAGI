@@ -1398,5 +1398,80 @@ class TestRankedCandidateSearch(unittest.TestCase):
         self.assertEqual(agent.forced_actions, [None])
 
 
+class TestDeterministicCriticGates(unittest.TestCase):
+    def _make_model(self):
+        model = AgentWorldModelCritic(
+            vocab_size=4,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+        )
+        model.deterministic_critic_slots = {
+            "goal_distance": 3,
+            "death": 5,
+            "progress_epsilon": 0.002,
+            "death_threshold": 0.5,
+        }
+        return model
+
+    def _evaluate(self, model, current, predicted):
+        current_t = torch.tensor([current], dtype=torch.float32)
+        predicted_t = torch.tensor([predicted], dtype=torch.float32)
+        logits = torch.zeros(1, 2, 4)
+        return model._critic_evaluation(predicted_t, current_t, logits)
+
+    def test_progress_is_mechanistic_goal_distance_decrease(self):
+        model = self._make_model()
+        base = [0.0] * 8
+        current = list(base)
+        current[3] = 0.5  # goal distance now
+        closer = list(base)
+        closer[3] = 0.45  # predicted goal distance shrinks
+        farther = list(base)
+        farther[3] = 0.55
+        stalled = list(base)
+        stalled[3] = 0.5  # unchanged: walking into an obstacle
+        self.assertTrue(bool(self._evaluate(model, current, closer).would_progress.all()))
+        self.assertFalse(bool(self._evaluate(model, current, farther).would_progress.any()))
+        self.assertFalse(bool(self._evaluate(model, current, stalled).would_progress.any()))
+
+    def test_death_comes_from_lstm_predicted_death_flag(self):
+        model = self._make_model()
+        current = [0.0] * 8
+        dying = [0.0] * 8
+        dying[5] = 0.9  # LSTM predicts the death flag
+        safe = [0.0] * 8
+        safe[5] = 0.1
+        self.assertTrue(bool(self._evaluate(model, current, dying).predicts_death.all()))
+        self.assertFalse(bool(self._evaluate(model, current, safe).predicts_death.any()))
+
+    def test_goal_completion_is_not_treated_as_death(self):
+        # A predicted terminated flag (e.g. reaching the goal) must not veto the
+        # action; only the dedicated death flag counts.
+        model = self._make_model()
+        current = [0.0] * 8
+        goal_reached = [0.0] * 8
+        goal_reached[3] = -0.4  # goal distance collapses
+        goal_reached[6] = 1.0  # a neighboring terminated-style flag
+        current[3] = 0.1
+        evaluation = self._evaluate(model, current, goal_reached)
+        self.assertTrue(bool(evaluation.would_progress.all()))
+        self.assertFalse(bool(evaluation.predicts_death.any()))
+
+    def test_slot_bounds_are_validated(self):
+        model = self._make_model()
+        model.deterministic_critic_slots = {"goal_distance": 99, "death": 5}
+        with self.assertRaises(ValueError):
+            self._evaluate(model, [0.0] * 8, [0.0] * 8)
+
+    def test_none_slots_keep_learned_heads(self):
+        model = self._make_model()
+        model.deterministic_critic_slots = None
+        evaluation = self._evaluate(model, [0.0] * 8, [0.0] * 8)
+        # Learned-head path still functions and returns an evaluation.
+        self.assertIsNotNone(evaluation.progress_score)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1341,6 +1341,13 @@ class AgentWorldModelCritic(nn.Module):
         # code can execute exactly the searched action.
         self.ranked_candidate_search = bool(ranked_candidate_search)
         self.last_selected_action_id: int | None = None
+        # Deterministic critic gates: when set (a mapping with goal_distance /
+        # death indices into the C stream plus progress_epsilon and
+        # death_threshold), would_progress is the mechanistic decrease of the
+        # predicted normalized goal distance and predicts_death reads the LSTM
+        # world model's predicted death flag directly. The learned
+        # progress/death MLP heads are bypassed for gating.
+        self.deterministic_critic_slots: Mapping[str, float] | None = None
         self.transition_representation_head = nn.Sequential(
             nn.Linear(seq_len_c, d_model),
             nn.LayerNorm(d_model),
@@ -1596,9 +1603,63 @@ class AgentWorldModelCritic(nn.Module):
             dim=-1,
         )
 
+    def _deterministic_critic_evaluation(
+        self,
+        next_state_pred,
+        current_state,
+        slots: Mapping[str, float],
+    ) -> CriticActionEvaluation:
+        """Gate candidates without the learned progress/death MLP heads.
+
+        Progress is mechanistic: the predicted normalized goal distance must
+        decrease by more than ``progress_epsilon`` relative to the current
+        state. Death comes from the LSTM world model itself: the predicted
+        state's death flag (trained by the terminal_outcome dynamics slot),
+        thresholded at ``death_threshold``. The terminated flag is not used
+        because it also fires on goal completion.
+        """
+
+        goal_index = int(slots["goal_distance"])
+        death_index = int(slots["death"])
+        feature_length = int(next_state_pred.shape[-1])
+        if goal_index >= feature_length or death_index >= feature_length:
+            raise ValueError(
+                "deterministic critic slots exceed C-stream length "
+                f"{feature_length}: goal_distance={goal_index}, death={death_index}"
+            )
+        progress_epsilon = float(slots.get("progress_epsilon", 0.0))
+        death_threshold = float(slots.get("death_threshold", 0.5))
+        if current_state is None:
+            raise ValueError("deterministic critic gates require the current state")
+        current = current_state.to(dtype=next_state_pred.dtype, device=next_state_pred.device)
+        progress_score = current[:, goal_index] - next_state_pred[:, goal_index]
+        death_risk = next_state_pred[:, death_index].clamp(0.0, 1.0)
+        feedback = self.critic(next_state_pred)
+        return CriticActionEvaluation(
+            feedback=feedback,
+            progress_score=progress_score,
+            death_risk=death_risk,
+            would_progress=progress_score > progress_epsilon,
+            predicts_death=death_risk >= death_threshold,
+        )
+
     def _critic_evaluation(
         self, next_state_pred, current_state, logits_a, *, motion_gate_enabled=True
     ):
+        slots = self.deterministic_critic_slots
+        if slots is not None:
+            evaluation = self._deterministic_critic_evaluation(
+                next_state_pred,
+                current_state,
+                slots,
+            )
+            return self._with_action_motion_gate(
+                evaluation,
+                next_state_pred,
+                current_state,
+                logits_a,
+                gate_enabled=motion_gate_enabled,
+            )
         critic = getattr(self, "critic", None)
         if hasattr(critic, "evaluate_action"):
             evaluation = critic.evaluate_action(

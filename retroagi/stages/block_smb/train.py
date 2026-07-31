@@ -42,7 +42,12 @@ from retroagi.core import (
     to_plain_data,
 )
 
-from .adapter import BLOCK_SMB_SPEC, SCENARIOS_DIR, BlockSMBStage
+from .adapter import (
+    BLOCK_SMB_SPEC,
+    SCENARIOS_DIR,
+    BlockSMBStage,
+    block_smb_deterministic_critic_slots,
+)
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
@@ -285,6 +290,11 @@ class BlockSMBTrainingConfig:
     # treats as no progress, so blocked actions are rejected and the next
     # most likely token is tried.
     ranked_candidate_search: bool = True
+    # Deterministic critic gates: would_progress is the mechanistic decrease of
+    # the predicted normalized goal distance and predicts_death reads the LSTM
+    # world model's predicted death flag directly, bypassing the learned
+    # progress/death MLP heads for gating.
+    deterministic_critic_gates: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -399,6 +409,8 @@ class BlockSMBTrainingConfig:
             raise TypeError("use_oracle_actions must be a bool")
         if not isinstance(self.ranked_candidate_search, bool):
             raise TypeError("ranked_candidate_search must be a bool")
+        if not isinstance(self.deterministic_critic_gates, bool):
+            raise TypeError("deterministic_critic_gates must be a bool")
         if not 0.0 <= self.action_gate_max_dominant_fraction <= 1.0:
             raise ValueError("action_gate_max_dominant_fraction must be between 0 and 1")
         required_actions = tuple(int(action) for action in self.action_gate_required_actions)
@@ -987,6 +999,12 @@ def make_block_smb_model(config: BlockSMBTrainingConfig) -> torch.nn.Module:
         # the search adds no parameters, so checkpoints stay compatible in both
         # directions and the setting is recorded via the training config.
         model.ranked_candidate_search = bool(config.ranked_candidate_search)
+    if hasattr(model, "deterministic_critic_slots"):
+        model.deterministic_critic_slots = (
+            block_smb_deterministic_critic_slots()
+            if config.deterministic_critic_gates
+            else None
+        )
     return model
 
 

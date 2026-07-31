@@ -183,3 +183,38 @@ class BlockSMBStage:
                 self.observation_config.state_max,
             ),
         }
+
+
+# Static C-stream layout for Block SMB, matching VisionHierarchyProjector's
+# fusion of the Block ViT output: position (mario x, y), semantic class
+# probabilities, support-state softmax (air/ground/platform), then the 27-dim
+# env state_vec. The drift guard in scripts/tests/test_block_smb_training.py
+# asserts these spans equal the projector's runtime fusion metadata.
+BLOCK_SMB_C_POSITION_DIMS = 2
+BLOCK_SMB_C_SEMANTIC_DIMS = 7
+BLOCK_SMB_C_SUPPORT_DIMS = 3
+BLOCK_SMB_C_STATE_DIMS = 27
+# state_vec indices (see MarioScenarioEnv state_vec construction).
+BLOCK_SMB_STATE_GOAL_DISTANCE_INDEX = 17
+BLOCK_SMB_STATE_DEATH_INDEX = 24
+
+
+def block_smb_deterministic_critic_slots() -> dict[str, float]:
+    """Absolute C-stream indices for deterministic critic gates.
+
+    Progress is the mechanistic decrease of the predicted normalized goal
+    distance; death is read directly from the LSTM world model's predicted
+    death flag (state_vec dim 24, trained by the terminal_outcome dynamics
+    slot). The terminated flag (dim 25) is deliberately NOT used for the
+    death gate because it also fires on goal completion.
+    """
+
+    state_start = (
+        BLOCK_SMB_C_POSITION_DIMS + BLOCK_SMB_C_SEMANTIC_DIMS + BLOCK_SMB_C_SUPPORT_DIMS
+    )
+    return {
+        "goal_distance": state_start + BLOCK_SMB_STATE_GOAL_DISTANCE_INDEX,
+        "death": state_start + BLOCK_SMB_STATE_DEATH_INDEX,
+        "progress_epsilon": 0.002,
+        "death_threshold": 0.5,
+    }

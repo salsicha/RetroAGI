@@ -1292,6 +1292,68 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         self.assertTrue(resolve([]))
         self.assertFalse(resolve(["--no-ranked-candidate-search"]))
 
+    def test_deterministic_critic_gates_wired_and_layout_matches_projector(self):
+        from retroagi.stages.block_smb import cli
+        from retroagi.stages.block_smb.adapter import (
+            block_smb_deterministic_critic_slots,
+        )
+        from retroagi.stages.block_smb.train import (
+            BlockSMBTrainingConfig,
+            make_block_smb_model,
+        )
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        slots = block_smb_deterministic_critic_slots()
+        # Drift guard: the static indices must land inside the projector's
+        # runtime c_state span at the goal-distance and death state dims. Use
+        # the real Block ViT (fresh weights; only output shapes matter) because
+        # the production fusion includes its support-state softmax, which
+        # simplified test stubs omit.
+        stage = BlockSMBStage(
+            scenario={
+                "mario": [20, 200],
+                "platforms": [[0, 220, 256, 20]],
+                "world_width": 256,
+            },
+            vision=BlockVisionTransformer(),
+            env=MarioScenarioEnv(),
+        )
+        try:
+            observation = stage.reset(seed=3)
+            batch = stage.encode_observation(observation)
+        finally:
+            stage.env.close()
+        spans = block_smb_c_stream_slot_spans(batch)
+        state_start, state_end = spans["state"]
+        self.assertEqual(slots["goal_distance"], state_start + 17)
+        self.assertEqual(slots["death"], state_start + 24)
+        self.assertLess(slots["death"], state_end)
+        terminal_start, terminal_end = spans["terminal_outcome"]
+        self.assertEqual(slots["death"], terminal_start)
+
+        config = BlockSMBTrainingConfig()
+        self.assertTrue(config.deterministic_critic_gates)
+        model = make_block_smb_model(config)
+        self.assertEqual(model.deterministic_critic_slots, slots)
+        disabled = make_block_smb_model(
+            BlockSMBTrainingConfig(deterministic_critic_gates=False)
+        )
+        self.assertIsNone(disabled.deterministic_critic_slots)
+
+        def resolve(extra):
+            args = cli.build_parser().parse_args(
+                [
+                    "train",
+                    "--vision-checkpoint",
+                    "data/block_vit/block_vit.pth",
+                    *extra,
+                ]
+            )
+            return cli._make_train_config(args).deterministic_critic_gates
+
+        self.assertTrue(resolve([]))
+        self.assertFalse(resolve(["--no-deterministic-critic-gates"]))
+
 
 if __name__ == "__main__":
     unittest.main()
