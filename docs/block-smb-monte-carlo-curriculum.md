@@ -158,6 +158,35 @@ names.
 The policy should continue to see fixed scenarios during training, but those
 scenarios should be a small sentinel fraction rather than the whole curriculum.
 
+### Mastery-Gated Schedule
+
+Fresh real-volume `retroagi train --stage block` runs use the mastery-gated
+schedule by default (`--mastery-gated-schedule`, disable with
+`--no-mastery-gated-schedule`). The intent of Block SMB is that each family is
+a small constrained skill; the schedule makes the trainer actually run each
+family until the model learns that skill:
+
+- Every family always has a nonzero sampling weight, so no gated family can be
+  silently excluded from training.
+- After each periodic held-out evaluation, per-family pass rates update a
+  mastery record. Unmastered families are weighted `1 + (gate - pass_rate)` so
+  the furthest-from-mastery skills draw the most samples; families at or above
+  the family pass-rate gate drop to a small retention weight
+  (`--mastery-retention-weight`, default `0.25`) so mastered skills keep being
+  rehearsed and regressions surface at the next evaluation.
+- Difficulties unlock per family: training samples `easy` until the easy bin
+  clears the gate, then adds `medium`, then `hard`. Unlocks are monotonic so
+  the training mix does not thrash when a later evaluation regresses.
+- The Monte Carlo train curriculum is regenerated deterministically after each
+  evaluation phase; failure replay continues to oversample recent held-out
+  failures on top of the mastery mix.
+
+The schedule concentrates training where skills are unlearned; it does not by
+itself create a learning signal where none exists (for example, jump families
+whose failure mode is a painless wall stall). Pair it with expert supervision
+such as the distillation/DAgger path or an imitation warm start when a family
+is stuck at a zero pass rate across evaluations.
+
 ## Gate Integrity
 
 **Never force-pass the gates.** A gate failure means the source policy is not

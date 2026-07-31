@@ -52,6 +52,7 @@ from .monte_carlo import (
     block_smb_monte_carlo_oracle_actions,
     evaluate_block_smb_monte_carlo_gates,
     sample_block_smb_monte_carlo_parameter_sweep,
+    sample_block_smb_monte_carlo_scenario,
     sample_block_smb_monte_carlo_split,
     summarize_block_smb_monte_carlo_action_counts,
     summarize_block_smb_monte_carlo_samples,
@@ -266,6 +267,12 @@ class BlockSMBTrainingConfig:
     monte_carlo_failure_replay_samples_per_epoch: int = 0
     monte_carlo_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE
     monte_carlo_family_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE
+    # Mastery-gated schedule: focus MC train sampling on families that have not
+    # yet cleared the family pass-rate gate, keep a small retention share for
+    # mastered families, and unlock difficulties per family (easy -> medium ->
+    # hard) as each bin clears the gate. Every family always has nonzero weight.
+    mastery_gated_schedule: bool = False
+    mastery_retention_weight: float = 0.25
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -372,6 +379,10 @@ class BlockSMBTrainingConfig:
             raise ValueError("monte_carlo_pass_rate_gate must be between 0 and 1")
         if not 0.0 <= self.monte_carlo_family_pass_rate_gate <= 1.0:
             raise ValueError("monte_carlo_family_pass_rate_gate must be between 0 and 1")
+        if not isinstance(self.mastery_gated_schedule, bool):
+            raise TypeError("mastery_gated_schedule must be a bool")
+        if float(self.mastery_retention_weight) <= 0.0:
+            raise ValueError("mastery_retention_weight must be positive")
         if not 0.0 <= self.action_gate_max_dominant_fraction <= 1.0:
             raise ValueError("action_gate_max_dominant_fraction must be between 0 and 1")
         required_actions = tuple(int(action) for action in self.action_gate_required_actions)
@@ -743,6 +754,162 @@ def build_epoch_curriculum(
         if block_smb_monte_carlo_metadata(scenario)
     ]
     return [*fixed, *replay_curriculum, *monte_carlo]
+
+
+def initial_block_smb_mastery_state() -> dict[str, dict[str, Any]]:
+    """Return the starting mastery record for every Monte Carlo family."""
+
+    return {
+        family: {
+            "pass_rate": 0.0,
+            "bin_pass_rates": {},
+            "unlocked_difficulties": ["easy"],
+            "mastered": False,
+        }
+        for family in BLOCK_SMB_MC_FAMILIES
+    }
+
+
+def update_block_smb_mastery_state(
+    state: Mapping[str, Mapping[str, Any]],
+    monte_carlo_validation: Mapping[str, Any],
+    *,
+    family_pass_rate_gate: float,
+) -> dict[str, dict[str, Any]]:
+    """Fold one held-out evaluation into the per-family mastery record.
+
+    Difficulty unlocks are monotonic: once a bin clears the gate the next
+    difficulty stays unlocked even if a later evaluation regresses, so the
+    training distribution does not thrash between difficulty mixes.
+    """
+
+    families = monte_carlo_validation.get("families", {})
+    bins = monte_carlo_validation.get("difficulty_bins", {})
+    updated: dict[str, dict[str, Any]] = {}
+    for family in BLOCK_SMB_MC_FAMILIES:
+        previous = state.get(family, {})
+        record = {
+            "pass_rate": float(previous.get("pass_rate", 0.0)),
+            "bin_pass_rates": dict(previous.get("bin_pass_rates", {})),
+            "unlocked_difficulties": list(previous.get("unlocked_difficulties", ["easy"])),
+            "mastered": bool(previous.get("mastered", False)),
+        }
+        rollup = families.get(family)
+        if isinstance(rollup, Mapping) and "success_rate" in rollup:
+            record["pass_rate"] = float(rollup["success_rate"])
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+            bin_rollup = bins.get(f"{family}:{difficulty}")
+            if isinstance(bin_rollup, Mapping) and "success_rate" in bin_rollup:
+                record["bin_pass_rates"][difficulty] = float(bin_rollup["success_rate"])
+        unlocked = record["unlocked_difficulties"]
+        bin_rates = record["bin_pass_rates"]
+        if (
+            "medium" not in unlocked
+            and float(bin_rates.get("easy", 0.0)) >= family_pass_rate_gate
+        ):
+            unlocked.append("medium")
+        if (
+            "hard" not in unlocked
+            and "medium" in unlocked
+            and float(bin_rates.get("medium", 0.0)) >= family_pass_rate_gate
+        ):
+            unlocked.append("hard")
+        record["mastered"] = record["pass_rate"] >= family_pass_rate_gate
+        updated[family] = record
+    return updated
+
+
+def block_smb_mastery_family_weights(
+    state: Mapping[str, Mapping[str, Any]],
+    *,
+    family_pass_rate_gate: float,
+    retention_weight: float,
+) -> dict[str, float]:
+    """Weight every family: focus on unmastered skills, retain mastered ones.
+
+    Unmastered families weigh ``1.0 + (gate - pass_rate)`` so the furthest-from
+    -mastery skills draw the most samples; mastered families keep a small
+    positive retention weight so they are rehearsed and regressions surface at
+    the next evaluation. Every family always has nonzero weight, so no gated
+    family can be silently excluded from training.
+    """
+
+    weights: dict[str, float] = {}
+    for family in BLOCK_SMB_MC_FAMILIES:
+        record = state.get(family, {})
+        if bool(record.get("mastered", False)):
+            weights[family] = float(retention_weight)
+        else:
+            deficit = max(0.0, family_pass_rate_gate - float(record.get("pass_rate", 0.0)))
+            weights[family] = 1.0 + deficit
+    return weights
+
+
+def build_mastery_monte_carlo_curriculum(
+    config: BlockSMBTrainingConfig,
+    state: Mapping[str, Mapping[str, Any]],
+    *,
+    phase: int,
+) -> list[tuple[str, dict]]:
+    """Sample a train curriculum focused on unmastered families.
+
+    Families are drawn from the mastery weights and each sample's difficulty is
+    drawn uniformly from that family's unlocked difficulties, so a family
+    masters easy bins before it sees medium or hard ones. Deterministic per
+    (monte_carlo_seed, phase).
+    """
+
+    sample_count = int(config.monte_carlo_train_samples_per_epoch)
+    if sample_count <= 0:
+        return []
+    weights = block_smb_mastery_family_weights(
+        state,
+        family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
+        retention_weight=config.mastery_retention_weight,
+    )
+    families = list(BLOCK_SMB_MC_FAMILIES)
+    weight_values = [weights[family] for family in families]
+    rng = random.Random(int(config.monte_carlo_seed) + 800_000 + int(phase))
+    scenarios: list[tuple[str, dict]] = []
+    for sample_index in range(sample_count):
+        family = rng.choices(families, weights=weight_values, k=1)[0]
+        unlocked = list(state.get(family, {}).get("unlocked_difficulties", ["easy"]))
+        difficulty = rng.choice(unlocked or ["easy"])
+        sample = sample_block_smb_monte_carlo_scenario(
+            distribution_id=config.monte_carlo_distribution_id,
+            split="train",
+            seed=int(config.monte_carlo_seed) + 800_000 + int(phase),
+            sample_index=sample_index,
+            family=family,
+            difficulty=difficulty,
+            validate_reachability=config.monte_carlo_validate_reachability,
+            max_rejections=config.monte_carlo_max_rejections,
+        )
+        scenarios.append((sample.scenario_id, copy.deepcopy(dict(sample.scenario))))
+    return scenarios
+
+
+def summarize_block_smb_mastery_state(
+    state: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Compact per-family mastery summary for logs and checkpoints."""
+
+    return {
+        "mastered_families": sorted(
+            family for family, record in state.items() if record.get("mastered")
+        ),
+        "unmastered_families": sorted(
+            family for family, record in state.items() if not record.get("mastered")
+        ),
+        "families": {
+            family: {
+                "pass_rate": float(record.get("pass_rate", 0.0)),
+                "unlocked_difficulties": list(record.get("unlocked_difficulties", ["easy"])),
+                "mastered": bool(record.get("mastered", False)),
+            }
+            for family, record in state.items()
+        },
+    }
 
 
 def summarize_block_smb_curriculum(
@@ -2671,7 +2838,15 @@ def train_and_evaluate_block_smb(
         global_step = int(checkpoint["global_step"])
     elif target_model is not None:
         update_target_network(target_model, model, tau=1.0)
-    curriculum = build_curriculum(config)
+    mastery_state = initial_block_smb_mastery_state()
+    mastery_phase = 0
+    if config.mastery_gated_schedule:
+        curriculum = load_fixed_scenarios(config.fixed_scenarios)
+        curriculum.extend(
+            build_mastery_monte_carlo_curriculum(config, mastery_state, phase=mastery_phase)
+        )
+    else:
+        curriculum = build_curriculum(config)
     vector_env = SequentialBlockSMBVectorEnv(
         curriculum,
         num_envs=config.num_envs,
@@ -2779,6 +2954,39 @@ def train_and_evaluate_block_smb(
                 failure_bins = monte_carlo_validation.get("failure_bins", {})
                 if isinstance(failure_bins, Mapping):
                     recent_monte_carlo_failure_bins = failure_bins
+            if config.mastery_gated_schedule and isinstance(monte_carlo_validation, Mapping):
+                mastery_state = update_block_smb_mastery_state(
+                    mastery_state,
+                    monte_carlo_validation,
+                    family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
+                )
+                mastery_phase += 1
+                curriculum = load_fixed_scenarios(config.fixed_scenarios)
+                curriculum.extend(
+                    build_mastery_monte_carlo_curriculum(
+                        config,
+                        mastery_state,
+                        phase=mastery_phase,
+                    )
+                )
+                mastery_summary = summarize_block_smb_mastery_state(mastery_state)
+                last_metrics["eval_mastered_family_count"] = float(
+                    len(mastery_summary["mastered_families"])
+                )
+                _log_block_smb_event(
+                    config,
+                    "mastery_schedule_updated",
+                    epoch=completed_epoch,
+                    global_step=global_step,
+                    phase=mastery_phase,
+                    mastery=mastery_summary,
+                    family_weights=block_smb_mastery_family_weights(
+                        mastery_state,
+                        family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
+                        retention_weight=config.mastery_retention_weight,
+                    ),
+                    curriculum_summary=summarize_block_smb_curriculum(curriculum),
+                )
             _log_block_smb_event(
                 config,
                 "deterministic_evaluation",

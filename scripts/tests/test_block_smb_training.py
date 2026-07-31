@@ -1120,5 +1120,121 @@ class TestBlockSMBTraining(unittest.TestCase):
             torch.testing.assert_close(original, restored_parameter)
 
 
+class TestBlockSMBMasterySchedule(unittest.TestCase):
+    def test_initial_state_covers_every_family_with_nonzero_weight(self):
+        from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
+        from retroagi.stages.block_smb.train import (
+            block_smb_mastery_family_weights,
+            initial_block_smb_mastery_state,
+        )
+
+        state = initial_block_smb_mastery_state()
+        self.assertEqual(set(state), set(BLOCK_SMB_MC_FAMILIES))
+        weights = block_smb_mastery_family_weights(
+            state, family_pass_rate_gate=0.9, retention_weight=0.25
+        )
+        # No family may be excluded from training: the static failure-focus
+        # weights previously gave several gated families zero train samples.
+        self.assertTrue(all(weight > 0 for weight in weights.values()))
+        self.assertEqual(set(weights), set(BLOCK_SMB_MC_FAMILIES))
+        for family in BLOCK_SMB_MC_FAMILIES:
+            self.assertEqual(state[family]["unlocked_difficulties"], ["easy"])
+            self.assertFalse(state[family]["mastered"])
+
+    def test_update_masters_families_and_unlocks_difficulties(self):
+        from retroagi.stages.block_smb.train import (
+            block_smb_mastery_family_weights,
+            initial_block_smb_mastery_state,
+            update_block_smb_mastery_state,
+        )
+
+        state = initial_block_smb_mastery_state()
+        evaluation = {
+            "families": {
+                "flat_run": {"success_rate": 1.0},
+                "tall_pipe_jump": {"success_rate": 0.4},
+            },
+            "difficulty_bins": {
+                "tall_pipe_jump:easy": {"success_rate": 1.0},
+            },
+        }
+        state = update_block_smb_mastery_state(
+            state, evaluation, family_pass_rate_gate=0.9
+        )
+        self.assertTrue(state["flat_run"]["mastered"])
+        self.assertFalse(state["tall_pipe_jump"]["mastered"])
+        self.assertEqual(
+            state["tall_pipe_jump"]["unlocked_difficulties"], ["easy", "medium"]
+        )
+        weights = block_smb_mastery_family_weights(
+            state, family_pass_rate_gate=0.9, retention_weight=0.25
+        )
+        # Mastered family drops to the retention weight; unmastered families
+        # weigh 1 + deficit so the furthest-from-mastery draw the most samples.
+        self.assertEqual(weights["flat_run"], 0.25)
+        self.assertAlmostEqual(weights["tall_pipe_jump"], 1.5)
+        self.assertAlmostEqual(weights["single_gap"], 1.9)
+
+    def test_difficulty_unlocks_are_monotonic_across_regressions(self):
+        from retroagi.stages.block_smb.train import (
+            initial_block_smb_mastery_state,
+            update_block_smb_mastery_state,
+        )
+
+        state = initial_block_smb_mastery_state()
+        unlock = {
+            "families": {"single_gap": {"success_rate": 0.5}},
+            "difficulty_bins": {"single_gap:easy": {"success_rate": 1.0}},
+        }
+        state = update_block_smb_mastery_state(state, unlock, family_pass_rate_gate=0.9)
+        self.assertIn("medium", state["single_gap"]["unlocked_difficulties"])
+        regression = {
+            "families": {"single_gap": {"success_rate": 0.0}},
+            "difficulty_bins": {"single_gap:easy": {"success_rate": 0.0}},
+        }
+        state = update_block_smb_mastery_state(
+            state, regression, family_pass_rate_gate=0.9
+        )
+        # A later regression must not re-lock medium: the training mix must not
+        # thrash between difficulty distributions.
+        self.assertIn("medium", state["single_gap"]["unlocked_difficulties"])
+
+    def test_mastery_curriculum_is_deterministic_and_respects_unlocks(self):
+        from retroagi.stages.block_smb.monte_carlo import (
+            block_smb_monte_carlo_metadata,
+        )
+        from retroagi.stages.block_smb.train import (
+            BlockSMBTrainingConfig,
+            build_mastery_monte_carlo_curriculum,
+            initial_block_smb_mastery_state,
+        )
+
+        config = BlockSMBTrainingConfig(
+            monte_carlo_train_samples_per_epoch=8,
+            mastery_gated_schedule=True,
+        )
+        state = initial_block_smb_mastery_state()
+        first = build_mastery_monte_carlo_curriculum(config, state, phase=3)
+        second = build_mastery_monte_carlo_curriculum(config, state, phase=3)
+        self.assertEqual([name for name, _ in first], [name for name, _ in second])
+        self.assertEqual(len(first), 8)
+        for _name, scenario in first:
+            metadata = block_smb_monte_carlo_metadata(scenario)
+            # Nothing is unlocked beyond easy at the initial state.
+            self.assertEqual(metadata["parameters"]["difficulty_bin"], "easy")
+        shifted = build_mastery_monte_carlo_curriculum(config, state, phase=4)
+        self.assertNotEqual(
+            [name for name, _ in first], [name for name, _ in shifted]
+        )
+
+    def test_config_validates_mastery_fields(self):
+        from retroagi.stages.block_smb.train import BlockSMBTrainingConfig
+
+        with self.assertRaises(ValueError):
+            BlockSMBTrainingConfig(mastery_retention_weight=0.0)
+        config = BlockSMBTrainingConfig(mastery_gated_schedule=True)
+        self.assertTrue(config.mastery_gated_schedule)
+
+
 if __name__ == "__main__":
     unittest.main()

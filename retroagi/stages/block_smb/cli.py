@@ -346,6 +346,28 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         type=float,
         help="minimum per-family Monte Carlo pass rate for promotion gating",
     )
+    parser.set_defaults(mastery_gated_schedule=None)
+    parser.add_argument(
+        "--mastery-gated-schedule",
+        action="store_true",
+        dest="mastery_gated_schedule",
+        help=(
+            "focus Monte Carlo train sampling on families below the family "
+            "pass-rate gate, retain mastered families at a small weight, and "
+            "unlock per-family difficulties easy->medium->hard as bins pass"
+        ),
+    )
+    parser.add_argument(
+        "--no-mastery-gated-schedule",
+        action="store_false",
+        dest="mastery_gated_schedule",
+        help="use the static once-sampled Monte Carlo train curriculum",
+    )
+    parser.add_argument(
+        "--mastery-retention-weight",
+        type=_positive_float,
+        help="sampling weight for mastered families in the mastery-gated schedule",
+    )
     parser.set_defaults(monte_carlo_validate_reachability=None)
     parser.add_argument(
         "--validate-monte-carlo-reachability",
@@ -642,6 +664,8 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "monte_carlo_failure_replay_samples_per_epoch",
         "monte_carlo_pass_rate_gate",
         "monte_carlo_family_pass_rate_gate",
+        "mastery_gated_schedule",
+        "mastery_retention_weight",
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",
@@ -802,6 +826,11 @@ def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
         values["evaluation_interval_epochs"] = (
             DEFAULT_BLOCK_SMB_REAL_VOLUME_EVALUATION_INTERVAL_EPOCHS
         )
+    # Real-volume runs default to the mastery-gated schedule: focus sampling on
+    # families below the family gate (all families nonzero weight), retain
+    # mastered ones, and unlock difficulties per family as bins pass.
+    if use_real_volume_defaults and "mastery_gated_schedule" not in values:
+        values["mastery_gated_schedule"] = True
     if use_real_volume_defaults and "monte_carlo_train_samples_per_epoch" not in values:
         values["monte_carlo_train_samples_per_epoch"] = DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES
     if use_real_volume_defaults and "monte_carlo_validation_samples" not in values:
