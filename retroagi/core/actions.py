@@ -372,7 +372,13 @@ class SMBPrimitiveExecution:
 
 
 class SMBParameterizedPrimitiveExecutor:
-    """Execute learned SMB jump primitives with explicit hold/release timing."""
+    """Execute learned SMB jump primitives with committed hold durations.
+
+    A started jump holds its button combo for the duration selected at
+    initiation and cannot be aborted by the learned cancel/release heads;
+    only physical events (landing, enemy contact) or the runaway safety
+    valve end a hold early.
+    """
 
     def __init__(self, *, default_hold_frames: int = 4, max_hold_frames: int = 60) -> None:
         if int(default_hold_frames) <= 0:
@@ -489,8 +495,12 @@ class SMBParameterizedPrimitiveExecutor:
             SMB_SUPPORT_GROUND,
             SMB_SUPPORT_PLATFORM,
         }
-        cancelled = self._cancel_requested(motor_primitives)
-        if enemy_contact or landed or cancelled:
+        # A started jump commits to its chosen hold duration. Only physical
+        # events end it early: landing or enemy contact (plus the runaway
+        # safety valve in execute()). The learned cancel/release heads have no
+        # on-policy training signal, so letting them interrupt mid-flight
+        # randomly truncated well-chosen long jumps.
+        if enemy_contact or landed:
             action = int(release_action)
             duration_bin_index = self._duration_bin_index
             hold_frames = self._hold_frames
@@ -500,21 +510,10 @@ class SMBParameterizedPrimitiveExecutor:
             return SMBPrimitiveExecution(
                 action=action,
                 released=True,
-                cancelled=cancelled or enemy_contact,
+                cancelled=enemy_contact,
                 landed=landed,
                 duration_bin_index=duration_bin_index,
                 hold_frames=hold_frames,
-            )
-
-        release_requested = self._release_requested(motor_primitives)
-        if not self._released and release_requested:
-            self._released = True
-            return SMBPrimitiveExecution(
-                action=int(release_action),
-                active=True,
-                released=True,
-                duration_bin_index=self._duration_bin_index,
-                hold_frames=self._hold_frames,
             )
 
         if not self._released and self._hold_frames_remaining > 0:
@@ -549,18 +548,6 @@ class SMBParameterizedPrimitiveExecutor:
         if hold_duration is not None:
             return self._clamp_hold_frames(hold_duration), None
         return self.default_hold_frames, None
-
-    def _cancel_requested(self, motor_primitives: Any) -> bool:
-        cancel_logit = _last_motor_scalar(getattr(motor_primitives, "cancel_logit", None))
-        if cancel_logit is None:
-            return False
-        return bool(cancel_logit > 0.0)
-
-    def _release_requested(self, motor_primitives: Any) -> bool:
-        release_logit = _last_motor_scalar(getattr(motor_primitives, "release_logit", None))
-        if release_logit is None:
-            return False
-        return bool(release_logit > 0.0)
 
     def _clamp_hold_frames(self, value: Any) -> int:
         try:

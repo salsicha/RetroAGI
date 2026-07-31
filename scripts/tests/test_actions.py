@@ -239,7 +239,10 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertEqual(third.action, int(SMBAction.RIGHT))
         self.assertEqual(repeated.action, int(SMBAction.RIGHT))
 
-    def test_parameterized_primitive_executor_uses_release_logit(self):
+    def test_parameterized_primitive_executor_commits_through_interrupt_spikes(self):
+        # Regression for cancel-head truncation: spiking cancel/release logits
+        # mid-flight must NOT abort a committed hold. Only landing, enemy
+        # contact, or hold exhaustion end a started jump.
         executor = SMBParameterizedPrimitiveExecutor()
         hold_motor = SimpleNamespace(
             hold_duration_logits=torch.tensor([[[-1.0, 0.0, 4.0]]]),
@@ -247,11 +250,11 @@ class TestSMBActionVocabulary(unittest.TestCase):
             release_logit=torch.tensor([[-4.0]]),
             cancel_logit=torch.tensor([[-4.0]]),
         )
-        release_motor = SimpleNamespace(
+        interrupt_motor = SimpleNamespace(
             hold_duration_logits=torch.tensor([[[-1.0, 0.0, 4.0]]]),
             duration_bin_values=torch.tensor([1.0, 2.0, 4.0]),
             release_logit=torch.tensor([[4.0]]),
-            cancel_logit=torch.tensor([[-4.0]]),
+            cancel_logit=torch.tensor([[4.0]]),
         )
 
         first = executor.execute(
@@ -261,21 +264,35 @@ class TestSMBActionVocabulary(unittest.TestCase):
         )
         second = executor.execute(
             SMBAction.RIGHT_JUMP,
-            motor_primitives=release_motor,
+            motor_primitives=interrupt_motor,
             batch=self._batch_with_vision(self._support_vision(0)),
         )
         third = executor.execute(
             SMBAction.RIGHT_JUMP,
-            motor_primitives=hold_motor,
+            motor_primitives=interrupt_motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+        )
+        fourth = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=interrupt_motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+        )
+        fifth = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=interrupt_motor,
             batch=self._batch_with_vision(self._support_vision(0)),
         )
 
         self.assertTrue(first.started)
         self.assertEqual(first.hold_frames, 4)
-        self.assertEqual(second.action, int(SMBAction.RIGHT))
-        self.assertTrue(second.released)
+        # Interrupt spikes are ignored: the hold keeps emitting the jump.
+        self.assertEqual(second.action, int(SMBAction.RIGHT_JUMP))
         self.assertTrue(second.active)
-        self.assertEqual(third.action, int(SMBAction.RIGHT))
+        self.assertFalse(second.released)
+        self.assertEqual(third.action, int(SMBAction.RIGHT_JUMP))
+        self.assertEqual(fourth.action, int(SMBAction.RIGHT_JUMP))
+        # The hold ends only when its committed duration is exhausted.
+        self.assertEqual(fifth.action, int(SMBAction.RIGHT))
 
     def test_parameterized_primitive_executor_requires_non_jump_after_landing(self):
         executor = SMBParameterizedPrimitiveExecutor()
