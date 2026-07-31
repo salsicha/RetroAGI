@@ -132,6 +132,7 @@ DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILIES = (
     "mixed_section",
     "full_smb_opening_proxy",
     "tall_pipe_jump",
+    "pipe_mount",
 )
 DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
     ("single_gap", 1.0),
@@ -143,6 +144,7 @@ DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
     ("mixed_section", 1.0),
     ("full_smb_opening_proxy", 4.0),
     ("tall_pipe_jump", 2.0),
+    ("pipe_mount", 2.0),
 )
 DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES = 64
 ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES = (
@@ -1167,6 +1169,24 @@ def apply_block_smb_ablations(
     )
 
 
+def block_smb_forced_action_for_rollout(scenario: Mapping[str, Any] | None) -> int | None:
+    """Return the scenario's given A-level action intent, when present.
+
+    B-level isolation families (for example ``pipe_mount``) hand the A-level
+    decision to the rollout via an ``a_level_action`` Monte Carlo parameter, so
+    only the B-level primitive parameters remain to be learned. Unlike oracle
+    forcing, the forced action goes through the normal primitive executor, so
+    the model's own duration head chooses the hold length.
+    """
+
+    metadata = block_smb_monte_carlo_metadata(scenario) if scenario is not None else {}
+    parameters = metadata.get("parameters", {}) if isinstance(metadata, Mapping) else {}
+    value = parameters.get("a_level_action") if isinstance(parameters, Mapping) else None
+    if value is None:
+        return None
+    return int(value)
+
+
 def block_smb_oracle_actions_for_rollout(
     scenario: Mapping[str, Any] | None,
     *,
@@ -1261,6 +1281,7 @@ def _action_from_model(
     oracle_action: int | None = None,
     oracle_next_action: int | None = None,
     oracle_hold_frames: int | None = None,
+    forced_action: int | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -1312,6 +1333,15 @@ def _action_from_model(
     searched_action_id = getattr(model, "last_selected_action_id", None)
     if oracle_action_tensor is not None:
         action_tensor = oracle_action_tensor
+    elif forced_action is not None:
+        # B-level isolation: the scenario hands the A-level decision to the
+        # rollout; the forced action goes through the normal primitive
+        # executor below so the model's duration head stays in control.
+        action_tensor = torch.tensor(
+            [int(forced_action)],
+            dtype=torch.long,
+            device=action_logits.device,
+        )
     elif searched_action_id is not None:
         # Ranked-candidate critic search already picked the most likely action
         # the world model predicts will progress without death; execute exactly
@@ -1490,6 +1520,7 @@ def collect_trajectory(
         if use_oracle_actions
         else ()
     )
+    forced_action = block_smb_forced_action_for_rollout(stage.scenario)
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -1522,6 +1553,7 @@ def collect_trajectory(
             oracle_action=oracle_action,
             oracle_next_action=oracle_next_action,
             oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
+            forced_action=forced_action,
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)

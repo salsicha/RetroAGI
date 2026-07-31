@@ -287,6 +287,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
                     "coin",
                     "enemy_stomp",
                     "goal",
+                    "goal_distance",
                     "fall_death",
                     "gap_jump",
                     "enemy_hit",

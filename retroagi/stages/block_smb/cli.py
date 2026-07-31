@@ -169,6 +169,7 @@ REWARD_CONFIG_ARGS = {
     "reward_gap_jump": "gap_jump",
     "reward_enemy_hit": "enemy_hit",
     "reward_frame_penalty": "frame_penalty",
+    "reward_goal_distance_shaping": "goal_distance_shaping",
 }
 
 ABLATION_CONFIG_FIELDS = (
@@ -235,6 +236,15 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reward-gap-jump", type=_non_positive_float)
     parser.add_argument("--reward-enemy-hit", type=_non_positive_float)
     parser.add_argument("--reward-frame-penalty", type=_non_positive_float)
+    parser.add_argument(
+        "--reward-goal-distance-shaping",
+        type=_non_negative_float,
+        help=(
+            "potential-based per-step reward for decreasing the normalized goal "
+            "distance; scenarios can also opt in with a "
+            "reward_goal_distance_shaping key"
+        ),
+    )
     parser.add_argument("--gradient-clip-norm", type=_positive_float)
     parser.add_argument("--hidden-dim", type=_positive_int)
     parser.add_argument(

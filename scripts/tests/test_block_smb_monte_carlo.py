@@ -164,6 +164,36 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         )
         self.assertGreaterEqual(int(hard.parameters["pipe_height"]), 62)
 
+    def test_pipe_mount_isolates_b_level_with_shaping_and_given_action(self):
+        self.assertIn("pipe_mount", BLOCK_SMB_MC_FAMILIES)
+        heights = {}
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+            for seed in range(4):
+                sample = sample_block_smb_monte_carlo_scenario(
+                    split="validation",
+                    seed=seed,
+                    sample_index=0,
+                    family="pipe_mount",
+                    difficulty=difficulty,
+                )
+                self.assertTrue(sample.reachability["reachable"])
+                parameters = sample.parameters
+                # The A-level decision is given to the rollout.
+                self.assertEqual(parameters["a_level_action"], 2)
+                # Dense vertical-progress gradient is enabled per scenario.
+                self.assertEqual(
+                    sample.scenario["reward_goal_distance_shaping"], 2.0
+                )
+                # The goal sits on the pipe top.
+                pipe_height = int(parameters["pipe_height"])
+                goal = sample.scenario["goal"]
+                self.assertEqual(goal[1], 220 - pipe_height - 20)
+                heights.setdefault(difficulty, []).append(pipe_height)
+        # Difficulty bins produce disjoint, increasing height bands so the
+        # height -> duration mapping is identifiable.
+        self.assertLess(max(heights["easy"]), min(heights["medium"]))
+        self.assertLess(max(heights["medium"]), min(heights["hard"]))
+
     def test_parameter_sweep_covers_every_family_and_difficulty(self):
         sample_set = sample_block_smb_monte_carlo_parameter_sweep(
             split="validation",

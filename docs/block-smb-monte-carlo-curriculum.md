@@ -69,6 +69,7 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `full_smb_opening_proxy` | Block SMB approximation of the early Full SMB 1-1 demands |
 | `mixed_section` | sampled composition of two or three families in one level |
 | `tall_pipe_jump` | a single tall pipe (56-68px, taller than other pipe families) that must be mounted and cleared, staying under the jump-height ceiling so the scripted oracle remains reachable |
+| `pipe_mount` | B-level isolation family: the A-level decision is given (`a_level_action` forces RIGHT_JUMP through the rollout), the goal sits on the pipe top (42-66px, disjoint height bands per difficulty), and a per-scenario goal-distance shaping reward gives a dense vertical-progress gradient, so only the B-level jump parameters (hold duration versus pipe height) remain to be learned |
 
 The first implementation should keep geometry ranges conservative enough that a
 scripted bootstrap oracle can solve every sampled scenario. Harder ranges

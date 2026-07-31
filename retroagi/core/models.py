@@ -34,6 +34,7 @@ ACTION_HEAD_ALLOWED_MISSING_PREFIXES = (
 )
 ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES = ("world_model_actor_context.",)
 ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context.",)
+LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context_b.",)
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     *ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
@@ -41,6 +42,7 @@ ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_HEAD_ALLOWED_MISSING_PREFIXES,
     *ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES,
     *ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
+    *LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
 DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
@@ -642,6 +644,20 @@ class HierarchicalAdaptiveModel(nn.Module):
             nn.init.zeros_(self.c_state_context.weight)
             nn.init.zeros_(self.c_state_context.bias)
             torch.set_rng_state(rng_state)
+        # B-level C-state context: without it the B transformer sees only
+        # coarse semantic region tokens plus A's chosen-action embedding, so
+        # primitive parameters (for example jump-hold duration) cannot condition
+        # on obstacle geometry such as pipe height. The C state fuses position,
+        # goal deltas, kinematics, and pooled ViT patch tokens. Zero-initialized
+        # and RNG-neutral so existing checkpoints load and behave identically.
+        rng_state_b = torch.get_rng_state() if self.seq_len_c is not None else None
+        self.c_state_context_b = (
+            None if self.seq_len_c is None else nn.Linear(self.seq_len_c, d_model)
+        )
+        if self.c_state_context_b is not None:
+            nn.init.zeros_(self.c_state_context_b.weight)
+            nn.init.zeros_(self.c_state_context_b.bias)
+            torch.set_rng_state(rng_state_b)
 
         encoder_layers_a = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, batch_first=True
@@ -788,6 +804,9 @@ class HierarchicalAdaptiveModel(nn.Module):
 
         x_b = self.embedding(src_B) * math.sqrt(self.d_model)
         x_b = self.pos_encoder(x_b)
+        if self.c_state_context_b is not None:
+            c_context_b = torch.tanh(self.c_state_context_b(src_C.float()))
+            x_b = x_b + c_context_b.to(dtype=x_b.dtype).unsqueeze(1)
         cross_mask = self.generate_cross_causal_mask(seq_len_b, seq_len_a, ratio_ab).to(
             src_B.device
         )

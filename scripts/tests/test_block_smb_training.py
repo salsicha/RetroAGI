@@ -1354,6 +1354,89 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         self.assertTrue(resolve([]))
         self.assertFalse(resolve(["--no-deterministic-critic-gates"]))
 
+    def test_goal_distance_shaping_rewards_rising_toward_elevated_goal(self):
+        scenario = {
+            "world_width": 256,
+            "mario": [90, 200],
+            "platforms": [[0, 220, 256, 20], [120, 168, 30, 52]],
+            "coins": [],
+            "goal": [127, 148, 16, 20],
+            "reward_goal_distance_shaping": 2.0,
+        }
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=dict(scenario), seed=0)
+            total = 0.0
+            for action in [2] * 12 + [1] * 20:
+                _obs, _reward, terminated, truncated, info = env.step(action)
+                total += info["reward_terms"]["goal_distance"]
+                if terminated or truncated:
+                    break
+            self.assertGreater(total, 0.0)
+            self.assertGreater(info["reward_terms"]["goal"], 0.0)
+        finally:
+            env.close()
+        # Without the opt-in key the term stays exactly zero.
+        control = {k: v for k, v in scenario.items() if k != "reward_goal_distance_shaping"}
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=control, seed=0)
+            total = 0.0
+            for action in [2] * 12 + [1] * 10:
+                _obs, _reward, terminated, truncated, info = env.step(action)
+                total += info["reward_terms"]["goal_distance"]
+                if terminated or truncated:
+                    break
+            self.assertEqual(total, 0.0)
+        finally:
+            env.close()
+
+    def test_pipe_mount_rollout_forces_a_level_action_with_free_b_duration(self):
+        from retroagi.stages.block_smb.monte_carlo import (
+            sample_block_smb_monte_carlo_scenario,
+        )
+        from retroagi.stages.block_smb.train import (
+            block_smb_forced_action_for_rollout,
+            collect_trajectory,
+        )
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="train",
+            seed=3,
+            sample_index=0,
+            family="pipe_mount",
+            difficulty="easy",
+        )
+        self.assertEqual(block_smb_forced_action_for_rollout(sample.scenario), 2)
+        # Fixed scenarios carry no intent.
+        self.assertIsNone(block_smb_forced_action_for_rollout({"mario": [20, 200]}))
+
+        config = tiny_config()
+        model = make_block_smb_model(config)
+        model.eval()
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(),
+            scenario=dict(sample.scenario),
+            vision=BlockVisionTransformer(),
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                "pipe_mount_forced",
+                rollout_steps=8,
+                seed=0,
+                deterministic=False,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+        # The given A-level action drives the rollout from the first step; the
+        # executor (model duration head) owns the hold, so the executed action
+        # is the forced jump rather than a sampled/searched token.
+        self.assertEqual(trajectory.transitions[0].action, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -91,11 +91,16 @@ class BlockSMBRewardConfig:
     gap_jump: float = -5.0
     enemy_hit: float = -10.0
     frame_penalty: float = -0.01
+    # Potential-based goal-distance shaping: per-step reward proportional to
+    # the decrease in normalized goal distance. Off globally by default;
+    # scenarios opt in with a "reward_goal_distance_shaping" coefficient so
+    # B-level isolation families get a dense vertical-progress gradient.
+    goal_distance_shaping: float = 0.0
 
     def __post_init__(self) -> None:
         if self.progress_per_pixel < 0:
             raise ValueError("progress_per_pixel must be non-negative")
-        for name in ("coin", "enemy_stomp", "goal"):
+        for name in ("coin", "enemy_stomp", "goal", "goal_distance_shaping"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
         for name in ("fall_death", "gap_jump", "enemy_hit", "frame_penalty"):
@@ -108,6 +113,7 @@ class BlockSMBRewardConfig:
             "coin": 0.0,
             "enemy_stomp": 0.0,
             "goal": 0.0,
+            "goal_distance": 0.0,
             "fall_death": 0.0,
             "gap_jump": 0.0,
             "enemy_hit": 0.0,
@@ -263,6 +269,12 @@ class MarioScenarioEnv:
             self.enemies.append(self._parse_enemy(e))
 
         self.goal = pygame.Rect(*scenario["goal"]) if "goal" in scenario else None
+        # Per-scenario opt-in overrides the config default coefficient.
+        self._goal_distance_shaping = float(
+            scenario.get("reward_goal_distance_shaping", self.reward_config.goal_distance_shaping)
+            or 0.0
+        )
+        self._prev_goal_distance = self._normalized_goal_distance()
 
         obs = self.render()
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
@@ -275,6 +287,19 @@ class MarioScenarioEnv:
         return obs, info
 
     # ── Step ──────────────────────────────────────────────────────────────────
+
+    def _normalized_goal_distance(self) -> float | None:
+        """Normalized Mario-center to goal-center distance (matches state_vec)."""
+
+        if self.goal is None:
+            return None
+        ww = float(self.world_width)
+        wh = float(self.height)
+        mx = self.mario["x"] + self.mario["w"] / 2
+        my = self.mario["y"] + self.mario["h"] / 2
+        goal_dx = (self.goal.centerx - mx) / ww
+        goal_dy = (self.goal.centery - my) / wh
+        return min(math.hypot(goal_dx, goal_dy), 1.0)
 
     def step(self, action: int):
         """
@@ -460,6 +485,15 @@ class MarioScenarioEnv:
                 self.mario["x"] - self._max_x_reached
             ) * self.reward_config.progress_per_pixel
             self._max_x_reached = self.mario["x"]
+
+        # ── 12b. Goal-distance shaping (potential-based, opt-in) ─────────────
+        if self._goal_distance_shaping > 0.0 and self.goal is not None:
+            current_goal_distance = self._normalized_goal_distance()
+            if self._prev_goal_distance is not None and current_goal_distance is not None:
+                reward_terms["goal_distance"] += self._goal_distance_shaping * (
+                    self._prev_goal_distance - current_goal_distance
+                )
+            self._prev_goal_distance = current_goal_distance
 
         # ── 13. Fall death ────────────────────────────────────────────────────
         if self.mario["y"] > self.height:

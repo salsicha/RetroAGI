@@ -1473,5 +1473,64 @@ class TestDeterministicCriticGates(unittest.TestCase):
         self.assertIsNotNone(evaluation.progress_score)
 
 
+class TestLevelBCStateContext(unittest.TestCase):
+    def test_b_context_exists_zero_initialized_and_checkpoint_compatible(self):
+        from retroagi.core.models import (
+            LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
+        )
+
+        model = AgentWorldModelCritic(
+            vocab_size=4,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+            direct_c_state_context=True,
+        )
+        head = model.agent.c_state_context_b
+        self.assertIsNotNone(head)
+        # Zero-init: the new pathway contributes nothing until trained, so old
+        # checkpoints behave identically after loading.
+        self.assertEqual(float(head.weight.abs().sum()), 0.0)
+        self.assertEqual(float(head.bias.abs().sum()), 0.0)
+        # Old checkpoints (no B-context keys) load through the allowed-missing
+        # mechanism.
+        state = model.state_dict()
+        pruned = {
+            key: value
+            for key, value in state.items()
+            if not key.startswith("agent.c_state_context_b.")
+        }
+        result = model.load_state_dict(pruned, strict=False)
+        self.assertTrue(
+            all(
+                key.startswith(LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES)
+                for key in result.missing_keys
+            )
+        )
+
+    def test_b_context_conditions_controller_params_when_trained(self):
+        torch.manual_seed(0)
+        model = AgentWorldModelCritic(
+            vocab_size=4,
+            seq_len_a=2,
+            seq_len_c=8,
+            ratio_bc=2,
+            d_model=4,
+            direct_c_state_context=True,
+        )
+        with torch.no_grad():
+            model.agent.c_state_context_b.weight.normal_(0.0, 1.0)
+        src_a = torch.zeros(1, 2, dtype=torch.long)
+        src_b = torch.zeros(1, 4, dtype=torch.long)
+        model.eval()
+        with torch.no_grad():
+            out_low = model.agent(src_a, src_b, torch.zeros(1, 8))
+            out_high = model.agent(src_a, src_b, torch.ones(1, 8))
+        # With a trained head, different C states (for example different pipe
+        # heights) produce different B-level controller parameters.
+        self.assertFalse(torch.allclose(out_low[2], out_high[2]))
+
+
 if __name__ == "__main__":
     unittest.main()

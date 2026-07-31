@@ -34,6 +34,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "full_smb_opening_proxy",
     "mixed_section",
     "tall_pipe_jump",
+    "pipe_mount",
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 200
 
@@ -273,6 +274,14 @@ def block_smb_monte_carlo_family_specs(
             "pipe_width": [30, 30],
             "pipe_height": [56, 68],
             "goal_x": [266, 276],
+        },
+        "pipe_mount": {
+            "pipe_x": [120, 120],
+            "pipe_width": [30, 30],
+            "pipe_height": [42, 66],
+            "spawn_distance": [30, 30],
+            "goal": "on the pipe top",
+            "a_level_action": [2, 2],
         },
     }
     return {
@@ -879,6 +888,8 @@ def _generate_family_scenario(
         return _mixed_section(rng, difficulty)
     if family == "tall_pipe_jump":
         return _tall_pipe_jump(rng, difficulty)
+    if family == "pipe_mount":
+        return _pipe_mount(rng, difficulty)
     raise ValueError(f"unknown Block SMB Monte Carlo family {family!r}")
 
 
@@ -1290,6 +1301,55 @@ def _mixed_section(
         "difficulty_bin": difficulty,
     }
     return scenario, params, actions
+
+
+def _pipe_mount(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # B-level isolation family: the A-level decision is given (a_level_action
+    # forces RIGHT_JUMP during rollouts), the goal sits ON the pipe top, and a
+    # goal-distance shaping reward gives a dense vertical-progress gradient.
+    # Only the B-level jump parameters (hold duration) have to be learned, and
+    # the required hold grows monotonically with the pipe height, so the
+    # height -> duration mapping is identifiable from the C-stream state the
+    # B transformer now receives.
+    pipe_height = {
+        "easy": rng.randint(42, 48),
+        "medium": rng.randint(52, 58),
+        "hard": rng.randint(60, 66),
+    }[difficulty]
+    pipe_x, pipe_width = 120, 30
+    spawn_distance = 30
+    goal_x = pipe_x + rng.randint(2, 12)
+    scenario = {
+        "world_width": 256,
+        "mario": [pipe_x - spawn_distance, 200],
+        "platforms": [
+            [0, 220, 256, 20],
+            [pipe_x, 220 - pipe_height, pipe_width, pipe_height],
+        ],
+        "coins": [],
+        "goal": [goal_x, 220 - pipe_height - 20, 16, 20],
+        "reward_goal_distance_shaping": 2.0,
+    }
+    oracle_prefix = {"easy": [], "medium": [], "hard": [1, 1]}[difficulty]
+    oracle_hold = {"easy": 12, "medium": 14, "hard": 16}[difficulty]
+    actions = _pad(oracle_prefix + [2] * oracle_hold + [1] * 30)
+    return (
+        scenario,
+        {
+            "pipe_x": pipe_x,
+            "pipe_width": pipe_width,
+            "pipe_height": pipe_height,
+            "spawn_distance": spawn_distance,
+            "goal_x": goal_x,
+            # A-level intent handed to the rollout: force RIGHT_JUMP so only
+            # the B-level executor parameters remain to be learned.
+            "a_level_action": 2,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
 
 
 def _tall_pipe_jump(
