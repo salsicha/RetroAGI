@@ -385,6 +385,22 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         dest="use_oracle_actions",
         help="collect training rollouts purely on-policy",
     )
+    parser.set_defaults(ranked_candidate_search=None)
+    parser.add_argument(
+        "--ranked-candidate-search",
+        action="store_true",
+        dest="ranked_candidate_search",
+        help=(
+            "sort A-level action logits and execute the most likely candidate "
+            "the world model predicts will progress without death (default)"
+        ),
+    )
+    parser.add_argument(
+        "--no-ranked-candidate-search",
+        action="store_false",
+        dest="ranked_candidate_search",
+        help="use single-pass action selection with critic-feedback refinement",
+    )
     parser.set_defaults(monte_carlo_validate_reachability=None)
     parser.add_argument(
         "--validate-monte-carlo-reachability",
@@ -684,6 +700,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "mastery_gated_schedule",
         "mastery_retention_weight",
         "use_oracle_actions",
+        "ranked_candidate_search",
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",

@@ -1235,13 +1235,13 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         config = BlockSMBTrainingConfig(mastery_gated_schedule=True)
         self.assertTrue(config.mastery_gated_schedule)
 
-    def test_oracle_actions_default_on_and_cli_toggle(self):
+    def test_oracle_actions_default_off_and_cli_toggle(self):
         from retroagi.stages.block_smb import cli
         from retroagi.stages.block_smb.train import BlockSMBTrainingConfig
 
-        # Training-rollout oracle demonstrations are on by default; evaluation
-        # paths never pass the flag and stay oracle-free.
-        self.assertTrue(BlockSMBTrainingConfig().use_oracle_actions)
+        # Ranked-candidate search replaces oracle forcing as the default
+        # in-rollout skill channel; oracle demonstrations are opt-in.
+        self.assertFalse(BlockSMBTrainingConfig().use_oracle_actions)
         with self.assertRaises(TypeError):
             BlockSMBTrainingConfig(use_oracle_actions=1)
 
@@ -1256,9 +1256,41 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             )
             return cli._make_train_config(args).use_oracle_actions
 
-        self.assertTrue(resolve([]))
+        self.assertFalse(resolve([]))
         self.assertFalse(resolve(["--no-oracle-actions"]))
         self.assertTrue(resolve(["--use-oracle-actions"]))
+
+    def test_ranked_candidate_search_default_on_and_wired_to_model(self):
+        from retroagi.stages.block_smb import cli
+        from retroagi.stages.block_smb.train import (
+            BlockSMBTrainingConfig,
+            make_block_smb_model,
+        )
+
+        config = BlockSMBTrainingConfig()
+        self.assertTrue(config.ranked_candidate_search)
+        with self.assertRaises(TypeError):
+            BlockSMBTrainingConfig(ranked_candidate_search="yes")
+        model = make_block_smb_model(config)
+        self.assertTrue(model.ranked_candidate_search)
+        disabled = make_block_smb_model(
+            BlockSMBTrainingConfig(ranked_candidate_search=False)
+        )
+        self.assertFalse(disabled.ranked_candidate_search)
+
+        def resolve(extra):
+            args = cli.build_parser().parse_args(
+                [
+                    "train",
+                    "--vision-checkpoint",
+                    "data/block_vit/block_vit.pth",
+                    *extra,
+                ]
+            )
+            return cli._make_train_config(args).ranked_candidate_search
+
+        self.assertTrue(resolve([]))
+        self.assertFalse(resolve(["--no-ranked-candidate-search"]))
 
 
 if __name__ == "__main__":

@@ -1248,5 +1248,155 @@ class TestWorldModelRecurrentBoundaries(unittest.TestCase):
             )
 
 
+class RankedSearchAgent(nn.Module):
+    """Stub actor with fixed last-position logits and forced-action recording."""
+
+    uses_world_model_context = True
+
+    def __init__(self, seq_len_a, seq_len_b, vocab_size, last_logits):
+        super().__init__()
+        self.seq_len_a = seq_len_a
+        self.seq_len_b = seq_len_b
+        self.vocab_size = vocab_size
+        self.register_buffer("last_logits", torch.tensor(last_logits, dtype=torch.float32))
+        self.forced_actions = []
+        self.last_level_b_primitives = None
+
+    def forward(
+        self,
+        src_a,
+        src_b,
+        src_c,
+        criticism=None,
+        tau=1.0,
+        *,
+        world_model_context=None,
+        forced_action=None,
+    ):
+        del criticism, tau, world_model_context
+        self.forced_actions.append(None if forced_action is None else int(forced_action))
+        batch_size = src_a.size(0)
+        logits = torch.zeros(batch_size, self.seq_len_a, self.vocab_size)
+        logits[:, -1, :] = self.last_logits
+        w_b = torch.ones(batch_size, self.seq_len_b)
+        b_b = torch.zeros(batch_size, self.seq_len_b)
+        return logits, src_c.clone(), w_b, b_b
+
+
+class SequencedCritic(nn.Module):
+    """Critic stub returning scripted progress/death per evaluation call."""
+
+    def __init__(self, criticism, progress_scores, death_risks):
+        super().__init__()
+        self.register_buffer("criticism", criticism)
+        self.progress_scores = tuple(float(score) for score in progress_scores)
+        self.death_risks = tuple(float(risk) for risk in death_risks)
+        self.evaluations = 0
+
+    def forward(self, next_state_pred):
+        return self.criticism[: next_state_pred.size(0)]
+
+    def evaluate_action(
+        self,
+        next_state_pred,
+        current_state=None,
+        *,
+        progress_threshold=0.0,
+        death_threshold=0.75,
+        **_kwargs,
+    ):
+        del current_state
+        index = min(self.evaluations, len(self.progress_scores) - 1)
+        self.evaluations += 1
+        progress_score = torch.full(
+            (next_state_pred.size(0),), self.progress_scores[index]
+        )
+        death_risk = torch.full((next_state_pred.size(0),), self.death_risks[index])
+        return CriticActionEvaluation(
+            feedback=self.forward(next_state_pred),
+            progress_score=progress_score,
+            death_risk=death_risk,
+            would_progress=progress_score >= progress_threshold,
+            predicts_death=death_risk >= death_threshold,
+        )
+
+
+class TestRankedCandidateSearch(unittest.TestCase):
+    def _make_model(self, progress_scores, death_risks):
+        seq_len_a, seq_len_b, seq_len_c, d_model, vocab = 2, 4, 8, 4, 4
+        model = AgentWorldModelCritic(
+            vocab_size=vocab,
+            seq_len_a=seq_len_a,
+            seq_len_c=seq_len_c,
+            ratio_bc=2,
+            d_model=d_model,
+            ranked_candidate_search=True,
+        )
+        # Fixed logits rank the actions: id1 (9.0) > id3 (7.0) > id2 (5.0) > id0 (0.0)
+        agent = RankedSearchAgent(seq_len_a, seq_len_b, vocab, [0.0, 9.0, 5.0, 7.0])
+        model.agent = agent
+        model.world_model = RecordingWorldModel()
+        model.critic = SequencedCritic(
+            torch.ones(1, seq_len_a, d_model),
+            progress_scores=progress_scores,
+            death_risks=death_risks,
+        )
+        src_a = torch.zeros(1, seq_len_a, dtype=torch.long)
+        src_b = torch.zeros(1, seq_len_b, dtype=torch.long)
+        src_c = torch.ones(1, seq_len_c)
+        return model, agent, (src_a, src_b, src_c)
+
+    def test_executes_first_ranked_candidate_that_progresses_without_death(self):
+        # Critic call order: natural pass, then ranked candidates id1, id3.
+        # id1 (most likely) predicts no progress -- the wall case -- and id3
+        # (next most likely) progresses safely, so id3 is selected.
+        model, agent, batch = self._make_model(
+            progress_scores=(1.0, -1.0, 1.0),
+            death_risks=(0.0, 0.0, 0.0),
+        )
+        model(*batch)
+        self.assertEqual(agent.forced_actions, [None, 1, 3])
+        self.assertEqual(model.last_selected_action_id, 3)
+        trace = model.last_action_refinement
+        self.assertTrue(trace.accepted)
+        self.assertEqual(trace.iterations, 2)
+        self.assertEqual(trace.selected_iteration, 2)
+
+    def test_death_prediction_rejects_candidate(self):
+        # id1 progresses but predicts death; id3 progresses safely.
+        model, _agent, batch = self._make_model(
+            progress_scores=(1.0, 1.0, 1.0),
+            death_risks=(0.0, 0.95, 0.0),
+        )
+        model(*batch)
+        self.assertEqual(model.last_selected_action_id, 3)
+        self.assertTrue(model.last_action_refinement.accepted)
+
+    def test_falls_back_to_best_ranked_candidate_when_none_accepted(self):
+        # Every candidate is rejected; the fallback picks the best
+        # progress-minus-death rank among them (id2, progress -0.25).
+        model, agent, batch = self._make_model(
+            progress_scores=(-1.0, -1.0, -1.0, -0.25, -1.0),
+            death_risks=(0.0, 0.0, 0.0, 0.0, 0.0),
+        )
+        model(*batch)
+        self.assertEqual(agent.forced_actions, [None, 1, 3, 2, 0])
+        self.assertEqual(model.last_selected_action_id, 2)
+        trace = model.last_action_refinement
+        self.assertFalse(trace.accepted)
+        self.assertEqual(trace.iterations, 4)
+        self.assertEqual(trace.selected_iteration, 3)
+
+    def test_search_disabled_keeps_refinement_behavior(self):
+        model, agent, batch = self._make_model(
+            progress_scores=(1.0,),
+            death_risks=(0.0,),
+        )
+        model.ranked_candidate_search = False
+        model(*batch)
+        self.assertIsNone(model.last_selected_action_id)
+        self.assertEqual(agent.forced_actions, [None])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -277,7 +277,14 @@ class BlockSMBTrainingConfig:
     # scenarios that carry them (fixed scenarios have no oracle and stay
     # on-policy). This is the in-loop demonstration channel that supervises the
     # action and primitive heads; evaluation rollouts never use oracle actions.
-    use_oracle_actions: bool = True
+    use_oracle_actions: bool = False
+    # Ranked-candidate critic search: sort the A-level next-action logits and
+    # evaluate candidates from most to least likely through the LSTM world
+    # model and critic, executing the first one predicted to progress without
+    # death. Walking into an obstacle predicts no motion, which the critic
+    # treats as no progress, so blocked actions are rejected and the next
+    # most likely token is tried.
+    ranked_candidate_search: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -390,6 +397,8 @@ class BlockSMBTrainingConfig:
             raise ValueError("mastery_retention_weight must be positive")
         if not isinstance(self.use_oracle_actions, bool):
             raise TypeError("use_oracle_actions must be a bool")
+        if not isinstance(self.ranked_candidate_search, bool):
+            raise TypeError("ranked_candidate_search must be a bool")
         if not 0.0 <= self.action_gate_max_dominant_fraction <= 1.0:
             raise ValueError("action_gate_max_dominant_fraction must be between 0 and 1")
         required_actions = tuple(int(action) for action in self.action_gate_required_actions)
@@ -968,11 +977,17 @@ def make_block_smb_model(config: BlockSMBTrainingConfig) -> torch.nn.Module:
             f"contract in {POLICY_TUPLE_OUTPUT_CONTRACTS!r}, got "
             f"{architecture.output_contract!r}"
         )
-    return build_architecture(
+    model = build_architecture(
         config.architecture_name,
         BLOCK_SMB_SPEC,
         dict(config.architecture_config),
     )
+    if hasattr(model, "ranked_candidate_search"):
+        # Attribute flip rather than a constructor/architecture-config change:
+        # the search adds no parameters, so checkpoints stay compatible in both
+        # directions and the setting is recorded via the training config.
+        model.ranked_candidate_search = bool(config.ranked_candidate_search)
+    return model
 
 
 def make_target_network(model: torch.nn.Module) -> torch.nn.Module:
@@ -1276,11 +1291,23 @@ def _action_from_model(
             dtype=torch.long,
             device=action_logits.device,
         )
-    action_tensor = (
-        oracle_action_tensor
-        if oracle_action_tensor is not None
-        else (action_logits.argmax(dim=-1) if deterministic else distribution.sample())
-    )
+    searched_action_id = getattr(model, "last_selected_action_id", None)
+    if oracle_action_tensor is not None:
+        action_tensor = oracle_action_tensor
+    elif searched_action_id is not None:
+        # Ranked-candidate critic search already picked the most likely action
+        # the world model predicts will progress without death; execute exactly
+        # that token in both stochastic training rollouts and deterministic
+        # evaluation.
+        action_tensor = torch.tensor(
+            [int(searched_action_id)],
+            dtype=torch.long,
+            device=action_logits.device,
+        )
+    else:
+        action_tensor = (
+            action_logits.argmax(dim=-1) if deterministic else distribution.sample()
+        )
     execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
     if oracle_action_tensor is not None:
         execution = _oracle_primitive_execution(

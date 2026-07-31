@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 import torch
 import torch.nn as nn
@@ -743,6 +743,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         return_hidden=False,
         *,
         world_model_context=None,
+        forced_action=None,
     ):
         seq_len_a = src_A.size(1)
         seq_len_b = src_B.size(1)
@@ -770,6 +771,19 @@ class HierarchicalAdaptiveModel(nn.Module):
             probs_a = F.gumbel_softmax(logits_a, tau=tau, hard=True, dim=-1)
         else:
             probs_a = F.softmax(logits_a, dim=-1)
+        if forced_action is not None:
+            # Ranked-candidate imagination: condition the B/C pipeline on an
+            # explicit next-action token instead of the sampled/soft mixture, so
+            # the world model can evaluate "what if I took this action" for
+            # tokens other than the actor's first choice.
+            forced_index = int(forced_action)
+            if not 0 <= forced_index < probs_a.size(-1):
+                raise ValueError(
+                    f"forced_action must be in [0, {probs_a.size(-1)}), got {forced_index}"
+                )
+            forced_row = torch.zeros_like(probs_a[:, -1, :])
+            forced_row[:, forced_index] = 1.0
+            probs_a = torch.cat((probs_a[:, :-1, :], forced_row.unsqueeze(1)), dim=1)
         pred_emb_a = torch.matmul(probs_a, self.action_embedding.weight)
 
         x_b = self.embedding(src_B) * math.sqrt(self.d_model)
@@ -1247,6 +1261,7 @@ class AgentWorldModelCritic(nn.Module):
         critic_death_threshold=0.75,
         critic_motion_threshold=DEFAULT_ACTION_MOTION_THRESHOLD,
         direct_c_state_context=False,
+        ranked_candidate_search=False,
     ):
         super().__init__()
         if int(max_action_refinement_passes) <= 0:
@@ -1318,6 +1333,14 @@ class AgentWorldModelCritic(nn.Module):
         self.last_primitive_outcome: PrimitiveOutcomePrediction | None = None
         self.last_actor_world_model_context: torch.Tensor | None = None
         self.last_action_refinement: ActionRefinementTrace | None = None
+        # Ranked-candidate search: instead of re-running the actor with critic
+        # feedback, sort the A-level next-action logits and evaluate candidates
+        # from most to least likely through the world model and critic,
+        # executing the first one predicted to progress without death. The
+        # selected token id is exposed via last_selected_action_id so rollout
+        # code can execute exactly the searched action.
+        self.ranked_candidate_search = bool(ranked_candidate_search)
+        self.last_selected_action_id: int | None = None
         self.transition_representation_head = nn.Sequential(
             nn.Linear(seq_len_c, d_model),
             nn.LayerNorm(d_model),
@@ -1441,17 +1464,14 @@ class AgentWorldModelCritic(nn.Module):
         criticism=None,
         tau=1.0,
         world_model_context=None,
+        forced_action=None,
     ):
+        kwargs: dict[str, Any] = {"criticism": criticism, "tau": tau}
         if bool(getattr(self.agent, "uses_world_model_context", False)):
-            return self.agent(
-                src_A,
-                src_B,
-                src_C,
-                criticism=criticism,
-                tau=tau,
-                world_model_context=world_model_context,
-            )
-        return self.agent(src_A, src_B, src_C, criticism=criticism, tau=tau)
+            kwargs["world_model_context"] = world_model_context
+        if forced_action is not None:
+            kwargs["forced_action"] = forced_action
+        return self.agent(src_A, src_B, src_C, **kwargs)
 
     def _world_model_prediction(
         self,
@@ -1821,8 +1841,69 @@ class AgentWorldModelCritic(nn.Module):
         selected_candidate = first_candidate
         selected_iteration = 1
         accepted = self._candidate_is_accepted(first_candidate)
+        self.last_selected_action_id = None
 
-        if critic_feedback_enabled and not accepted:
+        use_ranked_search = (
+            self.ranked_candidate_search
+            and critic_feedback_enabled
+            and world_model_enabled
+            and src_A.size(0) == 1
+        )
+        if use_ranked_search:
+            ranked_action_ids = (
+                torch.argsort(
+                    logits_a1[:, -1, : self.action_vocab_size],
+                    dim=-1,
+                    descending=True,
+                )
+                .view(-1)
+                .tolist()
+            )
+            search_candidates: list[_ActionCandidate] = []
+            search_ids: list[int] = []
+            selected_candidate = None
+            selected_iteration = 0
+            accepted = False
+            for rank_index, action_id in enumerate(ranked_action_ids):
+                logits_f, actions_f, w_f, b_f = self._agent_forward(
+                    src_A,
+                    src_B,
+                    src_C,
+                    criticism=None,
+                    tau=tau,
+                    world_model_context=actor_world_model_context,
+                    forced_action=action_id,
+                )
+                primitive_params_f = getattr(self.agent, "last_level_b_primitives", None)
+                candidate = self._candidate_from_actor_outputs(
+                    src_C,
+                    logits_f,
+                    actions_f,
+                    w_f,
+                    b_f,
+                    primitive_params=primitive_params_f,
+                    world_model_state=world_model_state,
+                    episode_mask=episode_mask,
+                    return_world_model_state=return_world_model_state,
+                    world_model_enabled=world_model_enabled,
+                )
+                search_candidates.append(candidate)
+                search_ids.append(int(action_id))
+                if self._candidate_is_accepted(candidate):
+                    selected_candidate = candidate
+                    selected_iteration = rank_index + 1
+                    accepted = True
+                    break
+            if selected_candidate is None:
+                best_index = max(
+                    range(len(search_candidates)),
+                    key=lambda index: self._candidate_rank(search_candidates[index]),
+                )
+                selected_candidate = search_candidates[best_index]
+                selected_iteration = best_index + 1
+            self.last_selected_action_id = search_ids[selected_iteration - 1]
+            candidates = search_candidates
+        elif critic_feedback_enabled and not accepted:
             actor_criticism = first_candidate.criticism.detach()
             for _pass_index in range(1, self.max_action_refinement_passes):
                 logits_a, actions, w, b = self._agent_forward(
@@ -1854,7 +1935,7 @@ class AgentWorldModelCritic(nn.Module):
                     break
                 actor_criticism = candidate.criticism.detach()
 
-        if not accepted:
+        if not accepted and not use_ranked_search:
             selected_candidate, selected_iteration = self._select_fallback_candidate(candidates)
 
         self._record_refinement_trace(
