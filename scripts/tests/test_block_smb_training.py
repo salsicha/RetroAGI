@@ -1235,6 +1235,31 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         config = BlockSMBTrainingConfig(mastery_gated_schedule=True)
         self.assertTrue(config.mastery_gated_schedule)
 
+    def test_oracle_actions_default_on_and_cli_toggle(self):
+        from retroagi.stages.block_smb import cli
+        from retroagi.stages.block_smb.train import BlockSMBTrainingConfig
+
+        # Training-rollout oracle demonstrations are on by default; evaluation
+        # paths never pass the flag and stay oracle-free.
+        self.assertTrue(BlockSMBTrainingConfig().use_oracle_actions)
+        with self.assertRaises(TypeError):
+            BlockSMBTrainingConfig(use_oracle_actions=1)
+
+        def resolve(extra):
+            args = cli.build_parser().parse_args(
+                [
+                    "train",
+                    "--vision-checkpoint",
+                    "data/block_vit/block_vit.pth",
+                    *extra,
+                ]
+            )
+            return cli._make_train_config(args).use_oracle_actions
+
+        self.assertTrue(resolve([]))
+        self.assertFalse(resolve(["--no-oracle-actions"]))
+        self.assertTrue(resolve(["--use-oracle-actions"]))
+
 
 if __name__ == "__main__":
     unittest.main()

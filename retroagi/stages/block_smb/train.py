@@ -273,6 +273,11 @@ class BlockSMBTrainingConfig:
     # hard) as each bin clears the gate. Every family always has nonzero weight.
     mastery_gated_schedule: bool = False
     mastery_retention_weight: float = 0.25
+    # Execute scripted oracle actions during training rollouts on Monte Carlo
+    # scenarios that carry them (fixed scenarios have no oracle and stay
+    # on-policy). This is the in-loop demonstration channel that supervises the
+    # action and primitive heads; evaluation rollouts never use oracle actions.
+    use_oracle_actions: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -383,6 +388,8 @@ class BlockSMBTrainingConfig:
             raise TypeError("mastery_gated_schedule must be a bool")
         if float(self.mastery_retention_weight) <= 0.0:
             raise ValueError("mastery_retention_weight must be positive")
+        if not isinstance(self.use_oracle_actions, bool):
+            raise TypeError("use_oracle_actions must be a bool")
         if not 0.0 <= self.action_gate_max_dominant_fraction <= 1.0:
             raise ValueError("action_gate_max_dominant_fraction must be between 0 and 1")
         required_actions = tuple(int(action) for action in self.action_gate_required_actions)
@@ -2137,7 +2144,7 @@ def train_block_smb_epoch(
                 deterministic=False,
                 device=device,
                 ablation=config.ablation,
-                use_oracle_actions=False,
+                use_oracle_actions=config.use_oracle_actions,
             )
         finally:
             stage.env.close()

@@ -368,6 +368,23 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         type=_positive_float,
         help="sampling weight for mastered families in the mastery-gated schedule",
     )
+    parser.set_defaults(use_oracle_actions=None)
+    parser.add_argument(
+        "--use-oracle-actions",
+        action="store_true",
+        dest="use_oracle_actions",
+        help=(
+            "execute scripted oracle actions during training rollouts on Monte "
+            "Carlo scenarios that carry them (default; evaluation never uses "
+            "oracle actions)"
+        ),
+    )
+    parser.add_argument(
+        "--no-oracle-actions",
+        action="store_false",
+        dest="use_oracle_actions",
+        help="collect training rollouts purely on-policy",
+    )
     parser.set_defaults(monte_carlo_validate_reachability=None)
     parser.add_argument(
         "--validate-monte-carlo-reachability",
@@ -666,6 +683,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "monte_carlo_family_pass_rate_gate",
         "mastery_gated_schedule",
         "mastery_retention_weight",
+        "use_oracle_actions",
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",
