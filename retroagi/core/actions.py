@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Iterable, Mapping
@@ -380,14 +381,31 @@ class SMBParameterizedPrimitiveExecutor:
     valve end a hold early.
     """
 
-    def __init__(self, *, default_hold_frames: int = 4, max_hold_frames: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        default_hold_frames: int = 4,
+        max_hold_frames: int = 60,
+        duration_sampling: bool = False,
+        duration_temperature: float = 1.0,
+        duration_seed: int | None = None,
+    ) -> None:
         if int(default_hold_frames) <= 0:
             raise ValueError("default_hold_frames must be positive")
         if int(max_hold_frames) <= 0:
             raise ValueError("max_hold_frames must be positive")
+        if float(duration_temperature) <= 0.0:
+            raise ValueError("duration_temperature must be positive")
         self.default_hold_frames = int(default_hold_frames)
         self.max_hold_frames = int(max_hold_frames)
         self.max_active_frames = self.max_hold_frames + _JUMP_LANDING_ALLOWANCE_FRAMES
+        # Stochastic training rollouts sample the hold-duration bin from
+        # softmax(logits / temperature) so the duration head is explored and
+        # its REINFORCE log-prob term scores a genuinely sampled choice.
+        # Deterministic evaluation keeps the argmax bin.
+        self.duration_sampling = bool(duration_sampling)
+        self.duration_temperature = float(duration_temperature)
+        self._duration_rng = random.Random(duration_seed)
         self.reset()
 
     @property
@@ -534,11 +552,23 @@ class SMBParameterizedPrimitiveExecutor:
             hold_frames=self._hold_frames,
         )
 
+    def _select_duration_bin(self, logits: Any) -> int:
+        flat = np.asarray(logits, dtype=np.float64).reshape(-1)
+        if not self.duration_sampling:
+            return int(flat.argmax())
+        scaled = flat / self.duration_temperature
+        scaled = scaled - scaled.max()
+        probabilities = np.exp(scaled)
+        probabilities = probabilities / probabilities.sum()
+        return int(
+            self._duration_rng.choices(range(flat.size), weights=probabilities.tolist(), k=1)[0]
+        )
+
     def _select_hold_frames(self, motor_primitives: Any) -> tuple[int, int | None]:
         logits = _last_motor_array(getattr(motor_primitives, "hold_duration_logits", None))
         duration_values = _last_motor_array(getattr(motor_primitives, "duration_bin_values", None))
         if logits is not None and logits.size:
-            duration_bin_index = int(np.asarray(logits).reshape(-1).argmax())
+            duration_bin_index = self._select_duration_bin(logits)
             if duration_values is not None and duration_values.size:
                 values = np.asarray(duration_values).reshape(-1)
                 if 0 <= duration_bin_index < values.size:

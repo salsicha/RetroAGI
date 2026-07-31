@@ -239,6 +239,53 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertEqual(third.action, int(SMBAction.RIGHT))
         self.assertEqual(repeated.action, int(SMBAction.RIGHT))
 
+    def test_parameterized_primitive_executor_samples_durations_when_enabled(self):
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.zeros(1, 1, 8),
+            duration_bin_values=torch.tensor([1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]),
+        )
+
+        # Default (argmax) mode: flat logits always resolve to the same bin.
+        argmax_executor = SMBParameterizedPrimitiveExecutor()
+        argmax_bins = set()
+        for _ in range(12):
+            execution = argmax_executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            )
+            argmax_bins.add(execution.duration_bin_index)
+            argmax_executor.reset()
+        self.assertEqual(argmax_bins, {0})
+
+        # Sampling mode: flat logits explore many bins, deterministically per
+        # seed so rollouts stay reproducible.
+        sampler = SMBParameterizedPrimitiveExecutor(duration_sampling=True, duration_seed=11)
+        sampled_bins = []
+        for _ in range(24):
+            execution = sampler.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            )
+            sampled_bins.append(execution.duration_bin_index)
+            sampler.reset()
+        self.assertGreater(len(set(sampled_bins)), 3)
+        replay = SMBParameterizedPrimitiveExecutor(duration_sampling=True, duration_seed=11)
+        replay_bins = []
+        for _ in range(24):
+            execution = replay.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            )
+            replay_bins.append(execution.duration_bin_index)
+            replay.reset()
+        self.assertEqual(sampled_bins, replay_bins)
+
+        with self.assertRaises(ValueError):
+            SMBParameterizedPrimitiveExecutor(duration_temperature=0.0)
+
     def test_parameterized_primitive_executor_commits_through_interrupt_spikes(self):
         # Regression for cancel-head truncation: spiking cancel/release logits
         # mid-flight must NOT abort a committed hold. Only landing, enemy

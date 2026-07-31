@@ -1511,7 +1511,13 @@ def collect_trajectory(
     if record_frames:
         trajectory.frames.append(np.asarray(observation).copy())
     world_model_state: WorldModelState | None = None
-    primitive_executor = SMBParameterizedPrimitiveExecutor()
+    # Stochastic training rollouts sample the duration bin so the duration
+    # head is explored and its REINFORCE log-prob term is well-founded;
+    # deterministic evaluation keeps the argmax bin.
+    primitive_executor = SMBParameterizedPrimitiveExecutor(
+        duration_sampling=not deterministic,
+        duration_seed=seed,
+    )
     oracle_actions = (
         block_smb_oracle_actions_for_rollout(
             stage.scenario,
