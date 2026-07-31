@@ -278,7 +278,7 @@ def block_smb_monte_carlo_family_specs(
         "pipe_mount": {
             "pipe_x": [120, 120],
             "pipe_width": [30, 30],
-            "pipe_height": [42, 66],
+            "pipe_height": [42, 64],
             "spawn_distance": [30, 30],
             "goal": "on the pipe top",
             "a_level_action": [2, 2],
@@ -1316,7 +1316,9 @@ def _pipe_mount(
     pipe_height = {
         "easy": rng.randint(42, 48),
         "medium": rng.randint(52, 58),
-        "hard": rng.randint(60, 66),
+        # 65+ cannot be mounted by an immediate jump from the fixed spawn, and
+        # forced-A rollouts jump immediately, so the hard band stops at 64.
+        "hard": rng.randint(60, 64),
     }[difficulty]
     pipe_x, pipe_width = 120, 30
     spawn_distance = 30
@@ -1331,10 +1333,13 @@ def _pipe_mount(
         "coins": [],
         "goal": [goal_x, 220 - pipe_height - 20, 16, 20],
         "reward_goal_distance_shaping": 2.0,
+        # Energy regulator: each held jump frame costs effort, so the minimal
+        # sufficient hold beats maximal holds among successful mounts and
+        # fruitless jumping nets negative.
+        "reward_energy_jump": -0.15,
     }
-    oracle_prefix = {"easy": [], "medium": [], "hard": [1, 1]}[difficulty]
     oracle_hold = {"easy": 12, "medium": 14, "hard": 16}[difficulty]
-    actions = _pad(oracle_prefix + [2] * oracle_hold + [1] * 30)
+    actions = _pad([2] * oracle_hold + [1] * 30)
     return (
         scenario,
         {

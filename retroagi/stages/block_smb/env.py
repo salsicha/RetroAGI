@@ -96,6 +96,12 @@ class BlockSMBRewardConfig:
     # scenarios opt in with a "reward_goal_distance_shaping" coefficient so
     # B-level isolation families get a dense vertical-progress gradient.
     goal_distance_shaping: float = 0.0
+    # Energy regulator: control-effort cost per frame a jump button is held.
+    # Eager but fruitless actions are unrewarded, and among successful
+    # strategies the minimal sufficient effort nets the most, so hold duration
+    # must condition on obstacle size instead of defaulting to maximum. Off
+    # globally; scenarios opt in with a "reward_energy_jump" coefficient.
+    energy_jump: float = 0.0
 
     def __post_init__(self) -> None:
         if self.progress_per_pixel < 0:
@@ -103,7 +109,7 @@ class BlockSMBRewardConfig:
         for name in ("coin", "enemy_stomp", "goal", "goal_distance_shaping"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
-        for name in ("fall_death", "gap_jump", "enemy_hit", "frame_penalty"):
+        for name in ("fall_death", "gap_jump", "enemy_hit", "frame_penalty", "energy_jump"):
             if getattr(self, name) > 0:
                 raise ValueError(f"{name} must be non-positive")
 
@@ -114,6 +120,7 @@ class BlockSMBRewardConfig:
             "enemy_stomp": 0.0,
             "goal": 0.0,
             "goal_distance": 0.0,
+            "energy": 0.0,
             "fall_death": 0.0,
             "gap_jump": 0.0,
             "enemy_hit": 0.0,
@@ -275,6 +282,9 @@ class MarioScenarioEnv:
             or 0.0
         )
         self._prev_goal_distance = self._normalized_goal_distance()
+        self._energy_jump = float(
+            scenario.get("reward_energy_jump", self.reward_config.energy_jump) or 0.0
+        )
 
         obs = self.render()
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
@@ -317,6 +327,11 @@ class MarioScenarioEnv:
 
         jump_pressed = action in [2, 4, 5]
         move_x = 1 if action in [1, 2] else (-1 if action in [3, 4] else 0)
+        # Energy regulator: every frame of held jump costs effort, so eager
+        # but fruitless exertion nets negative and minimal sufficient holds
+        # beat maximal ones among successful strategies.
+        if jump_pressed and self._energy_jump < 0.0:
+            reward_terms["energy"] += self._energy_jump
 
         # ── 1. Horizontal momentum ────────────────────────────────────────────
         vx = self.mario["vx"]

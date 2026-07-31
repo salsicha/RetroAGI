@@ -170,6 +170,7 @@ REWARD_CONFIG_ARGS = {
     "reward_enemy_hit": "enemy_hit",
     "reward_frame_penalty": "frame_penalty",
     "reward_goal_distance_shaping": "goal_distance_shaping",
+    "reward_energy_jump": "energy_jump",
 }
 
 ABLATION_CONFIG_FIELDS = (
@@ -236,6 +237,14 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reward-gap-jump", type=_non_positive_float)
     parser.add_argument("--reward-enemy-hit", type=_non_positive_float)
     parser.add_argument("--reward-frame-penalty", type=_non_positive_float)
+    parser.add_argument(
+        "--reward-energy-jump",
+        type=_non_positive_float,
+        help=(
+            "control-effort cost per frame a jump button is held; scenarios "
+            "can also opt in with a reward_energy_jump key"
+        ),
+    )
     parser.add_argument(
         "--reward-goal-distance-shaping",
         type=_non_negative_float,

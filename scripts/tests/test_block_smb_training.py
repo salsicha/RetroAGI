@@ -1391,6 +1391,42 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         finally:
             env.close()
 
+    def test_energy_regulator_charges_held_jump_frames_only_when_opted_in(self):
+        scenario = {
+            "world_width": 256,
+            "mario": [20, 200],
+            "platforms": [[0, 220, 256, 20]],
+            "coins": [],
+            "goal": [230, 200, 16, 20],
+            "reward_energy_jump": -0.15,
+        }
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=dict(scenario), seed=0)
+            energy = 0.0
+            for action in [2] * 10 + [1] * 5:
+                _obs, _reward, terminated, truncated, info = env.step(action)
+                energy += info["reward_terms"]["energy"]
+                if terminated or truncated:
+                    break
+            # Ten held jump frames at -0.15 each; walking frames are free.
+            self.assertAlmostEqual(energy, -1.5, places=6)
+        finally:
+            env.close()
+        control = {k: v for k, v in scenario.items() if k != "reward_energy_jump"}
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=control, seed=0)
+            energy = 0.0
+            for action in [2] * 10:
+                _obs, _reward, terminated, truncated, info = env.step(action)
+                energy += info["reward_terms"]["energy"]
+                if terminated or truncated:
+                    break
+            self.assertEqual(energy, 0.0)
+        finally:
+            env.close()
+
     def test_pipe_mount_rollout_forces_a_level_action_with_free_b_duration(self):
         from retroagi.stages.block_smb.monte_carlo import (
             sample_block_smb_monte_carlo_scenario,
