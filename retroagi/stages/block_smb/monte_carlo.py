@@ -35,6 +35,9 @@ BLOCK_SMB_MC_FAMILIES = (
     "mixed_section",
     "tall_pipe_jump",
     "pipe_mount",
+    "pit_leap",
+    "stomp_mount",
+    "platform_hop",
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 200
 
@@ -281,6 +284,24 @@ def block_smb_monte_carlo_family_specs(
             "pipe_height": [42, 64],
             "spawn_distance": [30, 30],
             "goal": "on the pipe top",
+            "a_level_action": [2, 2],
+        },
+        "pit_leap": {
+            "gap_width": [40, 66],
+            "edge_x": [100, 100],
+            "goal": "on the far ledge",
+            "a_level_action": [2, 2],
+        },
+        "stomp_mount": {
+            "enemy_distance": [62, 94],
+            "goal": "beyond the enemy, reachable only through a stomp",
+            "a_level_action": [2, 2],
+        },
+        "platform_hop": {
+            "pit_width": [68, 110],
+            "platform_width": [24, 24],
+            "platform_speed": [0.3, 0.3],
+            "goal": "on the far ledge via the moving platform",
             "a_level_action": [2, 2],
         },
     }
@@ -890,6 +911,12 @@ def _generate_family_scenario(
         return _tall_pipe_jump(rng, difficulty)
     if family == "pipe_mount":
         return _pipe_mount(rng, difficulty)
+    if family == "pit_leap":
+        return _pit_leap(rng, difficulty)
+    if family == "stomp_mount":
+        return _stomp_mount(rng, difficulty)
+    if family == "platform_hop":
+        return _platform_hop(rng, difficulty)
     raise ValueError(f"unknown Block SMB Monte Carlo family {family!r}")
 
 
@@ -971,7 +998,9 @@ def _stair_climb(
         "coins": [[coin_a_x, 170, 10, 10], [coin_b_x, 140, 10, 10]],
         "goal": [goal_x, 110, 16, 20],
     }
-    actions = _pad([2] * 8 + [1] * 2 + [2] * 6 + [1])
+    # Retimed for honest jump-cut physics: buffered liftoffs after release
+    # are now cut, so each mount holds the button through landing.
+    actions = _pad([2] * 10 + [1] * 2 + [2] * 14 + [1] * 2 + [2] * 10 + [1])
     return (
         scenario,
         {
@@ -1357,15 +1386,143 @@ def _pipe_mount(
     )
 
 
+def _pit_leap(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # B-level isolation family: jump over a pit. The A-level decision is given
+    # (RIGHT_JUMP forced) and the gap width bands make the required hold grow
+    # monotonically (probed minima: 42px -> 8 frames, 54 -> 10, 66 -> 14), so
+    # the width -> duration mapping is identifiable. Undershoot falls into the
+    # pit, and the energy regulator makes minimal sufficient holds optimal.
+    gap_width = {
+        "easy": rng.randint(40, 46),
+        "medium": rng.randint(52, 58),
+        "hard": rng.randint(62, 66),
+    }[difficulty]
+    edge_x = 100
+    scenario = {
+        "world_width": 320,
+        "mario": [edge_x - 30, 200],
+        "platforms": [
+            [0, 220, edge_x, 20],
+            [edge_x + gap_width, 220, 320 - edge_x - gap_width, 20],
+        ],
+        "coins": [],
+        "goal": [edge_x + gap_width + 40, 200, 16, 20],
+        "reward_goal_distance_shaping": 2.0,
+        "reward_energy_jump": -0.15,
+    }
+    oracle_hold = {"easy": 10, "medium": 12, "hard": 16}[difficulty]
+    actions = _pad([2] * oracle_hold + [1] * 40)
+    return (
+        scenario,
+        {
+            "gap_width": gap_width,
+            "edge_x": edge_x,
+            "a_level_action": 2,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
+
+
+def _stomp_mount(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # B-level isolation family: jump ONTO a stationary enemy. The goal sits
+    # beyond the enemy and walking into it is death, so the only route is a
+    # stomp whose arc length must match the enemy distance (probed minima:
+    # 70px -> 8 frames, 85 -> 12, 92+ -> 14). A given jump that lands short
+    # walks into the enemy and dies, so eager mistimed effort is punished.
+    enemy_distance = {
+        "easy": rng.randint(62, 70),
+        "medium": rng.randint(76, 84),
+        "hard": rng.randint(88, 94),
+    }[difficulty]
+    spawn_x = 40
+    enemy_x = spawn_x + enemy_distance
+    scenario = {
+        "world_width": 320,
+        "mario": [spawn_x, 200],
+        "platforms": [[0, 220, 320, 20]],
+        "enemies": [[enemy_x, 206, enemy_x, enemy_x, 0]],
+        "coins": [],
+        "goal": [enemy_x + 70, 200, 16, 20],
+        "reward_goal_distance_shaping": 2.0,
+        "reward_energy_jump": -0.15,
+    }
+    oracle_hold = {"easy": 10, "medium": 12, "hard": 16}[difficulty]
+    actions = _pad([2] * oracle_hold + [1] * 60)
+    return (
+        scenario,
+        {
+            "enemy_distance": enemy_distance,
+            "enemy_x": enemy_x,
+            "a_level_action": 2,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
+
+
+def _platform_hop(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # B-level isolation family: jump onto a narrow, slowly moving platform
+    # suspended over a pit, ride it, and walk off to the far ledge. Pit width
+    # bands make the required hold grow monotonically (probed minima: 70-80px
+    # pit -> 8 frames, 90-100 -> 10, 110 -> 12); falling short is death.
+    pit_width = {
+        "easy": rng.randint(68, 78),
+        "medium": rng.randint(88, 98),
+        "hard": rng.randint(102, 110),
+    }[difficulty]
+    edge_x = 90
+    platform_width = 24
+    travel_low = edge_x + (pit_width - platform_width) // 2 - 8
+    travel_high = travel_low + 16
+    scenario = {
+        "world_width": 380,
+        "mario": [edge_x - 30, 200],
+        "platforms": [
+            [0, 220, edge_x, 20],
+            {
+                "x": travel_low + 4,
+                "y": 198,
+                "w": platform_width,
+                "h": 10,
+                "moving": [travel_low, travel_high, 0.3],
+            },
+            [edge_x + pit_width, 220, 380 - edge_x - pit_width, 20],
+        ],
+        "coins": [],
+        "goal": [edge_x + pit_width + 40, 200, 16, 20],
+        "reward_goal_distance_shaping": 2.0,
+        "reward_energy_jump": -0.15,
+    }
+    oracle_hold = {"easy": 10, "medium": 12, "hard": 14}[difficulty]
+    actions = _pad([2] * oracle_hold + [1] * 80)
+    return (
+        scenario,
+        {
+            "pit_width": pit_width,
+            "platform_width": platform_width,
+            "platform_speed": 0.3,
+            "a_level_action": 2,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
+
+
 def _tall_pipe_jump(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # A single tall pipe that must be jumped over/onto to reach the goal beyond
-    # it. Heights climb with difficulty and stay under the ~68px jump ceiling so
-    # the scripted oracle can always clear them: the two-phase RIGHT_JUMP burst
-    # mounts the pipe top, then jumps off the far side. Existing pipe families
-    # top out near 60px, so this exposes the policy to a taller-yet-jumpable
-    # pipe it otherwise never sees.
+    # A single tall pipe that must be jumped over/onto to reach the goal
+    # beyond it. Heights climb with difficulty and stay jumpable: with a full
+    # run-up, a single held jump mounts the whole 56-68px band under honest
+    # jump-cut physics (the old two-phase script relied on the buffered
+    # full-jump quirk and was retired with it).
     pipe_h = {"easy": 58, "medium": 62, "hard": 66}[difficulty] + rng.randint(-2, 2)
     pipe_x, pipe_w = 180, 30
     goal_x = rng.randint(266, 276)
@@ -1379,7 +1536,7 @@ def _tall_pipe_jump(
         "coins": [[pipe_x + 10, 220 - pipe_h - 20, 10, 10]],
         "goal": [goal_x, 200, 16, 20],
     }
-    actions = _pad([1] * 8 + [2] * 12 + [1] * 2 + [2] * 14 + [1] * 120)
+    actions = _pad([1] * 38 + [2] * 16 + [1] * 120)
     return (
         scenario,
         {

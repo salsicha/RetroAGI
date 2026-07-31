@@ -164,6 +164,25 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         )
         self.assertGreaterEqual(int(hard.parameters["pipe_height"]), 62)
 
+    def test_jump_suite_families_isolate_b_level(self):
+        # Every B-level isolation family hands the A-level decision to the
+        # rollout and opts into goal-distance shaping plus the jump-energy
+        # regulator, with reachable oracles at every difficulty.
+        for family in ("pit_leap", "stomp_mount", "platform_hop"):
+            for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+                for seed in range(3):
+                    sample = sample_block_smb_monte_carlo_scenario(
+                        split="validation",
+                        seed=seed,
+                        sample_index=0,
+                        family=family,
+                        difficulty=difficulty,
+                    )
+                    self.assertTrue(sample.reachability["reachable"], (family, difficulty, seed))
+                    self.assertEqual(sample.parameters["a_level_action"], 2)
+                    self.assertEqual(sample.scenario["reward_goal_distance_shaping"], 2.0)
+                    self.assertEqual(sample.scenario["reward_energy_jump"], -0.15)
+
     def test_pipe_mount_isolates_b_level_with_shaping_and_given_action(self):
         self.assertIn("pipe_mount", BLOCK_SMB_MC_FAMILIES)
         heights = {}

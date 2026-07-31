@@ -201,8 +201,12 @@ class TestKnownDivergencesFromRealSMB(unittest.TestCase):
             launched = False
             for _ in range(JUMP_BUFFER_FRAMES + 2):
                 env.step(int(SMBAction.NOOP))
-                if env.mario["vy"] < -5.0:
+                if env.mario["vy"] < -1.0:
                     launched = True
+                    # The button is no longer held at liftoff, so the buffered
+                    # jump fires as a CUT hop: hold duration -> jump height
+                    # stays monotone and a tap can never out-jump a hold.
+                    self.assertGreater(env.mario["vy"], -5.0)
                     break
             self.assertTrue(launched, "buffered jump press no longer fires on landing")
         finally:

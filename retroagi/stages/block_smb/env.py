@@ -71,7 +71,9 @@ KNOWN_REAL_SMB_DIVERGENCES = (
     {
         "name": "jump_buffer",
         "block_behavior": (
-            f"a press up to {JUMP_BUFFER_FRAMES} frames before landing fires on contact"
+            f"a press up to {JUMP_BUFFER_FRAMES} frames before landing fires on contact; "
+            "if the button is no longer held at liftoff the fired jump is cut "
+            "to a short hop, keeping hold duration -> jump height monotone"
         ),
         "real_behavior": "no jump buffering; presses before landing are dropped",
         "reason": "quality-of-life forgiveness that eases early policy learning",
@@ -379,6 +381,15 @@ class MarioScenarioEnv:
 
         if can_jump and wants_jump:
             self.mario["vy"] = self.jump_power
+            if not jump_pressed:
+                # Buffered liftoff after the button was already released: apply
+                # the variable-height cut at launch so a short tap yields a
+                # short hop. Without this, the release transition happens
+                # before liftoff, the cut never fires, and a 4-frame tap
+                # produced a full-height jump -- breaking the monotone
+                # hold-duration -> jump-height mapping the B-level primitive
+                # curriculum relies on.
+                self.mario["vy"] *= JUMP_CUT_FACTOR
             self.mario["on_ground"] = False
             self.mario["coyote_frames"] = 0
             self.mario["jump_buffer"] = 0
