@@ -201,6 +201,7 @@ class MarioScenarioEnv:
         self.enemies = []
         self.goal = None
         self._goal_on_stomp = False
+        self._goal_credited = False
         self.camera_x = 0.0
         self.score = 0
         self.steps = 0
@@ -288,6 +289,7 @@ class MarioScenarioEnv:
         # track the moving target, and goal credit is granted by the stomp
         # itself rather than by touching the goal rect.
         self._goal_on_stomp = bool(scenario.get("goal_on_stomp", False))
+        self._goal_credited = False
         self._track_goal_to_enemy()
         # Per-scenario opt-in overrides the config default coefficient.
         self._goal_distance_shaping = float(
@@ -588,6 +590,7 @@ class MarioScenarioEnv:
                     # success flows through the same channel as rect goals.
                     terminated = True
                     reward_terms["goal"] += self.reward_config.goal
+                    self._goal_credited = True
             else:
                 terminated = True
                 death = True
@@ -606,6 +609,7 @@ class MarioScenarioEnv:
         if self.goal and not self._goal_on_stomp and mario_rect.colliderect(self.goal):
             terminated = True
             reward_terms["goal"] += self.reward_config.goal
+            self._goal_credited = True
 
         # ── 18. Timeout ───────────────────────────────────────────────────────
         if self.steps >= self.max_steps:

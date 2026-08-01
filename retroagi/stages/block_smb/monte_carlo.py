@@ -842,6 +842,14 @@ def _with_sweep_metadata(
 
 
 def _goal_reached(env: MarioScenarioEnv) -> bool:
+    # The env's credited-goal event is authoritative. Under goal_on_stomp the
+    # goal rect is only a tracking proxy riding the enemy: positional overlap
+    # must never count, or an oracle that dies walking into the enemy would
+    # validate as reachable.
+    if getattr(env, "_goal_credited", False):
+        return True
+    if getattr(env, "_goal_on_stomp", False):
+        return False
     if env.goal is None:
         return False
     mario_rect = pygame.Rect(

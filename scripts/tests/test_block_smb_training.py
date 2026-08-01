@@ -1354,6 +1354,50 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         self.assertTrue(resolve([]))
         self.assertFalse(resolve(["--no-deterministic-critic-gates"]))
 
+    def test_goal_reached_label_under_goal_on_stomp(self):
+        # Regression: the rollout success label comes from _goal_reached().
+        # Under goal_on_stomp the goal rect is a proxy riding the enemy, so
+        # Mario overlaps it on the very frame he walks into the enemy and
+        # dies — positional overlap must not label that death a success.
+        from retroagi.stages.block_smb.train import _goal_reached
+
+        scenario = {
+            "world_width": 256,
+            "mario": [20, 204],
+            "platforms": [[0, 220, 256, 20]],
+            "enemies": [[30, 206, 30, 30, 0.0]],
+            "coins": [],
+            "goal": [28, 186, 16, 20],
+            "goal_on_stomp": True,
+        }
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=dict(scenario), seed=0)
+            terminated = False
+            for _ in range(20):
+                _obs, _reward, terminated, _truncated, info = env.step(1)
+                if terminated:
+                    break
+            self.assertTrue(terminated)
+            self.assertTrue(info["death"])
+            self.assertFalse(_goal_reached(env))
+        finally:
+            env.close()
+        # A genuine stomp credits the goal and flips the label.
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=dict(scenario), seed=0)
+            env.mario["x"] = 30.0
+            env.mario["y"] = 186.0
+            env.mario["vy"] = 8.0
+            _obs, _reward, terminated, _truncated, info = env.step(0)
+            self.assertTrue(terminated)
+            self.assertFalse(info["death"])
+            self.assertGreater(info["reward_terms"]["goal"], 0.0)
+            self.assertTrue(_goal_reached(env))
+        finally:
+            env.close()
+
     def test_goal_distance_shaping_rewards_rising_toward_elevated_goal(self):
         scenario = {
             "world_width": 256,

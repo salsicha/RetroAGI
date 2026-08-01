@@ -1102,6 +1102,14 @@ def discounted_returns(
 
 
 def _goal_reached(env: MarioScenarioEnv) -> bool:
+    # The env's credited-goal event is authoritative. Under goal_on_stomp the
+    # goal rect is only a tracking proxy riding the enemy, so positional
+    # overlap must never count: Mario overlaps the proxy on the very frame he
+    # walks into the enemy and dies, which would label deaths as successes.
+    if getattr(env, "_goal_credited", False):
+        return True
+    if getattr(env, "_goal_on_stomp", False):
+        return False
     if env.goal is None:
         return False
     import pygame

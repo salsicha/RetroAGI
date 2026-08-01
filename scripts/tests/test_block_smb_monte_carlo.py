@@ -164,6 +164,27 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         )
         self.assertGreaterEqual(int(hard.parameters["pipe_height"]), 62)
 
+    def test_stomp_oracle_dying_into_enemy_is_not_reachable(self):
+        # Regression: under goal_on_stomp the goal rect rides the enemy, so
+        # the validator's positional fallback would count the frame where
+        # Mario dies against the enemy (overlapping the proxy rect) as a
+        # reached goal. Only credited stomps may validate as reachable.
+        scenario = {
+            "world_width": 340,
+            "mario": [40, 200],
+            "platforms": [[0, 220, 340, 20]],
+            "enemies": [[96, 206, 96, 96, 0.0]],
+            "coins": [],
+            "goal": [94, 186, 16, 20],
+            "goal_on_stomp": True,
+        }
+        walk_into_enemy = [1] * 200
+        result = validate_block_smb_monte_carlo_oracle(scenario, walk_into_enemy)
+        self.assertFalse(result["reachable"])
+        stomp = [2] * 8 + [1] * 192
+        result = validate_block_smb_monte_carlo_oracle(scenario, stomp)
+        self.assertTrue(result["reachable"])
+
     def test_jump_suite_families_isolate_b_level(self):
         # Every B-level isolation family hands the A-level decision to the
         # rollout and opts into goal-distance shaping plus the jump-energy
