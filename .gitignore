@@ -27,6 +27,7 @@ artifacts/block_smb/distill_dagger_*/
 artifacts/full_smb/gamma_fix_ab_*/
 artifacts/full_volume_*/
 artifacts/block_smb/pipe_mount_*/
+artifacts/block_smb/stomp_b_level_*/
 # Ad-hoc sweep/probe/eval outputs from local experiments. Emulator .npz
 # recordings under these paths are ROM-derived and must never be committed.
 artifacts/block_smb/current_*
