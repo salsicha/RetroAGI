@@ -312,6 +312,10 @@ class BlockSMBTrainingConfig:
     action_gate_required_actions: tuple[int, ...] = (1, 2)
     checkpoint_path: Optional[Path] = None
     resume_path: Optional[Path] = None
+    # Weights-only warm start: load model weights from a Block SMB checkpoint
+    # (for example a B-level jump-suite policy) while keeping a fresh
+    # optimizer, epoch counter, and curriculum. Mutually exclusive with resume.
+    init_checkpoint: Optional[Path] = None
     save_checkpoints: bool = False
     video_dir: Optional[Path] = None
     record_videos: bool = False
@@ -417,6 +421,8 @@ class BlockSMBTrainingConfig:
             raise TypeError("use_oracle_actions must be a bool")
         if not isinstance(self.ranked_candidate_search, bool):
             raise TypeError("ranked_candidate_search must be a bool")
+        if self.resume_path is not None and self.init_checkpoint is not None:
+            raise ValueError("resume_path and init_checkpoint are mutually exclusive")
         if not isinstance(self.deterministic_critic_gates, bool):
             raise TypeError("deterministic_critic_gates must be a bool")
         if not 0.0 <= self.action_gate_max_dominant_fraction <= 1.0:
@@ -2932,6 +2938,21 @@ def train_and_evaluate_block_smb(
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
+    elif config.init_checkpoint is not None:
+        # Weights-only warm start: model parameters come from the checkpoint,
+        # everything else (optimizer, epochs, curriculum, mastery state) is
+        # fresh so a new training regime can continue from learned skills.
+        restore_block_smb_checkpoint(
+            config.init_checkpoint,
+            model,
+            optimizer=None,
+            map_location=device,
+            architecture_name=config.architecture_name,
+            architecture_config=config.architecture_config,
+            restore_rng=False,
+        )
+        if target_model is not None:
+            update_target_network(target_model, model, tau=1.0)
     elif target_model is not None:
         update_target_network(target_model, model, tau=1.0)
     mastery_state = initial_block_smb_mastery_state()

@@ -594,6 +594,14 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--checkpoint", type=Path, help="checkpoint path to save")
     train.add_argument("--resume", type=Path, help="checkpoint path to resume")
     train.add_argument(
+        "--init-checkpoint",
+        type=Path,
+        help=(
+            "weights-only warm start from a Block SMB checkpoint (fresh "
+            "optimizer, epochs, and curriculum); mutually exclusive with --resume"
+        ),
+    )
+    train.add_argument(
         "--record",
         action="store_true",
         help="record deterministic evaluation trajectories after each epoch",
@@ -940,6 +948,8 @@ def _make_train_config(args: argparse.Namespace) -> BlockSMBTrainingConfig:
         values["save_checkpoints"] = True
     if args.resume is not None:
         values["resume_path"] = args.resume
+    if getattr(args, "init_checkpoint", None) is not None:
+        values["init_checkpoint"] = args.init_checkpoint
     if args.vision_checkpoint is not None:
         values["vision_checkpoint_path"] = args.vision_checkpoint
     record_dir = args.record_dir
