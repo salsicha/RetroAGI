@@ -437,6 +437,24 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         dest="deterministic_critic_gates",
         help="gate candidates with the learned critic progress/death MLP heads",
     )
+    parser.set_defaults(adaptive_duration_control=None)
+    parser.add_argument(
+        "--adaptive-duration-control",
+        action="store_true",
+        dest="adaptive_duration_control",
+        help=(
+            "let B-level re-parameterize an active jump mid-air: the executor "
+            "tracks the current duration head as a slew-limited setpoint so "
+            "the arc can extend or shorten to intercept moving targets "
+            "(default)"
+        ),
+    )
+    parser.add_argument(
+        "--no-adaptive-duration-control",
+        action="store_false",
+        dest="adaptive_duration_control",
+        help="lock the hold duration chosen at jump initiation",
+    )
     parser.set_defaults(monte_carlo_validate_reachability=None)
     parser.add_argument(
         "--validate-monte-carlo-reachability",
@@ -746,6 +764,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "use_oracle_actions",
         "ranked_candidate_search",
         "deterministic_critic_gates",
+        "adaptive_duration_control",
         "evaluation_episodes",
         "evaluation_max_steps",
         "evaluation_interval_epochs",

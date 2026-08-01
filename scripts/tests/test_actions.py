@@ -341,6 +341,135 @@ class TestSMBActionVocabulary(unittest.TestCase):
         # The hold ends only when its committed duration is exhausted.
         self.assertEqual(fifth.action, int(SMBAction.RIGHT))
 
+    @staticmethod
+    def _duration_motor(logits: list[float]) -> SimpleNamespace:
+        return SimpleNamespace(
+            hold_duration_logits=torch.tensor([[logits]]),
+            duration_bin_values=torch.tensor([2.0, 4.0, 16.0]),
+        )
+
+    def test_adaptive_duration_extends_hold_when_belief_rises(self):
+        # B-level re-parameterizes the jump mid-air: when its duration belief
+        # rises after initiation (a moving target drifted away), the tracked
+        # setpoint climbs and the arc extends beyond the initiation hold.
+        executor = SMBParameterizedPrimitiveExecutor()
+        short_belief = self._duration_motor([0.0, 6.0, -6.0])  # E[hold] ~ 4
+        long_belief = self._duration_motor([-6.0, 0.0, 6.0])  # E[hold] ~ 16
+
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=short_belief,
+            batch=self._batch_with_vision(self._support_vision(1)),
+        )
+        self.assertTrue(first.started)
+        self.assertEqual(first.hold_frames, 4)
+
+        results = [
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=long_belief,
+                batch=self._batch_with_vision(self._support_vision(0)),
+            )
+            for _ in range(16)
+        ]
+        # A locked snapshot would release on the 5th call; the tracked
+        # setpoint slews upward 1 frame/frame and stays ahead of the counter
+        # until it saturates near the new 16-frame belief.
+        self.assertTrue(all(result.active and not result.released for result in results[:15]))
+        self.assertTrue(results[15].released)
+        # Initiation logging/credit is untouched by in-flight adaptation.
+        self.assertEqual(results[0].hold_frames, 4)
+
+    def test_adaptive_duration_shortens_hold_when_belief_drops(self):
+        # The converse interception move: the target closed in, B's duration
+        # belief collapses, and the hold releases earlier than committed —
+        # but only as fast as the slew limit allows.
+        executor = SMBParameterizedPrimitiveExecutor()
+        long_belief = self._duration_motor([-6.0, 0.0, 6.0])
+        short_belief = self._duration_motor([0.0, 6.0, -6.0])
+
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=long_belief,
+            batch=self._batch_with_vision(self._support_vision(1)),
+        )
+        self.assertTrue(first.started)
+        self.assertEqual(first.hold_frames, 16)
+
+        results = [
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=short_belief,
+                batch=self._batch_with_vision(self._support_vision(0)),
+            )
+            for _ in range(8)
+        ]
+        # Setpoint decays 1 frame/frame from 16 while the counter climbs, so
+        # they meet in the middle: 8 held frames, not 16 and not an instant 4.
+        self.assertTrue(all(result.active and not result.released for result in results[:7]))
+        self.assertTrue(results[7].released)
+
+    def test_adaptive_duration_ignores_single_frame_noise_spike(self):
+        # The old cancel head died for this: one noisy frame must never
+        # truncate a committed hold. The slew clamp bounds a single spike to
+        # a 1-frame setpoint dip that recovers on the next frame.
+        executor = SMBParameterizedPrimitiveExecutor()
+        steady = self._duration_motor([0.0, 6.0, -6.0])  # E[hold] ~ 4
+        spike = self._duration_motor([6.0, 0.0, -6.0])  # E[hold] ~ 2
+
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=steady,
+            batch=self._batch_with_vision(self._support_vision(1)),
+        )
+        self.assertTrue(first.started)
+        motors = [spike, steady, steady, steady]
+        results = [
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(0)),
+            )
+            for motor in motors
+        ]
+        # Same release frame as an unperturbed 4-frame hold.
+        self.assertTrue(all(result.active and not result.released for result in results[:3]))
+        self.assertTrue(results[3].released)
+        self.assertEqual(results[3].action, int(SMBAction.RIGHT))
+
+    def test_adaptive_duration_preserves_sampled_exploration(self):
+        # With stationary logits the setpoint tracks *changes* in belief, so
+        # a sampled exploratory bin is never eroded toward the distribution
+        # mean: adaptive and locked executors release on the same frame.
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.zeros(1, 1, 8),
+            duration_bin_values=torch.tensor([1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]),
+        )
+        release_frames = []
+        for adaptive in (True, False):
+            executor = SMBParameterizedPrimitiveExecutor(
+                duration_sampling=True,
+                duration_seed=123,
+                adaptive_duration=adaptive,
+            )
+            first = executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=motor,
+                batch=self._batch_with_vision(self._support_vision(1)),
+            )
+            self.assertTrue(first.started)
+            for frame in range(2, 40):
+                result = executor.execute(
+                    SMBAction.RIGHT_JUMP,
+                    motor_primitives=motor,
+                    batch=self._batch_with_vision(self._support_vision(0)),
+                )
+                if result.released:
+                    release_frames.append(frame)
+                    break
+        self.assertEqual(len(release_frames), 2)
+        self.assertEqual(release_frames[0], release_frames[1])
+
     def test_parameterized_primitive_executor_requires_non_jump_after_landing(self):
         executor = SMBParameterizedPrimitiveExecutor()
         motor = SimpleNamespace(

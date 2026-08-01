@@ -303,6 +303,13 @@ class BlockSMBTrainingConfig:
     # world model's predicted death flag directly, bypassing the learned
     # progress/death MLP heads for gating.
     deterministic_critic_gates: bool = True
+    # Adaptive in-flight duration control: while a jump is active the executor
+    # tracks B-level's current duration head as a slew-limited setpoint,
+    # shifting the hold by the change in B's expected duration since
+    # initiation. This lets B re-parameterize a jump mid-air to intercept
+    # moving targets (enemy stomps, moving platforms) without reintroducing
+    # noise-driven truncation of committed holds.
+    adaptive_duration_control: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -1516,6 +1523,7 @@ def collect_trajectory(
     record_frames: bool = False,
     ablation: BlockSMBAblationConfig | Mapping[str, Any] | None = None,
     use_oracle_actions: bool = False,
+    adaptive_duration_control: bool = True,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
@@ -1529,6 +1537,7 @@ def collect_trajectory(
     primitive_executor = SMBParameterizedPrimitiveExecutor(
         duration_sampling=not deterministic,
         duration_seed=seed,
+        adaptive_duration=adaptive_duration_control,
     )
     oracle_actions = (
         block_smb_oracle_actions_for_rollout(
@@ -2240,6 +2249,7 @@ def train_block_smb_epoch(
                 device=device,
                 ablation=config.ablation,
                 use_oracle_actions=config.use_oracle_actions,
+                adaptive_duration_control=config.adaptive_duration_control,
             )
         finally:
             stage.env.close()
@@ -2335,6 +2345,7 @@ def evaluate_block_smb_monte_carlo(
                         device=device,
                         record_frames=record_dir is not None,
                         ablation=config.ablation,
+                        adaptive_duration_control=config.adaptive_duration_control,
                     )
                 finally:
                     stage.env.close()
@@ -2615,6 +2626,7 @@ def evaluate_block_smb(
                         device=device,
                         record_frames=record_dir is not None,
                         ablation=config.ablation,
+                        adaptive_duration_control=config.adaptive_duration_control,
                     )
                 finally:
                     stage.env.close()

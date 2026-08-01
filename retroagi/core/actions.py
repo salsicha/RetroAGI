@@ -373,12 +373,20 @@ class SMBPrimitiveExecution:
 
 
 class SMBParameterizedPrimitiveExecutor:
-    """Execute learned SMB jump primitives with committed hold durations.
+    """Execute learned SMB jump primitives as an adaptive controller.
 
-    A started jump holds its button combo for the duration selected at
-    initiation and cannot be aborted by the learned cancel/release heads;
-    only physical events (landing, enemy contact) or the runaway safety
-    valve end a hold early.
+    A started jump commits to the hold duration selected at initiation, and
+    the learned cancel/release heads cannot abort it; only physical events
+    (landing, enemy contact) or the runaway safety valve end a hold early.
+
+    With ``adaptive_duration`` enabled (default), the commitment is a tracked
+    setpoint rather than a locked snapshot: each in-flight frame the executor
+    re-reads B-level's current duration head and shifts the desired hold by
+    the *change* in B's expected duration since initiation, slew-limited to
+    ``adaptive_slew_frames`` per frame. B-level therefore re-parameterizes
+    the jump mid-air — extending or shortening the arc as a moving target
+    (e.g. an enemy to stomp) drifts — while a single noisy frame can never
+    truncate a well-chosen long jump the way the old binary cancel head did.
     """
 
     def __init__(
@@ -389,6 +397,8 @@ class SMBParameterizedPrimitiveExecutor:
         duration_sampling: bool = False,
         duration_temperature: float = 1.0,
         duration_seed: int | None = None,
+        adaptive_duration: bool = True,
+        adaptive_slew_frames: float = 1.0,
     ) -> None:
         if int(default_hold_frames) <= 0:
             raise ValueError("default_hold_frames must be positive")
@@ -396,6 +406,8 @@ class SMBParameterizedPrimitiveExecutor:
             raise ValueError("max_hold_frames must be positive")
         if float(duration_temperature) <= 0.0:
             raise ValueError("duration_temperature must be positive")
+        if float(adaptive_slew_frames) <= 0.0:
+            raise ValueError("adaptive_slew_frames must be positive")
         self.default_hold_frames = int(default_hold_frames)
         self.max_hold_frames = int(max_hold_frames)
         self.max_active_frames = self.max_hold_frames + _JUMP_LANDING_ALLOWANCE_FRAMES
@@ -406,6 +418,15 @@ class SMBParameterizedPrimitiveExecutor:
         self.duration_sampling = bool(duration_sampling)
         self.duration_temperature = float(duration_temperature)
         self._duration_rng = random.Random(duration_seed)
+        # Adaptive in-flight control: while a jump is active the executor keeps
+        # reading B-level's current duration head and tracks a slew-limited
+        # desired-hold setpoint, so the arc can extend or shorten mid-air to
+        # intercept moving targets. The slew clamp (frames of setpoint change
+        # per frame of flight) keeps a single noisy frame from truncating a
+        # well-chosen long jump — a sustained change of mind tracks through,
+        # a one-frame spike does not.
+        self.adaptive_duration = bool(adaptive_duration)
+        self.adaptive_slew_frames = float(adaptive_slew_frames)
         self.reset()
 
     @property
@@ -415,7 +436,9 @@ class SMBParameterizedPrimitiveExecutor:
     def reset(self) -> None:
         self._active_jump: SMBAction | None = None
         self._release_action: SMBAction | None = None
-        self._hold_frames_remaining = 0
+        self._frames_held = 0
+        self._desired_hold_frames = 0.0
+        self._hold_expected_baseline: float | None = None
         self._released = False
         self._left_support = False
         self._suppress_until_non_jump = False
@@ -485,7 +508,13 @@ class SMBParameterizedPrimitiveExecutor:
         self._release_action = smb_jump_release_action(action_value)
         self._hold_frames = hold_frames
         self._duration_bin_index = duration_bin_index
-        self._hold_frames_remaining = max(0, hold_frames - 1)
+        self._frames_held = 1
+        self._desired_hold_frames = float(hold_frames)
+        # Reference point for in-flight adaptation. The setpoint tracks
+        # *changes* in B's duration belief relative to initiation, not the
+        # belief itself — otherwise a sampled exploratory bin would be eroded
+        # toward the distribution mean, undoing duration exploration.
+        self._hold_expected_baseline = self._expected_hold_frames(motor_primitives)
         self._released = False
         self._left_support = support_name == SMB_SUPPORT_AIR
         self._active_frames = 0
@@ -534,8 +563,33 @@ class SMBParameterizedPrimitiveExecutor:
                 hold_frames=hold_frames,
             )
 
-        if not self._released and self._hold_frames_remaining > 0:
-            self._hold_frames_remaining -= 1
+        # Adaptive in-flight control: B-level keeps emitting duration
+        # parameters every frame (and, via its C-state context, sees where a
+        # moving target has drifted). Track the current expected hold as a
+        # slew-limited setpoint so the arc can be re-shaped mid-air — extend
+        # when the target moved away, release sooner when it closed in. The
+        # slew clamp means a sustained update tracks through in a few frames
+        # while a single noisy frame cannot truncate the jump.
+        if self.adaptive_duration and not self._released:
+            current = self._expected_hold_frames(motor_primitives)
+            if current is not None:
+                if self._hold_expected_baseline is None:
+                    self._hold_expected_baseline = current
+                hold_frames_committed = float(self._hold_frames or self.default_hold_frames)
+                setpoint = hold_frames_committed + (current - self._hold_expected_baseline)
+                delta = setpoint - self._desired_hold_frames
+                slew = self.adaptive_slew_frames
+                if delta > slew:
+                    delta = slew
+                elif delta < -slew:
+                    delta = -slew
+                self._desired_hold_frames = min(
+                    float(self.max_hold_frames),
+                    max(1.0, self._desired_hold_frames + delta),
+                )
+
+        if not self._released and self._frames_held < int(round(self._desired_hold_frames)):
+            self._frames_held += 1
             return SMBPrimitiveExecution(
                 action=int(self._active_jump),
                 active=True,
@@ -578,6 +632,35 @@ class SMBParameterizedPrimitiveExecutor:
         if hold_duration is not None:
             return self._clamp_hold_frames(hold_duration), None
         return self.default_hold_frames, None
+
+    def _expected_hold_frames(self, motor_primitives: Any) -> float | None:
+        """Smooth in-flight duration estimate from B's *current* outputs.
+
+        Initiation samples/argmaxes a discrete bin (exploration lives there);
+        in-flight tracking instead uses the softmax-weighted expected duration
+        so the setpoint moves continuously between bins rather than jumping.
+        """
+        logits = _last_motor_array(getattr(motor_primitives, "hold_duration_logits", None))
+        if logits is None or not logits.size:
+            hold_duration = _last_motor_scalar(getattr(motor_primitives, "hold_duration", None))
+            if hold_duration is None:
+                return None
+            return float(self._clamp_hold_frames(hold_duration))
+        flat = np.asarray(logits, dtype=np.float64).reshape(-1)
+        shifted = flat - flat.max()
+        probabilities = np.exp(shifted)
+        probabilities = probabilities / probabilities.sum()
+        duration_values = _last_motor_array(getattr(motor_primitives, "duration_bin_values", None))
+        if duration_values is not None and duration_values.size:
+            values = np.asarray(duration_values, dtype=np.float64).reshape(-1)
+            if values.size != flat.size:
+                values = np.arange(1, flat.size + 1, dtype=np.float64)
+        else:
+            values = np.arange(1, flat.size + 1, dtype=np.float64)
+        expected = float((probabilities * values).sum())
+        if not math.isfinite(expected):
+            return None
+        return min(float(self.max_hold_frames), max(1.0, expected))
 
     def _clamp_hold_frames(self, value: Any) -> int:
         try:
