@@ -228,6 +228,78 @@ class TestBlockSMBPhysics(unittest.TestCase):
         finally:
             stomp_env.close()
 
+    def test_goal_on_stomp_grants_goal_credit_on_stomp(self):
+        env = self.make_env(
+            {
+                "mario": [20, 190],
+                "platforms": [[0, 220, 256, 20]],
+                "enemies": [[22, 206, 22, 22, 0]],
+                "goal": [20, 186, 16, 20],
+                "goal_on_stomp": True,
+            }
+        )
+        try:
+            env.mario["vy"] = 8.0
+            _, reward, terminated, truncated, info = env.step(0)
+            # The stomp itself is the goal: terminated with goal credit,
+            # no death, through the same channel as rect goals.
+            self.assertTrue(terminated)
+            self.assertFalse(truncated)
+            self.assertFalse(info["death"])
+            self.assertTrue(env.enemies[0]["dead"])
+            self.assertEqual(info["reward_terms"]["goal"], env.reward_config.goal)
+            self.assertEqual(
+                info["reward_terms"]["enemy_stomp"],
+                env.reward_config.enemy_stomp,
+            )
+            self.assert_reward_total_matches_terms(reward, info)
+        finally:
+            env.close()
+
+    def test_goal_on_stomp_rect_is_tracking_proxy_not_touch_target(self):
+        # Mario hangs in the air overlapping the goal proxy rect above the
+        # enemy without stomping. The old rect-goal path would score this;
+        # under goal_on_stomp it must not, and the rect must follow the
+        # patrolling enemy each frame.
+        env = self.make_env(
+            {
+                "mario": [118, 170],
+                "platforms": [[0, 220, 256, 20]],
+                "enemies": [[120, 206, 100, 140, 1.0]],
+                "goal": [118, 186, 16, 20],
+                "goal_on_stomp": True,
+            }
+        )
+        try:
+            enemy = env.enemies[0]
+            overlapped = False
+            for _ in range(6):
+                _, _, terminated, truncated, info = env.step(0)
+                self.assertFalse(terminated)
+                self.assertFalse(truncated)
+                self.assertEqual(info["reward_terms"]["goal"], 0.0)
+                self.assertFalse(env.enemies[0]["dead"])
+                # Goal rect rides the moving enemy.
+                self.assertEqual(
+                    env.goal.midbottom,
+                    (
+                        int(round(enemy["x"] + enemy["w"] / 2)),
+                        int(round(enemy["y"])),
+                    ),
+                )
+                mario = env.mario
+                if (
+                    env.goal.left < mario["x"] + mario["w"]
+                    and mario["x"] < env.goal.right
+                    and env.goal.top < mario["y"] + mario["h"]
+                    and mario["y"] < env.goal.bottom
+                ):
+                    overlapped = True
+            # The premise held: Mario really did brush the proxy rect.
+            self.assertTrue(overlapped)
+        finally:
+            env.close()
+
     def test_goal_collision_terminates_with_goal_reward(self):
         env = self.make_env(
             {

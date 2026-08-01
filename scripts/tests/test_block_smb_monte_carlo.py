@@ -183,6 +183,38 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                     self.assertEqual(sample.scenario["reward_goal_distance_shaping"], 2.0)
                     self.assertEqual(sample.scenario["reward_energy_jump"], -0.15)
 
+    def test_stomp_mount_targets_the_enemy_itself(self):
+        # B-level stomp teaching: success is landing ON the enemy
+        # (goal_on_stomp), distance bands are disjoint and increasing, and
+        # the upper tiers patrol so the interception point moves in flight.
+        distances = {}
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+            for seed in range(4):
+                sample = sample_block_smb_monte_carlo_scenario(
+                    split="validation",
+                    seed=seed,
+                    sample_index=0,
+                    family="stomp_mount",
+                    difficulty=difficulty,
+                )
+                self.assertTrue(sample.reachability["reachable"], (difficulty, seed))
+                scenario = sample.scenario
+                parameters = sample.parameters
+                self.assertTrue(scenario["goal_on_stomp"])
+                self.assertEqual(parameters["a_level_action"], 2)
+                enemy = scenario["enemies"][0]
+                if difficulty == "easy":
+                    self.assertEqual(parameters["enemy_speed"], 0.0)
+                    self.assertEqual(enemy[2], enemy[3])
+                else:
+                    self.assertGreater(parameters["enemy_speed"], 0.0)
+                    self.assertLess(enemy[2], enemy[3])
+                distances.setdefault(difficulty, []).append(
+                    int(parameters["enemy_distance"])
+                )
+        self.assertLess(max(distances["easy"]), min(distances["medium"]))
+        self.assertLess(max(distances["medium"]), min(distances["hard"]))
+
     def test_pipe_mount_isolates_b_level_with_shaping_and_given_action(self):
         self.assertIn("pipe_mount", BLOCK_SMB_MC_FAMILIES)
         heights = {}

@@ -200,6 +200,7 @@ class MarioScenarioEnv:
         self.coins = []
         self.enemies = []
         self.goal = None
+        self._goal_on_stomp = False
         self.camera_x = 0.0
         self.score = 0
         self.steps = 0
@@ -282,6 +283,12 @@ class MarioScenarioEnv:
             self.enemies.append(self._parse_enemy(e))
 
         self.goal = pygame.Rect(*scenario["goal"]) if "goal" in scenario else None
+        # B-level stomp teaching: the goal rides the (possibly patrolling)
+        # enemy, so goal-distance shaping and the observation's goal slots
+        # track the moving target, and goal credit is granted by the stomp
+        # itself rather than by touching the goal rect.
+        self._goal_on_stomp = bool(scenario.get("goal_on_stomp", False))
+        self._track_goal_to_enemy()
         # Per-scenario opt-in overrides the config default coefficient.
         self._goal_distance_shaping = float(
             scenario.get("reward_goal_distance_shaping", self.reward_config.goal_distance_shaping)
@@ -304,6 +311,24 @@ class MarioScenarioEnv:
         return obs, info
 
     # ── Step ──────────────────────────────────────────────────────────────────
+
+    def _track_goal_to_enemy(self) -> None:
+        """Snap the goal rect onto the first live enemy for goal_on_stomp.
+
+        The goal rect becomes a moving proxy for the stomp target: shaping
+        and the goal observation slots follow the patrolling enemy, while
+        goal credit itself is granted only by the stomp collision.
+        """
+
+        if not self._goal_on_stomp or self.goal is None:
+            return
+        for enemy in self.enemies:
+            if not enemy["dead"]:
+                self.goal.midbottom = (
+                    int(round(enemy["x"] + enemy["w"] / 2)),
+                    int(round(enemy["y"])),
+                )
+                return
 
     def _normalized_goal_distance(self) -> float | None:
         """Normalized Mario-center to goal-center distance (matches state_vec)."""
@@ -541,6 +566,7 @@ class MarioScenarioEnv:
             if enemy["dead"]:
                 continue
             self._update_enemy(enemy, rects)
+        self._track_goal_to_enemy()
 
         # ── 15. Enemy collision ───────────────────────────────────────────────
         for enemy in self.enemies:
@@ -557,6 +583,11 @@ class MarioScenarioEnv:
                 self.score += 5
                 self.mario["vy"] = self.jump_power * 0.55
                 self.mario["on_ground"] = False
+                if self._goal_on_stomp:
+                    # Landing on the enemy IS the goal: grant goal credit so
+                    # success flows through the same channel as rect goals.
+                    terminated = True
+                    reward_terms["goal"] += self.reward_config.goal
             else:
                 terminated = True
                 death = True
@@ -570,7 +601,9 @@ class MarioScenarioEnv:
                 self.score += 10
 
         # ── 17. Goal ──────────────────────────────────────────────────────────
-        if self.goal and mario_rect.colliderect(self.goal):
+        # Under goal_on_stomp the rect is only a tracking proxy for shaping
+        # and observations; brushing it mid-air must not count as success.
+        if self.goal and not self._goal_on_stomp and mario_rect.colliderect(self.goal):
             terminated = True
             reward_terms["goal"] += self.reward_config.goal
 

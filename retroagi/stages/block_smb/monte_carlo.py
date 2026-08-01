@@ -293,9 +293,10 @@ def block_smb_monte_carlo_family_specs(
             "a_level_action": [2, 2],
         },
         "stomp_mount": {
-            "enemy_distance": [56, 74],
-            "ceiling_y": [150, 150],
-            "goal": "beyond the enemy, reachable only through a stomp under a low ceiling",
+            "enemy_distance": [52, 76],
+            "enemy_speed": [0.0, 0.4],
+            "patrol_halfwidth": [0, 14],
+            "goal": "land on the enemy itself; the goal rides the patrolling target",
             "a_level_action": [2, 2],
         },
         "platform_hop": {
@@ -1430,16 +1431,17 @@ def _pit_leap(
 def _stomp_mount(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # B-level isolation family: jump ONTO a stationary enemy under a low
-    # ceiling. The ceiling makes over-jumping impossible (tall arcs bonk and
-    # drop into the enemy), so a genuine mid-length stomp arc is the only
-    # route: 3-frame taps die short and 14-16 frame holds die on the ceiling.
-    # Probed tolerance narrows with distance (56-62px: holds 6-10 survive,
-    # 64-68: 8-10, 70-74: exactly 8).
-    enemy_distance = {
-        "easy": rng.randint(56, 62),
-        "medium": rng.randint(64, 68),
-        "hard": rng.randint(70, 74),
+    # B-level teaching family for the adaptive controller: the A-level jump
+    # command is given (forced RIGHT_JUMP) and the goal is to land ON the
+    # enemy. goal_on_stomp makes the goal ride the enemy, so goal-distance
+    # shaping tracks the target and only a genuine stomp scores — over- and
+    # under-shooting both miss, and walking into the enemy dies. Medium and
+    # hard tiers patrol, so the interception point moves during flight and
+    # the executor's in-air duration updates are what close the gap.
+    enemy_distance, patrol_halfwidth, enemy_speed = {
+        "easy": (rng.randint(52, 60), 0, 0.0),
+        "medium": (rng.randint(62, 68), 10, 0.25),
+        "hard": (rng.randint(70, 76), 14, 0.4),
     }[difficulty]
     spawn_x = 40
     enemy_x = spawn_x + enemy_distance
@@ -1448,21 +1450,31 @@ def _stomp_mount(
         "mario": [spawn_x, 200],
         "platforms": [
             [0, 220, 340, 20],
-            [enemy_x - 28, 150, 84, 10],
         ],
-        "enemies": [[enemy_x, 206, enemy_x, enemy_x, 0]],
+        "enemies": [
+            [
+                enemy_x,
+                206,
+                enemy_x - patrol_halfwidth,
+                enemy_x + patrol_halfwidth,
+                enemy_speed,
+            ]
+        ],
         "coins": [],
-        "goal": [enemy_x + 80, 200, 16, 20],
+        "goal": [enemy_x - 2, 186, 16, 20],
+        "goal_on_stomp": True,
         "reward_goal_distance_shaping": 2.0,
         "reward_energy_jump": -0.15,
     }
-    oracle_hold = 8
+    oracle_hold = {"easy": 8, "medium": 10, "hard": 12}[difficulty]
     actions = _pad([2] * oracle_hold + [1] * 60)
     return (
         scenario,
         {
             "enemy_distance": enemy_distance,
             "enemy_x": enemy_x,
+            "enemy_speed": enemy_speed,
+            "patrol_halfwidth": patrol_halfwidth,
             "a_level_action": 2,
             "difficulty_bin": difficulty,
         },

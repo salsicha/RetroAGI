@@ -70,7 +70,7 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `mixed_section` | sampled composition of two or three families in one level |
 | `tall_pipe_jump` | a single tall pipe (56-68px, taller than other pipe families) that must be mounted and cleared, staying under the jump-height ceiling so the scripted oracle remains reachable |
 | `pit_leap` | B-level isolation family: jump over a pit whose width bands (40-66px) make the required hold grow monotonically; A-level given, goal-distance shaping, jump-energy cost |
-| `stomp_mount` | B-level isolation family: jump onto a stationary enemy whose distance bands (62-94px) set the required arc; walking into it is death, so mistimed effort is punished; A-level given, shaping, energy cost |
+| `stomp_mount` | B-level teaching family for the adaptive controller: land ON the enemy itself (`goal_on_stomp` — the goal rides the target, only a stomp scores). Distance bands 52-76px set the arc; medium/hard tiers patrol (±10 @ 0.25, ±14 @ 0.4) so the interception point moves during flight; undershoot walks into the enemy and dies, overshoot misses. A-level given, shaping, energy cost |
 | `platform_hop` | B-level isolation family: jump onto a narrow slow-moving platform over a pit (68-110px bands) and ride it to the far ledge; A-level given, shaping, energy cost |
 | `pipe_mount` | B-level isolation family: the A-level decision is given (`a_level_action` forces RIGHT_JUMP through the rollout), the goal sits on the pipe top (42-66px, disjoint height bands per difficulty), and a per-scenario goal-distance shaping reward gives a dense vertical-progress gradient, so only the B-level jump parameters (hold duration versus pipe height) remain to be learned |
 
