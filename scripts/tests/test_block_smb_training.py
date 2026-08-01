@@ -1426,6 +1426,29 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             self.assertEqual(energy, 0.0)
         finally:
             env.close()
+        # Success-conditioned energy: an attempt that ends in death refunds the
+        # accumulated charge, so giving up never beats trying.
+        doomed = {
+            "world_width": 256,
+            "mario": [20, 200],
+            "platforms": [[0, 220, 100, 20]],
+            "coins": [],
+            "goal": [230, 200, 16, 20],
+            "reward_energy_jump": -0.15,
+        }
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=doomed, seed=0)
+            energy = 0.0
+            for action in [2] * 6 + [1] * 80:
+                _obs, _reward, terminated, truncated, info = env.step(action)
+                energy += info["reward_terms"]["energy"]
+                if terminated or truncated:
+                    break
+            self.assertTrue(info["death"])
+            self.assertAlmostEqual(energy, 0.0, places=6)
+        finally:
+            env.close()
 
     def test_pipe_mount_rollout_forces_a_level_action_with_free_b_duration(self):
         from retroagi.stages.block_smb.monte_carlo import (

@@ -293,8 +293,9 @@ def block_smb_monte_carlo_family_specs(
             "a_level_action": [2, 2],
         },
         "stomp_mount": {
-            "enemy_distance": [62, 94],
-            "goal": "beyond the enemy, reachable only through a stomp",
+            "enemy_distance": [56, 74],
+            "ceiling_y": [150, 150],
+            "goal": "beyond the enemy, reachable only through a stomp under a low ceiling",
             "a_level_action": [2, 2],
         },
         "platform_hop": {
@@ -1429,29 +1430,33 @@ def _pit_leap(
 def _stomp_mount(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # B-level isolation family: jump ONTO a stationary enemy. The goal sits
-    # beyond the enemy and walking into it is death, so the only route is a
-    # stomp whose arc length must match the enemy distance (probed minima:
-    # 70px -> 8 frames, 85 -> 12, 92+ -> 14). A given jump that lands short
-    # walks into the enemy and dies, so eager mistimed effort is punished.
+    # B-level isolation family: jump ONTO a stationary enemy under a low
+    # ceiling. The ceiling makes over-jumping impossible (tall arcs bonk and
+    # drop into the enemy), so a genuine mid-length stomp arc is the only
+    # route: 3-frame taps die short and 14-16 frame holds die on the ceiling.
+    # Probed tolerance narrows with distance (56-62px: holds 6-10 survive,
+    # 64-68: 8-10, 70-74: exactly 8).
     enemy_distance = {
-        "easy": rng.randint(62, 70),
-        "medium": rng.randint(76, 84),
-        "hard": rng.randint(88, 94),
+        "easy": rng.randint(56, 62),
+        "medium": rng.randint(64, 68),
+        "hard": rng.randint(70, 74),
     }[difficulty]
     spawn_x = 40
     enemy_x = spawn_x + enemy_distance
     scenario = {
-        "world_width": 320,
+        "world_width": 340,
         "mario": [spawn_x, 200],
-        "platforms": [[0, 220, 320, 20]],
+        "platforms": [
+            [0, 220, 340, 20],
+            [enemy_x - 28, 150, 84, 10],
+        ],
         "enemies": [[enemy_x, 206, enemy_x, enemy_x, 0]],
         "coins": [],
-        "goal": [enemy_x + 70, 200, 16, 20],
+        "goal": [enemy_x + 80, 200, 16, 20],
         "reward_goal_distance_shaping": 2.0,
         "reward_energy_jump": -0.15,
     }
-    oracle_hold = {"easy": 10, "medium": 12, "hard": 16}[difficulty]
+    oracle_hold = 8
     actions = _pad([2] * oracle_hold + [1] * 60)
     return (
         scenario,

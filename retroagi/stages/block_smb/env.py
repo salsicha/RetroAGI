@@ -101,8 +101,12 @@ class BlockSMBRewardConfig:
     # Energy regulator: control-effort cost per frame a jump button is held.
     # Eager but fruitless actions are unrewarded, and among successful
     # strategies the minimal sufficient effort nets the most, so hold duration
-    # must condition on obstacle size instead of defaulting to maximum. Off
-    # globally; scenarios opt in with a "reward_energy_jump" coefficient.
+    # must condition on obstacle size instead of defaulting to maximum. The
+    # accumulated charge is refunded when the episode ends in death, so dying
+    # while trying costs no energy and giving up never beats attempting (the
+    # first suite run collapsed failing families to 3-frame taps because
+    # shorter holds minimized energy on doomed attempts). Off globally;
+    # scenarios opt in with a "reward_energy_jump" coefficient.
     energy_jump: float = 0.0
 
     def __post_init__(self) -> None:
@@ -287,6 +291,7 @@ class MarioScenarioEnv:
         self._energy_jump = float(
             scenario.get("reward_energy_jump", self.reward_config.energy_jump) or 0.0
         )
+        self._episode_energy = 0.0
 
         obs = self.render()
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
@@ -334,6 +339,7 @@ class MarioScenarioEnv:
         # beat maximal ones among successful strategies.
         if jump_pressed and self._energy_jump < 0.0:
             reward_terms["energy"] += self._energy_jump
+            self._episode_energy += self._energy_jump
 
         # ── 1. Horizontal momentum ────────────────────────────────────────────
         vx = self.mario["vx"]
@@ -571,6 +577,14 @@ class MarioScenarioEnv:
         # ── 18. Timeout ───────────────────────────────────────────────────────
         if self.steps >= self.max_steps:
             truncated = True
+
+        # ── 18b. Success-conditioned energy: refund on death ─────────────────
+        # Dying while trying costs no energy, so a doomed attempt is never
+        # cheaper than a real one and failing families cannot collapse into
+        # minimal-effort taps. Wasteful holds still cost on surviving paths.
+        if death and self._episode_energy < 0.0:
+            reward_terms["energy"] -= self._episode_energy
+            self._episode_energy = 0.0
 
         # Small per-step penalty to encourage speed.
         reward_terms["frame_penalty"] += self.reward_config.frame_penalty
