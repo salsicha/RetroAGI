@@ -22,6 +22,7 @@ from retroagi.core import (
     SUPPORTED_CONTROLLER_SCHEDULES,
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
+    SMBAction,
     SMBParameterizedPrimitiveExecutor,
     SMBPrimitiveExecution,
     StageBatch,
@@ -310,6 +311,13 @@ class BlockSMBTrainingConfig:
     # moving targets (enemy stomps, moving platforms) without reintroducing
     # noise-driven truncation of committed holds.
     adaptive_duration_control: bool = True
+    # Per-frame primitive-outcome loss: each completed horizontal jump
+    # backfills its frames with the signed hindsight landing error relative
+    # to the goal (which rides the enemy under goal_on_stomp), and every
+    # frame's expected hold duration is pushed opposite the error. This is
+    # the dense geometry-conditioned gradient the duration head does not get
+    # from episode-level REINFORCE.
+    primitive_outcome_weight: float = 0.5
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -510,6 +518,11 @@ class BlockSMBTransition:
     oracle_action: int | None = None
     step_index: int = 0
     noop_allowed: bool = False
+    # Normalized expected hold duration (graph-attached) emitted while a jump
+    # primitive was engaged this frame; paired post-hoc with the primitive's
+    # hindsight landing error (info["primitive_outcome"]) for the per-frame
+    # primitive-outcome loss.
+    expected_hold: torch.Tensor | None = None
 
 
 @dataclass
@@ -1316,6 +1329,8 @@ def _action_from_model(
     torch.Tensor,
     tuple[torch.Tensor, ...],
     WorldModelState | None,
+    SMBPrimitiveExecution,
+    torch.Tensor | None,
 ]:
     episode = (batch.metadata or {}).get("episode", {})
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
@@ -1419,6 +1434,12 @@ def _action_from_model(
         device=action_logits.device,
         dtype=log_prob.dtype,
     )
+    expected_hold = _smb_expected_hold_fraction(
+        motor_primitives,
+        execution,
+        device=action_logits.device,
+        dtype=log_prob.dtype,
+    )
     return (
         int(action_tensor.item()),
         log_prob,
@@ -1426,6 +1447,8 @@ def _action_from_model(
         primitive_aux_loss,
         (actions1, actions2, next_state_pred, criticism, logits_a),
         next_world_model_state,
+        execution,
+        expected_hold,
     )
 
 
@@ -1450,6 +1473,42 @@ def _smb_primitive_duration_log_prob(
         return zero
     target = torch.tensor([index], dtype=torch.long, device=device)
     return F.log_softmax(logits[:, -1, :], dim=-1).gather(1, target.view(1, 1)).mean()
+
+
+def _smb_expected_hold_fraction(
+    motor_primitives: Any,
+    execution: SMBPrimitiveExecution,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor | None:
+    """Graph-attached expected hold duration, normalized to the longest bin.
+
+    Emitted for every frame a jump primitive is engaged (initiation and
+    in-flight), so the primitive-outcome loss can supervise the duration
+    belief per frame rather than only at initiation.
+    """
+
+    if motor_primitives is None or not (execution.started or execution.active):
+        return None
+    logits = getattr(motor_primitives, "hold_duration_logits", None)
+    if logits is None:
+        return None
+    logits = logits.to(device=device, dtype=dtype)
+    if logits.ndim != 3 or logits.size(0) != 1:
+        return None
+    probabilities = F.softmax(logits[:, -1, :], dim=-1).reshape(-1)
+    values = getattr(motor_primitives, "duration_bin_values", None)
+    if values is not None:
+        values = torch.as_tensor(values, device=device, dtype=dtype).reshape(-1)
+        if values.numel() != probabilities.numel():
+            values = None
+    if values is None:
+        values = torch.arange(
+            1, probabilities.numel() + 1, device=device, dtype=dtype
+        )
+    max_value = values.detach().abs().max().clamp_min(1.0)
+    return (probabilities * values.detach()).sum() / max_value
 
 
 def _smb_primitive_auxiliary_loss(
@@ -1556,6 +1615,31 @@ def collect_trajectory(
         else ()
     )
     forced_action = block_smb_forced_action_for_rollout(stage.scenario)
+    primitive_span: list[int] = []
+    primitive_direction = 1.0
+
+    def _complete_primitive_span() -> None:
+        # Backfill every frame of the finished jump with the signed hindsight
+        # landing error toward the goal (which rides the enemy under
+        # goal_on_stomp, so a patrolling target is measured where it actually
+        # was). Positive = overshot along the jump direction.
+        nonlocal primitive_span
+        if not primitive_span:
+            return
+        env = stage.env
+        goal = getattr(env, "goal", None)
+        if goal is not None and getattr(env, "world_width", 0):
+            mario_center_x = float(env.mario["x"]) + float(env.mario["w"]) / 2.0
+            error = (mario_center_x - float(goal.centerx)) / float(env.world_width)
+            error *= primitive_direction
+            error = max(-1.0, min(1.0, error))
+            if abs(error) < 0.02:
+                error = 0.0
+            for span_index in primitive_span:
+                span_info = trajectory.transitions[span_index].info
+                if isinstance(span_info, dict):
+                    span_info["primitive_outcome"] = error
+        primitive_span = []
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -1576,6 +1660,8 @@ def collect_trajectory(
             primitive_aux_loss,
             outputs,
             next_world_model_state,
+            execution,
+            expected_hold,
         ) = _action_from_model(
             model,
             batch,
@@ -1627,8 +1713,25 @@ def collect_trajectory(
                     stage.scenario,
                     step_index,
                 ),
+                expected_hold=expected_hold,
             )
         )
+        # Per-frame primitive-outcome bookkeeping: track the frames of the
+        # engaged horizontal jump. Completion is landing / enemy contact /
+        # episode end — NOT the button release, because the arc keeps
+        # carrying Mario forward after release, so the hindsight error must
+        # be measured where he actually came down.
+        transition_index = len(trajectory.transitions) - 1
+        if execution.started and execution.action in (
+            int(SMBAction.RIGHT_JUMP),
+            int(SMBAction.LEFT_JUMP),
+        ):
+            primitive_span = [transition_index]
+            primitive_direction = 1.0 if execution.action == int(SMBAction.RIGHT_JUMP) else -1.0
+        elif execution.active and primitive_span:
+            primitive_span.append(transition_index)
+        if execution.landed or execution.cancelled or done:
+            _complete_primitive_span()
         observation = next_observation
         if record_frames:
             trajectory.frames.append(np.asarray(observation).copy())
@@ -1640,6 +1743,10 @@ def collect_trajectory(
             if ablation_config.recurrent_state_enabled and next_world_model_state is not None
             else None
         )
+    # Rollout budget exhausted with a jump still open (e.g., vision never
+    # reported the landing): supervise with the final position — the sign of
+    # the error is settled even if post-landing walking inflates it.
+    _complete_primitive_span()
     return trajectory
 
 
@@ -2045,6 +2152,7 @@ def compute_block_smb_losses(
     oracle_action_terms = []
     noop_terms = []
     critic_terms = []
+    primitive_outcome_terms = []
     oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
         return_target = returns[index].view(1)
@@ -2099,6 +2207,21 @@ def compute_block_smb_losses(
         critic_terms.append(
             step.criticism.pow(2).mean() + _critic_action_outcome_loss(model, step, device=device)
         )
+        # Per-frame primitive-outcome supervision: the hindsight landing error
+        # (signed along the jump direction; positive = overshot the target)
+        # pushes the frame's expected hold duration down, an undershoot pushes
+        # it up. Short- and long-target scenarios push in opposite directions,
+        # which a context-blind duration head cannot satisfy — the gradient is
+        # forced into the geometry-conditioned pathway. Applying it at every
+        # in-flight frame (where a patrolling target has moved since
+        # initiation) additionally teaches mid-air belief updates.
+        outcome = (
+            step.info.get("primitive_outcome") if isinstance(step.info, Mapping) else None
+        )
+        if step.expected_hold is not None and outcome is not None:
+            primitive_outcome_terms.append(
+                step.expected_hold.to(device=device) * float(outcome)
+            )
     loss_representation = torch.stack(representation_terms).mean()
     loss_dynamics = torch.stack(dynamics_terms).mean()
     loss_reward = torch.stack(reward_terms).mean()
@@ -2108,6 +2231,11 @@ def compute_block_smb_losses(
     loss_oracle_action = torch.stack(oracle_action_terms).mean()
     loss_noop = torch.stack(noop_terms).mean()
     loss_critic_feedback = torch.stack(critic_terms).mean()
+    loss_primitive_outcome = (
+        torch.stack(primitive_outcome_terms).mean()
+        if primitive_outcome_terms
+        else loss_policy.new_zeros(())
+    )
     entropy_bonus = torch.stack(entropy_terms).mean()
     imagined_losses = compute_imagined_rollout_losses(model, trajectories or [], config, device)
     world_model_weight = config.world_model_weight if config.ablation.world_model_enabled else 0.0
@@ -2124,6 +2252,7 @@ def compute_block_smb_losses(
         + config.oracle_action_loss_weight * loss_oracle_action
         + config.noop_loss_weight * loss_noop
         + config.critic_loss_weight * loss_critic_feedback
+        + config.primitive_outcome_weight * loss_primitive_outcome
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
@@ -2145,6 +2274,10 @@ def compute_block_smb_losses(
         "loss_value": loss_value,
         "loss_policy": loss_policy,
         "loss_action_aux": loss_action_aux,
+        "loss_primitive_outcome": loss_primitive_outcome,
+        "primitive_outcome_supervised_steps": torch.tensor(
+            float(len(primitive_outcome_terms)), device=device
+        ),
         "loss_oracle_action": loss_oracle_action,
         "oracle_action_supervised_steps": torch.tensor(
             float(oracle_supervised_steps),

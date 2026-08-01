@@ -1,6 +1,7 @@
 """Tests for Block SMB trainer plumbing."""
 
 import json
+import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1539,6 +1540,112 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         # executor (model duration head) owns the hold, so the executed action
         # is the forced jump rather than a sampled/searched token.
         self.assertEqual(trajectory.transitions[0].action, 2)
+
+    def test_primitive_outcome_loss_pushes_expected_hold_against_error(self):
+        # Overshoot (positive signed error) must gradient-push the expected
+        # hold down; undershoot must push it up. The optimizer minimizes
+        # loss = error * expected_hold, so the sign of d(loss)/d(long-bin
+        # logit) must match the sign of the error.
+        from types import SimpleNamespace
+
+        from retroagi.core import SMBPrimitiveExecution
+        from retroagi.stages.block_smb.train import _smb_expected_hold_fraction
+
+        for error, expected_gradient_sign in ((0.5, 1.0), (-0.5, -1.0)):
+            logits = torch.zeros(1, 1, 8, requires_grad=True)
+            motor = SimpleNamespace(
+                hold_duration_logits=logits,
+                duration_bin_values=torch.tensor(
+                    [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]
+                ),
+            )
+            execution = SMBPrimitiveExecution(action=2, started=True, active=True)
+            fraction = _smb_expected_hold_fraction(
+                motor,
+                execution,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+            )
+            self.assertIsNotNone(fraction)
+            (fraction * error).backward()
+            long_bin_gradient = float(logits.grad[0, -1, -1])
+            self.assertGreater(long_bin_gradient * expected_gradient_sign, 0.0)
+        # No jump engaged -> no supervision tensor.
+        idle = SMBPrimitiveExecution(action=1)
+        self.assertIsNone(
+            _smb_expected_hold_fraction(
+                SimpleNamespace(
+                    hold_duration_logits=torch.zeros(1, 1, 8),
+                    duration_bin_values=torch.tensor([1.0] * 8),
+                ),
+                idle,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+            )
+        )
+
+    def test_stomp_rollout_backfills_primitive_outcomes(self):
+        # A stomp_mount rollout (forced jump, goal riding the enemy) must
+        # produce jump frames carrying both the graph-attached expected hold
+        # and a shared hindsight landing error, and the loss assembly must
+        # surface a finite loss_primitive_outcome.
+        from retroagi.stages.block_smb.monte_carlo import (
+            sample_block_smb_monte_carlo_scenario,
+        )
+        from retroagi.stages.block_smb.train import (
+            collect_trajectory,
+            compute_block_smb_losses,
+        )
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="train",
+            seed=3,
+            sample_index=0,
+            family="stomp_mount",
+            difficulty="easy",
+        )
+        config = tiny_config()
+        model = make_block_smb_model(config)
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(),
+            scenario=dict(sample.scenario),
+            vision=BlockVisionTransformer(),
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                "stomp_outcome",
+                rollout_steps=40,
+                seed=0,
+                deterministic=False,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+        supervised = [
+            step
+            for step in trajectory.transitions
+            if step.expected_hold is not None
+            and step.info.get("primitive_outcome") is not None
+        ]
+        self.assertGreater(len(supervised), 0)
+        outcomes = {float(step.info["primitive_outcome"]) for step in supervised}
+        for outcome in outcomes:
+            self.assertTrue(math.isfinite(outcome))
+            self.assertLessEqual(abs(outcome), 1.0)
+        losses = compute_block_smb_losses(
+            model,
+            trajectory.transitions,
+            config,
+            torch.device("cpu"),
+            trajectories=[trajectory],
+        )
+        self.assertTrue(torch.isfinite(losses["loss_primitive_outcome"]).item())
+        self.assertGreater(
+            float(losses["primitive_outcome_supervised_steps"].item()), 0.0
+        )
 
 
 if __name__ == "__main__":
