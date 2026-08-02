@@ -1542,16 +1542,16 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         self.assertEqual(trajectory.transitions[0].action, 2)
 
     def test_primitive_outcome_loss_pushes_expected_hold_against_error(self):
-        # Overshoot (positive signed error) must gradient-push the expected
-        # hold down; undershoot must push it up. The optimizer minimizes
-        # loss = error * expected_hold, so the sign of d(loss)/d(long-bin
-        # logit) must match the sign of the error.
+        # The quadratic regression toward the hindsight hold target must push
+        # the long-duration bin down when the target is below the current
+        # expectation (overshoot relabel) and up when above (undershoot
+        # relabel). Uniform logits give an expected fraction of ~0.41.
         from types import SimpleNamespace
 
         from retroagi.core import SMBPrimitiveExecution
         from retroagi.stages.block_smb.train import _smb_expected_hold_fraction
 
-        for error, expected_gradient_sign in ((0.5, 1.0), (-0.5, -1.0)):
+        for target, expected_gradient_sign in ((0.15, 1.0), (0.9, -1.0)):
             logits = torch.zeros(1, 1, 8, requires_grad=True)
             motor = SimpleNamespace(
                 hold_duration_logits=logits,
@@ -1567,7 +1567,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 dtype=torch.float32,
             )
             self.assertIsNotNone(fraction)
-            (fraction * error).backward()
+            ((fraction - target) ** 2).backward()
             long_bin_gradient = float(logits.grad[0, -1, -1])
             self.assertGreater(long_bin_gradient * expected_gradient_sign, 0.0)
         # No jump engaged -> no supervision tensor.
@@ -1628,13 +1628,14 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             step
             for step in trajectory.transitions
             if step.expected_hold is not None
-            and step.info.get("primitive_outcome") is not None
+            and step.info.get("primitive_outcome_target") is not None
         ]
         self.assertGreater(len(supervised), 0)
-        outcomes = {float(step.info["primitive_outcome"]) for step in supervised}
-        for outcome in outcomes:
-            self.assertTrue(math.isfinite(outcome))
-            self.assertLessEqual(abs(outcome), 1.0)
+        targets = {float(step.info["primitive_outcome_target"]) for step in supervised}
+        for target in targets:
+            self.assertTrue(math.isfinite(target))
+            self.assertGreaterEqual(target, 1.0 / 16.0)
+            self.assertLessEqual(target, 1.0)
         losses = compute_block_smb_losses(
             model,
             trajectory.transitions,

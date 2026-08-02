@@ -311,12 +311,15 @@ class BlockSMBTrainingConfig:
     # moving targets (enemy stomps, moving platforms) without reintroducing
     # noise-driven truncation of committed holds.
     adaptive_duration_control: bool = True
-    # Per-frame primitive-outcome loss: each completed horizontal jump
-    # backfills its frames with the signed hindsight landing error relative
-    # to the goal (which rides the enemy under goal_on_stomp), and every
-    # frame's expected hold duration is pushed opposite the error. This is
-    # the dense geometry-conditioned gradient the duration head does not get
-    # from episode-level REINFORCE.
+    # Per-frame primitive-outcome loss: each completed horizontal jump is
+    # hindsight-relabeled with the hold that would have hit the goal (which
+    # rides the enemy under goal_on_stomp), scaling the realized hold by
+    # target-distance / realized-displacement, and every frame's expected
+    # hold regresses quadratically toward it. This is the dense
+    # geometry-conditioned gradient the duration head does not get from
+    # episode-level REINFORCE, and it is bounded and self-terminating —
+    # unlike a raw signed-error push, whose asymmetric magnitudes collapse
+    # the head to the shortest bin.
     primitive_outcome_weight: float = 0.5
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
@@ -1475,6 +1478,11 @@ def _smb_primitive_duration_log_prob(
     return F.log_softmax(logits[:, -1, :], dim=-1).gather(1, target.view(1, 1)).mean()
 
 
+# Longest hold-duration bin the executor exposes (frames); hindsight hold
+# targets and the expected-hold fraction are both normalized against it.
+_SMB_MAX_DURATION_BIN_VALUE = 16.0
+
+
 def _smb_expected_hold_fraction(
     motor_primitives: Any,
     execution: SMBPrimitiveExecution,
@@ -1617,29 +1625,55 @@ def collect_trajectory(
     forced_action = block_smb_forced_action_for_rollout(stage.scenario)
     primitive_span: list[int] = []
     primitive_direction = 1.0
+    primitive_span_start_x = 0.0
 
     def _complete_primitive_span() -> None:
-        # Backfill every frame of the finished jump with the signed hindsight
-        # landing error toward the goal (which rides the enemy under
-        # goal_on_stomp, so a patrolling target is measured where it actually
-        # was). Positive = overshot along the jump direction.
+        # Hindsight hold relabeling: from the finished jump's realized
+        # displacement and the goal position at completion (the goal rides
+        # the enemy under goal_on_stomp, so a patrolling target is measured
+        # where it actually was), compute the hold that WOULD have hit the
+        # target and backfill every frame with it as a regression target.
+        # Bounded and self-terminating: undershoot implies a longer hold,
+        # overshoot a shorter one, and an on-target jump relabels to the
+        # hold that was actually used — unlike a raw signed-error push,
+        # whose asymmetric magnitudes collapsed the head to the floor bin.
         nonlocal primitive_span
         if not primitive_span:
             return
+        span = primitive_span
+        primitive_span = []
         env = stage.env
         goal = getattr(env, "goal", None)
-        if goal is not None and getattr(env, "world_width", 0):
-            mario_center_x = float(env.mario["x"]) + float(env.mario["w"]) / 2.0
-            error = (mario_center_x - float(goal.centerx)) / float(env.world_width)
-            error *= primitive_direction
-            error = max(-1.0, min(1.0, error))
-            if abs(error) < 0.02:
-                error = 0.0
-            for span_index in primitive_span:
-                span_info = trajectory.transitions[span_index].info
-                if isinstance(span_info, dict):
-                    span_info["primitive_outcome"] = error
-        primitive_span = []
+        if goal is None or not getattr(env, "world_width", 0):
+            return
+        mario_center_x = float(env.mario["x"]) + float(env.mario["w"]) / 2.0
+        realized = (mario_center_x - primitive_span_start_x) * primitive_direction
+        target = (float(goal.centerx) - primitive_span_start_x) * primitive_direction
+        if realized < 3.0 or target <= 0.0:
+            return
+        held = 0
+        for span_index in span:
+            if trajectory.transitions[span_index].action in (
+                int(SMBAction.RIGHT_JUMP),
+                int(SMBAction.LEFT_JUMP),
+            ):
+                held += 1
+            else:
+                break
+        if held <= 0:
+            return
+        if abs(target - realized) < 4.0:
+            correct_hold = float(held)
+        else:
+            ratio = max(0.25, min(4.0, target / realized))
+            correct_hold = max(
+                1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), held * ratio)
+            )
+        target_fraction = correct_hold / float(_SMB_MAX_DURATION_BIN_VALUE)
+        for span_index in span:
+            span_info = trajectory.transitions[span_index].info
+            if isinstance(span_info, dict):
+                span_info["primitive_outcome_target"] = target_fraction
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -1676,6 +1710,7 @@ def collect_trajectory(
             oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
             forced_action=forced_action,
         )
+        pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
@@ -1728,6 +1763,7 @@ def collect_trajectory(
         ):
             primitive_span = [transition_index]
             primitive_direction = 1.0 if execution.action == int(SMBAction.RIGHT_JUMP) else -1.0
+            primitive_span_start_x = pre_step_mario_center_x
         elif execution.active and primitive_span:
             primitive_span.append(transition_index)
         if execution.landed or execution.cancelled or done:
@@ -2207,20 +2243,21 @@ def compute_block_smb_losses(
         critic_terms.append(
             step.criticism.pow(2).mean() + _critic_action_outcome_loss(model, step, device=device)
         )
-        # Per-frame primitive-outcome supervision: the hindsight landing error
-        # (signed along the jump direction; positive = overshot the target)
-        # pushes the frame's expected hold duration down, an undershoot pushes
-        # it up. Short- and long-target scenarios push in opposite directions,
-        # which a context-blind duration head cannot satisfy — the gradient is
-        # forced into the geometry-conditioned pathway. Applying it at every
-        # in-flight frame (where a patrolling target has moved since
-        # initiation) additionally teaches mid-air belief updates.
-        outcome = (
-            step.info.get("primitive_outcome") if isinstance(step.info, Mapping) else None
+        # Per-frame primitive-outcome supervision: regress each jump frame's
+        # expected hold toward the hindsight-relabeled correct hold for that
+        # jump's geometry. Short- and long-target scenarios have different
+        # targets, which a context-blind duration head cannot satisfy — the
+        # gradient is forced into the geometry-conditioned pathway. Applying
+        # it at every in-flight frame (where a patrolling target has moved
+        # since initiation) additionally teaches mid-air belief updates.
+        outcome_target = (
+            step.info.get("primitive_outcome_target")
+            if isinstance(step.info, Mapping)
+            else None
         )
-        if step.expected_hold is not None and outcome is not None:
+        if step.expected_hold is not None and outcome_target is not None:
             primitive_outcome_terms.append(
-                step.expected_hold.to(device=device) * float(outcome)
+                (step.expected_hold.to(device=device) - float(outcome_target)) ** 2
             )
     loss_representation = torch.stack(representation_terms).mean()
     loss_dynamics = torch.stack(dynamics_terms).mean()
