@@ -1024,6 +1024,52 @@ confidence in every artifact, and matches or beats the scripted-oracle baseline
 on fixed scenarios, held-out Monte Carlo gates, and Block-to-Full transfer
 metrics.
 
+## P11: Hierarchical Self-Supervised Planning
+
+The current A/B/C hierarchy represents information at different resolutions,
+but it does not yet provide durable skill, tactic, route, or cross-episode
+decisions. Implement the staged
+[hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)
+so goals flow downward, measured outcomes flow upward, and every level improves
+from real play, hindsight relabeling, failure replay, and held-out evaluation.
+
+- [ ] HSP0: define versioned temporal goal, nested transition, outcome,
+      termination, provenance, and episode contracts.
+- [ ] Emit complete Block SMB primitive spans with event boundaries for
+      liftoff, release, landing, support loss, stalls, hazards, death, success,
+      timeout, and truncation.
+- [ ] HSP1: train persistent outcome-conditioned primitives from complete spans
+      with balanced wait, recovery, jump-timing, and failure replay.
+- [ ] Select primitive checkpoints by held-out execution success, timing,
+      stopping, outcome, and confidence metrics rather than per-frame loss
+      alone.
+- [ ] HSP2: add measurable local goals, hindsight relabeling, a
+      goal-conditioned skill policy, skill stopping rules, and outcome
+      confidence.
+- [ ] Add constrained self-supervised skill discovery with diversity,
+      controllability, usefulness, redundancy, and usage gates.
+- [ ] HSP3: add an event-driven tactic manager above the current controller,
+      including recovery selection and replay correction after child-policy
+      updates.
+- [ ] HSP4: train calibrated primitive-, skill-, and tactic-horizon world-model
+      heads; allow imagined practice only where real-transition validation
+      supports it.
+- [ ] HSP5: learn safe landmarks and tactic transitions, search a route graph,
+      and replan when observed outcomes invalidate an edge.
+- [ ] HSP6: allocate play across weak, uncertain, novel, regressed, and
+      transfer-sensitive behaviors without reading benchmark or promotion data.
+- [ ] HSP7: extend universal oracle traces and EM relabeling with temporal goals,
+      nested spans, boundaries, achieved goals, and cross-game provenance.
+- [ ] Add per-level promotion reports covering goal success, duration and
+      stopping calibration, outcome error, confidence, skill diversity, parent
+      lift, retention, and Block-to-Full transfer.
+
+**Exit criteria:** persistent primitives beat the current per-frame baseline,
+skill and tactic layers improve held-out multi-obstacle play, route and
+curriculum layers improve long-layout success per environment step, and the
+same versioned hierarchy contracts work for at least two game profiles without
+trainer-specific hierarchy logic.
+
 ## Definition of Done
 
 The full system is working when a clean checkout can:

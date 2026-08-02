@@ -99,6 +99,9 @@ distribution-level promotion criteria before Full SMB transfer.
 The [universal retro oracle roadmap](docs/universal-retro-oracle.md) lays out
 the path from scripted Block SMB oracle labels to a learned cross-game AI
 teacher that improves through maximum-likelihood training and EM relabeling.
+The [hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)
+extends that roadmap with persistent primitives, learned skills, tactics,
+landmark routes, and per-level improvement loops grounded in real play.
 The current known-good baseline is a scripted policy artifact at
 `artifacts/block_smb/known_good_scripted_seed20260622/`.
 Full SMB cannot commit ROM-derived emulator artifacts, so its checked-in
