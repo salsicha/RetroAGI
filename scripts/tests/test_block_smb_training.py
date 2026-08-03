@@ -1584,6 +1584,67 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             )
         )
 
+    def test_landed_jump_span_ends_as_success_not_interruption(self):
+        # Regression: the landing frame reports active=False with landed=True,
+        # so the early-close heuristic must not fire one frame before it —
+        # that mislabeled every landed jump as an interruption and zeroed the
+        # HSP1 landing metrics and HSP2 relabels.
+        from retroagi.stages.block_smb.temporal_spans import (
+            build_block_smb_temporal_spans,
+        )
+
+        base = dict(
+            released=False,
+            landed=False,
+            cancelled=False,
+            death=False,
+            goal=False,
+            terminated=False,
+            truncated=False,
+            y_before=200.0,
+            y_after=200.0,
+        )
+        records = [
+            dict(base, action=2, started=True, active=True, x_before=0.0, x_after=2.0),
+            dict(base, action=2, started=False, active=True, x_before=2.0, x_after=5.0),
+            dict(
+                base,
+                action=1,
+                started=False,
+                active=True,
+                released=True,
+                x_before=5.0,
+                x_after=8.0,
+            ),
+            dict(
+                base,
+                action=1,
+                started=False,
+                active=False,
+                released=True,
+                landed=True,
+                x_before=8.0,
+                x_after=10.0,
+            ),
+            dict(base, action=1, started=False, active=False, x_before=10.0, x_after=12.0),
+            dict(
+                base,
+                action=1,
+                started=False,
+                active=False,
+                truncated=True,
+                x_before=12.0,
+                x_after=14.0,
+            ),
+        ]
+        spans = build_block_smb_temporal_spans(
+            records, episode_id="e", scenario_id="s", seed=0
+        )
+        jump = [s for s in spans if s.command.get("primitive") == "jump"]
+        self.assertEqual(len(jump), 1)
+        self.assertEqual(jump[0].termination_reason, "success")
+        self.assertEqual(jump[0].end_frame, 3)
+
     def test_hsp0_rollout_spans_reconstruct_with_full_coverage(self):
         # HSP0 exit gate: rollouts emit temporal spans that tile every frame
         # with unambiguous end reasons, for both policy and scripted play.

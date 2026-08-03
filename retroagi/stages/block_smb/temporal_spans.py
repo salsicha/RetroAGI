@@ -110,11 +110,19 @@ def build_block_smb_temporal_spans(
                     events.append({"event": "timeout", "frame": end})
                     reason = "timeout"
                     break
-                if end + 1 < n and not records[end + 1].get("active") and not records[
-                    end + 1
-                ].get("started"):
+                if (
+                    end + 1 < n
+                    and not records[end + 1].get("active")
+                    and not records[end + 1].get("started")
+                    and not records[end + 1].get("landed")
+                    and not records[end + 1].get("cancelled")
+                ):
                     # Executor no longer active next frame without a recorded
-                    # physical ending (e.g. safety valve): close here.
+                    # physical ending (e.g. safety valve): close here. The
+                    # landing frame itself reports active=False with
+                    # landed=True, so it must NOT trigger this early close —
+                    # that would end every landed jump one frame short as an
+                    # interruption and zero out the landing metrics.
                     reason = "interruption"
                     break
                 if end == n - 1:
