@@ -1584,6 +1584,56 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             )
         )
 
+    def test_hsp0_rollout_spans_reconstruct_with_full_coverage(self):
+        # HSP0 exit gate: rollouts emit temporal spans that tile every frame
+        # with unambiguous end reasons, for both policy and scripted play.
+        from retroagi.core.temporal import reconstruct_episodes
+        from retroagi.stages.block_smb.monte_carlo import (
+            sample_block_smb_monte_carlo_scenario,
+        )
+        from retroagi.stages.block_smb.train import collect_trajectory
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="train",
+            seed=3,
+            sample_index=0,
+            family="stomp_mount",
+            difficulty="easy",
+        )
+        config = tiny_config()
+        model = make_block_smb_model(config)
+        for use_oracle in (False, True):
+            stage = BlockSMBStage(
+                env=MarioScenarioEnv(),
+                scenario=dict(sample.scenario),
+                vision=BlockVisionTransformer(),
+            )
+            try:
+                trajectory = collect_trajectory(
+                    model,
+                    stage,
+                    "hsp0_probe",
+                    rollout_steps=30,
+                    seed=1,
+                    deterministic=False,
+                    device=torch.device("cpu"),
+                    use_oracle_actions=use_oracle,
+                )
+            finally:
+                stage.env.close()
+            self.assertGreater(len(trajectory.spans), 1)
+            expected_source = "scripted" if use_oracle else "real"
+            for span in trajectory.spans:
+                self.assertEqual(span.source, expected_source)
+            (report,) = reconstruct_episodes(trajectory.spans)
+            self.assertTrue(report.valid, report.problems)
+            self.assertEqual(report.frame_count, len(trajectory.transitions))
+            self.assertIn("skill", report.levels)
+            skill = trajectory.spans[0]
+            self.assertEqual(skill.level, "skill")
+            self.assertEqual(skill.goal["goal_type"], "stomp_mount")
+
     def test_stomp_rollout_backfills_primitive_outcomes(self):
         # A stomp_mount rollout (forced jump, goal riding the enemy) must
         # produce jump frames carrying both the graph-attached expected hold

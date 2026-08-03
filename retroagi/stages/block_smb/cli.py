@@ -464,6 +464,19 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         dest="adaptive_duration_control",
         help="lock the hold duration chosen at jump initiation",
     )
+    parser.set_defaults(emit_temporal_spans=None)
+    parser.add_argument(
+        "--emit-temporal-spans",
+        action="store_true",
+        dest="emit_temporal_spans",
+        help="write HSP0 temporal spans (spans.jsonl) next to the train log (default)",
+    )
+    parser.add_argument(
+        "--no-emit-temporal-spans",
+        action="store_false",
+        dest="emit_temporal_spans",
+        help="skip temporal span emission",
+    )
     parser.set_defaults(monte_carlo_validate_reachability=None)
     parser.add_argument(
         "--validate-monte-carlo-reachability",
@@ -744,6 +757,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "noop_loss_weight",
         "critic_loss_weight",
         "primitive_outcome_weight",
+        "emit_temporal_spans",
         "imagined_rollout_weight",
         "imagined_rollout_horizon",
         "target_network_mode",

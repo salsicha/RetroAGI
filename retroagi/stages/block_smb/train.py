@@ -50,6 +50,7 @@ from .adapter import (
     block_smb_deterministic_critic_slots,
 )
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
+from .temporal_spans import build_block_smb_temporal_spans
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
@@ -321,6 +322,9 @@ class BlockSMBTrainingConfig:
     # unlike a raw signed-error push, whose asymmetric magnitudes collapse
     # the head to the shortest bin.
     primitive_outcome_weight: float = 0.5
+    # HSP0: write every rollout's temporal spans (one JSONL next to the train
+    # log) so episodes can be reconstructed as goals and spans after the run.
+    emit_temporal_spans: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -533,6 +537,9 @@ class BlockSMBTrajectory:
     scenario_name: str
     transitions: list[BlockSMBTransition] = field(default_factory=list)
     frames: list[np.ndarray] = field(default_factory=list)
+    # HSP0 temporal spans covering every frame of the rollout, built by
+    # build_block_smb_temporal_spans at collection time.
+    spans: list[Any] = field(default_factory=list)
 
     @property
     def total_return(self) -> float:
@@ -1117,6 +1124,22 @@ def discounted_returns(
     return values
 
 
+def _write_block_smb_spans(
+    config: BlockSMBTrainingConfig, trajectory: BlockSMBTrajectory
+) -> None:
+    """Append the rollout's HSP0 spans to the run's spans JSONL."""
+
+    if not config.emit_temporal_spans or config.log_path is None or not trajectory.spans:
+        return
+    from retroagi.core.temporal import write_transitions_jsonl
+
+    version = f"{config.architecture_name}@seed{config.seed}"
+    for span in trajectory.spans:
+        span.policy_version = version
+    spans_path = Path(config.log_path).with_name("spans.jsonl")
+    write_transitions_jsonl(spans_path, trajectory.spans)
+
+
 def _goal_reached(env: MarioScenarioEnv) -> bool:
     # The env's credited-goal event is authoritative. Under goal_on_stomp the
     # goal rect is only a tracking proxy riding the enemy, so positional
@@ -1626,6 +1649,7 @@ def collect_trajectory(
     primitive_span: list[int] = []
     primitive_direction = 1.0
     primitive_span_start_x = 0.0
+    temporal_records: list[dict[str, Any]] = []
 
     def _complete_primitive_span() -> None:
         # Hindsight hold relabeling: from the finished jump's realized
@@ -1768,6 +1792,23 @@ def collect_trajectory(
             primitive_span.append(transition_index)
         if execution.landed or execution.cancelled or done:
             _complete_primitive_span()
+        temporal_records.append(
+            {
+                "action": int(action),
+                "started": bool(execution.started),
+                "active": bool(execution.active),
+                "released": bool(execution.released),
+                "landed": bool(execution.landed),
+                "cancelled": bool(execution.cancelled),
+                "death": bool(info.get("death", False)),
+                "goal": bool(info.get("goal_reached", False)),
+                "terminated": bool(terminated),
+                "truncated": bool(truncated),
+                "x_before": pre_step_mario_center_x,
+                "x_after": float(stage.env.mario["x"])
+                + float(stage.env.mario["w"]) / 2.0,
+            }
+        )
         observation = next_observation
         if record_frames:
             trajectory.frames.append(np.asarray(observation).copy())
@@ -1783,6 +1824,18 @@ def collect_trajectory(
     # reported the landing): supervise with the final position — the sign of
     # the error is settled even if post-landing walking inflates it.
     _complete_primitive_span()
+    metadata = block_smb_monte_carlo_metadata(stage.scenario)
+    family = ""
+    if isinstance(metadata, Mapping):
+        family = str(metadata.get("family", "") or "")
+    trajectory.spans = build_block_smb_temporal_spans(
+        temporal_records,
+        episode_id=f"{scenario_name}#seed{seed}",
+        scenario_id=scenario_name,
+        seed=seed,
+        source="scripted" if (use_oracle_actions and oracle_actions) else "real",
+        family_goal=family,
+    )
     return trajectory
 
 
@@ -2429,6 +2482,7 @@ def train_block_smb_epoch(
                 use_oracle_actions=config.use_oracle_actions,
                 adaptive_duration_control=config.adaptive_duration_control,
             )
+            _write_block_smb_spans(config, trajectory)
         finally:
             stage.env.close()
         replay.add(trajectory)
