@@ -40,6 +40,7 @@ LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context_b.",)
 SKILL_LAYER_ALLOWED_MISSING_PREFIXES = (
     "agent.skill_goal_context_b.",
     "skill_outcome_head.",
+    "tactic_next_skill_head.",
 )
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
@@ -1414,6 +1415,11 @@ class AgentWorldModelCritic(nn.Module):
             nn.Linear(32, 1),
         )
         torch.set_rng_state(rng_state_skill_head)
+        # HSP3: next-skill prior for the tactic manager, trained from real
+        # successful skill sequences. RNG-neutral like the other new heads.
+        rng_state_tactic = torch.get_rng_state()
+        self.tactic_next_skill_head = nn.Linear(seq_len_c, SKILL_GOAL_ENCODING_DIM - 1)
+        torch.set_rng_state(rng_state_tactic)
 
     def transition_representation(self, state):
         return self.transition_representation_head(state)
@@ -1423,6 +1429,11 @@ class AgentWorldModelCritic(nn.Module):
 
     def predict_value(self, state):
         return self.value_head(state).squeeze(-1)
+
+    def predict_next_skill_logits(self, state):
+        """Logits over skill goal types for what should follow from state."""
+
+        return self.tactic_next_skill_head(state.float())
 
     def predict_skill_outcome_logit(self, state, goal_encoding):
         """Logit that the encoded skill goal is achieved starting from state."""
