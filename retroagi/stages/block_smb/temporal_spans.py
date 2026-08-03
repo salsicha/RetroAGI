@@ -147,8 +147,14 @@ def build_block_smb_temporal_spans(
                         "action": int(record.get("action", -1)),
                         "held_frames": held,
                     },
-                    state_before={"x": records[start].get("x_before")},
-                    state_after={"x": records[end].get("x_after")},
+                    state_before={
+                        "x": records[start].get("x_before"),
+                        "y": records[start].get("y_before"),
+                    },
+                    state_after={
+                        "x": records[end].get("x_after"),
+                        "y": records[end].get("y_after"),
+                    },
                     outcome={"displacement": displacement},
                     events=tuple(events),
                 )
@@ -217,8 +223,14 @@ def build_block_smb_temporal_spans(
                 success=reason == "success",
                 failure_category="death" if reason == "failure" else "",
                 command={"primitive": name},
-                state_before={"x": records[start].get("x_before")},
-                state_after={"x": records[end].get("x_after")},
+                state_before={
+                    "x": records[start].get("x_before"),
+                    "y": records[start].get("y_before"),
+                },
+                state_after={
+                    "x": records[end].get("x_after"),
+                    "y": records[end].get("y_after"),
+                },
                 outcome={
                     "displacement": float(last.get("x_after", 0.0))
                     - float(records[start].get("x_before", 0.0))

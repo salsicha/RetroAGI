@@ -6,6 +6,8 @@ from typing import Any, Iterable, Mapping
 
 import torch
 import torch.nn as nn
+
+from .skills import SKILL_GOAL_ENCODING_DIM
 import torch.nn.functional as F
 
 SUPPORTED_CONTROLLER_SCHEDULES = ("constant", "linear")
@@ -35,6 +37,10 @@ ACTION_HEAD_ALLOWED_MISSING_PREFIXES = (
 ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES = ("world_model_actor_context.",)
 ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context.",)
 LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context_b.",)
+SKILL_LAYER_ALLOWED_MISSING_PREFIXES = (
+    "agent.skill_goal_context_b.",
+    "skill_outcome_head.",
+)
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
     *ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES,
@@ -43,6 +49,7 @@ ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES,
     *ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
     *LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
+    *SKILL_LAYER_ALLOWED_MISSING_PREFIXES,
 )
 DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
 DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
@@ -658,6 +665,15 @@ class HierarchicalAdaptiveModel(nn.Module):
             nn.init.zeros_(self.c_state_context_b.weight)
             nn.init.zeros_(self.c_state_context_b.bias)
             torch.set_rng_state(rng_state_b)
+        # HSP2 skill-goal conditioning: a measurable local goal (clear a gap,
+        # mount a platform, ...) is injected into the B tokens the same way
+        # as the C-state context. Zero-initialized and RNG-neutral so
+        # existing checkpoints load and behave identically until trained.
+        rng_state_skill = torch.get_rng_state()
+        self.skill_goal_context_b = nn.Linear(SKILL_GOAL_ENCODING_DIM, d_model)
+        nn.init.zeros_(self.skill_goal_context_b.weight)
+        nn.init.zeros_(self.skill_goal_context_b.bias)
+        torch.set_rng_state(rng_state_skill)
 
         encoder_layers_a = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, batch_first=True
@@ -760,6 +776,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         *,
         world_model_context=None,
         forced_action=None,
+        skill_goal=None,
     ):
         seq_len_a = src_A.size(1)
         seq_len_b = src_B.size(1)
@@ -807,6 +824,11 @@ class HierarchicalAdaptiveModel(nn.Module):
         if self.c_state_context_b is not None:
             c_context_b = torch.tanh(self.c_state_context_b(src_C.float()))
             x_b = x_b + c_context_b.to(dtype=x_b.dtype).unsqueeze(1)
+        if skill_goal is not None and getattr(self, "skill_goal_context_b", None) is not None:
+            goal_context = torch.tanh(
+                self.skill_goal_context_b(skill_goal.to(src_C.device).float())
+            )
+            x_b = x_b + goal_context.to(dtype=x_b.dtype).unsqueeze(1)
         cross_mask = self.generate_cross_causal_mask(seq_len_b, seq_len_a, ratio_ab).to(
             src_B.device
         )
@@ -1382,6 +1404,16 @@ class AgentWorldModelCritic(nn.Module):
             nn.ReLU(),
             nn.Linear(d_model, 1),
         )
+        # HSP2: skill outcome head — P(goal achieved from this state). Trained
+        # from hindsight-relabeled spans; RNG-neutral so behavior and later
+        # weight initialization are unchanged for existing checkpoints.
+        rng_state_skill_head = torch.get_rng_state()
+        self.skill_outcome_head = nn.Sequential(
+            nn.Linear(seq_len_c + SKILL_GOAL_ENCODING_DIM, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+        )
+        torch.set_rng_state(rng_state_skill_head)
 
     def transition_representation(self, state):
         return self.transition_representation_head(state)
@@ -1391,6 +1423,14 @@ class AgentWorldModelCritic(nn.Module):
 
     def predict_value(self, state):
         return self.value_head(state).squeeze(-1)
+
+    def predict_skill_outcome_logit(self, state, goal_encoding):
+        """Logit that the encoded skill goal is achieved starting from state."""
+
+        features = torch.cat(
+            [state.float(), goal_encoding.to(state.device).float()], dim=-1
+        )
+        return self.skill_outcome_head(features).squeeze(-1)
 
     def predict_action_progress_logit(self, next_state_pred, current_state=None):
         critic = getattr(self, "critic", None)
@@ -1491,12 +1531,15 @@ class AgentWorldModelCritic(nn.Module):
         tau=1.0,
         world_model_context=None,
         forced_action=None,
+        skill_goal=None,
     ):
         kwargs: dict[str, Any] = {"criticism": criticism, "tau": tau}
         if bool(getattr(self.agent, "uses_world_model_context", False)):
             kwargs["world_model_context"] = world_model_context
         if forced_action is not None:
             kwargs["forced_action"] = forced_action
+        if skill_goal is not None:
+            kwargs["skill_goal"] = skill_goal
         return self.agent(src_A, src_B, src_C, **kwargs)
 
     def _world_model_prediction(
@@ -1887,6 +1930,7 @@ class AgentWorldModelCritic(nn.Module):
         return_world_model_state=False,
         critic_feedback_enabled=True,
         world_model_enabled=True,
+        skill_goal=None,
     ):
         actor_world_model_context = self._actor_world_model_context(
             world_model_state,
@@ -1903,6 +1947,7 @@ class AgentWorldModelCritic(nn.Module):
             criticism=None,
             tau=tau,
             world_model_context=actor_world_model_context,
+            skill_goal=skill_goal,
         )
         primitive_params1 = getattr(self.agent, "last_level_b_primitives", None)
         first_candidate = self._candidate_from_actor_outputs(
@@ -1953,7 +1998,8 @@ class AgentWorldModelCritic(nn.Module):
                     tau=tau,
                     world_model_context=actor_world_model_context,
                     forced_action=action_id,
-                )
+                    skill_goal=skill_goal,
+)
                 primitive_params_f = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(
                     src_C,
@@ -1993,7 +2039,8 @@ class AgentWorldModelCritic(nn.Module):
                     criticism=actor_criticism,
                     tau=tau,
                     world_model_context=actor_world_model_context,
-                )
+                    skill_goal=skill_goal,
+)
                 primitive_params = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(
                     src_C,

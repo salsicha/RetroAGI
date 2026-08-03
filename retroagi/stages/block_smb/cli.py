@@ -222,6 +222,7 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--critic-loss-weight", type=_non_negative_float)
     parser.add_argument("--release-timing-weight", type=_non_negative_float)
+    parser.add_argument("--skill-outcome-weight", type=_non_negative_float)
     parser.add_argument(
         "--primitive-outcome-weight",
         type=_non_negative_float,
@@ -759,6 +760,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "critic_loss_weight",
         "primitive_outcome_weight",
         "release_timing_weight",
+        "skill_outcome_weight",
         "emit_temporal_spans",
         "imagined_rollout_weight",
         "imagined_rollout_horizon",

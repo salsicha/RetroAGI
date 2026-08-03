@@ -51,6 +51,10 @@ from .adapter import (
 )
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .temporal_spans import build_block_smb_temporal_spans
+from .skills import (
+    achieved_block_smb_skill_goals,
+    requested_block_smb_skill_goal,
+)
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
@@ -329,6 +333,10 @@ class BlockSMBTrainingConfig:
     # hindsight-correct hold is over"); the executor still ignores the
     # release head at runtime.
     release_timing_weight: float = 0.1
+    # HSP2: condition B-level on the scenario family's requested skill goal
+    # and train the skill outcome head from hindsight-relabeled spans.
+    skill_goal_conditioning: bool = True
+    skill_outcome_weight: float = 0.1
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -1355,6 +1363,7 @@ def _action_from_model(
     oracle_next_action: int | None = None,
     oracle_hold_frames: int | None = None,
     forced_action: int | None = None,
+    skill_goal: torch.Tensor | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -1391,6 +1400,7 @@ def _action_from_model(
         return_world_model_state=True,
         critic_feedback_enabled=critic_feedback_enabled,
         world_model_enabled=world_model_enabled,
+        skill_goal=skill_goal,
     )
     action_logits = logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT]
     finite_or_raise("action_logits", action_logits)
@@ -1662,6 +1672,7 @@ def collect_trajectory(
     ablation: BlockSMBAblationConfig | Mapping[str, Any] | None = None,
     use_oracle_actions: bool = False,
     adaptive_duration_control: bool = True,
+    skill_goal_conditioning: bool = True,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
@@ -1686,6 +1697,13 @@ def collect_trajectory(
         else ()
     )
     forced_action = block_smb_forced_action_for_rollout(stage.scenario)
+    skill_goal = (
+        requested_block_smb_skill_goal(stage.scenario)
+        if skill_goal_conditioning
+        else None
+    )
+    if skill_goal is not None:
+        skill_goal = skill_goal.to(device)
     primitive_span: list[int] = []
     primitive_direction = 1.0
     primitive_span_start_x = 0.0
@@ -1779,8 +1797,10 @@ def collect_trajectory(
             oracle_next_action=oracle_next_action,
             oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
             forced_action=forced_action,
+            skill_goal=skill_goal,
         )
         pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
+        pre_step_mario_y = float(stage.env.mario["y"])
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
@@ -1854,6 +1874,8 @@ def collect_trajectory(
                 "x_before": pre_step_mario_center_x,
                 "x_after": float(stage.env.mario["x"])
                 + float(stage.env.mario["w"]) / 2.0,
+                "y_before": pre_step_mario_y,
+                "y_after": float(stage.env.mario["y"]),
             }
         )
         observation = next_observation
@@ -2393,6 +2415,46 @@ def compute_block_smb_losses(
         if release_timing_terms
         else loss_policy.new_zeros(())
     )
+    skill_outcome_terms: list[torch.Tensor] = []
+    if trajectories:
+        from retroagi.core.skills import SKILL_GOAL_TYPES, skill_goal_encoding
+
+        for trajectory_item in trajectories:
+            spans = getattr(trajectory_item, "spans", None)
+            if not spans:
+                continue
+            for achieved in achieved_block_smb_skill_goals(spans):
+                start = int(achieved["start_frame"])
+                if start >= len(trajectory_item.transitions):
+                    continue
+                state = trajectory_item.transitions[start].batch.src_c.detach().to(device)
+                goal_vec = skill_goal_encoding(
+                    achieved["goal_type"], achieved["magnitude"]
+                ).to(device)
+                positive = model.predict_skill_outcome_logit(state, goal_vec)
+                skill_outcome_terms.append(
+                    F.binary_cross_entropy_with_logits(
+                        positive, torch.ones_like(positive)
+                    )
+                )
+                # Contrastive negative: a different goal type from the same
+                # start state was (by relabel) not what this span achieved.
+                other = SKILL_GOAL_TYPES[
+                    (SKILL_GOAL_TYPES.index(achieved["goal_type"]) + 1)
+                    % len(SKILL_GOAL_TYPES)
+                ]
+                negative_vec = skill_goal_encoding(other, achieved["magnitude"]).to(device)
+                negative = model.predict_skill_outcome_logit(state, negative_vec)
+                skill_outcome_terms.append(
+                    F.binary_cross_entropy_with_logits(
+                        negative, torch.zeros_like(negative)
+                    )
+                )
+    loss_skill_outcome = (
+        torch.stack(skill_outcome_terms).mean()
+        if skill_outcome_terms
+        else loss_policy.new_zeros(())
+    )
     entropy_bonus = torch.stack(entropy_terms).mean()
     imagined_losses = compute_imagined_rollout_losses(model, trajectories or [], config, device)
     world_model_weight = config.world_model_weight if config.ablation.world_model_enabled else 0.0
@@ -2411,6 +2473,7 @@ def compute_block_smb_losses(
         + config.critic_loss_weight * loss_critic_feedback
         + config.primitive_outcome_weight * loss_primitive_outcome
         + config.release_timing_weight * loss_release_timing
+        + config.skill_outcome_weight * loss_skill_outcome
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
@@ -2434,6 +2497,10 @@ def compute_block_smb_losses(
         "loss_action_aux": loss_action_aux,
         "loss_primitive_outcome": loss_primitive_outcome,
         "loss_release_timing": loss_release_timing,
+        "loss_skill_outcome": loss_skill_outcome,
+        "skill_outcome_supervised_spans": torch.tensor(
+            float(len(skill_outcome_terms) / 2.0), device=device
+        ),
         "primitive_outcome_supervised_steps": torch.tensor(
             float(len(primitive_outcome_terms)), device=device
         ),
@@ -2550,6 +2617,7 @@ def train_block_smb_epoch(
                 ablation=config.ablation,
                 use_oracle_actions=config.use_oracle_actions,
                 adaptive_duration_control=config.adaptive_duration_control,
+                skill_goal_conditioning=config.skill_goal_conditioning,
             )
             _write_block_smb_spans(config, trajectory)
         finally:
