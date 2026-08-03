@@ -325,6 +325,10 @@ class BlockSMBTrainingConfig:
     # HSP0: write every rollout's temporal spans (one JSONL next to the train
     # log) so episodes can be reconstructed as goals and spans after the run.
     emit_temporal_spans: bool = True
+    # HSP1: span-supervised release-timing prediction (BCE toward "the
+    # hindsight-correct hold is over"); the executor still ignores the
+    # release head at runtime.
+    release_timing_weight: float = 0.1
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -530,6 +534,9 @@ class BlockSMBTransition:
     # hindsight landing error (info["primitive_outcome"]) for the per-frame
     # primitive-outcome loss.
     expected_hold: torch.Tensor | None = None
+    # HSP1: graph-attached release logit while the primitive is engaged,
+    # span-supervised toward "the hindsight-correct hold has elapsed".
+    release_logit: torch.Tensor | None = None
 
 
 @dataclass
@@ -1357,6 +1364,7 @@ def _action_from_model(
     WorldModelState | None,
     SMBPrimitiveExecution,
     torch.Tensor | None,
+    torch.Tensor | None,
 ]:
     episode = (batch.metadata or {}).get("episode", {})
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
@@ -1466,6 +1474,12 @@ def _action_from_model(
         device=action_logits.device,
         dtype=log_prob.dtype,
     )
+    release_logit = _smb_release_logit(
+        motor_primitives,
+        execution,
+        device=action_logits.device,
+        dtype=log_prob.dtype,
+    )
     return (
         int(action_tensor.item()),
         log_prob,
@@ -1475,6 +1489,7 @@ def _action_from_model(
         next_world_model_state,
         execution,
         expected_hold,
+        release_logit,
     )
 
 
@@ -1540,6 +1555,31 @@ def _smb_expected_hold_fraction(
         )
     max_value = values.detach().abs().max().clamp_min(1.0)
     return (probabilities * values.detach()).sum() / max_value
+
+
+def _smb_release_logit(
+    motor_primitives: Any,
+    execution: SMBPrimitiveExecution,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor | None:
+    """Graph-attached release logit while a jump primitive is engaged.
+
+    HSP1 trains the release head as a span-supervised predictor of "the
+    hindsight-correct hold is over" without giving it back any runtime
+    authority over the committed executor.
+    """
+
+    if motor_primitives is None or not (execution.started or execution.active):
+        return None
+    logit = getattr(motor_primitives, "release_logit", None)
+    if logit is None:
+        return None
+    logit = logit.to(device=device, dtype=dtype)
+    if logit.numel() < 1:
+        return None
+    return logit.reshape(-1)[-1]
 
 
 def _smb_primitive_auxiliary_loss(
@@ -1694,10 +1734,15 @@ def collect_trajectory(
                 1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), held * ratio)
             )
         target_fraction = correct_hold / float(_SMB_MAX_DURATION_BIN_VALUE)
-        for span_index in span:
+        for offset, span_index in enumerate(span):
             span_info = trajectory.transitions[span_index].info
             if isinstance(span_info, dict):
                 span_info["primitive_outcome_target"] = target_fraction
+                # HSP1: frame position within the primitive plus the
+                # hindsight-correct hold, so the release head can learn
+                # "should I be releasing now?" from complete spans.
+                span_info["primitive_frame_index"] = offset
+                span_info["primitive_target_hold"] = correct_hold
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -1720,6 +1765,7 @@ def collect_trajectory(
             next_world_model_state,
             execution,
             expected_hold,
+            release_logit,
         ) = _action_from_model(
             model,
             batch,
@@ -1773,6 +1819,7 @@ def collect_trajectory(
                     step_index,
                 ),
                 expected_hold=expected_hold,
+                release_logit=release_logit,
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -2242,6 +2289,7 @@ def compute_block_smb_losses(
     noop_terms = []
     critic_terms = []
     primitive_outcome_terms = []
+    release_timing_terms = []
     oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
         return_target = returns[index].view(1)
@@ -2312,6 +2360,20 @@ def compute_block_smb_losses(
             primitive_outcome_terms.append(
                 (step.expected_hold.to(device=device) - float(outcome_target)) ** 2
             )
+        frame_index = (
+            step.info.get("primitive_frame_index") if isinstance(step.info, Mapping) else None
+        )
+        target_hold = (
+            step.info.get("primitive_target_hold") if isinstance(step.info, Mapping) else None
+        )
+        if step.release_logit is not None and frame_index is not None and target_hold is not None:
+            should_release = 1.0 if float(frame_index) + 1.0 >= float(target_hold) else 0.0
+            release_timing_terms.append(
+                F.binary_cross_entropy_with_logits(
+                    step.release_logit.to(device=device).reshape(()),
+                    torch.tensor(should_release, dtype=torch.float32, device=device),
+                )
+            )
     loss_representation = torch.stack(representation_terms).mean()
     loss_dynamics = torch.stack(dynamics_terms).mean()
     loss_reward = torch.stack(reward_terms).mean()
@@ -2324,6 +2386,11 @@ def compute_block_smb_losses(
     loss_primitive_outcome = (
         torch.stack(primitive_outcome_terms).mean()
         if primitive_outcome_terms
+        else loss_policy.new_zeros(())
+    )
+    loss_release_timing = (
+        torch.stack(release_timing_terms).mean()
+        if release_timing_terms
         else loss_policy.new_zeros(())
     )
     entropy_bonus = torch.stack(entropy_terms).mean()
@@ -2343,6 +2410,7 @@ def compute_block_smb_losses(
         + config.noop_loss_weight * loss_noop
         + config.critic_loss_weight * loss_critic_feedback
         + config.primitive_outcome_weight * loss_primitive_outcome
+        + config.release_timing_weight * loss_release_timing
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
@@ -2365,6 +2433,7 @@ def compute_block_smb_losses(
         "loss_policy": loss_policy,
         "loss_action_aux": loss_action_aux,
         "loss_primitive_outcome": loss_primitive_outcome,
+        "loss_release_timing": loss_release_timing,
         "primitive_outcome_supervised_steps": torch.tensor(
             float(len(primitive_outcome_terms)), device=device
         ),
@@ -2554,6 +2623,9 @@ def evaluate_block_smb_monte_carlo(
     returns: list[float] = []
     successes: list[float] = []
     all_actions: list[int] = []
+    primitive_jump_spans = 0
+    primitive_jump_landings = 0
+    primitive_duration_gaps: list[float] = []
     with torch.no_grad():
         for sample_index, sample in enumerate(sample_set.samples):
             scenario_returns: list[float] = []
@@ -2594,6 +2666,28 @@ def evaluate_block_smb_monte_carlo(
                 scenario_successes.append(float(trajectory.success))
                 scenario_actions.extend(actions)
                 scenario_max_progress.append(max_progress)
+                # HSP1 primitive metrics: landing rate and duration
+                # calibration of jump spans against hindsight targets.
+                for span in trajectory.spans:
+                    if span.level != "motor_primitive":
+                        continue
+                    if span.command.get("primitive") != "jump":
+                        continue
+                    primitive_jump_spans += 1
+                    if span.termination_reason == "success":
+                        primitive_jump_landings += 1
+                    start_info = trajectory.transitions[span.start_frame].info
+                    target_hold = (
+                        start_info.get("primitive_target_hold")
+                        if isinstance(start_info, Mapping)
+                        else None
+                    )
+                    held = span.command.get("held_frames")
+                    if target_hold is not None and held is not None:
+                        primitive_duration_gaps.append(
+                            abs(float(held) - float(target_hold))
+                            / _SMB_MAX_DURATION_BIN_VALUE
+                        )
                 if record_dir is not None:
                     split_record_dir = record_dir / f"monte_carlo_{split}"
                     split_record_dir.mkdir(parents=True, exist_ok=True)
@@ -2687,6 +2781,19 @@ def evaluate_block_smb_monte_carlo(
         pass_rate_gate=config.monte_carlo_pass_rate_gate,
         family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
     )
+    evaluation["primitive_metrics"] = {
+        "jump_spans": float(primitive_jump_spans),
+        "landing_rate": (
+            primitive_jump_landings / primitive_jump_spans
+            if primitive_jump_spans
+            else 0.0
+        ),
+        "duration_gap_mean": (
+            sum(primitive_duration_gaps) / len(primitive_duration_gaps)
+            if primitive_duration_gaps
+            else 0.0
+        ),
+    }
     return evaluation
 
 
@@ -3201,6 +3308,7 @@ def train_and_evaluate_block_smb(
         update_target_network(target_model, model, tau=1.0)
     mastery_state = initial_block_smb_mastery_state()
     mastery_phase = 0
+    best_primitive_score = float("-inf")
     if config.mastery_gated_schedule:
         curriculum = load_fixed_scenarios(config.fixed_scenarios)
         curriculum.extend(
@@ -3311,6 +3419,38 @@ def train_and_evaluate_block_smb(
             )
             last_metrics.update(block_smb_monte_carlo_eval_metrics(evaluation))
             monte_carlo_validation = evaluation.get("monte_carlo_validation", {})
+            # HSP1: held-out primitive metrics select a best-primitives
+            # checkpoint independent of episode return.
+            if isinstance(monte_carlo_validation, Mapping):
+                primitive_metrics = monte_carlo_validation.get("primitive_metrics", {})
+                if isinstance(primitive_metrics, Mapping) and primitive_metrics.get(
+                    "jump_spans", 0.0
+                ):
+                    landing_rate = float(primitive_metrics.get("landing_rate", 0.0))
+                    duration_gap = float(
+                        primitive_metrics.get("duration_gap_mean", 0.0)
+                    )
+                    primitive_score = landing_rate - duration_gap
+                    last_metrics["eval_primitive_landing_rate"] = landing_rate
+                    last_metrics["eval_primitive_duration_gap"] = duration_gap
+                    if primitive_score > best_primitive_score and config.checkpoint_path:
+                        best_primitive_score = primitive_score
+                        best_path = Path(config.checkpoint_path).with_suffix(
+                            ".best_primitives.pth"
+                        )
+                        if Path(config.checkpoint_path).exists():
+                            import shutil
+
+                            shutil.copyfile(config.checkpoint_path, best_path)
+                            _log_block_smb_event(
+                                config,
+                                "best_primitive_checkpoint",
+                                epoch=completed_epoch,
+                                score=primitive_score,
+                                landing_rate=landing_rate,
+                                duration_gap_mean=duration_gap,
+                                path=str(best_path),
+                            )
             if isinstance(monte_carlo_validation, Mapping):
                 failure_bins = monte_carlo_validation.get("failure_bins", {})
                 if isinstance(failure_bins, Mapping):

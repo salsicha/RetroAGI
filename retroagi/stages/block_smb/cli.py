@@ -221,6 +221,7 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         help="penalize NOOP probability outside explicit wait/NOOP scenario windows",
     )
     parser.add_argument("--critic-loss-weight", type=_non_negative_float)
+    parser.add_argument("--release-timing-weight", type=_non_negative_float)
     parser.add_argument(
         "--primitive-outcome-weight",
         type=_non_negative_float,
@@ -757,6 +758,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "noop_loss_weight",
         "critic_loss_weight",
         "primitive_outcome_weight",
+        "release_timing_weight",
         "emit_temporal_spans",
         "imagined_rollout_weight",
         "imagined_rollout_horizon",

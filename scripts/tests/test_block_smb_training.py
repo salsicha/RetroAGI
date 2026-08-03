@@ -1697,6 +1697,17 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         self.assertGreater(
             float(losses["primitive_outcome_supervised_steps"].item()), 0.0
         )
+        # HSP1: release timing supervised from the same spans — frame index
+        # and hindsight hold backfilled, release logits captured, loss finite.
+        self.assertTrue(torch.isfinite(losses["loss_release_timing"]).item())
+        release_supervised = [
+            step
+            for step in trajectory.transitions
+            if step.release_logit is not None
+            and step.info.get("primitive_frame_index") is not None
+            and step.info.get("primitive_target_hold") is not None
+        ]
+        self.assertGreater(len(release_supervised), 0)
 
 
 if __name__ == "__main__":
