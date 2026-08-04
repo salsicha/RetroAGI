@@ -1774,6 +1774,13 @@ def collect_trajectory(
                 # "should I be releasing now?" from complete spans.
                 span_info["primitive_frame_index"] = offset
                 span_info["primitive_target_hold"] = correct_hold
+                # The world model's target for committed-primitive frames is
+                # the OUTCOME of the primitive — the state at completion
+                # (landing) — not the next frame. A jump's value is invisible
+                # one frame ahead; it lives where the arc comes down.
+                span_info["primitive_outcome_batch"] = trajectory.transitions[
+                    span[-1]
+                ].next_batch
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -2346,21 +2353,27 @@ def compute_block_smb_losses(
         reward_target = torch.tensor([step.reward], dtype=torch.float32, device=device)
         value_pred = model.predict_value(step.batch.src_c.detach())
         reward_pred = model.predict_reward(step.next_state_pred)
+        outcome_batch = (
+            step.info.get("primitive_outcome_batch")
+            if isinstance(step.info, Mapping)
+            else None
+        )
+        dynamics_target_batch = outcome_batch if outcome_batch is not None else step.next_batch
         predicted_representation = model.transition_representation(step.next_state_pred)
         with torch.no_grad():
             target_representation = target_model_for_loss.transition_representation(
-                step.next_batch.src_c.detach()
+                dynamics_target_batch.src_c.detach()
             )
         advantage = (return_target - value_pred.detach()).detach()
 
         policy_terms.append(-step.log_prob * advantage.squeeze(0))
         entropy_terms.append(step.entropy)
         representation_terms.append(F.mse_loss(predicted_representation, target_representation))
-        next_state_target = step.next_batch.src_c.detach()
+        next_state_target = dynamics_target_batch.src_c.detach()
         slot_losses = block_smb_c_stream_dynamics_slot_losses(
             step.next_state_pred,
             next_state_target,
-            step.next_batch,
+            dynamics_target_batch,
         )
         dynamics_terms.append(
             block_smb_dynamics_loss(
@@ -2375,7 +2388,7 @@ def compute_block_smb_losses(
         dynamics_metrics = block_smb_c_stream_dynamics_metrics(
             step.next_state_pred,
             next_state_target,
-            step.next_batch,
+            dynamics_target_batch,
             semantic_accuracy_threshold=config.semantic_prediction_accuracy_threshold,
         )
         for metric_name, metric_value in dynamics_metrics.items():

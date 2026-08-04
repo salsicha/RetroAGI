@@ -1758,6 +1758,16 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         self.assertGreater(
             float(losses["primitive_outcome_supervised_steps"].item()), 0.0
         )
+        # World model targets: committed-primitive frames predict the OUTCOME
+        # state (at completion), and all frames of one span share it.
+        outcome_frames = [
+            step
+            for step in trajectory.transitions
+            if step.info.get("primitive_outcome_batch") is not None
+        ]
+        self.assertGreater(len(outcome_frames), 0)
+        shared = {id(step.info["primitive_outcome_batch"]) for step in outcome_frames}
+        self.assertLessEqual(len(shared), len(supervised))
         # HSP1: release timing supervised from the same spans — frame index
         # and hindsight hold backfilled, release logits captured, loss finite.
         self.assertTrue(torch.isfinite(losses["loss_release_timing"]).item())
