@@ -585,3 +585,71 @@ class TestSMBActionVocabulary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSteadyPrimitives(unittest.TestCase):
+    @staticmethod
+    def _motor(logits):
+        return SimpleNamespace(
+            hold_duration_logits=torch.tensor([[logits]]),
+            duration_bin_values=torch.tensor([2.0, 4.0, 16.0]),
+        )
+
+    def _air(self):
+        return None  # no vision: no support/enemy signals
+
+    def test_walk_commits_for_selected_duration_and_marks_completion(self):
+        executor = SMBParameterizedPrimitiveExecutor()
+        motor = self._motor([0.0, 6.0, -6.0])  # argmax bin -> 4 frames
+        first = executor.execute(SMBAction.RIGHT, motor_primitives=motor)
+        self.assertTrue(first.started)
+        self.assertEqual(first.action, int(SMBAction.RIGHT))
+        self.assertEqual(first.hold_frames, 4)
+        # Policy asks for something else mid-walk: the commitment holds.
+        second = executor.execute(SMBAction.LEFT, motor_primitives=motor)
+        third = executor.execute(SMBAction.LEFT, motor_primitives=motor)
+        self.assertEqual(second.action, int(SMBAction.RIGHT))
+        self.assertTrue(second.active)
+        self.assertFalse(second.released)
+        self.assertEqual(third.action, int(SMBAction.RIGHT))
+        fourth = executor.execute(SMBAction.LEFT, motor_primitives=motor)
+        self.assertEqual(fourth.action, int(SMBAction.RIGHT))
+        self.assertTrue(fourth.released)
+        # Commitment satisfied: the next call is a fresh decision.
+        fifth = executor.execute(SMBAction.LEFT, motor_primitives=motor)
+        self.assertTrue(fifth.started)
+        self.assertEqual(fifth.action, int(SMBAction.LEFT))
+
+    def test_wait_is_a_first_class_primitive(self):
+        executor = SMBParameterizedPrimitiveExecutor()
+        motor = self._motor([6.0, 0.0, -6.0])  # argmax bin -> 2 frames
+        first = executor.execute(SMBAction.NOOP, motor_primitives=motor)
+        self.assertTrue(first.started)
+        self.assertEqual(first.hold_frames, 2)
+        second = executor.execute(SMBAction.RIGHT, motor_primitives=motor)
+        self.assertEqual(second.action, int(SMBAction.NOOP))
+        self.assertTrue(second.released)
+
+    def test_steady_disabled_passes_actions_through(self):
+        executor = SMBParameterizedPrimitiveExecutor(steady_primitives=False)
+        motor = self._motor([0.0, 6.0, -6.0])
+        result = executor.execute(SMBAction.RIGHT, motor_primitives=motor)
+        self.assertFalse(result.started)
+        self.assertEqual(result.action, int(SMBAction.RIGHT))
+
+    def test_adaptive_belief_drop_shortens_walk(self):
+        executor = SMBParameterizedPrimitiveExecutor()
+        long_belief = self._motor([-6.0, 0.0, 6.0])  # 16 frames
+        short_belief = self._motor([6.0, 0.0, -6.0])  # ~2
+        first = executor.execute(SMBAction.RIGHT, motor_primitives=long_belief)
+        self.assertEqual(first.hold_frames, 16)
+        frames = 1
+        for _ in range(20):
+            result = executor.execute(SMBAction.RIGHT, motor_primitives=short_belief)
+            frames += 1
+            if result.released:
+                break
+        # Setpoint decays 1/frame from 16 while the counter climbs: meets in
+        # the middle rather than running the full 16 or stopping instantly.
+        self.assertLess(frames, 16)
+        self.assertGreater(frames, 4)

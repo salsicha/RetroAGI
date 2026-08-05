@@ -399,6 +399,7 @@ class SMBParameterizedPrimitiveExecutor:
         duration_seed: int | None = None,
         adaptive_duration: bool = True,
         adaptive_slew_frames: float = 1.0,
+        steady_primitives: bool = True,
     ) -> None:
         if int(default_hold_frames) <= 0:
             raise ValueError("default_hold_frames must be positive")
@@ -427,6 +428,10 @@ class SMBParameterizedPrimitiveExecutor:
         # a one-frame spike does not.
         self.adaptive_duration = bool(adaptive_duration)
         self.adaptive_slew_frames = float(adaptive_slew_frames)
+        # Steady primitives: walking and waiting are committed multi-frame
+        # actions with the same duration selection and adaptive setpoint
+        # tracking as jumps — one adaptive controller for every action class.
+        self.steady_primitives = bool(steady_primitives)
         self.reset()
 
     @property
@@ -435,6 +440,7 @@ class SMBParameterizedPrimitiveExecutor:
 
     def reset(self) -> None:
         self._active_jump: SMBAction | None = None
+        self._active_steady: SMBAction | None = None
         self._release_action: SMBAction | None = None
         self._frames_held = 0
         self._desired_hold_frames = 0.0
@@ -499,9 +505,19 @@ class SMBParameterizedPrimitiveExecutor:
             # the policy and process the current action from a clean state.
             self.reset()
 
+        if self._active_steady is not None:
+            steady = self._execute_active_steady(
+                motor_primitives=motor_primitives,
+                enemy_contact=enemy_contact,
+            )
+            if steady is not None:
+                return steady
+
         if action_value not in SMB_JUMP_ACTIONS:
-            self.reset()
-            return SMBPrimitiveExecution(action=int(action_value))
+            if not self.steady_primitives:
+                self.reset()
+                return SMBPrimitiveExecution(action=int(action_value))
+            return self._start_steady_primitive(action_value, motor_primitives)
 
         hold_frames, duration_bin_index = self._select_hold_frames(motor_primitives)
         self._active_jump = action_value
@@ -605,6 +621,102 @@ class SMBParameterizedPrimitiveExecutor:
             duration_bin_index=self._duration_bin_index,
             hold_frames=self._hold_frames,
         )
+
+    def _start_steady_primitive(
+        self, action_value: SMBAction, motor_primitives: Any
+    ) -> SMBPrimitiveExecution:
+        hold_frames, duration_bin_index = self._select_hold_frames(motor_primitives)
+        self.reset()
+        self._active_steady = action_value
+        self._hold_frames = hold_frames
+        self._duration_bin_index = duration_bin_index
+        self._frames_held = 1
+        self._desired_hold_frames = float(hold_frames)
+        self._hold_expected_baseline = self._expected_hold_frames(motor_primitives)
+        if hold_frames <= 1:
+            completion = SMBPrimitiveExecution(
+                action=int(action_value),
+                started=True,
+                active=True,
+                released=True,
+                duration_bin_index=duration_bin_index,
+                hold_frames=hold_frames,
+            )
+            self.reset()
+            return completion
+        return SMBPrimitiveExecution(
+            action=int(action_value),
+            started=True,
+            active=True,
+            duration_bin_index=duration_bin_index,
+            hold_frames=hold_frames,
+        )
+
+    def _execute_active_steady(
+        self,
+        *,
+        motor_primitives: Any,
+        enemy_contact: bool,
+    ) -> SMBPrimitiveExecution | None:
+        """Continue a committed walk/wait primitive; None hands control back.
+
+        The same adaptive setpoint tracking as jumps applies: the desired
+        duration shifts with the change in B's expected duration since
+        initiation, slew-limited per frame. Enemy contact interrupts; the
+        final held frame carries released=True so span bookkeeping can close
+        the primitive as a natural completion.
+        """
+
+        assert self._active_steady is not None
+        action = self._active_steady
+        if enemy_contact:
+            duration_bin_index = self._duration_bin_index
+            hold_frames = self._hold_frames
+            self.reset()
+            return SMBPrimitiveExecution(
+                action=int(action),
+                released=True,
+                cancelled=True,
+                duration_bin_index=duration_bin_index,
+                hold_frames=hold_frames,
+            )
+        if self.adaptive_duration:
+            current = self._expected_hold_frames(motor_primitives)
+            if current is not None:
+                if self._hold_expected_baseline is None:
+                    self._hold_expected_baseline = current
+                committed = float(self._hold_frames or self.default_hold_frames)
+                setpoint = committed + (current - self._hold_expected_baseline)
+                delta = setpoint - self._desired_hold_frames
+                slew = self.adaptive_slew_frames
+                delta = max(-slew, min(slew, delta))
+                self._desired_hold_frames = min(
+                    float(self.max_hold_frames),
+                    max(1.0, self._desired_hold_frames + delta),
+                )
+        desired = int(round(self._desired_hold_frames))
+        if self._frames_held < desired - 1:
+            self._frames_held += 1
+            return SMBPrimitiveExecution(
+                action=int(action),
+                active=True,
+                duration_bin_index=self._duration_bin_index,
+                hold_frames=self._hold_frames,
+            )
+        if self._frames_held < desired:
+            self._frames_held += 1
+            completion = SMBPrimitiveExecution(
+                action=int(action),
+                active=True,
+                released=True,
+                duration_bin_index=self._duration_bin_index,
+                hold_frames=self._hold_frames,
+            )
+            self.reset()
+            return completion
+        # Duration already satisfied: hand control back to the policy.
+        self.reset()
+        return None
 
     def _select_duration_bin(self, logits: Any) -> int:
         flat = np.asarray(logits, dtype=np.float64).reshape(-1)

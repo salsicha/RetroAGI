@@ -342,6 +342,9 @@ class BlockSMBTrainingConfig:
     # trained from achieved-goal sequences.
     tactic_manager: bool = True
     tactic_weight: float = 0.1
+    # Universal duration primitives: walking and waiting run through the
+    # executor as committed multi-frame actions with adaptive setpoints.
+    steady_duration_primitives: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -1679,6 +1682,7 @@ def collect_trajectory(
     adaptive_duration_control: bool = True,
     skill_goal_conditioning: bool = True,
     tactic_manager_enabled: bool = True,
+    steady_duration_primitives: bool = True,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
@@ -1693,6 +1697,7 @@ def collect_trajectory(
         duration_sampling=not deterministic,
         duration_seed=seed,
         adaptive_duration=adaptive_duration_control,
+        steady_primitives=steady_duration_primitives,
     )
     oracle_actions = (
         block_smb_oracle_actions_for_rollout(
@@ -1718,6 +1723,7 @@ def collect_trajectory(
 
         tactic = TacticManager()
     primitive_span: list[int] = []
+    primitive_span_is_jump = True
     primitive_direction = 1.0
     primitive_span_start_x = 0.0
     temporal_records: list[dict[str, Any]] = []
@@ -1884,13 +1890,32 @@ def collect_trajectory(
         if execution.started and execution.action in (
             int(SMBAction.RIGHT_JUMP),
             int(SMBAction.LEFT_JUMP),
+            int(SMBAction.RIGHT),
+            int(SMBAction.LEFT),
         ):
             primitive_span = [transition_index]
-            primitive_direction = 1.0 if execution.action == int(SMBAction.RIGHT_JUMP) else -1.0
+            primitive_span_is_jump = execution.action in (
+                int(SMBAction.RIGHT_JUMP),
+                int(SMBAction.LEFT_JUMP),
+            )
+            primitive_direction = (
+                1.0
+                if execution.action in (int(SMBAction.RIGHT_JUMP), int(SMBAction.RIGHT))
+                else -1.0
+            )
             primitive_span_start_x = pre_step_mario_center_x
+        elif execution.started:
+            # A wait (NOOP) primitive: committed frames but no displacement
+            # goal, so no hindsight duration relabel applies.
+            primitive_span = []
         elif execution.active and primitive_span:
             primitive_span.append(transition_index)
-        if execution.landed or execution.cancelled or done:
+        if (
+            execution.landed
+            or execution.cancelled
+            or done
+            or (primitive_span and not primitive_span_is_jump and execution.released)
+        ):
             _complete_primitive_span()
             if tactic is not None:
                 tactic.notify_span_end()
@@ -2685,6 +2710,7 @@ def train_block_smb_epoch(
                 adaptive_duration_control=config.adaptive_duration_control,
                 skill_goal_conditioning=config.skill_goal_conditioning,
                 tactic_manager_enabled=config.tactic_manager,
+                steady_duration_primitives=config.steady_duration_primitives,
             )
             _write_block_smb_spans(config, trajectory)
         finally:

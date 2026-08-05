@@ -467,6 +467,18 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         dest="adaptive_duration_control",
         help="lock the hold duration chosen at jump initiation",
     )
+    parser.set_defaults(steady_duration_primitives=None)
+    parser.add_argument(
+        "--steady-duration-primitives",
+        action="store_true",
+        dest="steady_duration_primitives",
+        help="walk and wait as committed multi-frame primitives with adaptive durations (default)",
+    )
+    parser.add_argument(
+        "--no-steady-duration-primitives",
+        action="store_false",
+        dest="steady_duration_primitives",
+    )
     parser.set_defaults(tactic_manager=None, skill_goal_conditioning=None)
     parser.add_argument(
         "--tactic-manager",
@@ -787,6 +799,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "skill_outcome_weight",
         "tactic_weight",
         "tactic_manager",
+        "steady_duration_primitives",
         "skill_goal_conditioning",
         "emit_temporal_spans",
         "imagined_rollout_weight",

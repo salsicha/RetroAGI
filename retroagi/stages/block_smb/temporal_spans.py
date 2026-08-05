@@ -74,11 +74,14 @@ def build_block_smb_temporal_spans(
     while index < n:
         record = records[index]
         if record.get("started"):
+            is_jump = int(record.get("action", -1)) in _JUMP_ACTIONS
             # Jump primitive: runs while the executor reports the primitive
             # active; ends on landing, hazard contact, episode end, or the
             # rollout budget.
             start = index
-            events: list[dict[str, Any]] = [{"event": "liftoff", "frame": start}]
+            events: list[dict[str, Any]] = (
+                [{"event": "liftoff", "frame": start}] if is_jump else []
+            )
             end = index
             reason = "evaluator_truncation"
             while end < n:
@@ -87,6 +90,11 @@ def build_block_smb_temporal_spans(
                     e["event"] != "release" for e in events
                 ):
                     events.append({"event": "release", "frame": end})
+                    if not is_jump:
+                        # Steady primitives (walk/wait) complete at their
+                        # duration boundary — the release marker frame.
+                        reason = "success"
+                        break
                 if r.get("cancelled"):
                     events.append({"event": "hazard_contact", "frame": end})
                     reason = "interruption"
@@ -133,10 +141,15 @@ def build_block_smb_temporal_spans(
             displacement = float(records[end].get("x_after", 0.0)) - float(
                 records[start].get("x_before", 0.0)
             )
+            span_action = int(record.get("action", -1))
             held = sum(
                 1
                 for i in range(start, end + 1)
-                if int(records[i].get("action", -1)) in _JUMP_ACTIONS
+                if (
+                    int(records[i].get("action", -1)) in _JUMP_ACTIONS
+                    if is_jump
+                    else int(records[i].get("action", -1)) == span_action
+                )
             )
             spans.append(
                 common(
@@ -151,7 +164,9 @@ def build_block_smb_temporal_spans(
                     if reason == "interruption"
                     else "",
                     command={
-                        "primitive": "jump",
+                        "primitive": "jump"
+                        if is_jump
+                        else _locomotion_name(int(record.get("action", -1))),
                         "action": int(record.get("action", -1)),
                         "held_frames": held,
                     },
