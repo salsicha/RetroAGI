@@ -249,7 +249,10 @@ class BlockSMBTrainingConfig:
     target_network_tau: float = 0.01
     target_network_instability_threshold: float = 1.0
     gradient_clip_norm: float = 1.0
-    hidden_dim: int = 32
+    # Doubled from 32 after the universal-primitives full-volume run showed
+    # rotating competence: eleven families demonstrably learnable but only
+    # seven or eight retained at once, the signature of a capacity ceiling.
+    hidden_dim: int = 64
     controller_schedule: str = "constant"
     device: str = "auto"
     deterministic: bool = True
