@@ -39,6 +39,7 @@ ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context.",)
 LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context_b.",)
 SKILL_LAYER_ALLOWED_MISSING_PREFIXES = (
     "agent.skill_goal_context_b.",
+    "agent.skill_goal_context_a.",
     "skill_outcome_head.",
     "tactic_next_skill_head.",
 )
@@ -675,6 +676,14 @@ class HierarchicalAdaptiveModel(nn.Module):
         nn.init.zeros_(self.skill_goal_context_b.weight)
         nn.init.zeros_(self.skill_goal_context_b.bias)
         torch.set_rng_state(rng_state_skill)
+        # A-level goal conditioning: the selected skill goal also biases WHICH
+        # action is chosen, not only how B parameterizes it — "clear the gap
+        # now" can favor initiating a jump. Zero-init, RNG-neutral.
+        rng_state_skill_a = torch.get_rng_state()
+        self.skill_goal_context_a = nn.Linear(SKILL_GOAL_ENCODING_DIM, d_model)
+        nn.init.zeros_(self.skill_goal_context_a.weight)
+        nn.init.zeros_(self.skill_goal_context_a.bias)
+        torch.set_rng_state(rng_state_skill_a)
 
         encoder_layers_a = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, batch_first=True
@@ -788,6 +797,11 @@ class HierarchicalAdaptiveModel(nn.Module):
 
         x_a = self.embedding(src_A) * math.sqrt(self.d_model)
         x_a = self.pos_encoder(x_a)
+        if skill_goal is not None and getattr(self, "skill_goal_context_a", None) is not None:
+            goal_context_a = torch.tanh(
+                self.skill_goal_context_a(skill_goal.to(src_A.device).float())
+            )
+            x_a = x_a + goal_context_a.to(dtype=x_a.dtype).unsqueeze(1)
         if self.c_state_context is not None:
             if src_C.ndim != 2 or src_C.shape != (src_A.size(0), self.seq_len_c):
                 raise ValueError(
