@@ -657,9 +657,20 @@ class TestBlockSMBDistillation(unittest.TestCase):
         )
 
     def test_monte_carlo_samples_are_total_distillation_volume(self):
+        # The requested sample count is the total distillation volume as long
+        # as it covers the required warm-start sweep (every family at every
+        # difficulty). Derive the request from the live family/difficulty
+        # constants so the invariant survives curriculum growth — a
+        # hard-coded 50 broke when the family set reached 20 (sweep = 60).
+        from retroagi.stages.block_smb import BLOCK_SMB_MC_DIFFICULTY_BINS
+
+        required_sweep = len(DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES) * len(
+            BLOCK_SMB_MC_DIFFICULTY_BINS
+        )
+        requested = max(50, required_sweep)
         config = BlockSMBDistillationConfig(
             fixed_scenarios=(),
-            monte_carlo_samples=50,
+            monte_carlo_samples=requested,
             required_monte_carlo_families=DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
             required_monte_carlo_repeats_per_difficulty=1,
             rollout_steps=2,
@@ -672,10 +683,12 @@ class TestBlockSMBDistillation(unittest.TestCase):
         scenarios, _scripts, summary = build_block_smb_distillation_scenarios(config)
         training_config = distill_module._training_config_from_distillation(config)
 
-        self.assertEqual(len(scenarios), 50)
-        self.assertEqual(summary["monte_carlo"]["requested_sample_count"], 50)
-        self.assertEqual(summary["monte_carlo"]["sample_count"], 50)
-        self.assertEqual(training_config.monte_carlo_train_samples_per_epoch, 50)
+        self.assertEqual(len(scenarios), requested)
+        self.assertEqual(summary["monte_carlo"]["requested_sample_count"], requested)
+        self.assertEqual(summary["monte_carlo"]["sample_count"], requested)
+        self.assertEqual(
+            training_config.monte_carlo_train_samples_per_epoch, requested
+        )
 
 
 if __name__ == "__main__":
