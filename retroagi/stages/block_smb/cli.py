@@ -399,6 +399,14 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         type=_positive_float,
         help="sampling weight for mastered families in the mastery-gated schedule",
     )
+    parser.add_argument(
+        "--mastery-retention-grace-evals",
+        type=int,
+        help=(
+            "evaluations a newly-mastered family keeps elevated practice weight, "
+            "ramping down to the retention weight (default 3)"
+        ),
+    )
     parser.set_defaults(use_oracle_actions=None)
     parser.add_argument(
         "--use-oracle-actions",
@@ -829,6 +837,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "monte_carlo_family_pass_rate_gate",
         "mastery_gated_schedule",
         "mastery_retention_weight",
+        "mastery_retention_grace_evals",
         "use_oracle_actions",
         "ranked_candidate_search",
         "deterministic_critic_gates",

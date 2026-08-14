@@ -1170,11 +1170,56 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         weights = block_smb_mastery_family_weights(
             state, family_pass_rate_gate=0.9, retention_weight=0.25
         )
-        # Mastered family drops to the retention weight; unmastered families
-        # weigh 1 + deficit so the furthest-from-mastery draw the most samples.
-        self.assertEqual(weights["flat_run"], 0.25)
+        # A freshly mastered family keeps elevated practice (graduated
+        # retention: first mastered eval of a 3-eval grace ramp); unmastered
+        # families weigh 1 + deficit so the furthest-from-mastery draw the
+        # most samples.
+        self.assertAlmostEqual(weights["flat_run"], 0.75)
         self.assertAlmostEqual(weights["tall_pipe_jump"], 1.5)
         self.assertAlmostEqual(weights["single_gap"], 1.9)
+
+    def test_graduated_retention_ramps_down_and_resets_on_regression(self):
+        from retroagi.stages.block_smb.train import (
+            block_smb_mastery_family_weights,
+            initial_block_smb_mastery_state,
+            update_block_smb_mastery_state,
+        )
+
+        def weight(state):
+            return block_smb_mastery_family_weights(
+                state, family_pass_rate_gate=0.9, retention_weight=0.25
+            )["flat_run"]
+
+        passing = {"families": {"flat_run": {"success_rate": 1.0}}, "difficulty_bins": {}}
+        failing = {"families": {"flat_run": {"success_rate": 0.0}}, "difficulty_bins": {}}
+
+        state = initial_block_smb_mastery_state()
+        state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
+        self.assertEqual(state["flat_run"]["mastered_evals"], 1)
+        self.assertAlmostEqual(weight(state), 0.75)
+        state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
+        self.assertAlmostEqual(weight(state), 0.5)
+        state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
+        self.assertAlmostEqual(weight(state), 0.25)
+        # Long-mastered: stays at the floor.
+        state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
+        self.assertAlmostEqual(weight(state), 0.25)
+        # Regression: counter resets, family returns to full focus...
+        state = update_block_smb_mastery_state(state, failing, family_pass_rate_gate=0.9)
+        self.assertEqual(state["flat_run"]["mastered_evals"], 0)
+        self.assertAlmostEqual(weight(state), 1.9)
+        # ...and re-mastering restarts the ramp rather than dropping to the floor.
+        state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
+        self.assertEqual(state["flat_run"]["mastered_evals"], 1)
+        self.assertAlmostEqual(weight(state), 0.75)
+        # Grace 0 preserves the old instant-floor behavior.
+        instant = block_smb_mastery_family_weights(
+            state,
+            family_pass_rate_gate=0.9,
+            retention_weight=0.25,
+            retention_grace_evals=0,
+        )
+        self.assertAlmostEqual(instant["flat_run"], 0.25)
 
     def test_difficulty_unlocks_are_monotonic_across_regressions(self):
         from retroagi.stages.block_smb.train import (

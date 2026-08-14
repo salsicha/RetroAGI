@@ -295,6 +295,10 @@ class BlockSMBTrainingConfig:
     # hard) as each bin clears the gate. Every family always has nonzero weight.
     mastery_gated_schedule: bool = False
     mastery_retention_weight: float = 0.25
+    # Graduated retention: a newly-mastered family keeps elevated practice
+    # for this many evaluations, ramping linearly from full weight down to
+    # mastery_retention_weight, instead of dropping to the floor instantly.
+    mastery_retention_grace_evals: int = 3
     # Execute scripted oracle actions during training rollouts on Monte Carlo
     # scenarios that carry them (fixed scenarios have no oracle and stay
     # on-policy). This is the in-loop demonstration channel that supervises the
@@ -863,6 +867,7 @@ def initial_block_smb_mastery_state() -> dict[str, dict[str, Any]]:
             "bin_pass_rates": {},
             "unlocked_difficulties": ["easy"],
             "mastered": False,
+            "mastered_evals": 0,
         }
         for family in BLOCK_SMB_MC_FAMILIES
     }
@@ -891,6 +896,7 @@ def update_block_smb_mastery_state(
             "bin_pass_rates": dict(previous.get("bin_pass_rates", {})),
             "unlocked_difficulties": list(previous.get("unlocked_difficulties", ["easy"])),
             "mastered": bool(previous.get("mastered", False)),
+            "mastered_evals": int(previous.get("mastered_evals", 0)),
         }
         rollup = families.get(family)
         if isinstance(rollup, Mapping) and "success_rate" in rollup:
@@ -913,6 +919,13 @@ def update_block_smb_mastery_state(
         ):
             unlocked.append("hard")
         record["mastered"] = record["pass_rate"] >= family_pass_rate_gate
+        # Graduated retention: count consecutive evaluations at mastery so
+        # the practice weight can ease off gradually. A regression resets
+        # the count — the family returns to full focus and, once it passes
+        # again, restarts the ramp instead of dropping straight to the floor.
+        record["mastered_evals"] = (
+            record["mastered_evals"] + 1 if record["mastered"] else 0
+        )
         updated[family] = record
     return updated
 
@@ -922,6 +935,7 @@ def block_smb_mastery_family_weights(
     *,
     family_pass_rate_gate: float,
     retention_weight: float,
+    retention_grace_evals: int = 3,
 ) -> dict[str, float]:
     """Weight every family: focus on unmastered skills, retain mastered ones.
 
@@ -936,7 +950,17 @@ def block_smb_mastery_family_weights(
     for family in BLOCK_SMB_MC_FAMILIES:
         record = state.get(family, {})
         if bool(record.get("mastered", False)):
-            weights[family] = float(retention_weight)
+            # A family that just crossed the gate is barely learned; dropping
+            # it straight to the retention floor starves it and it decays —
+            # the frontier thrash observed across the full-volume runs. Ease
+            # from full practice down to the floor over the grace period.
+            grace = max(0, int(retention_grace_evals))
+            count = max(1, int(record.get("mastered_evals", grace)))
+            if grace <= 0 or count >= grace:
+                weights[family] = float(retention_weight)
+            else:
+                progress = count / float(grace)
+                weights[family] = 1.0 + (float(retention_weight) - 1.0) * progress
         else:
             deficit = max(0.0, family_pass_rate_gate - float(record.get("pass_rate", 0.0)))
             weights[family] = 1.0 + deficit
@@ -964,6 +988,7 @@ def build_mastery_monte_carlo_curriculum(
         state,
         family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
         retention_weight=config.mastery_retention_weight,
+        retention_grace_evals=config.mastery_retention_grace_evals,
     )
     families = list(BLOCK_SMB_MC_FAMILIES)
     weight_values = [weights[family] for family in families]
@@ -1004,6 +1029,7 @@ def summarize_block_smb_mastery_state(
                 "pass_rate": float(record.get("pass_rate", 0.0)),
                 "unlocked_difficulties": list(record.get("unlocked_difficulties", ["easy"])),
                 "mastered": bool(record.get("mastered", False)),
+                "mastered_evals": int(record.get("mastered_evals", 0)),
             }
             for family, record in state.items()
         },
@@ -3649,6 +3675,7 @@ def train_and_evaluate_block_smb(
                         mastery_state,
                         family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
                         retention_weight=config.mastery_retention_weight,
+                        retention_grace_evals=config.mastery_retention_grace_evals,
                     ),
                     curriculum_summary=summarize_block_smb_curriculum(curriculum),
                 )
