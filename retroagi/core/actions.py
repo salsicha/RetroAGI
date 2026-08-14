@@ -372,8 +372,13 @@ class SMBPrimitiveExecution:
     hold_frames: int | None = None
 
 
-class SMBParameterizedPrimitiveExecutor:
-    """Execute learned SMB jump primitives as an adaptive controller.
+class SMBAdaptiveController:
+    """The controller: executes primitives as committed, adaptive holds.
+
+    Formerly SMBParameterizedPrimitiveExecutor (that name remains as an
+    alias). In the current naming: the skill network (A-level) decides the
+    next immediate action, the action network (B-level) decides its
+    parameters, and this controller turns those parameters into frames.
 
     A started jump commits to the hold duration selected at initiation, and
     the learned cancel/release heads cannot abort it; only physical events
@@ -782,6 +787,9 @@ class SMBParameterizedPrimitiveExecutor:
         if not math.isfinite(numeric):
             return self.default_hold_frames
         return max(1, min(self.max_hold_frames, int(round(numeric))))
+
+
+SMBParameterizedPrimitiveExecutor = SMBAdaptiveController
 
 
 def _vision_from_batch(batch: Any) -> Any:

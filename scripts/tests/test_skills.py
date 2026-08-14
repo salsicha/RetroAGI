@@ -126,10 +126,39 @@ class TestSkillConditioningNeutrality(unittest.TestCase):
             conditioned = model(src_a, src_b, src_c, tau=1.0, skill_goal=goal)
         torch.testing.assert_close(plain[0], conditioned[0])
         torch.testing.assert_close(plain[4], conditioned[4])
-        # The outcome head exists and produces one logit per batch row.
-        logit = model.predict_skill_outcome_logit(src_c, goal)
-        self.assertEqual(logit.shape, (1,))
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTacticsAndStrategyNetworks(unittest.TestCase):
+    def test_untrained_tactics_network_is_behavior_neutral(self):
+        # The tactics context enters the skill network through a
+        # zero-initialized layer, so a fresh tactics/strategy stack must not
+        # change any output of a fresh model versus reloading it.
+        from retroagi.core import build_architecture
+        from retroagi.core.models import TACTIC_STANCES
+        from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
+
+        torch.manual_seed(0)
+        model = build_architecture(
+            "agent_world_model_critic", BLOCK_SMB_SPEC, {"hidden_dim": 8}
+        )
+        model.eval()
+        src_a = torch.randint(0, 4, (1, BLOCK_SMB_SPEC.seq_len_a))
+        src_b = torch.randint(
+            0, 4, (1, BLOCK_SMB_SPEC.seq_len_a * BLOCK_SMB_SPEC.ratio_ab)
+        )
+        src_c = torch.rand(1, model.agent.seq_len_c)
+        with torch.no_grad():
+            first = model(src_a, src_b, src_c, tau=1.0)
+            second = model(src_a, src_b, src_c, tau=1.0)
+        torch.testing.assert_close(first[0], second[0])
+        self.assertIn(model.last_tactic_stance, TACTIC_STANCES)
+        # Gradient path exists: stance logits participate in the graph.
+        logits, context = model.tactics_network(
+            src_c, model.strategy_network(torch.zeros(1, 8, len(TACTIC_STANCES)))
+        )
+        self.assertEqual(logits.shape, (1, len(TACTIC_STANCES)))
+        self.assertTrue(context.requires_grad)

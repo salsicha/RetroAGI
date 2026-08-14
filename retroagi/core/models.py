@@ -17,7 +17,11 @@ ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES = (
     "world_model.primitive_encoder.",
     "world_model.primitive_outcome_head.",
 )
-ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES = ("world_model.fc.",)
+ACTION_LEVEL_WORLD_MODEL_OBSOLETE_PREFIXES = (
+    "world_model.fc.",
+    "skill_outcome_head.",
+    "tactic_next_skill_head.",
+)
 ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES = (
     "critic.progress_head.",
     "critic.death_head.",
@@ -40,8 +44,9 @@ LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context_b.",)
 SKILL_LAYER_ALLOWED_MISSING_PREFIXES = (
     "agent.skill_goal_context_b.",
     "agent.skill_goal_context_a.",
-    "skill_outcome_head.",
-    "tactic_next_skill_head.",
+    "agent.tactic_context_a.",
+    "tactics_network.",
+    "strategy_network.",
 )
 ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES,
@@ -694,6 +699,13 @@ class HierarchicalAdaptiveModel(nn.Module):
         nn.init.zeros_(self.skill_goal_context_a.weight)
         nn.init.zeros_(self.skill_goal_context_a.bias)
         torch.set_rng_state(rng_state_skill_a)
+        # Tactics-network context into the skill network: zero-initialized so
+        # an untrained tactics network cannot disturb behavior.
+        rng_state_tactic_ctx = torch.get_rng_state()
+        self.tactic_context_a = nn.Linear(32, d_model)
+        nn.init.zeros_(self.tactic_context_a.weight)
+        nn.init.zeros_(self.tactic_context_a.bias)
+        torch.set_rng_state(rng_state_tactic_ctx)
 
         encoder_layers_a = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, batch_first=True
@@ -797,6 +809,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         world_model_context=None,
         forced_action=None,
         skill_goal=None,
+        tactic_context=None,
     ):
         seq_len_a = src_A.size(1)
         seq_len_b = src_B.size(1)
@@ -812,6 +825,11 @@ class HierarchicalAdaptiveModel(nn.Module):
                 self.skill_goal_context_a(skill_goal.to(src_A.device).float())
             )
             x_a = x_a + goal_context_a.to(dtype=x_a.dtype).unsqueeze(1)
+        if tactic_context is not None and getattr(self, "tactic_context_a", None) is not None:
+            tactic_context_a = torch.tanh(
+                self.tactic_context_a(tactic_context.to(src_A.device).float())
+            )
+            x_a = x_a + tactic_context_a.to(dtype=x_a.dtype).unsqueeze(1)
         if self.c_state_context is not None:
             if src_C.ndim != 2 or src_C.shape != (src_A.size(0), self.seq_len_c):
                 raise ValueError(
@@ -1296,6 +1314,69 @@ class Critic(nn.Module):
         )
 
 
+TACTIC_STANCES = ("advance", "alternate_route", "hold_area", "retreat")
+
+
+class TacticsNetwork(nn.Module):
+    """Transformer over the scene state proposing a tactical stance.
+
+    Sits above the skill network (A-level). Emits a distribution over the
+    four stances — continue toward the goal, take the alternate route (for
+    example the higher of two platforms), hold this area, or retreat — plus
+    a context vector the skill network consumes. The context injection into
+    the skill network is zero-initialized there, so an untrained tactics
+    network is behavior-neutral.
+    """
+
+    def __init__(self, seq_len_c: int, d_model: int, strategy_dim: int) -> None:
+        super().__init__()
+        self.input_projection = nn.Linear(1, d_model)
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=2,
+            dim_feedforward=d_model * 2,
+            batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=1)
+        self.strategy_projection = nn.Linear(strategy_dim, d_model)
+        self.stance_head = nn.Linear(d_model, len(TACTIC_STANCES))
+        self.context_head = nn.Linear(d_model, d_model)
+
+    def forward(self, state, strategy_context=None):
+        tokens = self.input_projection(state.float().unsqueeze(-1))
+        if strategy_context is not None:
+            tokens = tokens + self.strategy_projection(
+                strategy_context.float()
+            ).unsqueeze(1)
+        pooled = self.encoder(tokens).mean(dim=1)
+        return self.stance_head(pooled), self.context_head(pooled)
+
+
+class StrategyNetwork(nn.Module):
+    """Transformer over the recent sequence of tactical stances.
+
+    Sits above the tactics network and decides the sequence of tactics: it
+    reads the rolling history of stance distributions and summarizes it into
+    a context that conditions the next tactical decision.
+    """
+
+    def __init__(self, d_model: int, history: int = 8) -> None:
+        super().__init__()
+        self.history = int(history)
+        self.input_projection = nn.Linear(len(TACTIC_STANCES), d_model)
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=2,
+            dim_feedforward=d_model * 2,
+            batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=1)
+
+    def forward(self, stance_history):
+        tokens = self.input_projection(stance_history.float())
+        return self.encoder(tokens).mean(dim=1)
+
+
 class AgentWorldModelCritic(nn.Module):
     """
     Combines the actor, world model, and critic in a bounded refinement loop.
@@ -1429,21 +1510,16 @@ class AgentWorldModelCritic(nn.Module):
             nn.ReLU(),
             nn.Linear(d_model, 1),
         )
-        # HSP2: skill outcome head — P(goal achieved from this state). Trained
-        # from hindsight-relabeled spans; RNG-neutral so behavior and later
-        # weight initialization are unchanged for existing checkpoints.
-        rng_state_skill_head = torch.get_rng_state()
-        self.skill_outcome_head = nn.Sequential(
-            nn.Linear(seq_len_c + SKILL_GOAL_ENCODING_DIM, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1),
-        )
-        torch.set_rng_state(rng_state_skill_head)
-        # HSP3: next-skill prior for the tactic manager, trained from real
-        # successful skill sequences. RNG-neutral like the other new heads.
-        rng_state_tactic = torch.get_rng_state()
-        self.tactic_next_skill_head = nn.Linear(seq_len_c, SKILL_GOAL_ENCODING_DIM - 1)
-        torch.set_rng_state(rng_state_tactic)
+        # Tactics network (above the skill network) and strategy network
+        # (above tactics, deciding the sequence of tactics). RNG-neutral so
+        # existing checkpoints keep identical downstream initialization.
+        rng_state_tactics = torch.get_rng_state()
+        self.tactics_network = TacticsNetwork(seq_len_c, 32, 32)
+        self.strategy_network = StrategyNetwork(32)
+        torch.set_rng_state(rng_state_tactics)
+        self._stance_history = None
+
+
 
     def transition_representation(self, state):
         return self.transition_representation_head(state)
@@ -1454,18 +1530,6 @@ class AgentWorldModelCritic(nn.Module):
     def predict_value(self, state):
         return self.value_head(state).squeeze(-1)
 
-    def predict_next_skill_logits(self, state):
-        """Logits over skill goal types for what should follow from state."""
-
-        return self.tactic_next_skill_head(state.float())
-
-    def predict_skill_outcome_logit(self, state, goal_encoding):
-        """Logit that the encoded skill goal is achieved starting from state."""
-
-        features = torch.cat(
-            [state.float(), goal_encoding.to(state.device).float()], dim=-1
-        )
-        return self.skill_outcome_head(features).squeeze(-1)
 
     def predict_action_progress_logit(self, next_state_pred, current_state=None):
         critic = getattr(self, "critic", None)
@@ -1567,6 +1631,7 @@ class AgentWorldModelCritic(nn.Module):
         world_model_context=None,
         forced_action=None,
         skill_goal=None,
+        tactic_context=None,
     ):
         kwargs: dict[str, Any] = {"criticism": criticism, "tau": tau}
         if bool(getattr(self.agent, "uses_world_model_context", False)):
@@ -1575,6 +1640,8 @@ class AgentWorldModelCritic(nn.Module):
             kwargs["forced_action"] = forced_action
         if skill_goal is not None:
             kwargs["skill_goal"] = skill_goal
+        if tactic_context is not None and getattr(self.agent, "tactic_context_a", None) is not None:
+            kwargs["tactic_context"] = tactic_context
         return self.agent(src_A, src_B, src_C, **kwargs)
 
     def _world_model_prediction(
@@ -1972,6 +2039,30 @@ class AgentWorldModelCritic(nn.Module):
             src_A,
             episode_mask=episode_mask,
         )
+        history_len = getattr(self.strategy_network, "history", 8)
+        if (
+            world_model_state is None
+            or self._stance_history is None
+            or self._stance_history.size(0) != src_C.size(0)
+        ):
+            self._stance_history = torch.zeros(
+                src_C.size(0),
+                history_len,
+                len(TACTIC_STANCES),
+                device=src_C.device,
+            )
+        strategy_context = self.strategy_network(self._stance_history)
+        tactic_stance_logits, tactic_context = self.tactics_network(
+            src_C, strategy_context
+        )
+        stance_probabilities = torch.softmax(tactic_stance_logits, dim=-1)
+        self._stance_history = torch.cat(
+            (self._stance_history[:, 1:, :], stance_probabilities.detach().unsqueeze(1)),
+            dim=1,
+        )
+        self.last_tactic_stance = TACTIC_STANCES[
+            int(stance_probabilities[0].argmax())
+        ]
         self.last_actor_world_model_context = (
             None if actor_world_model_context is None else actor_world_model_context.detach()
         )
@@ -1983,6 +2074,7 @@ class AgentWorldModelCritic(nn.Module):
             tau=tau,
             world_model_context=actor_world_model_context,
             skill_goal=skill_goal,
+            tactic_context=tactic_context,
         )
         primitive_params1 = getattr(self.agent, "last_level_b_primitives", None)
         first_candidate = self._candidate_from_actor_outputs(
@@ -2034,6 +2126,7 @@ class AgentWorldModelCritic(nn.Module):
                     world_model_context=actor_world_model_context,
                     forced_action=action_id,
                     skill_goal=skill_goal,
+                    tactic_context=tactic_context,
 )
                 primitive_params_f = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(
@@ -2075,6 +2168,7 @@ class AgentWorldModelCritic(nn.Module):
                     tau=tau,
                     world_model_context=actor_world_model_context,
                     skill_goal=skill_goal,
+                    tactic_context=tactic_context,
 )
                 primitive_params = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(

@@ -222,8 +222,6 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--critic-loss-weight", type=_non_negative_float)
     parser.add_argument("--release-timing-weight", type=_non_negative_float)
-    parser.add_argument("--skill-outcome-weight", type=_non_negative_float)
-    parser.add_argument("--tactic-weight", type=_non_negative_float)
     parser.add_argument(
         "--primitive-outcome-weight",
         type=_non_negative_float,
@@ -487,18 +485,7 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         dest="steady_duration_primitives",
     )
-    parser.set_defaults(tactic_manager=None, skill_goal_conditioning=None)
-    parser.add_argument(
-        "--tactic-manager",
-        action="store_true",
-        dest="tactic_manager",
-        help="select skill goals with the HSP3 tactic manager on scenarios without a forced goal (default)",
-    )
-    parser.add_argument(
-        "--no-tactic-manager",
-        action="store_false",
-        dest="tactic_manager",
-    )
+    parser.set_defaults(skill_goal_conditioning=None)
     parser.add_argument(
         "--skill-goal-conditioning",
         action="store_true",
@@ -804,9 +791,6 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "critic_loss_weight",
         "primitive_outcome_weight",
         "release_timing_weight",
-        "skill_outcome_weight",
-        "tactic_weight",
-        "tactic_manager",
         "steady_duration_primitives",
         "skill_goal_conditioning",
         "emit_temporal_spans",

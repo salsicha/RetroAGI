@@ -51,10 +51,7 @@ from .adapter import (
 )
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .temporal_spans import build_block_smb_temporal_spans
-from .skills import (
-    achieved_block_smb_skill_goals,
-    requested_block_smb_skill_goal,
-)
+from .skills import requested_block_smb_skill_goal
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
@@ -343,12 +340,6 @@ class BlockSMBTrainingConfig:
     # HSP2: condition B-level on the scenario family's requested skill goal
     # and train the skill outcome head from hindsight-relabeled spans.
     skill_goal_conditioning: bool = True
-    skill_outcome_weight: float = 0.1
-    # HSP3: event-driven tactic manager selects the skill goal during
-    # rollouts on scenarios that do not force one; the next-skill prior is
-    # trained from achieved-goal sequences.
-    tactic_manager: bool = True
-    tactic_weight: float = 0.1
     # Universal duration primitives: walking and waiting run through the
     # executor as committed multi-frame actions with adaptive setpoints.
     steady_duration_primitives: bool = True
@@ -1710,7 +1701,6 @@ def collect_trajectory(
     use_oracle_actions: bool = False,
     adaptive_duration_control: bool = True,
     skill_goal_conditioning: bool = True,
-    tactic_manager_enabled: bool = True,
     steady_duration_primitives: bool = True,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
@@ -1744,13 +1734,6 @@ def collect_trajectory(
     )
     if skill_goal is not None:
         skill_goal = skill_goal.to(device)
-    tactic = None
-    if tactic_manager_enabled and skill_goal is None and hasattr(
-        model, "predict_skill_outcome_logit"
-    ):
-        from retroagi.core.tactics import TacticManager
-
-        tactic = TacticManager()
     primitive_span: list[int] = []
     primitive_span_is_jump = True
     primitive_direction = 1.0
@@ -1830,18 +1813,6 @@ def collect_trajectory(
             int(oracle_actions[step_index + 1]) if step_index + 1 < len(oracle_actions) else None
         )
         step_skill_goal = skill_goal
-        if tactic is not None:
-            with torch.no_grad():
-                next_skill_logits = (
-                    model.predict_next_skill_logits(batch.src_c)
-                    if hasattr(model, "predict_next_skill_logits")
-                    else None
-                )
-                step_skill_goal = tactic.maybe_select(
-                    batch.src_c,
-                    model.predict_skill_outcome_logit,
-                    next_skill_logits=next_skill_logits,
-                )
         (
             action,
             log_prob,
@@ -1946,8 +1917,6 @@ def collect_trajectory(
             or (primitive_span and not primitive_span_is_jump and execution.released)
         ):
             _complete_primitive_span()
-            if tactic is not None:
-                tactic.notify_span_end()
         temporal_records.append(
             {
                 "action": int(action),
@@ -2510,69 +2479,6 @@ def compute_block_smb_losses(
         if release_timing_terms
         else loss_policy.new_zeros(())
     )
-    skill_outcome_terms: list[torch.Tensor] = []
-    if trajectories:
-        from retroagi.core.skills import SKILL_GOAL_TYPES, skill_goal_encoding
-
-        for trajectory_item in trajectories:
-            spans = getattr(trajectory_item, "spans", None)
-            if not spans:
-                continue
-            for achieved in achieved_block_smb_skill_goals(spans):
-                start = int(achieved["start_frame"])
-                if start >= len(trajectory_item.transitions):
-                    continue
-                state = trajectory_item.transitions[start].batch.src_c.detach().to(device)
-                goal_vec = skill_goal_encoding(
-                    achieved["goal_type"], achieved["magnitude"]
-                ).to(device)
-                positive = model.predict_skill_outcome_logit(state, goal_vec)
-                skill_outcome_terms.append(
-                    F.binary_cross_entropy_with_logits(
-                        positive, torch.ones_like(positive)
-                    )
-                )
-                # Contrastive negative: a different goal type from the same
-                # start state was (by relabel) not what this span achieved.
-                other = SKILL_GOAL_TYPES[
-                    (SKILL_GOAL_TYPES.index(achieved["goal_type"]) + 1)
-                    % len(SKILL_GOAL_TYPES)
-                ]
-                negative_vec = skill_goal_encoding(other, achieved["magnitude"]).to(device)
-                negative = model.predict_skill_outcome_logit(state, negative_vec)
-                skill_outcome_terms.append(
-                    F.binary_cross_entropy_with_logits(
-                        negative, torch.zeros_like(negative)
-                    )
-                )
-    loss_skill_outcome = (
-        torch.stack(skill_outcome_terms).mean()
-        if skill_outcome_terms
-        else loss_policy.new_zeros(())
-    )
-    tactic_terms: list[torch.Tensor] = []
-    if trajectories:
-        from retroagi.core.tactics import tactic_transition_examples
-
-        for trajectory_item in trajectories:
-            spans = getattr(trajectory_item, "spans", None)
-            if not spans or not hasattr(model, "predict_next_skill_logits"):
-                continue
-            achieved = achieved_block_smb_skill_goals(spans)
-            for state_frame, next_goal_index in tactic_transition_examples(achieved):
-                if state_frame >= len(trajectory_item.transitions):
-                    continue
-                state = (
-                    trajectory_item.transitions[state_frame].batch.src_c.detach().to(device)
-                )
-                logits = model.predict_next_skill_logits(state)
-                target = torch.tensor([next_goal_index], device=device)
-                tactic_terms.append(F.cross_entropy(logits, target))
-    loss_tactic = (
-        torch.stack(tactic_terms).mean()
-        if tactic_terms
-        else loss_policy.new_zeros(())
-    )
     entropy_bonus = torch.stack(entropy_terms).mean()
     imagined_losses = compute_imagined_rollout_losses(model, trajectories or [], config, device)
     world_model_weight = config.world_model_weight if config.ablation.world_model_enabled else 0.0
@@ -2591,8 +2497,6 @@ def compute_block_smb_losses(
         + config.critic_loss_weight * loss_critic_feedback
         + config.primitive_outcome_weight * loss_primitive_outcome
         + config.release_timing_weight * loss_release_timing
-        + config.skill_outcome_weight * loss_skill_outcome
-        + config.tactic_weight * loss_tactic
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
@@ -2616,11 +2520,6 @@ def compute_block_smb_losses(
         "loss_action_aux": loss_action_aux,
         "loss_primitive_outcome": loss_primitive_outcome,
         "loss_release_timing": loss_release_timing,
-        "loss_skill_outcome": loss_skill_outcome,
-        "loss_tactic": loss_tactic,
-        "skill_outcome_supervised_spans": torch.tensor(
-            float(len(skill_outcome_terms) / 2.0), device=device
-        ),
         "primitive_outcome_supervised_steps": torch.tensor(
             float(len(primitive_outcome_terms)), device=device
         ),
@@ -2738,7 +2637,6 @@ def train_block_smb_epoch(
                 use_oracle_actions=config.use_oracle_actions,
                 adaptive_duration_control=config.adaptive_duration_control,
                 skill_goal_conditioning=config.skill_goal_conditioning,
-                tactic_manager_enabled=config.tactic_manager,
                 steady_duration_primitives=config.steady_duration_primitives,
             )
             _write_block_smb_spans(config, trajectory)
