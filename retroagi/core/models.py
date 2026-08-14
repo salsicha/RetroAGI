@@ -53,7 +53,10 @@ ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
     *SKILL_LAYER_ALLOWED_MISSING_PREFIXES,
 )
-DEFAULT_PRIMITIVE_DURATION_BINS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
+# Every whole-frame hold length from 1 to 16. The earlier sparse menu
+# (1,2,3,4,6,8,12,16) had no entry between 8 and 12, so close-target stomps
+# whose correct hold is ~10 frames could only under- or over-shoot.
+DEFAULT_PRIMITIVE_DURATION_BINS = tuple(float(v) for v in range(1, 17))
 DEFAULT_ACTION_MOTION_THRESHOLD = 1.0e-4
 WORLD_MODEL_PRIMITIVE_FEATURE_DIM = 9
 WORLD_MODEL_PRIMITIVE_EMBEDDING_DIM = 16
@@ -91,6 +94,13 @@ def action_level_world_model_state_dict(
         if (
             expected is not None
             and key.startswith(ACTION_HEAD_ALLOWED_MISSING_PREFIXES)
+            and tuple(value.shape) != tuple(expected.shape)
+        ):
+            skipped.append(key)
+            continue
+        if (
+            expected is not None
+            and key.startswith(LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES)
             and tuple(value.shape) != tuple(expected.shape)
         ):
             skipped.append(key)
