@@ -397,6 +397,9 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         type=_positive_float,
         help="sampling weight for mastered families in the mastery-gated schedule",
     )
+    parser.add_argument("--success-replay-weight", type=_non_negative_float)
+    parser.add_argument("--success-replay-episodes-per-family", type=_positive_int)
+    parser.add_argument("--success-replay-steps-per-epoch", type=_positive_int)
     parser.add_argument(
         "--mastery-retention-grace-evals",
         type=int,
@@ -822,6 +825,9 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "mastery_gated_schedule",
         "mastery_retention_weight",
         "mastery_retention_grace_evals",
+        "success_replay_weight",
+        "success_replay_episodes_per_family",
+        "success_replay_steps_per_epoch",
         "use_oracle_actions",
         "ranked_candidate_search",
         "deterministic_critic_gates",

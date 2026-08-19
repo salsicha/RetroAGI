@@ -1828,3 +1828,89 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBlockSMBSuccessReplay(unittest.TestCase):
+    @staticmethod
+    def _trajectory(success, actions=(1, 2), hold_target=0.5):
+        from types import SimpleNamespace
+
+        transitions = []
+        for index, action in enumerate(actions):
+            batch = SimpleNamespace(
+                src_a=torch.randint(0, 4, (1, 8)),
+                src_b=torch.randint(0, 4, (1, 16)),
+                src_c=torch.rand(1, 12),
+            )
+            info = {"primitive_outcome_target": hold_target} if action == 2 else {}
+            if success and index == len(actions) - 1:
+                info["goal_reached"] = True
+            transitions.append(
+                SimpleNamespace(batch=batch, action=action, info=info)
+            )
+        return SimpleNamespace(success=success, transitions=transitions)
+
+    def test_buffer_stores_only_successes_balanced_and_capped(self):
+        from retroagi.stages.block_smb.train import BlockSMBSuccessReplay
+
+        buffer = BlockSMBSuccessReplay(max_episodes_per_family=2, seed=0)
+        buffer.add(self._trajectory(False), "pit_leap")
+        self.assertEqual(len(buffer), 0)
+        buffer.add(self._trajectory(True), "")
+        self.assertEqual(len(buffer), 0)
+        for _ in range(5):
+            buffer.add(self._trajectory(True), "pit_leap")
+        buffer.add(self._trajectory(True), "moving_bridge")
+        # Cap enforced per family; both families present.
+        self.assertEqual(len(buffer), 3)
+        self.assertEqual(buffer.families(), ["moving_bridge", "pit_leap"])
+        # Balanced sampling touches the single-episode family roughly half
+        # the time despite pit_leap holding more episodes.
+        records = buffer.sample_steps(200)
+        self.assertEqual(len(records), 200)
+        self.assertTrue(all("src_a" in r and "action" in r for r in records))
+
+    def test_replay_update_trains_from_stored_successes(self):
+        from retroagi.stages.block_smb.train import (
+            BlockSMBSuccessReplay,
+            block_smb_success_replay_update,
+        )
+
+        config = tiny_config(success_replay_steps_per_epoch=4)
+        model = make_block_smb_model(config)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        buffer = BlockSMBSuccessReplay(seed=0)
+        from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
+        from types import SimpleNamespace
+
+        transitions = []
+        for action in (1, 2, 1):
+            batch = SimpleNamespace(
+                src_a=torch.randint(0, 4, (1, BLOCK_SMB_SPEC.seq_len_a)),
+                src_b=torch.randint(
+                    0, 4, (1, BLOCK_SMB_SPEC.seq_len_a * BLOCK_SMB_SPEC.ratio_ab)
+                ),
+                src_c=torch.rand(1, model.agent.seq_len_c),
+            )
+            info = {"primitive_outcome_target": 0.5} if action == 2 else {}
+            transitions.append(SimpleNamespace(batch=batch, action=action, info=info))
+        transitions[-1].info["goal_reached"] = True
+        trajectory = SimpleNamespace(success=True, transitions=transitions)
+        buffer.add(trajectory, "moving_bridge")
+        self.assertEqual(len(buffer), 1)
+        before = [p.detach().clone() for p in model.parameters()]
+        metrics = block_smb_success_replay_update(
+            model, optimizer, buffer, config, torch.device("cpu")
+        )
+        self.assertGreater(metrics["success_replay_loss"], 0.0)
+        changed = any(
+            not torch.equal(b, p.detach())
+            for b, p in zip(before, model.parameters())
+        )
+        self.assertTrue(changed)
+        # Weight zero: no-op.
+        idle_config = tiny_config(success_replay_weight=0.0)
+        metrics = block_smb_success_replay_update(
+            model, optimizer, buffer, idle_config, torch.device("cpu")
+        )
+        self.assertEqual(metrics["success_replay_loss"], 0.0)
