@@ -20,15 +20,17 @@ promoting an architecture toward full Super Mario Bros:
 The stage code is separated, but all stages share the same core contract:
 
 ```text
-observation -> hierarchical actor -> action
-observation + action -> world model prediction
-prediction -> critic -> actor refinement
-carried LSTM state -> next initial actor decision
+observation -> frozen perception -> scene state
+strategy network -> tactics network -> skill network -> action network
+action + parameters -> adaptive controller -> frame-by-frame buttons
+scene + committed action -> world model -> predicted primitive outcome
+prediction -> critic gates -> acceptance / feedback
+carried LSTM state -> next decision
 ```
 
-Shared actor/world-model/critic components live in `retroagi/core`. Stage
-adapters live in `retroagi/stages/*` and convert stage-native observations into
-the common A/B/C timescale tensors.
+Shared components live in `retroagi/core`. Stage adapters live in
+`retroagi/stages/*` and convert stage-native observations into the common
+A/B/C timescale tensors.
 
 ## Project Layout
 
@@ -36,7 +38,11 @@ the common A/B/C timescale tensors.
 retroagi/
   core/
     interfaces.py      # StageSpec, StageBatch, shared adapter protocol
-    models.py          # reusable actor, world model, critic, controller
+    models.py          # skill/action networks, tactics/strategy networks,
+                       # world model, critic (one AgentWorldModelCritic module)
+    actions.py         # SMBAdaptiveController: committed adaptive primitives
+    temporal.py        # HSP0 goal/span contracts and episode reconstruction
+    skills.py          # measurable skill-goal encodings
   stages/
     synthetic_1d/      # procedural one-dimensional validation
     block_smb/         # pygame-ce SMB-like scenarios and adapter
@@ -46,8 +52,50 @@ scripts/               # compatibility wrappers and older experiments
 
 ## Architecture
 
+One learned module (`AgentWorldModelCritic`, about 1.2M parameters at the
+default width of 128) contains every trainable part; the decision procedures
+around it are plain, inspectable code. Top to bottom:
+
+- **Strategy network** — a transformer over the recent sequence of tactical
+  stances; decides the sequence of tactics.
+- **Tactics network** — a transformer over the scene state; proposes one of
+  four tactical stances (advance toward the goal, take the alternate route,
+  hold the area, retreat) plus a context vector for the skill network. The
+  injection is zero-initialized, so an untrained tactics stack is
+  behavior-neutral; it learns end-to-end from the policy gradients.
+- **Skill network (A-level)** — a transformer encoder; decides the next
+  immediate action.
+- **Action network (B-level)** — a transformer decoder; decides that action's
+  parameters: the hold duration over a complete 1-16 frame menu, controller
+  gains, and release prediction.
+- **Controller (C-level, `SMBAdaptiveController`)** — mechanical, no weights.
+  Executes every action class (jump, walk, wait) as a committed multi-frame
+  primitive whose duration is a slew-limited adaptive setpoint tracking the
+  action network's live belief; physical events (landing, enemy contact) end
+  primitives early. Learned interrupt heads have no runtime authority.
+- **World model (LSTM)** — predicts the *outcome state* of the committed
+  primitive (the world at landing), not merely the next frame.
+- **Critic** — learned progress/death judges, value and reward heads, plus
+  deterministic gates that read the world model's predicted goal distance and
+  death flag directly.
+- **Perception (Block ViT)** — trained and frozen before policy training.
+
+Training is self-supervised from the agent's own play (see the
+[hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)):
+policy gradients with a value baseline; **hindsight hold coaching** (every
+completed jump or walk relabels its frames with the duration that would have
+hit the target); release-timing supervision from completed spans; **success
+replay** (successful episodes are stored per family and replayed as a
+balanced supervised loss each epoch — maintenance gradient outside the
+zero-sum rollout budget); **HSP0 temporal spans** recording every frame of
+every rollout into versioned goal/span records with unambiguous end reasons;
+and a **mastery-gated curriculum with graduated retention** (practice focuses
+on failing families, newly mastered families ease off over a grace period,
+difficulty unlocks are monotonic, evaluation splits are read-only, and gates
+are never force-passed).
+
 See the [architecture diagram](docs/architecture.html) for the hierarchical
-actor/world-model/critic flow.
+flow.
 
 ## Current Status
 
