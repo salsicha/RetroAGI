@@ -302,14 +302,13 @@ class BlockSMBTrainingConfig:
     # for this many evaluations, ramping linearly from full weight down to
     # mastery_retention_weight, instead of dropping to the floor instantly.
     mastery_retention_grace_evals: int = 3
-    # Success replay: the policy's own successful episodes are stored per
-    # family and replayed as a supervised loss (imitate your own successes)
-    # each epoch. This is gradient outside the zero-sum rollout budget: rare
-    # fragile skills (bridges, stairs) keep receiving maintenance signal
-    # regardless of where live practice is focused.
-    success_replay_weight: float = 0.5
+    # Scenario rehearsal: layouts the policy has solved are stored per family
+    # and a balanced sample is re-rolled live each epoch through the normal
+    # on-policy losses. Fresh practice on known-solvable layouts cannot go
+    # stale (the frozen-record replay it replaces provably did), and the
+    # rehearsal success rate is a per-epoch retention gauge.
     success_replay_episodes_per_family: int = 8
-    success_replay_steps_per_epoch: int = 64
+    success_replay_rehearsals_per_epoch: int = 4
     # Execute scripted oracle actions during training rollouts on Monte Carlo
     # scenarios that carry them (fixed scenarios have no oracle and stay
     # on-policy). This is the in-loop demonstration channel that supervises the
@@ -590,122 +589,83 @@ class BlockSMBTrajectory:
 
 
 class BlockSMBSuccessReplay:
-    """Balanced per-family store of the policy's own successful episodes.
+    """Balanced per-family store of scenarios the policy has solved.
 
     Live practice is a zero-sum budget: boosting one family's samples takes
     from every other, which is how narrow-timing skills (bridges, stairs)
-    decayed once their practice eased off. Successful episodes are therefore
-    stored as detached per-step records and replayed as a supervised loss —
-    imitate your own successes — which costs no environment rollouts.
-    Sampling is balanced across families that have any stored success, so a
-    skill stays represented no matter where live practice is focused.
+    decayed once their practice eased off. The first fix — replaying frozen
+    per-step records as a supervised loss — went stale as the policy
+    improved: its loss rose monotonically all run while it dragged the
+    network back toward outdated behavior. This version therefore stores
+    only the SCENARIO of each success (a known-solvable layout, deduplicated
+    per family, FIFO-capped) and rehearsal re-rolls those scenarios live
+    each epoch through the normal on-policy losses. Fresh practice cannot
+    go stale, and the rehearsal success rate is a direct retention gauge.
     """
 
     def __init__(self, max_episodes_per_family: int = 8, seed: int = 0) -> None:
         if int(max_episodes_per_family) <= 0:
             raise ValueError("max_episodes_per_family must be positive")
         self.max_episodes_per_family = int(max_episodes_per_family)
-        self._episodes: dict[str, Any] = {}
+        self._scenarios: dict[str, dict[str, dict[str, Any]]] = {}
         self._rng = random.Random(seed)
 
-    def add(self, trajectory: "BlockSMBTrajectory", family: str | None) -> None:
-        if not family or not trajectory.success or not trajectory.transitions:
+    def add(
+        self,
+        trajectory: "BlockSMBTrajectory",
+        family: str | None,
+        scenario_id: str | None = None,
+        scenario: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not family or not trajectory.success or not scenario_id or scenario is None:
             return
-        steps = []
-        for step in trajectory.transitions:
-            hold_target = (
-                step.info.get("primitive_outcome_target")
-                if isinstance(step.info, Mapping)
-                else None
-            )
-            steps.append(
-                {
-                    "src_a": step.batch.src_a.detach().cpu(),
-                    "src_b": step.batch.src_b.detach().cpu(),
-                    "src_c": step.batch.src_c.detach().cpu(),
-                    "action": int(step.action),
-                    "hold_target": (
-                        float(hold_target) if hold_target is not None else None
-                    ),
-                }
-            )
-        from collections import deque
-
-        bucket = self._episodes.setdefault(
-            family, deque(maxlen=self.max_episodes_per_family)
-        )
-        bucket.append(steps)
+        bucket = self._scenarios.setdefault(family, {})
+        # Re-solving a stored scenario refreshes its recency; new scenarios
+        # evict the oldest entry once the family bucket is full.
+        bucket.pop(scenario_id, None)
+        bucket[scenario_id] = {
+            "scenario_id": scenario_id,
+            "scenario": copy.deepcopy(dict(scenario)),
+            "family": family,
+        }
+        while len(bucket) > self.max_episodes_per_family:
+            oldest = next(iter(bucket))
+            bucket.pop(oldest)
 
     def __len__(self) -> int:
-        return sum(len(bucket) for bucket in self._episodes.values())
+        return sum(len(bucket) for bucket in self._scenarios.values())
 
     def families(self) -> list[str]:
-        return sorted(family for family, bucket in self._episodes.items() if bucket)
+        return sorted(family for family, bucket in self._scenarios.items() if bucket)
 
-    def sample_steps(self, count: int) -> list[dict[str, Any]]:
+    def sample_scenarios(self, count: int) -> list[dict[str, Any]]:
+        """Balanced sample without replacement: round-robin across families."""
+
         families = self.families()
         if not families or count <= 0:
             return []
-        records = []
-        for _ in range(int(count)):
-            family = self._rng.choice(families)
-            episode = self._rng.choice(list(self._episodes[family]))
-            records.append(self._rng.choice(episode))
-        return records
-
-
-def block_smb_success_replay_update(
-    model: torch.nn.Module,
-    optimizer: optim.Optimizer,
-    success_replay: "BlockSMBSuccessReplay",
-    config: "BlockSMBTrainingConfig",
-    device: torch.device,
-) -> dict[str, float]:
-    """One off-budget supervised update from stored successful steps.
-
-    Each sampled step is re-forwarded with current weights; the skill
-    network's action choice is pulled toward the action that succeeded and
-    the action network's expected hold toward the hindsight-correct hold
-    recorded when the episode succeeded.
-    """
-
-    if config.success_replay_weight <= 0.0 or not len(success_replay):
-        return {"success_replay_loss": 0.0, "success_replay_episodes": float(len(success_replay))}
-    records = success_replay.sample_steps(int(config.success_replay_steps_per_epoch))
-    if not records:
-        return {"success_replay_loss": 0.0, "success_replay_episodes": float(len(success_replay))}
-    optimizer.zero_grad(set_to_none=True)
-    terms: list[torch.Tensor] = []
-    for record in records:
-        outputs = model(
-            record["src_a"].to(device),
-            record["src_b"].to(device),
-            record["src_c"].to(device),
-            tau=1.0,
-        )
-        logits_a = outputs[4][:, -1, :BLOCK_SMB_ACTION_COUNT]
-        target = torch.tensor([record["action"]], dtype=torch.long, device=device)
-        terms.append(F.cross_entropy(logits_a, target))
-        if record["hold_target"] is not None:
-            motor = getattr(model, "last_motor_primitives", None)
-            fraction = _smb_expected_hold_fraction(
-                motor,
-                SMBPrimitiveExecution(
-                    action=record["action"], started=True, active=True
-                ),
-                device=device,
-                dtype=logits_a.dtype,
+        order = list(families)
+        self._rng.shuffle(order)
+        pools = {
+            family: self._rng.sample(
+                list(self._scenarios[family].values()),
+                len(self._scenarios[family]),
             )
-            if fraction is not None:
-                terms.append((fraction - float(record["hold_target"])) ** 2)
-    loss = torch.stack(terms).mean() * float(config.success_replay_weight)
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
-    optimizer.step()
-    return {
-        "success_replay_loss": float(loss.detach().cpu()),
-        "success_replay_episodes": float(len(success_replay)),
-    }
+            for family in order
+        }
+        picks: list[dict[str, Any]] = []
+        while len(picks) < int(count) and any(pools.values()):
+            for family in order:
+                if pools[family] and len(picks) < int(count):
+                    record = pools[family].pop()
+                    picks.append(
+                        {
+                            "scenario_id": record["scenario_id"],
+                            "scenario": copy.deepcopy(record["scenario"]),
+                            "family": record["family"],
+                        }
+                    )
+        return picks
 
 
 class BlockSMBReplayBuffer:
@@ -2784,20 +2744,65 @@ def train_block_smb_epoch(
                 if isinstance(metadata, Mapping)
                 else ""
             )
-            success_replay.add(trajectory, family)
+            success_replay.add(trajectory, family, scenario_name, scenario)
         total_returns.append(trajectory.total_return)
         all_actions.extend(step.action for step in trajectory.transitions)
         if len(replay.trajectories) >= update_batch_size:
             flush_update_batch()
 
+    replay_metrics: dict[str, float] = {}
+    if success_replay is not None:
+        replay_metrics = {
+            "success_replay_episodes": float(len(success_replay)),
+            "success_replay_families": float(len(success_replay.families())),
+        }
+        rehearsals = success_replay.sample_scenarios(
+            int(config.success_replay_rehearsals_per_epoch)
+        )
+        if rehearsals:
+            rehearsal_successes = 0
+            for rehearsal_index, rehearsal in enumerate(rehearsals):
+                stage = BlockSMBStage(
+                    env=MarioScenarioEnv(reward_config=config.reward_config),
+                    scenario=copy.deepcopy(rehearsal["scenario"]),
+                    vision=vision_factory(),
+                )
+                try:
+                    trajectory = collect_trajectory(
+                        model,
+                        stage,
+                        rehearsal["scenario_id"],
+                        rollout_steps=config.rollout_steps,
+                        seed=config.seed + 900_000 + epoch * 100 + rehearsal_index,
+                        deterministic=False,
+                        device=device,
+                        ablation=config.ablation,
+                        adaptive_duration_control=config.adaptive_duration_control,
+                        skill_goal_conditioning=config.skill_goal_conditioning,
+                        steady_duration_primitives=config.steady_duration_primitives,
+                    )
+                finally:
+                    stage.env.close()
+                replay.add(trajectory)
+                total_returns.append(trajectory.total_return)
+                all_actions.extend(step.action for step in trajectory.transitions)
+                if trajectory.success:
+                    rehearsal_successes += 1
+                    success_replay.add(
+                        trajectory,
+                        rehearsal["family"],
+                        rehearsal["scenario_id"],
+                        rehearsal["scenario"],
+                    )
+                if len(replay.trajectories) >= update_batch_size:
+                    flush_update_batch()
+            replay_metrics["success_rehearsals"] = float(len(rehearsals))
+            replay_metrics["success_rehearsal_success_rate"] = (
+                rehearsal_successes / len(rehearsals)
+            )
     flush_update_batch()
     if total_update_episodes <= 0:
         raise ValueError("no Block SMB rollout episodes were collected")
-    replay_metrics: dict[str, float] = {}
-    if success_replay is not None:
-        replay_metrics = block_smb_success_replay_update(
-            model, optimizer, success_replay, config, device
-        )
     epoch_losses = {
         key: value / float(total_update_episodes) for key, value in metric_totals.items()
     }

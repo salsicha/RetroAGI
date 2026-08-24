@@ -84,10 +84,11 @@ Training is self-supervised from the agent's own play (see the
 [hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)):
 policy gradients with a value baseline; **hindsight hold coaching** (every
 completed jump or walk relabels its frames with the duration that would have
-hit the target); release-timing supervision from completed spans; **success
-replay** (successful episodes are stored per family and replayed as a
-balanced supervised loss each epoch — maintenance gradient outside the
-zero-sum rollout budget); **HSP0 temporal spans** recording every frame of
+hit the target); release-timing supervision from completed spans; **scenario
+rehearsal** (layouts the policy has solved are stored per family and a
+balanced sample is re-rolled live each epoch through the normal on-policy
+losses — retention practice that cannot go stale, with the rehearsal
+success rate logged as a direct retention gauge); **HSP0 temporal spans** recording every frame of
 every rollout into versioned goal/span records with unambiguous end reasons;
 and a **mastery-gated curriculum with graduated retention** (practice focuses
 on failing families, newly mastered families ease off over a grace period,

@@ -1832,85 +1832,61 @@ if __name__ == "__main__":
 
 class TestBlockSMBSuccessReplay(unittest.TestCase):
     @staticmethod
-    def _trajectory(success, actions=(1, 2), hold_target=0.5):
+    def _trajectory(success):
         from types import SimpleNamespace
 
-        transitions = []
-        for index, action in enumerate(actions):
-            batch = SimpleNamespace(
-                src_a=torch.randint(0, 4, (1, 8)),
-                src_b=torch.randint(0, 4, (1, 16)),
-                src_c=torch.rand(1, 12),
-            )
-            info = {"primitive_outcome_target": hold_target} if action == 2 else {}
-            if success and index == len(actions) - 1:
-                info["goal_reached"] = True
-            transitions.append(
-                SimpleNamespace(batch=batch, action=action, info=info)
-            )
-        return SimpleNamespace(success=success, transitions=transitions)
+        info = {"goal_reached": True} if success else {}
+        return SimpleNamespace(
+            success=success,
+            transitions=[SimpleNamespace(info=info)],
+        )
 
-    def test_buffer_stores_only_successes_balanced_and_capped(self):
+    def test_buffer_stores_solved_scenarios_deduped_and_capped(self):
         from retroagi.stages.block_smb.train import BlockSMBSuccessReplay
 
         buffer = BlockSMBSuccessReplay(max_episodes_per_family=2, seed=0)
-        buffer.add(self._trajectory(False), "pit_leap")
+        scenario = {"mario": [40, 200], "goal": [96, 186, 16, 20]}
+        buffer.add(self._trajectory(False), "pit_leap", "s0", scenario)
         self.assertEqual(len(buffer), 0)
-        buffer.add(self._trajectory(True), "")
+        buffer.add(self._trajectory(True), "", "s0", scenario)
+        buffer.add(self._trajectory(True), "pit_leap", None, scenario)
         self.assertEqual(len(buffer), 0)
-        for _ in range(5):
-            buffer.add(self._trajectory(True), "pit_leap")
-        buffer.add(self._trajectory(True), "moving_bridge")
-        # Cap enforced per family; both families present.
-        self.assertEqual(len(buffer), 3)
-        self.assertEqual(buffer.families(), ["moving_bridge", "pit_leap"])
-        # Balanced sampling touches the single-episode family roughly half
-        # the time despite pit_leap holding more episodes.
-        records = buffer.sample_steps(200)
-        self.assertEqual(len(records), 200)
-        self.assertTrue(all("src_a" in r and "action" in r for r in records))
-
-    def test_replay_update_trains_from_stored_successes(self):
-        from retroagi.stages.block_smb.train import (
-            BlockSMBSuccessReplay,
-            block_smb_success_replay_update,
-        )
-
-        config = tiny_config(success_replay_steps_per_epoch=4)
-        model = make_block_smb_model(config)
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-        buffer = BlockSMBSuccessReplay(seed=0)
-        from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
-        from types import SimpleNamespace
-
-        transitions = []
-        for action in (1, 2, 1):
-            batch = SimpleNamespace(
-                src_a=torch.randint(0, 4, (1, BLOCK_SMB_SPEC.seq_len_a)),
-                src_b=torch.randint(
-                    0, 4, (1, BLOCK_SMB_SPEC.seq_len_a * BLOCK_SMB_SPEC.ratio_ab)
-                ),
-                src_c=torch.rand(1, model.agent.seq_len_c),
-            )
-            info = {"primitive_outcome_target": 0.5} if action == 2 else {}
-            transitions.append(SimpleNamespace(batch=batch, action=action, info=info))
-        transitions[-1].info["goal_reached"] = True
-        trajectory = SimpleNamespace(success=True, transitions=transitions)
-        buffer.add(trajectory, "moving_bridge")
+        # Re-solving the same scenario refreshes rather than duplicates.
+        for _ in range(3):
+            buffer.add(self._trajectory(True), "pit_leap", "s0", scenario)
         self.assertEqual(len(buffer), 1)
-        before = [p.detach().clone() for p in model.parameters()]
-        metrics = block_smb_success_replay_update(
-            model, optimizer, buffer, config, torch.device("cpu")
-        )
-        self.assertGreater(metrics["success_replay_loss"], 0.0)
-        changed = any(
-            not torch.equal(b, p.detach())
-            for b, p in zip(before, model.parameters())
-        )
-        self.assertTrue(changed)
-        # Weight zero: no-op.
-        idle_config = tiny_config(success_replay_weight=0.0)
-        metrics = block_smb_success_replay_update(
-            model, optimizer, buffer, idle_config, torch.device("cpu")
-        )
-        self.assertEqual(metrics["success_replay_loss"], 0.0)
+        buffer.add(self._trajectory(True), "pit_leap", "s1", scenario)
+        buffer.add(self._trajectory(True), "pit_leap", "s2", scenario)
+        # Cap of 2 per family: oldest (s0) evicted.
+        self.assertEqual(len(buffer), 2)
+        buffer.add(self._trajectory(True), "moving_bridge", "b0", scenario)
+        self.assertEqual(buffer.families(), ["moving_bridge", "pit_leap"])
+
+    def test_rehearsal_sampling_is_balanced_and_returns_copies(self):
+        from retroagi.stages.block_smb.train import BlockSMBSuccessReplay
+
+        buffer = BlockSMBSuccessReplay(max_episodes_per_family=4, seed=0)
+        scenario = {"mario": [40, 200]}
+        for index in range(4):
+            buffer.add(self._trajectory(True), "pit_leap", f"p{index}", scenario)
+        buffer.add(self._trajectory(True), "moving_bridge", "b0", scenario)
+        picks = buffer.sample_scenarios(3)
+        self.assertEqual(len(picks), 3)
+        families = [p["family"] for p in picks]
+        # Round-robin without replacement: the single-scenario family is
+        # always represented despite the other family holding four.
+        self.assertIn("moving_bridge", families)
+        ids = [p["scenario_id"] for p in picks]
+        self.assertEqual(len(ids), len(set(ids)))
+        # Returned scenarios are deep copies: mutating one cannot corrupt
+        # the stored layout.
+        picks[0]["scenario"]["mario"][0] = 999
+        again = buffer.sample_scenarios(5)
+        self.assertTrue(all(p["scenario"]["mario"][0] == 40 for p in again))
+        # Empty buffer and zero count degrade cleanly.
+        self.assertEqual(BlockSMBSuccessReplay().sample_scenarios(3), [])
+        self.assertEqual(buffer.sample_scenarios(0), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
