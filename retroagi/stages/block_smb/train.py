@@ -307,7 +307,10 @@ class BlockSMBTrainingConfig:
     # stale (the frozen-record replay it replaces provably did), and the
     # rehearsal success rate is a per-epoch retention gauge.
     success_replay_episodes_per_family: int = 8
-    success_replay_rehearsals_per_epoch: int = 4
+    # 12, up from 4: the diagnostic dose measured a flat ~50% retention rate
+    # without moving it; a third of practice as retention work is the
+    # therapeutic-dose experiment.
+    success_replay_rehearsals_per_epoch: int = 12
     # Execute scripted oracle actions during training rollouts on Monte Carlo
     # scenarios that carry them (fixed scenarios have no oracle and stay
     # on-policy). This is the in-loop demonstration channel that supervises the
@@ -2760,6 +2763,7 @@ def train_block_smb_epoch(
         )
         if rehearsals:
             rehearsal_successes = 0
+            rehearsal_by_family: dict[str, list[int]] = {}
             for rehearsal_index, rehearsal in enumerate(rehearsals):
                 stage = BlockSMBStage(
                     env=MarioScenarioEnv(reward_config=config.reward_config),
@@ -2785,7 +2789,12 @@ def train_block_smb_epoch(
                 replay.add(trajectory)
                 total_returns.append(trajectory.total_return)
                 all_actions.extend(step.action for step in trajectory.transitions)
+                family_counts = rehearsal_by_family.setdefault(
+                    rehearsal["family"], [0, 0]
+                )
+                family_counts[0] += 1
                 if trajectory.success:
+                    family_counts[1] += 1
                     rehearsal_successes += 1
                     success_replay.add(
                         trajectory,
@@ -2799,6 +2808,12 @@ def train_block_smb_epoch(
             replay_metrics["success_rehearsal_success_rate"] = (
                 rehearsal_successes / len(rehearsals)
             )
+            # Per-family rehearsal outcomes split "forgot a retained skill"
+            # from "was never reliable at it" — the aggregate rate conflates
+            # the two.
+            for family, (attempts, successes) in rehearsal_by_family.items():
+                replay_metrics[f"rehearsal_attempts_{family}"] = float(attempts)
+                replay_metrics[f"rehearsal_rate_{family}"] = successes / attempts
     flush_update_batch()
     if total_update_episodes <= 0:
         raise ValueError("no Block SMB rollout episodes were collected")
