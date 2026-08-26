@@ -120,11 +120,10 @@ DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES = 256
 # scenario goals (Mario travels ~3px/step, goals sit at x>=230), so 160 is both
 # a volume increase and a correctness fix. Evaluation is spaced out so the
 # held-out gate sweeps do not dominate the longer run.
-# 200 -> 100 -> 60: every full-volume run's score envelope formed by round
-# 40-70 and later rounds only redistributed skills under the same ceiling,
-# so the budget now covers the climb phase plus a retention window and
-# banks the rest.
-DEFAULT_BLOCK_SMB_REAL_VOLUME_EPOCHS = 60
+# 200 -> 100 -> 60 -> 50: every full-volume run's score envelope formed by
+# round 40-70 and later rounds only redistributed skills under the same
+# ceiling; fifty covers the climb phase and a short retention window.
+DEFAULT_BLOCK_SMB_REAL_VOLUME_EPOCHS = 50
 DEFAULT_BLOCK_SMB_REAL_VOLUME_ROLLOUT_STEPS = 160
 DEFAULT_BLOCK_SMB_REAL_VOLUME_EVALUATION_INTERVAL_EPOCHS = 25
 DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE = 0.95
