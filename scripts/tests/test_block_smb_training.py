@@ -1890,3 +1890,29 @@ class TestBlockSMBSuccessReplay(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWaitCoaching(unittest.TestCase):
+    def test_wait_target_is_frames_until_platform_nearest(self):
+        from retroagi.stages.block_smb.train import block_smb_wait_target_frames
+
+        def records(platform_positions):
+            return [{"platform_x": p} for p in platform_positions]
+
+        # Platform approaches from 100px away, nearest (2px) at offset 20.
+        positions = [100.0 - 5.0 * k if k <= 20 else 2.0 + 5.0 * (k - 20) for k in range(40)]
+        target = block_smb_wait_target_frames(records(positions), 0, 0.0)
+        self.assertEqual(target, 20)
+        # Already adjacent: clamps to the 4-frame minimum.
+        target = block_smb_wait_target_frames(records([1.0] * 10), 0, 0.0)
+        self.assertEqual(target, 4)
+        # Never comes close: no coaching target.
+        far = block_smb_wait_target_frames(records([500.0] * 40), 0, 0.0)
+        self.assertIsNone(far)
+        # No moving platform recorded: no target.
+        none = block_smb_wait_target_frames([{"platform_x": None}] * 10, 0, 0.0)
+        self.assertIsNone(none)
+        # Ceiling: nearest approach beyond 64 frames is out of reach.
+        late = [200.0 - 2.0 * k for k in range(100)]
+        target = block_smb_wait_target_frames(records(late), 0, 0.0)
+        self.assertIsNone(target) if target is None else self.assertLessEqual(target, 64)

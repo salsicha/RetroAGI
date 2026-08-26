@@ -364,6 +364,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
                     "fall_death",
                     "gap_jump",
                     "enemy_hit",
+                    "wait_survival",
                     "frame_penalty",
                     "total",
                 },
@@ -433,3 +434,44 @@ class TestBlockSMBPhysics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWaitSurvivalShaping(unittest.TestCase):
+    def test_wait_survival_pays_only_inside_window_and_alive(self):
+        env = MarioScenarioEnv()
+        try:
+            env.reset(
+                scenario={
+                    "mario": [20, 204],
+                    "platforms": [[0, 220, 256, 20]],
+                    "reward_wait_survival": 0.05,
+                    "wait_window": [0, 3],
+                    "goal": [230, 200, 16, 20],
+                },
+                seed=0,
+            )
+            paid = 0.0
+            for step in range(6):
+                _obs, _reward, terminated, truncated, info = env.step(0)
+                paid += info["reward_terms"]["wait_survival"]
+                if terminated or truncated:
+                    break
+            # Steps 1-3 fall inside the window; later steps pay nothing.
+            self.assertAlmostEqual(paid, 0.15)
+        finally:
+            env.close()
+        # Without the opt-in key the term stays exactly zero.
+        env = MarioScenarioEnv()
+        try:
+            env.reset(
+                scenario={
+                    "mario": [20, 204],
+                    "platforms": [[0, 220, 256, 20]],
+                    "goal": [230, 200, 16, 20],
+                },
+                seed=0,
+            )
+            _obs, _reward, _t, _tr, info = env.step(0)
+            self.assertEqual(info["reward_terms"]["wait_survival"], 0.0)
+        finally:
+            env.close()

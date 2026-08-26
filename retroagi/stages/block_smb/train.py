@@ -241,7 +241,11 @@ class BlockSMBTrainingConfig:
     value_loss_weight: float = 0.25
     action_aux_weight: float = 0.01
     oracle_action_loss_weight: float = 1.0
-    noop_loss_weight: float = 0.25
+    # 0.0, retired from 0.25: the anti-freeze guard predates committed
+    # primitives and the energy regulator, which now prevent NOOP-collapse
+    # by construction — while the guard actively fought the wait familes'
+    # one required behavior. Opt back in per run via --noop-loss-weight.
+    noop_loss_weight: float = 0.0
     critic_loss_weight: float = 0.001
     imagined_rollout_weight: float = 0.0
     imagined_rollout_horizon: int = 0
@@ -1487,6 +1491,7 @@ def _action_from_model(
     oracle_hold_frames: int | None = None,
     forced_action: int | None = None,
     skill_goal: torch.Tensor | None = None,
+    wait_event: bool = False,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -1578,6 +1583,7 @@ def _action_from_model(
             int(action_tensor.item()),
             motor_primitives=motor_primitives,
             batch=batch,
+            wait_event=wait_event,
         )
         if execution.action != int(action_tensor.item()):
             action_tensor = torch.tensor(
@@ -1647,6 +1653,50 @@ def _smb_primitive_duration_log_prob(
         return zero
     target = torch.tensor([index], dtype=torch.long, device=device)
     return F.log_softmax(logits[:, -1, :], dim=-1).gather(1, target.view(1, 1)).mean()
+
+
+# Longest committed wait in frames: the duration menu (1-16) scaled by the
+# controller's wait factor (4). Hindsight wait targets normalize against it.
+_SMB_MAX_WAIT_FRAMES = 64.0
+
+
+def block_smb_wait_target_frames(
+    records: Sequence[Mapping[str, Any]] | list,
+    start_index: int,
+    mario_x: float,
+    *,
+    horizon: int = 64,
+    minimum: int = 4,
+    approach_threshold: float = 24.0,
+) -> int | None:
+    """Hindsight correct wait: frames until the moving platform is nearest.
+
+    A moving bridge's motion is deterministic, so the right wait is
+    computable after the fact: from the wait's start, find the recorded
+    frame (within the wait ceiling) where the platform's center passed
+    closest to where the agent stood. Waiting shorter or longer than that
+    misses the bridge in one direction or the other. Returns None when no
+    moving platform was recorded or it never came close enough to matter.
+    """
+
+    best_offset = None
+    best_distance = None
+    for offset in range(0, int(horizon) + 1):
+        index = start_index + offset
+        if index >= len(records):
+            break
+        platform_x = records[index].get("platform_x")
+        if platform_x is None:
+            continue
+        distance = abs(float(platform_x) - float(mario_x))
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            best_offset = offset
+    if best_offset is None or best_distance is None:
+        return None
+    if best_distance > float(approach_threshold):
+        return None
+    return max(int(minimum), min(int(horizon), best_offset))
 
 
 # Longest hold-duration bin the executor exposes (frames); hindsight hold
@@ -1833,6 +1883,9 @@ def collect_trajectory(
     primitive_span_is_jump = True
     primitive_direction = 1.0
     primitive_span_start_x = 0.0
+    wait_spans: list[tuple[int, int, float]] = []
+    wait_span_start: int | None = None
+    wait_span_start_x = 0.0
     temporal_records: list[dict[str, Any]] = []
 
     def _complete_primitive_span() -> None:
@@ -1908,6 +1961,20 @@ def collect_trajectory(
             int(oracle_actions[step_index + 1]) if step_index + 1 < len(oracle_actions) else None
         )
         step_skill_goal = skill_goal
+        pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
+        pre_step_mario_y = float(stage.env.mario["y"])
+        moving_platform_x = next(
+            (
+                float(plat["move_x"]) + plat["rect"].w / 2.0
+                for plat in stage.env.platforms
+                if plat.get("moving")
+            ),
+            None,
+        )
+        wait_event = (
+            moving_platform_x is not None
+            and abs(moving_platform_x - pre_step_mario_center_x) < 24.0
+        )
         (
             action,
             log_prob,
@@ -1932,9 +1999,8 @@ def collect_trajectory(
             oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
             forced_action=forced_action,
             skill_goal=step_skill_goal,
+            wait_event=wait_event,
         )
-        pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
-        pre_step_mario_y = float(stage.env.mario["y"])
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
@@ -2000,11 +2066,19 @@ def collect_trajectory(
             )
             primitive_span_start_x = pre_step_mario_center_x
         elif execution.started:
-            # A wait (NOOP) primitive: committed frames but no displacement
-            # goal, so no hindsight duration relabel applies.
+            # A wait (NOOP) primitive: no displacement relabel, but waits get
+            # their own hindsight coaching after the rollout — the correct
+            # wait is when the recorded moving platform came nearest.
             primitive_span = []
+            wait_span_start = transition_index
+            wait_span_start_x = pre_step_mario_center_x
         elif execution.active and primitive_span:
             primitive_span.append(transition_index)
+        if wait_span_start is not None and (
+            execution.released or execution.cancelled or done
+        ):
+            wait_spans.append((wait_span_start, transition_index, wait_span_start_x))
+            wait_span_start = None
         if (
             execution.landed
             or execution.cancelled
@@ -2029,6 +2103,14 @@ def collect_trajectory(
                 + float(stage.env.mario["w"]) / 2.0,
                 "y_before": pre_step_mario_y,
                 "y_after": float(stage.env.mario["y"]),
+                "platform_x": next(
+                    (
+                        float(plat["move_x"]) + plat["rect"].w / 2.0
+                        for plat in stage.env.platforms
+                        if plat.get("moving")
+                    ),
+                    None,
+                ),
             }
         )
         observation = next_observation
@@ -2046,6 +2128,22 @@ def collect_trajectory(
     # reported the landing): supervise with the final position — the sign of
     # the error is settled even if post-landing walking inflates it.
     _complete_primitive_span()
+    if wait_span_start is not None:
+        wait_spans.append((wait_span_start, len(trajectory.transitions) - 1, wait_span_start_x))
+    for span_start, span_end, span_x in wait_spans:
+        target_frames = block_smb_wait_target_frames(
+            temporal_records, span_start, span_x
+        )
+        if target_frames is None:
+            continue
+        for offset, index in enumerate(range(span_start, span_end + 1)):
+            span_info = trajectory.transitions[index].info
+            if isinstance(span_info, dict):
+                span_info["primitive_outcome_target"] = (
+                    target_frames / _SMB_MAX_WAIT_FRAMES
+                )
+                span_info["primitive_frame_index"] = offset
+                span_info["primitive_target_hold"] = float(target_frames)
     metadata = block_smb_monte_carlo_metadata(stage.scenario)
     family = ""
     if isinstance(metadata, Mapping):

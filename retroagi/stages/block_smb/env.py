@@ -108,11 +108,16 @@ class BlockSMBRewardConfig:
     # shorter holds minimized energy on doomed attempts). Off globally;
     # scenarios opt in with a "reward_energy_jump" coefficient.
     energy_jump: float = 0.0
+    # Wait-survival shaping: per-frame trickle while alive inside a
+    # scenario-declared wait window, so waiting is not paid exclusively
+    # through the end-discounted goal. Off globally; scenarios opt in with
+    # a "reward_wait_survival" coefficient.
+    wait_survival: float = 0.0
 
     def __post_init__(self) -> None:
         if self.progress_per_pixel < 0:
             raise ValueError("progress_per_pixel must be non-negative")
-        for name in ("coin", "enemy_stomp", "goal", "goal_distance_shaping"):
+        for name in ("coin", "enemy_stomp", "goal", "goal_distance_shaping", "wait_survival"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
         for name in ("fall_death", "gap_jump", "enemy_hit", "frame_penalty", "energy_jump"):
@@ -130,6 +135,7 @@ class BlockSMBRewardConfig:
             "fall_death": 0.0,
             "gap_jump": 0.0,
             "enemy_hit": 0.0,
+            "wait_survival": 0.0,
             "frame_penalty": 0.0,
         }
 
@@ -301,6 +307,16 @@ class MarioScenarioEnv:
             scenario.get("reward_energy_jump", self.reward_config.energy_jump) or 0.0
         )
         self._episode_energy = 0.0
+        # Wait-survival shaping: a small per-frame trickle while alive inside
+        # a scenario-declared wait window, so waiting is not exclusively paid
+        # through the end-discounted goal reward. Opt-in per scenario.
+        self._wait_survival = float(scenario.get("reward_wait_survival", 0.0) or 0.0)
+        window = scenario.get("wait_window")
+        self._wait_window = (
+            (int(window[0]), int(window[1]))
+            if isinstance(window, (list, tuple)) and len(window) == 2
+            else None
+        )
 
         obs = self.render()
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
@@ -602,6 +618,15 @@ class MarioScenarioEnv:
                 coin["collected"] = True
                 reward_terms["coin"] += self.reward_config.coin
                 self.score += 10
+
+        # ── 16b. Wait-survival shaping ────────────────────────────────────────
+        if (
+            self._wait_survival > 0.0
+            and self._wait_window is not None
+            and self._wait_window[0] <= self.steps <= self._wait_window[1]
+            and not death
+        ):
+            reward_terms["wait_survival"] += self._wait_survival
 
         # ── 17. Goal ──────────────────────────────────────────────────────────
         # Under goal_on_stomp the rect is only a tracking proxy for shaping

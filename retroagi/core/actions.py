@@ -405,6 +405,8 @@ class SMBAdaptiveController:
         adaptive_duration: bool = True,
         adaptive_slew_frames: float = 1.0,
         steady_primitives: bool = True,
+        wait_duration_scale: float = 4.0,
+        max_wait_frames: int = 64,
     ) -> None:
         if int(default_hold_frames) <= 0:
             raise ValueError("default_hold_frames must be positive")
@@ -437,6 +439,16 @@ class SMBAdaptiveController:
         # actions with the same duration selection and adaptive setpoint
         # tracking as jumps — one adaptive controller for every action class.
         self.steady_primitives = bool(steady_primitives)
+        # Waits need longer commitments than jumps: a moving bridge's cycle
+        # can exceed the 16-frame duration menu. Wait (NOOP) primitives scale
+        # the selected bin by this factor, giving a 4-64 frame wait range
+        # from the same duration head.
+        if float(wait_duration_scale) <= 0.0:
+            raise ValueError("wait_duration_scale must be positive")
+        if int(max_wait_frames) <= 0:
+            raise ValueError("max_wait_frames must be positive")
+        self.wait_duration_scale = float(wait_duration_scale)
+        self.max_wait_frames = int(max_wait_frames)
         self.reset()
 
     @property
@@ -479,6 +491,7 @@ class SMBAdaptiveController:
         motor_primitives: Any = None,
         batch: Any = None,
         vision: Any = None,
+        wait_event: bool = False,
     ) -> SMBPrimitiveExecution:
         action_value = coerce_smb_action(action)
         if vision is None and batch is not None:
@@ -514,6 +527,7 @@ class SMBAdaptiveController:
             steady = self._execute_active_steady(
                 motor_primitives=motor_primitives,
                 enemy_contact=enemy_contact,
+                wait_event=wait_event,
             )
             if steady is not None:
                 return steady
@@ -631,6 +645,13 @@ class SMBAdaptiveController:
         self, action_value: SMBAction, motor_primitives: Any
     ) -> SMBPrimitiveExecution:
         hold_frames, duration_bin_index = self._select_hold_frames(motor_primitives)
+        if action_value == SMBAction.NOOP:
+            hold_frames = int(
+                min(
+                    self.max_wait_frames,
+                    max(4, round(hold_frames * self.wait_duration_scale)),
+                )
+            )
         self.reset()
         self._active_steady = action_value
         self._hold_frames = hold_frames
@@ -662,6 +683,7 @@ class SMBAdaptiveController:
         *,
         motor_primitives: Any,
         enemy_contact: bool,
+        wait_event: bool = False,
     ) -> SMBPrimitiveExecution | None:
         """Continue a committed walk/wait primitive; None hands control back.
 
@@ -674,6 +696,19 @@ class SMBAdaptiveController:
 
         assert self._active_steady is not None
         action = self._active_steady
+        if wait_event and action == SMBAction.NOOP:
+            # Event-terminated wait: the thing being waited for arrived (the
+            # moving platform is adjacent). Like a jump ending on landing,
+            # the wait ends on its terminal event rather than its timer.
+            duration_bin_index = self._duration_bin_index
+            hold_frames = self._hold_frames
+            self.reset()
+            return SMBPrimitiveExecution(
+                action=int(action),
+                released=True,
+                duration_bin_index=duration_bin_index,
+                hold_frames=hold_frames,
+            )
         if enemy_contact:
             duration_bin_index = self._duration_bin_index
             hold_frames = self._hold_frames
@@ -691,12 +726,22 @@ class SMBAdaptiveController:
                 if self._hold_expected_baseline is None:
                     self._hold_expected_baseline = current
                 committed = float(self._hold_frames or self.default_hold_frames)
-                setpoint = committed + (current - self._hold_expected_baseline)
+                # The duration head thinks in bin space (1-16); waits run in
+                # scaled frame space, so belief changes scale accordingly.
+                scale = (
+                    self.wait_duration_scale if action == SMBAction.NOOP else 1.0
+                )
+                setpoint = committed + (current - self._hold_expected_baseline) * scale
                 delta = setpoint - self._desired_hold_frames
-                slew = self.adaptive_slew_frames
+                slew = self.adaptive_slew_frames * scale
                 delta = max(-slew, min(slew, delta))
+                ceiling = (
+                    float(self.max_wait_frames)
+                    if action == SMBAction.NOOP
+                    else float(self.max_hold_frames)
+                )
                 self._desired_hold_frames = min(
-                    float(self.max_hold_frames),
+                    ceiling,
                     max(1.0, self._desired_hold_frames + delta),
                 )
         desired = int(round(self._desired_hold_frames))

@@ -621,14 +621,33 @@ class TestSteadyPrimitives(unittest.TestCase):
         self.assertEqual(fifth.action, int(SMBAction.LEFT))
 
     def test_wait_is_a_first_class_primitive(self):
+        # Wait primitives scale the duration menu by 4: bin value 2 -> an
+        # 8-frame committed wait, and the longest bin reaches the 64-frame
+        # ceiling a moving bridge's cycle can demand.
         executor = SMBParameterizedPrimitiveExecutor()
-        motor = self._motor([6.0, 0.0, -6.0])  # argmax bin -> 2 frames
+        motor = self._motor([6.0, 0.0, -6.0])  # argmax bin -> 2 -> 8 frames
         first = executor.execute(SMBAction.NOOP, motor_primitives=motor)
         self.assertTrue(first.started)
-        self.assertEqual(first.hold_frames, 2)
-        second = executor.execute(SMBAction.RIGHT, motor_primitives=motor)
-        self.assertEqual(second.action, int(SMBAction.NOOP))
-        self.assertTrue(second.released)
+        self.assertEqual(first.hold_frames, 8)
+        held = 1
+        result = first
+        for _ in range(10):
+            result = executor.execute(SMBAction.RIGHT, motor_primitives=motor)
+            self.assertEqual(result.action, int(SMBAction.NOOP))
+            held += 1
+            if result.released:
+                break
+        self.assertTrue(result.released)
+        self.assertEqual(held, 8)
+        long_motor = self._motor([-6.0, 0.0, 6.0])  # argmax bin -> 16 -> 64
+        start = executor.execute(SMBAction.NOOP, motor_primitives=long_motor)
+        self.assertEqual(start.hold_frames, 64)
+        # Walks are unscaled: bin 4 stays a 4-frame walk.
+        executor2 = SMBParameterizedPrimitiveExecutor()
+        walk = executor2.execute(
+            SMBAction.RIGHT, motor_primitives=self._motor([0.0, 6.0, -6.0])
+        )
+        self.assertEqual(walk.hold_frames, 4)
 
     def test_steady_disabled_passes_actions_through(self):
         executor = SMBParameterizedPrimitiveExecutor(steady_primitives=False)

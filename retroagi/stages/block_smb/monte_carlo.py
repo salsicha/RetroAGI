@@ -1180,6 +1180,11 @@ def _wait_timing(
         ],
         "coins": [[130, 190, 10, 10]],
         "goal": [230, 200, 16, 20],
+        # Waiting is only instrumentally rewarded through the heavily
+        # discounted goal; a small survival trickle inside the wait window
+        # keeps the credit path from vanishing over long waits.
+        "reward_wait_survival": 0.05,
+        "wait_window": [0, wait + 6],
     }
     actions = _pad([0] * wait + [1] * 20 + [2] * 16 + [1])
     return (
