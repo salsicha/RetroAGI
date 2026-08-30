@@ -295,3 +295,33 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBridgeWaitFamily(unittest.TestCase):
+    def test_bridge_wait_teaches_the_wait_decision(self):
+        # B-teaching for waiting: the opening action is given (NOOP, first
+        # primitive only), waits grow with difficulty past the old 16-frame
+        # ceiling, and every band is reachable by its oracle.
+        waits = {}
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+            for seed in range(3):
+                sample = sample_block_smb_monte_carlo_scenario(
+                    split="validation",
+                    seed=seed,
+                    sample_index=0,
+                    family="bridge_wait",
+                    difficulty=difficulty,
+                )
+                self.assertTrue(sample.reachability["reachable"], (difficulty, seed))
+                self.assertEqual(sample.parameters["a_level_action"], 0)
+                self.assertEqual(
+                    sample.parameters["a_level_action_scope"], "first_primitive"
+                )
+                self.assertEqual(sample.scenario["reward_wait_survival"], 0.05)
+                waits.setdefault(difficulty, []).append(
+                    int(sample.parameters["required_wait"])
+                )
+        self.assertLess(max(waits["easy"]), min(waits["medium"]))
+        self.assertLess(max(waits["medium"]), min(waits["hard"]))
+        # Hard waits exceed the old 16-frame duration menu ceiling.
+        self.assertGreater(min(waits["hard"]), 16)

@@ -1912,7 +1912,60 @@ class TestWaitCoaching(unittest.TestCase):
         # No moving platform recorded: no target.
         none = block_smb_wait_target_frames([{"platform_x": None}] * 10, 0, 0.0)
         self.assertIsNone(none)
+        # A platform that stays distant but clearly approaches still yields
+        # a target: the agent may wait well back from the crossing edge.
+        approach = [100.0 - 1.5 * k for k in range(30)] + [55.0 + 1.5 * k for k in range(10)]
+        target = block_smb_wait_target_frames(records(approach), 0, 0.0)
+        self.assertEqual(target, 30)
         # Ceiling: nearest approach beyond 64 frames is out of reach.
         late = [200.0 - 2.0 * k for k in range(100)]
         target = block_smb_wait_target_frames(records(late), 0, 0.0)
         self.assertIsNone(target) if target is None else self.assertLessEqual(target, 64)
+
+
+class TestScopedForcedAction(unittest.TestCase):
+    def test_first_primitive_scope_releases_after_opening_wait(self):
+        from retroagi.stages.block_smb.monte_carlo import (
+            sample_block_smb_monte_carlo_scenario,
+        )
+        from retroagi.stages.block_smb.train import (
+            block_smb_forced_action_scope,
+            collect_trajectory,
+        )
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="train",
+            seed=3,
+            sample_index=0,
+            family="bridge_wait",
+            difficulty="easy",
+        )
+        self.assertEqual(block_smb_forced_action_scope(sample.scenario), "first_primitive")
+        self.assertEqual(block_smb_forced_action_scope({"mario": [20, 200]}), "episode")
+
+        config = tiny_config()
+        model = make_block_smb_model(config)
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(),
+            scenario=dict(sample.scenario),
+            vision=BlockVisionTransformer(),
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                "bridge_wait_probe",
+                rollout_steps=160,
+                seed=0,
+                deterministic=False,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+        actions = [t.action for t in trajectory.transitions]
+        # The given opening primitive is a wait...
+        self.assertEqual(actions[0], 0)
+        # ...and once it completes the policy owns the episode: the rollout
+        # is not NOOP-forced throughout.
+        self.assertTrue(any(a != 0 for a in actions))

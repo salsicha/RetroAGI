@@ -38,6 +38,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "pit_leap",
     "stomp_mount",
     "platform_hop",
+    "bridge_wait",
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 200
 
@@ -305,6 +306,12 @@ def block_smb_monte_carlo_family_specs(
             "platform_speed": [0.3, 0.3],
             "goal": "on the far ledge via the moving platform",
             "a_level_action": [2, 2],
+        },
+        "bridge_wait": {
+            "required_wait": [8, 30],
+            "platform_speed": [0.5, 1.05],
+            "goal": "across the gap after the bridge arrives",
+            "a_level_action": [0, 0],
         },
     }
     return {
@@ -925,6 +932,8 @@ def _generate_family_scenario(
         return _pit_leap(rng, difficulty)
     if family == "stomp_mount":
         return _stomp_mount(rng, difficulty)
+    if family == "bridge_wait":
+        return _bridge_wait(rng, difficulty)
     if family == "platform_hop":
         return _platform_hop(rng, difficulty)
     raise ValueError(f"unknown Block SMB Monte Carlo family {family!r}")
@@ -1193,6 +1202,61 @@ def _wait_timing(
             "wait_window": wait,
             "platform_speed": speed,
             "platform_range": [move_min, 130],
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
+
+
+def _bridge_wait(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # B-teaching family for the WAIT decision: the opening choice is given
+    # (forced NOOP, first primitive only), the controller's event-terminated
+    # wait releases when the bridge arrives, and the policy crosses with its
+    # mastered run/jump skills. The bridge starts at the far end of its
+    # travel and returns at a speed chosen so it arrives at the near point
+    # as the crossing jump happens (arrival = wait + crossing lead), probed
+    # reachable across every band. Hard waits exceed the old 16-frame
+    # duration ceiling, exercising the 4-64 frame wait range.
+    if difficulty == "easy":
+        required_wait = 8 + rng.randint(0, 4)
+        move_min, lead = 96, 25
+    elif difficulty == "medium":
+        required_wait = 16 + rng.randint(0, 4)
+        move_min, lead = 96, 25
+    else:
+        required_wait = 24 + rng.randint(0, 6)
+        move_min, lead = 100, 20
+    speed = round((130 - move_min) / (required_wait + lead), 3)
+    scenario = {
+        "world_width": 256,
+        "mario": [20, 200],
+        "platforms": [
+            [0, 220, 85, 20],
+            {
+                "x": 130,
+                "y": 220,
+                "w": 50,
+                "h": 20,
+                "moving": [move_min, 130, speed],
+            },
+            [180, 220, 76, 20],
+        ],
+        "coins": [],
+        "goal": [230, 200, 16, 20],
+        "reward_wait_survival": 0.05,
+        "wait_window": [0, required_wait + 8],
+        "reward_goal_distance_shaping": 2.0,
+    }
+    actions = _pad([0] * required_wait + [1] * 20 + [2] * 16 + [1])
+    return (
+        scenario,
+        {
+            "required_wait": required_wait,
+            "platform_speed": speed,
+            "a_level_action": 0,
+            "a_level_action_scope": "first_primitive",
             "difficulty_bin": difficulty,
         },
         actions,

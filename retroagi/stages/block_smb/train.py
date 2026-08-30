@@ -1395,6 +1395,21 @@ def block_smb_forced_action_for_rollout(scenario: Mapping[str, Any] | None) -> i
     return int(value)
 
 
+def block_smb_forced_action_scope(scenario: Mapping[str, Any] | None) -> str:
+    """How long the scenario's given A-level action stays in force.
+
+    "episode" (default) forces every step, as the jump-teaching families
+    use. "first_primitive" forces only the opening primitive — the
+    bridge_wait family gives the WAIT decision and hands control back once
+    the event-terminated wait completes, so the policy crosses on its own.
+    """
+
+    metadata = block_smb_monte_carlo_metadata(scenario) if scenario is not None else {}
+    parameters = metadata.get("parameters", {}) if isinstance(metadata, Mapping) else {}
+    scope = parameters.get("a_level_action_scope") if isinstance(parameters, Mapping) else None
+    return str(scope) if scope else "episode"
+
+
 def block_smb_oracle_actions_for_rollout(
     scenario: Mapping[str, Any] | None,
     *,
@@ -1694,7 +1709,16 @@ def block_smb_wait_target_frames(
             best_offset = offset
     if best_offset is None or best_distance is None:
         return None
-    if best_distance > float(approach_threshold):
+    first = next(
+        (
+            abs(float(r.get("platform_x")) - float(mario_x))
+            for r in records[start_index : start_index + 1]
+            if r.get("platform_x") is not None
+        ),
+        None,
+    )
+    approached = first is not None and (first - best_distance) >= 8.0
+    if best_distance > float(approach_threshold) and not approached:
         return None
     return max(int(minimum), min(int(horizon), best_offset))
 
@@ -1872,6 +1896,7 @@ def collect_trajectory(
         else ()
     )
     forced_action = block_smb_forced_action_for_rollout(stage.scenario)
+    forced_action_scope = block_smb_forced_action_scope(stage.scenario)
     skill_goal = (
         requested_block_smb_skill_goal(stage.scenario)
         if skill_goal_conditioning
@@ -1963,18 +1988,22 @@ def collect_trajectory(
         step_skill_goal = skill_goal
         pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
         pre_step_mario_y = float(stage.env.mario["y"])
-        moving_platform_x = next(
-            (
-                float(plat["move_x"]) + plat["rect"].w / 2.0
-                for plat in stage.env.platforms
-                if plat.get("moving")
-            ),
-            None,
-        )
-        wait_event = (
-            moving_platform_x is not None
-            and abs(moving_platform_x - pre_step_mario_center_x) < 24.0
-        )
+        wait_event = False
+        for plat in stage.env.platforms:
+            if not plat.get("moving"):
+                continue
+            # The awaited event: the platform reached the end of its travel
+            # nearest the agent — its closest approach — regardless of the
+            # absolute distance (the agent may wait well back from the edge).
+            near_end = (
+                float(plat["move_min"])
+                if abs(plat["move_min"] - pre_step_mario_center_x)
+                <= abs(plat["move_max"] - pre_step_mario_center_x)
+                else float(plat["move_max"])
+            )
+            if abs(float(plat["move_x"]) - near_end) < 6.0:
+                wait_event = True
+            break
         (
             action,
             log_prob,
@@ -2074,6 +2103,14 @@ def collect_trajectory(
             wait_span_start_x = pre_step_mario_center_x
         elif execution.active and primitive_span:
             primitive_span.append(transition_index)
+        if (
+            forced_action is not None
+            and forced_action_scope == "first_primitive"
+            and (execution.released or execution.landed or execution.cancelled)
+        ):
+            # The given opening primitive has completed; the policy owns the
+            # rest of the episode.
+            forced_action = None
         if wait_span_start is not None and (
             execution.released or execution.cancelled or done
         ):
