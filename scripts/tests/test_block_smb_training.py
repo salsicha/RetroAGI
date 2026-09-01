@@ -1969,3 +1969,53 @@ class TestScopedForcedAction(unittest.TestCase):
         # ...and once it completes the policy owns the episode: the rollout
         # is not NOOP-forced throughout.
         self.assertTrue(any(a != 0 for a in actions))
+
+
+class TestMovingTargetCoaching(unittest.TestCase):
+    def test_jump_frames_are_coached_against_frame_local_goal_positions(self):
+        # A monster reversal mid-jump must shift the coaching targets of the
+        # frames after the reversal: each in-flight frame is relabeled from
+        # where the goal actually was at that frame, not only at landing.
+        from retroagi.stages.block_smb.monte_carlo import (
+            sample_block_smb_monte_carlo_scenario,
+        )
+        from retroagi.stages.block_smb.train import collect_trajectory
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="train",
+            seed=5,
+            sample_index=0,
+            family="stomp_mount",
+            difficulty="hard",  # patrolling monster: the goal moves in flight
+        )
+        config = tiny_config()
+        model = make_block_smb_model(config)
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(),
+            scenario=dict(sample.scenario),
+            vision=BlockVisionTransformer(),
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                "moving_target_probe",
+                rollout_steps=60,
+                seed=1,
+                deterministic=False,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+        supervised = [
+            float(step.info["primitive_outcome_target"])
+            for step in trajectory.transitions
+            if step.info.get("primitive_outcome_target") is not None
+            and step.info.get("primitive_frame_index") is not None
+        ]
+        self.assertGreater(len(supervised), 0)
+        for target in supervised:
+            self.assertTrue(math.isfinite(target))
+            self.assertGreaterEqual(target, 1.0 / 16.0)
+            self.assertLessEqual(target, 1.0)

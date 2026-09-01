@@ -1950,30 +1950,44 @@ def collect_trajectory(
                 break
         if held <= 0:
             return
-        if abs(target - realized) < 4.0:
-            correct_hold = float(held)
-        else:
-            ratio = max(0.25, min(4.0, target / realized))
-            correct_hold = max(
-                1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), held * ratio)
-            )
-        target_fraction = correct_hold / float(_SMB_MAX_DURATION_BIN_VALUE)
+        def correct_hold_for(frame_target: float) -> float:
+            if abs(frame_target - realized) < 4.0:
+                return float(held)
+            ratio = max(0.25, min(4.0, frame_target / realized))
+            return max(1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), held * ratio))
+
         for offset, span_index in enumerate(span):
             span_info = trajectory.transitions[span_index].info
-            if isinstance(span_info, dict):
-                span_info["primitive_outcome_target"] = target_fraction
-                # HSP1: frame position within the primitive plus the
-                # hindsight-correct hold, so the release head can learn
-                # "should I be releasing now?" from complete spans.
-                span_info["primitive_frame_index"] = offset
-                span_info["primitive_target_hold"] = correct_hold
-                # The world model's target for committed-primitive frames is
-                # the OUTCOME of the primitive — the state at completion
-                # (landing) — not the next frame. A jump's value is invisible
-                # one frame ahead; it lives where the arc comes down.
-                span_info["primitive_outcome_batch"] = trajectory.transitions[
-                    span[-1]
-                ].next_batch
+            if not isinstance(span_info, dict):
+                continue
+            # Mid-flight adaptation training: each frame's coaching target is
+            # computed from where the goal actually was AT THAT FRAME (under
+            # goal_on_stomp the goal rides the monster). A monster reversal
+            # mid-jump therefore shifts the targets of the frames after the
+            # reversal — teaching the action network to revise its duration
+            # belief in the air, which the controller's adaptive setpoint is
+            # already wired to track. For static goals every frame's target
+            # is identical and behavior matches the previous single-target
+            # coaching exactly.
+            frame_goal_x = temporal_records[span_index].get("goal_x")
+            frame_target = (
+                (float(frame_goal_x) - primitive_span_start_x) * primitive_direction
+                if frame_goal_x is not None
+                else target
+            )
+            frame_correct = correct_hold_for(frame_target)
+            span_info["primitive_outcome_target"] = frame_correct / float(
+                _SMB_MAX_DURATION_BIN_VALUE
+            )
+            span_info["primitive_frame_index"] = offset
+            span_info["primitive_target_hold"] = frame_correct
+            # The world model's target for committed-primitive frames is
+            # the OUTCOME of the primitive — the state at completion
+            # (landing) — not the next frame. A jump's value is invisible
+            # one frame ahead; it lives where the arc comes down.
+            span_info["primitive_outcome_batch"] = trajectory.transitions[
+                span[-1]
+            ].next_batch
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -2078,6 +2092,38 @@ def collect_trajectory(
         # episode end — NOT the button release, because the arc keeps
         # carrying Mario forward after release, so the hindsight error must
         # be measured where he actually came down.
+        temporal_records.append(
+            {
+                "action": int(action),
+                "started": bool(execution.started),
+                "active": bool(execution.active),
+                "released": bool(execution.released),
+                "landed": bool(execution.landed),
+                "cancelled": bool(execution.cancelled),
+                "death": bool(info.get("death", False)),
+                "goal": bool(info.get("goal_reached", False)),
+                "terminated": bool(terminated),
+                "truncated": bool(truncated),
+                "x_before": pre_step_mario_center_x,
+                "x_after": float(stage.env.mario["x"])
+                + float(stage.env.mario["w"]) / 2.0,
+                "y_before": pre_step_mario_y,
+                "y_after": float(stage.env.mario["y"]),
+                "platform_x": next(
+                    (
+                        float(plat["move_x"]) + plat["rect"].w / 2.0
+                        for plat in stage.env.platforms
+                        if plat.get("moving")
+                    ),
+                    None,
+                ),
+                "goal_x": (
+                    float(stage.env.goal.centerx)
+                    if getattr(stage.env, "goal", None) is not None
+                    else None
+                ),
+            }
+        )
         transition_index = len(trajectory.transitions) - 1
         if execution.started and execution.action in (
             int(SMBAction.RIGHT_JUMP),
@@ -2125,33 +2171,6 @@ def collect_trajectory(
             or (primitive_span and not primitive_span_is_jump and execution.released)
         ):
             _complete_primitive_span()
-        temporal_records.append(
-            {
-                "action": int(action),
-                "started": bool(execution.started),
-                "active": bool(execution.active),
-                "released": bool(execution.released),
-                "landed": bool(execution.landed),
-                "cancelled": bool(execution.cancelled),
-                "death": bool(info.get("death", False)),
-                "goal": bool(info.get("goal_reached", False)),
-                "terminated": bool(terminated),
-                "truncated": bool(truncated),
-                "x_before": pre_step_mario_center_x,
-                "x_after": float(stage.env.mario["x"])
-                + float(stage.env.mario["w"]) / 2.0,
-                "y_before": pre_step_mario_y,
-                "y_after": float(stage.env.mario["y"]),
-                "platform_x": next(
-                    (
-                        float(plat["move_x"]) + plat["rect"].w / 2.0
-                        for plat in stage.env.platforms
-                        if plat.get("moving")
-                    ),
-                    None,
-                ),
-            }
-        )
         observation = next_observation
         if record_frames:
             trajectory.frames.append(np.asarray(observation).copy())
