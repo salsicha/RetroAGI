@@ -383,6 +383,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
         config = BlockSMBDistillationConfig(
             fixed_scenarios=("level_5_enemy_hop.json",),
             required_monte_carlo_families=(),
+            monte_carlo_samples=0,
             rollout_steps=45,
             episodes_per_scenario=1,
             evaluation_episodes=1,

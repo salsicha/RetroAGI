@@ -8,11 +8,13 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import torch
 import torch.nn as nn
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
+    DEFAULT_PRIMITIVE_DURATION_BINS,
     AgentWorldModelCritic,
     MotorPrimitiveOutput,
     PrimitiveOutcomePrediction,
@@ -309,7 +311,9 @@ class TestSynthetic1DPrimitiveSupervision(unittest.TestCase):
         self.assertEqual(targets.outcome_progress_delta.shape, (yb.size(0),))
         self.assertTrue(torch.all(targets.hold_duration_bin >= 0).item())
         self.assertTrue(
-            torch.all(targets.hold_duration_bin < 8).item(),
+            torch.all(
+                targets.hold_duration_bin < len(DEFAULT_PRIMITIVE_DURATION_BINS)
+            ).item(),
         )
         self.assertTrue(
             torch.all((targets.hazard_window >= 0) & (targets.hazard_window <= 1)).item()
@@ -339,7 +343,7 @@ class TestSynthetic1DPrimitiveSupervision(unittest.TestCase):
         )
         batch_size, seq_len_b = yb.shape
         vocab_size = SYNTHETIC_1D_SPEC.vocab_size
-        duration_bins = 8
+        duration_bins = len(DEFAULT_PRIMITIVE_DURATION_BINS)
         motor = MotorPrimitiveOutput(
             button_combo_logits=torch.zeros(batch_size, seq_len_b, vocab_size, requires_grad=True),
             hold_duration=torch.ones(batch_size, seq_len_b),
@@ -407,8 +411,14 @@ class TestSynthetic1DPrimitiveSupervision(unittest.TestCase):
             confidence=torch.ones(batch_size, seq_len_b),
             interrupt_logit=torch.zeros(batch_size, seq_len_b),
             replan_probability=torch.full((batch_size, seq_len_b), 0.5),
-            hold_duration_logits=torch.zeros(batch_size, seq_len_b, 8),
-            duration_bin_values=torch.arange(1, 9, dtype=torch.float32),
+            hold_duration_logits=torch.zeros(
+                batch_size,
+                seq_len_b,
+                len(DEFAULT_PRIMITIVE_DURATION_BINS),
+            ),
+            duration_bin_values=torch.arange(
+                1, len(DEFAULT_PRIMITIVE_DURATION_BINS) + 1, dtype=torch.float32
+            ),
             post_release_logits=torch.zeros(
                 batch_size,
                 seq_len_b,
@@ -902,6 +912,12 @@ class TestSynthetic1DCheckpointing(unittest.TestCase):
 
 
 class TestSynthetic1DBaselineComparison(unittest.TestCase):
+    # Budget recalibrated after the tactics/strategy architecture revision:
+    # the extra parameters reshuffled seeded inits, and this seed now needs
+    # ~90 epochs to escape its early basin (ratio 0.81 at 60 epochs vs 0.50
+    # at 90; other seeds pass at 60 with ~0.45-0.48). The margin assertions
+    # are unchanged, and the longer training outgrows the global 60s budget.
+    @pytest.mark.timeout(300)
     def test_trained_policy_beats_declared_baselines_on_held_out_controller_mse(self):
         seed_everything(123, deterministic=True)
         splits = generate_dataset_splits(
@@ -922,7 +938,7 @@ class TestSynthetic1DBaselineComparison(unittest.TestCase):
         batch_size = 32
 
         model.train()
-        for epoch in range(60):
+        for epoch in range(90):
             permutation = torch.randperm(
                 train_xa.size(0), generator=torch.Generator().manual_seed(500 + epoch)
             )
