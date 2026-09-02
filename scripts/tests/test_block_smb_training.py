@@ -46,9 +46,13 @@ from retroagi.stages.block_smb import (
     train_and_evaluate_block_smb,
 )
 from retroagi.stages.block_smb.train import (
-    HoldDistanceCurve,
+    BLOCK_SMB_JUMP_FOUNDATION_FAMILIES,
     apply_block_smb_ablations,
-    hold_curve_jump_observation,
+    block_smb_jump_overreach_loss,
+    jump_foundation_complete,
+    jump_foundation_family_weights,
+    jump_overreach,
+    sign_coached_hold,
     block_smb_c_stream_slot_spans,
     block_smb_noop_allowed_for_step,
     block_smb_noop_suppression_loss,
@@ -2067,171 +2071,55 @@ class TestMovingTargetCoaching(unittest.TestCase):
             self.assertLessEqual(target, 1.0)
 
 
-class TestHoldDistanceCurve(unittest.TestCase):
-    @staticmethod
-    def _filled_curve(bucket: str = "standing:flat") -> HoldDistanceCurve:
-        # A realistic flat-tail curve: short holds already travel far and
-        # long holds buy mostly height. Distance is NOT proportional to hold.
-        curve = HoldDistanceCurve()
-        for held, distance in {2: 30.0, 4: 45.0, 8: 60.0, 12: 70.0, 16: 78.0}.items():
-            for _ in range(8):
-                curve.record(bucket, held, distance)
-        return curve
+class TestSignCoachingAndOverreach(unittest.TestCase):
+    def test_sign_coached_hold_steps_one_frame_in_error_direction(self):
+        # One bit per jump: overshoot -> one step shorter, undershoot -> one
+        # step longer, on-target -> anchor what was held. Never magnitude.
+        self.assertEqual(sign_coached_hold(8, 78.0, 58.0), 7.0)
+        self.assertEqual(sign_coached_hold(8, 40.0, 58.0), 9.0)
+        self.assertEqual(sign_coached_hold(8, 58.5, 58.0), 8.0)
+        # Clamped at the menu edges.
+        self.assertEqual(sign_coached_hold(16, 40.0, 90.0), 16.0)
+        self.assertEqual(sign_coached_hold(1, 30.0, 5.0), 1.0)
 
-    def test_inverts_measured_nonlinear_curve(self):
-        curve = self._filled_curve()
-        # The diagnosed stomp failure: a 15-frame hold flew 78px over a
-        # ~60px target. Proportional scaling relabels to 15 * 60/78 ≈ 11.5
-        # and stalls there; the measured curve knows 60px is an 8-frame hold.
-        self.assertAlmostEqual(curve.correct_hold("standing:flat", 60.0), 8.0)
-        # Between measured bins the hold interpolates.
-        self.assertAlmostEqual(curve.correct_hold("standing:flat", 74.0), 14.0)
-        self.assertAlmostEqual(curve.correct_hold("standing:flat", 30.0), 2.0)
-        # Below the measured range: the arc floor is real physics, clamp to
-        # the shortest measured hold.
-        self.assertAlmostEqual(curve.correct_hold("standing:flat", 5.0), 2.0)
-        # Slightly past the longest measured distance still answers...
-        self.assertAlmostEqual(curve.correct_hold("standing:flat", 90.0), 16.0)
-        # ...but meaningfully beyond it the curve declines rather than
-        # teach a confidently wrong short hold (proportional fallback).
-        self.assertIsNone(curve.correct_hold("standing:flat", 200.0))
+    def test_jump_overreach_flags_only_full_length_shortfalls(self):
+        # A full-length jump that still fell short: duration cannot fix it.
+        self.assertTrue(jump_overreach(16, 60.0, 120.0))
+        # Shorter holds leave duration room -- not overreach.
+        self.assertFalse(jump_overreach(12, 60.0, 120.0))
+        # Within tolerance or overshooting is not overreach.
+        self.assertFalse(jump_overreach(16, 118.0, 120.0))
+        self.assertFalse(jump_overreach(16, 130.0, 120.0))
 
-    def test_sparse_data_returns_none_for_proportional_fallback(self):
-        curve = HoldDistanceCurve()
-        self.assertIsNone(curve.correct_hold("standing:flat", 60.0))
-        # One heavily sampled bin is not enough to invert a curve.
-        for _ in range(50):
-            curve.record("standing:flat", 8, 60.0)
-        self.assertIsNone(curve.correct_hold("standing:flat", 60.0))
-        # A second bin below the trust threshold still does not count.
-        for _ in range(7):
-            curve.record("standing:flat", 4, 45.0)
-            curve.record("standing:flat", 12, 70.0)
-        self.assertIsNone(curve.correct_hold("standing:flat", 60.0))
-        # Crossing the threshold on three bins unlocks inversion.
-        curve.record("standing:flat", 4, 45.0)
-        curve.record("standing:flat", 12, 70.0)
-        self.assertIsNotNone(curve.correct_hold("standing:flat", 60.0))
-        # Buckets are isolated: another bucket's physics stays sparse.
-        self.assertIsNone(curve.correct_hold("moving:flat", 60.0))
+    def test_jump_overreach_loss_suppresses_the_chosen_jump(self):
+        from types import SimpleNamespace
 
-    def test_bucket_separates_takeoff_speed_and_landing_elevation(self):
-        self.assertEqual(HoldDistanceCurve.bucket(0.0, 0.0), "standing:flat")
-        self.assertEqual(HoldDistanceCurve.bucket(0.5, 7.9), "standing:flat")
-        self.assertEqual(HoldDistanceCurve.bucket(2.4, 0.0), "moving:flat")
-        self.assertEqual(HoldDistanceCurve.bucket(0.0, 12.0), "standing:mount")
-        self.assertEqual(HoldDistanceCurve.bucket(2.4, -12.0), "moving:drop")
+        logits = torch.zeros(1, 1, BLOCK_SMB_SPEC.vocab_size, requires_grad=True)
+        flagged = SimpleNamespace(
+            logits_a=logits,
+            info={"jump_overreach": True, "jump_overreach_action": 2},
+        )
+        loss = block_smb_jump_overreach_loss(flagged, device=torch.device("cpu"))
+        self.assertGreater(float(loss), 0.0)
+        loss.backward()
+        gradient = logits.grad[0, -1]
+        # The chosen jump's logit is pushed down; the alternatives rise.
+        self.assertGreater(float(gradient[2]), 0.0)
+        self.assertLess(float(gradient[1]), 0.0)
 
-    def test_state_dict_round_trip_preserves_curve(self):
-        curve = self._filled_curve()
-        restored = HoldDistanceCurve()
-        restored.load_state_dict(curve.state_dict())
-        self.assertEqual(restored.sample_count(), curve.sample_count())
-        self.assertAlmostEqual(restored.correct_hold("standing:flat", 60.0), 8.0)
-        self.assertEqual(restored.summary(), curve.summary())
+        unflagged = SimpleNamespace(logits_a=torch.zeros(1, 1, 8), info={})
+        self.assertEqual(
+            float(block_smb_jump_overreach_loss(unflagged, device=torch.device("cpu"))),
+            0.0,
+        )
 
-    def test_checkpoint_round_trips_hold_curve(self):
-        with TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "hold_curve_block_smb.pth"
-            config = tiny_config()
-            model = make_block_smb_model(config)
-            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-            save_block_smb_checkpoint(
-                checkpoint_path,
-                model,
-                optimizer,
-                epoch=1,
-                global_step=2,
-                config=config,
-                metrics={"loss_total": 1.0},
-                hold_curve=self._filled_curve(),
-            )
-            restored_model = make_block_smb_model(config)
-            restored_optimizer = torch.optim.AdamW(
-                restored_model.parameters(), lr=config.learning_rate
-            )
-            restored = restore_block_smb_checkpoint(
-                checkpoint_path,
-                restored_model,
-                restored_optimizer,
-            )
-        self.assertIn("hold_distance_curve", restored["states"])
-        curve = HoldDistanceCurve()
-        curve.load_state_dict(restored["states"]["hold_distance_curve"])
-        self.assertAlmostEqual(curve.correct_hold("standing:flat", 60.0), 8.0)
-
-    @staticmethod
-    def _frame(x0, x1, y0, y1, *, landed=False, death=False, goal=False):
-        return {
-            "x_before": float(x0),
-            "x_after": float(x1),
-            "y_before": float(y0),
-            "y_after": float(y1),
-            "landed": landed,
-            "death": death,
-            "goal": goal,
-        }
-
-    def test_jump_observation_reads_completion_from_latest_frame(self):
-        # Regression: completion flags must be read from the frame that
-        # triggered span completion — the landing frame never joins the
-        # span (the executor reports the primitive inactive on it). With
-        # the flags read from the span's last member instead, no jump is
-        # ever recorded and the curve stays empty for the whole run.
-        records = [
-            self._frame(40, 40, 200, 200),                # standing pre-takeoff
-            self._frame(40, 44, 200, 190),                # jump frame (span[0])
-            self._frame(44, 48, 190, 175),                # in flight
-            self._frame(48, 52, 175, 185),                # descending (span[-1])
-            self._frame(52, 56, 185, 200, landed=True),   # landing frame, not in span
-        ]
-        bucket, clean = hold_curve_jump_observation(records, [1, 2, 3], 1.0)
-        self.assertEqual(bucket, "standing:flat")
-        self.assertTrue(clean)
-
-    def test_jump_observation_rejects_dirty_completions(self):
-        flight = [
-            self._frame(40, 40, 200, 200),
-            self._frame(40, 44, 200, 190),
-            self._frame(44, 48, 190, 175),
-        ]
-        death_end = flight + [self._frame(48, 52, 175, 200, death=True)]
-        _bucket, clean = hold_curve_jump_observation(death_end, [1, 2], 1.0)
-        self.assertFalse(clean)
-        stomp_credit = flight + [self._frame(48, 52, 175, 190, landed=True, goal=True)]
-        _bucket, clean = hold_curve_jump_observation(stomp_credit, [1, 2], 1.0)
-        self.assertFalse(clean)
-        # A wall bonk pins horizontal progress mid-flight.
-        bonked = [
-            self._frame(40, 40, 200, 200),
-            self._frame(40, 44, 200, 190),
-            self._frame(44, 44, 190, 175),
-            self._frame(44, 44, 175, 200, landed=True),
-        ]
-        _bucket, clean = hold_curve_jump_observation(bonked, [1, 2], 1.0)
-        self.assertFalse(clean)
-
-    def test_jump_observation_buckets_speed_and_elevation(self):
-        # Moving takeoff: the frame before the span shows running speed.
-        records = [
-            self._frame(40, 42.4, 200, 200),              # running pre-takeoff
-            self._frame(42.4, 45, 200, 190),
-            self._frame(45, 48, 190, 175),
-            self._frame(48, 52, 175, 160, landed=True),   # landed 40px higher
-        ]
-        bucket, clean = hold_curve_jump_observation(records, [1, 2], 1.0)
-        self.assertEqual(bucket, "moving:mount")
-        self.assertTrue(clean)
-
-    def test_engine_truth_lands_jumps_and_feeds_the_curve(self):
-        # End to end on the engine's own landing signal: flat world, no
-        # hazards, forced jumps, an untrained model AND untrained vision —
-        # the vision support head cannot detect these landings (that is the
-        # misfire this replaces), yet every arc completes on engine truth
-        # and feeds the hold->distance curve.
+    def test_engine_truth_lands_jumps_and_emits_sign_targets(self):
+        # End to end on the engine's landing signal: flat world, no hazards,
+        # forced jumps, untrained model AND untrained vision. Every arc
+        # completes on engine truth and every jump frame carries a bounded
+        # one-step coaching target.
         from retroagi.stages.block_smb.vision import BlockVisionTransformer
 
-        curve = HoldDistanceCurve()
         scenario = {
             "world_width": 2000,
             "mario": [40, 200],
@@ -2257,12 +2145,11 @@ class TestHoldDistanceCurve(unittest.TestCase):
             trajectory = collect_trajectory(
                 model,
                 stage,
-                "engine_truth_probe",
+                "sign_coaching_probe",
                 rollout_steps=120,
                 seed=1,
                 deterministic=False,
                 device=torch.device("cpu"),
-                hold_curve=curve,
             )
         finally:
             stage.env.close()
@@ -2274,49 +2161,6 @@ class TestHoldDistanceCurve(unittest.TestCase):
             and any(e.get("event") == "landing" for e in span.events)
         ]
         self.assertGreater(len(landed_jumps), 0)
-        self.assertGreater(curve.sample_count(), 0)
-
-    def test_rollout_coaching_accepts_a_dense_curve(self):
-        # Integration smoke: coaching through a fully measured curve still
-        # emits bounded per-frame hold targets.
-        from retroagi.stages.block_smb.monte_carlo import (
-            sample_block_smb_monte_carlo_scenario,
-        )
-        from retroagi.stages.block_smb.vision import BlockVisionTransformer
-
-        curve = HoldDistanceCurve()
-        for speed in ("standing", "moving"):
-            for landing in ("flat", "mount", "drop"):
-                for held in range(1, 17):
-                    for _ in range(8):
-                        curve.record(f"{speed}:{landing}", held, 25.0 + 3.5 * held)
-        sample = sample_block_smb_monte_carlo_scenario(
-            split="train",
-            seed=5,
-            sample_index=0,
-            family="stomp_mount",
-            difficulty="easy",
-        )
-        config = tiny_config()
-        model = make_block_smb_model(config)
-        stage = BlockSMBStage(
-            env=MarioScenarioEnv(),
-            scenario=dict(sample.scenario),
-            vision=BlockVisionTransformer(),
-        )
-        try:
-            trajectory = collect_trajectory(
-                model,
-                stage,
-                "measured_curve_probe",
-                rollout_steps=60,
-                seed=1,
-                deterministic=False,
-                device=torch.device("cpu"),
-                hold_curve=curve,
-            )
-        finally:
-            stage.env.close()
         supervised = [
             float(step.info["primitive_outcome_target"])
             for step in trajectory.transitions
@@ -2328,3 +2172,38 @@ class TestHoldDistanceCurve(unittest.TestCase):
             self.assertTrue(math.isfinite(target))
             self.assertGreaterEqual(target, 1.0 / 16.0)
             self.assertLessEqual(target, 1.0)
+
+
+class TestJumpFoundationSequencing(unittest.TestCase):
+    def test_foundation_curriculum_samples_only_jump_teachers(self):
+        from retroagi.stages.block_smb.train import build_curriculum
+
+        config = tiny_config(
+            generated_scenarios=0,
+            monte_carlo_train_samples_per_epoch=15,
+        )
+        curriculum = build_curriculum(
+            config, family_weights=jump_foundation_family_weights()
+        )
+        monte_carlo_names = [
+            name for name, _scenario in curriculum if name.startswith("block_smb_mc")
+        ]
+        self.assertEqual(len(monte_carlo_names), 15)
+        for name in monte_carlo_names:
+            self.assertTrue(
+                any(family in name for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES),
+                name,
+            )
+
+    def test_jump_foundation_gate_uses_mean_over_all_teachers(self):
+        passing = {
+            family: {"success_rate": 0.8}
+            for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES
+        }
+        self.assertTrue(jump_foundation_complete(passing, gate=0.75))
+        # One collapsed teacher drags the mean below the gate.
+        failing = dict(passing)
+        failing[BLOCK_SMB_JUMP_FOUNDATION_FAMILIES[0]] = {"success_rate": 0.0}
+        self.assertFalse(jump_foundation_complete(failing, gate=0.75))
+        # Families missing from the evaluation count as zero.
+        self.assertFalse(jump_foundation_complete({}, gate=0.75))

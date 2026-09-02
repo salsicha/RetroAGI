@@ -378,6 +378,33 @@ class TestSMBActionVocabulary(unittest.TestCase):
             duration_bin_values=torch.tensor([2.0, 4.0, 16.0]),
         )
 
+    def test_committed_jump_contract_original_hold_unless_updated(self):
+        # The controller's contract: a jump is planned for a chosen number
+        # of frames; it can receive updates mid-flight; with no updates it
+        # executes exactly the original plan.
+        executor = SMBParameterizedPrimitiveExecutor()
+        steady_belief = self._duration_motor([0.0, 6.0, -6.0])  # E[hold] ~ 4
+
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=steady_belief,
+            batch=self._batch_with_vision(self._support_vision(1)),
+        )
+        self.assertTrue(first.started)
+        self.assertEqual(first.hold_frames, 4)
+        # Belief never changes after initiation -> release on exactly the
+        # planned frame, no earlier, no later.
+        results = [
+            executor.execute(
+                SMBAction.RIGHT_JUMP,
+                motor_primitives=steady_belief,
+                batch=self._batch_with_vision(self._support_vision(0)),
+            )
+            for _ in range(4)
+        ]
+        self.assertTrue(all(r.active and not r.released for r in results[:3]))
+        self.assertTrue(results[3].released)
+
     def test_adaptive_duration_extends_hold_when_belief_rises(self):
         # B-level re-parameterizes the jump mid-air: when its duration belief
         # rises after initiation (a moving target drifted away), the tracked

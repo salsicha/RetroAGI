@@ -527,20 +527,38 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         dest="engine_support_override",
     )
-    parser.set_defaults(measured_hold_coaching=None)
     parser.add_argument(
-        "--measured-hold-coaching",
-        action="store_true",
-        dest="measured_hold_coaching",
+        "--jump-overreach-weight",
+        type=float,
         help=(
-            "relabel jump holds by inverting the measured hold-to-distance "
-            "curve instead of proportional scaling (default)"
+            "suppression weight on the skill network's jump choice when a "
+            "full-length jump still fell short (default 0.25; 0 disables)"
+        ),
+    )
+    parser.set_defaults(jump_foundation_first=None)
+    parser.add_argument(
+        "--jump-foundation-first",
+        action="store_true",
+        dest="jump_foundation_first",
+        help=(
+            "train the basic jump teacher families first; dependent families "
+            "unlock when the jump skill works (default)"
         ),
     )
     parser.add_argument(
-        "--no-measured-hold-coaching",
+        "--no-jump-foundation-first",
         action="store_false",
-        dest="measured_hold_coaching",
+        dest="jump_foundation_first",
+    )
+    parser.add_argument(
+        "--jump-foundation-gate",
+        type=float,
+        help="mean validation success over the jump teachers that ends the foundation phase (default 0.75)",
+    )
+    parser.add_argument(
+        "--jump-foundation-max-epochs",
+        type=_non_negative_int,
+        help="hard cap on foundation epochs regardless of the gate (default 30)",
     )
     parser.set_defaults(emit_temporal_spans=None)
     parser.add_argument(
@@ -837,7 +855,10 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "primitive_outcome_weight",
         "release_timing_weight",
         "steady_duration_primitives",
-        "measured_hold_coaching",
+        "jump_overreach_weight",
+        "jump_foundation_first",
+        "jump_foundation_gate",
+        "jump_foundation_max_epochs",
         "engine_support_override",
         "skill_goal_conditioning",
         "emit_temporal_spans",

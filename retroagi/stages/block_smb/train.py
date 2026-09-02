@@ -369,14 +369,27 @@ class BlockSMBTrainingConfig:
     # unlike a raw signed-error push, whose asymmetric magnitudes collapse
     # the head to the shortest bin.
     primitive_outcome_weight: float = 0.5
-    # Compute the relabeled hold by inverting the measured hold→distance
-    # curve (built online from every cleanly landed jump, bucketed by
-    # takeoff speed and landing elevation) instead of scaling the realized
-    # hold proportionally. Proportional scaling assumes distance is linear
-    # in hold; it is not — long holds buy mostly height — so overshoot
-    # corrections stall above the true hold. The proportional rule remains
-    # the fallback while a curve bucket is too sparse to invert.
-    measured_hold_coaching: bool = True
+    # One bit of duration coaching per finished jump: overshoot relabels
+    # the hold one step shorter, undershoot one step longer, on-target
+    # anchors the hold that was used. Direction, not size: magnitude-scaled
+    # pushes collapsed the head (overshoot errors always outweighed
+    # undershoot errors), and measured lookup tables amplified any
+    # measurement corruption into confidently wrong labels.
+    #
+    # When a full-length jump still falls short, duration cannot fix it —
+    # the initiation was the mistake. Those initiation frames feed a
+    # suppression loss on the skill network's chosen jump action so the
+    # layer that decided to jump learns the target was out of reach.
+    jump_overreach_weight: float = 0.25
+    # Sequence the curriculum: train the basic jump teachers first so
+    # everything that depends on the jump skill starts with it working.
+    # While active, Monte Carlo sampling draws only the foundation
+    # families; the phase ends when their mean validation success clears
+    # the gate at an evaluation, or unconditionally at the epoch cap.
+    # Skipped under the mastery-gated schedule or explicit family weights.
+    jump_foundation_first: bool = True
+    jump_foundation_gate: float = 0.75
+    jump_foundation_max_epochs: int = 30
     # HSP0: write every rollout's temporal spans (one JSONL next to the train
     # log) so episodes can be reconstructed as goals and spans after the run.
     emit_temporal_spans: bool = True
@@ -506,8 +519,14 @@ class BlockSMBTrainingConfig:
             raise ValueError("mastery_retention_weight must be positive")
         if not isinstance(self.use_oracle_actions, bool):
             raise TypeError("use_oracle_actions must be a bool")
-        if not isinstance(self.measured_hold_coaching, bool):
-            raise TypeError("measured_hold_coaching must be a bool")
+        if float(self.jump_overreach_weight) < 0.0:
+            raise ValueError("jump_overreach_weight must be non-negative")
+        if not isinstance(self.jump_foundation_first, bool):
+            raise TypeError("jump_foundation_first must be a bool")
+        if not 0.0 <= float(self.jump_foundation_gate) <= 1.0:
+            raise ValueError("jump_foundation_gate must be between 0 and 1")
+        if int(self.jump_foundation_max_epochs) < 0:
+            raise ValueError("jump_foundation_max_epochs must be non-negative")
         if not isinstance(self.engine_support_override, bool):
             raise TypeError("engine_support_override must be a bool")
         if self.monte_carlo_validation_repeats_per_difficulty < 0:
@@ -925,9 +944,48 @@ def build_monte_carlo_curriculum(
     return sample_set.scenarios()
 
 
-def build_curriculum(config: BlockSMBTrainingConfig) -> list[tuple[str, dict]]:
+# The basic jump teachers: forced-jump families whose whole purpose is to
+# make the jump skill work. Everything that DEPENDS on jumping (gaps,
+# stairs, enemies, bridges, composites) trains after these — a dependent
+# family practiced before its prerequisite exists just burns budget dying.
+BLOCK_SMB_JUMP_FOUNDATION_FAMILIES = (
+    "pit_leap",
+    "platform_hop",
+    "pipe_mount",
+    "tall_pipe_jump",
+    "stomp_mount",
+)
+
+
+def jump_foundation_family_weights() -> dict[str, float]:
+    """Exclusive sampling weights for the jump-foundation phase."""
+
+    return {family: 1.0 for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES}
+
+
+def jump_foundation_complete(
+    validation_families: Mapping[str, Any],
+    *,
+    gate: float,
+) -> bool:
+    """The jump skill counts as working when the foundation families' mean
+    validation success clears the gate. Families missing from the
+    evaluation count as zero."""
+
+    rates = [
+        float((validation_families.get(family) or {}).get("success_rate", 0.0))
+        for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES
+    ]
+    return bool(rates) and sum(rates) / len(rates) >= float(gate)
+
+
+def build_curriculum(
+    config: BlockSMBTrainingConfig,
+    *,
+    family_weights: Mapping[str, float] | None = None,
+) -> list[tuple[str, dict]]:
     scenarios = load_fixed_scenarios(config.fixed_scenarios)
-    scenarios.extend(build_monte_carlo_curriculum(config))
+    scenarios.extend(build_monte_carlo_curriculum(config, family_weights=family_weights))
     return scenarios
 
 
@@ -1765,189 +1823,80 @@ def block_smb_wait_target_frames(
 # targets and the expected-hold fraction are both normalized against it.
 _SMB_MAX_DURATION_BIN_VALUE = 16.0
 
-# Measured hold→distance curve thresholds. Takeoffs slower than the standing
-# speed count as standstill jumps; landings more than the elevation tolerance
-# above/below the takeoff height are mounts/drops (their arcs are cut short /
-# extended, so they live on different curves). A bin's mean is trusted after
-# enough samples, and inversion needs several trusted bins before it replaces
-# the proportional fallback. Flight frames slower than the minimum horizontal
-# speed indicate an obstructed arc (wall bonk, enemy recoil) — those spans
-# would poison the curve and are not recorded.
-_HOLD_CURVE_STANDING_SPEED = 0.6
-_HOLD_CURVE_ELEVATION_TOLERANCE = 8.0
-_HOLD_CURVE_MIN_BIN_SAMPLES = 8
-_HOLD_CURVE_MIN_TRUSTED_BINS = 3
-_HOLD_CURVE_MIN_FLIGHT_SPEED = 0.3
-_HOLD_CURVE_MAX_EXTRAPOLATION = 1.25
+# On-target tolerance for jump coaching: landings within this many pixels
+# of the frame-local target count as correct and anchor the hold that was
+# actually used.
+_SMB_JUMP_TARGET_TOLERANCE = 4.0
 
 
-class HoldDistanceCurve:
-    """Measured hold→distance mapping for hindsight jump coaching.
+def sign_coached_hold(held: int, realized: float, frame_target: float) -> float:
+    """One bit of duration coaching: direction, not size.
 
-    Every cleanly landed jump contributes (frames held → horizontal pixels
-    traveled) to a running per-bucket mean, where buckets separate the
-    physics regimes that bend the curve: standing vs moving takeoff, and
-    flat vs raised vs lowered landing. Coaching inverts the measured curve
-    — which hold actually travels the target distance — instead of scaling
-    the realized hold proportionally. Proportional scaling assumes distance
-    grows linearly with hold, but past the short holds extra frames buy
-    mostly height, so on overshoots it stalls well above the true answer
-    (relabeling toward ~12 where the layout needs 8).
+    Overshoot relabels the hold one step shorter than what was held,
+    undershoot one step longer, and an on-target jump anchors the hold that
+    was used. Distance is monotone in hold in this engine, so repeated
+    single-step corrections walk to the crossing point and stay there —
+    without the magnitude asymmetry that collapsed the head under signed
+    error scaling, and without a measured lookup table that amplifies any
+    measurement corruption into confidently wrong labels.
     """
 
-    def __init__(self) -> None:
-        # bucket -> held frames -> [sample count, distance sum]
-        self._totals: dict[str, dict[int, list[float]]] = {}
-
-    @staticmethod
-    def bucket(takeoff_speed: float, elevation_change: float) -> str:
-        speed = (
-            "moving"
-            if abs(float(takeoff_speed)) >= _HOLD_CURVE_STANDING_SPEED
-            else "standing"
-        )
-        if float(elevation_change) >= _HOLD_CURVE_ELEVATION_TOLERANCE:
-            landing = "mount"
-        elif float(elevation_change) <= -_HOLD_CURVE_ELEVATION_TOLERANCE:
-            landing = "drop"
-        else:
-            landing = "flat"
-        return f"{speed}:{landing}"
-
-    def record(self, bucket: str, held: int, distance: float) -> None:
-        if int(held) < 1 or float(distance) <= 0.0:
-            return
-        held_bin = min(int(held), int(_SMB_MAX_DURATION_BIN_VALUE))
-        entry = self._totals.setdefault(str(bucket), {}).setdefault(
-            held_bin, [0.0, 0.0]
-        )
-        entry[0] += 1.0
-        entry[1] += float(distance)
-
-    def _trusted_means(self, bucket: str) -> list[tuple[int, float]]:
-        return [
-            (held, total / count)
-            for held, (count, total) in sorted(self._totals.get(bucket, {}).items())
-            if count >= _HOLD_CURVE_MIN_BIN_SAMPLES
-        ]
-
-    def correct_hold(self, bucket: str, target_distance: float) -> float | None:
-        """Hold whose measured distance best matches the target.
-
-        Interpolates between the two trusted bins that bracket the target.
-        Below the measured range it clamps to the shortest hold (the arc
-        floor is real physics); above it it declines. Returns None while
-        the bucket is too sparse to invert or the target is beyond its
-        measured reach, so the caller falls back to the proportional rule.
-        """
-
-        means = self._trusted_means(bucket)
-        if len(means) < _HOLD_CURVE_MIN_TRUSTED_BINS:
-            return None
-        target = float(target_distance)
-        # Refuse to extrapolate: a target meaningfully beyond the longest
-        # measured distance is a question this bucket cannot answer, and
-        # clamping to the closest measured hold teaches a confidently wrong
-        # short answer. Decline so the caller falls back to the
-        # direction-correct proportional rule.
-        longest_measured = max(distance for _hold, distance in means)
-        if target > longest_measured * _HOLD_CURVE_MAX_EXTRAPOLATION:
-            return None
-        best = float(min(means, key=lambda entry: abs(entry[1] - target))[0])
-        for (hold_low, dist_low), (hold_high, dist_high) in zip(means, means[1:]):
-            low, high = sorted((dist_low, dist_high))
-            if low <= target <= high and dist_high != dist_low:
-                fraction = (target - dist_low) / (dist_high - dist_low)
-                best = hold_low + fraction * (hold_high - hold_low)
-                break
-        return max(1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), best))
-
-    def sample_count(self) -> int:
-        return int(
-            sum(
-                count
-                for bins in self._totals.values()
-                for count, _total in bins.values()
-            )
-        )
-
-    def summary(self) -> dict[str, dict[str, dict[str, float]]]:
-        return {
-            bucket: {
-                str(held): {"count": count, "mean": total / count}
-                for held, (count, total) in sorted(bins.items())
-                if count > 0
-            }
-            for bucket, bins in sorted(self._totals.items())
-        }
-
-    def state_dict(self) -> dict[str, Any]:
-        return {
-            "totals": {
-                bucket: {str(held): list(entry) for held, entry in bins.items()}
-                for bucket, bins in self._totals.items()
-            }
-        }
-
-    def load_state_dict(self, payload: Mapping[str, Any]) -> None:
-        self._totals = {}
-        totals = payload.get("totals", {}) if isinstance(payload, Mapping) else {}
-        for bucket, bins in totals.items():
-            if not isinstance(bins, Mapping):
-                continue
-            for held, entry in bins.items():
-                count, total = float(entry[0]), float(entry[1])
-                if count <= 0.0:
-                    continue
-                self._totals.setdefault(str(bucket), {})[int(held)] = [count, total]
+    if abs(frame_target - realized) < _SMB_JUMP_TARGET_TOLERANCE:
+        return float(held)
+    direction = 1.0 if frame_target > realized else -1.0
+    return max(1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), float(held) + direction))
 
 
-def hold_curve_jump_observation(
-    temporal_records: Sequence[Mapping[str, Any]],
-    span: Sequence[int],
-    primitive_direction: float,
-) -> tuple[str, bool]:
-    """Bucket a completed jump span and decide whether it feeds the curve.
+def jump_overreach(held: int, realized: float, target: float) -> bool:
+    """A full-length jump that still fell short of the target.
 
-    The bucket comes from the takeoff speed (the displacement of the frame
-    before the span) and the elevation change from takeoff to the completion
-    frame. A span is clean — safe to record as a hold→distance sample — only
-    when the completion frame reports a landing without death or goal credit
-    (a stomp credit means the arc was cut by the enemy, not gravity) and
-    every in-flight frame kept moving horizontally (a wall bonk or enemy
-    recoil realizes a distance no free jump would).
-
-    Completion flags are read from the LATEST record, not the span's last
-    member: the landing frame never joins the span because the executor
-    reports the primitive inactive on it.
+    The duration coach cannot express this (one step up from the longest
+    hold clamps to the longest hold); the initiation decision was the
+    mistake, so the signal must reach the layer that chose to jump.
     """
 
-    takeoff_speed = 0.0
-    if span[0] > 0:
-        previous = temporal_records[span[0] - 1]
-        takeoff_speed = (
-            float(previous["x_after"]) - float(previous["x_before"])
-        ) * primitive_direction
-    completion = temporal_records[-1]
-    elevation_change = float(temporal_records[span[0]]["y_before"]) - float(
-        completion["y_after"]
+    return (
+        float(held) >= float(_SMB_MAX_DURATION_BIN_VALUE)
+        and realized < target - _SMB_JUMP_TARGET_TOLERANCE
     )
-    bucket = HoldDistanceCurve.bucket(takeoff_speed, elevation_change)
-    clean_landing = (
-        bool(completion["landed"])
-        and not bool(completion["death"])
-        and not bool(completion["goal"])
-        and all(
+
+
+def block_smb_jump_overreach_loss(
+    step: "BlockSMBTransition",
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Suppress the skill network's jump choice where no hold could reach.
+
+    Initiation frames of full-length jumps that still undershot carry a
+    jump_overreach flag; pushing the chosen jump's logit below the other
+    actions teaches the deciding layer that the target was out of reach
+    from that state, without dictating what to do instead.
+    """
+
+    logits = step.logits_a.to(device=device)
+    zero = logits.new_zeros(())
+    info = step.info if isinstance(step.info, Mapping) else {}
+    if not bool(info.get("jump_overreach")):
+        return zero
+    if logits.ndim != 3 or logits.size(-1) < BLOCK_SMB_ACTION_COUNT:
+        return zero
+    action_logits = logits[:, -1, :BLOCK_SMB_ACTION_COUNT]
+    jump_action = int(info.get("jump_overreach_action", -1))
+    if not 0 <= jump_action < action_logits.size(-1) or action_logits.size(-1) <= 1:
+        return zero
+    jump_logit = action_logits[:, jump_action]
+    other_logsumexp = torch.logsumexp(
+        torch.cat(
             (
-                float(temporal_records[index]["x_after"])
-                - float(temporal_records[index]["x_before"])
-            )
-            * primitive_direction
-            >= _HOLD_CURVE_MIN_FLIGHT_SPEED
-            for index in span[1:]
-        )
+                action_logits[:, :jump_action],
+                action_logits[:, jump_action + 1 :],
+            ),
+            dim=-1,
+        ),
+        dim=-1,
     )
-    return bucket, clean_landing
+    return F.softplus(jump_logit - other_logsumexp).mean()
 
 
 def _smb_expected_hold_fraction(
@@ -2093,7 +2042,6 @@ def collect_trajectory(
     adaptive_duration_control: bool = True,
     skill_goal_conditioning: bool = True,
     steady_duration_primitives: bool = True,
-    hold_curve: HoldDistanceCurve | None = None,
     engine_support: bool = True,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
@@ -2172,26 +2120,23 @@ def collect_trajectory(
                 break
         if held <= 0:
             return
-        # Measured-curve coaching: bucket this jump by its takeoff speed
-        # and landing elevation, feed the curve when the arc completed
-        # cleanly, and invert the same bucket's curve for the relabel below.
-        bucket: str | None = None
-        if hold_curve is not None:
-            bucket, clean_landing = hold_curve_jump_observation(
-                temporal_records, span, primitive_direction
-            )
-            if clean_landing:
-                hold_curve.record(bucket, held, realized)
 
         def correct_hold_for(frame_target: float) -> float:
-            if abs(frame_target - realized) < 4.0:
-                return float(held)
-            if hold_curve is not None and bucket is not None:
-                measured = hold_curve.correct_hold(bucket, frame_target)
-                if measured is not None:
-                    return measured
-            ratio = max(0.25, min(4.0, frame_target / realized))
-            return max(1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), held * ratio))
+            return sign_coached_hold(held, realized, frame_target)
+
+        # Overreach: a full-length jump that still fell short is not a
+        # duration mistake — no hold on the menu reaches — so the duration
+        # push above is clamped into silence. The information belongs to
+        # the layer that decided to jump: flag the initiation frame so the
+        # skill network's chosen jump action is suppressed in that state
+        # (walk closer first, or do something else entirely).
+        if jump_overreach(held, realized, target):
+            initiation_info = trajectory.transitions[span[0]].info
+            if isinstance(initiation_info, dict):
+                initiation_info["jump_overreach"] = True
+                initiation_info["jump_overreach_action"] = int(
+                    trajectory.transitions[span[0]].action
+                )
 
         for offset, span_index in enumerate(span):
             span_info = trajectory.transitions[span_index].info
@@ -2869,6 +2814,7 @@ def compute_block_smb_losses(
     action_aux_terms = []
     oracle_action_terms = []
     noop_terms = []
+    jump_overreach_terms = []
     critic_terms = []
     primitive_outcome_terms = []
     release_timing_terms = []
@@ -2929,6 +2875,7 @@ def compute_block_smb_losses(
         if step.oracle_action is not None:
             oracle_supervised_steps += 1
         noop_terms.append(block_smb_noop_suppression_loss(step, device=device))
+        jump_overreach_terms.append(block_smb_jump_overreach_loss(step, device=device))
         critic_terms.append(
             step.criticism.pow(2).mean() + _critic_action_outcome_loss(model, step, device=device)
         )
@@ -2970,6 +2917,7 @@ def compute_block_smb_losses(
     loss_action_aux = torch.stack(action_aux_terms).mean()
     loss_oracle_action = torch.stack(oracle_action_terms).mean()
     loss_noop = torch.stack(noop_terms).mean()
+    loss_jump_overreach = torch.stack(jump_overreach_terms).mean()
     loss_critic_feedback = torch.stack(critic_terms).mean()
     loss_primitive_outcome = (
         torch.stack(primitive_outcome_terms).mean()
@@ -2996,6 +2944,7 @@ def compute_block_smb_losses(
         + config.action_aux_weight * loss_action_aux
         + config.oracle_action_loss_weight * loss_oracle_action
         + config.noop_loss_weight * loss_noop
+        + config.jump_overreach_weight * loss_jump_overreach
         + config.critic_loss_weight * loss_critic_feedback
         + config.primitive_outcome_weight * loss_primitive_outcome
         + config.release_timing_weight * loss_release_timing
@@ -3032,6 +2981,17 @@ def compute_block_smb_losses(
             device=device,
         ),
         "loss_noop": loss_noop,
+        "loss_jump_overreach": loss_jump_overreach,
+        "jump_overreach_steps": torch.tensor(
+            float(
+                sum(
+                    1
+                    for step in transitions
+                    if isinstance(step.info, Mapping) and step.info.get("jump_overreach")
+                )
+            ),
+            device=device,
+        ),
         "loss_critic_feedback": loss_critic_feedback,
         **imagined_losses,
         "target_network_active": torch.tensor(
@@ -3073,7 +3033,6 @@ def train_block_smb_epoch(
     vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
     target_model: Optional[torch.nn.Module] = None,
     success_replay: Optional[BlockSMBSuccessReplay] = None,
-    hold_curve: Optional[HoldDistanceCurve] = None,
 ) -> tuple[dict[str, float], BlockSMBReplayBuffer]:
     model.train()
     if target_model is not None:
@@ -3143,7 +3102,6 @@ def train_block_smb_epoch(
                 skill_goal_conditioning=config.skill_goal_conditioning,
                 steady_duration_primitives=config.steady_duration_primitives,
                 engine_support=config.engine_support_override,
-                hold_curve=hold_curve if config.measured_hold_coaching else None,
             )
             _write_block_smb_spans(config, trajectory)
         finally:
@@ -3194,7 +3152,6 @@ def train_block_smb_epoch(
                         skill_goal_conditioning=config.skill_goal_conditioning,
                         steady_duration_primitives=config.steady_duration_primitives,
                         engine_support=config.engine_support_override,
-                        hold_curve=hold_curve if config.measured_hold_coaching else None,
                     )
                 finally:
                     stage.env.close()
@@ -3803,7 +3760,6 @@ def save_block_smb_checkpoint(
     config: BlockSMBTrainingConfig,
     metrics: Mapping[str, float],
     target_model: Optional[torch.nn.Module] = None,
-    hold_curve: Optional[HoldDistanceCurve] = None,
 ) -> dict[str, Any]:
     states = {
         "model": model.state_dict(),
@@ -3814,8 +3770,6 @@ def save_block_smb_checkpoint(
     }
     if target_model is not None:
         states["target_model"] = target_model.state_dict()
-    if hold_curve is not None:
-        states["hold_distance_curve"] = hold_curve.state_dict()
     checkpoint = build_checkpoint(
         stage=BLOCK_SMB_SPEC.name,
         model_name=BLOCK_SMB_MODEL_NAME,
@@ -3972,7 +3926,6 @@ def train_and_evaluate_block_smb(
     )
     start_epoch = 0
     global_step = 0
-    hold_curve = HoldDistanceCurve()
     _initialize_block_smb_log(config)
     if config.resume_path is not None:
         checkpoint = restore_block_smb_checkpoint(
@@ -3986,9 +3939,6 @@ def train_and_evaluate_block_smb(
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
-        hold_curve_state = checkpoint.get("states", {}).get("hold_distance_curve")
-        if isinstance(hold_curve_state, Mapping):
-            hold_curve.load_state_dict(hold_curve_state)
     elif config.init_checkpoint is not None:
         # Weights-only warm start: model parameters come from the checkpoint,
         # everything else (optimizer, epochs, curriculum, mastery state) is
@@ -4013,13 +3963,24 @@ def train_and_evaluate_block_smb(
         max_episodes_per_family=config.success_replay_episodes_per_family,
         seed=config.seed,
     )
+    jump_foundation_active = (
+        config.jump_foundation_first
+        and not config.mastery_gated_schedule
+        and not config.monte_carlo_family_weights
+        and start_epoch < config.jump_foundation_max_epochs
+    )
     if config.mastery_gated_schedule:
         curriculum = load_fixed_scenarios(config.fixed_scenarios)
         curriculum.extend(
             build_mastery_monte_carlo_curriculum(config, mastery_state, phase=mastery_phase)
         )
     else:
-        curriculum = build_curriculum(config)
+        curriculum = build_curriculum(
+            config,
+            family_weights=(
+                jump_foundation_family_weights() if jump_foundation_active else None
+            ),
+        )
     vector_env = SequentialBlockSMBVectorEnv(
         curriculum,
         num_envs=config.num_envs,
@@ -4045,6 +4006,7 @@ def train_and_evaluate_block_smb(
         start_epoch=start_epoch,
         global_step=global_step,
         resumed_from=str(config.resume_path) if config.resume_path is not None else None,
+        jump_foundation_active=jump_foundation_active,
         curriculum=[name for name, _scenario in curriculum],
         curriculum_summary=summarize_block_smb_curriculum(curriculum),
     )
@@ -4053,9 +4015,25 @@ def train_and_evaluate_block_smb(
     last_metrics: dict[str, float] = {}
     recent_monte_carlo_failure_bins: Mapping[str, Any] = {}
     for epoch in range(start_epoch, config.epochs):
+        if jump_foundation_active and epoch >= config.jump_foundation_max_epochs:
+            jump_foundation_active = False
+            curriculum = build_curriculum(config)
+            _log_block_smb_event(
+                config,
+                "jump_foundation_completed",
+                epoch=epoch,
+                reason="max_epochs",
+            )
+        foundation_failure_bins = recent_monte_carlo_failure_bins
+        if jump_foundation_active and isinstance(recent_monte_carlo_failure_bins, Mapping):
+            foundation_failure_bins = {
+                key: value
+                for key, value in recent_monte_carlo_failure_bins.items()
+                if str(key).split(":")[0] in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES
+            }
         replay_curriculum = build_adaptive_monte_carlo_replay_curriculum(
             config,
-            recent_monte_carlo_failure_bins,
+            foundation_failure_bins,
             epoch=epoch,
         )
         epoch_curriculum = build_epoch_curriculum(curriculum, replay_curriculum)
@@ -4069,10 +4047,8 @@ def train_and_evaluate_block_smb(
             vision_factory=vision_factory,
             target_model=target_model,
             success_replay=success_replay,
-            hold_curve=hold_curve,
         )
         losses["adaptive_replay_samples"] = float(len(replay_curriculum))
-        losses["hold_curve_samples"] = float(hold_curve.sample_count())
         global_step += int(losses["episodes"])
         completed_epoch = epoch + 1
         last_metrics = dict(losses)
@@ -4126,6 +4102,27 @@ def train_and_evaluate_block_smb(
             )
             last_metrics.update(block_smb_monte_carlo_eval_metrics(evaluation))
             monte_carlo_validation = evaluation.get("monte_carlo_validation", {})
+            if jump_foundation_active and isinstance(monte_carlo_validation, Mapping):
+                foundation_families = monte_carlo_validation.get("families", {})
+                if isinstance(foundation_families, Mapping) and jump_foundation_complete(
+                    foundation_families, gate=config.jump_foundation_gate
+                ):
+                    jump_foundation_active = False
+                    curriculum = build_curriculum(config)
+                    _log_block_smb_event(
+                        config,
+                        "jump_foundation_completed",
+                        epoch=completed_epoch,
+                        reason="gate_met",
+                        families={
+                            family: float(
+                                (foundation_families.get(family) or {}).get(
+                                    "success_rate", 0.0
+                                )
+                            )
+                            for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES
+                        },
+                    )
             # HSP1: held-out primitive metrics select a best-primitives
             # checkpoint independent of episode return.
             if isinstance(monte_carlo_validation, Mapping):
@@ -4205,7 +4202,6 @@ def train_and_evaluate_block_smb(
                     key: value for key, value in last_metrics.items() if key.startswith("eval_")
                 },
                 evaluation=evaluation,
-                hold_distance_curve=hold_curve.summary(),
             )
             tracker.log_metrics(
                 {key: value for key, value in last_metrics.items() if key.startswith("eval_")},
@@ -4223,7 +4219,6 @@ def train_and_evaluate_block_smb(
                 config=config,
                 metrics=last_metrics,
                 target_model=target_model,
-                hold_curve=hold_curve,
             )
             _log_block_smb_event(
                 config,
