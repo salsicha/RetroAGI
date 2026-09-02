@@ -280,6 +280,10 @@ class SMBJumpActionTerminator:
             return int(action_value)
 
         if self._suppress_until_non_jump:
+            # One frame only, for the same reason as the adaptive
+            # controller: an unbounded wait for a non-jump action deadlocks
+            # forced-jump rollouts once landings actually fire.
+            self._suppress_until_non_jump = False
             return int(smb_jump_release_action(action_value))
 
         if not self._jump_active:
@@ -510,6 +514,13 @@ class SMBAdaptiveController:
         enemy_contact = _vision_enemy_contact(vision)
 
         if self._suppress_until_non_jump:
+            # One frame only. The suppression exists so a still-held jump
+            # command cannot restart a jump on the very frame the previous
+            # one ended; waiting for a non-jump action instead deadlocks
+            # forced-jump teaching families into one jump per episode now
+            # that landings actually fire (engine truth) — the forced
+            # command is always a jump, so the flag never cleared.
+            self._suppress_until_non_jump = False
             if action_value not in SMB_JUMP_ACTIONS:
                 self.reset()
                 return SMBPrimitiveExecution(action=int(action_value))

@@ -269,6 +269,20 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertTrue(landed.landed)
         self.assertTrue(landed.released)
 
+        # Re-jump suppression lasts exactly one frame: the still-held jump
+        # command becomes one run frame, then a fresh jump starts. An
+        # unbounded wait for a non-jump action deadlocked forced-jump
+        # teaching families into one jump per episode.
+        suppressed = executor.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="ground"
+        )
+        rejump = executor.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="ground"
+        )
+        self.assertEqual(suppressed.action, int(SMBAction.RIGHT))
+        self.assertFalse(suppressed.started)
+        self.assertTrue(rejump.started)
+
     def test_parameterized_primitive_executor_samples_durations_when_enabled(self):
         motor = SimpleNamespace(
             hold_duration_logits=torch.zeros(1, 1, 8),
