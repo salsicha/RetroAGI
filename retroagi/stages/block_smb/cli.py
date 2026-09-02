@@ -926,6 +926,13 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         overrides["world_model_slot_weights"] = dict(overrides.pop("world_model_slot_weight"))
     if "monte_carlo_family_weight" in overrides:
         overrides["monte_carlo_family_weights"] = dict(overrides.pop("monte_carlo_family_weight"))
+        # Explicit family weights pin the sampler (isolation runs and the
+        # like); the jump-foundation phase would override that intent, so
+        # it stays off unless the user also asked for it. Only the trainer
+        # cannot make this call — injected full-volume defaults are
+        # indistinguishable from user weights by the time config is built.
+        if getattr(args, "jump_foundation_first", None) is None:
+            overrides["jump_foundation_first"] = False
     return overrides
 
 

@@ -51,6 +51,7 @@ from retroagi.stages.block_smb.train import (
     block_smb_jump_overreach_loss,
     jump_foundation_complete,
     jump_foundation_family_weights,
+    jump_foundation_initially_active,
     jump_overreach,
     sign_coached_hold,
     block_smb_c_stream_slot_spans,
@@ -2207,3 +2208,25 @@ class TestJumpFoundationSequencing(unittest.TestCase):
         self.assertFalse(jump_foundation_complete(failing, gate=0.75))
         # Families missing from the evaluation count as zero.
         self.assertFalse(jump_foundation_complete({}, gate=0.75))
+
+    def test_jump_foundation_activation_ignores_default_family_weights(self):
+        # Fresh full-volume runs auto-inject failure-focus family weights;
+        # those must not disable the foundation phase (only explicit CLI
+        # weights do, handled at argument parsing).
+        config = tiny_config(
+            monte_carlo_family_weights=default_block_smb_failure_focus_monte_carlo_family_weights(),
+        )
+        self.assertTrue(jump_foundation_initially_active(config, 0))
+        # Mastery gating sequences its own way.
+        self.assertFalse(
+            jump_foundation_initially_active(
+                tiny_config(mastery_gated_schedule=True), 0
+            )
+        )
+        # Resuming past the cap starts unlocked.
+        self.assertFalse(jump_foundation_initially_active(tiny_config(), 30))
+        self.assertFalse(
+            jump_foundation_initially_active(
+                tiny_config(jump_foundation_first=False), 0
+            )
+        )

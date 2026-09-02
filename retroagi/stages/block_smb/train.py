@@ -386,7 +386,8 @@ class BlockSMBTrainingConfig:
     # While active, Monte Carlo sampling draws only the foundation
     # families; the phase ends when their mean validation success clears
     # the gate at an evaluation, or unconditionally at the epoch cap.
-    # Skipped under the mastery-gated schedule or explicit family weights.
+    # Skipped under the mastery-gated schedule; explicit CLI family
+    # weights disable it at argument-parsing time.
     jump_foundation_first: bool = True
     jump_foundation_gate: float = 0.75
     jump_foundation_max_epochs: int = 30
@@ -961,6 +962,26 @@ def jump_foundation_family_weights() -> dict[str, float]:
     """Exclusive sampling weights for the jump-foundation phase."""
 
     return {family: 1.0 for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES}
+
+
+def jump_foundation_initially_active(
+    config: "BlockSMBTrainingConfig",
+    start_epoch: int,
+) -> bool:
+    """Whether the run begins in the jump-foundation phase.
+
+    The mastery-gated schedule already sequences families its own way, and
+    a resume past the epoch cap starts unlocked. Explicit CLI family
+    weights disable the phase at argument-parsing time, where "explicit"
+    is knowable — the trainer cannot tell user weights from the injected
+    full-volume defaults.
+    """
+
+    return (
+        bool(config.jump_foundation_first)
+        and not config.mastery_gated_schedule
+        and int(start_epoch) < int(config.jump_foundation_max_epochs)
+    )
 
 
 def jump_foundation_complete(
@@ -3963,12 +3984,7 @@ def train_and_evaluate_block_smb(
         max_episodes_per_family=config.success_replay_episodes_per_family,
         seed=config.seed,
     )
-    jump_foundation_active = (
-        config.jump_foundation_first
-        and not config.mastery_gated_schedule
-        and not config.monte_carlo_family_weights
-        and start_epoch < config.jump_foundation_max_epochs
-    )
+    jump_foundation_active = jump_foundation_initially_active(config, start_epoch)
     if config.mastery_gated_schedule:
         curriculum = load_fixed_scenarios(config.fixed_scenarios)
         curriculum.extend(
