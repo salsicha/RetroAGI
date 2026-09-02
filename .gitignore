@@ -29,7 +29,7 @@ artifacts/full_volume_*/
 artifacts/block_smb/pipe_mount_*/
 artifacts/block_smb/stomp_b_level_*/
 artifacts/block_smb/jump_suite_*/
-artifacts/block_smb/isolate_*/
+artifacts/block_smb/isolate_*
 # Ad-hoc sweep/probe/eval outputs from local experiments. Emulator .npz
 # recordings under these paths are ROM-derived and must never be committed.
 artifacts/block_smb/current_*
