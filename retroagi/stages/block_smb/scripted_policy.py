@@ -13,7 +13,7 @@ from retroagi.core import build_checkpoint, load_checkpoint, save_checkpoint
 from .adapter import BLOCK_SMB_SPEC
 from .env import MarioScenarioEnv
 from .success import evaluate_fixed_success_thresholds
-from .train import load_fixed_scenarios
+from .train import _goal_reached, load_fixed_scenarios
 
 SCRIPTED_BLOCK_SMB_POLICY_NAME = "block_smb_scripted_known_good"
 SCRIPTED_BLOCK_SMB_CHECKPOINT_KIND = "scripted_policy"
@@ -34,7 +34,11 @@ def fixed_scenario_action_scripts(
     scripts = {
         "level_1_flat.json": list(right),
         "level_2_gap.json": [1] * 10 + [2] * 17 + [1] * max_steps,
-        "level_3_stairs.json": [2] * 8 + [1] * 2 + [2] * 6 + [1] * max_steps,
+        "level_3_stairs.json": (
+            # One jump per stair: press on the landing, not mid-air (re-press
+            # while airborne is ignored, there is no double jump).
+            [2] * 8 + [1] * 2 + [2] * 12 + [1] * 2 + [2] * 10 + [1] * max_steps
+        ),
         "level_4_platforms.json": [1] * 8 + [2] * 16 + [1] * max_steps,
         "level_5_enemy_hop.json": [1] * 20 + [2] * 18 + [1] * max_steps,
         "level_6_enemy_patrol.json": ([1] * 12 + [2] * 18 + [1] * 18 + [2] * 18 + [1] * max_steps),
@@ -70,13 +74,6 @@ class BlockSMBScriptedPolicy:
         if step_index < len(script):
             return int(script[step_index])
         return int(script[-1])
-
-
-def _goal_reached(env: MarioScenarioEnv) -> bool:
-    if env.goal is None:
-        return False
-    mario_rect = pygame.Rect(env.mario["x"], env.mario["y"], env.mario["w"], env.mario["h"])
-    return bool(mario_rect.colliderect(env.goal))
 
 
 def evaluate_scripted_block_smb_policy(
