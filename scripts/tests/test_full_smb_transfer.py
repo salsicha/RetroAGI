@@ -138,6 +138,9 @@ def tiny_block_config(**overrides):
         evaluation_episodes=1,
         evaluation_max_steps=1,
         monte_carlo_validation_samples=12,
+        # Keep the tiny fixture on the cheap joint draw; the stratified
+        # per-family sweep samples 189 layouts per evaluation.
+        monte_carlo_validation_repeats_per_difficulty=0,
         device="cpu",
     )
     values.update(overrides)

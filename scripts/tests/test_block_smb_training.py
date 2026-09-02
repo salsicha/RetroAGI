@@ -783,6 +783,9 @@ class TestBlockSMBTraining(unittest.TestCase):
             generated_scenarios=0,
             monte_carlo_family_weights=default_block_smb_failure_focus_monte_carlo_family_weights(),
             monte_carlo_validation_samples=len(BLOCK_SMB_MC_FAMILIES),
+            # This test covers the legacy joint draw; the stratified
+            # per-family sweep has its own test below.
+            monte_carlo_validation_repeats_per_difficulty=0,
             monte_carlo_pass_rate_gate=0.1,
             monte_carlo_family_pass_rate_gate=0.1,
         )
@@ -846,6 +849,43 @@ class TestBlockSMBTraining(unittest.TestCase):
         )
         self.assertEqual(set(evaluation["families"]), set(BLOCK_SMB_MC_FAMILIES))
         self.assertFalse(evaluation["coverage"]["missing_families"])
+
+    def test_validation_measures_every_family_on_a_fixed_layout_base(self):
+        # The joint draw spread ~40 validation layouts over 21 families
+        # (~2 each), so per-family curves and the mastery gate steered on
+        # 2-layout readings. Stratified repeats give every family the same
+        # fixed per-difficulty base at every evaluation.
+        config = tiny_config(
+            generated_scenarios=0,
+            monte_carlo_validation_samples=len(BLOCK_SMB_MC_FAMILIES),
+            monte_carlo_validation_repeats_per_difficulty=1,
+        )
+        model = make_block_smb_model(config)
+
+        evaluation = evaluate_block_smb_monte_carlo(
+            model,
+            config,
+            split="validation",
+            sample_count=len(BLOCK_SMB_MC_FAMILIES),
+            device=torch.device("cpu"),
+            vision_factory=static_vision_factory,
+            stratified_repeats_per_difficulty=(
+                config.monte_carlo_validation_repeats_per_difficulty
+            ),
+        )
+
+        expected_per_family = len(BLOCK_SMB_MC_DIFFICULTY_BINS)
+        self.assertEqual(
+            evaluation["sample_count"],
+            len(BLOCK_SMB_MC_FAMILIES) * expected_per_family,
+        )
+        self.assertEqual(set(evaluation["families"]), set(BLOCK_SMB_MC_FAMILIES))
+        for family in BLOCK_SMB_MC_FAMILIES:
+            self.assertEqual(
+                evaluation["families"][family]["sample_count"],
+                expected_per_family,
+                family,
+            )
 
     def test_adaptive_monte_carlo_replay_samples_recent_failure_families(self):
         config = tiny_config(

@@ -43,3 +43,4 @@ artifacts/full_smb/sweep_chained_*
 # Uncurated fresh Block SMB run left local; its curated sibling
 # (fresh_block_smb_20260704_005140) is committed, so no broad pattern here.
 artifacts/fresh_block_smb_20260703_234530/
+artifacts/block_smb/full_curve_*

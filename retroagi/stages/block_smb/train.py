@@ -293,6 +293,16 @@ class BlockSMBTrainingConfig:
     monte_carlo_validate_reachability: bool = True
     monte_carlo_max_rejections: int = 32
     monte_carlo_validation_samples: int = 0
+    # Per-family measurement base for held-out evaluations. When positive and
+    # a validation/test evaluation is enabled, the sample set is a fixed
+    # family x difficulty sweep with this many layouts per difficulty tier
+    # (3 -> 9 fixed layouts per family) instead of a joint draw of
+    # monte_carlo_validation_samples layouts. The joint draw spread ~40
+    # layouts over 21 families (~2 each), so per-family curves — and the
+    # mastery gate steering on them — were 2-layout readings that could
+    # flap on a single unlucky layout (platform_chain read 0% for a whole
+    # run while true skill was ~96%). 0 restores the joint draw.
+    monte_carlo_validation_repeats_per_difficulty: int = 3
     monte_carlo_test_samples: int = 0
     monte_carlo_failure_replay_samples_per_epoch: int = 0
     monte_carlo_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE
@@ -489,6 +499,10 @@ class BlockSMBTrainingConfig:
             raise TypeError("use_oracle_actions must be a bool")
         if not isinstance(self.measured_hold_coaching, bool):
             raise TypeError("measured_hold_coaching must be a bool")
+        if self.monte_carlo_validation_repeats_per_difficulty < 0:
+            raise ValueError(
+                "monte_carlo_validation_repeats_per_difficulty must be non-negative"
+            )
         if not isinstance(self.ranked_candidate_search, bool):
             raise TypeError("ranked_candidate_search must be a bool")
         if self.resume_path is not None and self.init_checkpoint is not None:
@@ -3205,10 +3219,21 @@ def evaluate_block_smb_monte_carlo(
     device: torch.device,
     vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
     record_dir: Optional[Path] = None,
+    stratified_repeats_per_difficulty: int = 0,
 ) -> dict[str, Any]:
-    """Evaluate a policy on a held-out Monte Carlo split."""
+    """Evaluate a policy on a held-out Monte Carlo split.
 
-    if sample_count <= 0 and not config.monte_carlo_parameter_sweep:
+    With ``stratified_repeats_per_difficulty`` > 0 the sample set is a fixed
+    family x difficulty sweep — every family measured on the same layouts at
+    every evaluation — instead of a joint draw of ``sample_count`` layouts
+    whose per-family slices are only ~2 layouts each.
+    """
+
+    if (
+        sample_count <= 0
+        and not config.monte_carlo_parameter_sweep
+        and stratified_repeats_per_difficulty <= 0
+    ):
         raise ValueError("sample_count must be positive")
     if config.monte_carlo_parameter_sweep:
         sample_set = sample_block_smb_monte_carlo_parameter_sweep(
@@ -3216,6 +3241,15 @@ def evaluate_block_smb_monte_carlo(
             split=split,
             seed=int(config.monte_carlo_seed),
             repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
+            validate_reachability=config.monte_carlo_validate_reachability,
+            max_rejections=config.monte_carlo_max_rejections,
+        )
+    elif stratified_repeats_per_difficulty > 0:
+        sample_set = sample_block_smb_monte_carlo_parameter_sweep(
+            distribution_id=config.monte_carlo_distribution_id,
+            split=split,
+            seed=int(config.monte_carlo_seed),
+            repeats_per_difficulty=int(stratified_repeats_per_difficulty),
             validate_reachability=config.monte_carlo_validate_reachability,
             max_rejections=config.monte_carlo_max_rejections,
         )
@@ -3662,6 +3696,9 @@ def evaluate_block_smb(
             device=device,
             vision_factory=vision_factory,
             record_dir=validation_record_dir,
+            stratified_repeats_per_difficulty=(
+                config.monte_carlo_validation_repeats_per_difficulty
+            ),
         )
     if config.monte_carlo_test_samples > 0:
         test_record_dir = record_dir / "monte_carlo" if record_dir is not None else None
@@ -3673,6 +3710,9 @@ def evaluate_block_smb(
             device=device,
             vision_factory=vision_factory,
             record_dir=test_record_dir,
+            stratified_repeats_per_difficulty=(
+                config.monte_carlo_validation_repeats_per_difficulty
+            ),
         )
     return evaluation
 

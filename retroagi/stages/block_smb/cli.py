@@ -350,6 +350,15 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--monte-carlo-validation-repeats-per-difficulty",
+        type=_non_negative_int,
+        help=(
+            "fixed per-family layouts per difficulty tier for held-out "
+            "evaluations (default 3 -> 9 layouts per family); 0 restores the "
+            "joint draw whose per-family slices are ~2 layouts"
+        ),
+    )
+    parser.add_argument(
         "--monte-carlo-test-samples",
         type=_non_negative_int,
         help=(
@@ -837,6 +846,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "monte_carlo_validate_reachability",
         "monte_carlo_max_rejections",
         "monte_carlo_validation_samples",
+        "monte_carlo_validation_repeats_per_difficulty",
         "monte_carlo_test_samples",
         "monte_carlo_failure_replay_samples_per_epoch",
         "monte_carlo_pass_rate_gate",
