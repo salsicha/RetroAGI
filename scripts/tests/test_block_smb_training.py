@@ -46,6 +46,7 @@ from retroagi.stages.block_smb import (
     train_and_evaluate_block_smb,
 )
 from retroagi.stages.block_smb.train import (
+    HoldDistanceCurve,
     apply_block_smb_ablations,
     block_smb_c_stream_slot_spans,
     block_smb_noop_allowed_for_step,
@@ -2005,6 +2006,148 @@ class TestMovingTargetCoaching(unittest.TestCase):
                 seed=1,
                 deterministic=False,
                 device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+        supervised = [
+            float(step.info["primitive_outcome_target"])
+            for step in trajectory.transitions
+            if step.info.get("primitive_outcome_target") is not None
+            and step.info.get("primitive_frame_index") is not None
+        ]
+        self.assertGreater(len(supervised), 0)
+        for target in supervised:
+            self.assertTrue(math.isfinite(target))
+            self.assertGreaterEqual(target, 1.0 / 16.0)
+            self.assertLessEqual(target, 1.0)
+
+
+class TestHoldDistanceCurve(unittest.TestCase):
+    @staticmethod
+    def _filled_curve(bucket: str = "standing:flat") -> HoldDistanceCurve:
+        # A realistic flat-tail curve: short holds already travel far and
+        # long holds buy mostly height. Distance is NOT proportional to hold.
+        curve = HoldDistanceCurve()
+        for held, distance in {2: 30.0, 4: 45.0, 8: 60.0, 12: 70.0, 16: 78.0}.items():
+            for _ in range(8):
+                curve.record(bucket, held, distance)
+        return curve
+
+    def test_inverts_measured_nonlinear_curve(self):
+        curve = self._filled_curve()
+        # The diagnosed stomp failure: a 15-frame hold flew 78px over a
+        # ~60px target. Proportional scaling relabels to 15 * 60/78 ≈ 11.5
+        # and stalls there; the measured curve knows 60px is an 8-frame hold.
+        self.assertAlmostEqual(curve.correct_hold("standing:flat", 60.0), 8.0)
+        # Between measured bins the hold interpolates.
+        self.assertAlmostEqual(curve.correct_hold("standing:flat", 74.0), 14.0)
+        self.assertAlmostEqual(curve.correct_hold("standing:flat", 30.0), 2.0)
+        # Beyond the measured range: clamp to the closest measured bin.
+        self.assertAlmostEqual(curve.correct_hold("standing:flat", 200.0), 16.0)
+        self.assertAlmostEqual(curve.correct_hold("standing:flat", 5.0), 2.0)
+
+    def test_sparse_data_returns_none_for_proportional_fallback(self):
+        curve = HoldDistanceCurve()
+        self.assertIsNone(curve.correct_hold("standing:flat", 60.0))
+        # One heavily sampled bin is not enough to invert a curve.
+        for _ in range(50):
+            curve.record("standing:flat", 8, 60.0)
+        self.assertIsNone(curve.correct_hold("standing:flat", 60.0))
+        # A second bin below the trust threshold still does not count.
+        for _ in range(7):
+            curve.record("standing:flat", 4, 45.0)
+            curve.record("standing:flat", 12, 70.0)
+        self.assertIsNone(curve.correct_hold("standing:flat", 60.0))
+        # Crossing the threshold on three bins unlocks inversion.
+        curve.record("standing:flat", 4, 45.0)
+        curve.record("standing:flat", 12, 70.0)
+        self.assertIsNotNone(curve.correct_hold("standing:flat", 60.0))
+        # Buckets are isolated: another bucket's physics stays sparse.
+        self.assertIsNone(curve.correct_hold("moving:flat", 60.0))
+
+    def test_bucket_separates_takeoff_speed_and_landing_elevation(self):
+        self.assertEqual(HoldDistanceCurve.bucket(0.0, 0.0), "standing:flat")
+        self.assertEqual(HoldDistanceCurve.bucket(0.5, 7.9), "standing:flat")
+        self.assertEqual(HoldDistanceCurve.bucket(2.4, 0.0), "moving:flat")
+        self.assertEqual(HoldDistanceCurve.bucket(0.0, 12.0), "standing:mount")
+        self.assertEqual(HoldDistanceCurve.bucket(2.4, -12.0), "moving:drop")
+
+    def test_state_dict_round_trip_preserves_curve(self):
+        curve = self._filled_curve()
+        restored = HoldDistanceCurve()
+        restored.load_state_dict(curve.state_dict())
+        self.assertEqual(restored.sample_count(), curve.sample_count())
+        self.assertAlmostEqual(restored.correct_hold("standing:flat", 60.0), 8.0)
+        self.assertEqual(restored.summary(), curve.summary())
+
+    def test_checkpoint_round_trips_hold_curve(self):
+        with TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "hold_curve_block_smb.pth"
+            config = tiny_config()
+            model = make_block_smb_model(config)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+            save_block_smb_checkpoint(
+                checkpoint_path,
+                model,
+                optimizer,
+                epoch=1,
+                global_step=2,
+                config=config,
+                metrics={"loss_total": 1.0},
+                hold_curve=self._filled_curve(),
+            )
+            restored_model = make_block_smb_model(config)
+            restored_optimizer = torch.optim.AdamW(
+                restored_model.parameters(), lr=config.learning_rate
+            )
+            restored = restore_block_smb_checkpoint(
+                checkpoint_path,
+                restored_model,
+                restored_optimizer,
+            )
+        self.assertIn("hold_distance_curve", restored["states"])
+        curve = HoldDistanceCurve()
+        curve.load_state_dict(restored["states"]["hold_distance_curve"])
+        self.assertAlmostEqual(curve.correct_hold("standing:flat", 60.0), 8.0)
+
+    def test_rollout_coaching_accepts_a_dense_curve(self):
+        # Integration smoke: coaching through a fully measured curve still
+        # emits bounded per-frame hold targets.
+        from retroagi.stages.block_smb.monte_carlo import (
+            sample_block_smb_monte_carlo_scenario,
+        )
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        curve = HoldDistanceCurve()
+        for speed in ("standing", "moving"):
+            for landing in ("flat", "mount", "drop"):
+                for held in range(1, 17):
+                    for _ in range(8):
+                        curve.record(f"{speed}:{landing}", held, 25.0 + 3.5 * held)
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="train",
+            seed=5,
+            sample_index=0,
+            family="stomp_mount",
+            difficulty="easy",
+        )
+        config = tiny_config()
+        model = make_block_smb_model(config)
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(),
+            scenario=dict(sample.scenario),
+            vision=BlockVisionTransformer(),
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                "measured_curve_probe",
+                rollout_steps=60,
+                seed=1,
+                deterministic=False,
+                device=torch.device("cpu"),
+                hold_curve=curve,
             )
         finally:
             stage.env.close()

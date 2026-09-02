@@ -503,6 +503,21 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         dest="skill_goal_conditioning",
     )
+    parser.set_defaults(measured_hold_coaching=None)
+    parser.add_argument(
+        "--measured-hold-coaching",
+        action="store_true",
+        dest="measured_hold_coaching",
+        help=(
+            "relabel jump holds by inverting the measured hold-to-distance "
+            "curve instead of proportional scaling (default)"
+        ),
+    )
+    parser.add_argument(
+        "--no-measured-hold-coaching",
+        action="store_false",
+        dest="measured_hold_coaching",
+    )
     parser.set_defaults(emit_temporal_spans=None)
     parser.add_argument(
         "--emit-temporal-spans",
@@ -798,6 +813,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "primitive_outcome_weight",
         "release_timing_weight",
         "steady_duration_primitives",
+        "measured_hold_coaching",
         "skill_goal_conditioning",
         "emit_temporal_spans",
         "imagined_rollout_weight",
