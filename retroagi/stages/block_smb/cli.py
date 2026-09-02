@@ -512,6 +512,21 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         dest="skill_goal_conditioning",
     )
+    parser.set_defaults(engine_support_override=None)
+    parser.add_argument(
+        "--engine-support-override",
+        action="store_true",
+        dest="engine_support_override",
+        help=(
+            "landing detection from the engine's own physics instead of the "
+            "vision support head (default; Block SMB has ground truth)"
+        ),
+    )
+    parser.add_argument(
+        "--no-engine-support-override",
+        action="store_false",
+        dest="engine_support_override",
+    )
     parser.set_defaults(measured_hold_coaching=None)
     parser.add_argument(
         "--measured-hold-coaching",
@@ -823,6 +838,7 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "release_timing_weight",
         "steady_duration_primitives",
         "measured_hold_coaching",
+        "engine_support_override",
         "skill_goal_conditioning",
         "emit_temporal_spans",
         "imagined_rollout_weight",
@@ -1148,7 +1164,7 @@ def _collect_vision_diagnostic_frames(
     samples: int,
     seed: int,
     rollout_steps: int,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     if samples <= 0:
         raise ValueError("samples must be positive")
     if rollout_steps <= 0:
@@ -1156,6 +1172,7 @@ def _collect_vision_diagnostic_frames(
     rng = random.Random(seed)
     env = MarioScenarioEnv()
     frames = []
+    grounded = []
     scenario_index = 0
     try:
         while len(frames) < samples:
@@ -1168,18 +1185,23 @@ def _collect_vision_diagnostic_frames(
             )
             observation, _info = env.reset(scenario=scenario, seed=scenario_seed)
             frames.append(observation.copy())
+            grounded.append(bool(env.mario["on_ground"]))
             for _ in range(rollout_steps - 1):
                 if len(frames) >= samples:
                     break
                 action = _sample_vision_diagnostic_action(rng)
                 observation, _reward, terminated, truncated, _info = env.step(action)
                 frames.append(observation.copy())
+                grounded.append(bool(env.mario["on_ground"]))
                 if terminated or truncated:
                     break
             scenario_index += 1
     finally:
         env.close()
-    return torch.from_numpy(np.stack(frames[:samples])).to(torch.uint8)
+    return (
+        torch.from_numpy(np.stack(frames[:samples])).to(torch.uint8),
+        torch.tensor(grounded[:samples], dtype=torch.bool),
+    )
 
 
 def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
@@ -1189,7 +1211,7 @@ def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
         device=device,
         freeze=True,
     )
-    frames = _collect_vision_diagnostic_frames(
+    frames, frames_on_ground = _collect_vision_diagnostic_frames(
         samples=args.samples,
         seed=args.seed,
         rollout_steps=args.rollout_steps,
@@ -1198,6 +1220,7 @@ def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
         loaded.model,
         frames,
         batch_size=args.batch_size,
+        on_ground=frames_on_ground,
     )
     return {
         "config": {

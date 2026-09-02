@@ -41,6 +41,7 @@ from retroagi.core import (
     save_checkpoint as save_versioned_checkpoint,
 )
 from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockVisionTransformer, MarioScenarioEnv
+from retroagi.stages.block_smb.vision import merge_engine_support_targets
 
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "block_vit" / "block_vit.pth"
 DEFAULT_EPOCHS = 20
@@ -160,8 +161,16 @@ def collect_procedural_frames(
     seed: int,
     rollout_steps: int = 32,
     show_progress: bool = False,
-) -> torch.Tensor:
-    """Run procedural block-SMB episodes and return uint8 NHWC frames."""
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run procedural block-SMB episodes.
+
+    Returns uint8 NHWC frames plus the engine's own support truth per frame:
+    a bool tensor of mario.on_ground read straight from the physics that
+    decides when Mario stops falling. This is what the support head trains
+    against — geometric patch inference cannot tell a low arc (Mario a few
+    pixels airborne over ground) from standing, which is exactly where the
+    head used to misfire.
+    """
     if num_samples <= 0:
         raise ValueError("num_samples must be positive")
     if rollout_steps <= 0:
@@ -170,6 +179,7 @@ def collect_procedural_frames(
     rng = random.Random(seed)
     env = MarioScenarioEnv()
     frames = []
+    grounded = []
     scenario_index = 0
     try:
         while len(frames) < num_samples:
@@ -182,12 +192,14 @@ def collect_procedural_frames(
             )
             observation, _ = env.reset(scenario=scenario, seed=scenario_seed)
             frames.append(observation.copy())
+            grounded.append(bool(env.mario["on_ground"]))
 
             for _ in range(rollout_steps - 1):
                 if len(frames) >= num_samples:
                     break
                 observation, _, terminated, truncated, _ = env.step(_sample_action(rng))
                 frames.append(observation.copy())
+                grounded.append(bool(env.mario["on_ground"]))
                 if terminated or truncated:
                     break
 
@@ -197,16 +209,22 @@ def collect_procedural_frames(
     finally:
         env.close()
 
-    return torch.from_numpy(np.stack(frames[:num_samples])).to(torch.uint8)
+    return (
+        torch.from_numpy(np.stack(frames[:num_samples])).to(torch.uint8),
+        torch.tensor(grounded[:num_samples], dtype=torch.bool),
+    )
 
 
 @torch.no_grad()
 def build_ground_truth(
     model: BlockVisionTransformer,
     frames: torch.Tensor,
+    on_ground: torch.Tensor,
     batch_size: int = 64,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create exact patch labels, support labels, and normalized positions."""
+    if len(on_ground) != len(frames):
+        raise ValueError("on_ground must have one entry per frame")
     labels = []
     positions = []
     supports = []
@@ -218,7 +236,12 @@ def build_ground_truth(
         support_targets = model.support_targets_from_labels(batch_labels)
         if support_targets is None:
             raise ValueError("could not infer Block ViT support targets")
-        supports.append(support_targets.cpu())
+        supports.append(
+            merge_engine_support_targets(
+                support_targets.cpu(),
+                on_ground[start : start + batch_size],
+            )
+        )
     return torch.cat(labels), torch.cat(positions), torch.cat(supports)
 
 
@@ -407,13 +430,15 @@ def train(
 
     print(f"Device: {device}; parameters: {sum(p.numel() for p in model.parameters()):,}")
     print("Generating fixed validation rollout...")
-    val_frames = collect_procedural_frames(
+    val_frames, val_on_ground = collect_procedural_frames(
         config.evaluation.samples,
         config.evaluation.seed,
         config.environment.rollout_steps,
         show_progress=True,
     )
-    val_labels, val_positions, val_supports = build_ground_truth(model, val_frames)
+    val_labels, val_positions, val_supports = build_ground_truth(
+        model, val_frames, val_on_ground
+    )
     val_loader = make_loader(
         val_frames,
         val_labels,
@@ -435,13 +460,15 @@ def train(
     best_iou = -1.0
     final_metrics = {}
     for epoch in range(start_epoch, config.training.epochs):
-        train_frames = collect_procedural_frames(
+        train_frames, train_on_ground = collect_procedural_frames(
             config.training.samples_per_epoch,
             train_seed_base + epoch * 10_000,
             config.environment.rollout_steps,
             show_progress=True,
         )
-        train_labels, train_positions, train_supports = build_ground_truth(model, train_frames)
+        train_labels, train_positions, train_supports = build_ground_truth(
+            model, train_frames, train_on_ground
+        )
         train_loader = make_loader(
             train_frames,
             train_labels,

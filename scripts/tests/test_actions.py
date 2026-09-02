@@ -239,6 +239,36 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertEqual(third.action, int(SMBAction.RIGHT))
         self.assertEqual(repeated.action, int(SMBAction.RIGHT))
 
+    def test_support_override_lands_jump_without_vision(self):
+        # Engine ground truth drives landing: no vision is consulted at all,
+        # and when both are supplied the override wins over the vision
+        # support head (which is exactly the misfire being bypassed).
+        executor = SMBParameterizedPrimitiveExecutor()
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[0.0, 4.0, -1.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 4.0]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="ground"
+        )
+        second = executor.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="air"
+        )
+        # Vision still claims airborne; the engine says landed. Engine wins.
+        landed = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            batch=self._batch_with_vision(self._support_vision(0)),
+            support_override="ground",
+        )
+
+        self.assertTrue(first.started)
+        self.assertTrue(second.active)
+        self.assertTrue(landed.landed)
+        self.assertTrue(landed.released)
+
     def test_parameterized_primitive_executor_samples_durations_when_enabled(self):
         motor = SimpleNamespace(
             hold_duration_logits=torch.zeros(1, 1, 8),

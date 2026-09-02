@@ -1987,6 +1987,10 @@ class TestScopedForcedAction(unittest.TestCase):
         self.assertEqual(block_smb_forced_action_scope({"mario": [20, 200]}), "episode")
 
         config = tiny_config()
+        # Fixed init: with committed waits a 160-step rollout has only a
+        # handful of decision points, so an unlucky global-RNG model can
+        # sample NOOP at every one and flake the release assertion.
+        torch.manual_seed(0)
         model = make_block_smb_model(config)
         stage = BlockSMBStage(
             env=MarioScenarioEnv(),
@@ -2083,9 +2087,14 @@ class TestHoldDistanceCurve(unittest.TestCase):
         # Between measured bins the hold interpolates.
         self.assertAlmostEqual(curve.correct_hold("standing:flat", 74.0), 14.0)
         self.assertAlmostEqual(curve.correct_hold("standing:flat", 30.0), 2.0)
-        # Beyond the measured range: clamp to the closest measured bin.
-        self.assertAlmostEqual(curve.correct_hold("standing:flat", 200.0), 16.0)
+        # Below the measured range: the arc floor is real physics, clamp to
+        # the shortest measured hold.
         self.assertAlmostEqual(curve.correct_hold("standing:flat", 5.0), 2.0)
+        # Slightly past the longest measured distance still answers...
+        self.assertAlmostEqual(curve.correct_hold("standing:flat", 90.0), 16.0)
+        # ...but meaningfully beyond it the curve declines rather than
+        # teach a confidently wrong short hold (proportional fallback).
+        self.assertIsNone(curve.correct_hold("standing:flat", 200.0))
 
     def test_sparse_data_returns_none_for_proportional_fallback(self):
         curve = HoldDistanceCurve()
@@ -2213,6 +2222,59 @@ class TestHoldDistanceCurve(unittest.TestCase):
         bucket, clean = hold_curve_jump_observation(records, [1, 2], 1.0)
         self.assertEqual(bucket, "moving:mount")
         self.assertTrue(clean)
+
+    def test_engine_truth_lands_jumps_and_feeds_the_curve(self):
+        # End to end on the engine's own landing signal: flat world, no
+        # hazards, forced jumps, an untrained model AND untrained vision —
+        # the vision support head cannot detect these landings (that is the
+        # misfire this replaces), yet every arc completes on engine truth
+        # and feeds the hold->distance curve.
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        curve = HoldDistanceCurve()
+        scenario = {
+            "world_width": 2000,
+            "mario": [40, 200],
+            "platforms": [[0, 220, 2000, 20]],
+            "coins": [],
+            "enemies": [],
+            "goal": [1900, 200, 16, 20],
+            "metadata": {
+                "block_smb_monte_carlo": {
+                    "family": "pipe_mount",
+                    "parameters": {"a_level_action": 2},
+                }
+            },
+        }
+        config = tiny_config()
+        model = make_block_smb_model(config)
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(),
+            scenario=scenario,
+            vision=BlockVisionTransformer(),
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                "engine_truth_probe",
+                rollout_steps=120,
+                seed=1,
+                deterministic=False,
+                device=torch.device("cpu"),
+                hold_curve=curve,
+            )
+        finally:
+            stage.env.close()
+        landed_jumps = [
+            span
+            for span in trajectory.spans
+            if span.level == "motor_primitive"
+            and span.command.get("primitive") == "jump"
+            and any(e.get("event") == "landing" for e in span.events)
+        ]
+        self.assertGreater(len(landed_jumps), 0)
+        self.assertGreater(curve.sample_count(), 0)
 
     def test_rollout_coaching_accepts_a_dense_curve(self):
         # Integration smoke: coaching through a fully measured curve still

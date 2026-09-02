@@ -492,11 +492,21 @@ class SMBAdaptiveController:
         batch: Any = None,
         vision: Any = None,
         wait_event: bool = False,
+        support_override: str | None = None,
     ) -> SMBPrimitiveExecution:
         action_value = coerce_smb_action(action)
         if vision is None and batch is not None:
             vision = _vision_from_batch(batch)
-        support_name = _vision_support_name(vision)
+        # Landing detection: when the caller has ground truth about support
+        # (the Block SMB engine knows exactly when Mario stops falling), it
+        # overrides the vision estimate. The vision support head stays a
+        # passive learner in that setting and only steers where no ground
+        # truth exists (Full SMB).
+        support_name = (
+            str(support_override).lower()
+            if support_override is not None
+            else _vision_support_name(vision)
+        )
         enemy_contact = _vision_enemy_contact(vision)
 
         if self._suppress_until_non_jump:

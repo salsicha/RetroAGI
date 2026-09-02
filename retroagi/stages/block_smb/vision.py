@@ -226,19 +226,54 @@ def load_block_vit_checkpoint(
 
 
 @torch.no_grad()
+def merge_engine_support_targets(
+    geometric: torch.Tensor,
+    on_ground: torch.Tensor,
+    *,
+    air_id: int = 0,
+    ground_id: int = 1,
+) -> torch.Tensor:
+    """Engine truth decides air vs supported; geometry names the surface.
+
+    The engine's on_ground flag is authoritative for whether Mario is
+    airborne — geometric patch inference calls a low arc "grounded" because
+    the patch beneath still reads as floor, which is exactly where the
+    support head used to misfire. Where the engine says supported, the
+    geometric label keeps the ground-vs-platform distinction; if geometry
+    disagrees and says air, fall back to plain ground.
+    """
+
+    merged = geometric.clone()
+    grounded = on_ground.to(dtype=torch.bool)
+    merged[~grounded] = air_id
+    merged[grounded & (geometric == air_id)] = ground_id
+    return merged
+
+
 def evaluate_block_vit_perception(
     model: "BlockVisionTransformer",
     observations: Any,
     *,
     thresholds: BlockVITPerceptionThresholds = BlockVITPerceptionThresholds(),
     batch_size: int = 32,
+    on_ground: Any = None,
 ) -> dict[str, Any]:
-    """Evaluate Block ViT semantics and position against exact palette labels."""
+    """Evaluate Block ViT semantics and position against exact palette labels.
+
+    When the caller collected the frames from the engine, pass its per-frame
+    on_ground truth so support accuracy is judged against reality instead of
+    geometric inference (which mislabels low arcs as grounded).
+    """
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
     frames = torch.as_tensor(observations)
     if frames.ndim == 3:
         frames = frames.unsqueeze(0)
+    engine_grounded = None
+    if on_ground is not None:
+        engine_grounded = torch.as_tensor(on_ground).reshape(-1).to(dtype=torch.bool)
+        if len(engine_grounded) != frames.shape[0]:
+            raise ValueError("on_ground must have one entry per frame")
     if frames.ndim != 4:
         raise ValueError("observations must have shape [N,H,W,C] or [N,C,H,W]")
     if frames.shape[0] <= 0:
@@ -259,6 +294,11 @@ def evaluate_block_vit_perception(
         labels = model.patch_targets(batch)
         positions = model.position_targets(batch)
         support_targets = model.support_targets(batch)
+        if engine_grounded is not None:
+            support_targets = merge_engine_support_targets(
+                support_targets,
+                engine_grounded[start : start + batch_size].to(support_targets.device),
+            )
         output = model.encode(batch)
         prediction = output.semantic_ids
         if prediction.shape != labels.shape:

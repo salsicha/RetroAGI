@@ -14,6 +14,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
+from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
 from retroagi.core import (
     ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     BASELINE_ARCHITECTURE_NAME,
@@ -351,6 +352,14 @@ class BlockSMBTrainingConfig:
     # moving targets (enemy stomps, moving platforms) without reintroducing
     # noise-driven truncation of committed holds.
     adaptive_duration_control: bool = True
+    # Landing detection from the engine's own physics (mario.on_ground)
+    # instead of the vision support head. Block SMB has ground truth about
+    # when Mario stops falling; acting on it keeps a support-head misfire
+    # from truncating spans and poisoning the hold->distance curve, the
+    # coaching labels, and the world model's outcome targets. The support
+    # head still trains against this same truth (scripts/vit) — it just
+    # never steers where truth exists.
+    engine_support_override: bool = True
     # Per-frame primitive-outcome loss: each completed horizontal jump is
     # hindsight-relabeled with the hold that would have hit the goal (which
     # rides the enemy under goal_on_stomp), and every frame's expected hold
@@ -499,6 +508,8 @@ class BlockSMBTrainingConfig:
             raise TypeError("use_oracle_actions must be a bool")
         if not isinstance(self.measured_hold_coaching, bool):
             raise TypeError("measured_hold_coaching must be a bool")
+        if not isinstance(self.engine_support_override, bool):
+            raise TypeError("engine_support_override must be a bool")
         if self.monte_carlo_validation_repeats_per_difficulty < 0:
             raise ValueError(
                 "monte_carlo_validation_repeats_per_difficulty must be non-negative"
@@ -1532,6 +1543,7 @@ def _action_from_model(
     forced_action: int | None = None,
     skill_goal: torch.Tensor | None = None,
     wait_event: bool = False,
+    support_override: str | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -1624,6 +1636,7 @@ def _action_from_model(
             motor_primitives=motor_primitives,
             batch=batch,
             wait_event=wait_event,
+            support_override=support_override,
         )
         if execution.action != int(action_tensor.item()):
             action_tensor = torch.tensor(
@@ -1765,6 +1778,7 @@ _HOLD_CURVE_ELEVATION_TOLERANCE = 8.0
 _HOLD_CURVE_MIN_BIN_SAMPLES = 8
 _HOLD_CURVE_MIN_TRUSTED_BINS = 3
 _HOLD_CURVE_MIN_FLIGHT_SPEED = 0.3
+_HOLD_CURVE_MAX_EXTRAPOLATION = 1.25
 
 
 class HoldDistanceCurve:
@@ -1820,16 +1834,25 @@ class HoldDistanceCurve:
     def correct_hold(self, bucket: str, target_distance: float) -> float | None:
         """Hold whose measured distance best matches the target.
 
-        Interpolates between the two trusted bins that bracket the target;
-        beyond the measured range it clamps to the closest measured bin.
-        Returns None while the bucket is too sparse to invert, so the
-        caller can fall back to the proportional rule.
+        Interpolates between the two trusted bins that bracket the target.
+        Below the measured range it clamps to the shortest hold (the arc
+        floor is real physics); above it it declines. Returns None while
+        the bucket is too sparse to invert or the target is beyond its
+        measured reach, so the caller falls back to the proportional rule.
         """
 
         means = self._trusted_means(bucket)
         if len(means) < _HOLD_CURVE_MIN_TRUSTED_BINS:
             return None
         target = float(target_distance)
+        # Refuse to extrapolate: a target meaningfully beyond the longest
+        # measured distance is a question this bucket cannot answer, and
+        # clamping to the closest measured hold teaches a confidently wrong
+        # short answer. Decline so the caller falls back to the
+        # direction-correct proportional rule.
+        longest_measured = max(distance for _hold, distance in means)
+        if target > longest_measured * _HOLD_CURVE_MAX_EXTRAPOLATION:
+            return None
         best = float(min(means, key=lambda entry: abs(entry[1] - target))[0])
         for (hold_low, dist_low), (hold_high, dist_high) in zip(means, means[1:]):
             low, high = sorted((dist_low, dist_high))
@@ -2071,6 +2094,7 @@ def collect_trajectory(
     skill_goal_conditioning: bool = True,
     steady_duration_primitives: bool = True,
     hold_curve: HoldDistanceCurve | None = None,
+    engine_support: bool = True,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
@@ -2258,6 +2282,20 @@ def collect_trajectory(
             forced_action=forced_action,
             skill_goal=step_skill_goal,
             wait_event=wait_event,
+            support_override=(
+                # The engine is the ground truth for landing in Block SMB:
+                # its physics know exactly when Mario stops falling. The
+                # vision support head is trained against this signal but
+                # never steers here — it only steers where no engine truth
+                # exists (Full SMB).
+                (
+                    SMB_SUPPORT_GROUND
+                    if stage.env.mario.get("on_ground")
+                    else SMB_SUPPORT_AIR
+                )
+                if engine_support
+                else None
+            ),
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         info = dict(info)
@@ -3104,6 +3142,7 @@ def train_block_smb_epoch(
                 adaptive_duration_control=config.adaptive_duration_control,
                 skill_goal_conditioning=config.skill_goal_conditioning,
                 steady_duration_primitives=config.steady_duration_primitives,
+                engine_support=config.engine_support_override,
                 hold_curve=hold_curve if config.measured_hold_coaching else None,
             )
             _write_block_smb_spans(config, trajectory)
@@ -3154,6 +3193,7 @@ def train_block_smb_epoch(
                         adaptive_duration_control=config.adaptive_duration_control,
                         skill_goal_conditioning=config.skill_goal_conditioning,
                         steady_duration_primitives=config.steady_duration_primitives,
+                        engine_support=config.engine_support_override,
                         hold_curve=hold_curve if config.measured_hold_coaching else None,
                     )
                 finally:

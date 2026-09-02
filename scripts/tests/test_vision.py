@@ -28,6 +28,7 @@ from scripts.vit.train_block_vit import (
     collect_procedural_frames,
     compute_loss,
     make_loader,
+    merge_engine_support_targets,
 )
 
 GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
@@ -228,10 +229,22 @@ class TestVisionInterface(unittest.TestCase):
         self.assertIn("support_accuracy", metrics["bottleneck_reasons"])
         self.assertIn("position_rmse", metrics["bottleneck_reasons"])
 
+    def test_engine_truth_overrides_geometric_support_labels(self):
+        # air=0, ground=1, platform=2. The engine's airborne verdict wins
+        # over geometric patch inference (which calls a low arc "grounded");
+        # where the engine says supported, geometry keeps naming the surface,
+        # falling back to ground when geometry disagreed entirely.
+        geometric = torch.tensor([1, 2, 1, 0, 0])
+        on_ground = torch.tensor([False, True, True, True, False])
+        merged = merge_engine_support_targets(geometric, on_ground)
+        self.assertEqual(merged.tolist(), [0, 2, 1, 1, 0])
+
     def test_procedural_trainer_executes_an_optimizer_step(self):
-        frames = collect_procedural_frames(8, seed=12, rollout_steps=4)
+        frames, on_ground = collect_procedural_frames(8, seed=12, rollout_steps=4)
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        labels, positions, supports = build_ground_truth(model, frames, batch_size=4)
+        labels, positions, supports = build_ground_truth(
+            model, frames, on_ground, batch_size=4
+        )
         loader = make_loader(
             frames,
             labels,
