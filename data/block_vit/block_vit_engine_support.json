@@ -1,0 +1,168 @@
+{
+  "architecture": {},
+  "checkpoint_kind": "vision_encoder",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "777ab3b12414c5fcbac8fb3acc7aba1a51d4b41d",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "777ab3b",
+    "system": "git"
+  },
+  "config": {
+    "checkpoints": {
+      "best_metric": "mean_iou",
+      "best_mode": "max",
+      "metadata": {},
+      "output_path": "data/block_vit/block_vit_engine_support.pth",
+      "resume_path": null,
+      "save_interval_epochs": 1
+    },
+    "environment": {
+      "deterministic": true,
+      "metadata": {},
+      "num_envs": 1,
+      "rollout_steps": 32,
+      "scenario": null,
+      "seed": 7,
+      "stage": "block_smb"
+    },
+    "evaluation": {
+      "deterministic": true,
+      "episodes": null,
+      "interval_epochs": 1,
+      "metadata": {},
+      "metrics": [
+        "loss",
+        "semantic_loss",
+        "position_loss",
+        "support_loss",
+        "accuracy",
+        "foreground_accuracy",
+        "mean_iou",
+        "support_accuracy"
+      ],
+      "samples": 512,
+      "seed": 1000007
+    },
+    "metadata": {
+      "position_weight": 2.0,
+      "support_weight": 1.0
+    },
+    "model": {
+      "depth": 2,
+      "dropout": 0.1,
+      "heads": 4,
+      "hidden_dim": 64,
+      "metadata": {},
+      "name": "block_smb_vit",
+      "patch_size": 16,
+      "vocab_size": null
+    },
+    "name": "block_vit_training",
+    "training": {
+      "batch_size": 32,
+      "device": "cuda",
+      "epochs": 20,
+      "gradient_clip_norm": 1.0,
+      "learning_rate": 0.0003,
+      "metadata": {},
+      "samples_per_epoch": 2048,
+      "seed": 7,
+      "weight_decay": 0.05
+    }
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-136-generic",
+      "system": "Linux",
+      "version": "#136-Ubuntu SMP PREEMPT_DYNAMIC Wed Jul  1 21:53:05 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.7.0+cu126"
+    }
+  },
+  "epoch": 18,
+  "global_step": 0,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "777ab3b12414c5fcbac8fb3acc7aba1a51d4b41d",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "777ab3b",
+      "system": "git"
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-136-generic",
+        "system": "Linux",
+        "version": "#136-Ubuntu SMP PREEMPT_DYNAMIC Wed Jul  1 21:53:05 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.7.0+cu126"
+      }
+    },
+    "trainer": "scripts.vit.train_block_vit"
+  },
+  "metrics": {
+    "accuracy": 0.9966471354166667,
+    "foreground_accuracy": 0.9850994575045208,
+    "loss": 0.10217209532856941,
+    "mean_iou": 0.9353027000830912,
+    "position_loss": 0.0018295967129233759,
+    "semantic_loss": 0.03848728764569387,
+    "support_accuracy": 0.96875,
+    "support_loss": 0.06002561445347965
+  },
+  "model_name": "block_smb_vit",
+  "specs": {
+    "vision": {
+      "name": "block_smb_vit",
+      "position_dim": 2,
+      "semantic_classes": [
+        "background",
+        "mario",
+        "platform",
+        "coin",
+        "goal",
+        "enemy",
+        "moving_platform"
+      ],
+      "support_classes": [
+        "air",
+        "ground",
+        "platform"
+      ],
+      "token_dim": 64
+    }
+  },
+  "stage": "block_smb",
+  "state_keys": [
+    "model",
+    "optimizer"
+  ]
+}
