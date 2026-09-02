@@ -7,7 +7,7 @@ import json
 import random
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import numpy as np
 import torch
@@ -1865,6 +1865,54 @@ class HoldDistanceCurve:
                 self._totals.setdefault(str(bucket), {})[int(held)] = [count, total]
 
 
+def hold_curve_jump_observation(
+    temporal_records: Sequence[Mapping[str, Any]],
+    span: Sequence[int],
+    primitive_direction: float,
+) -> tuple[str, bool]:
+    """Bucket a completed jump span and decide whether it feeds the curve.
+
+    The bucket comes from the takeoff speed (the displacement of the frame
+    before the span) and the elevation change from takeoff to the completion
+    frame. A span is clean — safe to record as a hold→distance sample — only
+    when the completion frame reports a landing without death or goal credit
+    (a stomp credit means the arc was cut by the enemy, not gravity) and
+    every in-flight frame kept moving horizontally (a wall bonk or enemy
+    recoil realizes a distance no free jump would).
+
+    Completion flags are read from the LATEST record, not the span's last
+    member: the landing frame never joins the span because the executor
+    reports the primitive inactive on it.
+    """
+
+    takeoff_speed = 0.0
+    if span[0] > 0:
+        previous = temporal_records[span[0] - 1]
+        takeoff_speed = (
+            float(previous["x_after"]) - float(previous["x_before"])
+        ) * primitive_direction
+    completion = temporal_records[-1]
+    elevation_change = float(temporal_records[span[0]]["y_before"]) - float(
+        completion["y_after"]
+    )
+    bucket = HoldDistanceCurve.bucket(takeoff_speed, elevation_change)
+    clean_landing = (
+        bool(completion["landed"])
+        and not bool(completion["death"])
+        and not bool(completion["goal"])
+        and all(
+            (
+                float(temporal_records[index]["x_after"])
+                - float(temporal_records[index]["x_before"])
+            )
+            * primitive_direction
+            >= _HOLD_CURVE_MIN_FLIGHT_SPEED
+            for index in span[1:]
+        )
+    )
+    return bucket, clean_landing
+
+
 def _smb_expected_hold_fraction(
     motor_primitives: Any,
     execution: SMBPrimitiveExecution,
@@ -2087,37 +2135,12 @@ def collect_trajectory(
         if held <= 0:
             return
         # Measured-curve coaching: bucket this jump by its takeoff speed
-        # (the previous frame's displacement) and landing elevation, feed
-        # the curve when the arc completed cleanly — landed, no death, no
-        # stomp credit, and unobstructed horizontal flight (a wall bonk or
-        # enemy recoil realizes a distance no free jump would) — and invert
-        # the same bucket's curve for the relabel below.
+        # and landing elevation, feed the curve when the arc completed
+        # cleanly, and invert the same bucket's curve for the relabel below.
         bucket: str | None = None
         if hold_curve is not None:
-            takeoff_speed = 0.0
-            if span[0] > 0:
-                previous = temporal_records[span[0] - 1]
-                takeoff_speed = (
-                    float(previous["x_after"]) - float(previous["x_before"])
-                ) * primitive_direction
-            completion = temporal_records[span[-1]]
-            elevation_change = float(
-                temporal_records[span[0]]["y_before"]
-            ) - float(completion["y_after"])
-            bucket = HoldDistanceCurve.bucket(takeoff_speed, elevation_change)
-            clean_landing = (
-                bool(completion["landed"])
-                and not bool(completion["death"])
-                and not bool(completion["goal"])
-                and all(
-                    (
-                        float(temporal_records[index]["x_after"])
-                        - float(temporal_records[index]["x_before"])
-                    )
-                    * primitive_direction
-                    >= _HOLD_CURVE_MIN_FLIGHT_SPEED
-                    for index in span[1:]
-                )
+            bucket, clean_landing = hold_curve_jump_observation(
+                temporal_records, span, primitive_direction
             )
             if clean_landing:
                 hold_curve.record(bucket, held, realized)

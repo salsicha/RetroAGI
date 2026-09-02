@@ -48,6 +48,7 @@ from retroagi.stages.block_smb import (
 from retroagi.stages.block_smb.train import (
     HoldDistanceCurve,
     apply_block_smb_ablations,
+    hold_curve_jump_observation,
     block_smb_c_stream_slot_spans,
     block_smb_noop_allowed_for_step,
     block_smb_noop_suppression_loss,
@@ -2109,6 +2110,69 @@ class TestHoldDistanceCurve(unittest.TestCase):
         curve = HoldDistanceCurve()
         curve.load_state_dict(restored["states"]["hold_distance_curve"])
         self.assertAlmostEqual(curve.correct_hold("standing:flat", 60.0), 8.0)
+
+    @staticmethod
+    def _frame(x0, x1, y0, y1, *, landed=False, death=False, goal=False):
+        return {
+            "x_before": float(x0),
+            "x_after": float(x1),
+            "y_before": float(y0),
+            "y_after": float(y1),
+            "landed": landed,
+            "death": death,
+            "goal": goal,
+        }
+
+    def test_jump_observation_reads_completion_from_latest_frame(self):
+        # Regression: completion flags must be read from the frame that
+        # triggered span completion — the landing frame never joins the
+        # span (the executor reports the primitive inactive on it). With
+        # the flags read from the span's last member instead, no jump is
+        # ever recorded and the curve stays empty for the whole run.
+        records = [
+            self._frame(40, 40, 200, 200),                # standing pre-takeoff
+            self._frame(40, 44, 200, 190),                # jump frame (span[0])
+            self._frame(44, 48, 190, 175),                # in flight
+            self._frame(48, 52, 175, 185),                # descending (span[-1])
+            self._frame(52, 56, 185, 200, landed=True),   # landing frame, not in span
+        ]
+        bucket, clean = hold_curve_jump_observation(records, [1, 2, 3], 1.0)
+        self.assertEqual(bucket, "standing:flat")
+        self.assertTrue(clean)
+
+    def test_jump_observation_rejects_dirty_completions(self):
+        flight = [
+            self._frame(40, 40, 200, 200),
+            self._frame(40, 44, 200, 190),
+            self._frame(44, 48, 190, 175),
+        ]
+        death_end = flight + [self._frame(48, 52, 175, 200, death=True)]
+        _bucket, clean = hold_curve_jump_observation(death_end, [1, 2], 1.0)
+        self.assertFalse(clean)
+        stomp_credit = flight + [self._frame(48, 52, 175, 190, landed=True, goal=True)]
+        _bucket, clean = hold_curve_jump_observation(stomp_credit, [1, 2], 1.0)
+        self.assertFalse(clean)
+        # A wall bonk pins horizontal progress mid-flight.
+        bonked = [
+            self._frame(40, 40, 200, 200),
+            self._frame(40, 44, 200, 190),
+            self._frame(44, 44, 190, 175),
+            self._frame(44, 44, 175, 200, landed=True),
+        ]
+        _bucket, clean = hold_curve_jump_observation(bonked, [1, 2], 1.0)
+        self.assertFalse(clean)
+
+    def test_jump_observation_buckets_speed_and_elevation(self):
+        # Moving takeoff: the frame before the span shows running speed.
+        records = [
+            self._frame(40, 42.4, 200, 200),              # running pre-takeoff
+            self._frame(42.4, 45, 200, 190),
+            self._frame(45, 48, 190, 175),
+            self._frame(48, 52, 175, 160, landed=True),   # landed 40px higher
+        ]
+        bucket, clean = hold_curve_jump_observation(records, [1, 2], 1.0)
+        self.assertEqual(bucket, "moving:mount")
+        self.assertTrue(clean)
 
     def test_rollout_coaching_accepts_a_dense_curve(self):
         # Integration smoke: coaching through a fully measured curve still
