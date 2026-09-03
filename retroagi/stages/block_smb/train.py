@@ -953,7 +953,6 @@ BLOCK_SMB_JUMP_FOUNDATION_FAMILIES = (
     "pit_leap",
     "platform_hop",
     "pipe_mount",
-    "tall_pipe_jump",
     "stomp_mount",
 )
 
@@ -1508,6 +1507,20 @@ def block_smb_forced_action_for_rollout(scenario: Mapping[str, Any] | None) -> i
     if value is None:
         return None
     return int(value)
+
+
+def block_smb_single_jump_scenario(scenario) -> bool:
+    """Whether the scenario is a single commanded jump.
+
+    Single-jump teachers end the episode the moment the jump completes:
+    the goal is judged at the landing (or stomp), and there is no second
+    attempt. Anything else the rollout could do after the arc — hop
+    chains, walk-around recoveries — is noise the jump lesson does not
+    want."""
+
+    metadata = block_smb_monte_carlo_metadata(scenario) if scenario is not None else {}
+    parameters = metadata.get("parameters", {}) if isinstance(metadata, Mapping) else {}
+    return bool(parameters.get("single_jump")) if isinstance(parameters, Mapping) else False
 
 
 def block_smb_forced_action_scope(scenario: Mapping[str, Any] | None) -> str:
@@ -2090,6 +2103,7 @@ def collect_trajectory(
     )
     forced_action = block_smb_forced_action_for_rollout(stage.scenario)
     forced_action_scope = block_smb_forced_action_scope(stage.scenario)
+    single_jump_scenario = block_smb_single_jump_scenario(stage.scenario)
     skill_goal = (
         requested_block_smb_skill_goal(stage.scenario)
         if skill_goal_conditioning
@@ -2392,6 +2406,12 @@ def collect_trajectory(
         if record_frames:
             trajectory.frames.append(np.asarray(observation).copy())
         if done:
+            world_model_state = None
+            break
+        if single_jump_scenario and (execution.landed or execution.cancelled):
+            # The commanded jump has completed and the env did not already
+            # terminate (a goal landing or death would have): the single
+            # attempt failed, and the episode ends here.
             world_model_state = None
             break
         world_model_state = (

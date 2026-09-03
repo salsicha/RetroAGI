@@ -2230,3 +2230,64 @@ class TestJumpFoundationSequencing(unittest.TestCase):
                 tiny_config(jump_foundation_first=False), 0
             )
         )
+
+
+class TestSingleJumpScenarios(unittest.TestCase):
+    def _run(self, goal):
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        scenario = {
+            "world_width": 2000,
+            "mario": [40, 200],
+            "platforms": [[0, 220, 2000, 20]],
+            "coins": [],
+            "enemies": [],
+            "goal": goal,
+            "metadata": {
+                "block_smb_monte_carlo": {
+                    "family": "pipe_mount",
+                    "parameters": {"a_level_action": 2, "single_jump": True},
+                }
+            },
+        }
+        config = tiny_config()
+        torch.manual_seed(3)
+        model = make_block_smb_model(config)
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(),
+            scenario=scenario,
+            vision=BlockVisionTransformer(),
+        )
+        try:
+            return collect_trajectory(
+                model,
+                stage,
+                "single_jump_probe",
+                rollout_steps=120,
+                seed=1,
+                deterministic=False,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+
+    def test_episode_ends_when_the_commanded_jump_completes(self):
+        # Goal far out of reach: the one arc lands, the episode ends as a
+        # failure right there — no second jump, no hop chains.
+        trajectory = self._run(goal=[1900, 200, 16, 20])
+        self.assertFalse(trajectory.success)
+        # A full arc is under ~40 frames; the 120-step budget was not used.
+        self.assertLess(len(trajectory.transitions), 60)
+        jumps = sum(
+            1
+            for span in trajectory.spans
+            if span.level == "motor_primitive"
+            and span.command.get("primitive") == "jump"
+        )
+        self.assertEqual(jumps, 1)
+
+    def test_landing_in_the_goal_is_credited(self):
+        # Goal strip along the whole ground: the arc lands inside it and
+        # the environment credits the episode on the landing frame.
+        trajectory = self._run(goal=[0, 200, 1990, 20])
+        self.assertTrue(trajectory.success)

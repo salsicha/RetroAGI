@@ -1459,6 +1459,10 @@ def _pipe_mount(
             # A-level intent handed to the rollout: force RIGHT_JUMP so only
             # the B-level executor parameters remain to be learned.
             "a_level_action": 2,
+            # Single-jump scenario: the episode ends when the jump completes;
+            # mounting the pipe (goal on its top) is credited on landing and
+            # anything else is an immediate failure.
+            "single_jump": True,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -1479,15 +1483,21 @@ def _pit_leap(
         "hard": rng.randint(62, 66),
     }[difficulty]
     edge_x = 100
+    # Single-jump scenario: the episode IS the one commanded jump and ends
+    # the moment it completes. The goal spans the entire far ledge, so any
+    # landing that cleared the pit is credited on the landing frame; an
+    # undershoot back onto the near ledge ends the episode as a failure
+    # instead of devolving into hop chains.
+    far_x = edge_x + gap_width
     scenario = {
         "world_width": 320,
         "mario": [edge_x - 30, 200],
         "platforms": [
             [0, 220, edge_x, 20],
-            [edge_x + gap_width, 220, 320 - edge_x - gap_width, 20],
+            [far_x, 220, 320 - far_x, 20],
         ],
         "coins": [],
-        "goal": [edge_x + gap_width + 40, 200, 16, 20],
+        "goal": [far_x, 200, 320 - far_x - 4, 20],
         "reward_goal_distance_shaping": 2.0,
         "reward_energy_jump": -0.15,
     }
@@ -1499,6 +1509,7 @@ def _pit_leap(
             "gap_width": gap_width,
             "edge_x": edge_x,
             "a_level_action": 2,
+            "single_jump": True,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -1553,6 +1564,10 @@ def _stomp_mount(
             "enemy_speed": enemy_speed,
             "patrol_halfwidth": patrol_halfwidth,
             "a_level_action": 2,
+            # Single-jump scenario: a stomp already ends the episode with
+            # credit; a miss now ends it at the landing instead of
+            # devolving into hop chains or walk-around timeouts.
+            "single_jump": True,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -1562,10 +1577,12 @@ def _stomp_mount(
 def _platform_hop(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # B-level isolation family: jump onto a narrow, slowly moving platform
-    # suspended over a pit, ride it, and walk off to the far ledge. Pit width
-    # bands make the required hold grow monotonically (probed minima: 70-80px
-    # pit -> 8 frames, 90-100 -> 10, 110 -> 12); falling short is death.
+    # Single-jump teacher: land the one commanded jump ON a narrow platform
+    # suspended over a pit. The platform is static and the goal sits on it,
+    # so the episode is exactly one arc judged at its landing — riding a
+    # MOVING platform is a jump-plus-wait composite and belongs to the
+    # bridge families, not the single-jump foundation. Pit width bands make
+    # the required hold grow monotonically; falling short or long is death.
     pit_width = {
         "easy": rng.randint(68, 78),
         "medium": rng.randint(88, 98),
@@ -1573,24 +1590,17 @@ def _platform_hop(
     }[difficulty]
     edge_x = 90
     platform_width = 24
-    travel_low = edge_x + (pit_width - platform_width) // 2 - 8
-    travel_high = travel_low + 16
+    platform_x = edge_x + (pit_width - platform_width) // 2
     scenario = {
         "world_width": 380,
         "mario": [edge_x - 30, 200],
         "platforms": [
             [0, 220, edge_x, 20],
-            {
-                "x": travel_low + 4,
-                "y": 198,
-                "w": platform_width,
-                "h": 10,
-                "moving": [travel_low, travel_high, 0.3],
-            },
+            [platform_x, 198, platform_width, 10],
             [edge_x + pit_width, 220, 380 - edge_x - pit_width, 20],
         ],
         "coins": [],
-        "goal": [edge_x + pit_width + 40, 200, 16, 20],
+        "goal": [platform_x + 4, 178, 16, 20],
         "reward_goal_distance_shaping": 2.0,
         "reward_energy_jump": -0.15,
     }
@@ -1601,8 +1611,9 @@ def _platform_hop(
         {
             "pit_width": pit_width,
             "platform_width": platform_width,
-            "platform_speed": 0.3,
+            "platform_x": platform_x,
             "a_level_action": 2,
+            "single_jump": True,
             "difficulty_bin": difficulty,
         },
         actions,

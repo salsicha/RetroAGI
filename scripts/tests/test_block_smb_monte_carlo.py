@@ -189,7 +189,7 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         # Every B-level isolation family hands the A-level decision to the
         # rollout and opts into goal-distance shaping plus the jump-energy
         # regulator, with reachable oracles at every difficulty.
-        for family in ("pit_leap", "stomp_mount", "platform_hop"):
+        for family in ("pit_leap", "stomp_mount", "platform_hop", "pipe_mount"):
             for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
                 for seed in range(3):
                     sample = sample_block_smb_monte_carlo_scenario(
@@ -201,6 +201,9 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                     )
                     self.assertTrue(sample.reachability["reachable"], (family, difficulty, seed))
                     self.assertEqual(sample.parameters["a_level_action"], 2)
+                    # Single-jump teachers: the episode is the one commanded
+                    # jump, judged at its landing.
+                    self.assertTrue(sample.parameters["single_jump"], family)
                     self.assertEqual(sample.scenario["reward_goal_distance_shaping"], 2.0)
                     self.assertEqual(sample.scenario["reward_energy_jump"], -0.15)
 
