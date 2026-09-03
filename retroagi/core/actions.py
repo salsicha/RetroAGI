@@ -497,6 +497,7 @@ class SMBAdaptiveController:
         vision: Any = None,
         wait_event: bool = False,
         support_override: str | None = None,
+        enemy_contact_override: bool | None = None,
     ) -> SMBPrimitiveExecution:
         action_value = coerce_smb_action(action)
         if vision is None and batch is not None:
@@ -511,7 +512,15 @@ class SMBAdaptiveController:
             if support_override is not None
             else _vision_support_name(vision)
         )
-        enemy_contact = _vision_enemy_contact(vision)
+        # Enemy contact follows the same rule: the vision guess flags mere
+        # PROXIMITY and was cancelling stomp arcs three frames before
+        # impact — every correct approach self-destructed. Engine truth
+        # (an actual bounce or death last frame) overrides it in Block SMB.
+        enemy_contact = (
+            bool(enemy_contact_override)
+            if enemy_contact_override is not None
+            else _vision_enemy_contact(vision)
+        )
 
         if self._suppress_until_non_jump:
             # One frame only. The suppression exists so a still-held jump

@@ -1636,6 +1636,7 @@ def _action_from_model(
     skill_goal: torch.Tensor | None = None,
     wait_event: bool = False,
     support_override: str | None = None,
+    enemy_contact_override: bool | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -1729,6 +1730,7 @@ def _action_from_model(
             batch=batch,
             wait_event=wait_event,
             support_override=support_override,
+            enemy_contact_override=enemy_contact_override,
         )
         if execution.action != int(action_tensor.item()):
             action_tensor = torch.tensor(
@@ -2104,6 +2106,7 @@ def collect_trajectory(
     forced_action = block_smb_forced_action_for_rollout(stage.scenario)
     forced_action_scope = block_smb_forced_action_scope(stage.scenario)
     single_jump_scenario = block_smb_single_jump_scenario(stage.scenario)
+    engine_enemy_contact = False
     skill_goal = (
         requested_block_smb_skill_goal(stage.scenario)
         if skill_goal_conditioning
@@ -2276,8 +2279,15 @@ def collect_trajectory(
                 if engine_support
                 else None
             ),
+            enemy_contact_override=(engine_enemy_contact if engine_support else None),
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
+        # Engine truth for the NEXT frame's controller decision: an actual
+        # bounce (stomp reward) or death this step, never the vision's
+        # proximity guess.
+        engine_enemy_contact = bool(info.get("death")) or (
+            float((info.get("reward_terms") or {}).get("enemy_stomp", 0.0) or 0.0) > 0.0
+        )
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
         next_batch = apply_block_smb_ablations(

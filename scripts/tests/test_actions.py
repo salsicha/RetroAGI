@@ -283,6 +283,39 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertFalse(suppressed.started)
         self.assertTrue(rejump.started)
 
+    def test_enemy_contact_override_blocks_vision_proximity_cancel(self):
+        # The vision contact guess flags proximity and was cancelling stomp
+        # arcs just before impact. With engine truth saying "no contact",
+        # the committed jump keeps flying; with engine truth saying contact,
+        # it cancels.
+        executor = SMBParameterizedPrimitiveExecutor()
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[0.0, 0.0, 6.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 8.0]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+        first = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            support_override="ground",
+            enemy_contact_override=False,
+        )
+        second = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            support_override="air",
+            enemy_contact_override=False,
+        )
+        self.assertTrue(first.started)
+        self.assertTrue(second.active and not second.cancelled)
+        contact = executor.execute(
+            SMBAction.RIGHT_JUMP,
+            motor_primitives=motor,
+            support_override="air",
+            enemy_contact_override=True,
+        )
+        self.assertTrue(contact.cancelled)
+
     def test_parameterized_primitive_executor_samples_durations_when_enabled(self):
         motor = SimpleNamespace(
             hold_duration_logits=torch.zeros(1, 1, 8),
