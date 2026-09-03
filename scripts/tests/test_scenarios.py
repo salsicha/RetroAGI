@@ -33,9 +33,18 @@ class TestMarioScenarios(unittest.TestCase):
         # Basic validation of the observation shape (H, W, 3)
         self.assertEqual(obs.shape, (self.env.height, self.env.width, 3))
 
-        # Validate state variables
+        # Validate state variables. Reset settles Mario onto the surface he
+        # spawns over (the phantom spawn fall made every episode-opening
+        # jump read its own touchdown as a landing), so the resting y may
+        # sit a few pixels below the authored spawn.
         self.assertEqual(self.env.mario["x"], expected_mario[0])
-        self.assertEqual(self.env.mario["y"], expected_mario[1])
+        self.assertLessEqual(abs(self.env.mario["y"] - expected_mario[1]), 8)
+        if self.env.mario["on_ground"]:
+            standing_on = any(
+                platform["rect"].top == self.env.mario["y"] + self.env.mario["h"]
+                for platform in self.env.platforms
+            )
+            self.assertTrue(standing_on)
         self.assertEqual(len(self.env.platforms), expected_platforms)
         self.assertEqual(len(self.env.coins), expected_coins)
         self.assertEqual(len(self.env.enemies), expected_enemies)

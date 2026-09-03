@@ -278,6 +278,27 @@ class MarioScenarioEnv:
         for p in scenario.get("platforms", []):
             self.platforms.append(self._parse_platform(p))
 
+        # Settle the spawn: scenarios place Mario a few pixels above his
+        # surface, which used to leave him airborne for the first frames.
+        # That phantom fall made the adaptive controller read the spawn
+        # touchdown as a jump's LANDING and release every episode-opening
+        # jump after ~4 frames — invisible while episodes allowed retries,
+        # fatal for single-jump scenarios. If a platform top lies within a
+        # short drop below the spawn, start standing on it.
+        mario_rect = pygame.Rect(
+            int(self.mario["x"]), int(self.mario["y"]), self.mario["w"], self.mario["h"]
+        )
+        for platform in self.platforms:
+            rect = platform["rect"]
+            horizontally_over = (
+                mario_rect.right > rect.left and mario_rect.left < rect.right
+            )
+            drop = rect.top - mario_rect.bottom
+            if horizontally_over and 0 <= drop <= 8:
+                self.mario["y"] = float(rect.top - self.mario["h"])
+                self.mario["on_ground"] = True
+                break
+
         # Coins
         self.coins = [
             {"rect": pygame.Rect(c[0], c[1], c[2], c[3]), "collected": False}

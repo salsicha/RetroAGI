@@ -35,9 +35,9 @@ def fixed_scenario_action_scripts(
         "level_1_flat.json": list(right),
         "level_2_gap.json": [1] * 10 + [2] * 17 + [1] * max_steps,
         "level_3_stairs.json": (
-            # One jump per stair: press on the landing, not mid-air (re-press
-            # while airborne is ignored, there is no double jump).
-            [2] * 8 + [1] * 2 + [2] * 12 + [1] * 2 + [2] * 10 + [1] * max_steps
+            # One jump per stair, retimed for the grounded spawn (liftoff on
+            # frame 1 instead of after the old settle-fall).
+            [2] * 8 + [1] * 4 + [2] * 14 + [1] * 2 + [2] * 12 + [1] * max_steps
         ),
         "level_4_platforms.json": [1] * 8 + [2] * 16 + [1] * max_steps,
         "level_5_enemy_hop.json": [1] * 20 + [2] * 18 + [1] * max_steps,

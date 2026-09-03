@@ -1017,9 +1017,9 @@ def _stair_climb(
         "coins": [[coin_a_x, 170, 10, 10], [coin_b_x, 140, 10, 10]],
         "goal": [goal_x, 110, 16, 20],
     }
-    # Retimed for honest jump-cut physics: buffered liftoffs after release
-    # are now cut, so each mount holds the button through landing.
-    actions = _pad([2] * 10 + [1] * 2 + [2] * 14 + [1] * 2 + [2] * 10 + [1])
+    # Retimed for the grounded spawn: liftoff now happens on the first
+    # frame instead of after a settle, shifting every landing.
+    actions = _pad([2] * 8 + [1] * 4 + [2] * 14 + [1] * 2 + [2] * 12 + [1])
     return (
         scenario,
         {
