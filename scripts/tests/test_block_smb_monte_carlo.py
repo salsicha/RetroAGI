@@ -205,7 +205,11 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                     # jump, judged at its landing.
                     self.assertTrue(sample.parameters["single_jump"], family)
                     self.assertEqual(sample.scenario["reward_goal_distance_shaping"], 2.0)
-                    self.assertEqual(sample.scenario["reward_energy_jump"], -0.15)
+                    # No jump-energy tax: single-jump failure-on-overshoot
+                    # is the minimal-hold pressure; the tax made the 1-frame
+                    # tap the cheapest failure and collapsed the duration
+                    # head to the floor bin.
+                    self.assertNotIn("reward_energy_jump", sample.scenario)
 
     def test_stomp_mount_targets_the_enemy_itself(self):
         # B-level stomp teaching: success is landing ON the enemy

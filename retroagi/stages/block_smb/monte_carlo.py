@@ -1441,10 +1441,11 @@ def _pipe_mount(
         "coins": [],
         "goal": [goal_x, 220 - pipe_height - 20, 16, 20],
         "reward_goal_distance_shaping": 2.0,
-        # Energy regulator: each held jump frame costs effort, so the minimal
-        # sufficient hold beats maximal holds among successful mounts and
-        # fruitless jumping nets negative.
-        "reward_energy_jump": -0.15,
+        # No jump-energy tax: in a single-jump episode an over-hold misses
+        # the target and fails outright, which is the real minimal-
+        # sufficient-hold pressure. A per-frame tax made the 1-frame tap
+        # the cheapest FAILURE and collapsed the duration head to the
+        # floor bin before coaching could walk it anywhere.
     }
     oracle_hold = {"easy": 12, "medium": 14, "hard": 16}[difficulty]
     actions = _pad([2] * oracle_hold + [1] * 30)
@@ -1499,7 +1500,6 @@ def _pit_leap(
         "coins": [],
         "goal": [far_x, 200, 320 - far_x - 4, 20],
         "reward_goal_distance_shaping": 2.0,
-        "reward_energy_jump": -0.15,
     }
     oracle_hold = {"easy": 10, "medium": 12, "hard": 16}[difficulty]
     actions = _pad([2] * oracle_hold + [1] * 40)
@@ -1552,7 +1552,6 @@ def _stomp_mount(
         "goal": [enemy_x - 2, 186, 16, 20],
         "goal_on_stomp": True,
         "reward_goal_distance_shaping": 2.0,
-        "reward_energy_jump": -0.15,
     }
     oracle_hold = {"easy": 8, "medium": 10, "hard": 12}[difficulty]
     actions = _pad([2] * oracle_hold + [1] * 60)
@@ -1602,7 +1601,6 @@ def _platform_hop(
         "coins": [],
         "goal": [platform_x + 4, 178, 16, 20],
         "reward_goal_distance_shaping": 2.0,
-        "reward_energy_jump": -0.15,
     }
     oracle_hold = {"easy": 10, "medium": 12, "hard": 14}[difficulty]
     actions = _pad([2] * oracle_hold + [1] * 80)
