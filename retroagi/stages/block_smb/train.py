@@ -1865,7 +1865,12 @@ _SMB_MAX_DURATION_BIN_VALUE = 16.0
 _SMB_JUMP_TARGET_TOLERANCE = 4.0
 
 
-def sign_coached_hold(held: int, realized: float, frame_target: float) -> float:
+def sign_coached_hold(
+    held: int,
+    realized: float,
+    frame_target: float,
+    tolerance: float = _SMB_JUMP_TARGET_TOLERANCE,
+) -> float:
     """One bit of duration coaching: direction, not size.
 
     Overshoot relabels the hold one step shorter than what was held,
@@ -1875,25 +1880,41 @@ def sign_coached_hold(held: int, realized: float, frame_target: float) -> float:
     without the magnitude asymmetry that collapsed the head under signed
     error scaling, and without a measured lookup table that amplifies any
     measurement corruption into confidently wrong labels.
+
+    The tolerance is the goal's half-width: frame_target is the goal
+    CENTER, and landing anywhere inside the goal span is on-target. With
+    the old fixed 4px tolerance, a wide goal (pit_leap's landing ledge)
+    put its center beyond any jump's reach, so every jump — successful
+    crossings included — was coached "hold longer" with an identical
+    label on every tier. The anchor never fired, the tiers carried zero
+    differential signal, and the duration head collapsed to one global
+    hold for all states.
     """
 
-    if abs(frame_target - realized) < _SMB_JUMP_TARGET_TOLERANCE:
+    if abs(frame_target - realized) < max(float(tolerance), _SMB_JUMP_TARGET_TOLERANCE):
         return float(held)
     direction = 1.0 if frame_target > realized else -1.0
     return max(1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), float(held) + direction))
 
 
-def jump_overreach(held: int, realized: float, target: float) -> bool:
+def jump_overreach(
+    held: int,
+    realized: float,
+    target: float,
+    tolerance: float = _SMB_JUMP_TARGET_TOLERANCE,
+) -> bool:
     """A full-length jump that still fell short of the target.
 
     The duration coach cannot express this (one step up from the longest
     hold clamps to the longest hold); the initiation decision was the
-    mistake, so the signal must reach the layer that chose to jump.
+    mistake, so the signal must reach the layer that chose to jump. The
+    tolerance is the goal's half-width, so a max-hold jump that lands
+    inside a wide goal is a success, not overreach.
     """
 
     return (
         float(held) >= float(_SMB_MAX_DURATION_BIN_VALUE)
-        and realized < target - _SMB_JUMP_TARGET_TOLERANCE
+        and realized < target - max(float(tolerance), _SMB_JUMP_TARGET_TOLERANCE)
     )
 
 
@@ -2159,8 +2180,12 @@ def collect_trajectory(
         if held <= 0:
             return
 
-        def correct_hold_for(frame_target: float) -> float:
-            return sign_coached_hold(held, realized, frame_target)
+        completion_halfwidth = float(
+            temporal_records[-1].get("goal_halfwidth") or 0.0
+        )
+
+        def correct_hold_for(frame_target: float, halfwidth: float) -> float:
+            return sign_coached_hold(held, realized, frame_target, tolerance=halfwidth)
 
         # Overreach: a full-length jump that still fell short is not a
         # duration mistake — no hold on the menu reaches — so the duration
@@ -2168,7 +2193,7 @@ def collect_trajectory(
         # the layer that decided to jump: flag the initiation frame so the
         # skill network's chosen jump action is suppressed in that state
         # (walk closer first, or do something else entirely).
-        if jump_overreach(held, realized, target):
+        if jump_overreach(held, realized, target, tolerance=completion_halfwidth):
             initiation_info = trajectory.transitions[span[0]].info
             if isinstance(initiation_info, dict):
                 initiation_info["jump_overreach"] = True
@@ -2195,7 +2220,10 @@ def collect_trajectory(
                 if frame_goal_x is not None
                 else target
             )
-            frame_correct = correct_hold_for(frame_target)
+            frame_halfwidth = float(
+                temporal_records[span_index].get("goal_halfwidth") or 0.0
+            )
+            frame_correct = correct_hold_for(frame_target, frame_halfwidth)
             span_info["primitive_outcome_target"] = frame_correct / float(
                 _SMB_MAX_DURATION_BIN_VALUE
             )
@@ -2362,6 +2390,11 @@ def collect_trajectory(
                     float(stage.env.goal.centerx)
                     if getattr(stage.env, "goal", None) is not None
                     else None
+                ),
+                "goal_halfwidth": (
+                    float(stage.env.goal.w) / 2.0
+                    if getattr(stage.env, "goal", None) is not None
+                    else 0.0
                 ),
             }
         )

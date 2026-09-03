@@ -2083,6 +2083,21 @@ class TestSignCoachingAndOverreach(unittest.TestCase):
         self.assertEqual(sign_coached_hold(16, 40.0, 90.0), 16.0)
         self.assertEqual(sign_coached_hold(1, 30.0, 5.0), 1.0)
 
+    def test_wide_goal_tolerance_anchors_successful_landings(self):
+        # The tolerance is the goal's half-width. pit_leap's landing ledge
+        # is ~170px wide with its center beyond any jump's reach; with the
+        # old fixed 4px tolerance every jump — successful crossings
+        # included — was coached "hold longer" with the same label on every
+        # tier, and the duration head collapsed to one global hold.
+        # Landing inside the goal span anchors the hold that was used.
+        self.assertEqual(sign_coached_hold(11, 80.0, 160.0, tolerance=85.0), 11.0)
+        # Falling genuinely short of the span still pushes one step longer.
+        self.assertEqual(sign_coached_hold(11, 60.0, 160.0, tolerance=85.0), 12.0)
+        # A max-hold jump that lands inside a wide goal is a success, not
+        # overreach; short of the span it is.
+        self.assertFalse(jump_overreach(16, 80.0, 160.0, tolerance=85.0))
+        self.assertTrue(jump_overreach(16, 60.0, 160.0, tolerance=85.0))
+
     def test_jump_overreach_flags_only_full_length_shortfalls(self):
         # A full-length jump that still fell short: duration cannot fix it.
         self.assertTrue(jump_overreach(16, 60.0, 120.0))
