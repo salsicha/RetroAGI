@@ -230,8 +230,11 @@ def block_smb_monte_carlo_family_specs(
             "enemy_gap_offset": [18, 36],
         },
         "enemy_stomp": {
-            "enemy_x": [104, 116],
-            "stomp_window": [12, 18],
+            "spawn_x": [16, 40],
+            "enemy_distance": [52, 164],
+            "enemy_speed": [0.0, 0.6],
+            "family_revision": [2, 2],
+            "goal": "stomp the enemy, recover, then reach the finish",
         },
         "retreat_recovery": {
             "start_x": [188, 208],
@@ -603,6 +606,7 @@ def validate_block_smb_monte_carlo_oracle(
         reason = None if reachable else _oracle_rejection_reason(env, last_info, max_steps)
         return {
             "reachable": bool(reachable),
+            "stomp_completed": bool(env._stomp_credited),
             "completion_steps": completion_steps,
             "max_steps": int(max_steps),
             "total_return": float(total_return),
@@ -858,7 +862,7 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
     # validate as reachable.
     if getattr(env, "_goal_credited", False):
         return True
-    if getattr(env, "_goal_on_stomp", False):
+    if getattr(env, "_goal_on_stomp", False) or getattr(env, "_require_stomp_before_goal", False):
         return False
     if env.goal is None:
         return False
@@ -1141,18 +1145,62 @@ def _enemy_gap(
 def _enemy_stomp(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    enemy_x = {"easy": 108, "medium": 110, "hard": 112}[difficulty] + rng.randint(-1, 1)
-    coin_x = rng.randint(146, 156)
+    spawn_x = rng.randint(16, 40)
+    low, high, speed, patrol = {
+        "easy": (52, 72, 0.0, 0),
+        "medium": (92, 116, 0.3, 8),
+        "hard": (140, 164, 0.6, 12),
+    }[difficulty]
+    distance = rng.randint(low, high)
+    enemy_x = spawn_x + distance
+    direction = rng.choice((-1, 1)) if speed else 1
     scenario = {
-        "world_width": 256,
-        "mario": [20, 200],
-        "platforms": [[0, 220, 256, 20]],
-        "enemies": [[enemy_x, 206, enemy_x, enemy_x, 0]],
-        "coins": [[coin_x, 185, 10, 10]],
-        "goal": [230, 200, 16, 20],
+        "world_width": 360,
+        "mario": [spawn_x, 200],
+        "platforms": [[0, 220, 360, 20]],
+        "enemies": [[enemy_x, 206, enemy_x - patrol, enemy_x + patrol, speed, direction]],
+        "coins": [],
+        "goal": [334, 200, 16, 20],
+        "require_stomp_before_goal": True,
+        "reward_goal_distance_shaping": 2.0,
     }
-    actions = _pad([1] * 8 + [2] * 14 + [1])
-    return scenario, {"enemy_x": enemy_x, "stomp_window": 14, "difficulty_bin": difficulty}, actions
+    # Search approach and hold in actual physics. Reaching the finish alone
+    # cannot validate a demonstration because the engine requires the stomp.
+    preferred_walk = max(0, round((distance - 70) / 3))
+    walks = sorted(
+        range(max(0, preferred_walk - 12), preferred_walk + 13),
+        key=lambda n: (abs(n - preferred_walk), n),
+    )
+    actions = _pad([1] * preferred_walk + [2] * 12 + [1])
+    oracle_walk, oracle_hold = preferred_walk, 12
+    found = False
+    for walk in walks:
+        for hold in sorted(range(1, 17), key=lambda n: (abs(n - 12), n)):
+            candidate = _pad([1] * walk + [2] * hold + [1])
+            if validate_block_smb_monte_carlo_oracle(scenario, candidate, max_steps=160)[
+                "reachable"
+            ]:
+                actions, oracle_walk, oracle_hold = candidate, walk, hold
+                found = True
+                break
+        if found:
+            break
+    return (
+        scenario,
+        {
+            "spawn_x": spawn_x,
+            "enemy_x": enemy_x,
+            "enemy_distance": distance,
+            "enemy_speed": speed,
+            "enemy_initial_direction": direction,
+            "patrol_halfwidth": patrol,
+            "family_revision": 2,
+            "oracle_approach_frames": oracle_walk,
+            "oracle_hold_frames": oracle_hold,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
 
 
 def _retreat_recovery(

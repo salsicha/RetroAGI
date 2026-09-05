@@ -91,6 +91,10 @@ def build_block_smb_temporal_spans(
                         # duration boundary — the release marker frame.
                         reason = "success"
                         break
+                if r.get("stomp_contact"):
+                    events.append({"event": "hazard_contact", "frame": end, "outcome": "stomp"})
+                    reason = "success"
+                    break
                 if r.get("attempt_failed"):
                     events.append({"event": "landing", "frame": end, "outcome": "miss"})
                     reason = "failure"
@@ -195,7 +199,11 @@ def build_block_smb_temporal_spans(
         # Locomotion span: consecutive frames of one action class with no
         # active primitive.
         start = index
-        name = _locomotion_name(int(record.get("action", -1)))
+        name = (
+            "bounce_recovery"
+            if record.get("bounce_recovery")
+            else _locomotion_name(int(record.get("action", -1)))
+        )
         end = index
         stall_frames = 0
         events = []
@@ -222,7 +230,12 @@ def build_block_smb_temporal_spans(
             if nxt >= n:
                 break
             nrec = records[nxt]
-            if nrec.get("started") or _locomotion_name(int(nrec.get("action", -1))) != name:
+            next_name = (
+                "bounce_recovery"
+                if nrec.get("bounce_recovery")
+                else _locomotion_name(int(nrec.get("action", -1)))
+            )
+            if nrec.get("started") or next_name != name:
                 break
             end = nxt
         last = records[end]

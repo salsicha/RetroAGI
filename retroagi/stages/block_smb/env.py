@@ -209,6 +209,8 @@ class MarioScenarioEnv:
         self.enemies = []
         self.goal = None
         self._goal_on_stomp = False
+        self._require_stomp_before_goal = False
+        self._stomp_credited = False
         self._goal_credited = False
         self.camera_x = 0.0
         self.score = 0
@@ -319,6 +321,15 @@ class MarioScenarioEnv:
         # track the moving target, and goal credit is granted by the stomp
         # itself rather than by touching the goal rect.
         self._goal_on_stomp = bool(scenario.get("goal_on_stomp", False))
+        metadata = scenario.get("metadata")
+        family_metadata = (
+            metadata.get("block_smb_monte_carlo") if isinstance(metadata, dict) else None
+        )
+        family = family_metadata.get("family") if isinstance(family_metadata, dict) else None
+        self._require_stomp_before_goal = bool(
+            scenario.get("require_stomp_before_goal", False) or family == "enemy_stomp"
+        )
+        self._stomp_credited = False
         self._goal_credited = False
         self._track_goal_to_enemy()
         # Per-scenario opt-in overrides the config default coefficient.
@@ -617,13 +628,14 @@ class MarioScenarioEnv:
                 continue
             er = pygame.Rect(enemy["x"], enemy["y"], enemy["w"], enemy["h"])
             geometry = stomp_collision_geometry(mario_rect, er, self.mario["vy"])
-            if self._goal_on_stomp and stomp_geometry is None:
+            if (self._goal_on_stomp or self._require_stomp_before_goal) and stomp_geometry is None:
                 stomp_geometry = geometry
             if not mario_rect.colliderect(er):
                 continue
             if geometry["stomp"]:
                 # Stomp!
                 enemy["dead"] = True
+                self._stomp_credited = True
                 reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
                 self.score += 5
                 self.mario["vy"] = self.jump_power * 0.55
@@ -658,7 +670,13 @@ class MarioScenarioEnv:
         # ── 17. Goal ──────────────────────────────────────────────────────────
         # Under goal_on_stomp the rect is only a tracking proxy for shaping
         # and observations; brushing it mid-air must not count as success.
-        if self.goal and not self._goal_on_stomp and mario_rect.colliderect(self.goal):
+        if (
+            self.goal
+            and not self._goal_on_stomp
+            and not death
+            and (not self._require_stomp_before_goal or self._stomp_credited)
+            and mario_rect.colliderect(self.goal)
+        ):
             terminated = True
             reward_terms["goal"] += self.reward_config.goal
             self._goal_credited = True
@@ -921,6 +939,7 @@ class MarioScenarioEnv:
             "max_x_reached": self._max_x_reached,
             "nearest_coin": nc,
             "nearest_enemy": ne,
+            "stomp_completed": self._stomp_credited,
             "platform_below_dist": plat_below,
             "goal_delta": {"dx": goal_dx, "dy": goal_dy, "dist": goal_dist},
             "support_right_dx": support_right_dx,

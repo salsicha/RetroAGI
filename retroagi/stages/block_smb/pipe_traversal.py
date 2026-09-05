@@ -7,6 +7,7 @@ from .env import MarioScenarioEnv
 from .monte_carlo import block_smb_monte_carlo_metadata
 
 TALL_PIPE_MIN_TRAINING_STEPS = 160
+ENEMY_STOMP_MIN_TRAINING_STEPS = 160
 
 
 def is_tall_pipe_scenario(scenario: Mapping[str, Any] | None) -> bool:
@@ -21,10 +22,16 @@ def training_rollout_steps(requested: int, scenario: Mapping[str, Any] | None) -
 
     The tall-pipe oracle needs 82–86 frames. A 60-frame training episode
     cannot reach the finish at any speed. Apply the floor to old replay
-    scenarios too, without depending on newly generated metadata.
+    scenarios too, without depending on newly generated metadata. Composite
+    enemy stomps also need time for the approach, bounce, and finish.
     """
     if is_tall_pipe_scenario(scenario):
         return max(requested, TALL_PIPE_MIN_TRAINING_STEPS)
+    if scenario is not None and (
+        scenario.get("require_stomp_before_goal")
+        or block_smb_monte_carlo_metadata(scenario).get("family") == "enemy_stomp"
+    ):
+        return max(requested, ENEMY_STOMP_MIN_TRAINING_STEPS)
     return requested
 
 

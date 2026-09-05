@@ -66,7 +66,7 @@ from .monte_carlo import (
 )
 from .pipe_traversal import TallPipeTraversal, pipe_completion_metrics, training_rollout_steps
 from .skills import requested_block_smb_skill_goal
-from .stomp import stomp_coaching_target
+from .stomp import stomp_coaching_target, stomp_completion_metrics
 from .success import evaluate_fixed_success_thresholds, summarize_fixed_success_metrics
 from .temporal_spans import build_block_smb_temporal_spans
 from .vision import BlockVisionTransformer
@@ -1396,7 +1396,7 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
     # walks into the enemy and dies, which would label deaths as successes.
     if getattr(env, "_goal_credited", False):
         return True
-    if getattr(env, "_goal_on_stomp", False):
+    if getattr(env, "_goal_on_stomp", False) or getattr(env, "_require_stomp_before_goal", False):
         return False
     if env.goal is None:
         return False
@@ -1631,6 +1631,7 @@ def _action_from_model(
     oracle_next_action: int | None = None,
     oracle_hold_frames: int | None = None,
     oracle_primitive_active: bool = False,
+    recovering_from_stomp: bool = False,
     forced_action: int | None = None,
     skill_goal: torch.Tensor | None = None,
     wait_event: bool = False,
@@ -1721,7 +1722,17 @@ def _action_from_model(
     else:
         action_tensor = action_logits.argmax(dim=-1) if deterministic else distribution.sample()
     execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
-    if oracle_action_tensor is not None:
+    if recovering_from_stomp:
+        # Preserve the policy's horizontal choice while the automatic bounce
+        # resolves. A held jump here would buffer a new takeoff and invent a
+        # second committed primitive before Mario has recovered support.
+        action_tensor = torch.tensor(
+            [int(smb_jump_release_action(int(action_tensor.item())))],
+            dtype=action_tensor.dtype,
+            device=action_tensor.device,
+        )
+        execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
+    elif oracle_action_tensor is not None:
         execution = _oracle_primitive_execution(
             int(action_tensor.item()),
             next_action=oracle_next_action,
@@ -1766,6 +1777,22 @@ def _action_from_model(
             entropy = (
                 torch.distributions.Categorical(logits=duration_logits[:, -1, :]).entropy().mean()
             )
+    if recovering_from_stomp and supplied_action is None:
+        # Jump/no-jump intents map to the same horizontal recovery action.
+        # Credit their combined probability, rather than pretending the
+        # released action itself was sampled from the original distribution.
+        recovery_logits = torch.stack(
+            [torch.logsumexp(action_logits[:, ids], dim=-1) for ids in ((0, 5), (1, 2), (3, 4))],
+            dim=-1,
+        )
+        recovery_distribution = torch.distributions.Categorical(logits=recovery_logits)
+        recovery_index = torch.tensor(
+            [{0: 0, 1: 1, 3: 2}[int(action_tensor.item())]],
+            dtype=torch.long,
+            device=action_logits.device,
+        )
+        log_prob = recovery_distribution.log_prob(recovery_index).squeeze(0)
+        entropy = recovery_distribution.entropy().squeeze(0)
     primitive_aux_loss = _smb_primitive_auxiliary_loss(
         motor_primitives,
         oracle_action_tensor,
@@ -2168,6 +2195,8 @@ def collect_trajectory(
     engine_enemy_contact = False
     oracle_primitive_active = False
     stomp_scenario = bool(getattr(stage.env, "_goal_on_stomp", False))
+    enemy_composite = bool(stage.env._require_stomp_before_goal)
+    enemy_phase = "stomp" if enemy_composite else None
     skill_goal = requested_block_smb_skill_goal(stage.scenario) if skill_goal_conditioning else None
     if skill_goal is not None:
         skill_goal = skill_goal.to(device)
@@ -2197,11 +2226,16 @@ def collect_trajectory(
         mario_center_x = float(env.mario["x"]) + float(env.mario["w"]) / 2.0
         realized = (mario_center_x - primitive_span_start_x) * primitive_direction
         mounting = pipe_traversal is not None and primitive_span_phase == "mount"
+        intercepting = stomp_scenario or (enemy_composite and primitive_span_phase == "stomp")
         target_x, target_halfwidth = (
             pipe_traversal.target(env) if mounting else (float(goal.centerx), float(goal.w) / 2.0)
         )
+        if intercepting and env.enemies:
+            enemy = env.enemies[0]
+            target_x = float(enemy["x"]) + float(enemy["w"]) / 2
+            target_halfwidth = (float(enemy["w"]) + float(env.mario["w"])) / 2
         target = (target_x - primitive_span_start_x) * primitive_direction
-        if (realized < 3.0 and not mounting) or target <= 0.0:
+        if not intercepting and ((realized < 3.0 and not mounting) or target <= 0.0):
             return
         held = 0
         for span_index in span:
@@ -2216,14 +2250,16 @@ def collect_trajectory(
             return
 
         stomp_target = None
-        if stomp_scenario:
-            stomp_target, _ = stomp_coaching_target(
+        stomp_outcome = None
+        if intercepting:
+            stomp_target, stomp_outcome = stomp_coaching_target(
                 [
                     temporal_records[i]["stomp_geometry"]
                     for i in span
                     if temporal_records[i].get("stomp_geometry")
                 ],
                 held,
+                direction=primitive_direction,
             )
             if stomp_target is None:
                 return  # The unfinished arc has not reached the contact window.
@@ -2250,7 +2286,12 @@ def collect_trajectory(
         # skill network's chosen jump action is suppressed in that state
         # (walk closer first, or do something else entirely).
         if (
-            not stomp_scenario
+            enemy_composite
+            and intercepting
+            and stomp_outcome == "undershoot"
+            and held >= _SMB_MAX_DURATION_BIN_VALUE
+        ) or (
+            not intercepting
             and not mounted_during_span
             and jump_overreach(held, realized, target, tolerance=completion_halfwidth)
         ):
@@ -2285,7 +2326,7 @@ def collect_trajectory(
             )
             span_info["primitive_frame_index"] = offset
             span_info["primitive_target_hold"] = frame_correct
-            if pipe_traversal is not None:
+            if pipe_traversal is not None or enemy_composite:
                 span_info["primitive_target_phase"] = primitive_span_phase
                 span_info["primitive_target_x"] = target_x
             # The world model's target for committed-primitive frames is
@@ -2306,12 +2347,12 @@ def collect_trajectory(
         oracle_next_action = (
             int(oracle_actions[step_index + 1]) if step_index + 1 < len(oracle_actions) else None
         )
-        step_phase = pipe_traversal.phase if pipe_traversal is not None else None
+        step_phase = pipe_traversal.phase if pipe_traversal is not None else enemy_phase
         # Clear the mount request without changing checkpoint dimensions.
         # The C stream still supplies the finish position; actions stay learned.
         step_skill_goal = (
             torch.zeros_like(skill_goal)
-            if skill_goal is not None and step_phase == "finish"
+            if skill_goal is not None and step_phase in ("finish", "bounce_recovery")
             else skill_goal
         )
         pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
@@ -2355,6 +2396,7 @@ def collect_trajectory(
             oracle_next_action=oracle_next_action,
             oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
             oracle_primitive_active=oracle_primitive_active,
+            recovering_from_stomp=enemy_phase == "bounce_recovery",
             forced_action=forced_action,
             skill_goal=step_skill_goal,
             wait_event=wait_event,
@@ -2390,6 +2432,19 @@ def collect_trajectory(
         )
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
+        stomp_contact = bool((info.get("stomp_geometry") or {}).get("stomp"))
+        if enemy_composite:
+            if stomp_contact:
+                # Close the interception on the collision frame, before the
+                # automatic bounce. Do not report it as hazard cancellation.
+                primitive_executor.reset()
+                execution = replace(execution, active=True, cancelled=False)
+                oracle_primitive_active = False
+                engine_enemy_contact = False
+                enemy_phase = "bounce_recovery"
+            elif enemy_phase == "bounce_recovery" and stage.env.mario["on_ground"]:
+                enemy_phase = "finish"
+            info["skill_phase"] = step_phase
         if stomp_scenario:
             if info["goal_reached"]:
                 info["stomp_outcome"] = "success"
@@ -2485,6 +2540,8 @@ def collect_trajectory(
                 "attempt_failed": bool(info.get("attempt_failed", False)),
                 "stomp_outcome": info.get("stomp_outcome"),
                 "stomp_geometry": info.get("stomp_geometry"),
+                "stomp_contact": stomp_contact,
+                "bounce_recovery": step_phase == "bounce_recovery",
                 "pipe_contact": pipe_contact,
                 "terminated": bool(terminated),
                 "truncated": bool(truncated),
@@ -2556,6 +2613,7 @@ def collect_trajectory(
         if (
             execution.landed
             or execution.cancelled
+            or (enemy_composite and stomp_contact)
             or done
             or (primitive_span and not primitive_span_is_jump and execution.released)
         ):
@@ -3473,6 +3531,7 @@ def evaluate_block_smb_monte_carlo(
             scenario_actions: list[int] = []
             scenario_max_progress: list[float] = []
             scenario_mounts: list[bool] = []
+            scenario_stomps: list[bool] = []
             stomp_outcomes: dict[str, int] = {}
             for episode in range(config.evaluation_episodes):
                 stage = BlockSMBStage(
@@ -3511,6 +3570,10 @@ def evaluate_block_smb_monte_carlo(
                 scenario_successes.append(float(trajectory.success))
                 scenario_actions.extend(actions)
                 scenario_max_progress.append(max_progress)
+                if sample.family == "enemy_stomp":
+                    scenario_stomps.append(
+                        any(t.info.get("stomp_completed", False) for t in trajectory.transitions)
+                    )
                 if sample.family == "stomp_mount":
                     outcome = str(
                         trajectory.transitions[-1].info.get("stomp_outcome", "no_contact")
@@ -3578,6 +3641,15 @@ def evaluate_block_smb_monte_carlo(
                     sum(
                         bool(mounted and success)
                         for mounted, success in zip(scenario_mounts, scenario_successes)
+                    ),
+                )
+            if sample.family == "enemy_stomp":
+                result["enemy_stomp_metrics"] = stomp_completion_metrics(
+                    len(scenario_stomps),
+                    sum(scenario_stomps),
+                    sum(
+                        bool(stomp and success)
+                        for stomp, success in zip(scenario_stomps, scenario_successes)
                     ),
                 )
             if sample.family == "stomp_mount":
@@ -3685,6 +3757,10 @@ def _add_monte_carlo_rollup(
         counts = rollup.setdefault("pipe_counts", [0, 0, 0])
         for i, name in enumerate(("episodes", "mount_successes", "finish_after_mount_successes")):
             counts[i] += int(result["pipe_metrics"][name])
+    if "enemy_stomp_metrics" in result:
+        counts = rollup.setdefault("enemy_stomp_counts", [0, 0, 0])
+        for i, name in enumerate(("episodes", "stomp_successes", "finish_after_stomp_successes")):
+            counts[i] += int(result["enemy_stomp_metrics"][name])
     if "stomp_outcome_counts" in result:
         counts = rollup.setdefault("stomp_outcome_counts", {})
         for outcome, count in result["stomp_outcome_counts"].items():
@@ -3726,6 +3802,10 @@ def _finalize_monte_carlo_rollups(
         }
         if "stomp_outcome_counts" in rollup:
             finalized[str(key)]["stomp_outcome_counts"] = dict(rollup["stomp_outcome_counts"])
+        if "enemy_stomp_counts" in rollup:
+            finalized[str(key)]["enemy_stomp_metrics"] = stomp_completion_metrics(
+                *rollup["enemy_stomp_counts"]
+            )
         if "pipe_counts" in rollup:
             finalized[str(key)]["pipe_metrics"] = pipe_completion_metrics(*rollup["pipe_counts"])
     return finalized

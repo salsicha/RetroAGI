@@ -27,6 +27,8 @@ def stomp_collision_geometry(mario: pygame.Rect, enemy: pygame.Rect, vy: float) 
 def stomp_coaching_target(
     records: Sequence[Mapping[str, Any]],
     held: int,
+    *,
+    direction: float = 1.0,
 ) -> tuple[float | None, str]:
     """Compare both bodies at the same descending contact time, not proxy centers.
 
@@ -49,5 +51,18 @@ def stomp_coaching_target(
     closest = min(candidates, key=lambda g: abs(g["horizontal_gap"]))
     # Touching edges is not overlap: disambiguate the zero-gap boundary.
     overshoot = closest["mario_rect"][0] >= closest["enemy_rect"][0] + closest["enemy_rect"][2]
-    direction = -1 if overshoot else 1
-    return float(min(16, max(1, held + direction))), "overshoot" if overshoot else "undershoot"
+    if direction < 0:
+        overshoot = not overshoot
+    correction = -1 if overshoot else 1
+    return float(min(16, max(1, held + correction))), "overshoot" if overshoot else "undershoot"
+
+
+def stomp_completion_metrics(episodes: int, stomps: int, finishes: int) -> dict[str, Any]:
+    """Separate physical stomp completion from finishing after that contact."""
+    return {
+        "episodes": episodes,
+        "stomp_successes": stomps,
+        "finish_after_stomp_successes": finishes,
+        "stomp_success_rate": stomps / episodes if episodes else None,
+        "finish_after_stomp_success_rate": finishes / stomps if stomps else None,
+    }

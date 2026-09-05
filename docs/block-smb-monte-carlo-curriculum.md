@@ -61,7 +61,7 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `enemy_hop` | enemy x-position, speed, patrol width, approach distance |
 | `enemy_patrol` | enemy count, spacing, patrol overlap, speed variance |
 | `enemy_gap` | enemy placement relative to gap, gap width, landing zone |
-| `enemy_stomp` | enemy height/position, stomp window, safe landing distance |
+| `enemy_stomp` | composite approach, stomp, bounce recovery, and finish; success requires an actual stomp before reaching the goal |
 | `retreat_recovery` | left/right recovery need, obstacle proximity, safe fallback |
 | `wait_timing` | moving-platform phase, wait window, jump window |
 | `chained_obstacles` | multiple obstacle sections with enemies and pipes |
@@ -98,6 +98,43 @@ that mounted (`null` if none did). Counts are included so aggregation weights
 episodes correctly. The existing `success_rate` still requires touching the
 original goal rectangle. Existing checkpoints load unchanged, but these training
 changes require further training before improved learned accuracy can be claimed.
+
+
+`enemy_stomp` revision 2 requires an engine-credited stomp followed by contact
+with the final goal. Passing over a live enemy and touching the finish earns
+no goal credit. This requirement also applies to saved scenarios identified
+as the `enemy_stomp` family; older bypassing oracles no longer validate as
+successful demonstrations. Explicit scenarios can opt in with
+`require_stomp_before_goal: true`.
+
+The generator varies spawn x from 16–40px and enemy distance across disjoint
+52–72 / 92–116 / 140–164px bands. Easy enemies stand still; medium and hard
+patrol at 0.3 / 0.6px per frame over 16 / 24px travel, starting in either
+direction. The finish is at x=334. The oracle searches both walking approach
+and 1–16-frame jump hold against the exact physics, requiring a stomp and
+finish within 160 frames. The sample records `family_revision: 2`, approach
+frames, and hold frames. The obsolete constant `stomp_window` field is removed.
+Results from the old geometry and completion-only metric are not directly
+comparable to this revision.
+
+Training and success rehearsal give the composite at least 160 frames, including
+old replay scenarios; evaluation continues to honor its explicit frame limit.
+Interception coaching compares simultaneous collision rectangles. Successful
+stomps anchor the actual hold and never incur an overreach penalty for failing
+to reach the distant finish in the same jump. A maximum-hold undershoot of the
+enemy can still coach the policy to approach first. Leftward recovery attempts
+interpret corrections in their direction of travel.
+
+A stomp closes the interception span successfully on its contact frame. The
+requested enemy-clear goal is then cleared. During `bounce_recovery`, horizontal
+movement remains the policy's choice; jump input is released until the engine
+reports support, so the automatic bounce cannot create a new jump primitive.
+The recovery has its own temporal span, followed by a learned `finish` phase.
+Scenario, difficulty, and family evaluation records expose `enemy_stomp_metrics`
+with episode/stomp/finish counts, `stomp_success_rate`, and
+`finish_after_stomp_success_rate` (`null` when no stomp occurred). The overall
+`success_rate` requires both events. No checkpoint parameter dimensions change;
+learned performance must be evaluated after retraining.
 
 
 `stomp_mount` samples now carry `parameters.family_revision: 2`. Distance bands
