@@ -6,9 +6,9 @@ from typing import Any, Iterable, Mapping
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .skills import SKILL_GOAL_ENCODING_DIM
-import torch.nn.functional as F
 
 SUPPORTED_CONTROLLER_SCHEDULES = ("constant", "linear")
 ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES = (
@@ -847,6 +847,7 @@ class HierarchicalAdaptiveModel(nn.Module):
             probs_a = F.gumbel_softmax(logits_a, tau=tau, hard=True, dim=-1)
         else:
             probs_a = F.softmax(logits_a, dim=-1)
+        self.last_unforced_logits_a = logits_a
         if forced_action is not None:
             # Ranked-candidate imagination: condition the B/C pipeline on an
             # explicit next-action token instead of the sampled/soft mixture, so
@@ -860,6 +861,11 @@ class HierarchicalAdaptiveModel(nn.Module):
             forced_row = torch.zeros_like(probs_a[:, -1, :])
             forced_row[:, forced_index] = 1.0
             probs_a = torch.cat((probs_a[:, :-1, :], forced_row.unsqueeze(1)), dim=1)
+            # World-model primitive context and motor decoding must describe
+            # the same supplied action that conditions B's cross attention.
+            forced_logits = torch.full_like(logits_a[:, -1:, :], -30.0)
+            forced_logits[:, :, forced_index] = 30.0
+            logits_a = torch.cat((logits_a[:, :-1, :], forced_logits), dim=1)
         pred_emb_a = torch.matmul(probs_a, self.action_embedding.weight)
 
         x_b = self.embedding(src_B) * math.sqrt(self.d_model)
@@ -1345,9 +1351,7 @@ class TacticsNetwork(nn.Module):
     def forward(self, state, strategy_context=None):
         tokens = self.input_projection(state.float().unsqueeze(-1))
         if strategy_context is not None:
-            tokens = tokens + self.strategy_projection(
-                strategy_context.float()
-            ).unsqueeze(1)
+            tokens = tokens + self.strategy_projection(strategy_context.float()).unsqueeze(1)
         pooled = self.encoder(tokens).mean(dim=1)
         return self.stance_head(pooled), self.context_head(pooled)
 
@@ -1519,8 +1523,6 @@ class AgentWorldModelCritic(nn.Module):
         torch.set_rng_state(rng_state_tactics)
         self._stance_history = None
 
-
-
     def transition_representation(self, state):
         return self.transition_representation_head(state)
 
@@ -1529,7 +1531,6 @@ class AgentWorldModelCritic(nn.Module):
 
     def predict_value(self, state):
         return self.value_head(state).squeeze(-1)
-
 
     def predict_action_progress_logit(self, next_state_pred, current_state=None):
         critic = getattr(self, "critic", None)
@@ -2033,6 +2034,7 @@ class AgentWorldModelCritic(nn.Module):
         critic_feedback_enabled=True,
         world_model_enabled=True,
         skill_goal=None,
+        forced_action=None,
     ):
         actor_world_model_context = self._actor_world_model_context(
             world_model_state,
@@ -2052,17 +2054,13 @@ class AgentWorldModelCritic(nn.Module):
                 device=src_C.device,
             )
         strategy_context = self.strategy_network(self._stance_history)
-        tactic_stance_logits, tactic_context = self.tactics_network(
-            src_C, strategy_context
-        )
+        tactic_stance_logits, tactic_context = self.tactics_network(src_C, strategy_context)
         stance_probabilities = torch.softmax(tactic_stance_logits, dim=-1)
         self._stance_history = torch.cat(
             (self._stance_history[:, 1:, :], stance_probabilities.detach().unsqueeze(1)),
             dim=1,
         )
-        self.last_tactic_stance = TACTIC_STANCES[
-            int(stance_probabilities[0].argmax())
-        ]
+        self.last_tactic_stance = TACTIC_STANCES[int(stance_probabilities[0].argmax())]
         self.last_actor_world_model_context = (
             None if actor_world_model_context is None else actor_world_model_context.detach()
         )
@@ -2075,6 +2073,12 @@ class AgentWorldModelCritic(nn.Module):
             world_model_context=actor_world_model_context,
             skill_goal=skill_goal,
             tactic_context=tactic_context,
+            forced_action=forced_action,
+        )
+        self.last_policy_logits_a = (
+            getattr(self.agent, "last_unforced_logits_a", logits_a1)
+            if forced_action is not None
+            else logits_a1
         )
         primitive_params1 = getattr(self.agent, "last_level_b_primitives", None)
         first_candidate = self._candidate_from_actor_outputs(
@@ -2097,6 +2101,7 @@ class AgentWorldModelCritic(nn.Module):
 
         use_ranked_search = (
             self.ranked_candidate_search
+            and forced_action is None
             and critic_feedback_enabled
             and world_model_enabled
             and src_A.size(0) == 1
@@ -2127,7 +2132,7 @@ class AgentWorldModelCritic(nn.Module):
                     forced_action=action_id,
                     skill_goal=skill_goal,
                     tactic_context=tactic_context,
-)
+                )
                 primitive_params_f = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(
                     src_C,
@@ -2157,7 +2162,7 @@ class AgentWorldModelCritic(nn.Module):
                 selected_iteration = best_index + 1
             self.last_selected_action_id = search_ids[selected_iteration - 1]
             candidates = search_candidates
-        elif critic_feedback_enabled and not accepted:
+        elif forced_action is None and critic_feedback_enabled and not accepted:
             actor_criticism = first_candidate.criticism.detach()
             for _pass_index in range(1, self.max_action_refinement_passes):
                 logits_a, actions, w, b = self._agent_forward(
@@ -2169,7 +2174,7 @@ class AgentWorldModelCritic(nn.Module):
                     world_model_context=actor_world_model_context,
                     skill_goal=skill_goal,
                     tactic_context=tactic_context,
-)
+                )
                 primitive_params = getattr(self.agent, "last_level_b_primitives", None)
                 candidate = self._candidate_from_actor_outputs(
                     src_C,
@@ -2215,7 +2220,13 @@ class AgentWorldModelCritic(nn.Module):
             selected_candidate.next_state_pred,
             selected_candidate.criticism,
             selected_candidate.actions,
-            selected_candidate.logits_a,
+            # Candidate logits encode a supplied action for physics prediction.
+            # Training still needs the actor distribution that ranked the actions.
+            (
+                self.last_policy_logits_a
+                if forced_action is not None or use_ranked_search
+                else selected_candidate.logits_a
+            ),
             selected_candidate.w,
             selected_candidate.b,
         )

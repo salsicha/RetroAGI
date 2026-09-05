@@ -68,12 +68,76 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `chained_enemy_gauntlet` | enemy, gap, patrol, and pipe sequence in one level |
 | `full_smb_opening_proxy` | Block SMB approximation of the early Full SMB 1-1 demands |
 | `mixed_section` | sampled composition of two or three families in one level |
-| `tall_pipe_jump` | a single tall pipe (56-68px, taller than other pipe families) that must be mounted and cleared, staying under the jump-height ceiling so the scripted oracle remains reachable |
+| `tall_pipe_jump` | composite traversal: approach and mount a 56–68px pipe, then descend and touch the ground-level finish; mounting and episode completion are reported separately |
 | `pit_leap` | B-level isolation family: jump over a pit whose width bands (40-66px) make the required hold grow monotonically; A-level given, goal-distance shaping, jump-energy cost |
-| `stomp_mount` | B-level teaching family for the adaptive controller: land ON the enemy itself (`goal_on_stomp` — the goal rides the target, only a stomp scores). Distance bands 52-76px set the arc; medium/hard tiers patrol (±10 @ 0.25, ±14 @ 0.4) so the interception point moves during flight; undershoot walks into the enemy and dies, overshoot misses. A-level given, shaping, energy cost |
+| `stomp_mount` | single-jump interception with a supplied A-level jump intent; stationary easy targets, moving medium/hard targets with varied direction and patrol phase; actual collision geometry determines stomp credit and coaching |
 | `bridge_wait` | B-teaching family for the WAIT decision: the opening action is given (forced NOOP, first primitive only), the event-terminated wait releases when the bridge arrives, and the policy crosses on its own. Waits grow 8-30 frames across tiers (hard exceeds the old 16-frame menu); wait-survival shaping and hindsight wait coaching apply |
 | `platform_hop` | B-level isolation family: jump onto a narrow slow-moving platform over a pit (68-110px bands) and ride it to the far ledge; A-level given, shaping, energy cost |
 | `pipe_mount` | B-level isolation family: the A-level decision is given (`a_level_action` forces RIGHT_JUMP through the rollout), the goal sits on the pipe top (42-66px, disjoint height bands per difficulty), and a per-scenario goal-distance shaping reward gives a dense vertical-progress gradient, so only the B-level jump parameters (hold duration versus pipe height) remain to be learned |
+
+`tall_pipe_jump` training and success rehearsal use at least 160 frames, even
+when `rollout_steps` is smaller. Its oracle requires 82–86 frames; the former
+60-frame training limit prevented any successful episode. The epoch metrics
+`training_rollout_steps_max` and `training_rollout_budget_extensions` expose the
+effective budget. Evaluation continues to honor `evaluation_max_steps` exactly.
+
+The mounting jump is coached toward the pipe top, with its target retained
+through landing. Actual support on the pipe anchors a successful hold and
+prevents an erroneous `jump_overreach` penalty. Reaching the pipe horizontally
+without sufficient height instead requests a longer hold. After mounting (or
+passing the pipe), the mount goal encoding is cleared and the final goal remains
+available in the symbolic state. Actions remain policy decisions; walking after
+mounting is not forced. Retreating off the approach side reactivates mounting.
+The family also opts into goal-distance reward shaping to provide feedback when
+approaching or overshooting the finish.
+
+Scenario, difficulty, and family evaluation records include `pipe_metrics`:
+`mount_success_rate` measures actual pipe support, and
+`finish_after_mount_success_rate` measures episode completion among attempts
+that mounted (`null` if none did). Counts are included so aggregation weights
+episodes correctly. The existing `success_rate` still requires touching the
+original goal rectangle. Existing checkpoints load unchanged, but these training
+changes require further training before improved learned accuracy can be claimed.
+
+
+`stomp_mount` samples now carry `parameters.family_revision: 2`. Distance bands
+remain 52–60 / 62–68 / 70–76px. Medium and hard patrols move at 0.6 / 0.9px per
+frame with 20 / 28px total travel, start in either direction, and first reverse
+about 6–12 frames after takeoff, while release can still affect the jump. The
+sample records initial direction and nominal frames to the first turn. Each
+sample's scripted oracle is calibrated against the engine's 1–16-frame hold
+menu and checked for reachability. Evaluation still uses the learned policy.
+Saved older scenarios remain replayable; compare revision 2 results separately
+from the previous patrol distribution, whose reversals came after the jump.
+Variation exercises interception across motion phases; reachability alone does
+not establish that every sample requires mid-flight adaptation.
+
+The engine and coaching share the stomp predicate: integer collision rectangles
+must overlap while Mario descends, with his inferred previous bottom at or above
+the enemy's center. Recorded rectangles and pre-bounce velocity are re-evaluated
+for coaching. Valid off-center stomps anchor the executed hold; misses use the
+horizontal gap during the descending contact window to request one bin longer
+or shorter. Every frame in the arc receives the same contact-time target. A
+historical enemy position is never compared with Mario's later landing position,
+and an unfinished arc without contact-window evidence receives no hold label.
+
+Duration coaching uses categorical cross-entropy on the bin the controller
+samples or selects by argmax; fitting only the distribution's mean could leave
+the executed mode unchanged. Wait targets account for their four-frame bin
+scale. Supplied A-level intent conditions B, the world model, and motor decoding
+before prediction. It receives no on-policy actor credit and cannot be replaced
+by critic candidate search. Oracle demonstrations retain actor supervision and
+one jump span through landing, without off-policy REINFORCE credit.
+
+Stomp scenarios disable positive-x progress reward while retaining target-distance
+shaping. A completed single-jump miss ends with the enemy-hit penalty and a
+terminal training mask. Scenario, difficulty, and family evaluation records
+include `stomp_outcome_counts`: `success`, `collision`, `undershoot`, `overshoot`,
+`no_contact`, `environment_timeout`, or `budget_timeout`. Temporal spans retain
+those failure categories, so a safe miss is no longer reported as an evaluator
+timeout. These changes add no model parameters; checkpoint loading remains
+compatible, but improved learned accuracy requires retraining and evaluation.
+
 
 The first implementation should keep geometry ranges conservative enough that a
 scripted bootstrap oracle can solve every sampled scenario. Harder ranges

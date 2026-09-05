@@ -14,7 +14,6 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
 from retroagi.core import (
     ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
     BASELINE_ARCHITECTURE_NAME,
@@ -43,6 +42,7 @@ from retroagi.core import (
     smb_jump_release_action,
     to_plain_data,
 )
+from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
 
 from .adapter import (
     BLOCK_SMB_SPEC,
@@ -51,8 +51,6 @@ from .adapter import (
     block_smb_deterministic_critic_slots,
 )
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
-from .temporal_spans import build_block_smb_temporal_spans
-from .skills import requested_block_smb_skill_goal
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
@@ -66,7 +64,11 @@ from .monte_carlo import (
     summarize_block_smb_monte_carlo_action_counts,
     summarize_block_smb_monte_carlo_samples,
 )
+from .pipe_traversal import TallPipeTraversal, pipe_completion_metrics, training_rollout_steps
+from .skills import requested_block_smb_skill_goal
+from .stomp import stomp_coaching_target
 from .success import evaluate_fixed_success_thresholds, summarize_fixed_success_metrics
+from .temporal_spans import build_block_smb_temporal_spans
 from .vision import BlockVisionTransformer
 
 BLOCK_SMB_MODEL_NAME = "block_smb_actor_world_model_critic"
@@ -361,9 +363,9 @@ class BlockSMBTrainingConfig:
     # never steers where truth exists.
     engine_support_override: bool = True
     # Per-frame primitive-outcome loss: each completed horizontal jump is
-    # hindsight-relabeled with the hold that would have hit the goal (which
-    # rides the enemy under goal_on_stomp), and every frame's expected hold
-    # regresses quadratically toward it. This is the dense
+    # hindsight-relabeled with a one-bin correction toward contact, or the
+    # executed hold for a successful landing. Cross-entropy supervises the
+    # categorical choice used at execution, rather than its mean. This is the dense
     # geometry-conditioned gradient the duration head does not get from
     # episode-level REINFORCE, and it is bounded and self-terminating —
     # unlike a raw signed-error push, whose asymmetric magnitudes collapse
@@ -531,9 +533,7 @@ class BlockSMBTrainingConfig:
         if not isinstance(self.engine_support_override, bool):
             raise TypeError("engine_support_override must be a bool")
         if self.monte_carlo_validation_repeats_per_difficulty < 0:
-            raise ValueError(
-                "monte_carlo_validation_repeats_per_difficulty must be non-negative"
-            )
+            raise ValueError("monte_carlo_validation_repeats_per_difficulty must be non-negative")
         if not isinstance(self.ranked_candidate_search, bool):
             raise TypeError("ranked_candidate_search must be a bool")
         if self.resume_path is not None and self.init_checkpoint is not None:
@@ -626,6 +626,8 @@ class BlockSMBTransition:
     # HSP1: graph-attached release logit while the primitive is engaged,
     # span-supervised toward "the hindsight-correct hold has elapsed".
     release_logit: torch.Tensor | None = None
+    hold_duration_logits: torch.Tensor | None = None
+    duration_bin_values: torch.Tensor | None = None
 
 
 @dataclass
@@ -1111,10 +1113,7 @@ def update_block_smb_mastery_state(
                 record["bin_pass_rates"][difficulty] = float(bin_rollup["success_rate"])
         unlocked = record["unlocked_difficulties"]
         bin_rates = record["bin_pass_rates"]
-        if (
-            "medium" not in unlocked
-            and float(bin_rates.get("easy", 0.0)) >= family_pass_rate_gate
-        ):
+        if "medium" not in unlocked and float(bin_rates.get("easy", 0.0)) >= family_pass_rate_gate:
             unlocked.append("medium")
         if (
             "hard" not in unlocked
@@ -1127,9 +1126,7 @@ def update_block_smb_mastery_state(
         # the practice weight can ease off gradually. A regression resets
         # the count — the family returns to full focus and, once it passes
         # again, restarts the ramp instead of dropping straight to the floor.
-        record["mastered_evals"] = (
-            record["mastered_evals"] + 1 if record["mastered"] else 0
-        )
+        record["mastered_evals"] = record["mastered_evals"] + 1 if record["mastered"] else 0
         updated[family] = record
     return updated
 
@@ -1301,9 +1298,7 @@ def make_block_smb_model(config: BlockSMBTrainingConfig) -> torch.nn.Module:
         model.ranked_candidate_search = bool(config.ranked_candidate_search)
     if hasattr(model, "deterministic_critic_slots"):
         model.deterministic_critic_slots = (
-            block_smb_deterministic_critic_slots()
-            if config.deterministic_critic_gates
-            else None
+            block_smb_deterministic_critic_slots() if config.deterministic_critic_gates else None
         )
     return model
 
@@ -1380,9 +1375,7 @@ def discounted_returns(
     return values
 
 
-def _write_block_smb_spans(
-    config: BlockSMBTrainingConfig, trajectory: BlockSMBTrajectory
-) -> None:
+def _write_block_smb_spans(config: BlockSMBTrainingConfig, trajectory: BlockSMBTrajectory) -> None:
     """Append the rollout's HSP0 spans to the run's spans JSONL."""
 
     if not config.emit_temporal_spans or config.log_path is None or not trajectory.spans:
@@ -1571,10 +1564,13 @@ def _oracle_hold_frames(actions: tuple[int, ...], step_index: int) -> int | None
     action = int(actions[step_index])
     if not is_smb_jump_action(action):
         return None
+    start = step_index
+    while start > 0 and int(actions[start - 1]) == action:
+        start -= 1
     end = step_index
     while end < len(actions) and int(actions[end]) == action:
         end += 1
-    return max(1, end - step_index)
+    return max(1, end - start)
 
 
 def _oracle_duration_bin_index(
@@ -1601,17 +1597,19 @@ def _oracle_primitive_execution(
     next_action: int | None,
     hold_frames: int | None,
     motor_primitives: Any,
+    was_active: bool = False,
 ) -> SMBPrimitiveExecution:
     action_value = int(action)
-    started = is_smb_jump_action(action_value)
+    holding = is_smb_jump_action(action_value)
+    started = holding and not was_active
     duration_bin_index = _oracle_duration_bin_index(motor_primitives, hold_frames)
     released = False
-    if started and next_action is not None:
+    if holding and next_action is not None:
         released = int(next_action) == int(smb_jump_release_action(action_value))
     return SMBPrimitiveExecution(
         action=action_value,
         started=started,
-        active=started,
+        active=started or was_active,
         released=released,
         cancelled=False,
         duration_bin_index=duration_bin_index,
@@ -1632,6 +1630,7 @@ def _action_from_model(
     oracle_action: int | None = None,
     oracle_next_action: int | None = None,
     oracle_hold_frames: int | None = None,
+    oracle_primitive_active: bool = False,
     forced_action: int | None = None,
     skill_goal: torch.Tensor | None = None,
     wait_event: bool = False,
@@ -1654,6 +1653,8 @@ def _action_from_model(
         episode_mask = torch.as_tensor(
             episode_mask, dtype=batch.src_c.dtype, device=batch.src_c.device
         )
+    supplied_action = oracle_action if oracle_action is not None else forced_action
+    supplied_kwargs = {"forced_action": int(supplied_action)} if supplied_action is not None else {}
     (
         actions1,
         next_state_pred,
@@ -1674,7 +1675,13 @@ def _action_from_model(
         critic_feedback_enabled=critic_feedback_enabled,
         world_model_enabled=world_model_enabled,
         skill_goal=skill_goal,
+        **supplied_kwargs,
     )
+    # Retain genuine actor logits for optional oracle supervision. The
+    # model's B/world-model/motor pathways have already used the supplied intent.
+    policy_logits = getattr(model, "last_policy_logits_a", None)
+    if supplied_action is not None and policy_logits is not None:
+        logits_a = policy_logits
     action_logits = logits_a[:, -1, :BLOCK_SMB_ACTION_COUNT]
     finite_or_raise("action_logits", action_logits)
     distribution = torch.distributions.Categorical(logits=action_logits)
@@ -1712,9 +1719,7 @@ def _action_from_model(
             device=action_logits.device,
         )
     else:
-        action_tensor = (
-            action_logits.argmax(dim=-1) if deterministic else distribution.sample()
-        )
+        action_tensor = action_logits.argmax(dim=-1) if deterministic else distribution.sample()
     execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
     if oracle_action_tensor is not None:
         execution = _oracle_primitive_execution(
@@ -1722,6 +1727,7 @@ def _action_from_model(
             next_action=oracle_next_action,
             hold_frames=oracle_hold_frames,
             motor_primitives=motor_primitives,
+            was_active=oracle_primitive_active,
         )
     elif primitive_executor is not None:
         execution = primitive_executor.execute(
@@ -1738,14 +1744,28 @@ def _action_from_model(
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
-    log_prob = distribution.log_prob(action_tensor).squeeze(0)
-    log_prob = log_prob + _smb_primitive_duration_log_prob(
-        motor_primitives,
-        execution,
-        device=action_logits.device,
-        dtype=log_prob.dtype,
+    # A supplied intent is not an on-policy sample. Only the learned duration
+    # receives policy credit in isolation episodes; demonstrations use CE.
+    log_prob = (
+        action_logits.new_zeros(())
+        if supplied_action is not None
+        else distribution.log_prob(action_tensor).squeeze(0)
     )
+    if oracle_action is None:
+        log_prob = log_prob + _smb_primitive_duration_log_prob(
+            motor_primitives,
+            execution,
+            device=action_logits.device,
+            dtype=log_prob.dtype,
+        )
     entropy = distribution.entropy().squeeze(0)
+    if supplied_action is not None:
+        entropy = action_logits.new_zeros(())
+        duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
+        if oracle_action is None and execution.started and duration_logits is not None:
+            entropy = (
+                torch.distributions.Categorical(logits=duration_logits[:, -1, :]).entropy().mean()
+            )
     primitive_aux_loss = _smb_primitive_auxiliary_loss(
         motor_primitives,
         oracle_action_tensor,
@@ -1912,9 +1932,8 @@ def jump_overreach(
     inside a wide goal is a success, not overreach.
     """
 
-    return (
-        float(held) >= float(_SMB_MAX_DURATION_BIN_VALUE)
-        and realized < target - max(float(tolerance), _SMB_JUMP_TARGET_TOLERANCE)
+    return float(held) >= float(_SMB_MAX_DURATION_BIN_VALUE) and realized < target - max(
+        float(tolerance), _SMB_JUMP_TARGET_TOLERANCE
     )
 
 
@@ -1985,11 +2004,27 @@ def _smb_expected_hold_fraction(
         if values.numel() != probabilities.numel():
             values = None
     if values is None:
-        values = torch.arange(
-            1, probabilities.numel() + 1, device=device, dtype=dtype
-        )
+        values = torch.arange(1, probabilities.numel() + 1, device=device, dtype=dtype)
     max_value = values.detach().abs().max().clamp_min(1.0)
     return (probabilities * values.detach()).sum() / max_value
+
+
+def block_smb_duration_coaching_loss(
+    step: BlockSMBTransition, *, device: torch.device
+) -> torch.Tensor:
+    """Coach the categorical duration that sampling/argmax actually executes."""
+    logits = step.hold_duration_logits.to(device=device)[:, -1, :]
+    values = step.duration_bin_values
+    values = (
+        torch.arange(1, logits.size(-1) + 1, device=device, dtype=logits.dtype)
+        if values is None
+        else torch.as_tensor(values, device=device, dtype=logits.dtype).reshape(-1)
+    )
+    target = float(step.info["primitive_target_hold"]) / float(
+        step.info.get("primitive_duration_scale", 1.0)
+    )
+    index = (values - target).abs().argmin().view(1)
+    return F.cross_entropy(logits, index)
 
 
 def _smb_release_logit(
@@ -2104,6 +2139,9 @@ def collect_trajectory(
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
     trajectory = BlockSMBTrajectory(scenario_name=scenario_name)
+    pipe_traversal = TallPipeTraversal.from_stage(stage.scenario, stage.env)
+    if pipe_traversal is not None:
+        pipe_traversal.observe(stage.env)
     if record_frames:
         trajectory.frames.append(np.asarray(observation).copy())
     world_model_state: WorldModelState | None = None
@@ -2128,32 +2166,25 @@ def collect_trajectory(
     forced_action_scope = block_smb_forced_action_scope(stage.scenario)
     single_jump_scenario = block_smb_single_jump_scenario(stage.scenario)
     engine_enemy_contact = False
-    skill_goal = (
-        requested_block_smb_skill_goal(stage.scenario)
-        if skill_goal_conditioning
-        else None
-    )
+    oracle_primitive_active = False
+    stomp_scenario = bool(getattr(stage.env, "_goal_on_stomp", False))
+    skill_goal = requested_block_smb_skill_goal(stage.scenario) if skill_goal_conditioning else None
     if skill_goal is not None:
         skill_goal = skill_goal.to(device)
     primitive_span: list[int] = []
     primitive_span_is_jump = True
     primitive_direction = 1.0
     primitive_span_start_x = 0.0
+    primitive_span_phase: str | None = None
     wait_spans: list[tuple[int, int, float]] = []
     wait_span_start: int | None = None
     wait_span_start_x = 0.0
     temporal_records: list[dict[str, Any]] = []
 
     def _complete_primitive_span() -> None:
-        # Hindsight hold relabeling: from the finished jump's realized
-        # displacement and the goal position at completion (the goal rides
-        # the enemy under goal_on_stomp, so a patrolling target is measured
-        # where it actually was), compute the hold that WOULD have hit the
-        # target and backfill every frame with it as a regression target.
-        # Bounded and self-terminating: undershoot implies a longer hold,
-        # overshoot a shorter one, and an on-target jump relabels to the
-        # hold that was actually used — unlike a raw signed-error push,
-        # whose asymmetric magnitudes collapsed the head to the floor bin.
+        # Backfill the completed arc with a bounded duration correction.
+        # Stomps compare both collision bodies at the same contact time;
+        # pipe mounts retain their initiation target through phase changes.
         nonlocal primitive_span
         if not primitive_span:
             return
@@ -2165,8 +2196,12 @@ def collect_trajectory(
             return
         mario_center_x = float(env.mario["x"]) + float(env.mario["w"]) / 2.0
         realized = (mario_center_x - primitive_span_start_x) * primitive_direction
-        target = (float(goal.centerx) - primitive_span_start_x) * primitive_direction
-        if realized < 3.0 or target <= 0.0:
+        mounting = pipe_traversal is not None and primitive_span_phase == "mount"
+        target_x, target_halfwidth = (
+            pipe_traversal.target(env) if mounting else (float(goal.centerx), float(goal.w) / 2.0)
+        )
+        target = (target_x - primitive_span_start_x) * primitive_direction
+        if (realized < 3.0 and not mounting) or target <= 0.0:
             return
         held = 0
         for span_index in span:
@@ -2180,11 +2215,32 @@ def collect_trajectory(
         if held <= 0:
             return
 
-        completion_halfwidth = float(
-            temporal_records[-1].get("goal_halfwidth") or 0.0
+        stomp_target = None
+        if stomp_scenario:
+            stomp_target, _ = stomp_coaching_target(
+                [
+                    temporal_records[i]["stomp_geometry"]
+                    for i in span
+                    if temporal_records[i].get("stomp_geometry")
+                ],
+                held,
+            )
+            if stomp_target is None:
+                return  # The unfinished arc has not reached the contact window.
+        completion_halfwidth = target_halfwidth
+        mounted_during_span = mounting and any(
+            temporal_records[i].get("pipe_contact", False) for i in span
         )
 
         def correct_hold_for(frame_target: float, halfwidth: float) -> float:
+            if stomp_target is not None:
+                return stomp_target
+            if mounted_during_span:
+                return float(held)
+            if mounting and abs(frame_target - realized) < halfwidth:
+                # Reaching the pipe's x coordinate below its top is a height
+                # shortfall, not a successful landing or horizontal overshoot.
+                return min(_SMB_MAX_DURATION_BIN_VALUE, float(held) + 1.0)
             return sign_coached_hold(held, realized, frame_target, tolerance=halfwidth)
 
         # Overreach: a full-length jump that still fell short is not a
@@ -2193,7 +2249,11 @@ def collect_trajectory(
         # the layer that decided to jump: flag the initiation frame so the
         # skill network's chosen jump action is suppressed in that state
         # (walk closer first, or do something else entirely).
-        if jump_overreach(held, realized, target, tolerance=completion_halfwidth):
+        if (
+            not stomp_scenario
+            and not mounted_during_span
+            and jump_overreach(held, realized, target, tolerance=completion_halfwidth)
+        ):
             initiation_info = trajectory.transitions[span[0]].info
             if isinstance(initiation_info, dict):
                 initiation_info["jump_overreach"] = True
@@ -2205,23 +2265,19 @@ def collect_trajectory(
             span_info = trajectory.transitions[span_index].info
             if not isinstance(span_info, dict):
                 continue
-            # Mid-flight adaptation training: each frame's coaching target is
-            # computed from where the goal actually was AT THAT FRAME (under
-            # goal_on_stomp the goal rides the monster). A monster reversal
-            # mid-jump therefore shifts the targets of the frames after the
-            # reversal — teaching the action network to revise its duration
-            # belief in the air, which the controller's adaptive setpoint is
-            # already wired to track. For static goals every frame's target
-            # is identical and behavior matches the previous single-target
-            # coaching exactly.
-            frame_goal_x = temporal_records[span_index].get("goal_x")
+            # Every stomp frame learns the same eventual interception hold.
+            # Comparing a historical enemy position with Mario's terminal
+            # position would contradict valid moving-target interceptions.
+            frame_goal_x = target_x if mounting else temporal_records[span_index].get("goal_x")
             frame_target = (
                 (float(frame_goal_x) - primitive_span_start_x) * primitive_direction
                 if frame_goal_x is not None
                 else target
             )
-            frame_halfwidth = float(
-                temporal_records[span_index].get("goal_halfwidth") or 0.0
+            frame_halfwidth = (
+                target_halfwidth
+                if mounting
+                else float(temporal_records[span_index].get("goal_halfwidth") or 0.0)
             )
             frame_correct = correct_hold_for(frame_target, frame_halfwidth)
             span_info["primitive_outcome_target"] = frame_correct / float(
@@ -2229,13 +2285,14 @@ def collect_trajectory(
             )
             span_info["primitive_frame_index"] = offset
             span_info["primitive_target_hold"] = frame_correct
+            if pipe_traversal is not None:
+                span_info["primitive_target_phase"] = primitive_span_phase
+                span_info["primitive_target_x"] = target_x
             # The world model's target for committed-primitive frames is
             # the OUTCOME of the primitive — the state at completion
             # (landing) — not the next frame. A jump's value is invisible
             # one frame ahead; it lives where the arc comes down.
-            span_info["primitive_outcome_batch"] = trajectory.transitions[
-                span[-1]
-            ].next_batch
+            span_info["primitive_outcome_batch"] = trajectory.transitions[span[-1]].next_batch
 
     for step_index in range(rollout_steps):
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
@@ -2249,7 +2306,14 @@ def collect_trajectory(
         oracle_next_action = (
             int(oracle_actions[step_index + 1]) if step_index + 1 < len(oracle_actions) else None
         )
-        step_skill_goal = skill_goal
+        step_phase = pipe_traversal.phase if pipe_traversal is not None else None
+        # Clear the mount request without changing checkpoint dimensions.
+        # The C stream still supplies the finish position; actions stay learned.
+        step_skill_goal = (
+            torch.zeros_like(skill_goal)
+            if skill_goal is not None and step_phase == "finish"
+            else skill_goal
+        )
         pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
         pre_step_mario_y = float(stage.env.mario["y"])
         wait_event = False
@@ -2290,6 +2354,7 @@ def collect_trajectory(
             oracle_action=oracle_action,
             oracle_next_action=oracle_next_action,
             oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
+            oracle_primitive_active=oracle_primitive_active,
             forced_action=forced_action,
             skill_goal=step_skill_goal,
             wait_event=wait_event,
@@ -2299,17 +2364,24 @@ def collect_trajectory(
                 # vision support head is trained against this signal but
                 # never steers here — it only steers where no engine truth
                 # exists (Full SMB).
-                (
-                    SMB_SUPPORT_GROUND
-                    if stage.env.mario.get("on_ground")
-                    else SMB_SUPPORT_AIR
-                )
+                (SMB_SUPPORT_GROUND if stage.env.mario.get("on_ground") else SMB_SUPPORT_AIR)
                 if engine_support
                 else None
             ),
             enemy_contact_override=(engine_enemy_contact if engine_support else None),
         )
+        was_on_ground = bool(stage.env.mario.get("on_ground"))
         next_observation, reward, terminated, truncated, info = stage.step(action)
+        if oracle_action is not None:
+            # Demonstrations share one span from takeoff through landing,
+            # including the flight after button release.
+            landed = (
+                execution.active and not was_on_ground and bool(stage.env.mario.get("on_ground"))
+            )
+            execution = replace(execution, landed=landed)
+            oracle_primitive_active = (
+                execution.active and not landed and not (terminated or truncated)
+            )
         # Engine truth for the NEXT frame's controller decision: an actual
         # bounce (stomp reward) or death this step, never the vision's
         # proximity guess.
@@ -2318,6 +2390,39 @@ def collect_trajectory(
         )
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
+        if stomp_scenario:
+            if info["goal_reached"]:
+                info["stomp_outcome"] = "success"
+            elif info.get("death"):
+                info["stomp_outcome"] = "collision"
+            elif single_jump_scenario and execution.landed:
+                geometry = [
+                    t.info["stomp_geometry"]
+                    for t in trajectory.transitions
+                    if t.info.get("stomp_geometry")
+                ]
+                if info.get("stomp_geometry"):
+                    geometry.append(info["stomp_geometry"])
+                _, outcome = stomp_coaching_target(geometry, 1)
+                info["stomp_outcome"] = outcome
+                info["attempt_failed"] = True
+                terminated = True
+                # A safe missed stomp and a fatal collision both fail the
+                # requested skill; overshooting must not collect a free return.
+                penalty = float(stage.env.reward_config.enemy_hit)
+                reward += penalty
+                info["reward_terms"] = {**info["reward_terms"], "stomp_miss": penalty}
+                info["reward_total"] = float(reward)
+            elif truncated:
+                info["stomp_outcome"] = "environment_timeout"
+        pipe_contact = False
+        if pipe_traversal is not None:
+            pipe_contact = pipe_traversal.observe(stage.env)
+            info["skill_phase"] = step_phase
+            info["pipe_mounted"] = pipe_traversal.mounted
+        if info.get("attempt_failed"):
+            stage._last_episode_mask = 0.0
+            stage._last_terminal = True
         next_batch = apply_block_smb_ablations(
             stage.encode_observation(next_observation, info), ablation_config
         )
@@ -2354,6 +2459,12 @@ def collect_trajectory(
                 ),
                 expected_hold=expected_hold,
                 release_logit=release_logit,
+                hold_duration_logits=getattr(
+                    getattr(model, "last_motor_primitives", None), "hold_duration_logits", None
+                ),
+                duration_bin_values=getattr(
+                    getattr(model, "last_motor_primitives", None), "duration_bin_values", None
+                ),
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -2371,11 +2482,14 @@ def collect_trajectory(
                 "cancelled": bool(execution.cancelled),
                 "death": bool(info.get("death", False)),
                 "goal": bool(info.get("goal_reached", False)),
+                "attempt_failed": bool(info.get("attempt_failed", False)),
+                "stomp_outcome": info.get("stomp_outcome"),
+                "stomp_geometry": info.get("stomp_geometry"),
+                "pipe_contact": pipe_contact,
                 "terminated": bool(terminated),
                 "truncated": bool(truncated),
                 "x_before": pre_step_mario_center_x,
-                "x_after": float(stage.env.mario["x"])
-                + float(stage.env.mario["w"]) / 2.0,
+                "x_after": float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0,
                 "y_before": pre_step_mario_y,
                 "y_after": float(stage.env.mario["y"]),
                 "platform_x": next(
@@ -2416,6 +2530,9 @@ def collect_trajectory(
                 else -1.0
             )
             primitive_span_start_x = pre_step_mario_center_x
+            # Landing changes the live phase before the executor reports
+            # completion, so retain the objective chosen at initiation.
+            primitive_span_phase = step_phase
         elif execution.started:
             # A wait (NOOP) primitive: no displacement relabel, but waits get
             # their own hindsight coaching after the rollout — the correct
@@ -2433,9 +2550,7 @@ def collect_trajectory(
             # The given opening primitive has completed; the policy owns the
             # rest of the episode.
             forced_action = None
-        if wait_span_start is not None and (
-            execution.released or execution.cancelled or done
-        ):
+        if wait_span_start is not None and (execution.released or execution.cancelled or done):
             wait_spans.append((wait_span_start, transition_index, wait_span_start_x))
             wait_span_start = None
         if (
@@ -2462,6 +2577,9 @@ def collect_trajectory(
             if ablation_config.recurrent_state_enabled and next_world_model_state is not None
             else None
         )
+    if stomp_scenario and trajectory.transitions and not trajectory.transitions[-1].done:
+        trajectory.transitions[-1].info["stomp_outcome"] = "budget_timeout"
+        temporal_records[-1]["stomp_outcome"] = "budget_timeout"
     # Rollout budget exhausted with a jump still open (e.g., vision never
     # reported the landing): supervise with the final position — the sign of
     # the error is settled even if post-landing walking inflates it.
@@ -2469,19 +2587,18 @@ def collect_trajectory(
     if wait_span_start is not None:
         wait_spans.append((wait_span_start, len(trajectory.transitions) - 1, wait_span_start_x))
     for span_start, span_end, span_x in wait_spans:
-        target_frames = block_smb_wait_target_frames(
-            temporal_records, span_start, span_x
-        )
+        target_frames = block_smb_wait_target_frames(temporal_records, span_start, span_x)
         if target_frames is None:
             continue
         for offset, index in enumerate(range(span_start, span_end + 1)):
             span_info = trajectory.transitions[index].info
             if isinstance(span_info, dict):
-                span_info["primitive_outcome_target"] = (
-                    target_frames / _SMB_MAX_WAIT_FRAMES
-                )
+                span_info["primitive_outcome_target"] = target_frames / _SMB_MAX_WAIT_FRAMES
                 span_info["primitive_frame_index"] = offset
                 span_info["primitive_target_hold"] = float(target_frames)
+                span_info["primitive_duration_scale"] = (
+                    _SMB_MAX_WAIT_FRAMES / _SMB_MAX_DURATION_BIN_VALUE
+                )
     metadata = block_smb_monte_carlo_metadata(stage.scenario)
     family = ""
     if isinstance(metadata, Mapping):
@@ -2909,9 +3026,7 @@ def compute_block_smb_losses(
         value_pred = model.predict_value(step.batch.src_c.detach())
         reward_pred = model.predict_reward(step.next_state_pred)
         outcome_batch = (
-            step.info.get("primitive_outcome_batch")
-            if isinstance(step.info, Mapping)
-            else None
+            step.info.get("primitive_outcome_batch") if isinstance(step.info, Mapping) else None
         )
         dynamics_target_batch = outcome_batch if outcome_batch is not None else step.next_batch
         predicted_representation = model.transition_representation(step.next_state_pred)
@@ -2963,19 +3078,14 @@ def compute_block_smb_losses(
         critic_terms.append(
             step.criticism.pow(2).mean() + _critic_action_outcome_loss(model, step, device=device)
         )
-        # Per-frame primitive-outcome supervision: regress each jump frame's
-        # expected hold toward the hindsight-relabeled correct hold for that
-        # jump's geometry. Short- and long-target scenarios have different
-        # targets, which a context-blind duration head cannot satisfy — the
-        # gradient is forced into the geometry-conditioned pathway. Applying
-        # it at every in-flight frame (where a patrolling target has moved
-        # since initiation) additionally teaches mid-air belief updates.
+        # Train the discrete duration choice, including in-flight beliefs.
+        # Waits map their frame target back through the executor's scale.
         outcome_target = (
-            step.info.get("primitive_outcome_target")
-            if isinstance(step.info, Mapping)
-            else None
+            step.info.get("primitive_outcome_target") if isinstance(step.info, Mapping) else None
         )
-        if step.expected_hold is not None and outcome_target is not None:
+        if step.hold_duration_logits is not None and outcome_target is not None:
+            primitive_outcome_terms.append(block_smb_duration_coaching_loss(step, device=device))
+        elif step.expected_hold is not None and outcome_target is not None:
             primitive_outcome_terms.append(
                 (step.expected_hold.to(device=device) - float(outcome_target)) ** 2
             )
@@ -3133,6 +3243,12 @@ def train_block_smb_epoch(
     total_returns: list[float] = []
     all_actions: list[int] = []
     update_count = 0
+    rollout_budgets: list[int] = []
+
+    def rollout_budget(scenario) -> int:
+        budget = training_rollout_steps(config.rollout_steps, scenario)
+        rollout_budgets.append(budget)
+        return budget
 
     def flush_update_batch() -> None:
         nonlocal replay, total_update_episodes, update_count
@@ -3176,7 +3292,7 @@ def train_block_smb_epoch(
                 model,
                 stage,
                 scenario_name,
-                rollout_steps=config.rollout_steps,
+                rollout_steps=rollout_budget(scenario),
                 seed=config.seed + epoch * 10_000 + episode,
                 deterministic=False,
                 device=device,
@@ -3193,11 +3309,7 @@ def train_block_smb_epoch(
         replay.add(trajectory)
         if success_replay is not None:
             metadata = block_smb_monte_carlo_metadata(scenario)
-            family = (
-                str(metadata.get("family", "") or "")
-                if isinstance(metadata, Mapping)
-                else ""
-            )
+            family = str(metadata.get("family", "") or "") if isinstance(metadata, Mapping) else ""
             success_replay.add(trajectory, family, scenario_name, scenario)
         total_returns.append(trajectory.total_return)
         all_actions.extend(step.action for step in trajectory.transitions)
@@ -3227,7 +3339,7 @@ def train_block_smb_epoch(
                         model,
                         stage,
                         rehearsal["scenario_id"],
-                        rollout_steps=config.rollout_steps,
+                        rollout_steps=rollout_budget(rehearsal["scenario"]),
                         seed=config.seed + 900_000 + epoch * 100 + rehearsal_index,
                         deterministic=False,
                         device=device,
@@ -3242,9 +3354,7 @@ def train_block_smb_epoch(
                 replay.add(trajectory)
                 total_returns.append(trajectory.total_return)
                 all_actions.extend(step.action for step in trajectory.transitions)
-                family_counts = rehearsal_by_family.setdefault(
-                    rehearsal["family"], [0, 0]
-                )
+                family_counts = rehearsal_by_family.setdefault(rehearsal["family"], [0, 0])
                 family_counts[0] += 1
                 if trajectory.success:
                     family_counts[1] += 1
@@ -3258,9 +3368,7 @@ def train_block_smb_epoch(
                 if len(replay.trajectories) >= update_batch_size:
                     flush_update_batch()
             replay_metrics["success_rehearsals"] = float(len(rehearsals))
-            replay_metrics["success_rehearsal_success_rate"] = (
-                rehearsal_successes / len(rehearsals)
-            )
+            replay_metrics["success_rehearsal_success_rate"] = rehearsal_successes / len(rehearsals)
             # Per-family rehearsal outcomes split "forgot a retained skill"
             # from "was never reliable at it" — the aggregate rate conflates
             # the two.
@@ -3276,6 +3384,10 @@ def train_block_smb_epoch(
     epoch_losses["mean_return"] = float(np.mean(total_returns)) if total_returns else 0.0
     epoch_losses["episodes"] = float(total_update_episodes)
     epoch_losses["optimizer_updates"] = float(update_count)
+    epoch_losses["training_rollout_steps_max"] = float(max(rollout_budgets))
+    epoch_losses["training_rollout_budget_extensions"] = float(
+        sum(budget > config.rollout_steps for budget in rollout_budgets)
+    )
     epoch_losses.update(replay_metrics)
     action_counts = summarize_block_smb_monte_carlo_action_counts(all_actions)
     epoch_losses.update(block_smb_action_count_metric_values("train", action_counts))
@@ -3360,6 +3472,8 @@ def evaluate_block_smb_monte_carlo(
             scenario_successes: list[float] = []
             scenario_actions: list[int] = []
             scenario_max_progress: list[float] = []
+            scenario_mounts: list[bool] = []
+            stomp_outcomes: dict[str, int] = {}
             for episode in range(config.evaluation_episodes):
                 stage = BlockSMBStage(
                     env=MarioScenarioEnv(reward_config=config.reward_config),
@@ -3378,6 +3492,9 @@ def evaluate_block_smb_monte_carlo(
                         record_frames=record_dir is not None,
                         ablation=config.ablation,
                         adaptive_duration_control=config.adaptive_duration_control,
+                        skill_goal_conditioning=config.skill_goal_conditioning,
+                        steady_duration_primitives=config.steady_duration_primitives,
+                        engine_support=config.engine_support_override,
                     )
                 finally:
                     stage.env.close()
@@ -3394,6 +3511,15 @@ def evaluate_block_smb_monte_carlo(
                 scenario_successes.append(float(trajectory.success))
                 scenario_actions.extend(actions)
                 scenario_max_progress.append(max_progress)
+                if sample.family == "stomp_mount":
+                    outcome = str(
+                        trajectory.transitions[-1].info.get("stomp_outcome", "no_contact")
+                    )
+                    stomp_outcomes[outcome] = stomp_outcomes.get(outcome, 0) + 1
+                if sample.family == "tall_pipe_jump":
+                    scenario_mounts.append(
+                        any(step.info.get("pipe_mounted", False) for step in trajectory.transitions)
+                    )
                 # HSP1 primitive metrics: landing rate and duration
                 # calibration of jump spans against hindsight targets.
                 for span in trajectory.spans:
@@ -3413,8 +3539,7 @@ def evaluate_block_smb_monte_carlo(
                     held = span.command.get("held_frames")
                     if target_hold is not None and held is not None:
                         primitive_duration_gaps.append(
-                            abs(float(held) - float(target_hold))
-                            / _SMB_MAX_DURATION_BIN_VALUE
+                            abs(float(held) - float(target_hold)) / _SMB_MAX_DURATION_BIN_VALUE
                         )
                 if record_dir is not None:
                     split_record_dir = record_dir / f"monte_carlo_{split}"
@@ -3446,6 +3571,17 @@ def evaluate_block_smb_monte_carlo(
                 "max_progress": max_progress,
                 "action_counts": action_counts,
             }
+            if sample.family == "tall_pipe_jump":
+                result["pipe_metrics"] = pipe_completion_metrics(
+                    len(scenario_mounts),
+                    sum(scenario_mounts),
+                    sum(
+                        bool(mounted and success)
+                        for mounted, success in zip(scenario_mounts, scenario_successes)
+                    ),
+                )
+            if sample.family == "stomp_mount":
+                result["stomp_outcome_counts"] = stomp_outcomes
             scenario_results[sample.scenario_id] = result
             returns.extend(scenario_returns)
             successes.extend(scenario_successes)
@@ -3512,9 +3648,7 @@ def evaluate_block_smb_monte_carlo(
     evaluation["primitive_metrics"] = {
         "jump_spans": float(primitive_jump_spans),
         "landing_rate": (
-            primitive_jump_landings / primitive_jump_spans
-            if primitive_jump_spans
-            else 0.0
+            primitive_jump_landings / primitive_jump_spans if primitive_jump_spans else 0.0
         ),
         "duration_gap_mean": (
             sum(primitive_duration_gaps) / len(primitive_duration_gaps)
@@ -3547,6 +3681,14 @@ def _add_monte_carlo_rollup(
     scenario_id = str(result.get("scenario_id", ""))
     rollup["scenario_ids"].append(scenario_id)
     rollup["actions"].extend(actions)
+    if "pipe_metrics" in result:
+        counts = rollup.setdefault("pipe_counts", [0, 0, 0])
+        for i, name in enumerate(("episodes", "mount_successes", "finish_after_mount_successes")):
+            counts[i] += int(result["pipe_metrics"][name])
+    if "stomp_outcome_counts" in result:
+        counts = rollup.setdefault("stomp_outcome_counts", {})
+        for outcome, count in result["stomp_outcome_counts"].items():
+            counts[outcome] = counts.get(outcome, 0) + int(count)
     if success_rate < 1.0:
         rollup["failures"].append(
             {
@@ -3555,6 +3697,11 @@ def _add_monte_carlo_rollup(
                 "return": float(result.get("return", 0.0)),
                 "max_progress": float(result.get("max_progress", 0.0)),
                 "action_counts": dict(result.get("action_counts", {})),
+                **(
+                    {"stomp_outcome_counts": dict(result["stomp_outcome_counts"])}
+                    if "stomp_outcome_counts" in result
+                    else {}
+                ),
             }
         )
 
@@ -3577,6 +3724,10 @@ def _finalize_monte_carlo_rollups(
             "failures": failures,
             "action_counts": summarize_block_smb_monte_carlo_action_counts(actions),
         }
+        if "stomp_outcome_counts" in rollup:
+            finalized[str(key)]["stomp_outcome_counts"] = dict(rollup["stomp_outcome_counts"])
+        if "pipe_counts" in rollup:
+            finalized[str(key)]["pipe_metrics"] = pipe_completion_metrics(*rollup["pipe_counts"])
     return finalized
 
 
@@ -3694,6 +3845,9 @@ def evaluate_block_smb(
                         record_frames=record_dir is not None,
                         ablation=config.ablation,
                         adaptive_duration_control=config.adaptive_duration_control,
+                        skill_goal_conditioning=config.skill_goal_conditioning,
+                        steady_duration_primitives=config.steady_duration_primitives,
+                        engine_support=config.engine_support_override,
                     )
                 finally:
                     stage.env.close()
@@ -4056,9 +4210,7 @@ def train_and_evaluate_block_smb(
     else:
         curriculum = build_curriculum(
             config,
-            family_weights=(
-                jump_foundation_family_weights() if jump_foundation_active else None
-            ),
+            family_weights=(jump_foundation_family_weights() if jump_foundation_active else None),
         )
     vector_env = SequentialBlockSMBVectorEnv(
         curriculum,
@@ -4195,9 +4347,7 @@ def train_and_evaluate_block_smb(
                         reason="gate_met",
                         families={
                             family: float(
-                                (foundation_families.get(family) or {}).get(
-                                    "success_rate", 0.0
-                                )
+                                (foundation_families.get(family) or {}).get("success_rate", 0.0)
                             )
                             for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES
                         },
@@ -4210,17 +4360,13 @@ def train_and_evaluate_block_smb(
                     "jump_spans", 0.0
                 ):
                     landing_rate = float(primitive_metrics.get("landing_rate", 0.0))
-                    duration_gap = float(
-                        primitive_metrics.get("duration_gap_mean", 0.0)
-                    )
+                    duration_gap = float(primitive_metrics.get("duration_gap_mean", 0.0))
                     primitive_score = landing_rate - duration_gap
                     last_metrics["eval_primitive_landing_rate"] = landing_rate
                     last_metrics["eval_primitive_duration_gap"] = duration_gap
                     if primitive_score > best_primitive_score and config.checkpoint_path:
                         best_primitive_score = primitive_score
-                        best_path = Path(config.checkpoint_path).with_suffix(
-                            ".best_primitives.pth"
-                        )
+                        best_path = Path(config.checkpoint_path).with_suffix(".best_primitives.pth")
                         if Path(config.checkpoint_path).exists():
                             import shutil
 

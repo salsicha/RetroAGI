@@ -29,7 +29,7 @@ def _locomotion_name(action: int) -> str:
 def _episode_end_reason(record: Mapping[str, Any]) -> str:
     if record.get("goal"):
         return "success"
-    if record.get("death"):
+    if record.get("death") or record.get("attempt_failed"):
         return "failure"
     if record.get("terminated"):
         return "environment_termination"
@@ -79,22 +79,22 @@ def build_block_smb_temporal_spans(
             # active; ends on landing, hazard contact, episode end, or the
             # rollout budget.
             start = index
-            events: list[dict[str, Any]] = (
-                [{"event": "liftoff", "frame": start}] if is_jump else []
-            )
+            events: list[dict[str, Any]] = [{"event": "liftoff", "frame": start}] if is_jump else []
             end = index
             reason = "evaluator_truncation"
             while end < n:
                 r = records[end]
-                if r.get("released") and all(
-                    e["event"] != "release" for e in events
-                ):
+                if r.get("released") and all(e["event"] != "release" for e in events):
                     events.append({"event": "release", "frame": end})
                     if not is_jump:
                         # Steady primitives (walk/wait) complete at their
                         # duration boundary — the release marker frame.
                         reason = "success"
                         break
+                if r.get("attempt_failed"):
+                    events.append({"event": "landing", "frame": end, "outcome": "miss"})
+                    reason = "failure"
+                    break
                 if r.get("cancelled"):
                     events.append({"event": "hazard_contact", "frame": end})
                     reason = "interruption"
@@ -159,14 +159,20 @@ def build_block_smb_temporal_spans(
                     level="motor_primitive",
                     termination_reason=reason,
                     success=reason == "success",
-                    failure_category="death" if reason == "failure" else "",
-                    interruption_source="hazard_contact"
-                    if reason == "interruption"
-                    else "",
+                    failure_category=(
+                        str(records[end].get("stomp_outcome") or "death")
+                        if reason == "failure"
+                        else (
+                            str(records[end].get("stomp_outcome") or "")
+                            if reason != "success"
+                            else ""
+                        )
+                    ),
+                    interruption_source="hazard_contact" if reason == "interruption" else "",
                     command={
-                        "primitive": "jump"
-                        if is_jump
-                        else _locomotion_name(int(record.get("action", -1))),
+                        "primitive": (
+                            "jump" if is_jump else _locomotion_name(int(record.get("action", -1)))
+                        ),
                         "action": int(record.get("action", -1)),
                         "held_frames": held,
                     },
@@ -195,9 +201,9 @@ def build_block_smb_temporal_spans(
         events = []
         while end < n:
             r = records[end]
-            if (
-                float(r.get("x_after", 0.0)) == float(r.get("x_before", 0.0))
-                and name in ("run_right", "run_left")
+            if float(r.get("x_after", 0.0)) == float(r.get("x_before", 0.0)) and name in (
+                "run_right",
+                "run_left",
             ):
                 stall_frames += 1
                 if stall_frames == _PROGRESS_STALL_FRAMES:
@@ -222,7 +228,7 @@ def build_block_smb_temporal_spans(
         last = records[end]
         if last.get("goal"):
             reason = "success"
-        elif last.get("death"):
+        elif last.get("death") or last.get("attempt_failed"):
             reason = "failure"
         elif last.get("terminated"):
             reason = "environment_termination"
@@ -244,7 +250,11 @@ def build_block_smb_temporal_spans(
                 level="motor_primitive",
                 termination_reason=reason,
                 success=reason == "success",
-                failure_category="death" if reason == "failure" else "",
+                failure_category=(
+                    str(records[end].get("stomp_outcome") or "death")
+                    if reason == "failure"
+                    else str(records[end].get("stomp_outcome") or "") if reason != "success" else ""
+                ),
                 command={"primitive": name},
                 state_before={
                     "x": records[start].get("x_before"),
@@ -276,6 +286,9 @@ def build_block_smb_temporal_spans(
         start_frame=0,
         end_frame=n - 1,
         termination_reason=_episode_end_reason(records[-1]),
+        failure_category=(
+            str(records[-1].get("stomp_outcome") or "") if not records[-1].get("goal") else ""
+        ),
         success=bool(records[-1].get("goal")),
         goal=TemporalGoal(
             level="skill",

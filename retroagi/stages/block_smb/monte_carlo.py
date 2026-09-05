@@ -295,7 +295,10 @@ def block_smb_monte_carlo_family_specs(
         },
         "stomp_mount": {
             "enemy_distance": [52, 76],
-            "enemy_speed": [0.0, 0.4],
+            "enemy_speed": [0.0, 0.9],
+            "enemy_initial_direction": [-1, 1],
+            "frames_to_first_turn": [0, 12],
+            "family_revision": [2, 2],
             "patrol_halfwidth": [0, 14],
             "goal": "land on the enemy itself; the goal rides the patrolling target",
             "a_level_action": [2, 2],
@@ -1519,41 +1522,44 @@ def _pit_leap(
 def _stomp_mount(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # B-level teaching family for the adaptive controller: the A-level jump
-    # command is given (forced RIGHT_JUMP) and the goal is to land ON the
-    # enemy. goal_on_stomp makes the goal ride the enemy, so goal-distance
-    # shaping tracks the target and only a genuine stomp scores — over- and
-    # under-shooting both miss, and walking into the enemy dies. Medium and
-    # hard tiers patrol, so the interception point moves during flight and
-    # the executor's in-air duration updates are what close the gap.
+    # Single-jump interception. The moving tiers vary direction and phase,
+    # with a first reversal while jump release can still change the arc.
     enemy_distance, patrol_halfwidth, enemy_speed = {
         "easy": (rng.randint(52, 60), 0, 0.0),
-        "medium": (rng.randint(62, 68), 10, 0.25),
-        "hard": (rng.randint(70, 76), 14, 0.4),
+        "medium": (rng.randint(62, 68), 10, 0.6),
+        "hard": (rng.randint(70, 76), 14, 0.9),
     }[difficulty]
-    spawn_x = 40
-    enemy_x = spawn_x + enemy_distance
+    direction = rng.choice((-1, 1)) if enemy_speed else 1
+    turn_frames = rng.randint(6, 12) if enemy_speed else 0
+    enemy_x = 40 + enemy_distance
+    to_boundary = enemy_speed * turn_frames
+    if direction > 0:
+        patrol_max = enemy_x + to_boundary
+        patrol_min = patrol_max - 2 * patrol_halfwidth
+    else:
+        patrol_min = enemy_x - to_boundary
+        patrol_max = patrol_min + 2 * patrol_halfwidth
     scenario = {
         "world_width": 340,
-        "mario": [spawn_x, 200],
-        "platforms": [
-            [0, 220, 340, 20],
-        ],
-        "enemies": [
-            [
-                enemy_x,
-                206,
-                enemy_x - patrol_halfwidth,
-                enemy_x + patrol_halfwidth,
-                enemy_speed,
-            ]
-        ],
+        "mario": [40, 200],
+        "platforms": [[0, 220, 340, 20]],
+        "enemies": [[enemy_x, 206, patrol_min, patrol_max, enemy_speed, direction]],
         "coins": [],
         "goal": [enemy_x - 2, 186, 16, 20],
         "goal_on_stomp": True,
         "reward_goal_distance_shaping": 2.0,
+        "reward_progress_per_pixel": 0.0,
     }
-    oracle_hold = {"easy": 8, "medium": 10, "hard": 12}[difficulty]
+    # Reachability remains an exact-physics check. Direction/phase variation
+    # invalidates the old single time-indexed hold per tier. Pick a reachable
+    # scripted demonstration; ordinary policy rollouts never execute it.
+    preferred = {"easy": 8, "medium": 10, "hard": 12}[difficulty]
+    oracle_hold = preferred
+    for hold in sorted(range(1, 17), key=lambda h: (abs(h - preferred), h)):
+        actions = _pad([2] * hold + [1] * 60)
+        if validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=60)["reachable"]:
+            oracle_hold = hold
+            break
     actions = _pad([2] * oracle_hold + [1] * 60)
     return (
         scenario,
@@ -1562,10 +1568,10 @@ def _stomp_mount(
             "enemy_x": enemy_x,
             "enemy_speed": enemy_speed,
             "patrol_halfwidth": patrol_halfwidth,
+            "enemy_initial_direction": direction,
+            "frames_to_first_turn": turn_frames,
+            "family_revision": 2,
             "a_level_action": 2,
-            # Single-jump scenario: a stomp already ends the episode with
-            # credit; a miss now ends it at the landing instead of
-            # devolving into hop chains or walk-around timeouts.
             "single_jump": True,
             "difficulty_bin": difficulty,
         },
@@ -1638,6 +1644,7 @@ def _tall_pipe_jump(
         ],
         "coins": [[pipe_x + 10, 220 - pipe_h - 20, 10, 10]],
         "goal": [goal_x, 200, 16, 20],
+        "reward_goal_distance_shaping": 2.0,
     }
     actions = _pad([1] * 38 + [2] * 16 + [1] * 120)
     return (

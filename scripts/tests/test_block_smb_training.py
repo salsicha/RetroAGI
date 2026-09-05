@@ -48,13 +48,8 @@ from retroagi.stages.block_smb import (
 from retroagi.stages.block_smb.train import (
     BLOCK_SMB_JUMP_FOUNDATION_FAMILIES,
     apply_block_smb_ablations,
-    block_smb_jump_overreach_loss,
-    jump_foundation_complete,
-    jump_foundation_family_weights,
-    jump_foundation_initially_active,
-    jump_overreach,
-    sign_coached_hold,
     block_smb_c_stream_slot_spans,
+    block_smb_jump_overreach_loss,
     block_smb_noop_allowed_for_step,
     block_smb_noop_suppression_loss,
     block_smb_oracle_action_loss,
@@ -62,9 +57,14 @@ from retroagi.stages.block_smb.train import (
     collect_trajectory,
     compute_block_smb_losses,
     compute_imagined_rollout_losses,
+    jump_foundation_complete,
+    jump_foundation_family_weights,
+    jump_foundation_initially_active,
+    jump_overreach,
     make_block_smb_model,
     make_target_network,
     save_block_smb_checkpoint,
+    sign_coached_hold,
     target_network_parameter_delta,
     train_block_smb_epoch,
     update_target_network,
@@ -1206,14 +1206,10 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 "tall_pipe_jump:easy": {"success_rate": 1.0},
             },
         }
-        state = update_block_smb_mastery_state(
-            state, evaluation, family_pass_rate_gate=0.9
-        )
+        state = update_block_smb_mastery_state(state, evaluation, family_pass_rate_gate=0.9)
         self.assertTrue(state["flat_run"]["mastered"])
         self.assertFalse(state["tall_pipe_jump"]["mastered"])
-        self.assertEqual(
-            state["tall_pipe_jump"]["unlocked_difficulties"], ["easy", "medium"]
-        )
+        self.assertEqual(state["tall_pipe_jump"]["unlocked_difficulties"], ["easy", "medium"])
         weights = block_smb_mastery_family_weights(
             state, family_pass_rate_gate=0.9, retention_weight=0.25
         )
@@ -1285,9 +1281,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             "families": {"single_gap": {"success_rate": 0.0}},
             "difficulty_bins": {"single_gap:easy": {"success_rate": 0.0}},
         }
-        state = update_block_smb_mastery_state(
-            state, regression, family_pass_rate_gate=0.9
-        )
+        state = update_block_smb_mastery_state(state, regression, family_pass_rate_gate=0.9)
         # A later regression must not re-lock medium: the training mix must not
         # thrash between difficulty distributions.
         self.assertIn("medium", state["single_gap"]["unlocked_difficulties"])
@@ -1316,9 +1310,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             # Nothing is unlocked beyond easy at the initial state.
             self.assertEqual(metadata["parameters"]["difficulty_bin"], "easy")
         shifted = build_mastery_monte_carlo_curriculum(config, state, phase=4)
-        self.assertNotEqual(
-            [name for name, _ in first], [name for name, _ in shifted]
-        )
+        self.assertNotEqual([name for name, _ in first], [name for name, _ in shifted])
 
     def test_config_validates_mastery_fields(self):
         from retroagi.stages.block_smb.train import BlockSMBTrainingConfig
@@ -1366,9 +1358,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             BlockSMBTrainingConfig(ranked_candidate_search="yes")
         model = make_block_smb_model(config)
         self.assertTrue(model.ranked_candidate_search)
-        disabled = make_block_smb_model(
-            BlockSMBTrainingConfig(ranked_candidate_search=False)
-        )
+        disabled = make_block_smb_model(BlockSMBTrainingConfig(ranked_candidate_search=False))
         self.assertFalse(disabled.ranked_candidate_search)
 
         def resolve(extra):
@@ -1428,9 +1418,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         self.assertTrue(config.deterministic_critic_gates)
         model = make_block_smb_model(config)
         self.assertEqual(model.deterministic_critic_slots, slots)
-        disabled = make_block_smb_model(
-            BlockSMBTrainingConfig(deterministic_critic_gates=False)
-        )
+        disabled = make_block_smb_model(BlockSMBTrainingConfig(deterministic_critic_gates=False))
         self.assertIsNone(disabled.deterministic_critic_slots)
 
         def resolve(extra):
@@ -1647,9 +1635,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             logits = torch.zeros(1, 1, 8, requires_grad=True)
             motor = SimpleNamespace(
                 hold_duration_logits=logits,
-                duration_bin_values=torch.tensor(
-                    [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]
-                ),
+                duration_bin_values=torch.tensor([1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]),
             )
             execution = SMBPrimitiveExecution(action=2, started=True, active=True)
             fraction = _smb_expected_hold_fraction(
@@ -1729,9 +1715,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 x_after=14.0,
             ),
         ]
-        spans = build_block_smb_temporal_spans(
-            records, episode_id="e", scenario_id="s", seed=0
-        )
+        spans = build_block_smb_temporal_spans(records, episode_id="e", scenario_id="s", seed=0)
         jump = [s for s in spans if s.command.get("primitive") == "jump"]
         self.assertEqual(len(jump), 1)
         self.assertEqual(jump[0].termination_reason, "success")
@@ -1847,9 +1831,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             trajectories=[trajectory],
         )
         self.assertTrue(torch.isfinite(losses["loss_primitive_outcome"]).item())
-        self.assertGreater(
-            float(losses["primitive_outcome_supervised_steps"].item()), 0.0
-        )
+        self.assertGreater(float(losses["primitive_outcome_supervised_steps"].item()), 0.0)
         # World model targets: committed-primitive frames predict the OUTCOME
         # state (at completion), and all frames of one span share it.
         outcome_frames = [
@@ -2023,10 +2005,9 @@ class TestScopedForcedAction(unittest.TestCase):
 
 
 class TestMovingTargetCoaching(unittest.TestCase):
-    def test_jump_frames_are_coached_against_frame_local_goal_positions(self):
-        # A monster reversal mid-jump must shift the coaching targets of the
-        # frames after the reversal: each in-flight frame is relabeled from
-        # where the goal actually was at that frame, not only at landing.
+    def test_jump_frames_share_the_contact_time_interception_target(self):
+        # A moving target gets one hindsight interception hold for the arc,
+        # evaluated with simultaneous collision geometry.
         from retroagi.stages.block_smb.monte_carlo import (
             sample_block_smb_monte_carlo_scenario,
         )
@@ -2066,6 +2047,7 @@ class TestMovingTargetCoaching(unittest.TestCase):
             and step.info.get("primitive_frame_index") is not None
         ]
         self.assertGreater(len(supervised), 0)
+        self.assertEqual(len(set(supervised)), 1)
         for target in supervised:
             self.assertTrue(math.isfinite(target))
             self.assertGreaterEqual(target, 1.0 / 16.0)
@@ -2198,9 +2180,7 @@ class TestJumpFoundationSequencing(unittest.TestCase):
             generated_scenarios=0,
             monte_carlo_train_samples_per_epoch=15,
         )
-        curriculum = build_curriculum(
-            config, family_weights=jump_foundation_family_weights()
-        )
+        curriculum = build_curriculum(config, family_weights=jump_foundation_family_weights())
         monte_carlo_names = [
             name for name, _scenario in curriculum if name.startswith("block_smb_mc")
         ]
@@ -2212,10 +2192,7 @@ class TestJumpFoundationSequencing(unittest.TestCase):
             )
 
     def test_jump_foundation_gate_uses_mean_over_all_teachers(self):
-        passing = {
-            family: {"success_rate": 0.8}
-            for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES
-        }
+        passing = {family: {"success_rate": 0.8} for family in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES}
         self.assertTrue(jump_foundation_complete(passing, gate=0.75))
         # One collapsed teacher drags the mean below the gate.
         failing = dict(passing)
@@ -2234,16 +2211,12 @@ class TestJumpFoundationSequencing(unittest.TestCase):
         self.assertTrue(jump_foundation_initially_active(config, 0))
         # Mastery gating sequences its own way.
         self.assertFalse(
-            jump_foundation_initially_active(
-                tiny_config(mastery_gated_schedule=True), 0
-            )
+            jump_foundation_initially_active(tiny_config(mastery_gated_schedule=True), 0)
         )
         # Resuming past the cap starts unlocked.
         self.assertFalse(jump_foundation_initially_active(tiny_config(), 30))
         self.assertFalse(
-            jump_foundation_initially_active(
-                tiny_config(jump_foundation_first=False), 0
-            )
+            jump_foundation_initially_active(tiny_config(jump_foundation_first=False), 0)
         )
 
 
@@ -2296,8 +2269,7 @@ class TestSingleJumpScenarios(unittest.TestCase):
         jumps = sum(
             1
             for span in trajectory.spans
-            if span.level == "motor_primitive"
-            and span.command.get("primitive") == "jump"
+            if span.level == "motor_primitive" and span.command.get("primitive") == "jump"
         )
         self.assertEqual(jumps, 1)
 

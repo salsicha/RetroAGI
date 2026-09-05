@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pygame
 
+from .stomp import stomp_collision_geometry
+
 # ── Gym-compatible space stubs (no gym dependency required) ──────────────────
 
 
@@ -272,6 +274,9 @@ class MarioScenarioEnv:
             "jump_held": False,  # was jump action present last frame?
         }
         self._max_x_reached = self.mario["x"]
+        self._progress_per_pixel = float(
+            scenario.get("reward_progress_per_pixel", self.reward_config.progress_per_pixel)
+        )
 
         # Platforms — accept list [x,y,w,h] or dict
         self.platforms = []
@@ -290,9 +295,7 @@ class MarioScenarioEnv:
         )
         for platform in self.platforms:
             rect = platform["rect"]
-            horizontally_over = (
-                mario_rect.right > rect.left and mario_rect.left < rect.right
-            )
+            horizontally_over = mario_rect.right > rect.left and mario_rect.left < rect.right
             drop = rect.top - mario_rect.bottom
             if horizontally_over and 0 <= drop <= 8:
                 self.mario["y"] = float(rect.top - self.mario["h"])
@@ -395,6 +398,7 @@ class MarioScenarioEnv:
         truncated = False
         death = False
         info = {}
+        stomp_geometry = None
 
         jump_pressed = action in [2, 4, 5]
         move_x = 1 if action in [1, 2] else (-1 if action in [3, 4] else 0)
@@ -579,7 +583,7 @@ class MarioScenarioEnv:
         if self.mario["x"] > self._max_x_reached:
             reward_terms["progress"] += (
                 self.mario["x"] - self._max_x_reached
-            ) * self.reward_config.progress_per_pixel
+            ) * self._progress_per_pixel
             self._max_x_reached = self.mario["x"]
 
         # ── 12b. Goal-distance shaping (potential-based, opt-in) ─────────────
@@ -612,10 +616,12 @@ class MarioScenarioEnv:
             if enemy["dead"]:
                 continue
             er = pygame.Rect(enemy["x"], enemy["y"], enemy["w"], enemy["h"])
+            geometry = stomp_collision_geometry(mario_rect, er, self.mario["vy"])
+            if self._goal_on_stomp and stomp_geometry is None:
+                stomp_geometry = geometry
             if not mario_rect.colliderect(er):
                 continue
-            prev_bottom = mario_rect.bottom - self.mario["vy"]
-            if self.mario["vy"] > 0 and prev_bottom <= er.centery:
+            if geometry["stomp"]:
                 # Stomp!
                 enemy["dead"] = True
                 reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
@@ -680,6 +686,8 @@ class MarioScenarioEnv:
             terminated=terminated,
             truncated=truncated,
         )
+        if stomp_geometry is not None:
+            info["stomp_geometry"] = stomp_geometry
         return obs, reward, terminated, truncated, info
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -1003,18 +1011,22 @@ class MarioScenarioEnv:
 
     @staticmethod
     def _parse_enemy(e) -> dict:
-        """Accept list [x,y,pmin,pmax] or [x,y,pmin,pmax,speed] or dict."""
+        """Accept [x,y,pmin,pmax[,speed[,direction]]] or a dictionary."""
         if isinstance(e, dict):
             x, y = float(e["x"]), float(e["y"])
             pmin, pmax = float(e["patrol_min"]), float(e["patrol_max"])
             speed = float(e.get("speed", 1.5))
             edge_aware = bool(e.get("edge_aware", False))
+            direction = int(e.get("direction", 1))
         else:
             x, y = float(e[0]), float(e[1])
             pmin, pmax = float(e[2]), float(e[3])
             speed = float(e[4]) if len(e) > 4 else 1.5
             edge_aware = False
+            direction = int(e[5]) if len(e) > 5 else 1
 
+        if direction not in (-1, 1):
+            raise ValueError("enemy direction must be -1 or 1")
         return {
             "x": x,
             "y": y,
@@ -1023,7 +1035,7 @@ class MarioScenarioEnv:
             "w": 12,
             "h": 14,
             "speed": speed,
-            "direction": 1,
+            "direction": direction,
             "patrol_min": pmin,
             "patrol_max": pmax,
             "edge_aware": edge_aware,
