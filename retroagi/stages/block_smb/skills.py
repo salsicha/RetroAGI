@@ -109,15 +109,11 @@ def achieved_block_smb_skill_goals(
             if abs(displacement) >= _MIN_GAP_DISPLACEMENT:
                 record("clear_gap", abs(displacement))
         elif primitive == "wait":
-            if (
-                span.termination_reason == "success"
-                and span.duration >= _MIN_WAIT_FRAMES
-            ):
+            departures = [e["safe_departure"] for e in span.events if "safe_departure" in e]
+            useful_wait = any(departures) if departures else span.duration >= _MIN_WAIT_FRAMES
+            if span.termination_reason == "success" and useful_wait:
                 record("wait_pass", span.duration)
         elif primitive == "run_left":
-            if (
-                span.termination_reason == "success"
-                and displacement <= -_MIN_RETREAT_DISPLACEMENT
-            ):
+            if span.termination_reason == "success" and displacement <= -_MIN_RETREAT_DISPLACEMENT:
                 record("retreat_recover", abs(displacement))
     return achieved

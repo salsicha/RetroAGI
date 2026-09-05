@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 import pygame
 
+from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
 
 BLOCK_SMB_MC_SCHEMA_VERSION = "block_smb_monte_carlo.v1"
@@ -314,9 +315,11 @@ def block_smb_monte_carlo_family_specs(
             "a_level_action": [2, 2],
         },
         "bridge_wait": {
-            "required_wait": [8, 30],
-            "platform_speed": [0.5, 1.05],
-            "goal": "across the gap after the bridge arrives",
+            "initial_phase_frames": [12, 60],
+            "platform_speed": [1.6, 2.4],
+            "gap_width": [200, 200],
+            "family_revision": [2, 2],
+            "goal": "wait, board the bridge, and reach the far shore and finish",
             "a_level_action": [0, 0],
         },
     }
@@ -607,6 +610,8 @@ def validate_block_smb_monte_carlo_oracle(
         return {
             "reachable": bool(reachable),
             "stomp_completed": bool(env._stomp_credited),
+            "bridge_boarded": bool(env._bridge_boarded),
+            "bridge_crossed": bool(env._bridge_crossed),
             "completion_steps": completion_steps,
             "max_steps": int(max_steps),
             "total_return": float(total_return),
@@ -862,7 +867,11 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
     # validate as reachable.
     if getattr(env, "_goal_credited", False):
         return True
-    if getattr(env, "_goal_on_stomp", False) or getattr(env, "_require_stomp_before_goal", False):
+    if (
+        getattr(env, "_goal_on_stomp", False)
+        or getattr(env, "_require_stomp_before_goal", False)
+        or getattr(env, "_require_bridge_before_goal", False)
+    ):
         return False
     if env.goal is None:
         return False
@@ -1262,55 +1271,50 @@ def _wait_timing(
 def _bridge_wait(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # B-teaching family for the WAIT decision: the opening choice is given
-    # (forced NOOP, first primitive only), the controller's event-terminated
-    # wait releases when the bridge arrives, and the policy crosses with its
-    # mastered run/jump skills. The bridge starts at the far end of its
-    # travel and returns at a speed chosen so it arrives at the near point
-    # as the crossing jump happens (arrival = wait + crossing lead), probed
-    # reachable across every band. Hard waits exceed the old 16-frame
-    # duration ceiling, exercising the 4-64 frame wait range.
-    if difficulty == "easy":
-        required_wait = 8 + rng.randint(0, 4)
-        move_min, lead = 96, 25
-    elif difficulty == "medium":
-        required_wait = 16 + rng.randint(0, 4)
-        move_min, lead = 96, 25
-    else:
-        required_wait = 24 + rng.randint(0, 6)
-        move_min, lead = 100, 20
-    speed = round((130 - move_min) / (required_wait + lead), 3)
+    low, high, min_speed, max_speed = {
+        "easy": (12, 22, 2.0, 2.4),
+        "medium": (30, 42, 1.8, 2.2),
+        "hard": (48, 60, 1.6, 2.0),
+    }[difficulty]
+    phase_frames = rng.randint(low, high)
+    speed = round(rng.uniform(min_speed, max_speed), 3)
+    initial_x = round(75 + phase_frames * speed)
     scenario = {
-        "world_width": 256,
-        "mario": [20, 200],
+        "world_width": 380,
+        "mario": [60, 204],
         "platforms": [
             [0, 220, 85, 20],
             {
-                "x": 130,
+                "x": initial_x,
                 "y": 220,
-                "w": 50,
+                "w": 100,
                 "h": 20,
-                "moving": [move_min, 130, speed],
+                "moving": [75, 245, speed],
+                "direction": -1,
             },
-            [180, 220, 76, 20],
+            [285, 220, 95, 20],
         ],
         "coins": [],
-        "goal": [230, 200, 16, 20],
+        "goal": [350, 200, 16, 20],
+        "require_bridge_before_goal": True,
         "reward_wait_survival": 0.05,
-        "wait_window": [0, required_wait + 8],
         "reward_goal_distance_shaping": 2.0,
     }
-    actions = _pad([0] * required_wait + [1] * 20 + [2] * 16 + [1])
+    actions, wait = bridge_oracle(scenario)
     return (
         scenario,
         {
-            "required_wait": required_wait,
+            "required_wait": wait,
+            "initial_phase_frames": phase_frames,
             "platform_speed": speed,
+            "platform_initial_x": initial_x,
+            "gap_width": 200,
+            "family_revision": 2,
             "a_level_action": 0,
             "a_level_action_scope": "first_primitive",
             "difficulty_bin": difficulty,
         },
-        actions,
+        _pad(actions),
     )
 
 

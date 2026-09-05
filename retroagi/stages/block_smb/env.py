@@ -211,6 +211,9 @@ class MarioScenarioEnv:
         self._goal_on_stomp = False
         self._require_stomp_before_goal = False
         self._stomp_credited = False
+        self._require_bridge_before_goal = False
+        self._bridge_boarded = False
+        self._bridge_crossed = False
         self._goal_credited = False
         self.camera_x = 0.0
         self.score = 0
@@ -330,6 +333,11 @@ class MarioScenarioEnv:
             scenario.get("require_stomp_before_goal", False) or family == "enemy_stomp"
         )
         self._stomp_credited = False
+        self._require_bridge_before_goal = bool(
+            scenario.get("require_bridge_before_goal", False) or family == "bridge_wait"
+        )
+        self._bridge_boarded = False
+        self._bridge_crossed = False
         self._goal_credited = False
         self._track_goal_to_enemy()
         # Per-scenario opt-in overrides the config default coefficient.
@@ -411,6 +419,12 @@ class MarioScenarioEnv:
         info = {}
         stomp_geometry = None
 
+        useful_bridge_wait = False
+        if self._require_bridge_before_goal and action == 0 and self._wait_survival > 0:
+            from .bridge_traversal import bridge_safe_wait_frames
+
+            safe_waits = bridge_safe_wait_frames(self)
+            useful_bridge_wait = bool(safe_waits) and 1 not in safe_waits
         jump_pressed = action in [2, 4, 5]
         move_x = 1 if action in [1, 2] else (-1 if action in [3, 4] else 0)
         # Energy regulator: every frame of held jump costs effort, so eager
@@ -661,11 +675,27 @@ class MarioScenarioEnv:
         # ── 16b. Wait-survival shaping ────────────────────────────────────────
         if (
             self._wait_survival > 0.0
-            and self._wait_window is not None
-            and self._wait_window[0] <= self.steps <= self._wait_window[1]
+            and action == 0
             and not death
+            and (
+                useful_bridge_wait
+                if self._require_bridge_before_goal
+                else (
+                    self._wait_window is not None
+                    and self._wait_window[0] <= self.steps <= self._wait_window[1]
+                )
+            )
         ):
             reward_terms["wait_survival"] += self._wait_survival
+
+        if self._require_bridge_before_goal and self.mario["on_ground"]:
+            support = self.mario.get("_platform")
+            if support and support.get("moving"):
+                self._bridge_boarded = True
+            elif support and self._bridge_boarded:
+                bridge = next((p for p in self.platforms if p.get("moving")), None)
+                if bridge and support["rect"].left > bridge["move_min"]:
+                    self._bridge_crossed = True
 
         # ── 17. Goal ──────────────────────────────────────────────────────────
         # Under goal_on_stomp the rect is only a tracking proxy for shaping
@@ -675,6 +705,7 @@ class MarioScenarioEnv:
             and not self._goal_on_stomp
             and not death
             and (not self._require_stomp_before_goal or self._stomp_credited)
+            and (not self._require_bridge_before_goal or self._bridge_crossed)
             and mario_rect.colliderect(self.goal)
         ):
             terminated = True
@@ -940,6 +971,8 @@ class MarioScenarioEnv:
             "nearest_coin": nc,
             "nearest_enemy": ne,
             "stomp_completed": self._stomp_credited,
+            "bridge_boarded": self._bridge_boarded,
+            "bridge_crossed": self._bridge_crossed,
             "platform_below_dist": plat_below,
             "goal_delta": {"dx": goal_dx, "dy": goal_dy, "dist": goal_dist},
             "support_right_dx": support_right_dx,
@@ -1022,7 +1055,7 @@ class MarioScenarioEnv:
             "move_min": int(mv[0]) if mv else 0,
             "move_max": int(mv[1]) if mv else 0,
             "move_speed": float(mv[2]) if mv else 0.0,
-            "move_dir": 1,
+            "move_dir": int(p.get("direction", 1)) if isinstance(p, dict) else 1,
             "delta_x": 0,
         }
         plat["move_x"] = float(plat["rect"].x)

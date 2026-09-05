@@ -71,7 +71,7 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `tall_pipe_jump` | composite traversal: approach and mount a 56–68px pipe, then descend and touch the ground-level finish; mounting and episode completion are reported separately |
 | `pit_leap` | B-level isolation family: jump over a pit whose width bands (40-66px) make the required hold grow monotonically; A-level given, goal-distance shaping, jump-energy cost |
 | `stomp_mount` | single-jump interception with a supplied A-level jump intent; stationary easy targets, moving medium/hard targets with varied direction and patrol phase; actual collision geometry determines stomp credit and coaching |
-| `bridge_wait` | B-teaching family for the WAIT decision: the opening action is given (forced NOOP, first primitive only), the event-terminated wait releases when the bridge arrives, and the policy crosses on its own. Waits grow 8-30 frames across tiers (hard exceeds the old 16-frame menu); wait-survival shaping and hindsight wait coaching apply |
+| `bridge_wait` | composite wait, board, ride, exit, and finish; the opening NOOP is given for the first primitive, while collision-based departure events and safe duration windows teach timing. Success requires actual bridge support and far-shore support before the goal |
 | `platform_hop` | B-level isolation family: jump onto a narrow slow-moving platform over a pit (68-110px bands) and ride it to the far ledge; A-level given, shaping, energy cost |
 | `pipe_mount` | B-level isolation family: the A-level decision is given (`a_level_action` forces RIGHT_JUMP through the rollout), the goal sits on the pipe top (42-66px, disjoint height bands per difficulty), and a per-scenario goal-distance shaping reward gives a dense vertical-progress gradient, so only the B-level jump parameters (hold duration versus pipe height) remain to be learned |
 
@@ -98,6 +98,51 @@ that mounted (`null` if none did). Counts are included so aggregation weights
 episodes correctly. The existing `success_rate` still requires touching the
 original goal rectangle. Existing checkpoints load unchanged, but these training
 changes require further training before improved learned accuracy can be claimed.
+
+
+`bridge_wait` revision 2 uses a 200px gap and a 100px moving bridge.
+Mario starts near the left edge; a full held jump cannot bypass the gap.
+Success requires actual engine support on the bridge, then the far shore,
+then contact with the final goal. Saved scenarios identified as this family
+also receive the stricter goal gate; previous scores and bypassing oracles
+are not comparable to this revision.
+
+Initial bridge phase varies across easy (12–22), medium (30–42), and hard
+(48–60) phase frames; speeds vary across 2.0–2.4, 1.8–2.2, and 1.6–2.0px/frame,
+respectively. Phase frames set the initial position, not a required wait label.
+The oracle replays the real environment to determine the actual opening wait
+and validate the complete crossing. Different visible initial positions and
+motion histories provide timing evidence.
+
+A shared departure predictor uses acceleration, momentum, integer collision
+footprints, platform reversal, and carry to certify continuously supported
+walking to the next surface. Runtime events and wait coaching use these
+windows instead of a closest-endpoint timestamp. The predictor certifies
+a conservative walking route; actual engine support remains authoritative
+when a policy jumps onto or off the bridge.
+
+Duration coaching maximizes probability across all safe four-frame duration
+bins. Oracle duration labels use those same legal bins, and scalar release
+coaching is omitted when a safe set is available. An event release includes
+its final frame in the wait span. Verified short waits can achieve
+`wait_pass`; an unsafe timer release cannot. Wait-survival reward requires
+NOOP while a future departure window exists and the next departure is not
+ready. Moving actions and unnecessary waiting receive no wait reward.
+
+Goal conditioning progresses through wait, board, ride, exit, and finish.
+The exit objective remains active through the crossing, including brief loss
+of ground support. Boarding jumps target the moving bridge and exit jumps
+target the far shore; actual support anchors successful duration coaching.
+Live and rehearsal training have a 240-frame minimum budget; evaluation
+continues to honor its explicit budget.
+
+Evaluation exposes `bridge_metrics` at scenario, difficulty, and family levels:
+safe opening departures, actual boardings, crossings after boarding, and
+finishes after boarding, with counts and conditional rates (`null` for empty
+denominators). Event and timer release counts distinguish engine-assisted
+timing from duration-head termination. Event-assisted success alone does not
+establish learned timing accuracy. Checkpoint dimensions remain compatible;
+learned accuracy needs a fresh training and evaluation run.
 
 
 `enemy_stomp` revision 2 requires an engine-credited stomp followed by contact

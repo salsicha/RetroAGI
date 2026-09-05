@@ -85,7 +85,17 @@ def build_block_smb_temporal_spans(
             while end < n:
                 r = records[end]
                 if r.get("released") and all(e["event"] != "release" for e in events):
-                    events.append({"event": "release", "frame": end})
+                    events.append(
+                        {
+                            "event": "release",
+                            "frame": end,
+                            **(
+                                {"safe_departure": bool(r["wait_ready"])}
+                                if r.get("wait_ready") is not None
+                                else {}
+                            ),
+                        }
+                    )
                     if not is_jump:
                         # Steady primitives (walk/wait) complete at their
                         # duration boundary — the release marker frame.
@@ -128,6 +138,7 @@ def build_block_smb_temporal_spans(
                     and not records[end + 1].get("started")
                     and not records[end + 1].get("landed")
                     and not records[end + 1].get("cancelled")
+                    and not records[end + 1].get("released")
                 ):
                     # Executor no longer active next frame without a recorded
                     # physical ending (e.g. safety valve): close here. The

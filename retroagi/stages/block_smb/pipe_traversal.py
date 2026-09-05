@@ -32,6 +32,11 @@ def training_rollout_steps(requested: int, scenario: Mapping[str, Any] | None) -
         or block_smb_monte_carlo_metadata(scenario).get("family") == "enemy_stomp"
     ):
         return max(requested, ENEMY_STOMP_MIN_TRAINING_STEPS)
+    if scenario is not None and (
+        scenario.get("require_bridge_before_goal")
+        or block_smb_monte_carlo_metadata(scenario).get("family") == "bridge_wait"
+    ):
+        return max(requested, 240)
     return requested
 
 

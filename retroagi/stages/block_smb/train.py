@@ -50,6 +50,7 @@ from .adapter import (
     BlockSMBStage,
     block_smb_deterministic_critic_slots,
 )
+from .bridge_traversal import bridge_completion_metrics, bridge_phase, bridge_safe_wait_frames
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
@@ -1396,7 +1397,11 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
     # walks into the enemy and dies, which would label deaths as successes.
     if getattr(env, "_goal_credited", False):
         return True
-    if getattr(env, "_goal_on_stomp", False) or getattr(env, "_require_stomp_before_goal", False):
+    if (
+        getattr(env, "_goal_on_stomp", False)
+        or getattr(env, "_require_stomp_before_goal", False)
+        or getattr(env, "_require_bridge_before_goal", False)
+    ):
         return False
     if env.goal is None:
         return False
@@ -1631,6 +1636,9 @@ def _action_from_model(
     oracle_next_action: int | None = None,
     oracle_hold_frames: int | None = None,
     oracle_primitive_active: bool = False,
+    oracle_wait_frames: int | None = None,
+    wait_valid_frames: Sequence[int] | None = None,
+    oracle_wait_started: bool = False,
     recovering_from_stomp: bool = False,
     forced_action: int | None = None,
     skill_goal: torch.Tensor | None = None,
@@ -1732,6 +1740,22 @@ def _action_from_model(
             device=action_tensor.device,
         )
         execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
+    elif oracle_action_tensor is not None and oracle_wait_frames is not None:
+        wait_target = (
+            min(wait_valid_frames, key=lambda n: abs(n - oracle_wait_frames))
+            if wait_valid_frames
+            else None
+        )
+        execution = SMBPrimitiveExecution(
+            action=int(action_tensor.item()),
+            started=oracle_wait_started,
+            active=True,
+            released=oracle_next_action != 0,
+            hold_frames=oracle_wait_frames,
+            duration_bin_index=_oracle_duration_bin_index(
+                motor_primitives, wait_target / 4 if wait_target is not None else None
+            ),
+        )
     elif oracle_action_tensor is not None:
         execution = _oracle_primitive_execution(
             int(action_tensor.item()),
@@ -2047,6 +2071,17 @@ def block_smb_duration_coaching_loss(
         if values is None
         else torch.as_tensor(values, device=device, dtype=logits.dtype).reshape(-1)
     )
+    valid_frames = step.info.get("primitive_valid_hold_frames")
+    if valid_frames:
+        scale = float(step.info.get("primitive_duration_scale", 1.0))
+        valid = torch.as_tensor(valid_frames, device=device, dtype=logits.dtype)
+        indices = (
+            ((values[:, None] * scale - valid[None, :]).abs().min(dim=1).values < 1e-4)
+            .nonzero()
+            .flatten()
+        )
+        if indices.numel():
+            return -torch.logsumexp(F.log_softmax(logits, dim=-1)[:, indices], dim=-1).mean()
     target = float(step.info["primitive_target_hold"]) / float(
         step.info.get("primitive_duration_scale", 1.0)
     )
@@ -2197,6 +2232,10 @@ def collect_trajectory(
     stomp_scenario = bool(getattr(stage.env, "_goal_on_stomp", False))
     enemy_composite = bool(stage.env._require_stomp_before_goal)
     enemy_phase = "stomp" if enemy_composite else None
+    bridge_composite = bool(stage.env._require_bridge_before_goal)
+    bridge_opening = bridge_composite
+    bridge_departure_recorded = False
+    bridge_exit_committed = False
     skill_goal = requested_block_smb_skill_goal(stage.scenario) if skill_goal_conditioning else None
     if skill_goal is not None:
         skill_goal = skill_goal.to(device)
@@ -2227,9 +2266,35 @@ def collect_trajectory(
         realized = (mario_center_x - primitive_span_start_x) * primitive_direction
         mounting = pipe_traversal is not None and primitive_span_phase == "mount"
         intercepting = stomp_scenario or (enemy_composite and primitive_span_phase == "stomp")
+        bridge_target = bridge_composite and primitive_span_phase in (
+            "wait",
+            "board",
+            "ride",
+            "exit",
+        )
+        boarding = bridge_target and primitive_span_phase in ("wait", "board")
         target_x, target_halfwidth = (
             pipe_traversal.target(env) if mounting else (float(goal.centerx), float(goal.w) / 2.0)
         )
+        if bridge_target:
+            bridge = next((p["rect"] for p in env.platforms if p.get("moving")), None)
+            support = (
+                bridge
+                if boarding
+                else next(
+                    (
+                        p["rect"]
+                        for p in env.platforms
+                        if not p.get("moving")
+                        and bridge is not None
+                        and p["rect"].left > bridge.left
+                    ),
+                    None,
+                )
+            )
+            if support is None:
+                return
+            target_x, target_halfwidth = float(support.centerx), (support.w + env.mario["w"]) / 2.0
         if intercepting and env.enemies:
             enemy = env.enemies[0]
             target_x = float(enemy["x"]) + float(enemy["w"]) / 2
@@ -2263,6 +2328,10 @@ def collect_trajectory(
             )
             if stomp_target is None:
                 return  # The unfinished arc has not reached the contact window.
+        bridge_landed = bridge_target and any(
+            temporal_records[i].get("bridge_support" if boarding else "shore_support", False)
+            for i in span
+        )
         completion_halfwidth = target_halfwidth
         mounted_during_span = mounting and any(
             temporal_records[i].get("pipe_contact", False) for i in span
@@ -2271,7 +2340,7 @@ def collect_trajectory(
         def correct_hold_for(frame_target: float, halfwidth: float) -> float:
             if stomp_target is not None:
                 return stomp_target
-            if mounted_during_span:
+            if mounted_during_span or bridge_landed:
                 return float(held)
             if mounting and abs(frame_target - realized) < halfwidth:
                 # Reaching the pipe's x coordinate below its top is a height
@@ -2293,6 +2362,7 @@ def collect_trajectory(
         ) or (
             not intercepting
             and not mounted_during_span
+            and not bridge_landed
             and jump_overreach(held, realized, target, tolerance=completion_halfwidth)
         ):
             initiation_info = trajectory.transitions[span[0]].info
@@ -2309,7 +2379,11 @@ def collect_trajectory(
             # Every stomp frame learns the same eventual interception hold.
             # Comparing a historical enemy position with Mario's terminal
             # position would contradict valid moving-target interceptions.
-            frame_goal_x = target_x if mounting else temporal_records[span_index].get("goal_x")
+            frame_goal_x = (
+                target_x
+                if mounting or bridge_target
+                else temporal_records[span_index].get("goal_x")
+            )
             frame_target = (
                 (float(frame_goal_x) - primitive_span_start_x) * primitive_direction
                 if frame_goal_x is not None
@@ -2317,7 +2391,7 @@ def collect_trajectory(
             )
             frame_halfwidth = (
                 target_halfwidth
-                if mounting
+                if mounting or bridge_target
                 else float(temporal_records[span_index].get("goal_halfwidth") or 0.0)
             )
             frame_correct = correct_hold_for(frame_target, frame_halfwidth)
@@ -2326,7 +2400,7 @@ def collect_trajectory(
             )
             span_info["primitive_frame_index"] = offset
             span_info["primitive_target_hold"] = frame_correct
-            if pipe_traversal is not None or enemy_composite:
+            if pipe_traversal is not None or enemy_composite or bridge_composite:
                 span_info["primitive_target_phase"] = primitive_span_phase
                 span_info["primitive_target_x"] = target_x
             # The world model's target for committed-primitive frames is
@@ -2348,31 +2422,45 @@ def collect_trajectory(
             int(oracle_actions[step_index + 1]) if step_index + 1 < len(oracle_actions) else None
         )
         step_phase = pipe_traversal.phase if pipe_traversal is not None else enemy_phase
+        safe_waits = bridge_safe_wait_frames(stage.env) if bridge_composite else []
+        if bridge_composite:
+            step_phase = bridge_phase(stage.env, bridge_opening)
+            if bridge_exit_committed and not stage.env._bridge_crossed:
+                step_phase = "exit"
         # Clear the mount request without changing checkpoint dimensions.
         # The C stream still supplies the finish position; actions stay learned.
         step_skill_goal = (
             torch.zeros_like(skill_goal)
-            if skill_goal is not None and step_phase in ("finish", "bounce_recovery")
+            if skill_goal is not None
+            and (
+                step_phase in ("finish", "bounce_recovery")
+                or (bridge_composite and step_phase in ("board", "exit"))
+            )
             else skill_goal
         )
         pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
         pre_step_mario_y = float(stage.env.mario["y"])
-        wait_event = False
-        for plat in stage.env.platforms:
-            if not plat.get("moving"):
-                continue
-            # The awaited event: the platform reached the end of its travel
-            # nearest the agent — its closest approach — regardless of the
-            # absolute distance (the agent may wait well back from the edge).
-            near_end = (
-                float(plat["move_min"])
-                if abs(plat["move_min"] - pre_step_mario_center_x)
-                <= abs(plat["move_max"] - pre_step_mario_center_x)
-                else float(plat["move_max"])
-            )
-            if abs(float(plat["move_x"]) - near_end) < 6.0:
-                wait_event = True
-            break
+        wait_event = 1 in safe_waits if bridge_composite else False
+        if not bridge_composite:
+            for plat in stage.env.platforms:
+                if not plat.get("moving"):
+                    continue
+                near_end = (
+                    float(plat["move_min"])
+                    if abs(plat["move_min"] - pre_step_mario_center_x)
+                    <= abs(plat["move_max"] - pre_step_mario_center_x)
+                    else float(plat["move_max"])
+                )
+                wait_event = abs(float(plat["move_x"]) - near_end) < 6.0
+                break
+        oracle_wait_frames = None
+        if bridge_composite and oracle_action == 0:
+            start, end = step_index, step_index
+            while start > 0 and oracle_actions[start - 1] == 0:
+                start -= 1
+            while end < len(oracle_actions) and oracle_actions[end] == 0:
+                end += 1
+            oracle_wait_frames = end - start
         (
             action,
             log_prob,
@@ -2396,6 +2484,12 @@ def collect_trajectory(
             oracle_next_action=oracle_next_action,
             oracle_hold_frames=_oracle_hold_frames(oracle_actions, step_index),
             oracle_primitive_active=oracle_primitive_active,
+            oracle_wait_frames=oracle_wait_frames,
+            wait_valid_frames=(
+                [n for n in range(4, 65, 4) if n in safe_waits] if bridge_composite else None
+            ),
+            oracle_wait_started=oracle_wait_frames is not None
+            and (step_index == 0 or oracle_actions[step_index - 1] != 0),
             recovering_from_stomp=enemy_phase == "bounce_recovery",
             forced_action=forced_action,
             skill_goal=step_skill_goal,
@@ -2424,6 +2518,8 @@ def collect_trajectory(
             oracle_primitive_active = (
                 execution.active and not landed and not (terminated or truncated)
             )
+        if oracle_wait_frames is not None:
+            oracle_primitive_active = False
         # Engine truth for the NEXT frame's controller decision: an actual
         # bounce (stomp reward) or death this step, never the vision's
         # proximity guess.
@@ -2432,6 +2528,19 @@ def collect_trajectory(
         )
         info = dict(info)
         info["goal_reached"] = _goal_reached(stage.env)
+        if bridge_composite:
+            info["skill_phase"] = step_phase
+            if step_phase == "exit" and ((execution.released and wait_event) or action in (1, 2)):
+                bridge_exit_committed = True
+            if action in (3, 4) or (action == 0 and execution.started):
+                bridge_exit_committed = False
+            if not bridge_departure_recorded and action != 0:
+                info["bridge_departure"] = True
+                info["bridge_departure_safe"] = 0 in safe_waits
+                bridge_departure_recorded = True
+            if execution.released and execution.action == 0:
+                info["bridge_wait_release"] = "event" if wait_event else "timer"
+                bridge_opening = False
         stomp_contact = bool((info.get("stomp_geometry") or {}).get("stomp"))
         if enemy_composite:
             if stomp_contact:
@@ -2543,6 +2652,18 @@ def collect_trajectory(
                 "stomp_contact": stomp_contact,
                 "bounce_recovery": step_phase == "bounce_recovery",
                 "pipe_contact": pipe_contact,
+                "bridge_safe_wait_frames": safe_waits if bridge_composite else None,
+                "wait_ready": (
+                    wait_event
+                    if bridge_composite and execution.action == 0 and execution.released
+                    else None
+                ),
+                "bridge_support": bool(
+                    stage.env.mario.get("on_ground")
+                    and stage.env.mario.get("_platform")
+                    and stage.env.mario["_platform"].get("moving")
+                ),
+                "shore_support": bool(info.get("bridge_crossed")),
                 "terminated": bool(terminated),
                 "truncated": bool(truncated),
                 "x_before": pre_step_mario_center_x,
@@ -2592,8 +2713,8 @@ def collect_trajectory(
             primitive_span_phase = step_phase
         elif execution.started:
             # A wait (NOOP) primitive: no displacement relabel, but waits get
-            # their own hindsight coaching after the rollout — the correct
-            # wait is when the recorded moving platform came nearest.
+            # their own hindsight coaching after the rollout. Bridge waits
+            # use certified departure windows from the initiation state.
             primitive_span = []
             wait_span_start = transition_index
             wait_span_start_x = pre_step_mario_center_x
@@ -2645,7 +2766,16 @@ def collect_trajectory(
     if wait_span_start is not None:
         wait_spans.append((wait_span_start, len(trajectory.transitions) - 1, wait_span_start_x))
     for span_start, span_end, span_x in wait_spans:
-        target_frames = block_smb_wait_target_frames(temporal_records, span_start, span_x)
+        valid_frames = None
+        if bridge_composite:
+            safe = temporal_records[span_start].get("bridge_safe_wait_frames") or []
+            valid_frames = [float(n) for n in range(4, 65, 4) if n in safe]
+            if not valid_frames:
+                continue  # No certified departure in this duration menu.
+            held_wait = span_end - span_start + 1
+            target_frames = min(valid_frames, key=lambda n: abs(n - held_wait))
+        else:
+            target_frames = block_smb_wait_target_frames(temporal_records, span_start, span_x)
         if target_frames is None:
             continue
         for offset, index in enumerate(range(span_start, span_end + 1)):
@@ -2654,6 +2784,8 @@ def collect_trajectory(
                 span_info["primitive_outcome_target"] = target_frames / _SMB_MAX_WAIT_FRAMES
                 span_info["primitive_frame_index"] = offset
                 span_info["primitive_target_hold"] = float(target_frames)
+                if valid_frames:
+                    span_info["primitive_valid_hold_frames"] = valid_frames
                 span_info["primitive_duration_scale"] = (
                     _SMB_MAX_WAIT_FRAMES / _SMB_MAX_DURATION_BIN_VALUE
                 )
@@ -3153,7 +3285,12 @@ def compute_block_smb_losses(
         target_hold = (
             step.info.get("primitive_target_hold") if isinstance(step.info, Mapping) else None
         )
-        if step.release_logit is not None and frame_index is not None and target_hold is not None:
+        if (
+            step.release_logit is not None
+            and frame_index is not None
+            and target_hold is not None
+            and not step.info.get("primitive_valid_hold_frames")
+        ):
             should_release = 1.0 if float(frame_index) + 1.0 >= float(target_hold) else 0.0
             release_timing_terms.append(
                 F.binary_cross_entropy_with_logits(
@@ -3532,6 +3669,7 @@ def evaluate_block_smb_monte_carlo(
             scenario_max_progress: list[float] = []
             scenario_mounts: list[bool] = []
             scenario_stomps: list[bool] = []
+            bridge_counts = [0] * 8
             stomp_outcomes: dict[str, int] = {}
             for episode in range(config.evaluation_episodes):
                 stage = BlockSMBStage(
@@ -3570,6 +3708,30 @@ def evaluate_block_smb_monte_carlo(
                 scenario_successes.append(float(trajectory.success))
                 scenario_actions.extend(actions)
                 scenario_max_progress.append(max_progress)
+                if sample.family == "bridge_wait":
+                    departed = any(t.info.get("bridge_departure") for t in trajectory.transitions)
+                    safe = any(t.info.get("bridge_departure_safe") for t in trajectory.transitions)
+                    boarded = any(t.info.get("bridge_boarded") for t in trajectory.transitions)
+                    crossed = any(t.info.get("bridge_crossed") for t in trajectory.transitions)
+                    events = sum(
+                        t.info.get("bridge_wait_release") == "event" for t in trajectory.transitions
+                    )
+                    timers = sum(
+                        t.info.get("bridge_wait_release") == "timer" for t in trajectory.transitions
+                    )
+                    for i, value in enumerate(
+                        (
+                            1,
+                            departed,
+                            safe,
+                            boarded,
+                            crossed,
+                            boarded and trajectory.success,
+                            events,
+                            timers,
+                        )
+                    ):
+                        bridge_counts[i] += int(value)
                 if sample.family == "enemy_stomp":
                     scenario_stomps.append(
                         any(t.info.get("stomp_completed", False) for t in trajectory.transitions)
@@ -3643,6 +3805,8 @@ def evaluate_block_smb_monte_carlo(
                         for mounted, success in zip(scenario_mounts, scenario_successes)
                     ),
                 )
+            if sample.family == "bridge_wait":
+                result["bridge_metrics"] = bridge_completion_metrics(*bridge_counts)
             if sample.family == "enemy_stomp":
                 result["enemy_stomp_metrics"] = stomp_completion_metrics(
                     len(scenario_stomps),
@@ -3757,6 +3921,21 @@ def _add_monte_carlo_rollup(
         counts = rollup.setdefault("pipe_counts", [0, 0, 0])
         for i, name in enumerate(("episodes", "mount_successes", "finish_after_mount_successes")):
             counts[i] += int(result["pipe_metrics"][name])
+    if "bridge_metrics" in result:
+        counts = rollup.setdefault("bridge_counts", [0] * 8)
+        for i, name in enumerate(
+            (
+                "episodes",
+                "opening_departures",
+                "safe_departures",
+                "boardings",
+                "crossings",
+                "finishes_after_boarding",
+                "event_releases",
+                "timer_releases",
+            )
+        ):
+            counts[i] += int(result["bridge_metrics"][name])
     if "enemy_stomp_metrics" in result:
         counts = rollup.setdefault("enemy_stomp_counts", [0, 0, 0])
         for i, name in enumerate(("episodes", "stomp_successes", "finish_after_stomp_successes")):
@@ -3802,6 +3981,10 @@ def _finalize_monte_carlo_rollups(
         }
         if "stomp_outcome_counts" in rollup:
             finalized[str(key)]["stomp_outcome_counts"] = dict(rollup["stomp_outcome_counts"])
+        if "bridge_counts" in rollup:
+            finalized[str(key)]["bridge_metrics"] = bridge_completion_metrics(
+                *rollup["bridge_counts"]
+            )
         if "enemy_stomp_counts" in rollup:
             finalized[str(key)]["enemy_stomp_metrics"] = stomp_completion_metrics(
                 *rollup["enemy_stomp_counts"]
