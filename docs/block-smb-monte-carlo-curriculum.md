@@ -12,6 +12,10 @@ distribution. Training should draw Monte Carlo samples from that distribution;
 promotion should require both fixed-scenario success and held-out distribution
 success.
 
+The September 2026 [remaining-family audit](block-smb-remaining-family-audit.md)
+documents revision 2 geometry, landing credit, local duration coaching, and
+the reproducible fresh full-volume recipe.
+
 ## Implementation Status
 
 P3A is implemented for `block_smb_mc_v1`.
@@ -69,11 +73,11 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `full_smb_opening_proxy` | Block SMB approximation of the early Full SMB 1-1 demands |
 | `mixed_section` | sampled composition of two or three families in one level |
 | `tall_pipe_jump` | composite traversal: approach and mount a 56–68px pipe, then descend and touch the ground-level finish; mounting and episode completion are reported separately |
-| `pit_leap` | B-level isolation family: jump over a pit whose width bands (40-66px) make the required hold grow monotonically; A-level given, goal-distance shaping, jump-energy cost |
+| `pit_leap` | B-level isolation family: jump over a pit whose width bands (40-66px) make the required hold grow monotonically; A-level given, actual far-ledge landing credit, and physics-verified duration sets |
 | `stomp_mount` | single-jump interception with a supplied A-level jump intent; stationary easy targets, moving medium/hard targets with varied direction and patrol phase; actual collision geometry determines stomp credit and coaching |
 | `bridge_wait` | composite wait, board, ride, exit, and finish; the opening NOOP is given for the first primitive, while collision-based departure events and safe duration windows teach timing. Success requires actual bridge support and far-shore support before the goal |
 | `platform_hop` | B-level isolation family: jump onto a narrow slow-moving platform over a pit (68-110px bands) and ride it to the far ledge; A-level given, shaping, energy cost |
-| `pipe_mount` | B-level isolation family: the A-level decision is given (`a_level_action` forces RIGHT_JUMP through the rollout), the goal sits on the pipe top (42-66px, disjoint height bands per difficulty), and a per-scenario goal-distance shaping reward gives a dense vertical-progress gradient, so only the B-level jump parameters (hold duration versus pipe height) remain to be learned |
+| `pipe_mount` | B-level isolation family: the A-level decision is given (`a_level_action` forces RIGHT_JUMP through the rollout), the goal spans the pipe top and requires actual support (42-64px, disjoint height bands per difficulty), and a per-scenario goal-distance shaping reward gives a dense vertical-progress gradient, so only the B-level jump parameters (hold duration versus pipe height) remain to be learned |
 
 `tall_pipe_jump` training and success rehearsal use at least 160 frames, even
 when `rollout_steps` is smaller. Its oracle requires 82–86 frames; the former

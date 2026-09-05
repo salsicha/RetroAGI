@@ -24,7 +24,7 @@ BLOCK_SMB_FAMILY_SKILL_GOALS: dict[str, str] = {
     "pit_leap": "clear_gap",
     "platform_hop": "clear_gap",
     "platform_chain": "clear_gap",
-    "moving_bridge": "clear_gap",
+    "moving_bridge": "wait_pass",
     "chained_obstacles": "clear_gap",
     "stair_climb": "mount_platform",
     "pipe_mount": "mount_platform",

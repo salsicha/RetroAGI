@@ -34,9 +34,18 @@ def training_rollout_steps(requested: int, scenario: Mapping[str, Any] | None) -
         return max(requested, ENEMY_STOMP_MIN_TRAINING_STEPS)
     if scenario is not None and (
         scenario.get("require_bridge_before_goal")
-        or block_smb_monte_carlo_metadata(scenario).get("family") == "bridge_wait"
+        or block_smb_monte_carlo_metadata(scenario).get("family")
+        in ("bridge_wait", "wait_timing", "moving_bridge")
     ):
         return max(requested, 240)
+    if scenario is not None:
+        metadata = block_smb_monte_carlo_metadata(scenario)
+        family = metadata.get("family")
+        if family and not metadata.get("parameters", {}).get("single_jump"):
+            # Composite oracles near 200 frames were always cut off at 160.
+            # Include recovery time for both live rollouts and replay.
+            completion = (metadata.get("oracle") or {}).get("expected_completion_steps") or 0
+            return max(requested, 120, int(completion * 1.5))
     return requested
 
 

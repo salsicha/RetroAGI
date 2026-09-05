@@ -41,7 +41,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "platform_hop",
     "bridge_wait",
 )
-DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 200
+DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 
 
 @dataclass(frozen=True)
@@ -323,13 +323,83 @@ def block_smb_monte_carlo_family_specs(
             "a_level_action": [0, 0],
         },
     }
+    schemas.update(
+        {
+            "single_gap": {"gap_x": [94, 108], "gap_width": [38, 57], "family_revision": [2, 2]},
+            "stair_climb": {
+                "step_count": [3, 3],
+                "step_width": [36, 42],
+                "step_height": [26, 35],
+                "family_revision": [2, 2],
+            },
+            "platform_chain": {
+                "platform_count": [4, 4],
+                "gap_spacing": [22, 38],
+                "platform_tops": [116, 220],
+                "family_revision": [2, 2],
+            },
+            "enemy_hop": {"enemy_x": [94, 130], "enemy_count": [1, 1], "family_revision": [2, 2]},
+            "enemy_patrol": {
+                "enemy_count": [2, 2],
+                "patrol_offset": [-8, 8],
+                "initial_direction": [-1, 1],
+                "enemy_speed": [0.45, 0.75],
+                "family_revision": [2, 2],
+            },
+            "enemy_gap": {
+                "gap_width": [44, 51],
+                "enemy_gap_offset": [22, 42],
+                "family_revision": [2, 2],
+            },
+            "retreat_recovery": {
+                "start_x": [188, 208],
+                "goal_x": [35, 35],
+                "family_revision": [2, 2],
+            },
+        }
+    )
+    for family in ("wait_timing", "moving_bridge"):
+        schemas[family] = {k: v for k, v in schemas["bridge_wait"].items() if k != "a_level_action"}
+    schemas["moving_bridge"]["spawn_x"] = [28, 44]
+    for family in (
+        "chained_obstacles",
+        "chained_enemy_gauntlet",
+        "full_smb_opening_proxy",
+        "mixed_section",
+        "pipe_mount",
+        "pit_leap",
+    ):
+        schemas[family]["family_revision"] = [2, 2]
+    schemas["chained_obstacles"].update(
+        section_count=[4, 4], world_width=[512, 512], enemy_count=[2, 2], pipe_height=[32, 60]
+    )
+    schemas["chained_enemy_gauntlet"].update(
+        section_count=[5, 5], world_width=[544, 544], enemy_count=[2, 2], pipe_count=[1, 1]
+    )
+    schemas["full_smb_opening_proxy"].update(
+        section_count=[4, 4], world_width=[512, 512], pipe_count=[2, 2], pipe_height=[32, 62]
+    )
+    schemas["mixed_section"]["composition"] = ["enemy_gap_pipe", "enemy_two_pipes"]
     return {
         family: BlockSMBScenarioFamilySpec(
             schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
             distribution_id=distribution_id,
             family=family,
             parameter_schema=schema,
-            constraints={**base_constraints, "family": family},
+            constraints={
+                **base_constraints,
+                "family": family,
+                "max_gap_width": (
+                    200
+                    if family in ("bridge_wait", "wait_timing", "moving_bridge")
+                    else (110 if family == "platform_hop" else 66)
+                ),
+                "minimum_landing_width": (
+                    30
+                    if family in ("pipe_mount", "tall_pipe_jump")
+                    else (36 if family == "stair_climb" else 40)
+                ),
+            },
             oracle=oracle,
         )
         for family, schema in schemas.items()
@@ -427,7 +497,7 @@ def sample_block_smb_monte_carlo_scenario(
         oracle = {
             "kind": "scripted_action_sequence",
             "actions": list(actions[:DEFAULT_BLOCK_SMB_MC_MAX_STEPS]),
-            "action_source": f"{distribution_id}:{selected_family}:oracle_v1",
+            "action_source": f"{distribution_id}:{selected_family}:oracle_v{parameters.get('family_revision', 1)}",
             "expected_completion_steps": reachability.get("completion_steps"),
             "expected_min_progress": reachability.get("max_progress"),
         }
@@ -871,6 +941,7 @@ def _goal_reached(env: MarioScenarioEnv) -> bool:
         getattr(env, "_goal_on_stomp", False)
         or getattr(env, "_require_stomp_before_goal", False)
         or getattr(env, "_require_bridge_before_goal", False)
+        or getattr(env, "_goal_requires_support", False)
     ):
         return False
     if env.goal is None:
@@ -900,7 +971,27 @@ def _oracle_rejection_reason(
     return "goal_not_reached"
 
 
-def _generate_family_scenario(
+def _generate_family_scenario(family, rng, *, split, difficulty=None):
+    from .local_traversal import LOCAL_TRAVERSAL_FAMILIES, normalize_oracle_jumps, terrain_oracle
+
+    scenario, params, actions = _generate_family_scenario_raw(
+        family, rng, split=split, difficulty=difficulty
+    )
+    if family in LOCAL_TRAVERSAL_FAMILIES:
+        params["family_revision"] = 2
+        scenario.setdefault("reward_goal_distance_shaping", 2.0)
+        scenario.setdefault("goal_requires_support", True)
+        if family not in ("pipe_mount", "pit_leap", "retreat_recovery"):
+            actions = _pad(normalize_oracle_jumps(scenario, actions))
+            # Preserve a cheap verified script when it works; repair timing
+            # against the actual varied layout instead of rejecting its geometry.
+            if not validate_block_smb_monte_carlo_oracle(scenario, actions)["reachable"]:
+                actions = _pad(terrain_oracle(scenario))
+                params["oracle_calibrated"] = True
+    return scenario, params, actions
+
+
+def _generate_family_scenario_raw(
     family: str,
     rng: random.Random,
     *,
@@ -995,8 +1086,8 @@ def _flat_run(
 def _single_gap(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    first_width = 100
-    gap_width = {"easy": 44, "medium": 48, "hard": 50}[difficulty] + rng.randint(-2, 1)
+    first_width = rng.randint(94, 108)
+    gap_width = {"easy": 40, "medium": 48, "hard": 56}[difficulty] + rng.randint(-2, 1)
     coin_x = rng.randint(112, 128)
     landing_x = first_width + gap_width
     scenario = {
@@ -1006,7 +1097,7 @@ def _single_gap(
         "coins": [[coin_x, 160, 10, 10]],
         "goal": [220, 200, 16, 20],
     }
-    actions = _pad([1] * 10 + [2] * 17 + [1])
+    actions = _pad([1] * max(0, 10 + round((first_width - 100) / 3)) + [2] * 16 + [1])
     return (
         scenario,
         {"gap_x": first_width, "gap_width": gap_width, "difficulty_bin": difficulty},
@@ -1017,7 +1108,8 @@ def _single_gap(
 def _stair_climb(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    step_height = {"easy": 28, "medium": 30, "hard": 30}[difficulty]
+    step_height = {"easy": 26, "medium": 30, "hard": 34}[difficulty] + rng.randint(0, 1)
+    step_width = rng.randint(36, 42)
     coin_a_x = rng.randint(70, 82)
     coin_b_x = rng.randint(110, 122)
     goal_x = rng.randint(216, 228)
@@ -1026,12 +1118,17 @@ def _stair_climb(
         "mario": [20, 200],
         "platforms": [
             [0, 220, 60, 20],
-            [60, 190, 40, 50],
-            [100, 160, 40, 80],
-            [140, 130, 116, 110],
+            [60, 220 - step_height, step_width, step_height + 20],
+            [60 + step_width, 220 - 2 * step_height, step_width, 2 * step_height + 20],
+            [
+                60 + 2 * step_width,
+                220 - 3 * step_height,
+                196 - 2 * step_width,
+                3 * step_height + 20,
+            ],
         ],
         "coins": [[coin_a_x, 170, 10, 10], [coin_b_x, 140, 10, 10]],
-        "goal": [goal_x, 110, 16, 20],
+        "goal": [goal_x, 200 - 3 * step_height, 16, 20],
     }
     # Retimed for the grounded spawn: liftoff now happens on the first
     # frame instead of after a settle, shifting every landing.
@@ -1040,6 +1137,7 @@ def _stair_climb(
         scenario,
         {
             "step_count": 3,
+            "step_width": step_width,
             "step_height": step_height,
             "goal_x": goal_x,
             "difficulty_bin": difficulty,
@@ -1051,49 +1149,57 @@ def _stair_climb(
 def _platform_chain(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    gap = {"easy": 24, "medium": 30, "hard": 36}[difficulty] + rng.randint(-2, 2)
+    low_y = 160 + rng.randint(-4, 4)
+    high_y = 120 + rng.randint(-4, 4)
+    second_x, third_x = 40 + gap, 80 + 2 * gap
+    shore_x = 120 + 3 * gap
+    world_width = max(256, shore_x + 56)
     coin_a_x = rng.randint(78, 96)
     coin_b_x = rng.randint(142, 168)
-    goal_x = rng.randint(224, 234)
+    goal_x = world_width - rng.randint(22, 32)
     scenario = {
-        "world_width": 256,
+        "world_width": world_width,
         "mario": [20, 100],
         "platforms": [
             [0, 120, 40, 10],
-            [70, 160, 40, 10],
-            [140, 120, 40, 10],
-            [200, 220, 56, 20],
+            [second_x, low_y, 40, 10],
+            [third_x, high_y, 40, 10],
+            [shore_x, 220, world_width - shore_x, 20],
         ],
         "coins": [[coin_a_x, 140, 10, 10], [coin_b_x, 100, 10, 10]],
         "goal": [goal_x, 200, 16, 20],
     }
     actions = _pad([1] * 8 + [2] * 16 + [1])
-    return scenario, {"platform_count": 4, "goal_x": goal_x, "difficulty_bin": difficulty}, actions
+    return (
+        scenario,
+        {
+            "gap_spacing": gap,
+            "platform_tops": [120, low_y, high_y, 220],
+            "platform_count": 4,
+            "goal_x": goal_x,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
 
 
 def _moving_bridge(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    speed_range = {"easy": (0.45, 0.55), "medium": (0.65, 0.75), "hard": (0.85, 0.92)}[difficulty]
-    speed = round(rng.uniform(*speed_range), 3)
-    scenario = {
-        "world_width": 256,
-        "mario": [20, 200],
-        "platforms": [
-            [0, 220, 90, 20],
-            {"x": 106, "y": 220, "w": 50, "h": 20, "moving": [96, 146, speed]},
-            [172, 220, 84, 20],
-        ],
-        "coins": [[128, 190, 10, 10]],
-        "goal": [230, 200, 16, 20],
-    }
-    actions = _pad([1] * 10 + [2] * 14 + [1] * 8 + [2] * 14 + [1])
-    return scenario, {"platform_speed": speed, "difficulty_bin": difficulty}, actions
+    scenario, params, _ = _wait_timing(rng, difficulty)
+    # Add a walking approach; the free policy must approach before waiting.
+    scenario["mario"][0] = rng.randint(28, 44)
+    actions, wait = bridge_oracle(scenario)
+    params["spawn_x"] = scenario["mario"][0]
+    params["required_wait"] = wait
+    return scenario, params, _pad(actions)
 
 
 def _enemy_hop(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    enemy_x = {"easy": 104, "medium": 106, "hard": 108}[difficulty] + rng.randint(-2, 2)
+    enemy_x = {"easy": 96, "medium": 112, "hard": 128}[difficulty] + rng.randint(-2, 2)
     coin_x = rng.randint(140, 152)
     scenario = {
         "world_width": 256,
@@ -1103,7 +1209,7 @@ def _enemy_hop(
         "coins": [[coin_x, 190, 10, 10]],
         "goal": [230, 200, 16, 20],
     }
-    actions = _pad([1] * 20 + [2] * 18 + [1])
+    actions = _pad([1] * max(0, 20 + round((enemy_x - 106) / 3)) + [2] * 16 + [1])
     return scenario, {"enemy_x": enemy_x, "difficulty_bin": difficulty}, actions
 
 
@@ -1113,19 +1219,45 @@ def _enemy_patrol(
     speed = round(
         {"easy": 0.5, "medium": 0.6, "hard": 0.7}[difficulty] + rng.uniform(-0.05, 0.05), 3
     )
+    offset = rng.randint(-8, 8)
+    direction = rng.choice((-1, 1))
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
         "platforms": [[0, 220, 256, 20]],
         "enemies": [
-            {"x": 100, "y": 206, "patrol_min": 84, "patrol_max": 130, "speed": speed},
-            {"x": 170, "y": 206, "patrol_min": 150, "patrol_max": 190, "speed": speed},
+            {
+                "x": 100 + offset,
+                "y": 206,
+                "patrol_min": 84 + offset,
+                "patrol_max": 130 + offset,
+                "speed": speed,
+                "direction": direction,
+            },
+            {
+                "x": 170 - offset,
+                "y": 206,
+                "patrol_min": 150 - offset,
+                "patrol_max": 190 - offset,
+                "speed": speed,
+                "direction": -direction,
+            },
         ],
         "coins": [[130, 185, 10, 10], [200, 185, 10, 10]],
         "goal": [230, 200, 16, 20],
     }
     actions = _pad([1] * 12 + [2] * 18 + [1] * 18 + [2] * 18 + [1])
-    return scenario, {"enemy_count": 2, "enemy_speed": speed, "difficulty_bin": difficulty}, actions
+    return (
+        scenario,
+        {
+            "patrol_offset": offset,
+            "initial_direction": direction,
+            "enemy_count": 2,
+            "enemy_speed": speed,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
 
 
 def _enemy_gap(
@@ -1133,20 +1265,29 @@ def _enemy_gap(
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     gap_width = {"easy": 46, "medium": 48, "hard": 50}[difficulty] + rng.randint(-2, 1)
     enemy_speed = round(0.4 + rng.uniform(-0.05, 0.05), 3)
-    first_width = 100
+    first_width = rng.randint(96, 104)
+    enemy_offset = {"easy": 40, "medium": 32, "hard": 24}[difficulty] + rng.randint(-2, 2)
     landing_x = first_width + gap_width
     scenario = {
         "world_width": 256,
         "mario": [20, 200],
         "platforms": [[0, 220, first_width, 20], [landing_x, 220, 256 - landing_x, 20]],
-        "enemies": [[178, 206, 168, 206, enemy_speed]],
+        "enemies": [
+            [
+                landing_x + enemy_offset,
+                206,
+                landing_x + enemy_offset - 10,
+                landing_x + enemy_offset + 28,
+                enemy_speed,
+            ]
+        ],
         "coins": [[120, 160, 10, 10], [205, 185, 10, 10]],
         "goal": [230, 200, 16, 20],
     }
     actions = _pad([1] * 10 + [2] * 17 + [1] * 8 + [2] * 18 + [1])
     return (
         scenario,
-        {"gap_width": gap_width, "enemy_gap_offset": 178 - landing_x, "difficulty_bin": difficulty},
+        {"gap_width": gap_width, "enemy_gap_offset": enemy_offset, "difficulty_bin": difficulty},
         actions,
     )
 
@@ -1219,53 +1360,28 @@ def _retreat_recovery(
     coin_x = rng.randint(110, 130)
     scenario = {
         "world_width": 256,
+        "reward_progress_per_pixel": 0.0,
+        "reward_goal_distance_shaping": 8.0,
         "mario": [start_x, 200],
         "platforms": [[0, 220, 256, 20]],
         "coins": [[coin_x, 200, 10, 10]],
         "goal": [35, 200, 16, 20],
     }
-    return scenario, {"start_x": start_x, "goal_x": 35, "difficulty_bin": difficulty}, _pad([3])
+    return (
+        scenario,
+        {"family_revision": 2, "start_x": start_x, "goal_x": 35, "difficulty_bin": difficulty},
+        _pad([3]),
+    )
 
 
 def _wait_timing(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    wait = {"easy": 18, "medium": 20, "hard": 22}[difficulty] + rng.randint(-1, 1)
-    # The easy bin pairs a slow fractional bridge with a shorter travel range so
-    # the bridge stays close enough to cross with the shared action script.
-    if difficulty == "easy":
-        speed = round(rng.uniform(0.78, 0.88), 3)
-        move_min = 100
-    else:
-        speed = round(rng.uniform(0.95, 1.0), 3)
-        move_min = 90
-    scenario = {
-        "world_width": 256,
-        "mario": [20, 200],
-        "platforms": [
-            [0, 220, 85, 20],
-            {"x": 130, "y": 220, "w": 50, "h": 20, "moving": [move_min, 130, speed]},
-            [180, 220, 76, 20],
-        ],
-        "coins": [[130, 190, 10, 10]],
-        "goal": [230, 200, 16, 20],
-        # Waiting is only instrumentally rewarded through the heavily
-        # discounted goal; a small survival trickle inside the wait window
-        # keeps the credit path from vanishing over long waits.
-        "reward_wait_survival": 0.05,
-        "wait_window": [0, wait + 6],
-    }
-    actions = _pad([0] * wait + [1] * 20 + [2] * 16 + [1])
-    return (
-        scenario,
-        {
-            "wait_window": wait,
-            "platform_speed": speed,
-            "platform_range": [move_min, 130],
-            "difficulty_bin": difficulty,
-        },
-        actions,
-    )
+    # Unlike bridge_wait, both choosing to wait and leaving are learned.
+    scenario, params, actions = _bridge_wait(rng, difficulty)
+    params.pop("a_level_action")
+    params.pop("a_level_action_scope")
+    return scenario, params, actions
 
 
 def _bridge_wait(
@@ -1330,13 +1446,15 @@ def _chained_obstacles(
     second_enemy_speed = round(
         {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty] + rng.uniform(-0.02, 0.05), 3
     )
+    pipe_a_x = 180 + rng.randint(-6, 6)
+    pipe_b_x = 318 + rng.randint(-6, 6)
     scenario = {
         "world_width": 512,
         "mario": [20, 200],
         "platforms": [
             [0, 220, 512, 20],
-            [180, 220 - pipe_a_h, 28, pipe_a_h],
-            [318, 220 - pipe_b_h, 32, pipe_b_h],
+            [pipe_a_x, 220 - pipe_a_h, 28, pipe_a_h],
+            [pipe_b_x, 220 - pipe_b_h, 32, pipe_b_h],
         ],
         "enemies": [
             [enemy_x, 206, enemy_x, enemy_x, 0],
@@ -1364,6 +1482,7 @@ def _chained_obstacles(
             "world_width": 512,
             "enemy_count": 2,
             "pipe_count": 2,
+            "pipe_positions": [pipe_a_x, pipe_b_x],
             "pipe_heights": [pipe_a_h, pipe_b_h],
             "difficulty_bin": difficulty,
         },
@@ -1381,13 +1500,14 @@ def _chained_enemy_gauntlet(
     patrol_speed = round(
         {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty] + rng.uniform(-0.05, 0.05), 3
     )
+    pipe_x = 370 + rng.randint(-8, 8)
     scenario = {
         "world_width": 544,
         "mario": [20, 200],
         "platforms": [
             [0, 220, 180, 20],
             [landing_x, 220, 544 - landing_x, 20],
-            [370, 220 - pipe_h, 30, pipe_h],
+            [pipe_x, 220 - pipe_h, 30, pipe_h],
         ],
         "enemies": [
             [96, 206, 96, 96, 0],
@@ -1427,6 +1547,7 @@ def _chained_enemy_gauntlet(
             "gap_count": 1,
             "gap_width": gap_width,
             "pipe_count": 1,
+            "pipe_x": pipe_x,
             "pipe_height": pipe_h,
             "difficulty_bin": difficulty,
         },
@@ -1443,10 +1564,11 @@ def _full_smb_opening_proxy(
     scenario, params, actions = _chained_obstacles(rng, difficulty)
     scenario = copy.deepcopy(scenario)
     tall_pipe_h = {"easy": 50, "medium": 56, "hard": 60}[difficulty] + rng.randint(-2, 2)
-    scenario["platforms"][2] = [318, 220 - tall_pipe_h, 32, tall_pipe_h]
+    scenario["platforms"][2] = [params["pipe_positions"][1], 220 - tall_pipe_h, 32, tall_pipe_h]
     params = {
         **params,
-        "section_count": 5,
+        "section_count": 4,
+        "proxy_only": True,
         "families": ["enemy_hop", "pipe_jump", "tall_pipe_jump", "enemy_patrol"],
         "pipe_heights": [params["pipe_heights"][0], tall_pipe_h],
         "difficulty_bin": difficulty,
@@ -1457,13 +1579,32 @@ def _full_smb_opening_proxy(
 def _mixed_section(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    scenario, params, actions = _chained_enemy_gauntlet(rng, difficulty)
+    composition = rng.choice(("enemy_gap_pipe", "enemy_two_pipes"))
+    builder = _chained_enemy_gauntlet if composition == "enemy_gap_pipe" else _chained_obstacles
+    scenario, params, actions = builder(rng, difficulty)
     params = {
         **params,
-        "families": ["enemy_hop", "single_gap", "enemy_patrol", "pipe_jump"],
+        "composition": composition,
+        "families": (
+            ["enemy_hop", "single_gap", "enemy_patrol", "pipe_jump"]
+            if composition == "enemy_gap_pipe"
+            else ["enemy_hop", "pipe_jump", "enemy_patrol"]
+        ),
         "difficulty_bin": difficulty,
     }
     return scenario, params, actions
+
+
+def _verified_isolation_hold(scenario):
+    from .local_traversal import local_objective, safe_jump_holds
+
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        valid = safe_jump_holds(env, local_objective(env), 1)
+        return valid[len(valid) // 2] if valid else 16
+    finally:
+        env.close()
 
 
 def _pipe_mount(
@@ -1485,7 +1626,7 @@ def _pipe_mount(
     }[difficulty]
     pipe_x, pipe_width = 120, 30
     spawn_distance = 30
-    goal_x = pipe_x + rng.randint(2, 12)
+    goal_x = pipe_x
     scenario = {
         "world_width": 256,
         "mario": [pipe_x - spawn_distance, 200],
@@ -1494,15 +1635,17 @@ def _pipe_mount(
             [pipe_x, 220 - pipe_height, pipe_width, pipe_height],
         ],
         "coins": [],
-        "goal": [goal_x, 220 - pipe_height - 20, 16, 20],
+        "goal": [goal_x, 220 - pipe_height - 20, pipe_width, 20],
         "reward_goal_distance_shaping": 2.0,
+        "goal_requires_support": True,
+        "single_jump_attempt": True,
         # No jump-energy tax: in a single-jump episode an over-hold misses
         # the target and fails outright, which is the real minimal-
         # sufficient-hold pressure. A per-frame tax made the 1-frame tap
         # the cheapest FAILURE and collapsed the duration head to the
         # floor bin before coaching could walk it anywhere.
     }
-    oracle_hold = {"easy": 12, "medium": 14, "hard": 16}[difficulty]
+    oracle_hold = _verified_isolation_hold(scenario)
     actions = _pad([2] * oracle_hold + [1] * 30)
     return (
         scenario,
@@ -1519,6 +1662,7 @@ def _pipe_mount(
             # mounting the pipe (goal on its top) is credited on landing and
             # anything else is an immediate failure.
             "single_jump": True,
+            "family_revision": 2,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -1555,8 +1699,10 @@ def _pit_leap(
         "coins": [],
         "goal": [far_x, 200, 320 - far_x - 4, 20],
         "reward_goal_distance_shaping": 2.0,
+        "goal_requires_support": True,
+        "single_jump_attempt": True,
     }
-    oracle_hold = {"easy": 10, "medium": 12, "hard": 16}[difficulty]
+    oracle_hold = _verified_isolation_hold(scenario)
     actions = _pad([2] * oracle_hold + [1] * 40)
     return (
         scenario,
@@ -1565,6 +1711,7 @@ def _pit_leap(
             "edge_x": edge_x,
             "a_level_action": 2,
             "single_jump": True,
+            "family_revision": 2,
             "difficulty_bin": difficulty,
         },
         actions,

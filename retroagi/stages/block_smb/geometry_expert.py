@@ -49,9 +49,24 @@ def snapshot_env_state(env: MarioScenarioEnv) -> dict[str, Any]:
     """Copy every field of the env that ``step`` mutates."""
 
     mario = dict(env.mario)
-    mario["_platform"] = None  # recomputed inside every step before use
+    support_index = next(
+        (i for i, p in enumerate(env.platforms) if p is mario.get("_platform")), None
+    )
+    mario["_platform"] = None
+    mutable_flags = (
+        "_goal_credited",
+        "_stomp_credited",
+        "_bridge_boarded",
+        "_bridge_crossed",
+        "_attempt_failed",
+        "_prev_goal_distance",
+        "_episode_energy",
+    )
     return {
         "mario": mario,
+        "support_index": support_index,
+        "goal": env.goal.copy() if env.goal is not None else None,
+        "mutable_flags": {name: getattr(env, name) for name in mutable_flags if hasattr(env, name)},
         "platforms": [
             {**{k: v for k, v in plat.items() if k != "rect"}, "rect": plat["rect"].copy()}
             for plat in env.platforms
@@ -77,6 +92,11 @@ def restore_env_state(env: MarioScenarioEnv, snapshot: Mapping[str, Any]) -> Non
         {**{k: v for k, v in plat.items() if k != "rect"}, "rect": plat["rect"].copy()}
         for plat in snapshot["platforms"]
     ]
+    support_index = snapshot.get("support_index")
+    env.mario["_platform"] = env.platforms[support_index] if support_index is not None else None
+    env.goal = snapshot["goal"].copy() if snapshot.get("goal") is not None else None
+    for name, value in snapshot.get("mutable_flags", {}).items():
+        setattr(env, name, value)
     env.coins = [
         {"rect": coin["rect"].copy(), "collected": coin["collected"]} for coin in snapshot["coins"]
     ]

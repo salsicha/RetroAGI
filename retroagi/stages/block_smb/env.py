@@ -214,6 +214,9 @@ class MarioScenarioEnv:
         self._require_bridge_before_goal = False
         self._bridge_boarded = False
         self._bridge_crossed = False
+        self._goal_requires_support = False
+        self._single_jump_attempt = False
+        self._attempt_failed = False
         self._goal_credited = False
         self.camera_x = 0.0
         self.score = 0
@@ -334,11 +337,19 @@ class MarioScenarioEnv:
         )
         self._stomp_credited = False
         self._require_bridge_before_goal = bool(
-            scenario.get("require_bridge_before_goal", False) or family == "bridge_wait"
+            scenario.get("require_bridge_before_goal", False)
+            or family in ("bridge_wait", "wait_timing", "moving_bridge")
         )
         self._bridge_boarded = False
         self._bridge_crossed = False
         self._goal_credited = False
+        self._goal_requires_support = bool(
+            scenario.get("goal_requires_support") or family in ("pit_leap", "pipe_mount")
+        )
+        self._single_jump_attempt = bool(
+            scenario.get("single_jump_attempt") or family in ("pit_leap", "pipe_mount")
+        )
+        self._attempt_failed = False
         self._track_goal_to_enemy()
         # Per-scenario opt-in overrides the config default coefficient.
         self._goal_distance_shaping = float(
@@ -706,11 +717,28 @@ class MarioScenarioEnv:
             and not death
             and (not self._require_stomp_before_goal or self._stomp_credited)
             and (not self._require_bridge_before_goal or self._bridge_crossed)
+            and (
+                not self._goal_requires_support
+                or (
+                    self.mario["on_ground"]
+                    and self.mario.get("_platform") is not None
+                    and self.mario["_platform"]["rect"].top == self.goal.bottom
+                )
+            )
             and mario_rect.colliderect(self.goal)
         ):
             terminated = True
             reward_terms["goal"] += self.reward_config.goal
             self._goal_credited = True
+
+        if (
+            self._single_jump_attempt
+            and not prev_on_ground
+            and self.mario["on_ground"]
+            and not self._goal_credited
+        ):
+            self._attempt_failed = True
+            terminated = True
 
         # ── 18. Timeout ───────────────────────────────────────────────────────
         if self.steps >= self.max_steps:
@@ -973,6 +1001,7 @@ class MarioScenarioEnv:
             "stomp_completed": self._stomp_credited,
             "bridge_boarded": self._bridge_boarded,
             "bridge_crossed": self._bridge_crossed,
+            "attempt_failed": self._attempt_failed,
             "platform_below_dist": plat_below,
             "goal_delta": {"dx": goal_dx, "dy": goal_dy, "dist": goal_dist},
             "support_right_dx": support_right_dx,

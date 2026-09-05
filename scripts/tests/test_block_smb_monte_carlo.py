@@ -119,11 +119,21 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         self.assertGreaterEqual(sample.scenario["world_width"], 512)
         self.assertGreaterEqual(len(sample.scenario.get("platforms", [])), 3)
         self.assertGreaterEqual(len(sample.scenario.get("enemies", [])), 2)
-        self.assertEqual(sample.parameters["section_count"], 5)
-        self.assertIn("single_gap", sample.parameters["families"])
+        self.assertEqual(
+            sample.parameters["section_count"],
+            5 if sample.parameters["composition"] == "enemy_gap_pipe" else 4,
+        )
+        self.assertEqual(
+            "single_gap" in sample.parameters["families"],
+            sample.parameters["composition"] == "enemy_gap_pipe",
+        )
         self.assertTrue(sample.reachability["reachable"])
         actions = sample.oracle["actions"]
-        self.assertGreaterEqual(actions.count(2), 60)
+        # Count distinct jumps; revision 2 holds stay within the 16-frame menu.
+        starts = sum(
+            action == 2 and (i == 0 or actions[i - 1] != 2) for i, action in enumerate(actions)
+        )
+        self.assertGreaterEqual(starts, 3)
         self.assertGreaterEqual(actions.count(1), 100)
         reachability = validate_block_smb_monte_carlo_oracle(
             sample.scenario,
@@ -237,9 +247,7 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                 else:
                     self.assertGreater(parameters["enemy_speed"], 0.0)
                     self.assertLess(enemy[2], enemy[3])
-                distances.setdefault(difficulty, []).append(
-                    int(parameters["enemy_distance"])
-                )
+                distances.setdefault(difficulty, []).append(int(parameters["enemy_distance"]))
         self.assertLess(max(distances["easy"]), min(distances["medium"]))
         self.assertLess(max(distances["medium"]), min(distances["hard"]))
 
@@ -260,9 +268,7 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                 # The A-level decision is given to the rollout.
                 self.assertEqual(parameters["a_level_action"], 2)
                 # Dense vertical-progress gradient is enabled per scenario.
-                self.assertEqual(
-                    sample.scenario["reward_goal_distance_shaping"], 2.0
-                )
+                self.assertEqual(sample.scenario["reward_goal_distance_shaping"], 2.0)
                 # The goal sits on the pipe top.
                 pipe_height = int(parameters["pipe_height"])
                 goal = sample.scenario["goal"]
@@ -321,13 +327,9 @@ class TestBridgeWaitFamily(unittest.TestCase):
                 )
                 self.assertTrue(sample.reachability["reachable"], (difficulty, seed))
                 self.assertEqual(sample.parameters["a_level_action"], 0)
-                self.assertEqual(
-                    sample.parameters["a_level_action_scope"], "first_primitive"
-                )
+                self.assertEqual(sample.parameters["a_level_action_scope"], "first_primitive")
                 self.assertEqual(sample.scenario["reward_wait_survival"], 0.05)
-                waits.setdefault(difficulty, []).append(
-                    int(sample.parameters["required_wait"])
-                )
+                waits.setdefault(difficulty, []).append(int(sample.parameters["required_wait"]))
         self.assertLess(max(waits["easy"]), min(waits["medium"]))
         self.assertLess(max(waits["medium"]), min(waits["hard"]))
         # Hard waits exceed the old 16-frame duration menu ceiling.
