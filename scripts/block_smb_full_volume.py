@@ -7,8 +7,13 @@ long episodes; it writes diagnostics but never resumes or creates a policy run.
 
 import argparse
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
+
+# CUDA reads this before its first cuBLAS operation. Set it for both the
+# deterministic preflight and the detached production run.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import torch
 
@@ -41,6 +46,7 @@ def main():
         raise FileExistsError(f"Use a fresh output directory: {args.output_dir}")
     vision_factory, _ = _make_vision_factory(config, None)
     if args.preflight:
+        torch.use_deterministic_algorithms(config.deterministic)
         torch.manual_seed(config.seed)
         device = torch.device(config.device)
         # Full-sized model and real observation pipeline, with successful

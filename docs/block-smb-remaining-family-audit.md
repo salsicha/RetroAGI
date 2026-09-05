@@ -95,17 +95,18 @@ mastery sample covered all 21 families.
 The [checked-in recipe](../scripts/configs/block_smb_full_volume_revision2.json)
 starts a fresh policy using the existing frozen Block ViT:
 
-    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m scripts.block_smb_full_volume       --output-dir artifacts/block_smb/full_volume_20260905_family_revision2_seed20260905
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m scripts.block_smb_full_volume       --output-dir artifacts/block_smb/full_volume_20260905_family_revision2_seed20260905_retry1
 
 It keeps 70 epochs, 512 Monte Carlo samples per epoch, mastery scheduling,
 failure replay, and success rehearsal. Evaluation runs every five epochs with
 320 frames. Gamma increases from 0.95 to 0.99 to keep distant finishes
 influential. Eight episodes per update, down from sixteen, leave memory for
-longer graphs. The foundation phase retains its 30-epoch maximum and can
-graduate earlier at an evaluation gate.
+longer graphs. Mastery scheduling starts all families at easy and unlocks their
+harder tiers; the separate foundation-only phase is disabled in this mode.
 
 The launcher's --preflight option tests the full-sized CUDA model, real frozen
 perception, and successful pipe/bridge/chained trajectories without creating
-or resuming a policy run. The launcher refuses to overwrite an existing event
+or resuming a policy run. The launcher sets the cuBLAS workspace required by deterministic CUDA training
+and refuses to overwrite an existing event
 log. Revised scores require a fresh training/evaluation run; changes to geometry
 and credit make some old scores directly incomparable.

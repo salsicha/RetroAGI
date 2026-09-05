@@ -60,7 +60,7 @@
   "imagined_rollout_horizon": 0,
   "imagined_rollout_weight": 0.0,
   "init_checkpoint": null,
-  "jump_foundation_first": true,
+  "jump_foundation_first": false,
   "jump_foundation_gate": 0.75,
   "jump_foundation_max_epochs": 30,
   "jump_overreach_weight": 0.25,
