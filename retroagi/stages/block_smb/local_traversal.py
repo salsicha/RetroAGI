@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from .geometry_expert import restore_env_state, snapshot_env_state
 
 LOCAL_TRAVERSAL_FAMILIES = frozenset(
-    "pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery "
+    "tall_pipe_jump pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery "
     "platform_chain mixed_section full_smb_opening_proxy enemy_patrol enemy_gap "
     "chained_obstacles chained_enemy_gauntlet".split()
 )
@@ -30,6 +30,8 @@ class LocalObjective:
 
     def reached(self, env) -> bool:
         m = env.mario
+        if self.kind == "stomp":
+            return env._stomp_credited
         if self.kind in ("finish", "retreat"):
             return env._goal_credited
         if self.enemy_index is not None:
@@ -83,7 +85,16 @@ def local_objective(env) -> LocalObjective:
             for i, p in enumerate(env.platforms)
             if not p.get("moving") and p["rect"].left >= edge
         ]
-        if landings:
+        # A raised pipe ending above continuous lower floor is a descent,
+        # not a pit. Calling it a gap selects the next pipe as a landing and
+        # requests an impossible pipe-to-pipe jump instead of approaching it.
+        lower_floor = any(
+            p["rect"].left <= edge < p["rect"].right
+            and p["rect"].top > feet + 1
+            and not p.get("moving")
+            for p in env.platforms
+        )
+        if landings and not lower_floor:
             i, r = min(landings, key=lambda pair: pair[1].left)
             # Bound the landing target to its near edge, not the whole far floor.
             candidates.append(
@@ -102,8 +113,10 @@ def local_objective(env) -> LocalObjective:
     return min(candidates, key=lambda pair: pair[0])[1] if candidates else finish
 
 
-def safe_jump_holds(env, objective: LocalObjective, direction: int) -> list[int]:
-    """Replay the 1–16-frame menu through first landing/contact, then restore.
+def safe_jump_holds(
+    env, objective: LocalObjective, direction: int, *, verify_recovery: bool = True
+) -> list[int]:
+    """Replay the 1–16-frame menu through landing or terminal success, then restore.
 
     A successful jump must clear this objective alive. The full environment
     snapshot includes goal credit and reward potentials so probes cannot leak
@@ -117,22 +130,36 @@ def safe_jump_holds(env, objective: LocalObjective, direction: int) -> list[int]
         for hold in range(1, 17):
             restore_env_state(env, snapshot)
             airborne = False
-            for frame in range(64):
+            bouncing = False
+            for frame in range(96):
                 action = (
-                    (2 if direction > 0 else 4) if frame < hold else (1 if direction > 0 else 3)
+                    (2 if direction > 0 else 4)
+                    if frame < hold and not bouncing
+                    else (1 if direction > 0 else 3)
                 )
                 _, _, done, truncated, info = env.step(action)
                 airborne |= not env.mario["on_ground"]
                 landed = airborne and env.mario["on_ground"]
+                bouncing |= info["reward_terms"]["enemy_stomp"] > 0
                 if info["death"]:
                     break
                 achieved = (
                     env._goal_credited if env._single_jump_attempt else objective.reached(env)
                 )
-                if achieved and (
-                    landed or env._goal_credited or (info["reward_terms"]["enemy_stomp"] > 0)
-                ):
-                    valid.append(hold)
+                if achieved and (landed or env._goal_credited):
+                    # Nonterminal stomp contact is not a completed primitive:
+                    # the executor must survive the automatic bounce. At the
+                    # landing, reject an immediately trapped next-enemy state.
+                    recoverable = True
+                    if verify_recovery and landed and not env._goal_credited:
+                        following = local_objective(env)
+                        distance = following.left - env.mario["x"] - env.mario["w"]
+                        if following.kind == "enemy" and distance < 50:
+                            recoverable = bool(
+                                safe_jump_holds(env, following, direction, verify_recovery=False)
+                            )
+                    if recoverable:
+                        valid.append(hold)
                     break
                 if done or truncated or landed:
                     break

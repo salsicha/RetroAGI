@@ -946,6 +946,29 @@ class MarioScenarioEnv:
                         best = dy
             return 1.0 if best is None else best
 
+        # Dynamic objects need direction and reversal geometry, not only
+        # their distance in a single rendered frame. Kept separate so legacy
+        # 27-slot checkpoints retain their exact observation layout.
+        nearest_enemy = min(active_enemies, key=lambda e: abs(e["x"] - m["x"]), default=None)
+        bridge = next((p for p in self.platforms if p.get("moving")), None)
+        motion_vec = np.array(
+            [
+                (
+                    nearest_enemy["speed"] * nearest_enemy["direction"] / self.max_walk_speed
+                    if nearest_enemy
+                    else 0.0
+                ),
+                (nearest_enemy["patrol_min"] - nearest_enemy["x"]) / ww if nearest_enemy else 0.0,
+                (nearest_enemy["patrol_max"] - nearest_enemy["x"]) / ww if nearest_enemy else 0.0,
+                (nearest_enemy["y"] - m["y"]) / wh if nearest_enemy else 0.0,
+                (bridge["move_x"] - m["x"]) / ww if bridge else 0.0,
+                bridge["move_speed"] * bridge["move_dir"] / self.max_walk_speed if bridge else 0.0,
+                (bridge["move_min"] - bridge["move_x"]) / ww if bridge else 0.0,
+                (bridge["move_max"] - bridge["move_x"]) / ww if bridge else 0.0,
+            ],
+            dtype=np.float32,
+        )
+
         state_vec = np.array(
             [
                 m["x"] / ww,
@@ -1018,6 +1041,7 @@ class MarioScenarioEnv:
             "terminated": bool(terminated),
             "truncated": bool(truncated),
             "state_vec": state_vec,
+            "motion_vec": motion_vec,
         }
 
     # ── Enemy helpers ─────────────────────────────────────────────────────────

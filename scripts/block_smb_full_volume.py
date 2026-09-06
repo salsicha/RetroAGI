@@ -23,6 +23,7 @@ from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_s
 from retroagi.stages.block_smb.train import (
     BlockSMBTrainingConfig,
     make_block_smb_model,
+    make_block_smb_optimizer,
     train_and_evaluate_block_smb,
     train_block_smb_epoch,
 )
@@ -55,7 +56,7 @@ def main():
             config, use_oracle_actions=True, update_batch_episodes=1, save_checkpoints=False
         )
         model = make_block_smb_model(probe).to(device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=probe.learning_rate)
+        optimizer = make_block_smb_optimizer(model, probe)
         samples = [
             sample_block_smb_monte_carlo_scenario(
                 split="validation", seed=2, sample_index=0, family=family, difficulty="hard"
@@ -71,6 +72,28 @@ def main():
             device=device,
             vision_factory=vision_factory,
         )
+        # Exercise actual actor sampling too: a supplied jump cannot catch
+        # action-selection/likelihood mismatches in autonomous traversal.
+        on_policy_samples = [
+            sample_block_smb_monte_carlo_scenario(
+                split="validation", seed=2, sample_index=0, family=family, difficulty="easy"
+            )
+            for family in ("tall_pipe_jump", "flat_run", "bridge_wait")
+        ]
+        on_policy_metrics, _ = train_block_smb_epoch(
+            model,
+            optimizer,
+            [(sample.scenario_id, sample.scenario) for sample in on_policy_samples],
+            replace(probe, use_oracle_actions=False),
+            epoch=1,
+            device=device,
+            vision_factory=vision_factory,
+        )
+        if on_policy_metrics["oracle_action_supervised_steps"] != 0:
+            raise AssertionError("On-policy preflight unexpectedly used demonstrations")
+        if on_policy_metrics["loss_policy"] == 0:
+            raise AssertionError("On-policy preflight did not exercise policy credit")
+        metrics["on_policy"] = on_policy_metrics
         metrics["cuda_peak_allocated_bytes"] = torch.cuda.max_memory_allocated(device)
         (args.output_dir / "preflight.json").write_text(json.dumps(metrics, indent=2) + "\n")
         print(json.dumps(metrics), flush=True)

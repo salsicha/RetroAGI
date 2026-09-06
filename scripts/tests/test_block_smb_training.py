@@ -1204,6 +1204,9 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             },
             "difficulty_bins": {
                 "tall_pipe_jump:easy": {"success_rate": 1.0},
+                "tall_pipe_jump:medium": {"success_rate": 0.4},
+                "tall_pipe_jump:hard": {"success_rate": 0.4},
+                **{f"flat_run:{d}": {"success_rate": 1.0} for d in ("easy", "medium", "hard")},
             },
         }
         state = update_block_smb_mastery_state(state, evaluation, family_pass_rate_gate=0.9)
@@ -1217,7 +1220,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         # retention: first mastered eval of a 3-eval grace ramp); unmastered
         # families weigh 1 + deficit so the furthest-from-mastery draw the
         # most samples.
-        self.assertAlmostEqual(weights["flat_run"], 0.75)
+        self.assertAlmostEqual(weights["flat_run"], 1.0)
         self.assertAlmostEqual(weights["tall_pipe_jump"], 1.5)
         self.assertAlmostEqual(weights["single_gap"], 1.9)
 
@@ -1233,17 +1236,25 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 state, family_pass_rate_gate=0.9, retention_weight=0.25
             )["flat_run"]
 
-        passing = {"families": {"flat_run": {"success_rate": 1.0}}, "difficulty_bins": {}}
+        passing = {
+            "families": {"flat_run": {"success_rate": 1.0}},
+            "difficulty_bins": {
+                f"flat_run:{d}": {"success_rate": 1.0} for d in ("easy", "medium", "hard")
+            },
+        }
         failing = {"families": {"flat_run": {"success_rate": 0.0}}, "difficulty_bins": {}}
 
         state = initial_block_smb_mastery_state()
         state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
         self.assertEqual(state["flat_run"]["mastered_evals"], 1)
-        self.assertAlmostEqual(weight(state), 0.75)
+        self.assertAlmostEqual(weight(state), 1.0)
         state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
-        self.assertAlmostEqual(weight(state), 0.5)
+        self.assertAlmostEqual(weight(state), 1.0)
         state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
-        self.assertAlmostEqual(weight(state), 0.25)
+        self.assertAlmostEqual(weight(state), 1.0)
+        for expected in (0.75, 0.5, 0.25):
+            state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
+            self.assertAlmostEqual(weight(state), expected)
         # Long-mastered: stays at the floor.
         state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
         self.assertAlmostEqual(weight(state), 0.25)
@@ -1254,7 +1265,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         # ...and re-mastering restarts the ramp rather than dropping to the floor.
         state = update_block_smb_mastery_state(state, passing, family_pass_rate_gate=0.9)
         self.assertEqual(state["flat_run"]["mastered_evals"], 1)
-        self.assertAlmostEqual(weight(state), 0.75)
+        self.assertAlmostEqual(weight(state), 1.0)
         # Grace 0 preserves the old instant-floor behavior.
         instant = block_smb_mastery_family_weights(
             state,
@@ -1867,7 +1878,7 @@ class TestBlockSMBSuccessReplay(unittest.TestCase):
         info = {"goal_reached": True} if success else {}
         return SimpleNamespace(
             success=success,
-            transitions=[SimpleNamespace(info=info)],
+            transitions=[SimpleNamespace(info=info, action=2)],
         )
 
     def test_buffer_stores_solved_scenarios_deduped_and_capped(self):

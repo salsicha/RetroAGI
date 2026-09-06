@@ -43,11 +43,12 @@ from retroagi.core import (
     to_plain_data,
 )
 from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
-from retroagi.core.skills import skill_goal_encoding
+from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 
 from .adapter import (
     BLOCK_SMB_SPEC,
     SCENARIOS_DIR,
+    BlockSMBObservationConfig,
     BlockSMBStage,
     block_smb_deterministic_critic_slots,
 )
@@ -242,7 +243,16 @@ class BlockSMBTrainingConfig:
     epochs: int = 1
     episodes_per_epoch: int = 2
     rollout_steps: int = 32
+    autonomous_policy: bool = False
+    motion_observations: bool = False
     learning_rate: float = 3e-4
+    numeric_policy_learning_rate: float | None = None
+    demonstration_layouts_per_family: int = 36
+    demonstration_varied_routes: bool = False
+    demonstration_robust_routes: bool = False
+    demonstration_prioritized: bool = False
+    demonstration_bootstrap_updates: int = 0
+    demonstration_rehearsal_updates: int = 0
     gamma: float = 0.95
     reward_config: BlockSMBRewardConfig = field(default_factory=BlockSMBRewardConfig)
     ablation: BlockSMBAblationConfig = field(default_factory=BlockSMBAblationConfig)
@@ -326,33 +336,25 @@ class BlockSMBTrainingConfig:
     mastery_gated_schedule: bool = False
     mastery_retention_weight: float = 0.25
     # Graduated retention: a newly-mastered family keeps elevated practice
-    # for this many evaluations, ramping linearly from full weight down to
-    # mastery_retention_weight, instead of dropping to the floor instantly.
+    # for this many evaluations, then ramps down over the same number of
+    # evaluations. One passing average must not immediately remove practice.
     mastery_retention_grace_evals: int = 3
-    # Scenario rehearsal: layouts the policy has solved are stored per family
-    # and a balanced sample is re-rolled live each epoch through the normal
-    # on-policy losses. Fresh practice on known-solvable layouts cannot go
-    # stale (the frozen-record replay it replaces provably did), and the
-    # rehearsal success rate is a per-epoch retention gauge.
+    # Balanced live practice, with revalidated successful action sequences as
+    # low-weight imitation after a regression. Rehearsal metrics exclude demos.
     success_replay_episodes_per_family: int = 8
-    # 12, up from 4: the diagnostic dose measured a flat ~50% retention rate
-    # without moving it; a third of practice as retention work is the
-    # therapeutic-dose experiment.
     success_replay_rehearsals_per_epoch: int = 12
+    retention_imitation_weight: float = 0.1
     # Execute scripted oracle actions during training rollouts on Monte Carlo
     # scenarios that carry them (fixed scenarios have no oracle and stay
     # on-policy). This is the in-loop demonstration channel that supervises the
     # action and primitive heads; evaluation rollouts never use oracle actions.
     use_oracle_actions: bool = False
-    # Ranked-candidate critic search: sort the A-level next-action logits and
-    # evaluate candidates from most to least likely through the LSTM world
-    # model and critic, executing the first one predicted to progress without
-    # death. Walking into an obstacle predicts no motion, which the critic
-    # treats as no progress, so blocked actions are rejected and the next
-    # most likely token is tried.
+    # Optional deterministic evaluation search. Stochastic training always
+    # samples the actor before predicting its chosen action. The full-volume
+    # recipe disables search so evaluation measures the learned actor directly.
     ranked_candidate_search: bool = True
-    # Deterministic critic gates: would_progress is the mechanistic decrease of
-    # the predicted normalized goal distance and predicts_death reads the LSTM
+    # Deterministic critic gates compare distance to a local collision region
+    # (or the final goal when no local region is supplied) and predicts_death reads the LSTM
     # world model's predicted death flag directly, bypassing the learned
     # progress/death MLP heads for gating.
     deterministic_critic_gates: bool = True
@@ -415,6 +417,7 @@ class BlockSMBTrainingConfig:
     # Universal duration primitives: walking and waiting run through the
     # executor as committed multi-frame actions with adaptive setpoints.
     steady_duration_primitives: bool = True
+    walk_duration_primitives: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
     cover_curriculum_per_epoch: bool = True
@@ -494,6 +497,18 @@ class BlockSMBTrainingConfig:
         for name in ("learning_rate", "gamma", "gradient_clip_norm"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if self.numeric_policy_learning_rate is not None and self.numeric_policy_learning_rate <= 0:
+            raise ValueError("numeric_policy_learning_rate must be positive")
+        if self.demonstration_layouts_per_family < 3 or self.demonstration_layouts_per_family % 3:
+            raise ValueError(
+                "demonstration_layouts_per_family must be a positive multiple of three"
+            )
+        if min(self.demonstration_bootstrap_updates, self.demonstration_rehearsal_updates) < 0:
+            raise ValueError("demonstration update counts must be non-negative")
+        if (
+            self.demonstration_bootstrap_updates or self.demonstration_rehearsal_updates
+        ) and self.ablation.recurrent_state_enabled:
+            raise ValueError("Batched demonstrations require recurrent_state_enabled=false")
         if self.generated_scenarios < 0:
             raise ValueError("generated_scenarios must be non-negative")
         if self.monte_carlo_train_samples_per_epoch < 0:
@@ -568,9 +583,7 @@ class BlockSMBTrainingConfig:
         if not 0.0 <= self.semantic_prediction_accuracy_threshold <= 1.0:
             raise ValueError("semantic_prediction_accuracy_threshold must be between 0 and 1")
         if self.controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
-            raise ValueError(
-                "controller_schedule must be one of " f"{SUPPORTED_CONTROLLER_SCHEDULES}"
-            )
+            raise ValueError(f"controller_schedule must be one of {SUPPORTED_CONTROLLER_SCHEDULES}")
         object.__setattr__(self, "tracking_backend", self.tracking_backend.lower())
         if self.tracking_backend not in TRACKING_BACKENDS:
             raise ValueError(f"tracking_backend must be one of {TRACKING_BACKENDS}")
@@ -585,6 +598,7 @@ class BlockSMBTrainingConfig:
             self.value_loss_weight,
             self.action_aux_weight,
             self.oracle_action_loss_weight,
+            self.retention_imitation_weight,
             self.noop_loss_weight,
             self.critic_loss_weight,
             self.imagined_rollout_weight,
@@ -662,18 +676,11 @@ class BlockSMBTrajectory:
 
 
 class BlockSMBSuccessReplay:
-    """Balanced per-family store of scenarios the policy has solved.
+    """Balanced store of solved layouts and their executed action sequences.
 
-    Live practice is a zero-sum budget: boosting one family's samples takes
-    from every other, which is how narrow-timing skills (bridges, stairs)
-    decayed once their practice eased off. The first fix — replaying frozen
-    per-step records as a supervised loss — went stale as the policy
-    improved: its loss rose monotonically all run while it dragged the
-    network back toward outdated behavior. This version therefore stores
-    only the SCENARIO of each success (a known-solvable layout, deduplicated
-    per family, FIFO-capped) and rehearsal re-rolls those scenarios live
-    each epoch through the normal on-policy losses. Fresh practice cannot
-    go stale, and the rehearsal success rate is a direct retention gauge.
+    Rehearsal first measures the current policy. After a failure, a separate
+    physical replay can supply low-weight imitation, but only if that sequence
+    still succeeds. No stored predictions, logits, or computation graphs are reused.
     """
 
     def __init__(self, max_episodes_per_family: int = 8, seed: int = 0) -> None:
@@ -700,6 +707,7 @@ class BlockSMBSuccessReplay:
             "scenario_id": scenario_id,
             "scenario": copy.deepcopy(dict(scenario)),
             "family": family,
+            "actions": tuple(step.action for step in trajectory.transitions),
         }
         while len(bucket) > self.max_episodes_per_family:
             oldest = next(iter(bucket))
@@ -736,6 +744,7 @@ class BlockSMBSuccessReplay:
                             "scenario_id": record["scenario_id"],
                             "scenario": copy.deepcopy(record["scenario"]),
                             "family": record["family"],
+                            "actions": record["actions"],
                         }
                     )
         return picks
@@ -1130,7 +1139,10 @@ def update_block_smb_mastery_state(
             and float(bin_rates.get("medium", 0.0)) >= family_pass_rate_gate
         ):
             unlocked.append("hard")
-        record["mastered"] = record["pass_rate"] >= family_pass_rate_gate
+        record["mastered"] = record["pass_rate"] >= family_pass_rate_gate and all(
+            float(bin_rates.get(difficulty, 0.0)) >= family_pass_rate_gate
+            for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS
+        )
         # Graduated retention: count consecutive evaluations at mastery so
         # the practice weight can ease off gradually. A regression resets
         # the count — the family returns to full focus and, once it passes
@@ -1163,16 +1175,25 @@ def block_smb_mastery_family_weights(
             # A family that just crossed the gate is barely learned; dropping
             # it straight to the retention floor starves it and it decays —
             # the frontier thrash observed across the full-volume runs. Ease
-            # from full practice down to the floor over the grace period.
+            # only after a full grace period at full practice.
             grace = max(0, int(retention_grace_evals))
             count = max(1, int(record.get("mastered_evals", grace)))
-            if grace <= 0 or count >= grace:
+            if grace <= 0 or count >= 2 * grace:
                 weights[family] = float(retention_weight)
+            elif count <= grace:
+                weights[family] = 1.0
             else:
-                progress = count / float(grace)
+                progress = (count - grace) / float(grace)
                 weights[family] = 1.0 + (float(retention_weight) - 1.0) * progress
         else:
-            deficit = max(0.0, family_pass_rate_gate - float(record.get("pass_rate", 0.0)))
+            weakest = min(
+                float(record.get("pass_rate", 0.0)),
+                *(
+                    float(record.get("bin_pass_rates", {}).get(d, 0.0))
+                    for d in BLOCK_SMB_MC_DIFFICULTY_BINS
+                ),
+            )
+            deficit = max(0.0, family_pass_rate_gate - weakest)
             weights[family] = 1.0 + deficit
     return weights
 
@@ -1654,6 +1675,7 @@ def _action_from_model(
     wait_event: bool = False,
     support_override: str | None = None,
     enemy_contact_override: bool | None = None,
+    evaluation_target: torch.Tensor | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -1672,7 +1694,24 @@ def _action_from_model(
             episode_mask, dtype=batch.src_c.dtype, device=batch.src_c.device
         )
     supplied_action = oracle_action if oracle_action is not None else forced_action
-    supplied_kwargs = {"forced_action": int(supplied_action)} if supplied_action is not None else {}
+    committed_action = (
+        primitive_executor.committed_action
+        if primitive_executor is not None and not recovering_from_stomp
+        else None
+    )
+    prediction_action = supplied_action if supplied_action is not None else committed_action
+    supplied_kwargs = (
+        {"forced_action": int(prediction_action)} if prediction_action is not None else {}
+    )
+    if getattr(model, "supports_action_sampling", False):
+        supplied_kwargs.update(
+            policy_action_mode=(
+                "sample"
+                if not deterministic
+                else (None if model.ranked_candidate_search else "greedy")
+            ),
+            evaluation_target=evaluation_target,
+        )
     (
         actions1,
         next_state_pred,
@@ -1726,11 +1765,11 @@ def _action_from_model(
             dtype=torch.long,
             device=action_logits.device,
         )
+    elif committed_action is not None:
+        action_tensor = torch.tensor([committed_action], device=action_logits.device)
     elif searched_action_id is not None:
-        # Ranked-candidate critic search already picked the most likely action
-        # the world model predicts will progress without death; execute exactly
-        # that token in both stochastic training rollouts and deterministic
-        # evaluation.
+        # The model has parameterized and predicted this exact action.
+        # Training samples the actor; optional evaluation search is diagnostic.
         action_tensor = torch.tensor(
             [int(searched_action_id)],
             dtype=torch.long,
@@ -1738,6 +1777,7 @@ def _action_from_model(
         )
     else:
         action_tensor = action_logits.argmax(dim=-1) if deterministic else distribution.sample()
+    intent_tensor = action_tensor.clone()
     execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
     if recovering_from_stomp:
         # Preserve the policy's horizontal choice while the automatic bounce
@@ -1793,9 +1833,15 @@ def _action_from_model(
     log_prob = (
         action_logits.new_zeros(())
         if supplied_action is not None
-        else distribution.log_prob(action_tensor).squeeze(0)
+        or committed_action is not None
+        or deterministic
+        or (
+            not execution.started
+            and (execution.active or execution.released or execution.cancelled or execution.landed)
+        )
+        else distribution.log_prob(intent_tensor).squeeze(0)
     )
-    if oracle_action is None:
+    if oracle_action is None and not deterministic:
         log_prob = log_prob + _smb_primitive_duration_log_prob(
             motor_primitives,
             execution,
@@ -1803,6 +1849,8 @@ def _action_from_model(
             dtype=log_prob.dtype,
         )
     entropy = distribution.entropy().squeeze(0)
+    if committed_action is not None:
+        entropy = action_logits.new_zeros(())
     if supplied_action is not None:
         entropy = action_logits.new_zeros(())
         duration_logits = getattr(motor_primitives, "hold_duration_logits", None)
@@ -1810,7 +1858,7 @@ def _action_from_model(
             entropy = (
                 torch.distributions.Categorical(logits=duration_logits[:, -1, :]).entropy().mean()
             )
-    if recovering_from_stomp and supplied_action is None:
+    if recovering_from_stomp and supplied_action is None and not deterministic:
         # Jump/no-jump intents map to the same horizontal recovery action.
         # Credit their combined probability, rather than pretending the
         # released action itself was sampled from the original distribution.
@@ -2190,6 +2238,55 @@ def _smb_primitive_auxiliary_loss(
     return torch.stack([loss.to(device=device, dtype=dtype) for loss in losses]).mean()
 
 
+def block_smb_evaluation_target(env, objective=None, phase=None, bridge=False, enemy=False):
+    """Local collision region for optional model-based action evaluation."""
+    m = env.mario
+    left, right, top = env.goal.left, env.goal.right, env.goal.bottom
+    tolerance_y = (env.goal.h + m["h"]) / 2 - 1
+    center_y = env.goal.centery - m["h"] / 2
+    if objective is not None and objective.kind not in ("finish", "retreat"):
+        left, right, top = objective.left, objective.right, objective.top
+        center_y, tolerance_y = top - m["h"], 1.0
+    if enemy and phase == "stomp" and env.enemies:
+        target = env.enemies[0]
+        left, right, top = target["x"], target["x"] + target["w"], target["y"]
+        center_y, tolerance_y = top - m["h"], 1.0
+    if bridge and phase != "finish":
+        moving = next(p["rect"] for p in env.platforms if p.get("moving"))
+        target = (
+            moving
+            if phase in ("wait", "board")
+            else max(
+                (p["rect"] for p in env.platforms if not p.get("moving")),
+                key=lambda rect: rect.left,
+            )
+        )
+        left, right, top = target.left, target.right, target.top
+        center_y, tolerance_y = top - m["h"], 1.0
+    return torch.tensor(
+        [
+            [
+                ((left + right) / 2 - m["w"] / 2) / env.world_width,
+                center_y / env.height,
+                ((right - left + m["w"]) / 2 - 1) / env.world_width,
+                tolerance_y / env.height,
+            ]
+        ],
+        dtype=torch.float32,
+    )
+
+
+def block_smb_policy_scenario(scenario, autonomous):
+    """Remove supplied A decisions without changing geometry or task credit."""
+    if not autonomous:
+        return scenario
+    result = copy.deepcopy(scenario)
+    params = result.get("metadata", {}).get("block_smb_monte_carlo", {}).get("parameters", {})
+    params.pop("a_level_action", None)
+    params.pop("a_level_action_scope", None)
+    return result
+
+
 def collect_trajectory(
     model: torch.nn.Module,
     stage: BlockSMBStage,
@@ -2205,7 +2302,9 @@ def collect_trajectory(
     adaptive_duration_control: bool = True,
     skill_goal_conditioning: bool = True,
     steady_duration_primitives: bool = True,
+    walk_duration_primitives: bool = True,
     engine_support: bool = True,
+    demonstration_actions: Sequence[int] | None = None,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
@@ -2224,6 +2323,7 @@ def collect_trajectory(
         duration_seed=seed,
         adaptive_duration=adaptive_duration_control,
         steady_primitives=steady_duration_primitives,
+        walk_primitives=walk_duration_primitives,
     )
     oracle_actions = (
         block_smb_oracle_actions_for_rollout(
@@ -2233,6 +2333,9 @@ def collect_trajectory(
         if use_oracle_actions
         else ()
     )
+    if demonstration_actions is not None:
+        oracle_actions = tuple(int(action) for action in demonstration_actions)
+        rollout_steps = min(rollout_steps, len(oracle_actions))
     forced_action = block_smb_forced_action_for_rollout(stage.scenario)
     forced_action_scope = block_smb_forced_action_scope(stage.scenario)
     single_jump_scenario = block_smb_single_jump_scenario(stage.scenario)
@@ -2253,6 +2356,10 @@ def collect_trajectory(
     recovering_local_stomp = False
     local_completed = set()
     skill_goal = requested_block_smb_skill_goal(stage.scenario) if skill_goal_conditioning else None
+    if skill_goal_conditioning and skill_goal is None:
+        # A neutral request has the same encoding in batched learning and
+        # live rollouts, including the learned goal-projection bias.
+        skill_goal = torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
     if skill_goal is not None:
         skill_goal = skill_goal.to(device)
     primitive_span: list[int] = []
@@ -2462,7 +2569,11 @@ def collect_trajectory(
         if local_family:
             if not stage.env.mario["on_ground"] and primitive_local_target is not None:
                 step_local_target = primitive_local_target
-            step_phase = "bounce_recovery" if recovering_local_stomp else step_local_target.kind
+            step_phase = (
+                pipe_traversal.phase
+                if pipe_traversal is not None
+                else "bounce_recovery" if recovering_local_stomp else step_local_target.kind
+            )
         safe_waits = bridge_safe_wait_frames(stage.env) if bridge_composite else []
         if bridge_composite:
             step_phase = bridge_phase(stage.env, bridge_opening)
@@ -2559,6 +2670,9 @@ def collect_trajectory(
                 else None
             ),
             enemy_contact_override=(engine_enemy_contact if engine_support else None),
+            evaluation_target=block_smb_evaluation_target(
+                stage.env, step_local_target, step_phase, bridge_composite, enemy_composite
+            ).to(device),
         )
         if local_family and execution.started:
             primitive_local_target = step_local_target
@@ -2614,6 +2728,10 @@ def collect_trajectory(
                 bridge_departure_recorded = True
             if execution.released and execution.action == 0:
                 info["bridge_wait_release"] = "event" if wait_event else "timer"
+            # A timer is only a chance to reconsider; it does not establish
+            # that the bridge has arrived. Physical readiness or departure
+            # completes the opening wait, matching the demonstration goals.
+            if action != 0 or (execution.released and wait_event):
                 bridge_opening = False
         stomp_contact = (
             bool((info.get("stomp_geometry") or {}).get("stomp"))
@@ -3366,7 +3484,10 @@ def compute_block_smb_losses(
         else:
             action_aux_terms.append(step.primitive_aux_loss.to(device=device))
         oracle_loss = block_smb_oracle_action_loss(step, device=device)
-        oracle_action_terms.append(oracle_loss)
+        oracle_action_terms.append(
+            oracle_loss
+            * (config.retention_imitation_weight if step.info.get("retention_demo") else 1.0)
+        )
         if step.oracle_action is not None:
             oracle_supervised_steps += 1
         noop_terms.append(block_smb_noop_suppression_loss(step, device=device))
@@ -3585,8 +3706,11 @@ def train_block_smb_epoch(
         scenario_name, scenario = curriculum[(epoch * episode_count + episode) % len(curriculum)]
         stage = BlockSMBStage(
             env=MarioScenarioEnv(reward_config=config.reward_config),
-            scenario=scenario,
+            scenario=block_smb_policy_scenario(scenario, config.autonomous_policy),
             vision=vision_factory(),
+            observation_config=BlockSMBObservationConfig(
+                motion_observations=config.motion_observations
+            ),
         )
         try:
             trajectory = collect_trajectory(
@@ -3602,6 +3726,7 @@ def train_block_smb_epoch(
                 adaptive_duration_control=config.adaptive_duration_control,
                 skill_goal_conditioning=config.skill_goal_conditioning,
                 steady_duration_primitives=config.steady_duration_primitives,
+                walk_duration_primitives=config.walk_duration_primitives,
                 engine_support=config.engine_support_override,
             )
             _write_block_smb_spans(config, trajectory)
@@ -3632,8 +3757,13 @@ def train_block_smb_epoch(
             for rehearsal_index, rehearsal in enumerate(rehearsals):
                 stage = BlockSMBStage(
                     env=MarioScenarioEnv(reward_config=config.reward_config),
-                    scenario=copy.deepcopy(rehearsal["scenario"]),
+                    scenario=block_smb_policy_scenario(
+                        copy.deepcopy(rehearsal["scenario"]), config.autonomous_policy
+                    ),
                     vision=vision_factory(),
+                    observation_config=BlockSMBObservationConfig(
+                        motion_observations=config.motion_observations
+                    ),
                 )
                 try:
                     trajectory = collect_trajectory(
@@ -3648,6 +3778,7 @@ def train_block_smb_epoch(
                         adaptive_duration_control=config.adaptive_duration_control,
                         skill_goal_conditioning=config.skill_goal_conditioning,
                         steady_duration_primitives=config.steady_duration_primitives,
+                        walk_duration_primitives=config.walk_duration_primitives,
                         engine_support=config.engine_support_override,
                     )
                 finally:
@@ -3668,6 +3799,49 @@ def train_block_smb_epoch(
                     )
                 if len(replay.trajectories) >= update_batch_size:
                     flush_update_batch()
+                if not trajectory.success and config.retention_imitation_weight > 0:
+                    demo_stage = BlockSMBStage(
+                        env=MarioScenarioEnv(reward_config=config.reward_config),
+                        scenario=block_smb_policy_scenario(
+                            copy.deepcopy(rehearsal["scenario"]), config.autonomous_policy
+                        ),
+                        vision=vision_factory(),
+                        observation_config=BlockSMBObservationConfig(
+                            motion_observations=config.motion_observations
+                        ),
+                    )
+                    try:
+                        demonstration = collect_trajectory(
+                            model,
+                            demo_stage,
+                            rehearsal["scenario_id"],
+                            rollout_steps=rollout_budget(rehearsal["scenario"]),
+                            seed=config.seed + 900_000 + epoch * 100 + rehearsal_index,
+                            deterministic=True,
+                            device=device,
+                            ablation=config.ablation,
+                            adaptive_duration_control=config.adaptive_duration_control,
+                            skill_goal_conditioning=config.skill_goal_conditioning,
+                            steady_duration_primitives=config.steady_duration_primitives,
+                            walk_duration_primitives=config.walk_duration_primitives,
+                            engine_support=config.engine_support_override,
+                            demonstration_actions=rehearsal["actions"],
+                        )
+                    finally:
+                        demo_stage.env.close()
+                    if demonstration.success:
+                        for step in demonstration.transitions:
+                            step.info["retention_demo"] = True
+                        replay.add(demonstration)
+                        replay_metrics["retention_demonstrations"] = (
+                            replay_metrics.get("retention_demonstrations", 0.0) + 1
+                        )
+                    else:
+                        replay_metrics["retention_demonstration_rejections"] = (
+                            replay_metrics.get("retention_demonstration_rejections", 0.0) + 1
+                        )
+                    if len(replay.trajectories) >= update_batch_size:
+                        flush_update_batch()
             replay_metrics["success_rehearsals"] = float(len(rehearsals))
             replay_metrics["success_rehearsal_success_rate"] = rehearsal_successes / len(rehearsals)
             # Per-family rehearsal outcomes split "forgot a retained skill"
@@ -3781,8 +3955,13 @@ def evaluate_block_smb_monte_carlo(
             for episode in range(config.evaluation_episodes):
                 stage = BlockSMBStage(
                     env=MarioScenarioEnv(reward_config=config.reward_config),
-                    scenario=copy.deepcopy(dict(sample.scenario)),
+                    scenario=block_smb_policy_scenario(
+                        copy.deepcopy(dict(sample.scenario)), config.autonomous_policy
+                    ),
                     vision=vision_factory(),
+                    observation_config=BlockSMBObservationConfig(
+                        motion_observations=config.motion_observations
+                    ),
                 )
                 try:
                     trajectory = collect_trajectory(
@@ -3798,6 +3977,7 @@ def evaluate_block_smb_monte_carlo(
                         adaptive_duration_control=config.adaptive_duration_control,
                         skill_goal_conditioning=config.skill_goal_conditioning,
                         steady_duration_primitives=config.steady_duration_primitives,
+                        walk_duration_primitives=config.walk_duration_primitives,
                         engine_support=config.engine_support_override,
                     )
                 finally:
@@ -4226,8 +4406,11 @@ def evaluate_block_smb(
             for episode in range(config.evaluation_episodes):
                 stage = BlockSMBStage(
                     env=MarioScenarioEnv(reward_config=config.reward_config),
-                    scenario=scenario,
+                    scenario=block_smb_policy_scenario(scenario, config.autonomous_policy),
                     vision=vision_factory(),
+                    observation_config=BlockSMBObservationConfig(
+                        motion_observations=config.motion_observations
+                    ),
                 )
                 try:
                     trajectory = collect_trajectory(
@@ -4243,6 +4426,7 @@ def evaluate_block_smb(
                         adaptive_duration_control=config.adaptive_duration_control,
                         skill_goal_conditioning=config.skill_goal_conditioning,
                         steady_duration_primitives=config.steady_duration_primitives,
+                        walk_duration_primitives=config.walk_duration_primitives,
                         engine_support=config.engine_support_override,
                     )
                 finally:
@@ -4473,6 +4657,7 @@ def restore_block_smb_checkpoint(
     architecture_name: Optional[str] = None,
     architecture_config: Optional[Mapping[str, Any]] = None,
     restore_rng: bool = True,
+    motion_observations: bool | None = None,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
@@ -4482,6 +4667,11 @@ def restore_block_smb_checkpoint(
     if checkpoint["checkpoint_kind"] != BLOCK_SMB_CHECKPOINT_KIND:
         raise ValueError("checkpoint kind does not match Block SMB trainer")
     checkpoint_config = checkpoint.get("config", {})
+    if (
+        motion_observations is not None
+        and bool(checkpoint_config.get("motion_observations", False)) != motion_observations
+    ):
+        raise ValueError("Checkpoint motion-observation layout does not match this run")
     checkpoint_architecture_name = checkpoint_config.get("architecture_name")
     if architecture_name is not None and checkpoint_architecture_name is not None:
         if str(checkpoint_architecture_name) != architecture_name:
@@ -4545,6 +4735,22 @@ def restore_block_smb_checkpoint(
     return checkpoint
 
 
+def make_block_smb_optimizer(model, config):
+    """Use the qualified learning rate for the direct numeric policy paths."""
+    if config.numeric_policy_learning_rate is None:
+        return optim.AdamW(model.parameters(), lr=config.learning_rate)
+    direct = [
+        p
+        for name, p in model.named_parameters()
+        if name.startswith(("agent.action_state_head.", "agent.duration_state_head."))
+    ]
+    ids = {id(p) for p in direct}
+    groups = [{"params": [p for p in model.parameters() if id(p) not in ids]}]
+    if direct:
+        groups.append({"params": direct, "lr": config.numeric_policy_learning_rate})
+    return optim.AdamW(groups, lr=config.learning_rate)
+
+
 def train_and_evaluate_block_smb(
     config: Optional[BlockSMBTrainingConfig] = None,
     *,
@@ -4554,7 +4760,7 @@ def train_and_evaluate_block_smb(
     seed_everything(config.seed, config.deterministic)
     device = select_device(config.device)
     model = make_block_smb_model(config).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
+    optimizer = make_block_smb_optimizer(model, config)
     target_model = (
         make_target_network(model).to(device) if config.target_network_mode != "off" else None
     )
@@ -4570,6 +4776,7 @@ def train_and_evaluate_block_smb(
             target_model=target_model,
             architecture_name=config.architecture_name,
             architecture_config=config.architecture_config,
+            motion_observations=config.motion_observations,
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
@@ -4584,6 +4791,7 @@ def train_and_evaluate_block_smb(
             map_location=device,
             architecture_name=config.architecture_name,
             architecture_config=config.architecture_config,
+            motion_observations=config.motion_observations,
             restore_rng=False,
         )
         if target_model is not None:
@@ -4641,6 +4849,31 @@ def train_and_evaluate_block_smb(
     evaluations: list[dict[str, Any]] = []
     last_metrics: dict[str, float] = {}
     recent_monte_carlo_failure_bins: Mapping[str, Any] = {}
+    demonstration_data = None
+    if config.demonstration_bootstrap_updates or config.demonstration_rehearsal_updates:
+        from .demonstrations import build_balanced_demonstrations, fit_demonstrations
+
+        demonstration_data = build_balanced_demonstrations(config, vision_factory)
+        if start_epoch == 0 and config.demonstration_bootstrap_updates:
+            bootstrap_loss = fit_demonstrations(
+                model,
+                optimizer,
+                demonstration_data,
+                steps=config.demonstration_bootstrap_updates,
+                decision_durations_only=not config.adaptive_duration_control,
+                walk_durations=config.walk_duration_primitives,
+                prioritized=config.demonstration_prioritized,
+                seed=config.seed,
+            )
+            _log_block_smb_event(
+                config,
+                "demonstration_bootstrap",
+                loss=bootstrap_loss,
+                updates=config.demonstration_bootstrap_updates,
+                frames=len(demonstration_data.action),
+            )
+            if target_model is not None:
+                update_target_network(target_model, model, tau=1.0)
     for epoch in range(start_epoch, config.epochs):
         if jump_foundation_active and epoch >= config.jump_foundation_max_epochs:
             jump_foundation_active = False
@@ -4675,6 +4908,33 @@ def train_and_evaluate_block_smb(
             target_model=target_model,
             success_replay=success_replay,
         )
+        if demonstration_data is not None and config.demonstration_rehearsal_updates:
+            demonstration_weights = None
+            if config.mastery_gated_schedule:
+                family_weights = block_smb_mastery_family_weights(
+                    mastery_state,
+                    family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
+                    retention_weight=config.mastery_retention_weight,
+                    retention_grace_evals=config.mastery_retention_grace_evals,
+                )
+                demonstration_weights = {
+                    index: family_weights[family]
+                    for index, family in enumerate(BLOCK_SMB_MC_FAMILIES)
+                }
+            losses["demonstration_rehearsal_loss"] = fit_demonstrations(
+                model,
+                optimizer,
+                demonstration_data,
+                steps=config.demonstration_rehearsal_updates,
+                decision_durations_only=not config.adaptive_duration_control,
+                walk_durations=config.walk_duration_primitives,
+                prioritized=config.demonstration_prioritized,
+                family_weights=demonstration_weights,
+                seed=config.seed + epoch + 1,
+            )
+            losses["demonstration_rehearsal_updates"] = config.demonstration_rehearsal_updates
+            if target_model is not None:
+                update_target_network(target_model, model, tau=1.0)
         losses["adaptive_replay_samples"] = float(len(replay_curriculum))
         global_step += int(losses["episodes"])
         completed_epoch = epoch + 1

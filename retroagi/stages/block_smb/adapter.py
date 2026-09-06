@@ -43,6 +43,7 @@ class BlockSMBObservationConfig:
     frame_stack: int = 4
     state_min: float = -1.0
     state_max: float = 1.0
+    motion_observations: bool = False
 
     def __post_init__(self) -> None:
         if self.frame_stack <= 0:
@@ -76,6 +77,8 @@ class BlockSMBStage:
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
+        self._cached_vision_frame = None
+        self._cached_vision = None
 
     def reset(self, seed: Optional[int] = None):
         obs, info = self.env.reset(scenario=self.scenario, seed=seed)
@@ -83,6 +86,8 @@ class BlockSMBStage:
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
+        self._cached_vision_frame = None
+        self._cached_vision = None
         self._reset_frame_stack(obs)
         return obs
 
@@ -105,9 +110,17 @@ class BlockSMBStage:
         normalized_observation = self._normalize_observation(observation)
         if not torch.equal(self._frame_stack[-1], normalized_observation):
             self._append_frame(observation, valid=True)
-        state_vec = self._normalize_state_vec(info["state_vec"])
-        with torch.no_grad():
-            vision = self.vision.encode(normalized_observation)
+        state_vec = self.state_features(info)
+        # A transition's next frame is the next decision's current frame.
+        # The frozen encoder need only process those identical pixels once;
+        # symbolic state and episode metadata are still projected on every call.
+        if self._cached_vision_frame is None or not torch.equal(
+            normalized_observation, self._cached_vision_frame
+        ):
+            with torch.no_grad():
+                self._cached_vision = self.vision.encode(normalized_observation)
+            self._cached_vision_frame = normalized_observation.clone()
+        vision = self._cached_vision
 
         return self.vision_projector.project(
             vision,
@@ -154,6 +167,12 @@ class BlockSMBStage:
         if bool(tensor.numel()) and float(tensor.max()) > 1.0:
             tensor = tensor / 255.0
         return tensor.clamp(0.0, 1.0)
+
+    def state_features(self, info):
+        state = self._normalize_state_vec(info["state_vec"])
+        if self.observation_config.motion_observations:
+            state = np.concatenate((state, self._normalize_state_vec(info["motion_vec"])))
+        return state
 
     def _normalize_state_vec(self, state_vec: Any) -> np.ndarray:
         state = np.asarray(state_vec, dtype=np.float32)
@@ -209,11 +228,11 @@ def block_smb_deterministic_critic_slots() -> dict[str, float]:
     death gate because it also fires on goal completion.
     """
 
-    state_start = (
-        BLOCK_SMB_C_POSITION_DIMS + BLOCK_SMB_C_SEMANTIC_DIMS + BLOCK_SMB_C_SUPPORT_DIMS
-    )
+    state_start = BLOCK_SMB_C_POSITION_DIMS + BLOCK_SMB_C_SEMANTIC_DIMS + BLOCK_SMB_C_SUPPORT_DIMS
     return {
         "goal_distance": state_start + BLOCK_SMB_STATE_GOAL_DISTANCE_INDEX,
+        "position_x": state_start,
+        "position_y": state_start + 1,
         "death": state_start + BLOCK_SMB_STATE_DEATH_INDEX,
         "progress_epsilon": 0.002,
         "death_threshold": 0.5,

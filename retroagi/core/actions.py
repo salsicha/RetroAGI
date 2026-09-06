@@ -409,6 +409,7 @@ class SMBAdaptiveController:
         adaptive_duration: bool = True,
         adaptive_slew_frames: float = 1.0,
         steady_primitives: bool = True,
+        walk_primitives: bool = True,
         wait_duration_scale: float = 4.0,
         max_wait_frames: int = 64,
     ) -> None:
@@ -443,6 +444,7 @@ class SMBAdaptiveController:
         # actions with the same duration selection and adaptive setpoint
         # tracking as jumps — one adaptive controller for every action class.
         self.steady_primitives = bool(steady_primitives)
+        self.walk_primitives = bool(walk_primitives)
         # Waits need longer commitments than jumps: a moving bridge's cycle
         # can exceed the 16-frame duration menu. Wait (NOOP) primitives scale
         # the selected bin by this factor, giving a 4-64 frame wait range
@@ -458,6 +460,12 @@ class SMBAdaptiveController:
     @property
     def active(self) -> bool:
         return self._active_jump is not None
+
+    @property
+    def committed_action(self) -> int | None:
+        """Intent whose parameters still control the current primitive."""
+        action = self._active_jump if self._active_jump is not None else self._active_steady
+        return None if action is None else int(action)
 
     def reset(self) -> None:
         self._active_jump: SMBAction | None = None
@@ -563,7 +571,9 @@ class SMBAdaptiveController:
                 return steady
 
         if action_value not in SMB_JUMP_ACTIONS:
-            if not self.steady_primitives:
+            if not self.steady_primitives or (
+                not self.walk_primitives and action_value in SMB_WALK_ACTIONS
+            ):
                 self.reset()
                 return SMBPrimitiveExecution(action=int(action_value))
             return self._start_steady_primitive(action_value, motor_primitives)
@@ -758,9 +768,7 @@ class SMBAdaptiveController:
                 committed = float(self._hold_frames or self.default_hold_frames)
                 # The duration head thinks in bin space (1-16); waits run in
                 # scaled frame space, so belief changes scale accordingly.
-                scale = (
-                    self.wait_duration_scale if action == SMBAction.NOOP else 1.0
-                )
+                scale = self.wait_duration_scale if action == SMBAction.NOOP else 1.0
                 setpoint = committed + (current - self._hold_expected_baseline) * scale
                 delta = setpoint - self._desired_hold_frames
                 slew = self.adaptive_slew_frames * scale

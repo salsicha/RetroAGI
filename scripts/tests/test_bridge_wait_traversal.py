@@ -255,3 +255,19 @@ def test_unsafe_eight_frame_timer_does_not_earn_wait_skill_credit():
     assert trajectory.transitions[first.end_frame].info["bridge_wait_release"] == "timer"
     assert first.events[-1]["safe_departure"] is False
     assert not achieved_block_smb_skill_goals([first])
+
+
+def test_expired_wait_timer_does_not_claim_the_bridge_has_arrived():
+    item = sample("hard")
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=item.scenario)
+        assert min(bridge_safe_wait_frames(env)) > 8
+    finally:
+        env.close()
+    policy = PhasePolicy(moving_action=0)
+    policy.last_motor_primitives.hold_duration_logits.fill_(-30)
+    policy.last_motor_primitives.hold_duration_logits[..., 0] = 30
+    trajectory = rollout(item, policy, steps=8)
+    assert any(t.info.get("bridge_wait_release") == "timer" for t in trajectory.transitions)
+    assert all(t.info.get("skill_phase") == "wait" for t in trajectory.transitions)

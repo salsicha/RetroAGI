@@ -28,6 +28,8 @@ ACTION_REFINEMENT_ALLOWED_MISSING_PREFIXES = (
 )
 LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES = (
     "agent.fc_primitive_hold_duration.",
+    "agent.duration_state_head.",
+    "agent.action_state_head.",
     "agent.fc_primitive_release.",
     "agent.fc_primitive_cancel.",
     "agent.fc_primitive_replan.",
@@ -299,11 +301,11 @@ class AdaptiveController(nn.Module):
             raise ValueError(f"w and b shapes must match, got {w.shape} and {b.shape}")
         if x_c.size(0) != w.size(0):
             raise ValueError(
-                "x_c, w, and b batch sizes must match, got " f"{x_c.size(0)} and {w.size(0)}"
+                f"x_c, w, and b batch sizes must match, got {x_c.size(0)} and {w.size(0)}"
             )
         if x_c.size(1) % w.size(1) != 0:
             raise ValueError(
-                "C length must be divisible by B length, got " f"{x_c.size(1)} and {w.size(1)}"
+                f"C length must be divisible by B length, got {x_c.size(1)} and {w.size(1)}"
             )
         ratio_bc = x_c.size(1) // w.size(1)
         if self.schedule == "constant":
@@ -398,7 +400,7 @@ class MotorPrimitiveController(nn.Module):
             raise ValueError("w_pred and b_pred must have shape [batch, seq_len_b]")
         if w_pred.shape != b_pred.shape:
             raise ValueError(
-                "w_pred and b_pred shapes must match, got " f"{w_pred.shape} and {b_pred.shape}"
+                f"w_pred and b_pred shapes must match, got {w_pred.shape} and {b_pred.shape}"
             )
         if logits_a.size(0) != w_pred.size(0):
             raise ValueError(
@@ -627,6 +629,7 @@ class HierarchicalAdaptiveModel(nn.Module):
     """Three-level actor: Transformer A -> Transformer B -> adaptive controller."""
 
     uses_world_model_context = True
+    supports_action_sampling = True
 
     def __init__(
         self,
@@ -687,6 +690,32 @@ class HierarchicalAdaptiveModel(nn.Module):
         # as the C-state context. Zero-initialized and RNG-neutral so
         # existing checkpoints load and behave identically until trained.
         rng_state_skill = torch.get_rng_state()
+        # A deterministic numeric path preserves small geometry differences
+        # that positional-token dropout can obscure in duration classification.
+        self.action_state_head = (
+            nn.Sequential(
+                nn.Linear(seq_len_c + SKILL_GOAL_ENCODING_DIM, d_model),
+                nn.ReLU(),
+                nn.Linear(d_model, self.action_vocab_size),
+            )
+            if seq_len_c is not None
+            else None
+        )
+        if self.action_state_head is not None:
+            nn.init.zeros_(self.action_state_head[-1].weight)
+            nn.init.zeros_(self.action_state_head[-1].bias)
+        self.duration_state_head = (
+            nn.Sequential(
+                nn.Linear(seq_len_c + SKILL_GOAL_ENCODING_DIM + self.action_vocab_size, d_model),
+                nn.ReLU(),
+                nn.Linear(d_model, len(DEFAULT_PRIMITIVE_DURATION_BINS)),
+            )
+            if seq_len_c is not None
+            else None
+        )
+        if self.duration_state_head is not None:
+            nn.init.zeros_(self.duration_state_head[-1].weight)
+            nn.init.zeros_(self.duration_state_head[-1].bias)
         self.skill_goal_context_b = nn.Linear(SKILL_GOAL_ENCODING_DIM, d_model)
         nn.init.zeros_(self.skill_goal_context_b.weight)
         nn.init.zeros_(self.skill_goal_context_b.bias)
@@ -810,6 +839,7 @@ class HierarchicalAdaptiveModel(nn.Module):
         forced_action=None,
         skill_goal=None,
         tactic_context=None,
+        policy_action_mode=None,
     ):
         seq_len_a = src_A.size(1)
         seq_len_b = src_B.size(1)
@@ -842,29 +872,53 @@ class HierarchicalAdaptiveModel(nn.Module):
 
         hidden_a = self.transformer_A(x_a, mask=causal_mask_a)
         logits_a = self.fc_out_A(hidden_a)
+        if self.action_state_head is not None:
+            numeric_goal = (
+                skill_goal.to(src_C).float()
+                if skill_goal is not None
+                else src_C.new_zeros((src_C.size(0), SKILL_GOAL_ENCODING_DIM))
+            )
+            logits_a = logits_a + self.action_state_head(
+                torch.cat((src_C.float(), numeric_goal), dim=-1)
+            ).unsqueeze(1)
 
         if self.training:
             probs_a = F.gumbel_softmax(logits_a, tau=tau, hard=True, dim=-1)
         else:
             probs_a = F.softmax(logits_a, dim=-1)
         self.last_unforced_logits_a = logits_a
+        self.last_sampled_action_id = None
+        if policy_action_mode is not None and forced_action is None:
+            if src_A.size(0) != 1 or policy_action_mode not in ("sample", "greedy"):
+                raise ValueError(
+                    "Native action sampling requires one environment and sample/greedy mode"
+                )
+            distribution = torch.distributions.Categorical(logits=logits_a[:, -1, :])
+            selected = (
+                distribution.sample()
+                if policy_action_mode == "sample"
+                else distribution.logits.argmax(dim=-1)
+            )
+            forced_action = selected
+            self.last_sampled_action_id = int(selected.item())
         if forced_action is not None:
             # Ranked-candidate imagination: condition the B/C pipeline on an
             # explicit next-action token instead of the sampled/soft mixture, so
             # the world model can evaluate "what if I took this action" for
             # tokens other than the actor's first choice.
-            forced_index = int(forced_action)
-            if not 0 <= forced_index < probs_a.size(-1):
-                raise ValueError(
-                    f"forced_action must be in [0, {probs_a.size(-1)}), got {forced_index}"
-                )
-            forced_row = torch.zeros_like(probs_a[:, -1, :])
-            forced_row[:, forced_index] = 1.0
+            forced_indices = torch.as_tensor(forced_action, device=probs_a.device, dtype=torch.long)
+            if forced_indices.ndim == 0:
+                forced_indices = forced_indices.expand(probs_a.size(0))
+            if forced_indices.shape != (probs_a.size(0),):
+                raise ValueError("forced_action must be scalar or one action per batch item")
+            if bool(((forced_indices < 0) | (forced_indices >= probs_a.size(-1))).any()):
+                raise ValueError(f"forced_action must be in [0, {probs_a.size(-1)})")
+            forced_row = F.one_hot(forced_indices, probs_a.size(-1)).to(probs_a.dtype)
             probs_a = torch.cat((probs_a[:, :-1, :], forced_row.unsqueeze(1)), dim=1)
             # World-model primitive context and motor decoding must describe
             # the same supplied action that conditions B's cross attention.
             forced_logits = torch.full_like(logits_a[:, -1:, :], -30.0)
-            forced_logits[:, :, forced_index] = 30.0
+            forced_logits.scatter_(2, forced_indices[:, None, None], 30.0)
             logits_a = torch.cat((logits_a[:, :-1, :], forced_logits), dim=1)
         pred_emb_a = torch.matmul(probs_a, self.action_embedding.weight)
 
@@ -888,8 +942,19 @@ class HierarchicalAdaptiveModel(nn.Module):
         controller_params = self.fc_controller_params(hidden_b)
         w_pred = controller_params[:, :, 0]
         b_pred = controller_params[:, :, 1]
+        duration_goal = (
+            skill_goal.to(src_C).float()
+            if skill_goal is not None
+            else src_C.new_zeros((src_C.size(0), SKILL_GOAL_ENCODING_DIM))
+        )
+        duration_features = torch.cat((src_C.float(), duration_goal, probs_a[:, -1, :]), dim=-1)
+        duration_residual = (
+            self.duration_state_head(duration_features).unsqueeze(1)
+            if self.duration_state_head is not None
+            else 0.0
+        )
         self.last_level_b_primitives = LevelBPrimitiveParameters(
-            hold_duration_logits=self.fc_primitive_hold_duration(hidden_b),
+            hold_duration_logits=self.fc_primitive_hold_duration(hidden_b) + duration_residual,
             release_logit=self.fc_primitive_release(hidden_b).squeeze(-1),
             cancel_logit=self.fc_primitive_cancel(hidden_b).squeeze(-1),
             replan_logit=self.fc_primitive_replan(hidden_b).squeeze(-1),
@@ -998,8 +1063,7 @@ class WorldModel(nn.Module):
                 mask = mask.expand(batch_size)
             if tuple(mask.shape) != (batch_size,):
                 raise ValueError(
-                    "episode_mask must have shape [batch] or [batch, 1], "
-                    f"got {tuple(mask.shape)}"
+                    f"episode_mask must have shape [batch] or [batch, 1], got {tuple(mask.shape)}"
                 )
             chunk_masks[:, 0] = mask
         elif mask.ndim == 2:
@@ -1007,12 +1071,11 @@ class WorldModel(nn.Module):
                 chunk_masks[:, 0] = mask[:, 0]
             else:
                 raise ValueError(
-                    "episode_mask must have shape [batch] or [batch, 1], "
-                    f"got {tuple(mask.shape)}"
+                    f"episode_mask must have shape [batch] or [batch, 1], got {tuple(mask.shape)}"
                 )
         else:
             raise ValueError(
-                "episode_mask must have shape [batch] or [batch, 1], " f"got {tuple(mask.shape)}"
+                f"episode_mask must have shape [batch] or [batch, 1], got {tuple(mask.shape)}"
             )
         if not torch.isfinite(chunk_masks).all().item():
             raise ValueError("episode_mask must contain only finite values")
@@ -1128,8 +1191,7 @@ class WorldModel(nn.Module):
             or b_context.shape != state.shape
         ):
             raise ValueError(
-                "state, action, w_context, and b_context must all have shape "
-                f"{tuple(state.shape)}"
+                f"state, action, w_context, and b_context must all have shape {tuple(state.shape)}"
             )
 
         phases = (
@@ -1239,7 +1301,7 @@ def action_rejection_mask(
         mask = mask.expand(reference.size(0))
     if tuple(mask.shape) != (reference.size(0),):
         raise ValueError(
-            "critic rejection mask must have shape [batch] or scalar, got " f"{tuple(mask.shape)}"
+            f"critic rejection mask must have shape [batch] or scalar, got {tuple(mask.shape)}"
         )
     return mask
 
@@ -1492,6 +1554,8 @@ class AgentWorldModelCritic(nn.Module):
         # code can execute exactly the searched action.
         self.ranked_candidate_search = bool(ranked_candidate_search)
         self.last_selected_action_id: int | None = None
+        self.supports_action_sampling = True
+        self.action_evaluation_target = None
         # Deterministic critic gates: when set (a mapping with goal_distance /
         # death indices into the C stream plus progress_epsilon and
         # death_threshold), would_progress is the mechanistic decrease of the
@@ -1572,13 +1636,13 @@ class AgentWorldModelCritic(nn.Module):
             mask = mask[:, 0]
         if mask.ndim != 1:
             raise ValueError(
-                "episode_mask must have shape [batch] or [batch, 1], " f"got {tuple(mask.shape)}"
+                f"episode_mask must have shape [batch] or [batch, 1], got {tuple(mask.shape)}"
             )
         if mask.numel() == 1 and batch_size != 1:
             mask = mask.expand(batch_size)
         if tuple(mask.shape) != (batch_size,):
             raise ValueError(
-                "episode_mask must have shape [batch] or [batch, 1], " f"got {tuple(mask.shape)}"
+                f"episode_mask must have shape [batch] or [batch, 1], got {tuple(mask.shape)}"
             )
         if not torch.isfinite(mask).all().item():
             raise ValueError("episode_mask must contain only finite values")
@@ -1633,8 +1697,11 @@ class AgentWorldModelCritic(nn.Module):
         forced_action=None,
         skill_goal=None,
         tactic_context=None,
+        policy_action_mode=None,
     ):
         kwargs: dict[str, Any] = {"criticism": criticism, "tau": tau}
+        if policy_action_mode is not None:
+            kwargs["policy_action_mode"] = policy_action_mode
         if bool(getattr(self.agent, "uses_world_model_context", False)):
             kwargs["world_model_context"] = world_model_context
         if forced_action is not None:
@@ -1798,6 +1865,16 @@ class AgentWorldModelCritic(nn.Module):
             raise ValueError("deterministic critic gates require the current state")
         current = current_state.to(dtype=next_state_pred.dtype, device=next_state_pred.device)
         progress_score = current[:, goal_index] - next_state_pred[:, goal_index]
+        if self.action_evaluation_target is not None:
+            # Compare the same local landing region using normalized engine positions.
+            target = self.action_evaluation_target.to(current)
+            indices = [int(slots["position_x"]), int(slots["position_y"])]
+
+            def distance(state):
+                delta = (state[:, indices] - target[:, :2]).abs()
+                return (delta - target[:, 2:]).clamp_min(0).norm(dim=-1)
+
+            progress_score = distance(current) - distance(next_state_pred)
         death_risk = next_state_pred[:, death_index].clamp(0.0, 1.0)
         feedback = self.critic(next_state_pred)
         return CriticActionEvaluation(
@@ -2035,7 +2112,10 @@ class AgentWorldModelCritic(nn.Module):
         world_model_enabled=True,
         skill_goal=None,
         forced_action=None,
+        policy_action_mode=None,
+        evaluation_target=None,
     ):
+        self.action_evaluation_target = evaluation_target
         actor_world_model_context = self._actor_world_model_context(
             world_model_state,
             src_A,
@@ -2064,6 +2144,11 @@ class AgentWorldModelCritic(nn.Module):
         self.last_actor_world_model_context = (
             None if actor_world_model_context is None else actor_world_model_context.detach()
         )
+        native_sampling = (
+            policy_action_mode is not None
+            and forced_action is None
+            and getattr(self.agent, "supports_action_sampling", False)
+        )
         logits_a1, actions1, w_1, b_1 = self._agent_forward(
             src_A,
             src_B,
@@ -2074,12 +2159,40 @@ class AgentWorldModelCritic(nn.Module):
             skill_goal=skill_goal,
             tactic_context=tactic_context,
             forced_action=forced_action,
+            policy_action_mode=policy_action_mode if native_sampling else None,
         )
         self.last_policy_logits_a = (
             getattr(self.agent, "last_unforced_logits_a", logits_a1)
-            if forced_action is not None
+            if forced_action is not None or native_sampling
             else logits_a1
         )
+        sampled_action = self.agent.last_sampled_action_id if native_sampling else None
+        if policy_action_mode is not None and forced_action is None and not native_sampling:
+            if src_A.size(0) != 1:
+                raise ValueError("Action sampling requires a single environment")
+            if policy_action_mode not in ("sample", "greedy"):
+                raise ValueError("Unknown policy action mode")
+            distribution = torch.distributions.Categorical(
+                logits=logits_a1[:, -1, : self.action_vocab_size]
+            )
+            selected = (
+                distribution.sample()
+                if policy_action_mode == "sample"
+                else distribution.logits.argmax(dim=-1)
+            )
+            sampled_action = int(selected.item())
+            # Motor parameters and predictions must describe the actual draw.
+            logits_a1, actions1, w_1, b_1 = self._agent_forward(
+                src_A,
+                src_B,
+                src_C,
+                criticism=None,
+                tau=tau,
+                world_model_context=actor_world_model_context,
+                skill_goal=skill_goal,
+                tactic_context=tactic_context,
+                forced_action=sampled_action,
+            )
         primitive_params1 = getattr(self.agent, "last_level_b_primitives", None)
         first_candidate = self._candidate_from_actor_outputs(
             src_C,
@@ -2097,10 +2210,11 @@ class AgentWorldModelCritic(nn.Module):
         selected_candidate = first_candidate
         selected_iteration = 1
         accepted = self._candidate_is_accepted(first_candidate)
-        self.last_selected_action_id = None
+        self.last_selected_action_id = sampled_action
 
         use_ranked_search = (
             self.ranked_candidate_search
+            and policy_action_mode is None
             and forced_action is None
             and critic_feedback_enabled
             and world_model_enabled
@@ -2162,7 +2276,12 @@ class AgentWorldModelCritic(nn.Module):
                 selected_iteration = best_index + 1
             self.last_selected_action_id = search_ids[selected_iteration - 1]
             candidates = search_candidates
-        elif forced_action is None and critic_feedback_enabled and not accepted:
+        elif (
+            policy_action_mode is None
+            and forced_action is None
+            and critic_feedback_enabled
+            and not accepted
+        ):
             actor_criticism = first_candidate.criticism.detach()
             for _pass_index in range(1, self.max_action_refinement_passes):
                 logits_a, actions, w, b = self._agent_forward(
@@ -2224,7 +2343,7 @@ class AgentWorldModelCritic(nn.Module):
             # Training still needs the actor distribution that ranked the actions.
             (
                 self.last_policy_logits_a
-                if forced_action is not None or use_ranked_search
+                if forced_action is not None or use_ranked_search or policy_action_mode is not None
                 else selected_candidate.logits_a
             ),
             selected_candidate.w,

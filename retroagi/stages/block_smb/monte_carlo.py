@@ -1806,8 +1806,17 @@ def _platform_hop(
         "coins": [],
         "goal": [platform_x + 4, 178, 16, 20],
         "reward_goal_distance_shaping": 2.0,
+        "goal_requires_support": True,
+        "single_jump_attempt": True,
     }
     oracle_hold = {"easy": 10, "medium": 12, "hard": 14}[difficulty]
+    # Credit the landing itself. The old script could touch the goal while
+    # airborne and terminate before missing the platform altogether.
+    for hold in sorted(range(1, 17), key=lambda h: (abs(h - oracle_hold), h)):
+        actions = _pad([2] * hold + [1] * 80)
+        if validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=80)["reachable"]:
+            oracle_hold = hold
+            break
     actions = _pad([2] * oracle_hold + [1] * 80)
     return (
         scenario,
@@ -1817,6 +1826,7 @@ def _platform_hop(
             "platform_x": platform_x,
             "a_level_action": 2,
             "single_jump": True,
+            "family_revision": 3,
             "difficulty_bin": difficulty,
         },
         actions,
