@@ -178,3 +178,44 @@ def test_refinement_trains_with_vit_and_survives_checkpoint_roundtrip(tmp_path):
     restored = DenseSMBPerception.load(tmp_path / "refined.pth")
     assert restored.config["refinement_channels"] == 8
     torch.testing.assert_close(restored.encode(pixels).semantic_logits, output.semantic_logits)
+
+
+def test_overlap_objective_detects_small_missed_bodies_and_ignores_padding():
+    from scripts.smb_perception_training import collision_overlap_loss
+
+    target = torch.zeros(1, 40, 40, dtype=torch.long)
+    target[:, 4:6, 4:6] = 1
+    logits = torch.full((1, 7, 40, 40), -20.0)
+    logits[:, 0] = 20
+    # Missing four pixels out of 1,600 must still produce a strong body loss.
+    assert collision_overlap_loss(logits, target) > 0.99
+    logits[:, 0, 4:6, 4:6] = -20
+    logits[:, 1, 4:6, 4:6] = 20
+    assert collision_overlap_loss(logits, target) < 1e-5
+    target[:, 20:] = 255
+    logits[:, 1, 20:] = 80  # Incorrect padding predictions are not supervised.
+    logits.requires_grad_()
+    loss = collision_overlap_loss(logits, target)
+    assert loss < 1e-5
+    loss.backward()
+    assert torch.isfinite(logits.grad).all()
+    assert (logits.grad[:, :, 20:] == 0).all()
+    assert collision_overlap_loss(logits, torch.full_like(target, 255)) == 0
+
+
+def test_frame_mode_sampling_exposes_rare_appearances_without_changing_frames():
+    import numpy as np
+
+    from scripts.smb_perception_training import ClipDataset
+
+    clip = dict(frames=1000, frame_modes=["normal"] * 999 + ["skidding"])
+    dataset = ClipDataset([clip])
+    indices = dataset.sample_indices(np.random.default_rng(42), 2000)
+    fraction = sum(i == 999 for i in indices) / len(indices)
+    assert 0.45 < fraction < 0.55  # Previously the rare-frame probability was 0.001.
+    assert all(0 <= i < 1000 for i in indices)
+    assert len(dataset.index) == 1000  # Evaluation still visits each original frame once.
+    legacy = ClipDataset([dict(frames=3)])
+    assert set(legacy.sample_indices(np.random.default_rng(42), 100)) == {0, 1, 2}
+    with pytest.raises(ValueError, match="clip length"):
+        ClipDataset([dict(frames=2, frame_modes=["normal"])])

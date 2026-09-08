@@ -32,7 +32,7 @@
   "resume_path": null,
   "perception_layouts_per_family": 12,
   "perception_validation_per_family": 3,
-  "perception_updates": 4000,
+  "perception_updates": 8000,
   "family_train_layouts": 18,
   "family_eval_layouts": 30,
   "family_rounds": 12,

@@ -23,12 +23,22 @@ def block_clips(cases, directory, *, stride=8):
         env.render_goal = False
         images = []
         labels = []
+        frame_modes = []
         try:
             obs, _ = env.reset(scenario=sample.scenario)
             for frame, action in enumerate(sample.oracle["actions"]):
                 if frame % stride == 0:
                     images.append(obs.copy())
                     labels.append(collision_labels(block_oracle_scene(env)["scene"]))
+                    dead_visible = any(
+                        e["dead"]
+                        and e["x"] + e["w"] > env.camera_x
+                        and e["x"] < env.camera_x + env.width
+                        for e in env.enemies
+                    )
+                    frame_modes.append(
+                        f"skid={int(env.mario['skidding'])},dead={int(dead_visible)}"
+                    )
                 obs, _, done, truncated, _ = env.step(action)
                 if done or truncated:
                     break
@@ -45,6 +55,7 @@ def block_clips(cases, directory, *, stride=8):
                 label_source="block_collision_instrumentation",
                 pixels="block_renderer",
                 frames=len(images),
+                frame_modes=frame_modes,
             )
         )
     (directory / "clips.json").write_text(json.dumps(clips, indent=2) + "\n")
@@ -56,8 +67,22 @@ class ClipDataset:
         self.clips = clips
         self.index = [(i, j) for i, c in enumerate(clips) for j in range(c["frames"])]
         self.cache = {}
+        self.sampling_groups = {}
+        for index, (i, j) in enumerate(self.index):
+            modes = clips[i].get("frame_modes")
+            if modes is not None and len(modes) != clips[i]["frames"]:
+                raise ValueError("Frame modes do not match perception clip length")
+            mode = modes[j] if modes is not None else "default"
+            self.sampling_groups.setdefault(mode, []).append(index)
         if not self.index:
             raise ValueError("Empty perception split")
+
+    def sample_indices(self, rng, size):
+        groups = list(self.sampling_groups.values())
+        return [
+            group[int(rng.integers(len(group)))]
+            for group in (groups[int(i)] for i in rng.integers(len(groups), size=size))
+        ]
 
     def batch(self, indices):
         images = []
@@ -142,6 +167,24 @@ def collision_cross_entropy(logits, target, *, weight):
     )
 
 
+def collision_overlap_loss(logits, target):
+    """Give small foreground classes a direct overlap objective.
+
+    Compute each image/class separately so a missed small body is not diluted
+    by the number of terrain/background pixels elsewhere in the batch.
+    """
+    valid = target != 255
+    truth = F.one_hot(target.masked_fill(~valid, 0), 7).movedim(-1, 1)
+    truth = truth * valid[:, None]
+    probability = logits.softmax(1) * valid[:, None]
+    area = truth.sum((-2, -1))[:, 1:]
+    intersection = (probability * truth).sum((-2, -1))[:, 1:]
+    total = probability.sum((-2, -1))[:, 1:] + area
+    overlap = (2 * intersection + 1e-6) / (total + 1e-6)
+    present = area > 0
+    return ((1 - overlap) * present).sum() / present.sum().clamp_min(1)
+
+
 def translated_batch(images, labels, rng, *, max_x=128, max_y=64):
     """Expose screen positions, patch phases and clipped bodies without wrapping.
 
@@ -168,7 +211,7 @@ def train_perception(
     validation_clips,
     directory,
     *,
-    steps=4000,
+    steps=8000,
     batch_size=8,
     device="cuda",
     seed=0,
@@ -192,20 +235,25 @@ def train_perception(
         dim=dim, depth=depth, class_weights=class_weights, refinement_channels=16
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps, eta_min=3e-5)
     rng = np.random.default_rng(seed)
     weights = torch.tensor(class_weights, device=device)
     for step in range(steps):
         model.train()
-        images, labels = train.batch(rng.integers(len(train.index), size=batch_size))
+        images, labels = train.batch(train.sample_indices(rng, batch_size))
         images, labels = translated_batch(images, labels, rng)
         target = torch.as_tensor(labels, device=device).long()
         # Optimize weighted logits; inference removes the known class prior.
         vision = model(image_tensor(images, device=torch.device(device)), calibrated=False)
         loss = collision_cross_entropy(vision.semantic_logits, target, weight=weights)
+        loss = loss + 0.5 * collision_overlap_loss(
+            vision.semantic_logits - model.log_class_weights, target
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+        scheduler.step()
         if step == 0 or (step + 1) % 100 == 0 or step + 1 == steps:
             event = dict(phase="perception", step=step + 1, loss=float(loss.detach()))
             if log:
@@ -223,7 +271,10 @@ def train_perception(
     )
     metrics["absent_validation_classes"] = [int(k) for k, v in metrics["iou"].items() if v is None]
     metrics["full_level_qualified"] = False
+    metrics["learning_rate_schedule"] = dict(kind="cosine", initial=3e-4, final=3e-5, updates=steps)
+    metrics["training_frame_modes"] = {k: len(v) for k, v in train.sampling_groups.items()}
     metrics["training_translation"] = dict(max_x=128, max_y=64, padding_label=255)
+    metrics["overlap_loss_weight"] = 0.5
     metrics["class_weights"] = class_weights
     metrics["probability_correction"] = "subtract_log_training_class_weights"
     event = dict(
