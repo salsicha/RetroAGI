@@ -118,6 +118,8 @@ flow.
   adapter, headless smoke evaluation, Block SMB policy transfer, continued Full
   SMB training, transfer-vs-scratch comparison tooling, and a documented local
   benchmark run at `artifacts/full_smb/documented_benchmark_seed0/`.
+  The [shared transfer contract and emulator audit](docs/full-smb-transfer-contract.md)
+  documents the current compatibility fixes and failed full-level qualification.
 - **Operations** are covered by CI, native install instructions, stage
   operations guidance, and a clean-checkout reproducibility procedure.
 

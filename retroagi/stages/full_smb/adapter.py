@@ -329,6 +329,8 @@ class FullSMBEmulatorState:
     truncated: bool
     frame_stack: tuple[torch.Tensor, ...]
     frame_mask: tuple[bool, ...]
+    geometry_state: Any = None
+    geometry_frame: int = 0
 
 
 @dataclass(frozen=True)
@@ -572,12 +574,18 @@ class FullSMBStage:
         self._frame_stack: deque[torch.Tensor] = deque(maxlen=self.observation_config.frame_stack)
         self._frame_mask: deque[bool] = deque(maxlen=self.observation_config.frame_stack)
         self._last_observation: Optional[np.ndarray] = None
+        self.smb_runtime_contract = None
+        self.smb_geometry = None
+        self._geometry_frame = 0
 
     @property
     def buttons(self) -> tuple[str, ...]:
         return self.backend.buttons
 
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
+        if self.smb_geometry is not None:
+            self.smb_geometry.reset()
+        self._geometry_frame = 0
         result = self.backend.reset(seed=seed)
         observation = self._rgb_observation(result.observation)
         self.last_info = self._annotated_info(result.info, terminated=False, truncated=False)
@@ -596,6 +604,7 @@ class FullSMBStage:
     def step(
         self, action: SMBAction | int
     ) -> tuple[np.ndarray, float, bool, bool, Mapping[str, Any]]:
+        self._geometry_frame += 1
         shared_action = coerce_smb_action(action)
         button_action = full_smb_action(shared_action, self.buttons)
         button_action = self._augment_run_button(shared_action, button_action)
@@ -626,6 +635,10 @@ class FullSMBStage:
             previous_info=previous_info,
         )
         signal_info = _signal_mapping(info)
+        if self.smb_runtime_contract is not None:
+            terminated = terminated or bool(
+                signal_info.get("death") or signal_info.get("completion")
+            )
         if bool(signal_info.get("death")):
             terminated = True
         self._annotate_vision_position_target(info)
@@ -685,6 +698,8 @@ class FullSMBStage:
             truncated=bool(self._last_truncated),
             frame_stack=tuple(frame.clone() for frame in self._frame_stack),
             frame_mask=tuple(bool(item) for item in self._frame_mask),
+            geometry_state=copy.deepcopy(self.smb_geometry.__dict__) if self.smb_geometry else None,
+            geometry_frame=self._geometry_frame,
         )
 
     def load_emulator_state(self, state: FullSMBEmulatorState) -> np.ndarray:
@@ -695,6 +710,13 @@ class FullSMBStage:
         if len(state.frame_stack) > self.observation_config.frame_stack:
             raise ValueError("saved frame stack is larger than this stage config")
         self.backend.set_state(copy.deepcopy(state.backend_state))
+        self._geometry_frame = getattr(state, "geometry_frame", 0)
+        if self.smb_geometry is not None:
+            geometry_state = getattr(state, "geometry_state", None)
+            if geometry_state is None:
+                self.smb_geometry.reset()
+            else:
+                self.smb_geometry.__dict__ = copy.deepcopy(geometry_state)
         observation = self._rgb_observation(state.observation)
         self._last_observation = observation.copy()
         self.last_info = copy.deepcopy(state.last_info)
@@ -725,10 +747,33 @@ class FullSMBStage:
         with torch.set_grad_enabled(torch.is_grad_enabled() and vision_allows_grad):
             vision = self.vision.encode(processed_observation)
 
+        shared_metadata = {}
+        state = self._encoded_state_vec(info)
+        if self.smb_runtime_contract is not None:
+            from .geometry import remap_full_vision
+
+            geometry = self.smb_geometry.observe(
+                self.env.get_ram(),
+                frame=self._geometry_frame,
+                terminated=self._last_terminal,
+                truncated=self._last_truncated,
+            )
+            vision = remap_full_vision(
+                vision, visual_tokens=self.smb_runtime_contract.visual_tokens
+            )
+            state = geometry["features"]["state_vec"]
+            if self.smb_runtime_contract.motion_observations:
+                state = np.concatenate((state, geometry["features"]["motion_vec"]))
+            state = np.clip(state, -1.0, 1.0)
+            shared_metadata = {
+                "smb_geometry": geometry,
+                "smb_observation_schema": self.smb_runtime_contract.schema,
+            }
         return self.vision_projector.project(
             vision,
-            state=self._encoded_state_vec(info),
+            state=state,
             metadata={
+                **shared_metadata,
                 "raw_observation_shape": observation.shape,
                 "observation": self._observation_metadata(
                     vision.position.device,
@@ -746,6 +791,22 @@ class FullSMBStage:
                 "info": info,
             },
         )
+
+    def configure_policy_runtime(self, contract):
+        if contract is None:
+            return
+        from .geometry import NESGeometry
+
+        if self.observation_config.frame_skip != contract.frame_skip:
+            raise ValueError("Checkpoint requires frame_skip=1; refusing duration rescaling")
+        if self.observation_config.hold_run_button != contract.hold_run_button:
+            raise ValueError("Run-button setting does not match checkpoint runtime")
+        if self.observation_config.include_camera_state:
+            raise ValueError("Camera features cannot be appended to the shared feature layout")
+        if not callable(getattr(self.env, "get_ram", None)):
+            raise ValueError("Shared SMB runtime requires the NES collision geometry provider")
+        self.smb_runtime_contract = contract
+        self.smb_geometry = NESGeometry()
 
     def close(self) -> None:
         self.backend.close()
@@ -778,7 +839,15 @@ class FullSMBStage:
         self._frame_mask.append(True)
 
     def _append_frame(self, observation: np.ndarray, *, valid: bool) -> None:
-        self._frame_stack.append(self._preprocess_observation(observation))
+        processed = self._preprocess_observation(observation)
+        if self._frame_stack and self._frame_stack[-1].shape != processed.shape:
+            # Older local snapshots can carry a different capture crop than
+            # the live backend. Discard incompatible temporal history instead
+            # of stacking unlike tensors or treating stretched history as real.
+            self._reset_frame_stack(observation)
+            self._frame_mask[-1] = valid
+            return
+        self._frame_stack.append(processed)
         self._frame_mask.append(valid)
 
     def _preprocess_observation(self, observation: np.ndarray) -> torch.Tensor:
@@ -885,6 +954,16 @@ class FullSMBStage:
     ) -> dict[str, Any]:
         annotated = self._info(info)
         self._annotate_vision_position_target(annotated)
+        if self.smb_runtime_contract is not None:
+            ram = self.env.get_ram()
+            # The stock integration terminates only at game-over. A policy
+            # episode must also end at a single death or level completion.
+            annotated["death"] = bool(
+                int(ram[0x0E]) in (6, 11) or (int(ram[0xB5]) >= 2 and int(ram[0x0E]) == 8)
+            )
+            annotated["level_complete"] = bool(int(ram[0x0E]) == 5 and int(ram[0x746]) > 0)
+            annotated["power_state"] = "small" if ram[0x754] else "big"
+            terminated = terminated or annotated["death"] or annotated["level_complete"]
         signals = extract_full_smb_signals(annotated, terminated=terminated, truncated=truncated)
         signals = _apply_full_smb_transition_boundaries(
             previous_info,

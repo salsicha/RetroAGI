@@ -25,7 +25,6 @@ from retroagi.core import (
     TRACKING_BACKENDS,
     ExperimentTrackerConfig,
     SMBAction,
-    SMBParameterizedPrimitiveExecutor,
     SMBPrimitiveExecution,
     StageBatch,
     WorldModelState,
@@ -40,6 +39,7 @@ from retroagi.core import (
     smb_jump_release_action,
     to_plain_data,
 )
+from retroagi.core.smb_runtime import attach_runtime, make_smb_executor
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
 from retroagi.stages.block_smb.train import (
     BLOCK_SMB_CHECKPOINT_KIND,
@@ -864,6 +864,7 @@ def train_full_smb_policy(
             imitation_warm_start=imitation_warm_start_summary,
         )
         stage: Optional[FullSMBStage] = _make_stage(make_stage, vision, config)
+        _configure_smb_stage(stage, model)
         backend_metadata = _full_smb_backend_metadata(stage, config)
         try:
             model.train()
@@ -874,6 +875,7 @@ def train_full_smb_policy(
                 for update_index in range(config.updates_per_epoch):
                     if stage is None:
                         stage = _make_stage(make_stage, vision, config)
+                        _configure_smb_stage(stage, model)
                     episode_seed = config.seed + epoch * config.updates_per_epoch + update_index
                     try:
                         episode = _train_episode(
@@ -970,6 +972,7 @@ def train_full_smb_policy(
                         final_evaluation = evaluation
                     else:
                         stage = _make_stage(make_stage, vision, config)
+                        _configure_smb_stage(stage, model)
             if final_evaluation is None:
                 if config.evaluation_episodes > 0 and config.evaluation_max_steps > 0:
                     if stage is not None:
@@ -1085,6 +1088,11 @@ def _run_full_smb_imitation_warm_start_phase(
 ) -> Optional[dict[str, Any]]:
     if not bool(config.imitation_warm_start):
         return None
+    if getattr(model, "smb_runtime_contract", None) is not None:
+        raise ValueError(
+            "Legacy scripted warm-start labels do not match the shared SMB contract; "
+            "use scripts.full_smb_adapt_geometry and set imitation_warm_start=False"
+        )
     from retroagi.stages.full_smb.imitation import (
         collect_full_smb_imitation_dataset,
         collect_full_smb_obstacle_window_duration_dataset,
@@ -1283,6 +1291,7 @@ def evaluate_full_smb_policy(
     if isinstance(vision, torch.nn.Module):
         vision.eval()
     stage = _make_stage(make_stage, vision, config)
+    _configure_smb_stage(stage, model)
     returns: list[float] = []
     steps = 0
     terminated_count = 0
@@ -1296,7 +1305,7 @@ def evaluate_full_smb_policy(
         for episode_index in range(config.evaluation_episodes):
             episode_seed = config.seed + 10_000 + episode_index
             observation = stage.reset(seed=episode_seed)
-            primitive_executor = SMBParameterizedPrimitiveExecutor()
+            primitive_executor = make_smb_executor(model)
             episode_return = 0.0
             terminated = False
             truncated = False
@@ -1325,14 +1334,14 @@ def evaluate_full_smb_policy(
                 )
                 logits = forward.logits
                 action = int(logits.argmax(dim=-1).item())
-                evaluation_action_counts[str(action)] = (
-                    evaluation_action_counts.get(str(action), 0) + 1
-                )
                 action = primitive_executor.execute(
                     action,
                     motor_primitives=forward.motor_primitives,
                     batch=batch,
                 ).action
+                evaluation_action_counts[str(action)] = (
+                    evaluation_action_counts.get(str(action), 0) + 1
+                )
                 observation, reward, terminated, truncated, info = stage.step(action)
                 boundary = _full_smb_rollout_boundary(
                     terminated=terminated,
@@ -1500,6 +1509,12 @@ def play_full_smb_policy(
     if model is None and not play_config.human_control:
         raise ValueError("policy playback requires a model unless human_control is enabled")
     seed_everything(config.seed, deterministic=config.deterministic)
+    if hasattr(model, "smb_runtime_contract") and (
+        play_config.action_repeat != 1 or play_config.sampling_temperature != 1.0
+    ):
+        raise ValueError(
+            "Shared SMB play requires action_repeat=1 and the checkpoint sampling temperature"
+        )
     resolved_device = device or select_device(config.device)
     if model is not None:
         model.eval()
@@ -1509,6 +1524,7 @@ def play_full_smb_policy(
     if isinstance(vision, torch.nn.Module):
         vision.eval()
     stage = _make_stage(make_stage, vision, config)
+    _configure_smb_stage(stage, model)
     recording_targets = _resolve_full_smb_recording_targets(
         config,
         play_config.recording_prefix,
@@ -1533,7 +1549,7 @@ def play_full_smb_policy(
         episode_index = 0
         episode_seed = config.seed
         observation = stage.reset(seed=episode_seed)
-        primitive_executor = SMBParameterizedPrimitiveExecutor()
+        primitive_executor = make_smb_executor(model)
         resets += 1
         _render_full_smb_stage(
             stage,
@@ -1618,15 +1634,24 @@ def play_full_smb_policy(
                         batch,
                         device=resolved_device,
                         world_model_state=world_model_state,
+                        **(
+                            {"deterministic": play_config.deterministic_policy}
+                            if hasattr(model, "smb_runtime_contract")
+                            else {}
+                        ),
                     )
                 )
                 logits = forward.logits
                 _finite_tensor_or_raise("action_logits", logits)
-                action = _select_full_smb_play_action(
-                    logits,
-                    deterministic=play_config.deterministic_policy,
-                    temperature=play_config.sampling_temperature,
-                )
+                if hasattr(model, "smb_runtime_contract") and not play_config.deterministic_policy:
+                    committed = primitive_executor.committed_action
+                    action = committed if committed is not None else model.last_selected_action_id
+                else:
+                    action = _select_full_smb_play_action(
+                        logits,
+                        deterministic=play_config.deterministic_policy,
+                        temperature=play_config.sampling_temperature,
+                    )
                 action = primitive_executor.execute(
                     action,
                     motor_primitives=forward.motor_primitives,
@@ -2299,6 +2324,7 @@ def load_full_smb_policy_checkpoint(
         architecture_config=architecture_config,
     ).to(device)
     _load_full_smb_policy_state(model, checkpoint["states"]["model"])
+    attach_runtime(model, checkpoint.get("config", {}).get("smb_runtime_contract"))
     optimizer = optim.AdamW(model.parameters())
     if "optimizer" in checkpoint["states"]:
         _restore_optimizer_state(optimizer, checkpoint, strict=False)
@@ -2388,6 +2414,11 @@ def build_full_smb_policy_checkpoint(
         metrics=metrics,
         config={
             **to_plain_data(config),
+            "smb_runtime_contract": (
+                model.smb_runtime_contract.manifest()
+                if hasattr(model, "smb_runtime_contract")
+                else None
+            ),
             "perception": perception,
             "rollout": rollout,
             "loss_weights": loss_weights,
@@ -2474,6 +2505,7 @@ def _load_training_state(
             model,
             checkpoint["states"]["model"],
         )
+        attach_runtime(model, checkpoint.get("config", {}).get("smb_runtime_contract"))
         source = _training_source_metadata(
             FULL_SMB_TRAINING_SOURCE_RESUME_CHECKPOINT,
             checkpoint_path=config.resume_path,
@@ -2624,6 +2656,7 @@ def _load_init_training_state(
             model,
             init_checkpoint["states"]["model"],
         )
+        attach_runtime(model, init_checkpoint.get("config", {}).get("smb_runtime_contract"))
         source = _training_source_metadata(
             FULL_SMB_TRAINING_SOURCE_INIT_CHECKPOINT,
             checkpoint_path=config.init_checkpoint,
@@ -2783,7 +2816,7 @@ def _train_episode(
     value_inputs: list[torch.Tensor] = []
     step_masks: list[float] = []
     world_model_state: WorldModelState | None = None
-    primitive_executor = SMBParameterizedPrimitiveExecutor()
+    primitive_executor = make_smb_executor(model, deterministic=deterministic_actions, seed=seed)
     recurrent_state_resets = 1
     boundary_counts: dict[str, int] = {"manual_reset": 1}
     for _step in range(max_steps):
@@ -2794,6 +2827,11 @@ def _train_episode(
                 batch,
                 device=device,
                 world_model_state=world_model_state,
+                **(
+                    {"deterministic": deterministic_actions}
+                    if hasattr(model, "smb_runtime_contract")
+                    else {}
+                ),
             )
         )
         logits = forward.logits
@@ -2810,7 +2848,19 @@ def _train_episode(
         reward_prediction_abs_values.append(prediction_metrics["reward_prediction_abs_max"])
         next_state_prediction_abs_values.append(prediction_metrics["next_state_prediction_abs_max"])
         distribution = torch.distributions.Categorical(logits=logits)
-        if deterministic_actions:
+        contract_policy_decision = primitive_executor.committed_action is None
+        if getattr(model, "smb_runtime_contract", None) is not None:
+            action_tensor = torch.tensor(
+                [
+                    (
+                        primitive_executor.committed_action
+                        if primitive_executor.committed_action is not None
+                        else model.last_selected_action_id
+                    )
+                ],
+                device=device,
+            )
+        elif deterministic_actions:
             action_tensor = logits.argmax(dim=-1)
         else:
             action_tensor = distribution.sample()
@@ -2819,13 +2869,18 @@ def _train_episode(
             motor_primitives=forward.motor_primitives,
             batch=batch,
         )
-        if execution.action != int(action_tensor.item()):
+        action_overridden = execution.action != int(action_tensor.item())
+        if action_overridden:
             action_tensor = torch.tensor(
                 [execution.action],
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
         log_prob = distribution.log_prob(action_tensor)
+        if hasattr(model, "smb_runtime_contract") and (
+            not contract_policy_decision or action_overridden
+        ):
+            log_prob = log_prob * 0.0
         primitive_log_prob = _smb_primitive_duration_log_prob(
             forward.motor_primitives,
             execution,
@@ -3253,6 +3308,18 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         bool(observation.get("camera_state_enabled")) if isinstance(observation, Mapping) else False
     )
     state_start, state_end = state
+    if metadata.get("smb_observation_schema") == "smb_geometry_v1":
+        # Shared geometry has 27 physical slots plus optional motion. Neither
+        # score/lives nor camera slots are embedded in this checkpoint layout.
+        return {
+            "position": position,
+            "semantic_probabilities": semantics,
+            "support_state": support,
+            "emulator_state": state,
+            "camera_state": (state_end, state_end),
+            "terminal_outcome": (state_start + 24, state_start + 27),
+            "patch_tokens": patch_tokens,
+        }
     emulator_end = min(state_end, state_start + _FULL_SMB_SIGNAL_STATE_SLOT_COUNT)
     terminal_start = min(emulator_end, state_start + 6)
     terminal_outcome = (terminal_start, emulator_end)
@@ -3308,6 +3375,7 @@ def _policy_action_logits_and_state(
     *,
     device: torch.device,
     world_model_state: WorldModelState | None = None,
+    deterministic: bool = True,
 ) -> FullSMBPolicyForwardResult:
     _validate_full_smb_stage_batch(batch)
     src_a = batch.src_a.to(device)
@@ -3317,11 +3385,18 @@ def _policy_action_logits_and_state(
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
     if episode_mask is not None:
         episode_mask = torch.as_tensor(episode_mask, dtype=src_c.dtype, device=src_c.device)
+    contract = getattr(model, "smb_runtime_contract", None)
+    kwargs = {}
+    if contract is not None:
+        kwargs = _smb_forward_kwargs(model, batch, deterministic)
+        if not contract.recurrent_state:
+            world_model_state = None
     outputs = model(
         src_a,
         src_b,
         src_c,
         tau=1.0,
+        **kwargs,
         world_model_state=world_model_state,
         episode_mask=episode_mask,
         return_world_model_state=True,
@@ -3332,7 +3407,10 @@ def _policy_action_logits_and_state(
     next_world_model_state = outputs[-1]
     motor_primitives = getattr(model, "last_motor_primitives", None)
     logits = logits_a[:, -1, :FULL_SMB_ACTION_COUNT]
-    logits = _apply_full_smb_motor_primitive_bias(logits, motor_primitives)
+    if contract is not None and not deterministic:
+        logits = model.last_policy_logits_a[:, -1, :FULL_SMB_ACTION_COUNT]
+    if contract is None:
+        logits = _apply_full_smb_motor_primitive_bias(logits, motor_primitives)
     return FullSMBPolicyForwardResult(
         logits=logits,
         next_world_model_state=next_world_model_state,
@@ -3340,6 +3418,39 @@ def _policy_action_logits_and_state(
         criticism=criticism,
         motor_primitives=motor_primitives,
     )
+
+
+def _configure_smb_stage(stage, model):
+    contract = getattr(model, "smb_runtime_contract", None)
+    if contract is not None:
+        stage.configure_policy_runtime(contract)
+
+
+def _smb_forward_kwargs(model, batch, deterministic):
+    from retroagi.stages.block_smb.train import block_smb_evaluation_target
+
+    contract = model.smb_runtime_contract
+    metadata = batch.metadata or {}
+    if metadata.get("smb_observation_schema") != contract.schema:
+        raise ValueError("Batch observation semantics do not match checkpoint contract")
+    geometry = metadata["smb_geometry"]
+    expected_state_size = 35 if contract.motion_observations else 27
+    if tuple(metadata["vision_fusion"]["c_state"]) != (12, 12 + expected_state_size):
+        raise ValueError("Shared SMB state feature offsets are incompatible")
+    executor = getattr(model, "smb_executor", None)
+    committed = executor.committed_action if executor is not None else None
+    kwargs = dict(
+        skill_goal=geometry["skill_goal"].to(batch.src_c.device) if contract.skill_goals else None,
+        critic_feedback_enabled=contract.critic_feedback,
+        world_model_enabled=contract.world_model,
+        policy_action_mode="greedy" if deterministic else "sample",
+        evaluation_target=block_smb_evaluation_target(geometry["scene"], geometry["objective"]).to(
+            batch.src_c
+        ),
+    )
+    if committed is not None:
+        kwargs["forced_action"] = committed
+    return kwargs
 
 
 def _apply_full_smb_motor_primitive_bias(

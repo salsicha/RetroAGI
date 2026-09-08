@@ -4583,6 +4583,8 @@ def save_block_smb_checkpoint(
     }
     if target_model is not None:
         states["target_model"] = target_model.state_dict()
+    from retroagi.core.smb_geometry import MOTION_NAMES, SCHEMA, STATE_NAMES
+
     checkpoint = build_checkpoint(
         stage=BLOCK_SMB_SPEC.name,
         model_name=BLOCK_SMB_MODEL_NAME,
@@ -4592,6 +4594,11 @@ def save_block_smb_checkpoint(
         metrics=metrics,
         config=to_plain_data(config),
         specs={
+            "smb_observation": {
+                "schema": SCHEMA,
+                "features": list(STATE_NAMES)
+                + (list(MOTION_NAMES) if config.motion_observations else []),
+            },
             "stage": {
                 "name": BLOCK_SMB_SPEC.name,
                 "seq_len_a": BLOCK_SMB_SPEC.seq_len_a,

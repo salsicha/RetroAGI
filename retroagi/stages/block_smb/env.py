@@ -866,155 +866,17 @@ class MarioScenarioEnv:
                 or reward_terms.get("enemy_hit", 0.0) < 0.0
             )
 
+        from retroagi.core.smb_geometry import geometry_features
+
+        features = geometry_features(
+            self,
+            death=death,
+            terminated=terminated,
+            truncated=truncated,
+            coyote_frames=COYOTE_FRAMES,
+            jump_buffer_frames=JUMP_BUFFER_FRAMES,
+        )
         m = self.mario
-        ww = self.world_width
-        wh = self.height
-
-        def _nearest(items, get_rect):
-            best_dist = float("inf")
-            best_dx = best_dy = 1.0
-            mx, my = m["x"] + m["w"] / 2, m["y"] + m["h"] / 2
-            for item in items:
-                r = get_rect(item)
-                dx = (r.centerx - mx) / ww
-                dy = (r.centery - my) / wh
-                d = math.hypot(dx, dy)
-                if d < best_dist:
-                    best_dist, best_dx, best_dy = d, dx, dy
-            return {"dx": best_dx, "dy": best_dy, "dist": min(best_dist, 1.0)}
-
-        active_coins = [c for c in self.coins if not c["collected"]]
-        active_enemies = [e for e in self.enemies if not e["dead"]]
-
-        nc = (
-            _nearest(active_coins, lambda c: c["rect"])
-            if active_coins
-            else {"dx": 1.0, "dy": 1.0, "dist": 1.0}
-        )
-        ne = (
-            _nearest(active_enemies, lambda e: pygame.Rect(e["x"], e["y"], e["w"], e["h"]))
-            if active_enemies
-            else {"dx": 1.0, "dy": 1.0, "dist": 1.0}
-        )
-
-        # Distance to nearest platform below Mario's feet
-        mario_bottom = m["y"] + m["h"]
-        plat_below = 1.0
-        for p in self.platforms:
-            r = p["rect"]
-            if r.left <= m["x"] + m["w"] and r.right >= m["x"]:
-                if r.top >= mario_bottom:
-                    dist = (r.top - mario_bottom) / wh
-                    plat_below = min(plat_below, dist)
-
-        mx, my = m["x"] + m["w"] / 2, m["y"] + m["h"] / 2
-        mario_right = m["x"] + m["w"]
-        if self.goal is None:
-            goal_dx = goal_dy = goal_dist = 1.0
-        else:
-            goal_dx = (self.goal.centerx - mx) / ww
-            goal_dy = (self.goal.centery - my) / wh
-            goal_dist = min(math.hypot(goal_dx, goal_dy), 1.0)
-
-        facing_left = self._terrain_left
-        support_candidates = []
-        for p in self.platforms:
-            r = p["rect"]
-            if r.left <= mx <= r.right and (mario_bottom - 2.0) <= r.top <= (mario_bottom + 8.0):
-                support_candidates.append(r)
-        if support_candidates:
-            support = min(support_candidates, key=lambda r: abs(r.top - mario_bottom))
-            support_forward_dx = (
-                (m["x"] - support.left) if facing_left else (support.right - mario_right)
-            ) / ww
-        else:
-            support_forward_dx = 1.0
-
-        next_platform_dx = 1.0
-        next_platform_dy = 1.0
-        ahead_platforms = [
-            p["rect"]
-            for p in self.platforms
-            if (p["rect"].right < m["x"] if facing_left else p["rect"].left > mario_right)
-        ]
-        if ahead_platforms:
-            next_platform = min(
-                ahead_platforms,
-                key=lambda r: m["x"] - r.right if facing_left else r.left - mario_right,
-            )
-            next_platform_dx = (
-                (m["x"] - next_platform.right)
-                if facing_left
-                else (next_platform.left - mario_right)
-            ) / ww
-            next_platform_dy = (next_platform.top - mario_bottom) / wh
-
-        def _ground_ahead(offset: float) -> float:
-            probe_x = m["x"] - offset if facing_left else mario_right + offset
-            best: float | None = None
-            for p in self.platforms:
-                r = p["rect"]
-                if r.left <= probe_x <= r.right:
-                    dy = (r.top - mario_bottom) / wh
-                    if best is None or abs(dy) < abs(best):
-                        best = dy
-            return 1.0 if best is None else best
-
-        # Dynamic objects need direction and reversal geometry, not only
-        # their distance in a single rendered frame. Kept separate so legacy
-        # 27-slot checkpoints retain their exact observation layout.
-        nearest_enemy = min(active_enemies, key=lambda e: abs(e["x"] - m["x"]), default=None)
-        bridge = next((p for p in self.platforms if p.get("moving")), None)
-        motion_vec = np.array(
-            [
-                (
-                    nearest_enemy["speed"] * nearest_enemy["direction"] / self.max_walk_speed
-                    if nearest_enemy
-                    else 0.0
-                ),
-                (nearest_enemy["patrol_min"] - nearest_enemy["x"]) / ww if nearest_enemy else 0.0,
-                (nearest_enemy["patrol_max"] - nearest_enemy["x"]) / ww if nearest_enemy else 0.0,
-                (nearest_enemy["y"] - m["y"]) / wh if nearest_enemy else 0.0,
-                (bridge["move_x"] - m["x"]) / ww if bridge else 0.0,
-                bridge["move_speed"] * bridge["move_dir"] / self.max_walk_speed if bridge else 0.0,
-                (bridge["move_min"] - bridge["move_x"]) / ww if bridge else 0.0,
-                (bridge["move_max"] - bridge["move_x"]) / ww if bridge else 0.0,
-            ],
-            dtype=np.float32,
-        )
-
-        state_vec = np.array(
-            [
-                m["x"] / ww,
-                m["y"] / wh,
-                m["vx"] / self.max_walk_speed,
-                m["vy"] / self.max_fall_speed,
-                float(m["on_ground"]),
-                float(m["facing"]),
-                float(m["skidding"]),
-                float(m["coyote_frames"]) / COYOTE_FRAMES,
-                float(m["jump_buffer"]) / JUMP_BUFFER_FRAMES,
-                nc["dx"],
-                nc["dy"],
-                nc["dist"],
-                ne["dx"],
-                ne["dist"],
-                min(float(self.steps) / 200.0, 1.0),
-                goal_dx,
-                goal_dy,
-                goal_dist,
-                support_forward_dx,
-                next_platform_dx,
-                next_platform_dy,
-                _ground_ahead(24.0),
-                _ground_ahead(48.0),
-                _ground_ahead(72.0),
-                float(death),
-                float(terminated),
-                float(truncated),
-            ],
-            dtype=np.float32,
-        )
 
         return {
             "mario": {
@@ -1033,31 +895,17 @@ class MarioScenarioEnv:
             },
             "camera_x": self.camera_x,
             "max_x_reached": self._max_x_reached,
-            "nearest_coin": nc,
-            "nearest_enemy": ne,
+            **features,
             "stomp_completed": self._stomp_credited,
             "bridge_boarded": self._bridge_boarded,
             "bridge_crossed": self._bridge_crossed,
             "attempt_failed": self._attempt_failed,
-            "platform_below_dist": plat_below,
-            "goal_delta": {"dx": goal_dx, "dy": goal_dy, "dist": goal_dist},
-            "support_right_dx": (support.right - mario_right) / ww if support_candidates else 1.0,
-            "support_forward_dx": support_forward_dx,
-            "terrain_direction": -1 if facing_left else 1,
-            "next_platform_delta": {"dx": next_platform_dx, "dy": next_platform_dy},
-            "ground_ahead": {
-                "24": _ground_ahead(24.0),
-                "48": _ground_ahead(48.0),
-                "72": _ground_ahead(72.0),
-            },
             "reward_terms": dict(reward_terms),
             "reward_total": reward_total,
             "reward_config": asdict(self.reward_config),
             "death": death,
             "terminated": bool(terminated),
             "truncated": bool(truncated),
-            "state_vec": state_vec,
-            "motion_vec": motion_vec,
         }
 
     # ── Enemy helpers ─────────────────────────────────────────────────────────

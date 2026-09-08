@@ -628,6 +628,11 @@ def train_full_smb_imitation_warm_start(
 ) -> tuple[dict[str, Any], torch.optim.Optimizer]:
     """Distill scripted Full SMB action timing into the policy/controller head."""
 
+    if getattr(model, "smb_runtime_contract", None) is not None:
+        raise ValueError(
+            "Legacy imitation labels lack shared geometry, goals, and duration units; "
+            "use scripts.full_smb_adapt_geometry for shared SMB checkpoints"
+        )
     if epochs <= 0:
         raise ValueError("epochs must be positive")
     if batch_size <= 0:

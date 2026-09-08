@@ -355,7 +355,7 @@ def load_full_smb_save_state_payload(path: Path) -> Mapping[str, Any]:
 
 
 def _make_stage(spec: FullSMBSaveStateArtifactSpec) -> FullSMBStage:
-    return FullSMBStage(
+    stage = FullSMBStage(
         env_config=spec.to_env_config(),
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
@@ -364,6 +364,12 @@ def _make_stage(spec: FullSMBSaveStateArtifactSpec) -> FullSMBStage:
         ),
         vision=_NoopVision(),
     )
+    # Detect the first death; the backend's default done waits for game-over
+    # and can otherwise save a dead or respawned scene as an obstacle start.
+    from retroagi.core.smb_runtime import SMBRuntimeContract
+
+    stage.configure_policy_runtime(SMBRuntimeContract())
+    return stage
 
 
 class _NoopVision:
@@ -467,15 +473,15 @@ FULL_SMB_SAVE_STATE_PLAN = FullSMBSaveStatePlan(
             action_script=(
                 _step(
                     SMBAction.RIGHT,
-                    180,
-                    "Hold right from spawn toward the first pipe.",
+                    108,
+                    "Approach the first enemy with room to jump.",
                 ),
                 _step(
                     SMBAction.RIGHT_JUMP,
                     24,
                     "Hop over the first low obstacle while preserving motion.",
                 ),
-                _step(SMBAction.RIGHT, 96, "Stabilize near the first pipe section."),
+                _step(SMBAction.RIGHT, 32, "Land on the brick shelf before the first pipe."),
             ),
             description="Curriculum state near the first level 1-1 pipe section.",
         ),
@@ -488,7 +494,7 @@ FULL_SMB_SAVE_STATE_PLAN = FullSMBSaveStatePlan(
             action_script=(
                 _step(
                     SMBAction.RIGHT,
-                    132,
+                    100,
                     "Run right from spawn to just before the first enemy timing window.",
                 ),
             ),

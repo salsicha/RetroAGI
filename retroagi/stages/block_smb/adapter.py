@@ -126,6 +126,7 @@ class BlockSMBStage:
             vision,
             state=torch.as_tensor(state_vec, device=vision.position.device),
             metadata={
+                "smb_observation_schema": "smb_geometry_v1",
                 "raw_observation_shape": observation.shape,
                 "observation": self._observation_metadata(vision.position.device),
                 "episode": {

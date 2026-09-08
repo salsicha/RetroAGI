@@ -24,6 +24,7 @@ from retroagi.core import (
     save_checkpoint,
     validate_checkpoint_compatibility,
 )
+from retroagi.core.smb_runtime import SMBRuntimeContract, attach_runtime
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
 from retroagi.stages.block_smb.monte_carlo import DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
 from retroagi.stages.block_smb.train import (
@@ -120,11 +121,12 @@ def transfer_block_smb_checkpoint_to_full_smb(
 ) -> FullSMBTransferResult:
     """Load Block SMB policy weights and save a Full SMB transfer checkpoint.
 
-    The actor/world-model/critic weights transfer because Block SMB and Full SMB
-    share hierarchy lengths and the `SMBAction` vocabulary. Block ViT weights
-    are validated for provenance but are not reused directly because Full SMB
-    uses a different semantic vocabulary; the returned stage vision is the Full
-    SMB ViT checkpoint.
+    Weight shapes and source performance are checked separately from runtime
+    semantics. Motion-aware Block policies carry a shared geometry/control
+    contract into Full SMB; legacy policies retain their old runtime. Native
+    Full SMB vision is mapped by semantic meaning in the shared adapter. Its
+    learned token features still require real-emulator qualification/adaptation;
+    loading weights successfully does not qualify a policy for full-level play.
     """
 
     source_path = Path(block_policy_checkpoint)
@@ -134,6 +136,17 @@ def transfer_block_smb_checkpoint_to_full_smb(
         require_transfer_source_gate=require_transfer_source_gate,
     )
     source_transfer_gate = block_smb_checkpoint_transfer_source_gate(source_checkpoint)
+    from retroagi.core.smb_geometry import MOTION_NAMES, SCHEMA, STATE_NAMES
+
+    declared = source_checkpoint.get("specs", {}).get("smb_observation")
+    if declared is not None:
+        expected = list(STATE_NAMES) + (
+            list(MOTION_NAMES)
+            if source_checkpoint.get("config", {}).get("motion_observations")
+            else []
+        )
+        if declared.get("schema") != SCHEMA or declared.get("features") != expected:
+            raise ValueError("Block checkpoint observation schema or feature order is incompatible")
     architecture_name, architecture_config = policy_architecture_from_checkpoint(source_checkpoint)
     model = make_full_smb_policy_model(
         architecture_name=architecture_name,
@@ -148,6 +161,12 @@ def transfer_block_smb_checkpoint_to_full_smb(
     if skipped_world_model_keys:
         missing_keys = tuple((*missing_keys, *skipped_world_model_keys))
     model.eval()
+    # The qualified motion-aware policies require the shared observation and
+    # control contract. Legacy checkpoints retain an explicit legacy path.
+    if source_checkpoint.get("config", {}).get("motion_observations", False):
+        attach_runtime(
+            model, SMBRuntimeContract.from_block_config(source_checkpoint["config"]).manifest()
+        )
 
     source_vision_path = None
     if block_vision_checkpoint is not None:
@@ -225,6 +244,7 @@ def load_transferred_full_smb_policy(
         device=device,
         freeze=freeze_vision,
     )
+    attach_runtime(model, checkpoint.get("config", {}).get("smb_runtime_contract"))
     metadata = checkpoint.get("metadata", {})
     source = metadata.get("source", {}) if isinstance(metadata, Mapping) else {}
     return FullSMBTransferResult(
@@ -252,31 +272,17 @@ def select_transferred_full_smb_action(
     """Select an SMB action from a Full SMB batch with transferred policy weights."""
 
     model.eval()
-    src_a = batch.src_a.to(device)
-    src_b = batch.src_b.to(device)
-    src_c = batch.src_c.to(device)
-    episode = (batch.metadata or {}).get("episode", {})
-    episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
-    if episode_mask is not None:
-        episode_mask = torch.as_tensor(episode_mask, dtype=src_c.dtype, device=src_c.device)
-    *_prefix, logits_a = model(
-        src_a,
-        src_b,
-        src_c,
-        tau=1.0,
-        episode_mask=episode_mask,
-    )[:5]
-    action_logits = logits_a[:, -1, : len(SMB_ACTIONS)]
-    # Match the action-selection rule used by training, evaluation, and play:
-    # bias the logits with the model's motor-primitive signals before argmax.
-    # Imported lazily because train.py imports this module at load time.
-    from retroagi.stages.full_smb.train import _apply_full_smb_motor_primitive_bias
+    from retroagi.stages.full_smb.train import _policy_action_logits_and_state
 
-    action_logits = _apply_full_smb_motor_primitive_bias(
-        action_logits,
-        getattr(model, "last_motor_primitives", None),
-    )
-    if deterministic:
+    action_logits = _policy_action_logits_and_state(
+        model, batch, device=torch.device(device), deterministic=deterministic
+    ).logits
+    if hasattr(model, "smb_runtime_contract") and not deterministic:
+        committed = getattr(getattr(model, "smb_executor", None), "committed_action", None)
+        action_tensor = torch.tensor(
+            [committed if committed is not None else model.last_selected_action_id]
+        )
+    elif deterministic:
         action_tensor = action_logits.argmax(dim=-1)
     else:
         distribution = torch.distributions.Categorical(logits=action_logits)
@@ -669,6 +675,11 @@ def _build_transfer_checkpoint(
             "architecture_config": dict(architecture_config),
             "model": model_config,
             "source": source_checkpoint.get("config", {}),
+            "smb_runtime_contract": (
+                model.smb_runtime_contract.manifest()
+                if hasattr(model, "smb_runtime_contract")
+                else None
+            ),
         },
         specs={
             "stage": {

@@ -19,6 +19,7 @@ from retroagi.core import (
     action_level_world_model_state_dict,
     load_checkpoint,
 )
+from retroagi.core.smb_runtime import attach_runtime
 from retroagi.stages.full_smb.adapter import FullSMBEnvConfig, FullSMBStage
 from retroagi.stages.full_smb.save_states import load_full_smb_save_state_payload
 from retroagi.stages.full_smb.tasks import (
@@ -26,7 +27,10 @@ from retroagi.stages.full_smb.tasks import (
     FullSMBTaskSpec,
     full_smb_task_catalog,
 )
-from retroagi.stages.full_smb.train import _apply_full_smb_motor_primitive_bias
+from retroagi.stages.full_smb.train import (
+    _apply_full_smb_motor_primitive_bias,
+    _policy_action_logits_and_state,
+)
 from retroagi.stages.full_smb.transfer import (
     load_transferred_full_smb_policy,
     make_full_smb_policy_model,
@@ -286,6 +290,7 @@ def compare_full_smb_policies_on_stage(
 ) -> FullSMBPolicyComparisonResult:
     """Evaluate two Full SMB policies on the same seeded observation stream."""
 
+    _configure_comparison_contract(stage, [transfer_model, scratch_model])
     rng = random.Random(config.seed)
     observation = stage.reset(seed=config.seed)
     resets = 1
@@ -385,6 +390,7 @@ def _compare_loaded_policies_on_stage(
     config: FullSMBPolicySuiteComparisonConfig,
     accumulators: dict[str, dict[str, list[Any]]],
 ) -> dict[str, Any]:
+    _configure_comparison_contract(stage, [policy.model for policy in policies])
     rng = random.Random(seed)
     observation = _reset_comparison_stage(stage, seed=seed, start_state=start_state)
     resets = 1
@@ -638,6 +644,7 @@ def _load_comparison_policy_from_checkpoint(
             f"missing={unsupported_missing}, "
             f"unexpected={tuple(load_result.unexpected_keys)}"
         )
+    attach_runtime(model, checkpoint.get("config", {}).get("smb_runtime_contract"))
     model.eval()
     return _LoadedComparisonPolicy(
         name=name,
@@ -673,6 +680,7 @@ def _scratch_policy_for_reference(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         ).to(device)
+    attach_runtime(model, reference_checkpoint.get("config", {}).get("smb_runtime_contract"))
     model.eval()
     return _LoadedComparisonPolicy(
         name="scratch_initialized",
@@ -715,6 +723,7 @@ def _scratch_model_for_transfer(
                 f"missing={unsupported_missing}, "
                 f"unexpected={tuple(load_result.unexpected_keys)}"
             )
+        attach_runtime(model, checkpoint.get("config", {}).get("smb_runtime_contract"))
         model.eval()
         return model, "checkpoint"
 
@@ -727,8 +736,22 @@ def _scratch_model_for_transfer(
             architecture_name=architecture_name,
             architecture_config=architecture_config,
         ).to(device)
+    attach_runtime(model, transfer_checkpoint.get("config", {}).get("smb_runtime_contract"))
     model.eval()
     return model, "scratch_initialization"
+
+
+def _configure_comparison_contract(stage, models):
+    contracts = [getattr(model, "smb_runtime_contract", None) for model in models]
+    if any(contract != contracts[0] for contract in contracts[1:]):
+        raise ValueError("Comparison policies require identical observation/runtime contracts")
+    if contracts[0] is not None:
+        stage.configure_policy_runtime(contracts[0])
+        # This is a common externally driven observation stream, not an
+        # autonomous rollout. Do not inherit a previous play commitment.
+        for model in models:
+            if hasattr(model, "smb_executor"):
+                del model.smb_executor
 
 
 @torch.no_grad()
@@ -739,6 +762,14 @@ def _policy_action_logits(
     device: str | torch.device,
     torch_seed: int,
 ) -> torch.Tensor:
+    if getattr(model, "smb_runtime_contract", None) is not None:
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(torch_seed)
+            return (
+                _policy_action_logits_and_state(model, batch, device=torch.device(device))
+                .logits.detach()
+                .cpu()
+            )
     src_a = batch.src_a.to(device)
     src_b = batch.src_b.to(device)
     src_c = batch.src_c.to(device)
