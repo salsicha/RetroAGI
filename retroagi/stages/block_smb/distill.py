@@ -116,24 +116,8 @@ class BlockSMBDistillationConfig:
     monte_carlo_test_samples: int = DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES
     monte_carlo_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE
     monte_carlo_family_pass_rate_gate: float = DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE
-    fixed_scenarios: tuple[str, ...] = (
-        "level_1_flat.json",
-        "level_2_gap.json",
-        "level_3_stairs.json",
-        "level_4_platforms.json",
-        "level_5_enemy_hop.json",
-        "level_6_enemy_patrol.json",
-        "level_7_moving_bridge.json",
-        "level_8_enemy_gap.json",
-        "level_9_enemy_stomp.json",
-        "level_10_left_retreat.json",
-        "level_11_left_jump_recovery.json",
-        "level_12_wait_bridge.json",
-        "level_13_variable_pits.json",
-        "level_14_under_enemy_platform.json",
-        "level_15_wait_long_bridge.json",
-        "level_16_wait_enemy_gate.json",
-    )
+    # Fixed layouts are opt-in diagnostic fixtures, not default training data.
+    fixed_scenarios: tuple[str, ...] = ()
     device: str = "auto"
     deterministic: bool = True
     checkpoint_path: Optional[Path] = None

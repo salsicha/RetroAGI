@@ -139,8 +139,9 @@ before creating an environment.
 The [stage semantics](docs/stage-semantics.md) define observations, actions,
 rewards, episode endings, and resets across the curriculum.
 
-The [Block SMB success thresholds](docs/block-smb-success-thresholds.md) define
-the deterministic fixed-scenario bar for considering a policy known-good.
+Block SMB production training uses generated families only. The
+[family-only repair](docs/block-smb-family-only-training.md) documents the
+30-epoch recipe, expanded bridge and leftward-recovery coverage, and validation.
 The [Block SMB Monte Carlo curriculum plan](docs/block-smb-monte-carlo-curriculum.md)
 defines the generalization gate: parameterized scenario families, sampled
 train/validation/test/stress splits, coverage metrics, held-out evaluation, and

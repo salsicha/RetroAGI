@@ -360,7 +360,7 @@ def block_smb_monte_carlo_family_specs(
     )
     for family in ("wait_timing", "moving_bridge"):
         schemas[family] = {k: v for k, v in schemas["bridge_wait"].items() if k != "a_level_action"}
-    schemas["moving_bridge"]["spawn_x"] = [28, 44]
+    schemas["moving_bridge"]["spawn_x"] = [20, 60]
     for family in (
         "chained_obstacles",
         "chained_enemy_gauntlet",
@@ -380,6 +380,22 @@ def block_smb_monte_carlo_family_specs(
         section_count=[4, 4], world_width=[512, 512], pipe_count=[2, 2], pipe_height=[32, 62]
     )
     schemas["mixed_section"]["composition"] = ["enemy_gap_pipe", "enemy_two_pipes"]
+    for family in ("bridge_wait", "moving_bridge", "wait_timing"):
+        schemas[family].update(
+            family_revision=[3, 3],
+            platform_speed=[0.5, 2.4],
+            platform_width=[48, 100],
+            gap_width=[95, 200],
+            variant=["wide", "narrow"],
+            initial_phase_frames=[0, 240],
+        )
+    schemas["retreat_recovery"].update(
+        family_revision=[3, 3],
+        variant=["flat", "gap", "mount"],
+        gap_width=[36, 56],
+        mount_rise=[28, 52],
+        goal_x=[35, 85],
+    )
     return {
         family: BlockSMBScenarioFamilySpec(
             schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
@@ -794,7 +810,21 @@ def evaluate_block_smb_monte_carlo_gates(
     per_family_met = all(
         value >= float(family_pass_rate_gate) for value in per_family.values()
     ) and bool(per_family)
+    missing_families = sorted(
+        set(missing_families) | (set(BLOCK_SMB_MC_FAMILIES) - set(per_family))
+    )
     coverage_met = not missing_families
+    bins = evaluation.get("difficulty_bins", {})
+    expected_bins = {
+        f"{f}:{d}" for f in BLOCK_SMB_MC_FAMILIES for d in BLOCK_SMB_MC_DIFFICULTY_BINS
+    }
+    bin_rates = {
+        k: float(v.get("success_rate", 0)) for k, v in bins.items() if isinstance(v, Mapping)
+    }
+    missing_bins = sorted(expected_bins - set(bin_rates))
+    difficulty_met = not missing_bins and all(
+        v >= family_pass_rate_gate for v in bin_rates.values()
+    )
     return {
         "pass_rate": pass_rate,
         "pass_rate_gate": float(pass_rate_gate),
@@ -804,7 +834,10 @@ def evaluate_block_smb_monte_carlo_gates(
         "family_pass_rate_gate_met": bool(per_family_met),
         "coverage_gate_met": bool(coverage_met),
         "missing_families": missing_families,
-        "gate_met": bool(pass_rate_met and per_family_met and coverage_met),
+        "difficulty_pass_rates": bin_rates,
+        "missing_difficulty_bins": missing_bins,
+        "difficulty_gate_met": difficulty_met,
+        "gate_met": bool(pass_rate_met and per_family_met and coverage_met and difficulty_met),
     }
 
 
@@ -817,8 +850,11 @@ def block_smb_transfer_gate_metrics_from_evaluation(
     fixed_pass_rate = (
         float(tuning.get("threshold_pass_rate", 0.0)) if isinstance(tuning, Mapping) else 0.0
     )
-    fixed_gate_met = bool(evaluation.get("success_thresholds_met", False)) and (
-        fixed_pass_rate >= 1.0
+    fixed_required = evaluation.get("evaluation_suite") != "families"
+    fixed_gate_met = (
+        not fixed_required
+        or bool(evaluation.get("success_thresholds_met", False))
+        and (fixed_pass_rate >= 1.0)
     )
     monte_carlo = evaluation.get("monte_carlo_validation", {})
     # Fail closed: without Monte Carlo validation evidence the gate is not met.
@@ -829,7 +865,8 @@ def block_smb_transfer_gate_metrics_from_evaluation(
         mc_gate_met = bool(gates.get("gate_met", False)) if isinstance(gates, Mapping) else False
         mc_pass_rate = float(monte_carlo.get("success_rate", 0.0))
     return {
-        "fixed_threshold_pass_rate": fixed_pass_rate,
+        "fixed_required": fixed_required,
+        "fixed_threshold_pass_rate": fixed_pass_rate if fixed_required else None,
         "fixed_gate_met": bool(fixed_gate_met),
         "monte_carlo_validation_success_rate": mc_pass_rate,
         "monte_carlo_validation_gate_met": bool(mc_gate_met),
@@ -978,7 +1015,7 @@ def _generate_family_scenario(family, rng, *, split, difficulty=None):
         family, rng, split=split, difficulty=difficulty
     )
     if family in LOCAL_TRAVERSAL_FAMILIES:
-        params["family_revision"] = 2
+        params.setdefault("family_revision", 2)
         scenario.setdefault("reward_goal_distance_shaping", 2.0)
         scenario.setdefault("goal_requires_support", True)
         if family not in ("pipe_mount", "pit_leap", "retreat_recovery"):
@@ -1189,7 +1226,7 @@ def _moving_bridge(
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     scenario, params, _ = _wait_timing(rng, difficulty)
     # Add a walking approach; the free policy must approach before waiting.
-    scenario["mario"][0] = rng.randint(28, 44)
+    scenario["mario"][0] = rng.randint(20, 60)
     actions, wait = bridge_oracle(scenario)
     params["spawn_x"] = scenario["mario"][0]
     params["required_wait"] = wait
@@ -1367,10 +1404,29 @@ def _retreat_recovery(
         "coins": [[coin_x, 200, 10, 10]],
         "goal": [35, 200, 16, 20],
     }
+    variant = rng.choice(("flat", "mount", "gap"))
+    if variant == "mount":
+        rise = {"easy": 30, "medium": 40, "hard": 50}[difficulty] + rng.randint(-2, 2)
+        edge = rng.randint(146, 154)
+        scenario["platforms"] = [[edge, 220, 256 - edge, 20], [70, 220 - rise, edge - 60, 10]]
+        scenario["goal"] = [85, 200 - rise, 16, 20]
+    elif variant == "gap":
+        width = {"easy": 38, "medium": 46, "hard": 54}[difficulty] + rng.randint(-2, 2)
+        edge = rng.randint(150, 158)
+        scenario["platforms"] = [[edge, 220, 256 - edge, 20], [0, 220, edge - width, 20]]
+    from .local_traversal import terrain_oracle
+
+    actions = terrain_oracle(scenario)
     return (
         scenario,
-        {"family_revision": 2, "start_x": start_x, "goal_x": 35, "difficulty_bin": difficulty},
-        _pad([3]),
+        {
+            "family_revision": 3,
+            "variant": variant,
+            "start_x": start_x,
+            "goal_x": scenario["goal"][0],
+            "difficulty_bin": difficulty,
+        },
+        _pad(actions),
     )
 
 
@@ -1416,16 +1472,28 @@ def _bridge_wait(
         "reward_wait_survival": 0.05,
         "reward_goal_distance_shaping": 2.0,
     }
+    variant = "wide"
+    if rng.random() < 0.4:
+        variant = "narrow"
+        width = rng.randint(48, 60)
+        right_start = rng.randint(180, 216)
+        speed = round(rng.uniform(0.5, 1.1), 3)
+        high = right_start - width + 10
+        initial_x = rng.randint(high - 12, high)
+        scenario["platforms"][1].update(x=initial_x, w=width, moving=[75, high, speed])
+        scenario["platforms"][2] = [right_start, 220, 380 - right_start, 20]
     actions, wait = bridge_oracle(scenario)
     return (
         scenario,
         {
             "required_wait": wait,
-            "initial_phase_frames": phase_frames,
+            "initial_phase_frames": round((initial_x - 75) / speed),
             "platform_speed": speed,
             "platform_initial_x": initial_x,
-            "gap_width": 200,
-            "family_revision": 2,
+            "gap_width": scenario["platforms"][2][0] - 85,
+            "platform_width": scenario["platforms"][1]["w"],
+            "variant": variant,
+            "family_revision": 3,
             "a_level_action": 0,
             "a_level_action_scope": "first_primitive",
             "difficulty_bin": difficulty,

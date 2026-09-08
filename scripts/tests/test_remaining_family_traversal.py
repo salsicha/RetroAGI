@@ -49,7 +49,9 @@ def test_revised_oracles_complete_through_real_controller(family, difficulty):
         steps=training_rollout_steps(60, item.scenario),
         use_oracle_actions=True,
     )
-    assert item.parameters["family_revision"] == 2
+    assert item.parameters["family_revision"] == (
+        3 if family in ("wait_timing", "moving_bridge", "retreat_recovery") else 2
+    )
     assert trajectory.success
     assert len(trajectory.transitions) == item.reachability["completion_steps"]
     assert not any(t.info.get("jump_overreach") for t in trajectory.transitions)

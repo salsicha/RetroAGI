@@ -16,9 +16,16 @@ from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from .adapter import BlockSMBObservationConfig, BlockSMBStage
 from .bridge_traversal import bridge_phase, bridge_safe_wait_frames
 from .env import MarioScenarioEnv
-from .local_traversal import LOCAL_TRAVERSAL_FAMILIES, local_objective, safe_jump_holds
+from .local_traversal import (
+    LOCAL_TRAVERSAL_FAMILIES,
+    local_objective,
+    local_target_distance,
+    safe_jump_holds,
+    support_edge_distance,
+)
 from .pipe_traversal import TallPipeTraversal
 from .skills import requested_block_smb_skill_goal
+from .tasks import scenario_family
 from .vision import BlockVisionTransformer
 
 
@@ -102,7 +109,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 if pipe is not None:
                     pipe.observe(env)
                     phase = pipe.phase
-                elif sample.family in LOCAL_TRAVERSAL_FAMILIES:
+                elif scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES:
                     target = local_objective(env)
                     phase = target.kind
                     goal = skill_goal_encoding(
@@ -122,7 +129,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     if bridge_exit_committed and not env._bridge_crossed:
                         phase = "exit"
                 if phase in ("finish", "bounce_recovery") or (
-                    bridge and phase in ("board", "exit")
+                    bridge and phase in ("approach", "board", "exit")
                 ):
                     goal = torch.zeros_like(request)
                 # Match the live collector: a committed arc keeps the local
@@ -147,7 +154,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 observations.append(observation)
                 states.append(stage.state_features(info))
                 valid = [False] * 16
-                for value in (jump_valid if jump_intent is not None and jump_valid else [duration]):
+                for value in jump_valid if jump_intent is not None and jump_valid else [duration]:
                     valid[value - 1] = True
                 episode.append(
                     [
@@ -486,13 +493,13 @@ def varied_demonstration(sample, seed, *, robust=False):
                     and target.kind == "enemy"
                 ):
                     target = replace(target, kind="stomp")
-                direction = -1 if target.kind == "retreat" else 1
-                distance = target.left - env.mario["x"] - env.mario["w"]
+                direction = target.direction
+                distance = local_target_distance(env, target)
                 ready = distance < takeoff_distance
                 if robust:
                     support = env.mario.get("_platform")
                     if target.kind == "gap" and support is not None:
-                        ready = support["rect"].right - env.mario["x"] - env.mario["w"] <= gap_lead
+                        ready = support_edge_distance(env, direction) <= gap_lead
                     else:
                         ready = distance < (stomp_lead if target.kind == "stomp" else 40)
                     if (
@@ -502,7 +509,7 @@ def varied_demonstration(sample, seed, *, robust=False):
                     ):
                         # A lower enemy can still be far away when the safe
                         # takeoff surface ends. Jump before walking off it.
-                        ready |= support["rect"].right - env.mario["x"] - env.mario["w"] <= 24
+                        ready |= support_edge_distance(env, direction) <= 24
                 ready |= (
                     env._single_jump_attempt
                     or env._goal_on_stomp

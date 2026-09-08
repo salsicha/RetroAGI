@@ -9,8 +9,9 @@ spacing, enemy approach, or recovery behavior.
 
 The target Block SMB curriculum is therefore a versioned parameterized scenario
 distribution. Training should draw Monte Carlo samples from that distribution;
-promotion should require both fixed-scenario success and held-out distribution
-success.
+promotion requires held-out family and difficulty coverage and success. The
+September 8, 2026 recipe retires fixed scenes from production training and
+evaluation; see [family-only training](block-smb-family-only-training.md).
 
 The September 2026 [remaining-family audit](block-smb-remaining-family-audit.md)
 documents revision 2 geometry, landing credit, local duration coaching, and
@@ -20,15 +21,16 @@ the reproducible fresh full-volume recipe.
 
 P3A is implemented for `block_smb_mc_v1`.
 
-- checked-in fixed JSON scenarios remain regression sentinels;
+- checked-in fixed JSON files are legacy test fixtures, excluded from production;
 - generated Block SMB scenarios now come from
   `retroagi.stages.block_smb.monte_carlo`;
 - `--generated-scenarios` is preserved as a compatibility alias for Monte Carlo
   train samples;
 - `retroagi-block-smb evaluate-monte-carlo` evaluates replayable held-out
   `train`, `validation`, `test`, or `stress` splits;
-- Full SMB transfer requires fixed-scenario pass rate `1.0` and a passing
-  held-out Monte Carlo validation gate in the source checkpoint metrics.
+- family-only Full SMB transfer requires a passing held-out Monte Carlo
+  validation gate and measured noncollapsed validation actions; old checkpoints
+  that explicitly trained fixed scenes retain their legacy checks.
 
 The legacy `MarioScenarioEnv.generate_scenario(...)` helper remains available
 for low-level environment tests, but trainer-facing generated scenarios should
@@ -37,8 +39,7 @@ use the versioned sampler so checkpoints carry distribution evidence.
 ## Design Goals
 
 - Keep Block SMB as the high-volume, ground-truth training rung.
-- Preserve fixed scenarios as deterministic regression tests and transfer
-  sentinels.
+- Use reproducible sampled layouts as regression checks for every family and difficulty.
 - Add a parameterized scenario schema that can express the full simplified SMB
   distribution: terrain, gaps, stairs, moving platforms, enemies, coins, goals,
   recovery situations, and timing hazards.
@@ -47,8 +48,7 @@ use the versioned sampler so checkpoints carry distribution evidence.
 - Record enough metadata that a checkpoint can be traced to a distribution
   version, seed policy, split, sample count, coverage histogram, and failure
   bins.
-- Promote to Full SMB only when the policy passes fixed scenarios and held-out
-  Monte Carlo scenarios.
+- Promote to Full SMB only with passing held-out Monte Carlo evidence covering every family and difficulty.
 
 ## Scenario Families
 
@@ -66,7 +66,7 @@ mirror the fixed scenarios and then add interpolation/extrapolation ranges:
 | `enemy_patrol` | enemy count, spacing, patrol overlap, speed variance |
 | `enemy_gap` | enemy placement relative to gap, gap width, landing zone |
 | `enemy_stomp` | composite approach, stomp, bounce recovery, and finish; success requires an actual stomp before reaching the goal |
-| `retreat_recovery` | left/right recovery need, obstacle proximity, safe fallback |
+| `retreat_recovery` | leftward flat travel, gaps (36–56px), and elevated landings (28–52px rise) |
 | `wait_timing` | moving-platform phase, wait window, jump window |
 | `chained_obstacles` | multiple obstacle sections with enemies and pipes |
 | `chained_enemy_gauntlet` | enemy, gap, patrol, and pipe sequence in one level |
@@ -104,7 +104,9 @@ original goal rectangle. Existing checkpoints load unchanged, but these training
 changes require further training before improved learned accuracy can be claimed.
 
 
-`bridge_wait` revision 2 uses a 200px gap and a 100px moving bridge.
+`bridge_wait` revision 3 retains the revision-2 200px gap and 100px bridge,
+and adds 48–60px bridges moving at 0.5–1.1px/frame over narrower gaps.
+The following paragraph describes the retained wide variant.
 Mario starts near the left edge; a full held jump cannot bypass the gap.
 Success requires actual engine support on the bridge, then the far shore,
 then contact with the final goal. Saved scenarios identified as this family
@@ -310,8 +312,8 @@ names.
    stream from the full distribution.
 5. **Held-out validation/test gates:** evaluate without replay bias.
 
-The policy should continue to see fixed scenarios during training, but those
-scenarios should be a small sentinel fraction rather than the whole curriculum.
+The production policy trains exclusively on generated families, with successful
+demonstrations and failure/retention replay drawn through the same task contract.
 
 ### Mastery-Gated Schedule
 
@@ -357,7 +359,6 @@ be real gate passes.
 
 Block SMB promotion to Full SMB should require:
 
-- fixed-scenario threshold pass rate `1.0`;
 - held-out Monte Carlo validation pass rate above the configured gate;
 - held-out Monte Carlo test pass rate reported in the promotion artifact;
 - per-family pass rates above minimum family gates;
@@ -373,7 +374,7 @@ Suggested initial gates for `block_smb_mc_v1`:
 - test samples: at least `256`;
 - validation pass rate: at least `0.95`;
 - per-family pass rate: at least `0.90`;
-- fixed-scenario pass rate: exactly `1.0`.
+- every family/difficulty bin: at least `0.90`, with no missing bins.
 
 These numbers are starting points. The default code gates are configurable with
 `--monte-carlo-pass-rate-gate` and `--monte-carlo-family-pass-rate-gate`.

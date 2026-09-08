@@ -322,16 +322,16 @@ class MarioScenarioEnv:
             self.enemies.append(self._parse_enemy(e))
 
         self.goal = pygame.Rect(*scenario["goal"]) if "goal" in scenario else None
+        # Keep terrain coordinates stable through a small finish overshoot.
+        self._terrain_left = self.goal is not None and self.goal.centerx < self.mario["x"]
         # B-level stomp teaching: the goal rides the (possibly patrolling)
         # enemy, so goal-distance shaping and the observation's goal slots
         # track the moving target, and goal credit is granted by the stomp
         # itself rather than by touching the goal rect.
         self._goal_on_stomp = bool(scenario.get("goal_on_stomp", False))
-        metadata = scenario.get("metadata")
-        family_metadata = (
-            metadata.get("block_smb_monte_carlo") if isinstance(metadata, dict) else None
-        )
-        family = family_metadata.get("family") if isinstance(family_metadata, dict) else None
+        from .tasks import scenario_family
+
+        family = scenario_family(scenario)
         self._require_stomp_before_goal = bool(
             scenario.get("require_stomp_before_goal", False) or family == "enemy_stomp"
         )
@@ -916,6 +916,7 @@ class MarioScenarioEnv:
             goal_dy = (self.goal.centery - my) / wh
             goal_dist = min(math.hypot(goal_dx, goal_dy), 1.0)
 
+        facing_left = self._terrain_left
         support_candidates = []
         for p in self.platforms:
             r = p["rect"]
@@ -923,20 +924,33 @@ class MarioScenarioEnv:
                 support_candidates.append(r)
         if support_candidates:
             support = min(support_candidates, key=lambda r: abs(r.top - mario_bottom))
-            support_right_dx = (support.right - mario_right) / ww
+            support_forward_dx = (
+                (m["x"] - support.left) if facing_left else (support.right - mario_right)
+            ) / ww
         else:
-            support_right_dx = 1.0
+            support_forward_dx = 1.0
 
         next_platform_dx = 1.0
         next_platform_dy = 1.0
-        ahead_platforms = [p["rect"] for p in self.platforms if p["rect"].left > mario_right]
+        ahead_platforms = [
+            p["rect"]
+            for p in self.platforms
+            if (p["rect"].right < m["x"] if facing_left else p["rect"].left > mario_right)
+        ]
         if ahead_platforms:
-            next_platform = min(ahead_platforms, key=lambda r: r.left - mario_right)
-            next_platform_dx = (next_platform.left - mario_right) / ww
+            next_platform = min(
+                ahead_platforms,
+                key=lambda r: m["x"] - r.right if facing_left else r.left - mario_right,
+            )
+            next_platform_dx = (
+                (m["x"] - next_platform.right)
+                if facing_left
+                else (next_platform.left - mario_right)
+            ) / ww
             next_platform_dy = (next_platform.top - mario_bottom) / wh
 
         def _ground_ahead(offset: float) -> float:
-            probe_x = mario_right + offset
+            probe_x = m["x"] - offset if facing_left else mario_right + offset
             best: float | None = None
             for p in self.platforms:
                 r = p["rect"]
@@ -989,7 +1003,7 @@ class MarioScenarioEnv:
                 goal_dx,
                 goal_dy,
                 goal_dist,
-                support_right_dx,
+                support_forward_dx,
                 next_platform_dx,
                 next_platform_dy,
                 _ground_ahead(24.0),
@@ -1027,7 +1041,9 @@ class MarioScenarioEnv:
             "attempt_failed": self._attempt_failed,
             "platform_below_dist": plat_below,
             "goal_delta": {"dx": goal_dx, "dy": goal_dy, "dist": goal_dist},
-            "support_right_dx": support_right_dx,
+            "support_right_dx": (support.right - mario_right) / ww if support_candidates else 1.0,
+            "support_forward_dx": support_forward_dx,
+            "terrain_direction": -1 if facing_left else 1,
             "next_platform_delta": {"dx": next_platform_dx, "dy": next_platform_dy},
             "ground_ahead": {
                 "24": _ground_ahead(24.0),

@@ -142,6 +142,8 @@ def main():
     torch.use_deterministic_algorithms(True)
     values = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
     values.update(
+        demonstration_bootstrap_updates=0,
+        demonstration_rehearsal_updates=0,
         device="cuda",
         motion_observations=args.motion_observations,
         walk_duration_primitives=not args.frame_walk,

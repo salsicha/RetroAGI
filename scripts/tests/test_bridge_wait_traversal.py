@@ -224,7 +224,7 @@ def test_oracle_waits_have_complete_spans_and_real_training_updates_are_finite()
     trajectory = rollout(item, PhasePolicy(), steps=240, use_oracle_actions=True)
     assert trajectory.success
     waits = [s for s in trajectory.spans if s.command.get("primitive") == "wait"]
-    assert len(waits) == 2
+    assert len(waits) >= 2
     assert all(s.termination_reason == "success" for s in waits)
     assert trajectory.transitions[0].info["primitive_valid_hold_frames"]
     config = tiny_config(rollout_steps=60, use_oracle_actions=True, generated_scenarios=0)

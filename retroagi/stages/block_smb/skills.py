@@ -16,7 +16,7 @@ import torch
 from retroagi.core.skills import skill_goal_encoding
 from retroagi.core.temporal import HierarchicalTransition
 
-from .monte_carlo import block_smb_monte_carlo_metadata
+from .tasks import scenario_family
 
 # Which measurable goal each scenario family requests of the skill layer.
 BLOCK_SMB_FAMILY_SKILL_GOALS: dict[str, str] = {
@@ -53,10 +53,7 @@ def requested_block_smb_skill_goal(
 
     if scenario is None:
         return None
-    metadata = block_smb_monte_carlo_metadata(scenario)
-    family = ""
-    if isinstance(metadata, Mapping):
-        family = str(metadata.get("family", "") or "")
+    family = scenario_family(scenario)
     goal_type = BLOCK_SMB_FAMILY_SKILL_GOALS.get(family)
     if goal_type is None:
         return None

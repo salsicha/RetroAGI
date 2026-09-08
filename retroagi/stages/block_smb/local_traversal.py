@@ -23,6 +23,7 @@ class LocalObjective:
     top: float
     platform_index: int | None = None
     enemy_index: int | None = None
+    direction: int = 1
 
     @property
     def center(self):
@@ -36,7 +37,17 @@ class LocalObjective:
             return env._goal_credited
         if self.enemy_index is not None:
             enemy = env.enemies[self.enemy_index]
-            return bool(enemy["dead"] or (m["on_ground"] and m["x"] >= enemy["x"] + enemy["w"]))
+            return bool(
+                enemy["dead"]
+                or (
+                    m["on_ground"]
+                    and (
+                        m["x"] >= enemy["x"] + enemy["w"]
+                        if self.direction > 0
+                        else m["x"] + m["w"] <= enemy["x"]
+                    )
+                )
+            )
         if self.platform_index is not None:
             target = env.platforms[self.platform_index]
             support = m.get("_platform")
@@ -46,12 +57,29 @@ class LocalObjective:
                 and (
                     support is target
                     or (
-                        m["x"] >= target["rect"].right
+                        (
+                            m["x"] >= target["rect"].right
+                            if self.direction > 0
+                            else m["x"] + m["w"] <= target["rect"].left
+                        )
                         and (self.kind == "gap" or support["rect"].top <= target["rect"].top)
                     )
                 )
             )
         return False
+
+
+def _clear_path_under(env, left, right, bottom):
+    m = env.mario
+    if env.goal is not None and env.goal.bottom < m["y"] + m["h"] - 1:
+        return False
+    return bottom <= m["y"] and any(
+        not p.get("moving")
+        and p["rect"].left <= min(left, m["x"])
+        and p["rect"].right >= max(right, m["x"] + m["w"])
+        and abs(p["rect"].top - m["y"] - m["h"]) < 1
+        for p in env.platforms
+    )
 
 
 def local_objective(env) -> LocalObjective:
@@ -61,11 +89,16 @@ def local_objective(env) -> LocalObjective:
     goal = env.goal
     finish = LocalObjective("finish", goal.left, goal.right, goal.bottom)
     if goal.centerx < x:
-        return LocalObjective("retreat", goal.left, goal.right, goal.bottom)
+        return _left_objective(env)
     candidates = []
     for i, p in enumerate(env.platforms):
         r = p["rect"]
-        if r.right <= x or p.get("moving"):
+        if (
+            r.right <= x
+            or r.left >= goal.right
+            or p.get("moving")
+            or _clear_path_under(env, r.left, r.right, r.bottom)
+        ):
             continue
         # A raised surface still ahead, including a pipe Mario overlaps below.
         if r.top < feet - 1 and r.right > x + m["w"]:
@@ -94,14 +127,21 @@ def local_objective(env) -> LocalObjective:
             and not p.get("moving")
             for p in env.platforms
         )
-        if landings and not lower_floor:
+        if landings and not lower_floor and goal.centerx > edge:
             i, r = min(landings, key=lambda pair: pair[1].left)
             # Bound the landing target to its near edge, not the whole far floor.
             candidates.append(
                 (edge, LocalObjective("gap", r.left, min(r.right, r.left + 48), r.top, i))
             )
     for i, enemy in enumerate(env.enemies):
-        if not enemy["dead"] and enemy["x"] + enemy["w"] > x:
+        if (
+            not enemy["dead"]
+            and enemy["x"] + enemy["w"] > x
+            and enemy["x"] < goal.right
+            and not _clear_path_under(
+                env, enemy["x"], enemy["x"] + enemy["w"], enemy["y"] + enemy["h"]
+            )
+        ):
             candidates.append(
                 (
                     enemy["x"],
@@ -111,6 +151,96 @@ def local_objective(env) -> LocalObjective:
                 )
             )
     return min(candidates, key=lambda pair: pair[0])[1] if candidates else finish
+
+
+def _left_objective(env) -> LocalObjective:
+    """Mirror obstacle selection without changing world coordinates or physics."""
+    m = env.mario
+    x, feet = m["x"], m["y"] + m["h"]
+    goal = env.goal
+    finish = LocalObjective("retreat", goal.left, goal.right, goal.bottom, direction=-1)
+    candidates = []
+    for i, p in enumerate(env.platforms):
+        r = p["rect"]
+        if (
+            not p.get("moving")
+            and r.left < x
+            and r.right > goal.left
+            and r.top < feet - 1
+            and not _clear_path_under(env, r.left, r.right, r.bottom)
+        ):
+            candidates.append(
+                (
+                    max(0, x - r.right),
+                    LocalObjective("mount", r.left, r.right, r.top, i, direction=-1),
+                )
+            )
+    support = [
+        p["rect"]
+        for p in env.platforms
+        if not p.get("moving")
+        and p["rect"].left < x + m["w"]
+        and p["rect"].right > x
+        and abs(p["rect"].top - feet) < 1
+    ]
+    if support:
+        edge = min(r.left for r in support)
+        landings = [
+            (i, p["rect"])
+            for i, p in enumerate(env.platforms)
+            if not p.get("moving") and p["rect"].right <= edge
+        ]
+        lower_floor = any(
+            not p.get("moving")
+            and p["rect"].left < edge <= p["rect"].right
+            and p["rect"].top > feet + 1
+            for p in env.platforms
+        )
+        if landings and not lower_floor and goal.centerx < edge:
+            i, r = max(landings, key=lambda pair: pair[1].right)
+            candidates.append(
+                (
+                    x - edge,
+                    LocalObjective(
+                        "gap", max(r.left, r.right - 48), r.right, r.top, i, direction=-1
+                    ),
+                )
+            )
+    for i, e in enumerate(env.enemies):
+        if (
+            not e["dead"]
+            and e["x"] < x + m["w"]
+            and e["x"] + e["w"] > goal.left
+            and not _clear_path_under(env, e["x"], e["x"] + e["w"], e["y"] + e["h"])
+        ):
+            candidates.append(
+                (
+                    max(0, x - e["x"] - e["w"]),
+                    LocalObjective(
+                        "enemy", e["x"] - 24, e["x"] + e["w"], e["y"], enemy_index=i, direction=-1
+                    ),
+                )
+            )
+    return min(candidates, key=lambda pair: pair[0])[1] if candidates else finish
+
+
+def local_target_distance(env, target: LocalObjective) -> float:
+    return (
+        target.left - env.mario["x"] - env.mario["w"]
+        if target.direction > 0
+        else env.mario["x"] - target.right
+    )
+
+
+def support_edge_distance(env, direction: int) -> float:
+    support = env.mario.get("_platform")
+    if support is None:
+        return float("inf")
+    return (
+        support["rect"].right - env.mario["x"] - env.mario["w"]
+        if direction > 0
+        else env.mario["x"] - support["rect"].left
+    )
 
 
 def safe_jump_holds(
@@ -153,7 +283,7 @@ def safe_jump_holds(
                     recoverable = True
                     if verify_recovery and landed and not env._goal_credited:
                         following = local_objective(env)
-                        distance = following.left - env.mario["x"] - env.mario["w"]
+                        distance = local_target_distance(env, following)
                         if following.kind == "enemy" and distance < 50:
                             recoverable = bool(
                                 safe_jump_holds(env, following, direction, verify_recovery=False)
@@ -187,7 +317,7 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
             target = local_objective(env)
             if in_jump and env.mario["on_ground"]:
                 in_jump = False
-            direction = -1 if target.kind == "retreat" else 1
+            direction = target.direction
             if hold_remaining:
                 action = 2 if direction > 0 else 4
                 hold_remaining -= 1
@@ -196,14 +326,14 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
             elif target.kind in ("finish", "retreat"):
                 action = 1 if direction > 0 else 3
             else:
-                distance = target.left - env.mario["x"] - env.mario["w"]
+                distance = local_target_distance(env, target)
                 valid = safe_jump_holds(env, target, direction) if distance < 50 else []
                 if valid:
                     hold_remaining = valid[len(valid) // 2] - 1
                     in_jump = True
-                    action = 2
+                    action = 2 if direction > 0 else 4
                 else:
-                    action = 1
+                    action = 1 if direction > 0 else 3
             _, _, done, truncated, info = env.step(action)
             actions.append(action)
             if info["reward_terms"]["enemy_stomp"] > 0:

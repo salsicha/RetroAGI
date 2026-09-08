@@ -298,7 +298,7 @@ def _load_block_policy_source(
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
         raise ValueError(
-            f"source policy stage must be {BLOCK_SMB_SPEC.name!r}, " f"got {checkpoint['stage']!r}"
+            f"source policy stage must be {BLOCK_SMB_SPEC.name!r}, got {checkpoint['stage']!r}"
         )
     if checkpoint["model_name"] != BLOCK_SMB_MODEL_NAME:
         raise ValueError(
@@ -335,7 +335,7 @@ def _load_block_policy_source(
 def block_smb_checkpoint_transfer_source_gate(
     checkpoint: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Return fixed plus Monte Carlo transfer-source gate diagnostics."""
+    """Require family validation; retain fixed checks for legacy configurations."""
 
     metrics = checkpoint.get("metrics", {})
     if not isinstance(metrics, Mapping):
@@ -344,7 +344,8 @@ def block_smb_checkpoint_transfer_source_gate(
     if not isinstance(config, Mapping):
         config = {}
     fixed_pass_rate = _optional_float(metrics.get("eval_threshold_pass_rate"))
-    fixed_gate_met = fixed_pass_rate is not None and fixed_pass_rate >= 1.0
+    fixed_required = bool(config.get("fixed_scenarios", True))
+    fixed_gate_met = not fixed_required or (fixed_pass_rate is not None and fixed_pass_rate >= 1.0)
     semantic_gate = _optional_float(metrics.get("semantic_prediction_gate_met"))
     if semantic_gate is None:
         semantic_gate = _optional_float(
@@ -364,7 +365,7 @@ def block_smb_checkpoint_transfer_source_gate(
         "eval_fixed",
         fixed_action_counts,
     )
-    fixed_action_gate_met = fixed_action_collapse is False
+    fixed_action_gate_met = not fixed_required or fixed_action_collapse is False
     monte_carlo_validation_action_counts = _action_counts_from_metric_prefix(
         metrics,
         "eval_monte_carlo_validation",
@@ -382,9 +383,9 @@ def block_smb_checkpoint_transfer_source_gate(
         failure_reasons.append("Block SMB semantic prediction gate is not met")
     if not monte_carlo_gate_met:
         failure_reasons.append("held-out Monte Carlo validation gate is missing or failed")
-    if fixed_action_collapse is None:
+    if fixed_required and fixed_action_collapse is None:
         failure_reasons.append("fixed deterministic action counts are missing")
-    elif fixed_action_collapse:
+    elif fixed_required and fixed_action_collapse:
         failure_reasons.append("fixed deterministic policy collapsed to all NOOP actions")
     if monte_carlo_validation_samples > 0:
         if monte_carlo_validation_action_collapse is None:
@@ -394,7 +395,8 @@ def block_smb_checkpoint_transfer_source_gate(
                 "Monte Carlo validation deterministic policy collapsed to all NOOP actions"
             )
     return {
-        "fixed_threshold_pass_rate": fixed_pass_rate,
+        "fixed_required": fixed_required,
+        "fixed_threshold_pass_rate": fixed_pass_rate if fixed_required else None,
         "fixed_gate_met": bool(fixed_gate_met),
         "fixed_action_counts": fixed_action_counts,
         "fixed_all_noop_action_collapse": fixed_action_collapse,

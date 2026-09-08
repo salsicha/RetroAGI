@@ -136,7 +136,13 @@ def bridge_phase(env, opening_wait: bool) -> str:
         return "exit"
     if state is not None and state.support() == "bridge" and state.x >= round(state.bridge_x) + 4:
         return "exit" if 1 in bridge_safe_wait_frames(env) else "ride"
-    return "wait" if opening_wait else "board"
+    # Approaching on the shore is not a commitment to board. Recheck the
+    # actual boarding window even after walking has ended an initial wait.
+    if state is not None and state.support() == "left":
+        if state.left_end - state.x - state.width > 32:
+            return "approach"
+        return "board" if 0 in bridge_safe_wait_frames(env) else "wait"
+    return "board"
 
 
 def bridge_completion_metrics(
@@ -165,7 +171,7 @@ def bridge_completion_metrics(
     }
 
 
-def bridge_oracle(scenario: dict, max_steps: int = 240) -> tuple[list[int], int]:
+def bridge_oracle(scenario: dict, max_steps: int = 320) -> tuple[list[int], int]:
     """Validate wait, board, ride, and exit with real physics for generation."""
     from .env import MarioScenarioEnv
 
@@ -176,20 +182,12 @@ def bridge_oracle(scenario: dict, max_steps: int = 240) -> tuple[list[int], int]
     try:
         env.reset(scenario=scenario)
         for frame in range(max_steps):
-            if phase in ("wait", "ride"):
-                ready = 1 in bridge_safe_wait_frames(env)
-                action = 0
-                if ready and (phase == "ride" or frame >= 3):
-                    if phase == "wait":
-                        opening_wait = frame + 1
-                    phase = "board" if phase == "wait" else "exit"
-            else:
-                action = 1
+            phase = bridge_phase(env, True)
+            action = 1 if phase in ("approach", "board", "exit", "finish") else 0
+            if phase == "board" and not opening_wait:
+                opening_wait = frame
             _, _, done, truncated, _ = env.step(action)
             actions.append(action)
-            state = bridge_walk_state(env)
-            if phase == "board" and state is not None and state.stably_boarded():
-                phase = "ride"
             if done or truncated:
                 break
         return actions, opening_wait

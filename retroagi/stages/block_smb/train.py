@@ -78,6 +78,7 @@ from .pipe_traversal import TallPipeTraversal, pipe_completion_metrics, training
 from .skills import requested_block_smb_skill_goal
 from .stomp import stomp_coaching_target, stomp_completion_metrics
 from .success import evaluate_fixed_success_thresholds, summarize_fixed_success_metrics
+from .tasks import scenario_family
 from .temporal_spans import build_block_smb_temporal_spans
 from .vision import BlockVisionTransformer
 
@@ -133,12 +134,8 @@ DEFAULT_BLOCK_SMB_MC_TEST_SAMPLES = 256
 # scenario goals (Mario travels ~3px/step, goals sit at x>=230), so 160 is both
 # a volume increase and a correctness fix. Evaluation is spaced out so the
 # held-out gate sweeps do not dominate the longer run.
-# 200 -> 100 -> 60 -> 50 -> 70: fifty proved too short — the composite
-# families historically break through at rounds 40-70, and the 50-round
-# waitfix run produced the weakest frontier of the series (the chained
-# families never banked a single training success). Seventy covers the
-# full climb window plus retention observation.
-DEFAULT_BLOCK_SMB_REAL_VOLUME_EPOCHS = 70
+# Family-only production runs use the requested 30-epoch budget.
+DEFAULT_BLOCK_SMB_REAL_VOLUME_EPOCHS = 30
 DEFAULT_BLOCK_SMB_REAL_VOLUME_ROLLOUT_STEPS = 160
 DEFAULT_BLOCK_SMB_REAL_VOLUME_EVALUATION_INTERVAL_EPOCHS = 25
 DEFAULT_BLOCK_SMB_MC_PASS_RATE_GATE = 0.95
@@ -286,24 +283,8 @@ class BlockSMBTrainingConfig:
     controller_schedule: str = "constant"
     device: str = "auto"
     deterministic: bool = True
-    fixed_scenarios: tuple[str, ...] = (
-        "level_1_flat.json",
-        "level_2_gap.json",
-        "level_3_stairs.json",
-        "level_4_platforms.json",
-        "level_5_enemy_hop.json",
-        "level_6_enemy_patrol.json",
-        "level_7_moving_bridge.json",
-        "level_8_enemy_gap.json",
-        "level_9_enemy_stomp.json",
-        "level_10_left_retreat.json",
-        "level_11_left_jump_recovery.json",
-        "level_12_wait_bridge.json",
-        "level_13_variable_pits.json",
-        "level_14_under_enemy_platform.json",
-        "level_15_wait_long_bridge.json",
-        "level_16_wait_enemy_gate.json",
-    )
+    # Legacy fixtures remain opt-in for diagnostics, outside production training.
+    fixed_scenarios: tuple[str, ...] = ()
     generated_scenarios: int = 0
     generated_seed: int = 50_000
     monte_carlo_distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
@@ -2348,9 +2329,7 @@ def collect_trajectory(
     bridge_opening = bridge_composite
     bridge_departure_recorded = False
     bridge_exit_committed = False
-    local_family = (
-        block_smb_monte_carlo_metadata(stage.scenario).get("family") in LOCAL_TRAVERSAL_FAMILIES
-    )
+    local_family = scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES
     primitive_local_target = None
     primitive_safe_holds = None
     recovering_local_stomp = False
@@ -2390,12 +2369,13 @@ def collect_trajectory(
         mounting = pipe_traversal is not None and primitive_span_phase == "mount"
         intercepting = stomp_scenario or (enemy_composite and primitive_span_phase == "stomp")
         bridge_target = bridge_composite and primitive_span_phase in (
+            "approach",
             "wait",
             "board",
             "ride",
             "exit",
         )
-        boarding = bridge_target and primitive_span_phase in ("wait", "board")
+        boarding = bridge_target and primitive_span_phase in ("approach", "wait", "board")
         target_x, target_halfwidth = (
             pipe_traversal.target(env) if mounting else (float(goal.centerx), float(goal.w) / 2.0)
         )
@@ -2586,7 +2566,7 @@ def collect_trajectory(
             if skill_goal is not None
             and (
                 step_phase in ("finish", "bounce_recovery")
-                or (bridge_composite and step_phase in ("board", "exit"))
+                or (bridge_composite and step_phase in ("approach", "board", "exit"))
             )
             else skill_goal
         )
@@ -2722,7 +2702,7 @@ def collect_trajectory(
                 bridge_exit_committed = True
             if action in (3, 4) or (action == 0 and execution.started):
                 bridge_exit_committed = False
-            if not bridge_departure_recorded and action != 0:
+            if not bridge_departure_recorded and action != 0 and step_phase != "approach":
                 info["bridge_departure"] = True
                 info["bridge_departure_safe"] = 0 in safe_waits
                 bridge_departure_recorded = True
@@ -4529,6 +4509,21 @@ def evaluate_block_smb(
                 config.monte_carlo_validation_repeats_per_difficulty
             ),
         )
+    if not fixed:
+        primary = evaluation.get("monte_carlo_validation", {})
+        gates = primary.get("gates", {})
+        evaluation.update(
+            evaluation_suite="families",
+            mean_return=float(primary.get("mean_return", 0.0)),
+            success_rate=float(primary.get("success_rate", 0.0)),
+            success_thresholds_met=bool(gates.get("gate_met", False)),
+            action_counts=primary.get("action_counts", {}),
+            action_collapse=primary.get("action_collapse", {}),
+            tuning_metrics={
+                "threshold_pass_rate": float(bool(gates.get("gate_met", False))),
+                "score": float(primary.get("success_rate", 0.0)),
+            },
+        )
     return evaluation
 
 
@@ -4974,13 +4969,13 @@ def train_and_evaluate_block_smb(
             }
             last_metrics.update(
                 block_smb_action_count_metric_values(
-                    "eval_fixed",
+                    ("eval_fixed" if config.fixed_scenarios else "eval_monte_carlo_validation"),
                     evaluation.get("action_counts", {}),
                 )
             )
             last_metrics.update(
                 block_smb_action_distribution_gate_metrics(
-                    "eval_fixed",
+                    ("eval_fixed" if config.fixed_scenarios else "eval_monte_carlo_validation"),
                     evaluation.get("action_counts", {}),
                     min_distinct_actions=config.action_gate_min_distinct_actions,
                     max_dominant_fraction=config.action_gate_max_dominant_fraction,

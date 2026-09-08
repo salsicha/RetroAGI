@@ -1,5 +1,9 @@
 # Block SMB Success Thresholds
 
+> Legacy fixed-scene diagnostics. These fixtures are excluded from production
+> training/evaluation as of September 8, 2026. Current requirements are in
+> [family-only training](block-smb-family-only-training.md).
+
 These thresholds define when a Block SMB policy is considered successful on the
 nine fixed scenarios used by P3 evaluation. They are intentionally stricter
 than a single lucky goal collision: each scenario must be solved repeatedly,

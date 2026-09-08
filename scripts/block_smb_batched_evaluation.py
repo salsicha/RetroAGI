@@ -22,6 +22,7 @@ from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.local_traversal import LOCAL_TRAVERSAL_FAMILIES, local_objective
 from retroagi.stages.block_smb.pipe_traversal import TallPipeTraversal
 from retroagi.stages.block_smb.skills import requested_block_smb_skill_goal
+from retroagi.stages.block_smb.tasks import scenario_family
 from retroagi.stages.block_smb.train import (
     block_smb_policy_scenario,
     block_smb_single_jump_scenario,
@@ -69,7 +70,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     observation=observation,
                     pipe=pipe,
                     goal=request,
-                    local=sample.family in LOCAL_TRAVERSAL_FAMILIES,
+                    local=scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES,
                     target=None,
                     enemy=stage.env._require_stomp_before_goal,
                     bridge=stage.env._require_bridge_before_goal,
@@ -115,7 +116,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                             phase = "exit"
                     goal = s.goal.clone()
                     if phase in ("finish", "bounce_recovery") or (
-                        s.bridge and phase in ("board", "exit")
+                        s.bridge and phase in ("approach", "board", "exit")
                     ):
                         goal.zero_()
                     if s.local and phase not in ("finish", "bounce_recovery"):

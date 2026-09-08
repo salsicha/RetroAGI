@@ -1,4 +1,4 @@
-"""Reproducible fresh full-volume training after the family revision 2 audit.
+"""Reproducible 30-epoch family-only training with optional qualified initialization.
 
 Run with python -m scripts.block_smb_full_volume --output-dir PATH.
 --preflight runs real CUDA optimization and frozen perception on representative
@@ -6,8 +6,10 @@ long episodes; it writes diagnostics but never resumes or creates a policy run.
 """
 
 import argparse
+import hashlib
 import json
 import os
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from retroagi.stages.block_smb.train import (
     BlockSMBTrainingConfig,
     make_block_smb_model,
     make_block_smb_optimizer,
+    restore_block_smb_checkpoint,
     train_and_evaluate_block_smb,
     train_block_smb_epoch,
 )
@@ -35,13 +38,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--init-checkpoint", type=Path)
+    parser.add_argument("--config", type=Path, default=CONFIG)
     args = parser.parse_args()
-    values = json.loads(CONFIG.read_text())
+    values = json.loads(args.config.read_text())
+    if args.init_checkpoint:
+        values["init_checkpoint"] = args.init_checkpoint
+        values["demonstration_bootstrap_updates"] = 0
     values["checkpoint_path"] = args.output_dir / "checkpoints/policy.pth"
     values["log_path"] = args.output_dir / "events.jsonl"
     config = BlockSMBTrainingConfig(**_normalize_config_values(values))
-    if config.resume_path is not None or config.init_checkpoint is not None:
-        raise ValueError("This recipe starts from a fresh policy.")
+    if config.resume_path is not None:
+        raise ValueError("Use a fresh optimizer and curriculum for this recipe.")
+    if config.fixed_scenarios:
+        raise ValueError("Full-volume training uses generated families only.")
+    torch.set_num_threads(1)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if not args.preflight and config.log_path.exists():
         raise FileExistsError(f"Use a fresh output directory: {args.output_dir}")
@@ -56,12 +67,22 @@ def main():
             config, use_oracle_actions=True, update_batch_episodes=1, save_checkpoints=False
         )
         model = make_block_smb_model(probe).to(device)
+        if config.init_checkpoint:
+            restore_block_smb_checkpoint(
+                config.init_checkpoint,
+                model,
+                map_location=device,
+                architecture_name=config.architecture_name,
+                architecture_config=config.architecture_config,
+                motion_observations=config.motion_observations,
+                restore_rng=False,
+            )
         optimizer = make_block_smb_optimizer(model, probe)
         samples = [
             sample_block_smb_monte_carlo_scenario(
                 split="validation", seed=2, sample_index=0, family=family, difficulty="hard"
             )
-            for family in ("pipe_mount", "bridge_wait", "chained_obstacles")
+            for family in ("retreat_recovery", "moving_bridge", "chained_obstacles")
         ]
         metrics, _ = train_block_smb_epoch(
             model,
@@ -101,6 +122,20 @@ def main():
     (args.output_dir / "resolved_config.json").write_text(
         json.dumps(to_plain_data(config), indent=2) + "\n"
     )
+    manifest = {
+        "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "sources": {
+            str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(Path("retroagi").rglob("*.py"))
+        },
+        "initial_checkpoint_sha256": (
+            hashlib.sha256(config.init_checkpoint.read_bytes()).hexdigest()
+            if config.init_checkpoint
+            else None
+        ),
+    }
+    (args.output_dir / "source_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(json.dumps({"event": "full_volume_started", "epochs": config.epochs}), flush=True)
     result = train_and_evaluate_block_smb(config, vision_factory=vision_factory)
     summary = {key: to_plain_data(value) for key, value in result.items() if key != "model"}
     (args.output_dir / "run_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
