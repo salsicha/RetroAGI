@@ -160,3 +160,20 @@ all moving-platform contacts remain outside the measured parity claim. The conta
 report explicitly lists exclusions. Physics compatibility and a successful teacher
 route are not substitutes for autonomous emulator validation. No existing checkpoint,
 CNN, preflight model or newly assembled bundle is declared a reliable Full SMB player.
+
+## Startup correction (2026-09-08)
+
+The initial launch exited before its first perception optimizer update: PyTorch's
+spatial CUDA NLL reduction rejected strict deterministic mode. Perception now
+flattens pixels into class rows before cross entropy, preserving class weights,
+ignored labels and the mathematical objective while using the deterministic CUDA
+matrix reduction. CPU-reference loss/gradient comparisons, repeatability checks
+and an actual strict-CUDA perception training/save test pass (17 affected tests
+including component regressions). Determinism remains enabled.
+
+Logs now include timestamps, source-layout generation progress, the transition
+into perception training, and its first completed update. Unexpected exceptions
+report `runtime_failed`; measured qualification failures report `gate_failed`.
+The failed run is retained. The corrected fresh launch uses
+`artifacts/smb_composable/full_volume_20260908_retry1/`; discover the latest PID,
+run directory and log through `artifacts/smb_composable/active_run.json`.

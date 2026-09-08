@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
@@ -26,6 +27,10 @@ from retroagi.stages.block_smb.nes_curriculum import sample_nes_case
 from scripts.smb_perception_training import block_clips, train_perception
 
 
+class QualificationFailure(RuntimeError):
+    """A measured qualification requirement failed, rather than a runtime error."""
+
+
 def write_json(path, value):
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -33,7 +38,7 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def samples(config, split, count, *, offset=0, families=None):
+def samples(config, split, count, *, offset=0, families=None, log=None):
     result = []
     for family in families or config["families"]:
         for i in range(count):
@@ -44,6 +49,15 @@ def samples(config, split, count, *, offset=0, families=None):
                     seed=config["seed"],
                     index=offset + i,
                     difficulty=("easy", "medium", "hard")[i % 3],
+                )
+            )
+        if log:
+            log(
+                dict(
+                    phase="source_perception_dataset",
+                    split=split,
+                    family=family,
+                    layouts=len(result),
                 )
             )
     return result
@@ -88,7 +102,7 @@ def collect(model, cases, vision, *, log):
     )
     missing = set(s.family for s in cases) - {e["family"] for e in episodes if e["success"]}
     if missing:
-        raise RuntimeError(f"No executor-verified demonstrations for {sorted(missing)}")
+        raise QualificationFailure(f"No executor-verified demonstrations for {sorted(missing)}")
     return rows_to_data(rows), episodes
 
 
@@ -130,6 +144,7 @@ def run(config, output):
     output.mkdir(parents=True, exist_ok=False)
 
     def log(event):
+        event = dict(event, timestamp=datetime.now(timezone.utc).isoformat())
         print(json.dumps(event, default=str), flush=True)
         with (output / "events.jsonl").open("a") as stream:
             stream.write(json.dumps(event, default=str) + "\n")
@@ -158,12 +173,21 @@ def run(config, output):
         physics = audit()
         write_json(output / "physics.json", physics)
         if not physics["exact_motion_gate"]:
-            raise RuntimeError("NES motion gate failed")
+            raise QualificationFailure("NES motion gate failed")
         log(dict(phase="source_perception_dataset"))
-        train = samples(config, "train", config["perception_layouts_per_family"])
-        validation = samples(config, "validation", config["perception_validation_per_family"])
+        train = samples(config, "train", config["perception_layouts_per_family"], log=log)
+        validation = samples(
+            config, "validation", config["perception_validation_per_family"], log=log
+        )
         clips = block_clips(train, output / "block_train_clips")
         validation_clips = block_clips(validation, output / "block_validation_clips")
+        log(
+            dict(
+                phase="source_perception_training",
+                device=config["device"],
+                updates=config["perception_updates"],
+            )
+        )
         vision, perception = train_perception(
             clips,
             validation_clips,
@@ -174,7 +198,7 @@ def run(config, output):
             log=log,
         )
         if not perception["qualified"]:
-            raise RuntimeError(
+            raise QualificationFailure(
                 "Block collision-perception gate failed; see per-class and edge metrics"
             )
         # Each family starts with independent fresh core weights. Validation
@@ -233,7 +257,9 @@ def run(config, output):
                 )
             write_json(output / "family_learning.json", family_reports)
         if not all(r["passed"] for r in family_reports.values()):
-            raise RuntimeError("Family learnability gate failed; shared full-volume phase withheld")
+            raise QualificationFailure(
+                "Family learnability gate failed; shared full-volume phase withheld"
+            )
         log(dict(phase="full_volume_initialization", epochs=config["epochs"]))
         # Fresh core again: independent family qualifiers are not a hidden warm start.
         torch.manual_seed(config["seed"])
@@ -311,7 +337,7 @@ def run(config, output):
         )
         write_json(output / "block_test.json", test)
         if result["minimum"] < config["family_gate"] or test["minimum"] < config["family_gate"]:
-            raise RuntimeError("Shared Block held-out family gate failed")
+            raise QualificationFailure("Shared Block held-out family gate failed")
         log(dict(phase="recurrent_context_qualification"))
         from copy import deepcopy
         from dataclasses import replace
@@ -403,7 +429,7 @@ def run(config, output):
             log=log,
         )
         if not metrics["qualified"]:
-            raise RuntimeError("Full real-frame collision-perception gate failed")
+            raise QualificationFailure("Full real-frame collision-perception gate failed")
         individual = qualify_individual_approaches(
             output / "emulator",
             full_vision,
@@ -443,7 +469,16 @@ def run(config, output):
             )
         )
     except Exception as error:
-        log(dict(phase="gate_failed", error=str(error), full_level_qualified=False))
+        log(
+            dict(
+                phase=(
+                    "gate_failed" if isinstance(error, QualificationFailure) else "runtime_failed"
+                ),
+                error=str(error),
+                error_type=type(error).__name__,
+                full_level_qualified=False,
+            )
+        )
         raise
 
 

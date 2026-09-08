@@ -127,6 +127,21 @@ def evaluate_perception(model, dataset, *, batch_size=8):
     )
 
 
+def collision_cross_entropy(logits, target, *, weight):
+    """Use pixel rows to preserve weighted CE with deterministic CUDA kernels.
+
+    The spatial NLL reduction rejects strict determinism on CUDA. Flattening
+    pixels selects the deterministic matrix NLL path with the same objective,
+    class weighting, ignored pixels, and gradients.
+    """
+    return F.cross_entropy(
+        logits.movedim(1, -1).reshape(-1, logits.shape[1]),
+        target.reshape(-1),
+        weight=weight,
+        ignore_index=255,
+    )
+
+
 def train_perception(
     train_clips,
     validation_clips,
@@ -160,12 +175,12 @@ def train_perception(
         images, labels = train.batch(rng.integers(len(train.index), size=batch_size))
         target = torch.as_tensor(labels, device=device).long()
         vision = model(image_tensor(images, device=torch.device(device)))
-        loss = F.cross_entropy(vision.semantic_logits, target, weight=weights, ignore_index=255)
+        loss = collision_cross_entropy(vision.semantic_logits, target, weight=weights)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        if (step + 1) % 100 == 0 or step + 1 == steps:
+        if step == 0 or (step + 1) % 100 == 0 or step + 1 == steps:
             event = dict(phase="perception", step=step + 1, loss=float(loss.detach()))
             if log:
                 log(event)
