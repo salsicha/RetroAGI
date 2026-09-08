@@ -142,6 +142,27 @@ def collision_cross_entropy(logits, target, *, weight):
     )
 
 
+def translated_batch(images, labels, rng, *, max_x=128, max_y=64):
+    """Expose screen positions, patch phases and clipped bodies without wrapping.
+
+    New pixels are unsupervised (255), rather than invented collision labels.
+    This is perception-only augmentation; physical policy trajectories are intact.
+    """
+    shifted_images = np.zeros_like(images)
+    shifted_labels = np.full_like(labels, 255)
+    height, width = labels.shape[-2:]
+    for i in range(len(images)):
+        dx = int(rng.integers(-max_x, max_x + 1))
+        dy = int(rng.integers(-max_y, max_y + 1))
+        sx, sy = max(0, -dx), max(0, -dy)
+        tx, ty = max(0, dx), max(0, dy)
+        w, h = width - abs(dx), height - abs(dy)
+        if w > 0 and h > 0:
+            shifted_images[i, ty : ty + h, tx : tx + w] = images[i, sy : sy + h, sx : sx + w]
+            shifted_labels[i, ty : ty + h, tx : tx + w] = labels[i, sy : sy + h, sx : sx + w]
+    return shifted_images, shifted_labels
+
+
 def train_perception(
     train_clips,
     validation_clips,
@@ -166,15 +187,20 @@ def train_perception(
     train = ClipDataset(train_clips)
     validation = ClipDataset(validation_clips)
     torch.manual_seed(seed)
-    model = DenseSMBPerception(dim=dim, depth=depth).to(device)
+    class_weights = [0.1, 5.0, 1.0, 4.0, 4.0, 5.0, 3.0]
+    model = DenseSMBPerception(
+        dim=dim, depth=depth, class_weights=class_weights, refinement_channels=16
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     rng = np.random.default_rng(seed)
-    weights = torch.tensor([0.1, 5.0, 1.0, 4.0, 4.0, 5.0, 3.0], device=device)
+    weights = torch.tensor(class_weights, device=device)
     for step in range(steps):
         model.train()
         images, labels = train.batch(rng.integers(len(train.index), size=batch_size))
+        images, labels = translated_batch(images, labels, rng)
         target = torch.as_tensor(labels, device=device).long()
-        vision = model(image_tensor(images, device=torch.device(device)))
+        # Optimize weighted logits; inference removes the known class prior.
+        vision = model(image_tensor(images, device=torch.device(device)), calibrated=False)
         loss = collision_cross_entropy(vision.semantic_logits, target, weight=weights)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -197,6 +223,20 @@ def train_perception(
     )
     metrics["absent_validation_classes"] = [int(k) for k, v in metrics["iou"].items() if v is None]
     metrics["full_level_qualified"] = False
+    metrics["training_translation"] = dict(max_x=128, max_y=64, padding_label=255)
+    metrics["class_weights"] = class_weights
+    metrics["probability_correction"] = "subtract_log_training_class_weights"
+    event = dict(
+        phase="perception_validation",
+        **{
+            key: metrics[key]
+            for key in ("qualified", "iou", "body_edge_p95", "missed_bodies", "frames")
+        },
+    )
+    if log:
+        log(event)
+    else:
+        print(json.dumps(event), flush=True)
     model.eval().requires_grad_(False)
     model.save(directory / "perception.pth", metrics=metrics)
     (directory / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")

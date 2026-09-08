@@ -177,3 +177,52 @@ report `runtime_failed`; measured qualification failures report `gate_failed`.
 The failed run is retained. The corrected fresh launch uses
 `artifacts/smb_composable/full_volume_20260908_retry1/`; discover the latest PID,
 run directory and log through `artifacts/smb_composable/active_run.json`.
+
+## Collision-perception qualification repair (2026-09-08)
+
+The CUDA-corrected launch completed its 4,000 perception updates but failed the
+collision-perception gate. Weighted training assigned background weight 0.1,
+Mario/enemies 5, coins/goals 4, terrain 1 and moving platforms 3. Inference treated
+the resulting weighted scores as unweighted probabilities. This favored enlarged
+foreground regions: raw validation IoU was 0.810 Mario, 0.824 enemies and 0.749
+coins, despite tiny training loss and zero reported missing bodies. Training-scene
+IoUs were similarly poor, ruling out ordinary validation-only overfitting as the
+main cause of this failure.
+
+For weighted cross entropy, the optimum output is proportional to the true
+class probability times its training weight. `DenseSMBPerception` now subtracts
+log training weights from inference logits before producing **all** downstream
+outputs: masks, positions, support and semantic tokens. Training retains raw
+logits for the weighted loss. Weights travel in perception checkpoint config;
+legacy checkpoints without weights retain their historical inference behavior.
+The shared hierarchy, LSTM, adaptive controller and component interface are intact.
+
+A controlled ablation using the same saved weights changed validation IoU to
+0.935 Mario, 0.903 enemies and 0.904 coins, with 1.5-pixel body-edge p95. A fresh
+4,000-update run reproduced this exactly and passed the original validation gate.
+A larger 252-layout development check exposed three remaining misses in 4,743
+frames: skidding Mario at an unusual upper-right position and two one-pixel enemy
+slivers entering the viewport. These development scenes are not the final test.
+
+Perception training now translates images and collision masks together, without
+rescaling or wrapping, by up to 128 pixels horizontally and 64 vertically. This
+varies screen position and alignment within 16-pixel patches and introduces
+partially visible bodies. Newly introduced pixels carry ignore label 255, not
+fabricated collision classes. Physical policy rollouts are not transformed.
+Validation and test images remain the original renderer output. A disjoint set
+of 252 layouts (test indices 12–23, 4,642 frames) is reserved for final verification.
+Neither the 90% class-IoU requirement, two-pixel body-edge limit, nor zero-miss gate
+is relaxed. Perception validation metrics are now emitted in the live log.
+
+
+Translation alone at 8,000 updates improved Mario validation IoU to 0.960 but
+failed enemy IoU (0.882) and missed-body checks. That experiment is not qualified.
+The production trainer therefore adds a learned full-resolution residual decoder
+inside the domain-specific ViT: two 3×3 convolution layers with 16 channels, followed
+by a seven-class output layer. It combines RGB pixels with contextual patch logits
+to recover fine boundaries. It is trained jointly with the ViT under the same
+collision-label loss, not a rule-based pixel classifier or a RAM observation path.
+Its architecture is persisted in perception config; older checkpoints retain their
+original decoder. The production perception budget remains 4,000 updates pending
+the joint-decoder qualification experiment. No shared-policy training restart is
+claimed while that experiment is still running.

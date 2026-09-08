@@ -6,15 +6,39 @@ from torch.nn import functional as F
 
 from retroagi.core.interfaces import VisionOutput, VisionSpec
 from retroagi.core.smb_geometry import SEMANTICS
-from retroagi.core.vision import PatchVisionTransformer
+from retroagi.core.vision import PatchVisionTransformer, image_tensor
 
 
 class DenseSMBPerception(nn.Module):
     """One pixel decoder per patch; internal tokens never become policy state."""
 
-    def __init__(self, *, dim=128, depth=3, heads=4, patch_size=16):
+    def __init__(
+        self, *, dim=128, depth=3, heads=4, patch_size=16, class_weights=None, refinement_channels=0
+    ):
         super().__init__()
-        self.config = dict(dim=dim, depth=depth, heads=heads, patch_size=patch_size)
+        weights = (
+            torch.ones(len(SEMANTICS))
+            if class_weights is None
+            else torch.tensor(class_weights, dtype=torch.float32)
+        )
+        if weights.shape != (len(SEMANTICS),) or not bool(
+            torch.isfinite(weights).all() and (weights > 0).all()
+        ):
+            raise ValueError("Class weights must contain seven finite positive values")
+        self.config = dict(
+            dim=dim,
+            depth=depth,
+            heads=heads,
+            patch_size=patch_size,
+            class_weights=weights.tolist(),
+            refinement_channels=refinement_channels,
+        )
+        # Weighted cross entropy learns q(class|pixel) proportional to w * p.
+        # Restore p for every downstream consumer, including semantic tokens and
+        # support estimates. Config persists the weights; legacy files imply ones.
+        self.register_buffer(
+            "log_class_weights", weights.log()[None, :, None, None], persistent=False
+        )
         self.backbone = PatchVisionTransformer(
             semantic_classes=SEMANTICS,
             image_size=(240, 256),
@@ -29,19 +53,41 @@ class DenseSMBPerception(nn.Module):
             name="canonical_smb_dense_vit",
         )
         self.pixel_head = nn.Linear(dim, patch_size * patch_size * len(SEMANTICS))
+        self.refinement = (
+            nn.Sequential(
+                nn.Conv2d(3 + len(SEMANTICS), refinement_channels, 3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(refinement_channels, refinement_channels, 3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(refinement_channels, len(SEMANTICS), 1),
+            )
+            if refinement_channels
+            else None
+        )
         self.support_head = nn.Linear(dim, 3)
         self.spec = VisionSpec("canonical_smb_dense_vit", SEMANTICS, len(SEMANTICS))
 
     def encode(self, frames):
         return self.forward(frames)
 
-    def forward(self, frames):
+    def forward(self, frames, *, calibrated=True):
         native = self.backbone(frames)
         batch, _, _ = native.tokens.shape
         patch = self.config["patch_size"]
         gh, gw = 240 // patch, 256 // patch
         logits = self.pixel_head(native.tokens).reshape(batch, gh, gw, patch, patch, len(SEMANTICS))
         logits = logits.permute(0, 5, 1, 3, 2, 4).reshape(batch, len(SEMANTICS), 240, 256)
+        if self.refinement is not None:
+            pixels = image_tensor(frames, device=logits.device)
+            if pixels.shape[-2:] != logits.shape[-2:]:
+                pixels = F.interpolate(
+                    pixels, size=logits.shape[-2:], mode="bilinear", align_corners=False
+                )
+            # Retain the ViT's contextual prediction while recovering local
+            # boundaries that were compressed into each patch token.
+            logits = logits + self.refinement(torch.cat((pixels, logits), dim=1))
+        if calibrated:
+            logits = logits - self.log_class_weights
         p = logits.softmax(1)
         mario = (logits.argmax(1) == 1).float()
         mass = mario.sum((-2, -1)).clamp_min(1e-8)
