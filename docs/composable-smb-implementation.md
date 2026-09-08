@@ -2,12 +2,16 @@
 
 Implementation date: 2026-09-08. Design: [composable SMB transfer plan](composable-smb-transfer-plan.md).
 
+The [segmentation curriculum guide](smb-segmentation-curriculum.md) documents
+creation/training of the recovered DeepLab teacher, its audited annotation role,
+the separate CNN decoder inside each ViT, and the component swap contract.
+
 ## Architecture and interfaces
 
 ```mermaid
 flowchart LR
-    B[Block pixels] --> BV[Block dense ViT]
-    F[NES pixels] --> FV[Full dense ViT]
+    B[Block pixels] --> BV[Block dense ViT plus CNN decoder]
+    F[NES pixels] --> FV[Full dense ViT plus CNN decoder]
     BV --> S[Canonical semantics and shared pixel tracker]
     FV --> S
     S --> P[Canonical A / B / C projector]
@@ -107,7 +111,11 @@ The configuration rejects resume/init checkpoints and fixed scenes, and requires
    Deduplicate physical starts across splits. Save unresolved starts for repair.
    Teacher routes must reach stable support beyond the obstacle; deployed playback
    never searches snapshots or calls a teacher.
-6. Qualify the Full ViT. Train independent scratch controls for each approach,
+6. Audit the recovered DeepLab CNN on independent real collision labels and
+   save `cnn_teacher_audit.json`. The automated pipeline does not retrain the CNN
+   or use its proposals as labels; the documented teacher-training module covers
+   that separate preparation work. Train and qualify the Full dense ViT and CNN
+   decoder from instrumented labels. Train independent scratch controls for each approach,
    collect corrections on policy-visited training states, and test held-out nearby
    variations. The production schedule requests 18 training and 100 validation /
    100 test timing settings, subject to physical deduplication and reachability.

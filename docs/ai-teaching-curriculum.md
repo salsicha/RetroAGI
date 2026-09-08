@@ -27,6 +27,10 @@ By the end, students should be able to:
 - Explain RetroAGI's actor, world-model, critic, and A/B/C timescale structure.
 - Trace how stage-native observations become shared `StageBatch` tensors.
 - Train and evaluate the Synthetic 1D stage reproducibly.
+- Create, train and audit a CNN segmentation teacher without confusing sprite
+  labels with collision bodies.
+- Explain how domain-specific perception can be swapped while the hierarchy,
+  LSTM and adaptive controller retain compatible interfaces.
 - Explain why perception, reward, dynamics, value, and policy objectives should
   be separated.
 - Modify Block SMB reward, observation, and episode contracts without adding
@@ -65,13 +69,13 @@ finite training history and checkpoint-compatible metrics.
 | 1 | Repository orientation and contracts | `retroagi/core`, `docs/*` | Draw the data path from observation to `StageBatch` to model outputs |
 | 2 | Synthetic 1D data and hierarchy | `retroagi/stages/synthetic_1d` | Add one dataset-shape or seed-reproducibility test |
 | 3 | Reproducible training | Synthetic 1D trainer | Run a seeded training comparison and report metrics |
-| 4 | Vision as representation | `BlockVisionTransformer`, `VisionOutput` | Inspect one Block SMB frame and its semantic/token outputs |
+| 4 | CNN teachers and compatible perception | DeepLab teacher, dense ViTs, `VisionOutput` | Create/train a CNN on labeled clips, audit it, and map its classes to the canonical interface |
 | 5 | Environment semantics | `MarioScenarioEnv`, `BlockSMBStage` | Explain one transition's observation, action, reward, termination, and info |
 | 6 | Rewards and episode boundaries | Block SMB reward config and tests | Tune one reward term and show the `reward_terms` breakdown still sums correctly |
 | 7 | World models and critic feedback | `AgentWorldModelCritic` | Propose a loss decomposition for dynamics, value, reward, and policy |
 | 8 | Policy-training loop design | P3 TODOs | Write a minimal single-environment training-loop design doc |
 | 9 | Evaluation and curriculum progression | Fixed and generated scenarios | Define success-rate and return metrics for each fixed scenario |
-| 10 | Transfer to Full SMB | `retroagi/stages/full_smb` | Identify which Block SMB contracts must be preserved at the emulator boundary |
+| 10 | Composable transfer to Full SMB | Component bundles and emulator curriculum | Swap perception, verify frozen core weights, and evaluate optional LSTM adaptation |
 
 ## Module Details
 
@@ -126,22 +130,35 @@ Assessment:
 - Student can identify which state must be saved: model, optimizer, epoch,
   global step, metrics, config, and compatibility specs.
 
-### 4. Perception As A Stage Boundary
+### 4. CNN Segmentation And Perception As A Stage Boundary
 
-Block SMB perception converts RGB frames into position, semantic logits,
-semantic IDs, and tokens. The hierarchy should not need to know whether those
-features came from synthetic labels, a ViT, or a future emulator adapter.
+Follow the [segmentation curriculum](smb-segmentation-curriculum.md) for the
+complete creation/training recipe, class mapping, audit procedure and architecture
+diagrams. The recovered DeepLab network is an offline annotation teacher. The
+current dense ViT has a different, small CNN decoder trained jointly with it.
 
 Exercise:
 
-```bash
-python scripts/vit/train_block_vit.py --epochs 1 --samples-per-epoch 128 --val-samples 32
-```
+- Recover or construct the six-class DeepLab network. Prepare independently
+  labeled train/validation/test clips and train or fine-tune a small experiment.
+  The legacy script documents a recipe but needs missing source assets and is
+  not a supported turnkey trainer.
+- Report per-class IoU, body-edge errors and missed bodies on real frames.
+  Compare sprite masks and collision labels; record which target was trained.
+- Map approved teacher classes into the canonical vocabulary, document missing
+  classes, and explain how reviewed proposals could supervise Full ViT training.
+  The current pipeline audits the teacher but trains directly from instrumented
+  labels; automatic proposal ingestion is not implemented.
+- Trace pixels through the dense ViT/decoder, shared tracker and deterministic
+  projector into A/B/C. Explain why independent learned ViT embeddings cannot
+  simply occupy the same policy slots.
 
 Assessment:
 
-- Student can explain how semantic logits feed A/B streams and how position,
-  semantics, state, and patch tokens fill C-stream slots.
+- Student can distinguish teacher training, dense perception training and policy
+  training, and reproduce the required checkpoint/preprocessing metadata.
+- Student can explain how Block and Full perception emit one canonical interface
+  without importing RAM or teacher outputs into the deployed pixel policy.
 
 ### 5. Environment Semantics And Rewards
 
@@ -242,7 +259,13 @@ Exercise:
 
 - Compare Block SMB and Full SMB stage semantics.
 - Identify which game variables are needed to reproduce Block SMB diagnostics.
-- Write the adapter acceptance tests before implementing the adapter.
+- Assemble a compatible component bundle with replacement Full perception and
+  verify actor/controller/critic parameter hashes remain unchanged.
+- Compare frozen-core oracle and pixel playback, then optional world-model
+  adaptation on NES sequences with Block replay. Reset carried memory on swaps.
+- Explain why LSTM architecture can stay identical while its weights change, and
+  why recurrent context must be trained and qualified in both domains.
+- Requalify local approaches and nearby variations before full-level testing.
 
 Assessment:
 
@@ -258,6 +281,9 @@ Choose one:
 - Add a replay buffer with correct episode-boundary handling.
 - Add a reward-model or value-model objective without changing environment
   reward semantics.
+- Train and audit a CNN annotation teacher, with independently labeled real clips.
+- Demonstrate a perception swap with preserved core weights and measured emulator
+  behavior, using the component-bundle compatibility checks.
 - Prototype a Full SMB adapter acceptance-test suite.
 
 ## Grading Rubric

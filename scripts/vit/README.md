@@ -4,6 +4,14 @@ A self-contained pipeline that trains a Vision Transformer to perform
 **patch-level semantic segmentation** of Super Mario Bros scenes, using
 procedurally generated images built from **accurate, ripped SMB sprites**.
 
+For the current composable collision-perception curriculum, see
+[segmentation networks and composability](../../docs/smb-segmentation-curriculum.md).
+It documents the recovered DeepLab CNN's creation/training and teacher role,
+the separate convolutional decoder trained inside each dense ViT, and the shared
+policy interface. This page describes the older 13-class **patch** model; its
+checkpoint and reported patch accuracy do not qualify the seven-class dense
+collision model or the recovered CNN.
+
 ## Pipeline
 
 ```

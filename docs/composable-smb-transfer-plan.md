@@ -1,7 +1,9 @@
 # Composable Block SMB → Full SMB transfer and emulator curriculum
 
 Updated 2026-09-08. The implemented workflow and current verification evidence are
-recorded in [the implementation report](composable-smb-implementation.md). This plan
+recorded in [the implementation report](composable-smb-implementation.md). CNN
+creation, training, teacher use and component swaps are detailed in the
+[segmentation curriculum](smb-segmentation-curriculum.md). This plan
 supersedes the adaptation order in
 `full-smb-transfer-contract.md`; that report remains the record of the failed
 initial experiments. The new pipeline starts from scratch and gates each phase.
@@ -22,7 +24,7 @@ Full SMB world-model checkpoint may contain updated weights while retaining the
 same architecture, state format, and input/output meanings. Compatibility alone
 does not prove that swapping weights improves behavior.
 
-## Repository findings
+## Repository findings at plan inception
 
 - Shared classes already exist in `retroagi/core/models.py`:
   `HierarchicalAdaptiveModel`, `WorldModel`, `Critic`, `AdaptiveController`, and
@@ -66,9 +68,14 @@ cannot supply every Full SMB class or collision property. Smoke evidence is in
 The current pipeline also already has a Full SMB ViT and a sprite-composition
 label generator (`scripts/vit/generate_dataset.py`). A CNN is therefore useful
 as a real-frame annotation teacher, not a prerequisite for generating all labels.
-Its implementation is currently marked legacy/example-only; integrating a
-validated teacher requires a maintained wrapper rather than importing the old
-training script with its top-level side effects.
+The old training/inference scripts remain legacy examples with top-level side
+effects. A maintained offline wrapper now exists in
+`retroagi/stages/full_smb/segmentation_teacher.py`. The current pipeline audits
+the recovered CNN but does not retrain it or consume its proposals automatically;
+it uses independent NES collision labels to train the Full dense ViT. The latest
+recorded CNN collision audit approved no classes. The manual teacher-training
+module and the planned proposal-ingestion path are described separately in the
+[segmentation curriculum](smb-segmentation-curriculum.md).
 
 ## Phase 1 — Define and enforce interchangeable components
 
@@ -150,26 +157,36 @@ families. Re-sample impossible parameter combinations without weakening the
 skills' success definitions. Held-jump scripts must explicitly release/repress
 when required. Existing family success rates do not qualify the new profile.
 
-## Phase 3 — Qualify perception and train compatible ViTs
+## Phase 3 — Create/train the CNN teacher and qualify compatible ViTs
+
+Use the [CNN lifecycle module](smb-segmentation-curriculum.md) to recover or
+construct DeepLabV3/ResNet50, prepare native six-class annotations, train or
+fine-tune it on the training split, and save a versioned checkpoint plus provenance.
+The reference trainer's 45-epoch recipe is distinct from the current 8,000-update
+dense-ViT training and the 30 shared-policy epochs. Creation/retraining is an
+offline preparation step; the current automated pipeline begins from the recovered
+CNN checkpoint and runs its audit during emulator curriculum preparation.
 
 Validate the recovered CNN on independently labeled real emulator clips. Record
 per-class errors, small-enemy misses, contact-edge errors and temporal stability.
 Use it only for the classes/conditions it passes; confidence filtering alone is
 not proof that its labels are correct.
 
-Combine three label sources with explicit provenance:
+The planned annotation workflow combines three label sources with explicit provenance:
 
 - sprite-composed scenes with known rendering masks;
-- CNN proposals on actual emulator frames, checked/corrected on held-out clips;
+- CNN proposals on training clips, reviewed/corrected and qualified against independent held-out clips;
 - NES instrumentation for collision boxes/support/motion/event labels, distinct
   from visible sprite segmentation labels.
 
 Fill unsupported classes with new annotations/generated labels or a retrained
-teacher. Do not invent a one-to-one mapping from six legacy classes to thirteen
-Full classes. Keep real-frame validation separate from synthetic validation and
+teacher. Do not invent a one-to-one mapping from the six legacy classes to
+the seven canonical classes or the older thirteen-class patch vocabulary. Keep real-frame validation separate from synthetic validation and
 split by clips/approaches to avoid adjacent-frame leakage.
 
-Train or fine-tune the Full ViT to emit the canonical interface. Use paired
+The implemented Full ViT training path currently uses instrumentation labels;
+CNN proposal ingestion is not yet automated. Train or fine-tune the Full ViT and
+its convolutional refinement decoder jointly to emit the canonical interface. Use paired
 geometry rendered in Block and Full styles to check interface agreement. The
 Block ViT must satisfy the same boundary. Validate perception by its effect on
 local objectives and action choice, not only average pixel accuracy. RAM remains

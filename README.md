@@ -11,11 +11,15 @@ promoting an architecture toward full Super Mario Bros:
 2. **Block SMB** trains all trainable game-facing models on a simplified
    synthetic version of SMB: Block ViT perception plus the hierarchical
    actor/world-model/critic policy in fast scenario-driven tasks.
-3. **Full SMB asset-mock perception** bootstraps the Full SMB ViT with full game
-   assets arranged into synthetic scenarios before any policy relies on full
-   emulator observations.
-4. **Full SMB** verifies and validates inference in the emulator, then
-   continues training the transferred models at full fidelity.
+3. **Full SMB segmentation curriculum** creates or recovers a CNN annotation
+   teacher, trains and audits it, and qualifies a separate Full SMB ViT with its
+   convolutional collision decoder. The implemented pipeline audits the recovered
+   CNN and trains the ViT from instrumented real-frame labels; reviewed CNN
+   proposals are a documented extension, and sprite compositions can bootstrap
+   appearance learning.
+4. **Full SMB** assembles the Full perception component with the shared Block
+   hierarchy, LSTM and adaptive controller. It tests frozen-core transfer,
+   optional world-model adaptation, local approaches and then full-level play.
 
 The stage code is separated, but all stages share the same core contract:
 
@@ -31,6 +35,15 @@ carried LSTM state -> next decision
 Shared components live in `retroagi/core`. Stage adapters live in
 `retroagi/stages/*` and convert stage-native observations into the common
 A/B/C timescale tensors.
+
+The [segmentation and composability guide](docs/smb-segmentation-curriculum.md)
+explains CNN creation/training, its teacher role, the ViT's separate CNN decoder,
+and component swaps. Block and Full perception have different weights but emit
+one canonical scene interface; shared-core architecture and timing stay compatible.
+Critic feedback and carried recurrent memory are enabled only under the qualified
+common runtime. See the [current transfer plan](docs/composable-smb-transfer-plan.md)
+for the staged training order and [implementation report](docs/composable-smb-implementation.md)
+for measured results.
 
 ## Project Layout
 
@@ -300,9 +313,11 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--controller-schedule constant|linear`. The Full SMB random-agent runner is
    headless by default; pass `--render` only for local visual inspection. Full
    SMB policy transfer reuses Block SMB actor/world-model/critic weights.
-   Before that transferred policy is used for Full SMB inference or continued
-   training, the Full SMB ViT must be bootstrapped on synthetic scenarios made
-   from full-game assets and loaded as the versioned Full SMB ViT checkpoint.
+   The historical patch-ViT workflow below uses synthetic full-game asset
+   bootstrapping. The current composable curriculum instead qualifies dense
+   collision perception on instrumented real frames; CNN teacher proposals are
+   audited independently. These perception checkpoint formats are distinct; see
+   [the segmentation guide](docs/smb-segmentation-curriculum.md).
    Transfer comparisons evaluate the transferred policy and a scratch Full SMB
    baseline on identical seeded observation batches.
    Learned-dynamics imagination is selectable with
