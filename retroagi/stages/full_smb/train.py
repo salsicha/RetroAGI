@@ -3308,7 +3308,7 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         bool(observation.get("camera_state_enabled")) if isinstance(observation, Mapping) else False
     )
     state_start, state_end = state
-    if metadata.get("smb_observation_schema") == "smb_geometry_v1":
+    if metadata.get("smb_observation_schema") in ("smb_geometry_v1", "smb_scene_v2"):
         # Shared geometry has 27 physical slots plus optional motion. Neither
         # score/lives nor camera slots are embedded in this checkpoint layout.
         return {
@@ -3434,6 +3434,11 @@ def _smb_forward_kwargs(model, batch, deterministic):
     if metadata.get("smb_observation_schema") != contract.schema:
         raise ValueError("Batch observation semantics do not match checkpoint contract")
     geometry = metadata["smb_geometry"]
+    if (
+        contract.schema == "smb_scene_v2"
+        and geometry.get("observation_provider") != contract.observation_provider
+    ):
+        raise ValueError("Policy and batch observation providers differ")
     expected_state_size = 35 if contract.motion_observations else 27
     if tuple(metadata["vision_fusion"]["c_state"]) != (12, 12 + expected_state_size):
         raise ValueError("Shared SMB state feature offsets are incompatible")

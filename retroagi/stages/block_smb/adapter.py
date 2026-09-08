@@ -44,8 +44,18 @@ class BlockSMBObservationConfig:
     state_min: float = -1.0
     state_max: float = 1.0
     motion_observations: bool = False
+    scene_schema: str = "smb_geometry_v1"
+    observation_provider: str = "oracle"
 
     def __post_init__(self) -> None:
+        if self.observation_provider not in ("oracle", "perceived"):
+            raise ValueError("Unsupported observation provider")
+        if self.observation_provider == "perceived" and self.scene_schema != "smb_scene_v2":
+            raise ValueError("Perceived geometry requires canonical scene interfaces")
+        if self.scene_schema not in ("smb_geometry_v1", "smb_scene_v2"):
+            raise ValueError("Unsupported SMB scene schema")
+        if self.scene_schema == "smb_scene_v2" and not self.motion_observations:
+            raise ValueError("Canonical scenes require motion observations")
         if self.frame_stack <= 0:
             raise ValueError("frame_stack must be positive")
         if self.state_min >= self.state_max:
@@ -68,9 +78,15 @@ class BlockSMBStage:
         self.scenario = scenario
         self.vision = vision or BlockVisionTransformer()
         self.observation_config = observation_config
+        self.env.render_goal = observation_config.scene_schema != "smb_scene_v2"
         if isinstance(self.vision, torch.nn.Module):
             self.vision.eval()
-        self.vision_projector = VisionHierarchyProjector(self.spec)
+        if observation_config.scene_schema == "smb_scene_v2":
+            from retroagi.core.smb_scene import CanonicalSMBProjector
+
+            self.vision_projector = CanonicalSMBProjector(self.spec)
+        else:
+            self.vision_projector = VisionHierarchyProjector(self.spec)
         self.last_info: Mapping[str, Any] = {}
         self._frame_stack: deque[torch.Tensor] = deque(maxlen=self.observation_config.frame_stack)
         self._frame_mask: deque[bool] = deque(maxlen=self.observation_config.frame_stack)
@@ -79,6 +95,11 @@ class BlockSMBStage:
         self._last_truncated = False
         self._cached_vision_frame = None
         self._cached_vision = None
+        from retroagi.core.smb_tracking import PerceivedSMBScene
+
+        self.scene_tracker = PerceivedSMBScene()
+        self._scene_frame = None
+        self._scene_cache = None
 
     def reset(self, seed: Optional[int] = None):
         obs, info = self.env.reset(scenario=self.scenario, seed=seed)
@@ -88,6 +109,9 @@ class BlockSMBStage:
         self._last_truncated = False
         self._cached_vision_frame = None
         self._cached_vision = None
+        self.scene_tracker.reset()
+        self._scene_frame = None
+        self._scene_cache = None
         self._reset_frame_stack(obs)
         return obs
 
@@ -121,12 +145,55 @@ class BlockSMBStage:
                 self._cached_vision = self.vision.encode(normalized_observation)
             self._cached_vision_frame = normalized_observation.clone()
         vision = self._cached_vision
+        projection_kwargs = {}
+        geometry_metadata = {}
+        if self.observation_config.scene_schema == "smb_scene_v2":
+            from retroagi.core.smb_scene import block_oracle_scene, canonical_vision
+
+            vision = canonical_vision(vision, "block")
+            if self._scene_frame != self.env.steps:
+                self._scene_cache = (
+                    self.scene_tracker.observe(
+                        vision,
+                        terminated=self._last_terminal,
+                        truncated=self._last_truncated,
+                        goal_direction=(self.scenario or {}).get("task_direction", 1),
+                    )
+                    if self.observation_config.observation_provider == "perceived"
+                    else block_oracle_scene(
+                        self.env, terminated=self._last_terminal, truncated=self._last_truncated
+                    )
+                )
+                if self.observation_config.observation_provider == "oracle":
+                    from retroagi.core.smb_scene import preserve_objective
+
+                    self._scene_cache = preserve_objective(self._scene_cache, self.scene_tracker)
+                    if self.env.mario["on_ground"]:
+                        self.scene_tracker.bouncing = False
+                    elif info.get("reward_terms", {}).get("enemy_stomp", 0) > 0:
+                        self.scene_tracker.bouncing = True
+                    self._scene_cache["bouncing"] = getattr(self.scene_tracker, "bouncing", False)
+                self._scene_frame = self.env.steps
+            from retroagi.core.smb_scene import apply_local_target
+
+            geometry = apply_local_target(self._scene_cache)
+            state_vec = np.clip(
+                np.concatenate(
+                    (geometry["features"]["state_vec"], geometry["features"]["motion_vec"])
+                ),
+                -1.0,
+                1.0,
+            )
+            projection_kwargs["availability"] = geometry["availability"]
+            geometry_metadata["smb_geometry"] = geometry
 
         return self.vision_projector.project(
             vision,
             state=torch.as_tensor(state_vec, device=vision.position.device),
+            **projection_kwargs,
             metadata={
-                "smb_observation_schema": "smb_geometry_v1",
+                **geometry_metadata,
+                "smb_observation_schema": self.observation_config.scene_schema,
                 "raw_observation_shape": observation.shape,
                 "observation": self._observation_metadata(vision.position.device),
                 "episode": {

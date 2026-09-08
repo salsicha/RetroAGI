@@ -1,0 +1,279 @@
+"""Shared scene estimation from canonical segmentation, without simulator/RAM inputs.
+
+Unknown quantities have explicit availability slots. This provider is qualified
+separately from oracle geometry; its existence does not certify pixel-based play.
+"""
+
+from types import SimpleNamespace
+
+import numpy as np
+import pygame
+import torch
+
+from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
+from retroagi.core.smb_geometry import geometry_features
+from retroagi.stages.block_smb.local_traversal import LocalObjective, local_objective
+
+
+def component_boxes(mask, minimum_area=1):
+    rgb = np.repeat((mask.astype(np.uint8) * 255)[..., None], 3, axis=2)
+    surface = pygame.surfarray.make_surface(rgb.transpose(1, 0, 2))
+    binary = pygame.mask.from_threshold(surface, (255, 255, 255), (1, 1, 1, 255))
+    if minimum_area <= 1:
+        return binary.get_bounding_rects()
+    return [part.get_bounding_rects()[0] for part in binary.connected_components(minimum_area)]
+
+
+def terrain_rectangles(mask):
+    """Linear scan decomposition; exact runs merge across adjacent rows."""
+    active = {}
+    finished = []
+    for y, row in enumerate(mask):
+        edges = np.diff(np.r_[False, row, False].astype(np.int8))
+        current = {}
+        for left, right in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)):
+            key = (int(left), int(right))
+            rect = active.pop(key, None)
+            if rect is None:
+                rect = pygame.Rect(key[0], y, key[1] - key[0], 1)
+            else:
+                rect.h += 1
+            current[key] = rect
+        finished.extend(active.values())
+        active = current
+    finished.extend(active.values())
+    return [{"rect": r, "moving": False} for r in finished]
+
+
+class PerceivedSMBScene:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.previous = None
+        self.terrain = None
+        self.scroll = 0
+        self.frames = 0
+        self.target = None
+        self.bouncing = False
+        self.previous_vy = 0.0
+        self.objects = {5: [], 6: []}
+
+    def observe(
+        self, vision, *, terminated=False, truncated=False, objective_kind=None, goal_direction=1
+    ):
+        if vision.semantic_logits.shape[0] != 1 or vision.semantic_logits.shape[1] != 7:
+            raise ValueError("Scene tracking requires one canonical seven-class observation")
+        labels = (
+            torch.nn.functional.interpolate(
+                vision.semantic_logits.float(), (240, 256), mode="bilinear", align_corners=False
+            )
+            .argmax(1)[0]
+            .cpu()
+            .numpy()
+        )
+        terrain = labels == 2
+        camera_known = False
+        camera_delta = 0
+        if self.terrain is not None and np.any(np.diff(terrain.astype(np.int8), axis=1)):
+            errors = [
+                (np.mean(self.terrain[:, 8:-8] != terrain[:, 8 - shift : 248 - shift]), shift)
+                for shift in range(-7, 8)
+            ]
+            ordered = sorted(errors)
+            if ordered[0][0] < 0.02 and ordered[1][0] > ordered[0][0]:
+                camera_delta = ordered[0][1]
+                camera_known = True
+        self.scroll += camera_delta
+        boxes = component_boxes(labels == 1, minimum_area=24)
+        visible = bool(boxes)
+        box = max(boxes, key=lambda b: b.w * b.h) if boxes else pygame.Rect(0, 0, 0, 0)
+        # Canonical dense training labels describe the player collision body.
+        # A teacher emitting sprite outlines must be calibrated before this lane
+        # is qualified; do not apply arbitrary engine-only corrections here.
+        old = self.previous
+        vx = (box.x - old[0] + camera_delta) if old and visible and old[2] else 0.0
+        vy = (box.y - old[1]) if old and visible and old[2] else 0.0
+        velocity_known = bool(old and visible and old[2] and camera_known)
+        old_enemies = list(self.objects[5])
+        velocities = {}
+        for cls in (5, 6):
+            current = sorted(
+                component_boxes(labels == cls, minimum_area=12 if cls == 5 else 32),
+                key=lambda b: b.w * b.h,
+                reverse=True,
+            )[:6]
+            previous = list(self.objects[cls])
+            velocities[cls] = {}
+            for rect in current:
+                distances = sorted(
+                    (abs(rect.x - old.x + camera_delta) + abs(rect.y - old.y), i)
+                    for i, old in enumerate(previous)
+                )
+                if camera_known and distances and distances[0][0] <= 8:
+                    _, i = distances[0]
+                    old_rect = previous.pop(i)
+                    velocities[cls][tuple(rect)] = rect.x - old_rect.x + camera_delta
+            self.objects[cls] = current
+        platforms = terrain_rectangles(terrain)
+        fragmented = len(platforms) > 128
+        if fragmented:
+            # Unqualified/noisy segmentation must not create quadratic
+            # obstacle searches or be reported as reliable support geometry.
+            platforms = []
+        moving = [
+            {
+                "rect": b,
+                "moving": True,
+                "move_x": float(b.x),
+                "move_speed": 0.0,
+                "move_dir": 1,
+                "move_min": float(b.x),
+                "move_max": float(b.x),
+            }
+            for b in self.objects[6]
+        ]
+        for p in moving:
+            speed = velocities[6].get(tuple(p["rect"]), 0.0)
+            p.update(move_speed=abs(speed), move_dir=1 if speed >= 0 else -1)
+        platforms.extend(moving)
+        supports = [
+            p
+            for p in platforms
+            if box.right > p["rect"].left
+            and box.left < p["rect"].right
+            and abs(box.bottom - p["rect"].top) <= 2
+        ]
+        grounded = bool(visible and supports and vy >= 0)
+        if grounded:
+            self.bouncing = False
+        elif visible and old and self.previous_vy > 0 and vy < -1:
+            if any(
+                abs(old[1] + box.h - e.top) <= 8 and old[0] + box.w > e.left and old[0] < e.right
+                for e in old_enemies
+            ):
+                self.bouncing = True
+        self.previous_vy = vy
+        mario = dict(
+            x=float(box.x),
+            y=float(box.y),
+            w=box.w,
+            h=box.h,
+            vx=vx,
+            vy=vy,
+            on_ground=grounded,
+            facing=1 if vx >= 0 else -1,
+            skidding=False,
+            coyote_frames=0,
+            jump_buffer=0,
+            _platform=supports[0] if grounded else None,
+        )
+        enemies = [
+            dict(
+                x=b.x,
+                y=b.y,
+                w=b.w,
+                h=b.h,
+                dead=False,
+                speed=0.0,
+                direction=1,
+                patrol_min=b.x,
+                patrol_max=b.x,
+            )
+            for b in self.objects[5]
+        ]
+        for e in enemies:
+            speed = velocities[5].get((e["x"], e["y"], e["w"], e["h"]), 0.0)
+            e.update(speed=abs(speed), direction=1 if speed >= 0 else -1)
+        coins = [dict(rect=b, collected=False) for b in component_boxes(labels == 3)]
+        goals = component_boxes(labels == 4)
+        scene = SimpleNamespace(
+            mario=mario,
+            platforms=platforms,
+            enemies=enemies,
+            coins=coins,
+            goal=(
+                max(goals, key=lambda b: b.w * b.h)
+                if goals
+                else pygame.Rect(0 if goal_direction < 0 else 240, 188, 16, 20)
+            ),
+            world_width=256,
+            height=240,
+            max_walk_speed=3.0,
+            max_fall_speed=8.0,
+            steps=self.frames,
+            _terrain_left=goal_direction < 0,
+            _goal_credited=False,
+        )
+        objective = local_objective(scene) if visible else LocalObjective("finish", 240, 256, 208)
+        if objective_kind == "stomp" and objective.kind == "enemy":
+            from dataclasses import replace
+
+            objective = replace(objective, kind="stomp")
+        if not grounded and self.target is not None:
+            kind, left, right, top = self.target[:4]
+            direction = self.target[4] if len(self.target) > 4 else goal_direction
+            objective = LocalObjective(
+                kind, left - self.scroll, right - self.scroll, top, direction=direction
+            )
+        elif grounded:
+            self.target = (
+                objective.kind,
+                objective.left + self.scroll,
+                objective.right + self.scroll,
+                objective.top,
+                objective.direction,
+            )
+        skill = {
+            "gap": "clear_gap",
+            "mount": "mount_platform",
+            "enemy": "enemy_clear",
+            "retreat": "retreat_recover",
+            "stomp": "enemy_clear",
+        }.get(objective.kind)
+        # Explicit goals are provided by task configuration, not hidden state.
+        features = geometry_features(scene, terminated=terminated, truncated=truncated)
+        features["motion_vec"][[1, 2, 6, 7]] = 0
+        self.previous = (box.x, box.y, visible)
+        self.terrain = terrain.copy()
+        self.frames += 1
+        return dict(
+            scene=scene,
+            features=features,
+            objective=objective,
+            skill_goal=(
+                skill_goal_encoding(skill) if skill else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
+            ),
+            support="ground" if grounded else "air",
+            enemy_contact=False,
+            bouncing=self.bouncing,
+            availability=[
+                int(visible),
+                int(visible and not fragmented),
+                int(velocity_known),
+                int(
+                    bool(enemies)
+                    and all(
+                        tuple(pygame.Rect(e["x"], e["y"], e["w"], e["h"])) in velocities[5]
+                        for e in enemies
+                    )
+                ),
+                0,
+                int(bool(moving) and all(tuple(p["rect"]) in velocities[6] for p in moving)),
+                0,
+                0,
+            ],
+            unavailable_features=[
+                "enemy_vx",
+                "enemy_patrol_bounds",
+                "platform_vx",
+                "platform_bounds",
+                "power_state",
+            ],
+            unsupported_objects=["fragmented_terrain"] if fragmented else [],
+            world_x=box.x + self.scroll,
+            scroll=self.scroll,
+            player_box=list(box),
+            frame=self.frames - 1,
+            observation_provider="perceived",
+        )

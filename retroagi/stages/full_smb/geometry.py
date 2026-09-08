@@ -128,6 +128,7 @@ class NESGeometry:
         self.previous_enemies = {}
         self.previous_platforms = {}
         self.bouncing = False
+        self.previous_states = {}
         self.last_frame = None
         self.cached = None
         self.target = None
@@ -177,11 +178,21 @@ class NESGeometry:
         next_enemies = {}
         next_platforms = {}
         stomped = False
+        next_states = {}
         for slot in range(6):
             flag, kind, state = int(ram[0x0F + slot]), int(ram[0x16 + slot]), int(ram[0x1E + slot])
-            if slot in self.previous_enemies and state & 0x20 and vy < 0:
+            previous_state = getattr(self, "previous_states", {}).get(slot)
+            next_states[slot] = (kind, state)
+            defeated = bool(state & 0x20) or state == 4
+            if (
+                slot in self.previous_enemies
+                and previous_state is not None
+                and defeated
+                and previous_state != (kind, state)
+                and vy < 0
+            ):
                 stomped = True
-            if not flag or flag & 0x80 or state & 0x20:
+            if not flag or flag & 0x80 or state & 0x20 or (kind == 6 and state == 4):
                 continue
             if 0x24 <= kind <= 0x2C:
                 rect = _box(ram, slot + 1, scroll)
@@ -327,6 +338,7 @@ class NESGeometry:
         )
         self.previous = (world_x, box.y)
         self.previous_enemies = next_enemies
+        self.previous_states = next_states
         self.previous_platforms = next_platforms
         self.frames += 1
         self.last_frame, self.cached = frame, result

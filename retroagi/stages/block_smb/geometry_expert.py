@@ -18,6 +18,7 @@ rendering is stubbed out during simulation, so planning has no side effects
 and stays fast.
 """
 
+import copy
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
@@ -63,6 +64,7 @@ def snapshot_env_state(env: MarioScenarioEnv) -> dict[str, Any]:
         "_episode_energy",
     )
     return {
+        "motion": copy.deepcopy(env.motion),
         "mario": mario,
         "support_index": support_index,
         "goal": env.goal.copy() if env.goal is not None else None,
@@ -87,6 +89,7 @@ def snapshot_env_state(env: MarioScenarioEnv) -> dict[str, Any]:
 def restore_env_state(env: MarioScenarioEnv, snapshot: Mapping[str, Any]) -> None:
     """Restore a snapshot produced by :func:`snapshot_env_state`."""
 
+    env.motion = copy.deepcopy(snapshot.get("motion"))
     env.mario = dict(snapshot["mario"])
     env.platforms = [
         {**{k: v for k, v in plat.items() if k != "rect"}, "rect": plat["rect"].copy()}

@@ -257,7 +257,10 @@ def safe_jump_holds(
     env.render = lambda: None
     valid = []
     try:
-        for hold in range(1, 17):
+        from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+
+        menu = NES_JUMP_FRAMES if env.physics_profile == NES_PHYSICS_PROFILE else range(1, 17)
+        for hold in menu:
             restore_env_state(env, snapshot)
             airborne = False
             bouncing = False
@@ -315,6 +318,14 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
         env.render = lambda: None
         for _ in range(max_steps):
             target = local_objective(env)
+            if (
+                (env._goal_on_stomp or env._require_stomp_before_goal)
+                and not env._stomp_credited
+                and target.kind == "enemy"
+            ):
+                from dataclasses import replace
+
+                target = replace(target, kind="stomp")
             if in_jump and env.mario["on_ground"]:
                 in_jump = False
             direction = target.direction
@@ -364,7 +375,7 @@ def normalize_oracle_jumps(scenario: dict, actions: list[int]) -> list[int]:
                 held += 1
             action = (
                 {2: 1, 4: 3, 5: 0}.get(requested, requested)
-                if recovering or held > 16
+                if recovering or held > (32 if env.motion is not None else 16)
                 else requested
             )
             _, _, done, truncated, info = env.step(action)

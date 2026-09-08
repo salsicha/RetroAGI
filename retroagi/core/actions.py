@@ -412,6 +412,7 @@ class SMBAdaptiveController:
         walk_primitives: bool = True,
         wait_duration_scale: float = 4.0,
         max_wait_frames: int = 64,
+        min_wait_frames: int = 4,
     ) -> None:
         if int(default_hold_frames) <= 0:
             raise ValueError("default_hold_frames must be positive")
@@ -455,6 +456,9 @@ class SMBAdaptiveController:
             raise ValueError("max_wait_frames must be positive")
         self.wait_duration_scale = float(wait_duration_scale)
         self.max_wait_frames = int(max_wait_frames)
+        self.min_wait_frames = int(min_wait_frames)
+        if not 1 <= self.min_wait_frames <= self.max_wait_frames:
+            raise ValueError("Invalid minimum wait duration")
         self.reset()
 
     @property
@@ -689,7 +693,7 @@ class SMBAdaptiveController:
             hold_frames = int(
                 min(
                     self.max_wait_frames,
-                    max(4, round(hold_frames * self.wait_duration_scale)),
+                    max(self.min_wait_frames, round(hold_frames * self.wait_duration_scale)),
                 )
             )
         self.reset()

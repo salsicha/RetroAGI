@@ -23,8 +23,12 @@ class SMBRuntimeContract:
     hold_run_button: bool = True
     visual_tokens: str = "native_unaligned"
     geometry_source: str = "nes_collision_ram"
+    observation_provider: str = "oracle"
     jump_hold_frames: tuple[int, ...] = tuple(range(1, 17))
     physics_profile: str = "unadapted"
+    wait_duration_scale: float = 4.0
+    min_wait_frames: int = 4
+    max_wait_frames: int = 64
 
     def __post_init__(self):
         object.__setattr__(self, "jump_hold_frames", tuple(self.jump_hold_frames))
@@ -36,14 +40,28 @@ class SMBRuntimeContract:
             raise ValueError("Jump-duration mapping must be monotone")
         if self.adaptive_duration and self.jump_hold_frames != tuple(range(1, 17)):
             raise ValueError("Calibrated durations require fixed commitments")
-        if self.schema != SCHEMA:
+        if self.schema not in (SCHEMA, "smb_scene_v2"):
             raise ValueError(f"Unsupported SMB observation schema: {self.schema}")
         if self.frame_skip != 1:
             raise ValueError("SMB geometry contract requires one emulator frame per decision")
-        if self.visual_tokens not in ("native_unaligned", "native_adapted", "zero_ablation"):
+        if self.visual_tokens not in (
+            "native_unaligned",
+            "native_adapted",
+            "zero_ablation",
+            "canonical",
+        ):
             raise ValueError("Unsupported visual feature adapter")
-        if self.geometry_source != "nes_collision_ram":
-            raise ValueError("Unsupported geometry provider")
+        if self.observation_provider not in ("oracle", "perceived"):
+            raise ValueError("Unsupported observation provider")
+        if self.observation_provider == "perceived" and self.schema != "smb_scene_v2":
+            raise ValueError("Perceived geometry requires canonical scene interfaces")
+        expected_source = (
+            ("canonical_pixels" if self.observation_provider == "perceived" else "canonical_oracle")
+            if self.schema == "smb_scene_v2"
+            else "nes_collision_ram"
+        )
+        if self.geometry_source != expected_source:
+            raise ValueError("Geometry provider does not match observation contract")
 
     @classmethod
     def from_block_config(cls, config):
@@ -70,6 +88,14 @@ def attach_runtime(model, manifest):
         return
     contract = SMBRuntimeContract(**manifest)
     model.smb_runtime_contract = contract
+    if contract.schema == "smb_scene_v2" and hasattr(model, "motor_controller"):
+        import torch
+
+        model.motor_controller.duration_bin_values.copy_(
+            torch.tensor(
+                contract.jump_hold_frames, device=model.motor_controller.duration_bin_values.device
+            )
+        )
     if hasattr(model, "ranked_candidate_search"):
         model.ranked_candidate_search = False
     if hasattr(model, "deterministic_critic_slots"):
@@ -90,9 +116,13 @@ def make_smb_executor(model, *, deterministic=True, seed=None):
         walk_primitives=contract.walk_primitives,
         duration_sampling=not deterministic,
         duration_seed=seed,
+        wait_duration_scale=contract.wait_duration_scale,
+        min_wait_frames=contract.min_wait_frames,
+        max_wait_frames=contract.max_wait_frames,
     )
     executor.jump_hold_frames = contract.jump_hold_frames
     executor.engine_support = contract.engine_support
+    executor.nes_press_edges = contract.schema == "smb_scene_v2"
     model.smb_executor = executor
     return executor
 
@@ -110,6 +140,14 @@ class ContractExecutor(SMBParameterizedPrimitiveExecutor):
     def execute(self, action, *, batch=None, **kwargs):
         self._mapping_jump = int(action) in (2, 4, 5)
         metadata = (batch.metadata or {}).get("smb_geometry", {}) if batch else {}
+        if (
+            getattr(self, "nes_press_edges", False)
+            and self._active_jump is not None
+            and self._released
+            and self._left_support
+            and metadata.get("support") in ("ground", "platform")
+        ):
+            self.reset()
         if metadata.get("bouncing"):
             from retroagi.core.actions import SMBPrimitiveExecution, smb_jump_release_action
 

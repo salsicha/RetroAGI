@@ -331,6 +331,9 @@ class FullSMBEmulatorState:
     frame_mask: tuple[bool, ...]
     geometry_state: Any = None
     geometry_frame: int = 0
+    perceived_state: Any = None
+    perceived_cache: Any = None
+    scene_start_frame: int = 0
 
 
 @dataclass(frozen=True)
@@ -577,6 +580,9 @@ class FullSMBStage:
         self.smb_runtime_contract = None
         self.smb_geometry = None
         self._geometry_frame = 0
+        self._scene_start_frame = 0
+        self.scene_tracker = None
+        self._perceived_cache = None
 
     @property
     def buttons(self) -> tuple[str, ...]:
@@ -586,6 +592,10 @@ class FullSMBStage:
         if self.smb_geometry is not None:
             self.smb_geometry.reset()
         self._geometry_frame = 0
+        self._scene_start_frame = 0
+        if self.scene_tracker is not None:
+            self.scene_tracker.reset()
+        self._perceived_cache = None
         result = self.backend.reset(seed=seed)
         observation = self._rgb_observation(result.observation)
         self.last_info = self._annotated_info(result.info, terminated=False, truncated=False)
@@ -700,6 +710,11 @@ class FullSMBStage:
             frame_mask=tuple(bool(item) for item in self._frame_mask),
             geometry_state=copy.deepcopy(self.smb_geometry.__dict__) if self.smb_geometry else None,
             geometry_frame=self._geometry_frame,
+            perceived_state=(
+                copy.deepcopy(self.scene_tracker.__dict__) if self.scene_tracker else None
+            ),
+            perceived_cache=copy.deepcopy(self._perceived_cache),
+            scene_start_frame=getattr(self, "_scene_start_frame", 0),
         )
 
     def load_emulator_state(self, state: FullSMBEmulatorState) -> np.ndarray:
@@ -711,6 +726,12 @@ class FullSMBStage:
             raise ValueError("saved frame stack is larger than this stage config")
         self.backend.set_state(copy.deepcopy(state.backend_state))
         self._geometry_frame = getattr(state, "geometry_frame", 0)
+        self._scene_start_frame = getattr(state, "scene_start_frame", 0)
+        self._perceived_cache = copy.deepcopy(getattr(state, "perceived_cache", None))
+        if self.scene_tracker is not None:
+            self.scene_tracker.reset()
+            if getattr(state, "perceived_state", None) is not None:
+                self.scene_tracker.__dict__ = copy.deepcopy(state.perceived_state)
         if self.smb_geometry is not None:
             geometry_state = getattr(state, "geometry_state", None)
             if geometry_state is None:
@@ -745,26 +766,72 @@ class FullSMBStage:
             parameter.requires_grad for parameter in self.vision.parameters()
         )
         with torch.set_grad_enabled(torch.is_grad_enabled() and vision_allows_grad):
-            vision = self.vision.encode(processed_observation)
+            if (
+                self.smb_runtime_contract is not None
+                and self.smb_runtime_contract.schema == "smb_scene_v2"
+            ):
+                from retroagi.core.smb_scene import canonical_rgb
+
+                vision = self.vision.encode(canonical_rgb(observation))
+            else:
+                vision = self.vision.encode(processed_observation)
 
         shared_metadata = {}
+        projection_kwargs = {}
         state = self._encoded_state_vec(info)
         if self.smb_runtime_contract is not None:
             from .geometry import remap_full_vision
 
-            geometry = self.smb_geometry.observe(
-                self.env.get_ram(),
-                frame=self._geometry_frame,
-                terminated=self._last_terminal,
-                truncated=self._last_truncated,
-            )
-            vision = remap_full_vision(
-                vision, visual_tokens=self.smb_runtime_contract.visual_tokens
-            )
+            if self.smb_runtime_contract.schema == "smb_scene_v2":
+                from retroagi.core.smb_scene import canonical_vision
+
+                vision = canonical_vision(vision, "full")
+            else:
+                vision = remap_full_vision(
+                    vision, visual_tokens=self.smb_runtime_contract.visual_tokens
+                )
+            if self.smb_runtime_contract.observation_provider == "perceived":
+                if (
+                    self._perceived_cache is None
+                    or self._perceived_cache[0] != self._geometry_frame
+                ):
+                    geometry = self.scene_tracker.observe(
+                        vision, terminated=self._last_terminal, truncated=self._last_truncated
+                    )
+                    self._perceived_cache = (self._geometry_frame, geometry)
+                geometry = self._perceived_cache[1]
+            else:
+                geometry = self.smb_geometry.observe(
+                    self.env.get_ram(),
+                    frame=self._geometry_frame,
+                    terminated=self._last_terminal,
+                    truncated=self._last_truncated,
+                )
+            if self.smb_runtime_contract.schema == "smb_scene_v2":
+                projection_kwargs["availability"] = geometry.get("availability") or [
+                    1,
+                    1,
+                    1,
+                    1,
+                    0,
+                    int("bridge_vx" not in geometry.get("unavailable_features", [])),
+                    0,
+                    1,
+                ]
+            if self.smb_runtime_contract.schema == "smb_scene_v2":
+                from retroagi.core.smb_scene import apply_local_target
+
+                geometry = apply_local_target(geometry)
+                geometry["observation_provider"] = self.smb_runtime_contract.observation_provider
             state = geometry["features"]["state_vec"]
             if self.smb_runtime_contract.motion_observations:
                 state = np.concatenate((state, geometry["features"]["motion_vec"]))
             state = np.clip(state, -1.0, 1.0)
+            if self.smb_runtime_contract.schema == "smb_scene_v2":
+                state[[7, 8, 28, 29, 33, 34]] = 0
+                state[14] = min(
+                    (self._geometry_frame - getattr(self, "_scene_start_frame", 0)) / 200.0, 1.0
+                )
             shared_metadata = {
                 "smb_geometry": geometry,
                 "smb_observation_schema": self.smb_runtime_contract.schema,
@@ -772,6 +839,7 @@ class FullSMBStage:
         return self.vision_projector.project(
             vision,
             state=state,
+            **projection_kwargs,
             metadata={
                 **shared_metadata,
                 "raw_observation_shape": observation.shape,
@@ -806,6 +874,15 @@ class FullSMBStage:
         if not callable(getattr(self.env, "get_ram", None)):
             raise ValueError("Shared SMB runtime requires the NES collision geometry provider")
         self.smb_runtime_contract = contract
+        if contract.schema == "smb_scene_v2":
+            from retroagi.core.smb_scene import CanonicalSMBProjector
+
+            if not contract.motion_observations:
+                raise ValueError("Canonical scene interface requires motion observations")
+            self.vision_projector = CanonicalSMBProjector(self.spec)
+            from retroagi.core.smb_tracking import PerceivedSMBScene
+
+            self.scene_tracker = PerceivedSMBScene()
         self.smb_geometry = NESGeometry()
 
     def close(self) -> None:

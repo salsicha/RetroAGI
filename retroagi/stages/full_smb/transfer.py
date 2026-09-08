@@ -223,6 +223,29 @@ def load_transferred_full_smb_policy(
     """Load a checkpoint produced by `transfer_block_smb_checkpoint_to_full_smb`."""
 
     path = Path(checkpoint_path)
+    if path.is_dir() and (path / "bundle.json").exists():
+        from retroagi.core.smb_components import load_bundle
+
+        model, vision, manifest = load_bundle(path, device=device)
+        if vision is None or model.smb_runtime_contract.observation_provider != "perceived":
+            raise ValueError(
+                "Full pixel playback requires a perceived bundle with a canonical ViT; use the curriculum tool for oracle diagnostics"
+            )
+        return FullSMBTransferResult(
+            model=model,
+            vision=vision,
+            checkpoint={
+                "config": {"smb_runtime_contract": model.smb_runtime_contract.manifest()},
+                "metadata": manifest,
+            },
+            source_checkpoint={},
+            source_policy_path=path,
+            source_vision_path=None,
+            full_smb_vision_path=path / "perception.pth",
+            output_path=path,
+            missing_model_keys=(),
+            source_transfer_gate={"full_level_qualified": False, "component_compatible": True},
+        )
     checkpoint = load_checkpoint(path, map_location=device)
     _validate_transfer_checkpoint(checkpoint, path)
     architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)

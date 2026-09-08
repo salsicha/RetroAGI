@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pygame
 
+from retroagi.core.smb_physics import LEGACY_PHYSICS_PROFILE, NES_PHYSICS_PROFILE, NESPlayerMotion
+
 from .stomp import stomp_collision_geometry
 
 # ── Gym-compatible space stubs (no gym dependency required) ──────────────────
@@ -173,11 +175,15 @@ class MarioScenarioEnv:
         height: int = 240,
         world_width: int = None,
         reward_config: BlockSMBRewardConfig = BlockSMBRewardConfig(),
+        physics_profile: str = LEGACY_PHYSICS_PROFILE,
     ):
         self.width = width
         self.height = height
         self.world_width = world_width if world_width is not None else width
         self.reward_config = reward_config
+        self._default_physics_profile = physics_profile
+        self.physics_profile = physics_profile
+        self.motion = None
 
         # Physics
         self.gravity = 0.5
@@ -264,6 +270,10 @@ class MarioScenarioEnv:
             }
 
         self.world_width = scenario.get("world_width", self.width)
+        self.physics_profile = scenario.get("physics_profile", self._default_physics_profile)
+        if self.physics_profile not in (LEGACY_PHYSICS_PROFILE, NES_PHYSICS_PROFILE):
+            raise ValueError("Unsupported Block SMB physics profile")
+        self.motion = NESPlayerMotion() if self.physics_profile == NES_PHYSICS_PROFILE else None
 
         # Mario state
         self.mario = {
@@ -281,6 +291,18 @@ class MarioScenarioEnv:
             "jump_buffer": 0,  # counts down after jump pressed in air
             "jump_held": False,  # was jump action present last frame?
         }
+        if self.motion is not None:
+            self.mario["w"], self.mario["h"] = 10, 12
+            self.max_walk_speed, self.max_fall_speed = 2.5, 4.5
+            if "mario_velocity" in scenario:
+                vx, vy = scenario["mario_velocity"]
+                self.motion.x_speed = int(round(float(vx) * 16))
+                self.motion.y_speed = int(float(vy))
+                self.motion.y_force = int((float(vy) % 1) * 256)
+                self.mario["vx"], self.mario["vy"] = float(vx), float(vy)
+                self.motion.moving = 1 if vx > 0 else -1 if vx < 0 else 0
+        else:
+            self.max_walk_speed, self.max_fall_speed = 3.0, 8.0
         self._max_x_reached = self.mario["x"]
         self._progress_per_pixel = float(
             scenario.get("reward_progress_per_pixel", self.reward_config.progress_per_pixel)
@@ -319,7 +341,12 @@ class MarioScenarioEnv:
         # Enemies — accept list or dict; optional 5th element = speed
         self.enemies = []
         for e in scenario.get("enemies", []):
-            self.enemies.append(self._parse_enemy(e))
+            enemy = self._parse_enemy(e)
+            if self.motion is not None:
+                # NES Goomba damage body is 10x6, four pixels above its
+                # physical feet. Background support is a separate probe.
+                enemy.update(w=10, h=6, foot_offset=4, y=enemy["y"] + 4)
+            self.enemies.append(enemy)
 
         self.goal = pygame.Rect(*scenario["goal"]) if "goal" in scenario else None
         # Keep terrain coordinates stable through a small finish overshoot.
@@ -445,70 +472,92 @@ class MarioScenarioEnv:
             reward_terms["energy"] += self._energy_jump
             self._episode_energy += self._energy_jump
 
-        # ── 1. Horizontal momentum ────────────────────────────────────────────
-        vx = self.mario["vx"]
-        self.mario["skidding"] = False
+        if self.motion is not None:
+            dx, dy, jumped = self.motion.advance(
+                direction=move_x,
+                jump=jump_pressed,
+                grounded=self.mario["on_ground"],
+                y=self.mario["y"],
+                run=move_x > 0,
+            )
+            self.mario["vx"] = self.motion.x_speed / 16
+            self.mario["vy"] = self.motion.y_speed + self.motion.y_force / 256
+            self.mario["facing"] = self.motion.facing
+            self.mario["skidding"] = bool(move_x and move_x * self.motion.x_speed < 0)
+            self.mario["coyote_frames"] = self.mario["jump_buffer"] = 0
+            self.mario["jump_held"] = jump_pressed
+            if jumped:
+                self.mario["on_ground"] = False
+                self._airborne_started_with_jump = True
+            # Inclusive foot contact preserves support at zero displacement;
+            # a fractional position probe would alter the next ledge departure.
+            if self.mario["on_ground"]:
+                dy = 0.0
+        else:
+            # ── 1. Horizontal momentum ────────────────────────────────────────────
+            vx = self.mario["vx"]
+            self.mario["skidding"] = False
 
-        if move_x != 0:
-            self.mario["facing"] = move_x
-            if (move_x > 0 and vx < 0) or (move_x < 0 and vx > 0):
-                self.mario["skidding"] = True
-                vx += move_x * self.skid_decel
+            if move_x != 0:
+                self.mario["facing"] = move_x
+                if (move_x > 0 and vx < 0) or (move_x < 0 and vx > 0):
+                    self.mario["skidding"] = True
+                    vx += move_x * self.skid_decel
+                else:
+                    vx += move_x * self.accel
+                vx = max(-self.max_walk_speed, min(self.max_walk_speed, vx))
             else:
-                vx += move_x * self.accel
-            vx = max(-self.max_walk_speed, min(self.max_walk_speed, vx))
-        else:
-            if vx > 0:
-                vx = max(0.0, vx - self.decel)
-            elif vx < 0:
-                vx = min(0.0, vx + self.decel)
+                if vx > 0:
+                    vx = max(0.0, vx - self.decel)
+                elif vx < 0:
+                    vx = min(0.0, vx + self.decel)
 
-        self.mario["vx"] = vx
+            self.mario["vx"] = vx
 
-        # ── 2. Variable jump height (cut on release) ──────────────────────────
-        was_jump_held = self.mario["jump_held"]
-        self.mario["jump_held"] = jump_pressed
+            # ── 2. Variable jump height (cut on release) ──────────────────────────
+            was_jump_held = self.mario["jump_held"]
+            self.mario["jump_held"] = jump_pressed
 
-        if was_jump_held and not jump_pressed and self.mario["vy"] < 0:
-            # Jump released early — cut upward velocity
-            self.mario["vy"] *= JUMP_CUT_FACTOR
-
-        # ── 3. Jump with coyote time + jump buffer ────────────────────────────
-        if jump_pressed:
-            if not was_jump_held:
-                # Fresh press — register in buffer regardless of ground state
-                self.mario["jump_buffer"] = JUMP_BUFFER_FRAMES
-            # NOTE: while the button stays held the buffer deliberately does not
-            # decay, so a held jump re-fires on landing. This diverges from real
-            # SMB (holding A does not re-jump) but the scripted teacher
-            # curriculum and Monte Carlo oracles are tuned to this behavior —
-            # see KNOWN_REAL_SMB_DIVERGENCES and the action-semantics tests.
-        else:
-            self.mario["jump_buffer"] = max(0, self.mario["jump_buffer"] - 1)
-
-        can_jump = self.mario["on_ground"] or self.mario["coyote_frames"] > 0
-        wants_jump = self.mario["jump_buffer"] > 0
-
-        if can_jump and wants_jump:
-            self.mario["vy"] = self.jump_power
-            if not jump_pressed:
-                # Buffered liftoff after the button was already released: apply
-                # the variable-height cut at launch so a short tap yields a
-                # short hop. Without this, the release transition happens
-                # before liftoff, the cut never fires, and a 4-frame tap
-                # produced a full-height jump -- breaking the monotone
-                # hold-duration -> jump-height mapping the B-level primitive
-                # curriculum relies on.
+            if was_jump_held and not jump_pressed and self.mario["vy"] < 0:
+                # Jump released early — cut upward velocity
                 self.mario["vy"] *= JUMP_CUT_FACTOR
-            self.mario["on_ground"] = False
-            self.mario["coyote_frames"] = 0
-            self.mario["jump_buffer"] = 0
-            self._airborne_started_with_jump = True
 
-        # ── 4. Gravity ────────────────────────────────────────────────────────
-        self.mario["vy"] += self.gravity
-        if self.mario["vy"] > self.max_fall_speed:
-            self.mario["vy"] = self.max_fall_speed
+            # ── 3. Jump with coyote time + jump buffer ────────────────────────────
+            if jump_pressed:
+                if not was_jump_held:
+                    # Fresh press — register in buffer regardless of ground state
+                    self.mario["jump_buffer"] = JUMP_BUFFER_FRAMES
+                # NOTE: while the button stays held the buffer deliberately does not
+                # decay, so a held jump re-fires on landing. This diverges from real
+                # SMB (holding A does not re-jump) but the scripted teacher
+                # curriculum and Monte Carlo oracles are tuned to this behavior —
+                # see KNOWN_REAL_SMB_DIVERGENCES and the action-semantics tests.
+            else:
+                self.mario["jump_buffer"] = max(0, self.mario["jump_buffer"] - 1)
+
+            can_jump = self.mario["on_ground"] or self.mario["coyote_frames"] > 0
+            wants_jump = self.mario["jump_buffer"] > 0
+
+            if can_jump and wants_jump:
+                self.mario["vy"] = self.jump_power
+                if not jump_pressed:
+                    # Buffered liftoff after the button was already released: apply
+                    # the variable-height cut at launch so a short tap yields a
+                    # short hop. Without this, the release transition happens
+                    # before liftoff, the cut never fires, and a 4-frame tap
+                    # produced a full-height jump -- breaking the monotone
+                    # hold-duration -> jump-height mapping the B-level primitive
+                    # curriculum relies on.
+                    self.mario["vy"] *= JUMP_CUT_FACTOR
+                self.mario["on_ground"] = False
+                self.mario["coyote_frames"] = 0
+                self.mario["jump_buffer"] = 0
+                self._airborne_started_with_jump = True
+
+            # ── 4. Gravity ────────────────────────────────────────────────────────
+            self.mario["vy"] += self.gravity
+            if self.mario["vy"] > self.max_fall_speed:
+                self.mario["vy"] = self.max_fall_speed
 
         # ── 5. Update moving platforms ────────────────────────────────────────
         for plat in self.platforms:
@@ -528,7 +577,7 @@ class MarioScenarioEnv:
             plat["delta_x"] = plat["rect"].x - old_px
 
         # ── 6. Resolve X collisions ───────────────────────────────────────────
-        self.mario["x"] += self.mario["vx"]
+        self.mario["x"] += dx if self.motion is not None else self.mario["vx"]
         mario_rect = pygame.Rect(self.mario["x"], self.mario["y"], self.mario["w"], self.mario["h"])
 
         for plat in self.platforms:
@@ -547,11 +596,13 @@ class MarioScenarioEnv:
                     mario_rect.right = r.left
                 self.mario["x"] = mario_rect.x
                 self.mario["vx"] = 0
+                if self.motion is not None:
+                    self.motion.wall_contact()
 
         # ── 7. Resolve Y collisions ───────────────────────────────────────────
         previous_y = self.mario["y"]
         previous_bottom = previous_y + self.mario["h"]
-        self.mario["y"] += self.mario["vy"]
+        self.mario["y"] += dy if self.motion is not None else self.mario["vy"]
         mario_rect.y = self.mario["y"]
         prev_on_ground = self.mario["on_ground"]
         self.mario["on_ground"] = False
@@ -580,6 +631,8 @@ class MarioScenarioEnv:
                     mario_rect.top = r.bottom
                 self.mario["y"] = mario_rect.y
                 self.mario["vy"] = 0
+                if self.motion is not None:
+                    self.motion.vertical_contact()
 
         # ── 8. Carry Mario on moving platform ────────────────────────────────
         if (
@@ -592,7 +645,7 @@ class MarioScenarioEnv:
 
         # ── 9. Coyote time bookkeeping ────────────────────────────────────────
         if self.mario["on_ground"]:
-            self.mario["coyote_frames"] = COYOTE_FRAMES
+            self.mario["coyote_frames"] = 0 if self.motion is not None else COYOTE_FRAMES
             self._airborne_started_with_jump = False
         else:
             self.mario["coyote_frames"] = max(0, self.mario["coyote_frames"] - 1)
@@ -664,6 +717,9 @@ class MarioScenarioEnv:
                 reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
                 self.score += 5
                 self.mario["vy"] = self.jump_power * 0.55
+                if self.motion is not None:
+                    self.motion.bounce()
+                    self.mario["vy"] = self.motion.y_speed
                 self.mario["on_ground"] = False
                 if self._goal_on_stomp:
                     # Landing on the enemy IS the goal: grant goal credit so
@@ -789,7 +845,7 @@ class MarioScenarioEnv:
                 pygame.draw.ellipse(self.screen, (255, 215, 0), sr)
 
         # Goal (bright green)
-        if self.goal:
+        if self.goal and getattr(self, "render_goal", True):
             sr = pygame.Rect(self.goal.x - cam, self.goal.y, self.goal.w, self.goal.h)
             pygame.draw.rect(self.screen, (0, 255, 0), sr)
 
@@ -922,7 +978,7 @@ class MarioScenarioEnv:
         if enemy["edge_aware"] and enemy["on_ground"]:
             # Peek one pixel ahead at feet level; turn if no platform below
             peek_x = enemy["x"] + step_x + (enemy["w"] if enemy["direction"] > 0 else -1)
-            feet_y = enemy["y"] + enemy["h"] + 1
+            feet_y = enemy["y"] + enemy["h"] + enemy.get("foot_offset", 0) + 1
             supported = any(
                 r.left <= peek_x <= r.right and r.top <= feet_y <= r.bottom for r in platform_rects
             )
@@ -943,7 +999,9 @@ class MarioScenarioEnv:
         # Y — apply and resolve
         enemy["y"] += enemy["vy"]
         enemy["on_ground"] = False
-        er = pygame.Rect(enemy["x"], enemy["y"], enemy["w"], enemy["h"])
+        er = pygame.Rect(
+            enemy["x"], enemy["y"], enemy["w"], enemy["h"] + enemy.get("foot_offset", 0)
+        )
         for r in platform_rects:
             if er.colliderect(r):
                 if enemy["vy"] >= 0:

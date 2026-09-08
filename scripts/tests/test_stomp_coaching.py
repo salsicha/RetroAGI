@@ -284,7 +284,11 @@ def test_ranked_candidate_conditioning_preserves_actor_policy_gradients():
         assert model.last_selected_action_id is not None
         assert output[0] == model.last_selected_action_id
         assert int(model.last_motor_primitives.button_combo_logits[0, -1].argmax()) == output[0]
-        (-output[1]).backward()
+        # Deterministic evaluation carries no on-policy REINFORCE credit.
+        assert output[1].item() == 0 and not output[1].requires_grad
+        # Search must still preserve the raw actor logits for supervised use.
+        logits = model.last_policy_logits_a[0, -1, :6]
+        (-torch.log_softmax(logits, dim=-1)[output[0]]).backward()
         grad = model.agent.fc_out_A.weight.grad
         assert grad is not None and torch.isfinite(grad).all() and grad.abs().sum() > 0
     finally:
