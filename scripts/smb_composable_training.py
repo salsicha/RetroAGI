@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import json
 import os
-from dataclasses import asdict
+from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -66,7 +66,7 @@ def samples(config, split, count, *, offset=0, families=None, log=None):
 def collect(model, cases, vision, *, log):
     rows = []
     episodes = []
-    for sample in cases:
+    for number, sample in enumerate(cases, 1):
         stage = block_stage(sample, vision=vision, device=next(model.parameters()).device)
         try:
             data, result = collect_case(
@@ -92,6 +92,16 @@ def collect(model, cases, vision, *, log):
             rows.extend(data)
         finally:
             stage.env.close()
+        if number == 1 or number % 10 == 0:
+            log(
+                dict(
+                    phase="demonstrations",
+                    completed=number,
+                    attempted=len(cases),
+                    family=sample.family,
+                    frames=len(rows),
+                )
+            )
     log(
         dict(
             phase="demonstrations",
@@ -104,6 +114,71 @@ def collect(model, cases, vision, *, log):
     if missing:
         raise QualificationFailure(f"No executor-verified demonstrations for {sorted(missing)}")
     return rows_to_data(rows), episodes
+
+
+def concatenate_demonstrations(left, right):
+    return type(left)(
+        **{f.name: torch.cat((getattr(left, f.name), getattr(right, f.name))) for f in fields(left)}
+    )
+
+
+def bootstrap_shared(model, optimizer, config, vision, *, log):
+    """Train the same core as all-family demonstration batches become available."""
+    total = config["demonstration_layouts_per_family"]
+    chunk = config.get("demonstration_chunk_layouts_per_family", 3)
+    if total < 1 or chunk < 1:
+        raise ValueError("Demonstration counts must be positive")
+    chunks = (total + chunk - 1) // chunk
+    data, episodes = None, []
+    completed = 0
+    for number, offset in enumerate(range(0, total, chunk), 1):
+        count = min(chunk, total - offset)
+        log(
+            dict(
+                phase="full_volume_bootstrap",
+                stage="collecting_demonstrations",
+                batch=number,
+                batches=chunks,
+                updates=completed,
+            )
+        )
+        fresh, fresh_episodes = collect(
+            model,
+            samples(config, "train", count, offset=10000 + offset),
+            vision,
+            log=log,
+        )
+        start = len(data.action) if data is not None else 0
+        episodes.extend({**e, "start": e["start"] + start} for e in fresh_episodes)
+        data = fresh if data is None else concatenate_demonstrations(data, fresh)
+        # Keep the configured total update budget, including a partial last batch.
+        updates = number * config["bootstrap_updates"] // chunks - completed
+        if updates:
+            loss = fit_demonstrations(
+                model,
+                optimizer,
+                data,
+                steps=updates,
+                seed=config["seed"] + number - 1,
+                decision_durations_only=True,
+                walk_durations=False,
+                prioritized=True,
+            )
+            completed += updates
+            log(
+                dict(
+                    phase="full_volume_bootstrap",
+                    stage="training",
+                    batch=number,
+                    batches=chunks,
+                    updates=completed,
+                    total_updates=config["bootstrap_updates"],
+                    loss=loss,
+                    frames=len(data.action),
+                    layouts_per_family=offset + count,
+                )
+            )
+    return data, episodes
 
 
 def evaluate(model, cases, vision, *, max_steps=320):
@@ -201,93 +276,34 @@ def run(config, output):
             raise QualificationFailure(
                 "Block collision-perception gate failed; see per-class and edge metrics"
             )
-        # Each family starts with independent fresh core weights. Validation
-        # controls promotion; the test split is evaluated once after promotion.
-        family_reports = {}
-        for family in config["families"]:
-            log(dict(phase="family_learning", family=family))
-            torch.manual_seed(config["seed"])
-            model = make_model(
-                hidden_dim=config["hidden_dim"], device=config["device"], provider="perceived"
+        log(
+            dict(
+                phase="full_volume_initialization",
+                epochs=config["epochs"],
+                families=config["families"],
             )
-            data, episodes = collect(
-                model,
-                samples(config, "train", config["family_train_layouts"], families=[family]),
-                vision,
-                log=log,
-            )
-            optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
-            checks = samples(config, "validation", config["family_eval_layouts"], families=[family])
-            streak = 0
-            for round_index in range(config["family_rounds"]):
-                loss = fit_demonstrations(
-                    model,
-                    optimizer,
-                    data,
-                    steps=config["family_updates"],
-                    seed=config["seed"] + round_index,
-                    decision_durations_only=True,
-                    walk_durations=False,
-                    prioritized=True,
-                )
-                result = evaluate(model, checks, vision)
-                streak = streak + 1 if result["minimum"] >= config["family_gate"] else 0
-                log(
-                    dict(
-                        phase="family_learning",
-                        family=family,
-                        round=round_index + 1,
-                        loss=loss,
-                        minimum=result["minimum"],
-                        rates=result["rates"],
-                        successive_passes=streak,
-                    )
-                )
-                if streak >= 2:
-                    break
-            family_reports[family] = dict(validation=result, passed=streak >= 2)
-            if streak >= 2:
-                test = evaluate(
-                    model,
-                    samples(config, "test", config["family_eval_layouts"], families=[family]),
-                    vision,
-                )
-                family_reports[family].update(
-                    test=test, passed=test["minimum"] >= config["family_gate"]
-                )
-            write_json(output / "family_learning.json", family_reports)
-        if not all(r["passed"] for r in family_reports.values()):
-            raise QualificationFailure(
-                "Family learnability gate failed; shared full-volume phase withheld"
-            )
-        log(dict(phase="full_volume_initialization", epochs=config["epochs"]))
-        # Fresh core again: independent family qualifiers are not a hidden warm start.
+        )
+        # One fresh shared core learns every family; validation does not gate
+        # the start of training or reset this model between families.
         torch.manual_seed(config["seed"])
         model = make_model(
             hidden_dim=config["hidden_dim"], device=config["device"], provider="perceived"
         )
         optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
-        data, episodes = collect(
-            model,
-            samples(config, "train", config["demonstration_layouts_per_family"], offset=10000),
-            vision,
-            log=log,
-        )
+        data, episodes = bootstrap_shared(model, optimizer, config, vision, log=log)
         save_dataset(data, output / "demonstrations.pth", episodes=episodes, provider="perceived")
-        fit_demonstrations(
-            model,
-            optimizer,
-            data,
-            steps=config["bootstrap_updates"],
-            seed=config["seed"],
-            decision_durations_only=True,
-            walk_durations=False,
-            prioritized=True,
-        )
         validation = samples(
             config, "validation", config["validation_layouts_per_family"], offset=10000
         )
         for epoch in range(1, config["epochs"] + 1):
+            log(
+                dict(
+                    phase="full_volume_epoch",
+                    epoch=epoch,
+                    epochs=config["epochs"],
+                    stage="collecting_demonstrations",
+                )
+            )
             new = samples(
                 config,
                 "train",
@@ -295,9 +311,7 @@ def run(config, output):
                 offset=20000 + epoch * 1000,
             )
             fresh, _ = collect(model, new, vision, log=log)
-            combined = type(data)(
-                **{k: torch.cat((getattr(data, k), getattr(fresh, k))) for k in asdict(data)}
-            )
+            combined = concatenate_demonstrations(data, fresh)
             loss = fit_demonstrations(
                 model,
                 optimizer,

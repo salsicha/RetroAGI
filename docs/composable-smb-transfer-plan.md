@@ -194,10 +194,14 @@ supervision/evaluation evidence in the perceived lane, not an undeclared input.
 
 ## Phase 4 — Train and qualify the shared Block core
 
-Start with a small learnability run under the new physics/representation, then
-revisit each family, then train the full generated curriculum only after gates
-pass. Cover varied speeds, button histories, camera positions, perceptual errors,
-and transitions between skills. Preserve physical ground truth for labels while
+Start the full generated curriculum with one fresh shared core after perception
+preparation. The user's direct-restart instruction supersedes the earlier proposal
+to train separate family models as a prerequisite. Interleave shared bootstrap
+updates with all-family demonstration batches, then train all 30 shared epochs.
+Measure every family on held-out layouts during that run; low intermediate scores
+are diagnostic and do not block the next epoch. Final qualification governs
+emulator promotion. Cover varied speeds, button histories, camera positions,
+perceptual errors, and transitions between skills. Preserve physical ground truth for labels while
 matching the observations actually available during playback.
 
 Train the LSTM on ordered transitions with explicit primitive/button context,

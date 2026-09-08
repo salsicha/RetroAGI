@@ -33,10 +33,6 @@
   "perception_layouts_per_family": 12,
   "perception_validation_per_family": 3,
   "perception_updates": 8000,
-  "family_train_layouts": 18,
-  "family_eval_layouts": 30,
-  "family_rounds": 12,
-  "family_updates": 500,
   "family_gate": 0.99,
   "demonstration_layouts_per_family": 180,
   "bootstrap_updates": 10000,
@@ -47,5 +43,6 @@
   "emulator_learning_updates": 1000,
   "sequence_layouts_per_family": 3,
   "emulator_train_variations": 18,
-  "emulator_eval_variations": 100
+  "emulator_eval_variations": 100,
+  "demonstration_chunk_layouts_per_family": 3
 }
