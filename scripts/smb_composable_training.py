@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from retroagi.core.smb_learning import (
     block_stage,
     collect_case,
     collect_reactive_case,
+    collect_stomp_recovery_case,
     make_model,
     playback,
     rows_to_data,
@@ -111,6 +113,26 @@ def collect(model, cases, vision, *, log):
                     )
                 )
                 rows.extend(alternative)
+                if sample.family == "enemy_stomp":
+                    recovery, recovery_result = collect_stomp_recovery_case(
+                        model,
+                        stage,
+                        family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
+                        seed=sample.sample_seed % (2**31),
+                    )
+                    episodes.append(
+                        dict(
+                            id=sample.scenario_id,
+                            family=sample.family,
+                            split=sample.split,
+                            route_variant=True,
+                            recovery_variant="stomp_overshoot",
+                            start=len(rows),
+                            length=len(recovery),
+                            **recovery_result,
+                        )
+                    )
+                    rows.extend(recovery)
         finally:
             stage.env.close()
         if number == 1 or number % 10 == 0:
@@ -266,6 +288,41 @@ def evaluate(model, cases, vision, *, max_steps=320):
     )
 
 
+def reuse_perception(checkpoint, output, *, device, log):
+    """Reuse only qualified vision weights; policy initialization stays fresh."""
+    from retroagi.core.smb_perception import DenseSMBPerception
+
+    source = Path(checkpoint).resolve(strict=True)
+    payload = torch.load(source, map_location="cpu", weights_only=True)
+    metrics = payload.get("metrics", {})
+    if not metrics.get("qualified") or not metrics.get("collision_labels"):
+        raise QualificationFailure("Reused perception lacks qualified collision-label metrics")
+    vision = DenseSMBPerception.load(source, device=device)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    destination = Path(output) / "block_perception"
+    destination.mkdir()
+    shutil.copyfile(source, destination / "perception.pth")
+    if hashlib.sha256((destination / "perception.pth").read_bytes()).hexdigest() != digest:
+        raise ValueError("Reused perception checksum mismatch")
+    write_json(destination / "metrics.json", metrics)
+    original = source.parent / "provenance.json"
+    if original.exists():
+        shutil.copyfile(original, destination / "source_provenance.json")
+    provenance = dict(
+        source=str(source),
+        sha256=digest,
+        reused=True,
+        interface="dense_smb_perception_v1",
+        policy_weights_reused=False,
+        source_provenance_sha256=(
+            hashlib.sha256(original.read_bytes()).hexdigest() if original.exists() else None
+        ),
+    )
+    write_json(destination / "provenance.json", provenance)
+    log(dict(phase="source_perception_reused", **provenance))
+    return vision, metrics
+
+
 def run(config, output):
     retired = {
         "bootstrap_updates",
@@ -294,12 +351,14 @@ def run(config, output):
             config=config,
             sources={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
             fresh_initialization=True,
+            fresh_policy_initialization=True,
+            fresh_perception_initialization=not bool(config.get("perception_checkpoint")),
             policy_schedule="numbered_epochs_only",
             init_checkpoint=None,
             fixed_scenes=[],
             runtime="smb_scene_v2",
-            coaching="canonical_collision_coaching_v1",
-            objective_contract="observable_traversal_v1",
+            coaching="canonical_collision_coaching_v2",
+            objective_contract="observable_traversal_v2",
             full_level_qualified=False,
         ),
     )
@@ -311,29 +370,34 @@ def run(config, output):
         write_json(output / "physics.json", physics)
         if not physics["exact_motion_gate"]:
             raise QualificationFailure("NES motion gate failed")
-        log(dict(phase="source_perception_dataset"))
-        train = samples(config, "train", config["perception_layouts_per_family"], log=log)
-        validation = samples(
-            config, "validation", config["perception_validation_per_family"], log=log
-        )
-        clips = block_clips(train, output / "block_train_clips")
-        validation_clips = block_clips(validation, output / "block_validation_clips")
-        log(
-            dict(
-                phase="source_perception_training",
-                device=config["device"],
-                updates=config["perception_updates"],
+        if config.get("perception_checkpoint"):
+            vision, perception = reuse_perception(
+                config["perception_checkpoint"], output, device=config["device"], log=log
             )
-        )
-        vision, perception = train_perception(
-            clips,
-            validation_clips,
-            output / "block_perception",
-            steps=config["perception_updates"],
-            device=config["device"],
-            seed=config["seed"],
-            log=log,
-        )
+        else:
+            log(dict(phase="source_perception_dataset"))
+            train = samples(config, "train", config["perception_layouts_per_family"], log=log)
+            validation = samples(
+                config, "validation", config["perception_validation_per_family"], log=log
+            )
+            clips = block_clips(train, output / "block_train_clips")
+            validation_clips = block_clips(validation, output / "block_validation_clips")
+            log(
+                dict(
+                    phase="source_perception_training",
+                    device=config["device"],
+                    updates=config["perception_updates"],
+                )
+            )
+            vision, perception = train_perception(
+                clips,
+                validation_clips,
+                output / "block_perception",
+                steps=config["perception_updates"],
+                device=config["device"],
+                seed=config["seed"],
+                log=log,
+            )
         if not perception["qualified"]:
             raise QualificationFailure(
                 "Block collision-perception gate failed; see per-class and edge metrics"
@@ -561,8 +625,15 @@ def main():
         "--config", type=Path, default=Path("scripts/configs/smb_composable_full_volume.json")
     )
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--perception-checkpoint",
+        type=Path,
+        help="Reuse qualified vision only; initialize a fresh policy",
+    )
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
+    if args.perception_checkpoint:
+        config["perception_checkpoint"] = str(args.perception_checkpoint.resolve())
     if (
         config["epochs"] != 30
         or config.get("init_checkpoint")

@@ -169,7 +169,14 @@ class ContractExecutor(SMBParameterizedPrimitiveExecutor):
         self.prepare(batch)
         self._mapping_jump = int(action) in (2, 4, 5)
         metadata = (batch.metadata or {}).get("smb_geometry", {}) if batch else {}
-        if metadata.get("bouncing"):
+        if metadata.get("bouncing") or (
+            getattr(self, "nes_press_edges", False)
+            and self._mapping_jump
+            and self._active_jump is None
+            and metadata.get("support") == "air"
+        ):
+            # A press before physical landing is consumed by NES. Release it
+            # and let the policy initiate a fresh press on confirmed support.
             from retroagi.core.actions import SMBPrimitiveExecution, smb_jump_release_action
 
             return SMBPrimitiveExecution(action=int(smb_jump_release_action(action)))

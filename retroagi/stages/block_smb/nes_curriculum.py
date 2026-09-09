@@ -11,7 +11,7 @@ from retroagi.stages.block_smb.monte_carlo import (
     validate_block_smb_monte_carlo_oracle,
 )
 
-DISTRIBUTION = "block_smb_nes_land_v1"
+DISTRIBUTION = "block_smb_nes_land_v2"
 
 
 def sample_nes_case(*, family, split, seed, index, difficulty="medium", max_rejections=32):
@@ -32,11 +32,28 @@ def sample_nes_case(*, family, split, seed, index, difficulty="medium", max_reje
         scenario["task_direction"] = -1 if family == "retreat_recovery" else 1
         scenario["task_objective"] = "stomp" if family in ("enemy_stomp", "stomp_mount") else None
         scenario["mario"][1] += 4  # preserve the authored feet position with the NES small box
-        if family == "pit_leap":
+        if family in ("pit_leap", "platform_hop"):
             # The duration-isolation task begins at a real running takeoff.
             # NES caps a jump initiated from rest at walking horizontal speed.
             scenario["mario_velocity"] = [2.5, 0.0]
         candidates = [list(old.oracle["actions"])]
+        if family == "platform_hop":
+            from retroagi.core.smb_physics import NES_JUMP_FRAMES
+
+            # This family isolates duration selection at the initial state.
+            # Never accept a fallback route that silently adds a run-up.
+            routes = [[2] * hold + [1] * (320 - hold) for hold in NES_JUMP_FRAMES]
+            routes = [
+                route
+                for route in routes
+                if validate_block_smb_monte_carlo_oracle(scenario, route, max_steps=320)[
+                    "reachable"
+                ]
+            ]
+            if not routes:
+                reasons.append({"attempt": attempt, "reason": "no_immediate_jump"})
+                continue
+            candidates = [routes[len(routes) // 2]]
         for method in ("original_verified", "nes_local_search", "nes_bridge_search"):
             if method == "nes_local_search":
                 candidates.append(terrain_oracle(scenario, max_steps=320))

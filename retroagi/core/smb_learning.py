@@ -27,7 +27,7 @@ from retroagi.stages.full_smb.train import _policy_action_logits_and_state
 
 def runtime(provider="oracle"):
     return SMBRuntimeContract(
-        objective_contract="observable_traversal_v1",
+        objective_contract="observable_traversal_v2",
         schema="smb_scene_v2",
         visual_tokens="canonical",
         physics_profile=NES_PHYSICS_PROFILE,
@@ -115,7 +115,11 @@ def _collect_coached(
         batch = stage.encode_observation(obs)
         committed = executor.prepare(batch)
         bouncing = bool(batch.metadata["smb_geometry"].get("bouncing"))
-        decision = committed is None and not bouncing
+        decision = (
+            committed is None
+            and not bouncing
+            and batch.metadata["smb_geometry"].get("support") != "air"
+        )
         if decision:
             if actions is None or stage.env._require_bridge_before_goal:
                 intended, selected_index, selected_valid = coach_choice(
@@ -154,7 +158,7 @@ def _collect_coached(
             from retroagi.core.actions import smb_jump_release_action
 
             intended = int(smb_jump_release_action(actions[frame] if actions is not None else 1))
-            recoveries += 1
+            recoveries += int(bouncing)
         execution = executor.execute(
             intended, batch=batch, motor_primitives=primitive(selected_index)
         )
@@ -254,7 +258,7 @@ def save_dataset(data, path, *, episodes, provider):
     torch.save(
         dict(
             kind="canonical_demonstrations_v3",
-            coaching="canonical_collision_coaching_v1",
+            coaching="canonical_collision_coaching_v2",
             data=asdict(data),
             episodes=episodes,
             runtime=runtime(provider).manifest(),
@@ -441,3 +445,25 @@ def physical_outcome_loss(model, current, following):
         + F.binary_cross_entropy_with_logits(outcome.collision_death_logit, death)
         + F.binary_cross_entropy_with_logits(outcome.terminal_logit, terminal)
     )
+
+
+def collect_stomp_recovery_case(model, stage, *, family, seed=0):
+    """Teach the observable turn-back state after overshooting a required stomp.
+
+    This is a training-only reset variation; accept it only after the shared
+    pixel executor actually stomps the enemy and completes the task.
+    """
+    import copy
+
+    original = stage.scenario
+    stage.reset(seed=seed)
+    enemy = next((e for e in stage.env.enemies if not e["dead"]), None)
+    if enemy is None:
+        return [], dict(success=False, reason="no_recovery_target")
+    try:
+        stage.scenario = copy.deepcopy(original)
+        stage.scenario["mario"] = [enemy["x"] + enemy["w"] + 36, stage.env.mario["y"]]
+        stage.scenario["mario_velocity"] = [0.0, 0.0]
+        return collect_reactive_case(model, stage, family=family, seed=seed)
+    finally:
+        stage.scenario = original

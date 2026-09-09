@@ -95,8 +95,11 @@ Regression tests in `scripts/tests/test_smb_canonical_coaching.py` cover physica
 wait windows, state restoration, stomp task inputs, commitment boundaries,
 collision-coached routes, teacher-free playback, and component compatibility.
 
-The full run still creates fresh perception and a fresh shared policy, performs
-8,000 perception updates, and then starts epoch 1 with fresh policy weights.
+The full run initializes a fresh shared policy. By default it trains vision for
+8,000 updates; `--perception-checkpoint` instead reuses qualified, frozen vision
+and starts epoch 1 with fresh policy weights. See the
+[sensorimotor repair](smb-sensorimotor-repair.md) for the version 2 tracking,
+stomp recovery and landing contract and the vision-only restart command.
 There is no policy bootstrap stage. Each of the 30 epochs collects 25 layouts
 per family and interleaves coaching batches with its 1,000 rehearsal updates.
 Earlier epochs remain in replay. Each accepted layout also attempts a varied

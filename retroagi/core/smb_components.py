@@ -26,7 +26,7 @@ COMPONENT_PREFIXES = {
 
 @dataclass(frozen=True)
 class SMBComponentContract:
-    objective_contract: str = "observable_traversal_v1"
+    objective_contract: str = "observable_traversal_v2"
     observation_schema: str = "smb_scene_v2"
     physics_profile: str = "nes_land_v1"
     semantic_classes: tuple = (
@@ -230,7 +230,7 @@ def load_bundle(directory, *, device="cpu", perception_path=None):
 
     directory = Path(directory)
     manifest = json.loads((directory / "bundle.json").read_text())
-    if manifest["contract"].get("objective_contract") != "observable_traversal_v1":
+    if manifest["contract"].get("objective_contract") != "observable_traversal_v2":
         raise ValueError("Legacy bundle requires retraining for observable traversal goals")
     contract = SMBComponentContract(**manifest["contract"])
     model = make_model(hidden_dim=manifest["architecture"]["hidden_dim"], device=device)

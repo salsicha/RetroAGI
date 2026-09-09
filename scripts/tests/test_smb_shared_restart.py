@@ -71,7 +71,8 @@ def test_epochs_preserve_model_budget_replay_and_episode_offsets(monkeypatch):
     )
 
 
-def test_low_family_scores_do_not_block_the_30_shared_epochs(monkeypatch, tmp_path):
+@pytest.mark.parametrize("reuse_vision", [False, True])
+def test_low_family_scores_do_not_block_the_30_shared_epochs(monkeypatch, tmp_path, reuse_vision):
     from scripts import smb_physics_audit
 
     config = dict(
@@ -111,6 +112,16 @@ def test_low_family_scores_do_not_block_the_30_shared_epochs(monkeypatch, tmp_pa
     monkeypatch.setattr(
         training, "train_perception", lambda *args, **kwargs: (None, {"qualified": True})
     )
+    if reuse_vision:
+        config["perception_checkpoint"] = "qualified_vision.pth"
+
+        def unexpected_training(*args, **kwargs):
+            pytest.fail("A vision-only restart must skip perception optimization")
+
+        monkeypatch.setattr(training, "train_perception", unexpected_training)
+        monkeypatch.setattr(
+            training, "reuse_perception", lambda *args, **kwargs: (None, {"qualified": True})
+        )
     monkeypatch.setattr(training, "make_model", make_model)
     monkeypatch.setattr(
         training,
@@ -169,3 +180,27 @@ def test_retired_bootstrap_settings_are_rejected(key, tmp_path):
     with pytest.raises(ValueError, match="Removed bootstrap settings"):
         training.run({key: 1}, tmp_path / "run")
     assert not (tmp_path / "run").exists()
+
+
+def test_vision_only_reuse_is_frozen_and_records_exact_bytes(tmp_path):
+    import hashlib
+    import json
+
+    from retroagi.core.smb_perception import DenseSMBPerception
+
+    source = tmp_path / "source.pth"
+    vision = DenseSMBPerception(dim=32, depth=1)
+    vision.save(source, metrics={"qualified": True, "collision_labels": True})
+    output = tmp_path / "run"
+    output.mkdir()
+    events = []
+    reused, _ = training.reuse_perception(source, output, device="cpu", log=events.append)
+    assert all(not p.requires_grad for p in reused.parameters())
+    assert source.read_bytes() == (output / "block_perception/perception.pth").read_bytes()
+    provenance = json.loads((output / "block_perception/provenance.json").read_text())
+    assert provenance["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert provenance["policy_weights_reused"] is False
+    assert events[0]["phase"] == "source_perception_reused"
+    vision.save(source, metrics={"qualified": False, "collision_labels": True})
+    with pytest.raises(training.QualificationFailure, match="lacks qualified"):
+        training.reuse_perception(source, output, device="cpu", log=events.append)

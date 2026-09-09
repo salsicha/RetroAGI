@@ -4,14 +4,27 @@ This module chooses targets, never actions. It does not read task-family names,
 future platform bounds, simulator credit, or a training teacher.
 """
 
-from dataclasses import replace
-
 import torch
 
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.stages.block_smb.local_traversal import LocalObjective, local_objective
 
-OBJECTIVE_CONTRACT = "observable_traversal_v1"
+OBJECTIVE_CONTRACT = "observable_traversal_v2"
+
+
+def required_stomp(scene):
+    """Required contact remains a target even after the player passes it."""
+    m = scene.mario
+    candidates = [(i, e) for i, e in enumerate(scene.enemies) if not e.get("dead", False)]
+    if not candidates:
+        return None
+    i, e = min(
+        candidates, key=lambda pair: abs(pair[1]["x"] + pair[1]["w"] / 2 - m["x"] - m["w"] / 2)
+    )
+    direction = 1 if e["x"] + e["w"] / 2 >= m["x"] + m["w"] / 2 else -1
+    return LocalObjective(
+        "stomp", e["x"], e["x"] + e["w"], e["y"], enemy_index=i, direction=direction
+    )
 
 
 def observable_objective(scene, *, objective_kind=None):
@@ -96,8 +109,8 @@ def observable_objective(scene, *, objective_kind=None):
                     else "bridge_board" if bridge_gap <= 2 else "bridge_wait"
                 )
                 return LocalObjective(kind, b.left + 4, b.right - 4, b.top, direction=direction)
-    if objective_kind == "stomp" and objective.kind == "enemy":
-        objective = replace(objective, kind="stomp")
+    if objective_kind == "stomp":
+        objective = required_stomp(scene) or objective
     return objective
 
 

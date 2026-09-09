@@ -96,8 +96,10 @@ scripts/configs/smb_composable_full_volume.json --output-dir <fresh-directory>`.
 The configuration rejects resume/init checkpoints and fixed scenes, and requires
 30 shared-policy epochs and all 21 generated families.
 
-1. Recheck the paired motion traces. Generate fresh Block perception clips and
-   train a fresh dense ViT. Stop if collision-perception validation fails.
+1. Recheck the paired motion traces. By default, generate fresh Block perception
+   clips and train a dense ViT. With `--perception-checkpoint`, reuse qualified
+   frozen vision and record its checksum/provenance instead. Policy weights are
+   always fresh. See [sensorimotor repairs](smb-sensorimotor-repair.md).
 2. Initialize one fresh shared core and start epoch 1. There is no policy
    bootstrap or independent per-family training phase.
 3. Run 30 numbered epochs, each collecting 25 new layouts per family (525 total)

@@ -5,14 +5,13 @@ restore all state and require collision outcomes, including bounce recovery.
 """
 
 from contextlib import contextmanager
-from dataclasses import replace
 from types import SimpleNamespace
 
 from retroagi.core.smb_physics import NES_JUMP_FRAMES
 from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
 from retroagi.stages.block_smb.local_traversal import local_objective, local_target_distance
 
-COACHING_CONTRACT = "canonical_collision_coaching_v1"
+COACHING_CONTRACT = "canonical_collision_coaching_v2"
 
 
 @contextmanager
@@ -36,14 +35,13 @@ def probe_state(env):
 
 
 def training_target(env):
-    target = local_objective(env)
-    if (
-        (env._goal_on_stomp or env._require_stomp_before_goal)
-        and not env._stomp_credited
-        and target.kind == "enemy"
-    ):
-        target = replace(target, kind="stomp")
-    return target
+    from retroagi.core.smb_objectives import required_stomp
+
+    if (env._goal_on_stomp or env._require_stomp_before_goal) and not env._stomp_credited:
+        target = required_stomp(env)
+        if target is not None:
+            return target
+    return local_objective(env)
 
 
 def probe_executor(model):
