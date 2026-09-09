@@ -27,7 +27,7 @@ flowchart TD
     Review -. Accepted labels only .-> FV[Train Full dense ViT and convolutional decoder]
     NES --> FV
     Block[Block renderer and collision instrumentation] --> BV[Train Block dense ViT and convolutional decoder]
-    BV --> Core[Fresh shared core: bootstrap and 30 epochs across all 21 families]
+    BV --> Core[Fresh shared core: epochs 1–30 across all 21 families]
     Core --> Metrics[Per-family validation during shared training]
     FV --> Assemble[Assemble Full perception with shared core]
     Core --> Assemble

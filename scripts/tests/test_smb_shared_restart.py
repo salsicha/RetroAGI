@@ -13,15 +13,16 @@ class TinyData:
     action: torch.Tensor
 
 
-def test_streamed_bootstrap_preserves_model_budget_data_and_episode_offsets(monkeypatch):
+def test_epochs_preserve_model_budget_replay_and_episode_offsets(monkeypatch):
     model = torch.nn.Linear(1, 1)
     optimizer = torch.optim.AdamW(model.parameters())
     config = dict(
         seed=42,
         families=["flat_run", "single_gap"],
-        demonstration_layouts_per_family=7,
-        demonstration_chunk_layouts_per_family=3,
-        bootstrap_updates=5,
+        epochs=2,
+        train_layouts_per_family_per_epoch=7,
+        epoch_chunk_layouts_per_family=3,
+        rehearsal_updates=5,
     )
     seen, fits, events = [], [], []
 
@@ -31,6 +32,7 @@ def test_streamed_bootstrap_preserves_model_budget_data_and_episode_offsets(monk
         return cases
 
     def collect(candidate, cases, vision, *, log):
+        log(dict(phase="demonstrations", completed=len(cases)))
         assert candidate is model
         return TinyData(torch.arange(len(cases))), [
             dict(start=i, length=1) for i in range(len(cases))
@@ -44,14 +46,29 @@ def test_streamed_bootstrap_preserves_model_budget_data_and_episode_offsets(monk
     monkeypatch.setattr(training, "samples", samples)
     monkeypatch.setattr(training, "collect", collect)
     monkeypatch.setattr(training, "fit_demonstrations", fit)
-    data, episodes = training.bootstrap_shared(model, optimizer, config, None, log=events.append)
+    data, episodes, loss = training.train_epoch(
+        model, optimizer, config, None, epoch=1, log=events.append
+    )
     assert fits == [(1, 6), (2, 12), (2, 14)]
     assert len(data.action) == 14
     assert [e["start"] for e in episodes] == list(range(14))
-    assert len(set(seen)) == 14
+    assert loss == pytest.approx(0.1)
+    data, episodes, _ = training.train_epoch(
+        model, optimizer, config, None, epoch=2, data=data, episodes=episodes, log=events.append
+    )
+    assert fits == [(1, 6), (2, 12), (2, 14), (1, 20), (2, 26), (2, 28)]
+    assert len(data.action) == 28
+    assert [e["start"] for e in episodes] == list(range(28))
+    assert len(set(seen)) == 28
     for family in config["families"]:
-        assert {i for f, _, i in seen if f == family} == set(range(10000, 10007))
-    assert events[-1]["updates"] == 5
+        assert {i for f, _, i in seen if f == family} == set(range(21000, 21007)) | set(
+            range(22000, 22007)
+        )
+    assert events[-1]["epoch"] == 2 and events[-1]["updates"] == 5
+    assert all(e["epoch"] in (1, 2) for e in events)
+    assert all(
+        e["stage"] == "collecting_demonstrations" for e in events if e["phase"] == "demonstrations"
+    )
 
 
 def test_low_family_scores_do_not_block_the_30_shared_epochs(monkeypatch, tmp_path):
@@ -67,9 +84,7 @@ def test_low_family_scores_do_not_block_the_30_shared_epochs(monkeypatch, tmp_pa
         perception_layouts_per_family=1,
         perception_validation_per_family=1,
         perception_updates=1,
-        demonstration_layouts_per_family=6,
-        demonstration_chunk_layouts_per_family=3,
-        bootstrap_updates=5,
+        epoch_chunk_layouts_per_family=3,
         validation_layouts_per_family=1,
         train_layouts_per_family_per_epoch=1,
         rehearsal_updates=2,
@@ -85,7 +100,7 @@ def test_low_family_scores_do_not_block_the_30_shared_epochs(monkeypatch, tmp_pa
     def fit(model, optimizer, data, *, steps, **kwargs):
         fit_models.append(model)
         update_counts.append(steps)
-        # Simulate updates, preserving a single model across bootstrap and epochs.
+        # Simulate updates, preserving a single model throughout the numbered epochs.
         with torch.no_grad():
             model.weight.add_(1)
         return 0.1
@@ -122,7 +137,35 @@ def test_low_family_scores_do_not_block_the_30_shared_epochs(monkeypatch, tmp_pa
         torch.use_deterministic_algorithms(strict, warn_only=warn_only)
     assert len(models) == 1
     assert all(model is models[0] for model in fit_models)
-    assert sum(update_counts) == 5 + 30 * 2
+    assert sum(update_counts) == 30 * 2
+    assert len(update_counts) == 30
     assert exports == [f"epoch_{i:02d}" for i in range(1, 31)]
     assert not (tmp_path / "run" / "family_learning.json").exists()
     assert (tmp_path / "run" / "block_test.json").is_file()
+    import json
+
+    events = [
+        json.loads(line) for line in (tmp_path / "run" / "events.jsonl").read_text().splitlines()
+    ]
+    assert not any("bootstrap" in event["phase"] for event in events)
+    training_events = [e for e in events if e.get("stage") == "training"]
+    assert training_events[0]["epoch"] == 1
+    assert training_events[-1]["epoch"] == 30
+    first_validation = next(i for i, e in enumerate(events) if e.get("stage") == "validation")
+    assert any(
+        e.get("stage") == "training" and e.get("updates") == 2 for e in events[:first_validation]
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "bootstrap_updates",
+        "demonstration_layouts_per_family",
+        "demonstration_chunk_layouts_per_family",
+    ],
+)
+def test_retired_bootstrap_settings_are_rejected(key, tmp_path):
+    with pytest.raises(ValueError, match="Removed bootstrap settings"):
+        training.run({key: 1}, tmp_path / "run")
+    assert not (tmp_path / "run").exists()

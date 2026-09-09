@@ -96,10 +96,11 @@ wait windows, state restoration, stomp task inputs, commitment boundaries,
 collision-coached routes, teacher-free playback, and component compatibility.
 
 The full run still creates fresh perception and a fresh shared policy, performs
-8,000 perception updates, streams 180 layouts per family through 10,000 shared
-bootstrap updates, and then runs 30 shared epochs with 1,000 rehearsal updates
-each. Each accepted layout now also attempts a varied reactive route. This adds
-collection work, not policy epochs or independent prerequisite family models.
+8,000 perception updates, and then starts epoch 1 with fresh policy weights.
+There is no policy bootstrap stage. Each of the 30 epochs collects 25 layouts
+per family and interleaves coaching batches with its 1,000 rehearsal updates.
+Earlier epochs remain in replay. Each accepted layout also attempts a varied
+reactive route; there are no independent prerequisite family models.
 All 21 families remain in training; fixed scenes remain excluded. Family scores
 after each epoch measure autonomous completion. Full SMB promotion still
 requires the final measured qualification.

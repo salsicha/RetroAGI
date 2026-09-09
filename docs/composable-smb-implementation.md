@@ -98,16 +98,15 @@ The configuration rejects resume/init checkpoints and fixed scenes, and requires
 
 1. Recheck the paired motion traces. Generate fresh Block perception clips and
    train a fresh dense ViT. Stop if collision-perception validation fails.
-2. Initialize one fresh shared core for all 21 families. There are no separately
-   trained per-family models or per-family accuracy prerequisites before this run.
-   Collect executor-verified demonstrations in batches of three layouts per family
-   and train this same model between batches, replaying all data accumulated so far.
-3. Accumulate 180 initial layouts per family and 10,000 total bootstrap updates,
-   then run all 30 epochs with 525 new generated layouts and 1,000 rehearsal
-   updates per epoch. Family validation reports the shared model's progress after
-   each epoch; low scores do not prevent the next epoch. Validation and test each
-   contain 630 layouts. Final Block results gate emulator promotion after the
-   shared run. There are no fixed-scene training/evaluation entries.
+2. Initialize one fresh shared core and start epoch 1. There is no policy
+   bootstrap or independent per-family training phase.
+3. Run 30 numbered epochs, each collecting 25 new layouts per family (525 total)
+   and applying exactly 1,000 rehearsal updates. Collection and learning interleave
+   in batches of up to three layouts per family; earlier epochs remain in replay.
+   Status events include the epoch number, batch, stage, and update count. Family
+   validation follows each epoch; low scores do not prevent the next epoch.
+   Validation and test each contain 630 layouts. Final Block results gate emulator
+   promotion after the shared run. Fixed scenes remain excluded.
 4. Train ordered Block sequences with carried recurrent context and explicit
    episode resets. This is one-frame truncated BPTT at playback cadence. Verify
    that changing LSTM weights can change actor logits, and recheck family retention.
@@ -269,19 +268,16 @@ metadata is `artifacts/smb_composable/active_run.json`. This qualifies Block
 collision perception on the measured splits; it does not qualify all policy
 families or Full SMB perception/playback in advance.
 
-## Direct shared-training restart (2026-09-08)
+## Numbered epochs only (2026-09-09)
 
-The user requested the full training run from the beginning, rather than training
-and discarding independent family models first. The preliminary family loop and
-its four training-budget configuration keys have been removed. All perception
-and shared-core weights still initialize freshly. The 30 shared-policy epochs,
-all 21 families, demonstration volume and total bootstrap update budget are kept.
-Bootstrap collection and optimization now interleave across all-family batches;
-no family model is trained in isolation or substituted for the eventual core.
+The separate 180-layout-per-family, 10,000-update bootstrap stage has been removed
+at the user's request. Its configuration keys are rejected. Perception still
+trains from scratch, then one fresh shared core begins epoch 1 immediately.
+All policy collection, coaching, replay, and the 30,000 total policy updates
+belong to the 30 numbered epochs. No bootstrap updates are added or relabeled
+as an extra epoch. Independent family-model prerequisites remain removed.
 
-`full_volume_initialization`, `full_volume_bootstrap`, `full_volume_epoch` and
-`full_volume` events distinguish model initialization, initial shared updates,
-epoch preparation and completed epoch measurements. Demonstration capture reports
-progress. The previous preliminary run was stopped. The new launch root is
-`artifacts/smb_composable/full_volume_20260908_shared_restart/`; consult
-`artifacts/smb_composable/active_run.json` for its process and logs.
+`full_volume_epoch` events identify collection, optimization, and validation;
+collection progress also carries the current epoch. `full_volume` records the
+completed epoch's loss and autonomous family results. The latest process/log
+metadata is `artifacts/smb_composable/active_run.json`.

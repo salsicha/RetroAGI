@@ -200,8 +200,10 @@ supervision/evaluation evidence in the perceived lane, not an undeclared input.
 
 Start the full generated curriculum with one fresh shared core after perception
 preparation. The user's direct-restart instruction supersedes the earlier proposal
-to train separate family models as a prerequisite. Interleave shared bootstrap
-updates with all-family demonstration batches, then train all 30 shared epochs.
+to train separate family models as a prerequisite. Start epoch 1 with fresh policy
+weights; there is no policy bootstrap stage. Within each of the 30 epochs,
+interleave all-family coaching batches and the existing 1,000-update budget,
+retaining earlier epochs’ examples for replay.
 Measure every family on held-out layouts during that run; low intermediate scores
 are diagnostic and do not block the next epoch. Final qualification governs
 emulator promotion. Cover varied speeds, button histories, camera positions,

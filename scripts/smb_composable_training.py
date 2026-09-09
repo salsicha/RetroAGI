@@ -147,63 +147,90 @@ def concatenate_demonstrations(left, right):
     )
 
 
-def bootstrap_shared(model, optimizer, config, vision, *, log):
-    """Train the same core as all-family demonstration batches become available."""
-    total = config["demonstration_layouts_per_family"]
-    chunk = config.get("demonstration_chunk_layouts_per_family", 3)
-    if total < 1 or chunk < 1:
-        raise ValueError("Demonstration counts must be positive")
+def train_epoch(model, optimizer, config, vision, *, epoch, data=None, episodes=None, log):
+    """Collect and learn inside this numbered epoch, retaining earlier replay."""
+    total = config["train_layouts_per_family_per_epoch"]
+    chunk = config.get("epoch_chunk_layouts_per_family", 3)
+    budget = config["rehearsal_updates"]
+    if total < 1 or chunk < 1 or budget < 1:
+        raise ValueError("Epoch layout counts and update budget must be positive")
     chunks = (total + chunk - 1) // chunk
-    data, episodes = None, []
+    episodes = list(episodes or [])
     completed = 0
+    weighted_loss = 0.0
+
+    def epoch_log(event):
+        log(dict(epoch=epoch, epochs=config["epochs"], **event))
+
     for number, offset in enumerate(range(0, total, chunk), 1):
         count = min(chunk, total - offset)
-        log(
+        epoch_log(
             dict(
-                phase="full_volume_bootstrap",
+                phase="full_volume_epoch",
                 stage="collecting_demonstrations",
                 batch=number,
                 batches=chunks,
                 updates=completed,
+                total_updates=budget,
             )
         )
         fresh, fresh_episodes = collect(
             model,
-            samples(config, "train", count, offset=10000 + offset),
+            samples(config, "train", count, offset=20000 + epoch * 1000 + offset),
             vision,
-            log=log,
+            log=lambda event: epoch_log(
+                dict(
+                    stage="collecting_demonstrations",
+                    batch=number,
+                    batches=chunks,
+                    updates=completed,
+                    total_updates=budget,
+                    **event,
+                )
+            ),
         )
         start = len(data.action) if data is not None else 0
         episodes.extend({**e, "start": e["start"] + start} for e in fresh_episodes)
         data = fresh if data is None else concatenate_demonstrations(data, fresh)
-        # Keep the configured total update budget, including a partial last batch.
-        updates = number * config["bootstrap_updates"] // chunks - completed
+        # Interleave updates without adding any budget outside the epoch.
+        updates = number * budget // chunks - completed
         if updates:
+            epoch_log(
+                dict(
+                    phase="full_volume_epoch",
+                    stage="training",
+                    batch=number,
+                    batches=chunks,
+                    updates=completed,
+                    total_updates=budget,
+                )
+            )
             loss = fit_demonstrations(
                 model,
                 optimizer,
                 data,
                 steps=updates,
-                seed=config["seed"] + number - 1,
+                seed=config["seed"] + epoch * 1000 + number,
                 decision_durations_only=True,
                 walk_durations=False,
                 prioritized=True,
             )
             completed += updates
-            log(
+            weighted_loss += loss * updates
+            epoch_log(
                 dict(
-                    phase="full_volume_bootstrap",
+                    phase="full_volume_epoch",
                     stage="training",
                     batch=number,
                     batches=chunks,
                     updates=completed,
-                    total_updates=config["bootstrap_updates"],
+                    total_updates=budget,
                     loss=loss,
-                    frames=len(data.action),
+                    replay_frames=len(data.action),
                     layouts_per_family=offset + count,
                 )
             )
-    return data, episodes
+    return data, episodes, weighted_loss / completed
 
 
 def evaluate(model, cases, vision, *, max_steps=320):
@@ -240,6 +267,13 @@ def evaluate(model, cases, vision, *, max_steps=320):
 
 
 def run(config, output):
+    retired = {
+        "bootstrap_updates",
+        "demonstration_layouts_per_family",
+        "demonstration_chunk_layouts_per_family",
+    } & config.keys()
+    if retired:
+        raise ValueError(f"Removed bootstrap settings: {sorted(retired)}")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
 
@@ -260,6 +294,7 @@ def run(config, output):
             config=config,
             sources={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
             fresh_initialization=True,
+            policy_schedule="numbered_epochs_only",
             init_checkpoint=None,
             fixed_scenes=[],
             runtime="smb_scene_v2",
@@ -317,38 +352,35 @@ def run(config, output):
             hidden_dim=config["hidden_dim"], device=config["device"], provider="perceived"
         )
         optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
-        data, episodes = bootstrap_shared(model, optimizer, config, vision, log=log)
-        save_dataset(data, output / "demonstrations.pth", episodes=episodes, provider="perceived")
-        validation = samples(
-            config, "validation", config["validation_layouts_per_family"], offset=10000
-        )
+        data, episodes, validation = None, [], None
         for epoch in range(1, config["epochs"] + 1):
+            data, episodes, loss = train_epoch(
+                model,
+                optimizer,
+                config,
+                vision,
+                epoch=epoch,
+                data=data,
+                episodes=episodes,
+                log=log,
+            )
+            save_dataset(
+                data, output / "demonstrations.pth", episodes=episodes, provider="perceived"
+            )
             log(
                 dict(
                     phase="full_volume_epoch",
                     epoch=epoch,
                     epochs=config["epochs"],
-                    stage="collecting_demonstrations",
+                    stage="validation",
+                    updates=config["rehearsal_updates"],
+                    total_updates=config["rehearsal_updates"],
                 )
             )
-            new = samples(
-                config,
-                "train",
-                config["train_layouts_per_family_per_epoch"],
-                offset=20000 + epoch * 1000,
-            )
-            fresh, _ = collect(model, new, vision, log=log)
-            combined = concatenate_demonstrations(data, fresh)
-            loss = fit_demonstrations(
-                model,
-                optimizer,
-                combined,
-                steps=config["rehearsal_updates"],
-                seed=config["seed"] + epoch,
-                decision_durations_only=True,
-                walk_durations=False,
-                prioritized=True,
-            )
+            if validation is None:
+                validation = samples(
+                    config, "validation", config["validation_layouts_per_family"], offset=10000
+                )
             result = evaluate(model, validation, vision)
             log(
                 dict(
