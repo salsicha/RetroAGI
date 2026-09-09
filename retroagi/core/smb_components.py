@@ -13,7 +13,7 @@ from pathlib import Path
 import torch
 
 from retroagi.core.smb_geometry import MOTION_NAMES, STATE_NAMES
-from retroagi.core.smb_scene import AVAILABILITY_NAMES
+from retroagi.core.smb_scene import AVAILABILITY_NAMES, SCENE_ENCODER
 
 COMPONENT_PREFIXES = {
     "actor": ("agent.", "tactics_network.", "strategy_network.", "world_model_actor_context."),
@@ -26,7 +26,7 @@ COMPONENT_PREFIXES = {
 
 @dataclass(frozen=True)
 class SMBComponentContract:
-    objective_contract: str = "observable_traversal_v2"
+    objective_contract: str = "observable_traversal_v4"
     observation_schema: str = "smb_scene_v2"
     physics_profile: str = "nes_land_v1"
     semantic_classes: tuple = (
@@ -54,7 +54,7 @@ class SMBComponentContract:
     frame_skip: int = 1
     recurrent_state: bool = False
     decision_mode: str = "greedy"
-    scene_encoder: str = "canonical_semantic_v2"
+    scene_encoder: str = SCENE_ENCODER
 
     def __post_init__(self):
         for name in (
@@ -68,10 +68,7 @@ class SMBComponentContract:
             "availability_features",
         ):
             object.__setattr__(self, name, tuple(getattr(self, name)))
-        if (
-            self.observation_schema != "smb_scene_v2"
-            or self.scene_encoder != "canonical_semantic_v2"
-        ):
+        if self.observation_schema != "smb_scene_v2" or self.scene_encoder != SCENE_ENCODER:
             raise ValueError("Unrecognized canonical scene interface")
         if (
             self.viewport != (256, 240)
@@ -230,7 +227,7 @@ def load_bundle(directory, *, device="cpu", perception_path=None):
 
     directory = Path(directory)
     manifest = json.loads((directory / "bundle.json").read_text())
-    if manifest["contract"].get("objective_contract") != "observable_traversal_v2":
+    if manifest["contract"].get("objective_contract") != "observable_traversal_v4":
         raise ValueError("Legacy bundle requires retraining for observable traversal goals")
     contract = SMBComponentContract(**manifest["contract"])
     model = make_model(hidden_dim=manifest["architecture"]["hidden_dim"], device=device)

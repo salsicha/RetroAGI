@@ -134,6 +134,8 @@ class ContractExecutor(SMBParameterizedPrimitiveExecutor):
 
     def _select_hold_frames(self, motor_primitives):
         frames, index = super()._select_hold_frames(motor_primitives)
+        if getattr(self, "_reobserve_wait", False):
+            return 1, 0
         if getattr(self, "_mapping_jump", False) and index is not None:
             frames = self.jump_hold_frames[index]
         return frames, index
@@ -155,6 +157,16 @@ class ContractExecutor(SMBParameterizedPrimitiveExecutor):
                 self.reset()
             phase = getattr(metadata.get("objective"), "kind", None)
             previous = getattr(self, "_previous_bridge_phase", None)
+            # Bridge windows can open while the coarse phase is unchanged or
+            # occluded. Reconsider every bridge wait at the next observation.
+            self._bridge_wait_context = bool(
+                (phase or "").startswith("bridge_")
+                or (previous or "").startswith("bridge_")
+                or 6 in metadata.get("motion_memory", {})
+                or any(p.get("moving") for p in getattr(metadata.get("scene"), "platforms", []))
+            )
+            if self._active_steady == 0 and self._bridge_wait_context:
+                self.reset()
             if self._active_steady == 0 and (previous, phase) in (
                 ("bridge_wait", "bridge_board"),
                 ("bridge_ride", "bridge_exit"),
@@ -168,6 +180,7 @@ class ContractExecutor(SMBParameterizedPrimitiveExecutor):
     def execute(self, action, *, batch=None, **kwargs):
         self.prepare(batch)
         self._mapping_jump = int(action) in (2, 4, 5)
+        self._reobserve_wait = int(action) == 0 and getattr(self, "_bridge_wait_context", False)
         metadata = (batch.metadata or {}).get("smb_geometry", {}) if batch else {}
         if metadata.get("bouncing") or (
             getattr(self, "nes_press_edges", False)

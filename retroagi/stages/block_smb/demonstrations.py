@@ -42,6 +42,11 @@ class DemonstrationBatch:
     next_c: torch.Tensor
     family: torch.Tensor
     valid_durations: torch.Tensor
+    phase: torch.Tensor | None = None
+
+    def __post_init__(self):
+        if self.phase is None:
+            self.phase = torch.zeros_like(self.family)
 
 
 def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32):
@@ -283,18 +288,26 @@ def without_walk_commitments(data):
     return data
 
 
+def demonstration_groups(data):
+    # 0=routine, 1=approach, 2=wait, 3=board, 4=ride, 5=exit.
+    return (data.family.long() * 6 + data.phase.long()) * 7 + torch.where(
+        data.actor_mask, data.action, 6
+    )
+
+
 def demonstration_sample_weights(data, family_weights=None):
-    weights = torch.ones(len(data.action))
-    # Every family gets equal weight. Within a family, balance the decisions
-    # so a few takeoff frames are not drowned out by long stretches of walking.
+    weights = torch.zeros(len(data.action))
     for family in data.family.unique():
         family_mask = data.family == family
-        for action in data.action[family_mask & data.actor_mask].unique():
-            mask = family_mask & data.actor_mask & (data.action == action)
-            weights[mask] = 1.0 / mask.sum()
-        continuation = family_mask & ~data.actor_mask
-        if continuation.any():
-            weights[continuation] = 0.25 / continuation.sum()
+        for phase in data.phase[family_mask].unique():
+            phase_mask = family_mask & (data.phase == phase)
+            for action in data.action[phase_mask & data.actor_mask].unique():
+                mask = phase_mask & data.actor_mask & (data.action == action)
+                weights[mask] = 1.0 / mask.sum()
+            continuation = phase_mask & ~data.actor_mask
+            if continuation.any():
+                weights[continuation] = 0.25 / continuation.sum()
+            weights[phase_mask] /= weights[phase_mask].sum()
         weights[family_mask] /= weights[family_mask].sum()
         if family_weights:
             weight = float(family_weights.get(int(family), 1.0))
@@ -373,7 +386,7 @@ def fit_demonstrations(
     weights = demonstration_sample_weights(data, family_weights)
     base_weights = weights.clone()
     priorities = torch.ones_like(weights)
-    groups = data.family.long() * 7 + torch.where(data.actor_mask, data.action, 6)
+    groups = demonstration_groups(data)
     allowed_actions = demonstrated_action_sets(data)
     device = next(model.parameters()).device
     losses = []

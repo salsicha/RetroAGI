@@ -9,9 +9,13 @@ from types import SimpleNamespace
 
 from retroagi.core.smb_physics import NES_JUMP_FRAMES
 from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
-from retroagi.stages.block_smb.local_traversal import local_objective, local_target_distance
+from retroagi.stages.block_smb.local_traversal import (
+    local_objective,
+    local_target_distance,
+    stomp_probe_distance,
+)
 
-COACHING_CONTRACT = "canonical_collision_coaching_v2"
+COACHING_CONTRACT = "canonical_collision_coaching_v4"
 
 
 @contextmanager
@@ -191,17 +195,29 @@ def interior_index(indices):
 
 def coach_choice(model, env, *, takeoff_distance=50, variant=0):
     if env._require_bridge_before_goal:
-        ready, departures, safe = safe_bridge_wait_indices(env)
-        if ready:
+        # Runtime reobserves after one frame. Probe walking now, not obsolete
+        # long wait commitments; all later opportunities are reconsidered.
+        target = bridge_target(env)
+        if target == "finish":
             return 1, 0, list(range(16))
-        if departures:
-            index = departures[variant % len(departures)] if variant else interior_index(departures)
-            # All departure bins are collision-certified. Earlier rechecks are
-            # useful but are not mislabeled as equally good release times.
-            return 0, index, departures
-        if safe:
-            index = max(safe)
-            return 0, index, safe
+        with probe_state(env):
+            for _ in range(48):
+                _, _, done, truncated, info = env.step(1)
+                if info["death"] or not env.mario["on_ground"]:
+                    break
+                if bridge_walk_reached(env, target) or env._goal_credited:
+                    return 1, 0, list(range(16))
+                if done or truncated:
+                    break
+        # Releasing direction retains NES momentum. On a narrow platform a
+        # nominal wait can slide off before friction stops Mario. Teach an
+        # observed braking decision instead of calling that drift safe waiting.
+        if abs(env.mario["vx"]) > 1 / 16:
+            brake = 3 if env.mario["vx"] > 0 else 1
+            with probe_state(env):
+                _, _, done, truncated, info = env.step(brake)
+                if not (info["death"] or done or truncated) and env.mario["on_ground"]:
+                    return brake, 0, list(range(16))
         return 0, 0, [0]
     target = training_target(env)
     direction = target.direction
@@ -209,10 +225,40 @@ def coach_choice(model, env, *, takeoff_distance=50, variant=0):
     if (
         env.mario["on_ground"]
         and target.kind not in ("finish", "retreat")
-        and (local_target_distance(env, target) < takeoff_distance or env._single_jump_attempt)
+        and (
+            local_target_distance(env, target) < stomp_probe_distance(env, target, takeoff_distance)
+            or env._single_jump_attempt
+        )
     ):
         valid = safe_jump_indices(model, env, action)
         if valid:
             index = valid[variant % len(valid)] if variant else interior_index(valid)
             return action, index, valid
     return (1 if direction > 0 else 3), 0, list(range(16))
+
+
+def stomp_takeoff_choice(model, env, choice, *, proposal=None, delay=False):
+    """Train at policy/nearby takeoffs using physical labels, never playback guards.
+
+    Let a walk proposal approach one frame farther only when a collision probe
+    still finds a safe stomp there. Correct a proposed jump's hold at the actual
+    decision state. Keep complete, executor-verified routes in the collector.
+    """
+    target = training_target(env)
+    if target.kind != "stomp" or not env.mario["on_ground"]:
+        return (*choice, False)
+    jump = 2 if target.direction > 0 else 4
+    walk = 1 if target.direction > 0 else 3
+    if proposal == jump:
+        valid = choice[2] if choice[0] == jump else safe_jump_indices(model, env, jump)
+        if valid:
+            return jump, interior_index(valid), valid, False
+    if choice[0] == jump and (delay or proposal == walk):
+        with probe_state(env):
+            _, _, done, truncated, info = env.step(walk)
+            can_delay = not (done or truncated or info["death"]) and bool(
+                safe_jump_indices(model, env, jump)
+            )
+        if can_delay:
+            return walk, 0, list(range(16)), True
+    return (*choice, False)

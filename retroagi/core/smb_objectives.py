@@ -9,7 +9,7 @@ import torch
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.stages.block_smb.local_traversal import LocalObjective, local_objective
 
-OBJECTIVE_CONTRACT = "observable_traversal_v2"
+OBJECTIVE_CONTRACT = "observable_traversal_v4"
 
 
 def required_stomp(scene):

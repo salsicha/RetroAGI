@@ -8,6 +8,63 @@ from retroagi.core.interfaces import VisionOutput
 from retroagi.core.smb_geometry import SEMANTICS
 
 SCENE_SCHEMA = "smb_scene_v2"
+SCENE_ENCODER = "canonical_semantic_motion_v4"
+
+
+def enemy_relative_motion(geometry):
+    """Closing velocity in pixels/frame; positive means enemy moves right
+    relative to Mario. Pixel observations never require absolute camera motion.
+    """
+    if not geometry or "scene" not in geometry:
+        return 0.0, False
+    scene = geometry["scene"]
+    enemy = min(
+        (e for e in scene.enemies if not e.get("dead")),
+        key=lambda e: abs(e["x"] + e["w"] / 2 - scene.mario["x"] - scene.mario["w"] / 2),
+        default=None,
+    )
+    if enemy is None:
+        memory = geometry.get("motion_memory", {}).get(5, {})
+        return float(memory.get("relative_vx", 0)), False
+    if geometry.get("observation_provider") == "perceived":
+        speed = enemy.get("relative_vx")
+        return (
+            (float(speed), enemy.get("relative_age", 0) == 0) if speed is not None else (0.0, False)
+        )
+    support = scene.mario.get("_platform")
+    carry = (
+        support.get("move_speed", 0) * support.get("move_dir", 1)
+        if support and support.get("moving")
+        else 0
+    )
+    return enemy["speed"] * enemy["direction"] - scene.mario["vx"] - carry, True
+
+
+def platform_relative_motion(geometry):
+    if not geometry or "scene" not in geometry:
+        return 0.0, False, 5
+    scene = geometry["scene"]
+    platform = min(
+        (p for p in scene.platforms if p.get("moving")),
+        key=lambda p: abs(p["rect"].centerx - scene.mario["x"]),
+        default=None,
+    )
+    if platform is None:
+        memory = geometry.get("motion_memory", {}).get(6, {})
+        return float(memory.get("relative_vx", 0)), False, memory.get("relative_age", 5)
+    if geometry.get("observation_provider") == "perceived":
+        speed = platform.get("relative_vx")
+        age = platform.get("relative_age", 5)
+        return float(speed or 0), speed is not None and age == 0, age
+    support = scene.mario.get("_platform")
+    carry = (
+        support.get("move_speed", 0) * support.get("move_dir", 1)
+        if support and support.get("moving")
+        else 0
+    )
+    return platform["move_speed"] * platform["move_dir"] - scene.mario["vx"] - carry, True, 0
+
+
 # Availability has dedicated model-input slots, not only diagnostic metadata.
 AVAILABILITY_NAMES = (
     "mario",
@@ -76,8 +133,51 @@ class CanonicalSMBProjector(VisionHierarchyProjector):
         spatial = F.adaptive_avg_pool2d(probabilities, (15, 16)).flatten(1)
         descriptor = F.adaptive_avg_pool1d(spatial.unsqueeze(1), 9).squeeze(1)
         batch.src_c = torch.cat((batch.src_c[:, :47], availability, descriptor), dim=1)
+        # Screen displacement is not world velocity when the camera is
+        # unobservable. Do not let a learner use that changing surrogate
+        # despite its unavailable flag. Facing derived from it is unknown too.
+        unavailable_velocity = availability[:, 2] == 0
+        batch.src_c[unavailable_velocity, 14] = 0.0
+        batch.src_c[unavailable_velocity, 17] = 0.5
+        geometry = (metadata or {}).get("smb_geometry")
+        speed, known = enemy_relative_motion(geometry)
+        enemies = [e for e in geometry["scene"].enemies if not e.get("dead")] if geometry else []
+        enemy = min(
+            enemies,
+            key=lambda e: abs(
+                e["x"]
+                + e["w"] / 2
+                - geometry["scene"].mario["x"]
+                - geometry["scene"].mario["w"] / 2
+            ),
+            default={},
+        )
+        age = enemy.get(
+            "relative_age",
+            (
+                0
+                if known
+                else (geometry or {}).get("motion_memory", {}).get(5, {}).get("relative_age", 5)
+            ),
+        )
+        batch.src_c[:, 58] = min(1.0, age / 5.0)
+        platform_speed, platform_known, platform_age = platform_relative_motion(geometry)
+        batch.src_c[:, 59] = max(-1.0, min(1.0, platform_speed / 3.0))
+        batch.src_c[:, 60] = float(platform_known)
+        batch.src_c[:, 61] = min(1.0, platform_age / 5.0)
+        # The final two descriptor slots now have explicit physical meanings.
+        # A/B/C lengths and every existing physical/availability slot stay fixed.
+        batch.src_c[:, 62] = max(-1.0, min(1.0, speed / 3.0))
+        batch.src_c[:, 63] = float(known and age == 0)
+        batch.metadata["smb_scene_encoder"] = SCENE_ENCODER
         batch.metadata["smb_observation_schema"] = SCENE_SCHEMA
-        batch.metadata["vision_fusion"].update(c_availability=(47, 55), c_patch_tokens=(55, 64))
+        batch.metadata["vision_fusion"].update(
+            c_availability=(47, 55),
+            c_patch_tokens=(55, 58),
+            c_enemy_motion_age=(58, 59),
+            c_platform_relative_motion=(59, 62),
+            c_enemy_relative_motion=(62, 64),
+        )
         return batch
 
 
@@ -190,13 +290,18 @@ def canonical_rgb(observation):
 
 
 def preserve_objective(geometry, tracker):
-    """Keep a takeoff target fixed in world coordinates until support returns."""
+    """Keep static takeoff targets fixed; required stomps follow the live enemy."""
     from retroagi.core.smb_objectives import objective_goal
     from retroagi.stages.block_smb.local_traversal import LocalObjective
 
     objective = geometry["objective"]
     scroll = geometry["scroll"]
-    if geometry["support"] == "air" and tracker.target is not None:
+    if (
+        geometry["support"] == "air"
+        and tracker.target is not None
+        and objective.kind != "stomp"
+        and tracker.target[0] != "stomp"
+    ):
         kind, left, right, top = tracker.target[:4]
         direction = tracker.target[4] if len(tracker.target) > 4 else 1
         objective = LocalObjective(kind, left - scroll, right - scroll, top, direction=direction)

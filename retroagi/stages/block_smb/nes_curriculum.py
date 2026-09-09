@@ -11,12 +11,19 @@ from retroagi.stages.block_smb.monte_carlo import (
     validate_block_smb_monte_carlo_oracle,
 )
 
-DISTRIBUTION = "block_smb_nes_land_v2"
+DISTRIBUTION = "block_smb_nes_land_v4"
+FAMILY_ALIASES = {"wait_timing": "bridge_wait"}
+
+
+def canonical_families(families):
+    return list(dict.fromkeys(FAMILY_ALIASES.get(f, f) for f in families))
 
 
 def sample_nes_case(*, family, split, seed, index, difficulty="medium", max_rejections=32):
     if not 0 <= max_rejections < 1024 or index < 0:
         raise ValueError("Invalid candidate index or rejection budget")
+    requested_family = family
+    family = FAMILY_ALIASES.get(family, family)
     reasons = []
     for attempt in range(max_rejections + 1):
         old = sample_block_smb_monte_carlo_scenario(
@@ -32,6 +39,17 @@ def sample_nes_case(*, family, split, seed, index, difficulty="medium", max_reje
         scenario["task_direction"] = -1 if family == "retreat_recovery" else 1
         scenario["task_objective"] = "stomp" if family in ("enemy_stomp", "stomp_mount") else None
         scenario["mario"][1] += 4  # preserve the authored feet position with the NES small box
+        parameters = dict(old.parameters)
+        if requested_family != family:
+            scenario["metadata"]["family_alias"] = requested_family
+        if family == "enemy_stomp":
+            # Short, invisible patrol limits made identical observed motion
+            # require incompatible jump holds. Use the visible floor span;
+            # no authored turnaround can occur in the middle of a flat approach.
+            for enemy in scenario["enemies"]:
+                enemy[2], enemy[3] = 0, scenario["world_width"]
+            parameters.update(family_revision=3, patrol_halfwidth=None, enemy_motion="floor_span")
+            scenario["metadata"]["block_smb_monte_carlo"]["parameters"] = parameters
         if family in ("pit_leap", "platform_hop"):
             # The duration-isolation task begins at a real running takeoff.
             # NES caps a jump initiated from rest at walking horizontal speed.
@@ -81,6 +99,7 @@ def sample_nes_case(*, family, split, seed, index, difficulty="medium", max_reje
                 )
                 return replace(
                     old,
+                    parameters=parameters,
                     distribution_id=DISTRIBUTION,
                     scenario_id=scenario_id,
                     sample_index=index,

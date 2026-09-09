@@ -1,5 +1,9 @@
 # SMB sensorimotor repairs — September 9, 2026
 
+This records the initial version 2 repair. The subsequent
+[stomp timing and scrolling repair](smb-stomp-scrolling-repair.md) supersedes its
+stomp coaching and scene-input contract; vision remains reusable.
+
 The shared pixel tracker, goal selector, executor and coaching collector now use
 `observable_traversal_v2` and `canonical_collision_coaching_v2`. These are control
 and curriculum changes; the canonical seven-class vision interface and its
@@ -73,3 +77,8 @@ resume. Fixed scenes remain excluded.
 Omitting `--perception-checkpoint` retains the complete fresh-perception path.
 The Full SMB perception adaptation and emulator qualification stages remain
 subject to their existing measured transfer requirements.
+
+The subsequent [motion/curriculum repair](smb-motion-curriculum-repair.md) adds
+bounded motion memory, per-frame bridge re-observation, phase-balanced replay,
+actual-policy miss recovery, and an explicit `wait_timing` alias. Its v4 interface
+supersedes the historical contracts and pre-restart status described above.

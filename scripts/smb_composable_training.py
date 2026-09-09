@@ -18,11 +18,13 @@ from retroagi.core.smb_learning import (
     collect_case,
     collect_reactive_case,
     collect_stomp_recovery_case,
+    collect_stomp_scroll_case,
     make_model,
     playback,
     rows_to_data,
     save_dataset,
 )
+from retroagi.core.smb_scene import SCENE_ENCODER
 from retroagi.stages.block_smb.demonstrations import fit_demonstrations
 from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
 from retroagi.stages.block_smb.nes_curriculum import sample_nes_case
@@ -42,7 +44,9 @@ def write_json(path, value):
 
 def samples(config, split, count, *, offset=0, families=None, log=None):
     result = []
-    for family in families or config["families"]:
+    from retroagi.stages.block_smb.nes_curriculum import canonical_families
+
+    for family in canonical_families(families or config["families"]):
         for i in range(count):
             result.append(
                 sample_nes_case(
@@ -114,11 +118,61 @@ def collect(model, cases, vision, *, log):
                 )
                 rows.extend(alternative)
                 if sample.family == "enemy_stomp":
+                    for takeoff in ("nearby", "policy", "actual_takeoff", "actual_miss"):
+                        variation, variation_result = collect_reactive_case(
+                            model,
+                            stage,
+                            family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
+                            seed=sample.sample_seed % (2**31),
+                            takeoff_delay=3 + sample.sample_index % 7 if takeoff == "nearby" else 0,
+                            policy_takeoff=takeoff == "policy",
+                            policy_rollout={"actual_takeoff": "takeoff", "actual_miss": "miss"}.get(
+                                takeoff
+                            ),
+                        )
+                        episodes.append(
+                            dict(
+                                id=sample.scenario_id,
+                                family=sample.family,
+                                split=sample.split,
+                                route_variant=True,
+                                takeoff_variant=takeoff,
+                                start=len(rows),
+                                length=len(variation),
+                                **variation_result,
+                            )
+                        )
+                        rows.extend(variation)
+                    scrolling, scrolling_result = collect_stomp_scroll_case(
+                        model,
+                        stage,
+                        family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
+                        seed=sample.sample_seed % (2**31),
+                        offset=80 + 16 * (sample.sample_index % 5),
+                    )
+                    episodes.append(
+                        dict(
+                            id=sample.scenario_id,
+                            family=sample.family,
+                            split=sample.split,
+                            route_variant=True,
+                            takeoff_variant="policy_scrolling",
+                            start=len(rows),
+                            length=len(scrolling),
+                            **scrolling_result,
+                        )
+                    )
+                    rows.extend(scrolling)
                     recovery, recovery_result = collect_stomp_recovery_case(
                         model,
                         stage,
                         family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
                         seed=sample.sample_seed % (2**31),
+                        offset=12 + sample.sample_index % 9,
+                        # Moving away behind a one-way camera can make a fast
+                        # overshoot physically unrecoverable. Retain momentum
+                        # without authoring those impossible reset states.
+                        velocity=2.5 if sample.parameters["enemy_speed"] == 0 else 1.25,
                     )
                     episodes.append(
                         dict(
@@ -324,6 +378,8 @@ def reuse_perception(checkpoint, output, *, device, log):
 
 
 def run(config, output):
+    from retroagi.stages.block_smb.nes_curriculum import canonical_families
+
     retired = {
         "bootstrap_updates",
         "demonstration_layouts_per_family",
@@ -331,6 +387,7 @@ def run(config, output):
     } & config.keys()
     if retired:
         raise ValueError(f"Removed bootstrap settings: {sorted(retired)}")
+    config = {**config, "families": canonical_families(config["families"])}
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
 
@@ -354,11 +411,14 @@ def run(config, output):
             fresh_policy_initialization=True,
             fresh_perception_initialization=not bool(config.get("perception_checkpoint")),
             policy_schedule="numbered_epochs_only",
+            family_aliases={"wait_timing": "bridge_wait"},
+            independent_families=len(config["families"]),
             init_checkpoint=None,
             fixed_scenes=[],
             runtime="smb_scene_v2",
-            coaching="canonical_collision_coaching_v2",
-            objective_contract="observable_traversal_v2",
+            scene_encoder=SCENE_ENCODER,
+            coaching="canonical_collision_coaching_v4",
+            objective_contract="observable_traversal_v4",
             full_level_qualified=False,
         ),
     )
@@ -641,8 +701,14 @@ def main():
         or config.get("fixed_scenes")
     ):
         raise ValueError("This pipeline requires a fresh 30-epoch generated curriculum")
-    if set(config["families"]) != set(BLOCK_SMB_MC_FAMILIES):
-        raise ValueError("All 21 families must be present")
+    from retroagi.stages.block_smb.nes_curriculum import canonical_families
+
+    if set(canonical_families(config["families"])) != set(
+        canonical_families(BLOCK_SMB_MC_FAMILIES)
+    ):
+        raise ValueError(
+            "All 20 independent families must be present (wait_timing aliases bridge_wait)"
+        )
     run(config, args.output_dir)
 
 

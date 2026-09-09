@@ -27,7 +27,7 @@ flowchart TD
     Review -. Accepted labels only .-> FV[Train Full dense ViT and convolutional decoder]
     NES --> FV
     Block[Block renderer and collision instrumentation] --> BV[Train Block dense ViT and convolutional decoder]
-    BV --> Core[Fresh shared core: epochs 1–30 across all 21 families]
+    BV --> Core[Fresh shared core: epochs 1–30 across all 20 independent families]
     Core --> Metrics[Per-family validation during shared training]
     FV --> Assemble[Assemble Full perception with shared core]
     Core --> Assemble
@@ -272,6 +272,14 @@ Compatibility means more than tensor dimensions. `SMBComponentContract` records
 `smb_scene_v2`, the seven semantic classes, A/B/C lengths 8/16/64, 35 physical
 features, eight availability indicators, a 256×240 viewport, velocity scales,
 `nes_land_v1`, frame skip 1, physical jump/wait units, and recurrent/reset semantics.
+The current scene encoder, `canonical_semantic_motion_v4`, additionally reserves
+C slots 62 and 63 for enemy velocity relative to Mario (scaled by 3 pixels/frame
+and clipped to [-1, 1]) and its availability bit. This shared tracker feature
+cancels camera translation and requires no change to the segmentation labels
+or ViT weights. C58 contains enemy estimate age; C59–61 contain platform relative
+velocity, fresh-measurement availability, and age. Ages saturate at five frames
+and normalize by five; estimates expire after four frames. C55–57 retain three
+semantic spatial descriptors. See the [motion/curriculum repair](smb-motion-curriculum-repair.md).
 The projector uses deterministic semantic spatial features. Independently trained
 ViT latent embeddings never cross the policy boundary.
 

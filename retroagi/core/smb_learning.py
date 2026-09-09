@@ -16,7 +16,7 @@ from retroagi.core.smb_components import (
 )
 from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
 from retroagi.core.smb_runtime import SMBRuntimeContract, attach_runtime, make_smb_executor
-from retroagi.core.smb_scene import block_oracle_scene
+from retroagi.core.smb_scene import SCENE_ENCODER, block_oracle_scene
 from retroagi.core.smb_supervision import OracleSceneVision
 from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
 from retroagi.stages.block_smb.demonstrations import DemonstrationBatch
@@ -27,7 +27,7 @@ from retroagi.stages.full_smb.train import _policy_action_logits_and_state
 
 def runtime(provider="oracle"):
     return SMBRuntimeContract(
-        objective_contract="observable_traversal_v2",
+        objective_contract="observable_traversal_v4",
         schema="smb_scene_v2",
         visual_tokens="canonical",
         physics_profile=NES_PHYSICS_PROFILE,
@@ -88,13 +88,24 @@ def rows_to_data(rows):
                 if i in (0, 1, 2, 3, 8)
                 else torch.tensor([r[i] for r in rows])
             )
-            for i in range(11)
+            for i in range(len(rows[0]))
         )
     )
 
 
 def _collect_coached(
-    model, stage, actions=None, *, family=0, seed=0, max_steps=320, takeoff_distance=50, variant=0
+    model,
+    stage,
+    actions=None,
+    *,
+    family=0,
+    seed=0,
+    max_steps=320,
+    takeoff_distance=50,
+    variant=0,
+    takeoff_delay=0,
+    policy_takeoff=False,
+    policy_rollout=None,
 ):
     from retroagi.core.smb_coaching import (
         COACHING_CONTRACT,
@@ -102,6 +113,7 @@ def _collect_coached(
         safe_jump_indices,
     )
 
+    model.eval()  # Policy-takeoff proposals use the same deterministic lane as playback.
     obs = stage.reset(seed=seed)
     executor = make_smb_executor(model)
     if stage.env._require_bridge_before_goal:
@@ -111,17 +123,67 @@ def _collect_coached(
     selected_valid = [0]
     decisions = safe_sets = recoveries = 0
     info = {}
+    delayed_frames = 0
+    stomp_launched = False
+    policy_airborne = False
+    policy_finished = policy_rollout is None
+    policy_frames = 0
+    recovery_state = None
     for frame in range(max_steps if actions is None else min(max_steps, len(actions))):
         batch = stage.encode_observation(obs)
         committed = executor.prepare(batch)
+        sampling_phase = batch.metadata["smb_geometry"]["objective"].kind
+        if stage.env._require_bridge_before_goal:
+            from retroagi.core.smb_objectives import observable_objective
+
+            # Collision phase is a replay stratum only, never a policy input.
+            # Pixel occlusion must not hide exit decisions from balancing.
+            sampling_phase = observable_objective(stage.env).kind
         bouncing = bool(batch.metadata["smb_geometry"].get("bouncing"))
         decision = (
             committed is None
             and not bouncing
             and batch.metadata["smb_geometry"].get("support") != "air"
         )
+        corrected_takeoff = None
+        if not policy_finished:
+            policy_airborne |= not stage.env.mario["on_ground"]
+            if policy_airborne and stage.env.mario["on_ground"] and not stage.env._stomp_credited:
+                policy_finished = True
+                recovery_state = dict(
+                    x=stage.env.mario["x"],
+                    vx=stage.env.mario["vx"],
+                    camera=stage.env.camera_x,
+                    frame=frame,
+                )
+            else:
+                forward = _policy_action_logits_and_state(
+                    model, batch, device=next(model.parameters()).device
+                )
+                proposed = int(forward.logits.argmax(-1))
+                if policy_rollout == "takeoff" and decision and proposed in (2, 4, 5):
+                    valid = safe_jump_indices(model, stage.env, proposed)
+                    if valid:
+                        corrected_takeoff = (proposed, valid[len(valid) // 2], valid)
+                        policy_finished = True
+                if not policy_finished:
+                    execution = executor.execute(
+                        proposed, batch=batch, motor_primitives=forward.motor_primitives
+                    )
+                    obs, _, done, truncated, info = stage.step(execution.action)
+                    policy_frames += 1
+                    if done or truncated or frame >= 159:
+                        return [], dict(
+                            success=False,
+                            reason="no_recoverable_policy_miss",
+                            policy_frames=policy_frames,
+                        )
+                    # Uncorrected policy actions are never successful actor labels.
+                    continue
         if decision:
-            if actions is None or stage.env._require_bridge_before_goal:
+            if corrected_takeoff is not None:
+                intended, selected_index, selected_valid = corrected_takeoff
+            elif actions is None or stage.env._require_bridge_before_goal:
                 intended, selected_index, selected_valid = coach_choice(
                     model, stage.env, takeoff_distance=takeoff_distance, variant=variant
                 )
@@ -148,6 +210,33 @@ def _collect_coached(
                     )
                 elif intended in (1, 3):
                     selected_valid = list(range(16))  # Walk durations are not trained.
+            if (takeoff_delay or policy_takeoff) and actions is None and not stomp_launched:
+                from retroagi.core.smb_coaching import stomp_takeoff_choice
+
+                proposal = None
+                if policy_takeoff:
+                    forward = _policy_action_logits_and_state(
+                        model, batch, device=next(model.parameters()).device
+                    )
+                    proposal = int(forward.logits.argmax(-1))
+                intended, selected_index, selected_valid, delayed = stomp_takeoff_choice(
+                    model,
+                    stage.env,
+                    (intended, selected_index, selected_valid),
+                    proposal=proposal,
+                    delay=delayed_frames < takeoff_delay,
+                )
+                delayed_frames += int(delayed)
+                stomp_launched |= intended in (2, 4, 5)
+            if intended == 0 and getattr(executor, "_bridge_wait_context", False):
+                selected_index, selected_valid = 0, [0]
+            if stage.env._require_bridge_before_goal and intended == 1:
+                from retroagi.core.smb_coaching import bridge_target
+
+                if bridge_target(stage.env) == "exit":
+                    # The safe departure may begin before bridge/shore contact.
+                    # It is exit practice, even if coarse geometry says ride.
+                    sampling_phase = "bridge_exit"
             decisions += 1
             safe_sets += intended not in (1, 3) and len(selected_valid) > 1
         elif committed is not None:
@@ -177,6 +266,13 @@ def _collect_coached(
                 following.src_c.cpu(),
                 family,
                 [i in selected_valid for i in range(16)],
+                {
+                    "bridge_approach": 1,
+                    "bridge_wait": 2,
+                    "bridge_board": 3,
+                    "bridge_ride": 4,
+                    "bridge_exit": 5,
+                }.get(sampling_phase, 0),
             )
         )
         if done or truncated:
@@ -190,6 +286,8 @@ def _collect_coached(
         decisions=decisions,
         safe_duration_sets=safe_sets,
         bounce_continuations=recoveries,
+        policy_frames=policy_frames,
+        actual_miss_recovery=recovery_state,
         teacher=(
             "reactive_collision"
             if actions is None or stage.env._require_bridge_before_goal
@@ -257,8 +355,9 @@ def playback(model, stage, *, max_steps=320, seed=0, start=None, target=None):
 def save_dataset(data, path, *, episodes, provider):
     torch.save(
         dict(
-            kind="canonical_demonstrations_v3",
-            coaching="canonical_collision_coaching_v2",
+            kind="canonical_demonstrations_v4",
+            scene_encoder=SCENE_ENCODER,
+            coaching="canonical_collision_coaching_v4",
             data=asdict(data),
             episodes=episodes,
             runtime=runtime(provider).manifest(),
@@ -309,7 +408,17 @@ def adapt_world_model(model, data, *, steps=100, learning_rate=3e-4, seed=0):
 
 @torch.no_grad()
 def collect_reactive_case(
-    model, stage, *, family=0, seed=0, max_steps=320, takeoff_distance=50, variant=0
+    model,
+    stage,
+    *,
+    family=0,
+    seed=0,
+    max_steps=320,
+    takeoff_distance=50,
+    variant=0,
+    takeoff_delay=0,
+    policy_takeoff=False,
+    policy_rollout=None,
 ):
     return _collect_coached(
         model,
@@ -319,6 +428,9 @@ def collect_reactive_case(
         max_steps=max_steps,
         takeoff_distance=takeoff_distance,
         variant=variant,
+        takeoff_delay=takeoff_delay,
+        policy_takeoff=policy_takeoff,
+        policy_rollout=policy_rollout,
     )
 
 
@@ -447,7 +559,7 @@ def physical_outcome_loss(model, current, following):
     )
 
 
-def collect_stomp_recovery_case(model, stage, *, family, seed=0):
+def collect_stomp_recovery_case(model, stage, *, family, seed=0, velocity=1.25, offset=16):
     """Teach the observable turn-back state after overshooting a required stomp.
 
     This is a training-only reset variation; accept it only after the shared
@@ -462,8 +574,32 @@ def collect_stomp_recovery_case(model, stage, *, family, seed=0):
         return [], dict(success=False, reason="no_recovery_target")
     try:
         stage.scenario = copy.deepcopy(original)
-        stage.scenario["mario"] = [enemy["x"] + enemy["w"] + 36, stage.env.mario["y"]]
-        stage.scenario["mario_velocity"] = [0.0, 0.0]
+        stage.scenario["mario"] = [enemy["x"] + enemy["w"] + offset, stage.env.mario["y"]]
+        stage.scenario["mario_velocity"] = [velocity, 0.0]
         return collect_reactive_case(model, stage, family=family, seed=seed)
+    finally:
+        stage.scenario = original
+
+
+def collect_stomp_scroll_case(model, stage, *, family, seed=0, offset=120):
+    """Move a training approach under camera lock without changing local physics."""
+    import copy
+
+    original = stage.scenario
+    try:
+        stage.scenario = copy.deepcopy(original)
+        scenario = stage.scenario
+        scenario["world_width"] += offset
+        scenario["mario"][0] += offset
+        scenario["goal"][0] += offset
+        # Enemy-stomp approaches have one uninterrupted floor. Extend it on
+        # the left as well so translation cannot introduce a camera landmark.
+        if len(scenario["platforms"]) != 1 or scenario["platforms"][0][0] != 0:
+            raise ValueError("Scrolling stomp variation requires an uninterrupted floor")
+        scenario["platforms"][0][2] += offset
+        for enemy in scenario["enemies"]:
+            enemy[0] += offset
+            enemy[2], enemy[3] = 0, scenario["world_width"]
+        return collect_reactive_case(model, stage, family=family, seed=seed, policy_takeoff=True)
     finally:
         stage.scenario = original

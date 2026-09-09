@@ -3433,6 +3433,11 @@ def _smb_forward_kwargs(model, batch, deterministic):
     metadata = batch.metadata or {}
     if metadata.get("smb_observation_schema") != contract.schema:
         raise ValueError("Batch observation semantics do not match checkpoint contract")
+    if contract.objective_contract == "observable_traversal_v4":
+        from retroagi.core.smb_scene import SCENE_ENCODER
+
+        if metadata.get("smb_scene_encoder") != SCENE_ENCODER:
+            raise ValueError("Batch scene encoder does not match checkpoint feature meanings")
     geometry = metadata["smb_geometry"]
     if (
         contract.schema == "smb_scene_v2"

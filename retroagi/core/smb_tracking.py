@@ -48,6 +48,83 @@ def terrain_rectangles(mask):
     return [{"rect": r, "moving": False} for r in finished if r.w >= 4 and r.h >= 3]
 
 
+MOTION_TTL = 4
+
+
+def update_motion_tracks(tracks, boxes, player_center, *, frame, camera_delta, camera_known):
+    """Associate visible bodies, retaining bounded estimates across occlusion.
+
+    Hidden tracks aid association only: they never become collision surfaces.
+    Ages distinguish measured velocity from a retained estimate. Relative edge
+    displacement cancels the camera and uses a common unclipped landmark.
+    """
+    tracks = [t for t in tracks if frame - t["frame"] <= MOTION_TTL]
+    for t in tracks:
+        t["camera_sum"] += camera_delta
+        t["camera_valid"] &= camera_known
+    unmatched = list(tracks)
+    updated, estimates = [], {}
+    for rect in boxes:
+        candidates = []
+        for t in unmatched:
+            prior = t["rect"]
+            edge = (
+                "right"
+                if rect.left == 0 or prior.left == 0
+                else ("left" if rect.right == 256 or prior.right == 256 else "centerx")
+            )
+            delta = getattr(rect, edge) - getattr(prior, edge)
+            elapsed = frame - t["frame"]
+            relative = (
+                (delta - (player_center - t["player"])) / elapsed
+                if (player_center is not None and t["player"] is not None)
+                else None
+            )
+            distance = abs(relative if relative is not None else delta / elapsed)
+            if abs(rect.y - prior.y) <= 8 and distance <= 10:
+                candidates.append((distance, len(candidates), t, delta, relative))
+        if candidates:
+            _, _, t, delta, relative = min(candidates, key=lambda c: c[:2])
+            unmatched.remove(t)
+            elapsed = frame - t["frame"]
+            if t["camera_valid"]:
+                measured = (delta + t["camera_sum"]) / elapsed
+                if frame - t["world_frame"] > MOTION_TTL or (
+                    t["world"] and measured * sum(t["world"]) < 0
+                ):
+                    t["world"].clear()
+                t["world"].append(measured)
+                t["world_frame"] = frame
+            if relative is not None:
+                if t["relative"] and relative * sum(t["relative"]) < 0:
+                    t["relative"].clear()
+                t["relative"].append(relative)
+                t["relative_frame"] = frame
+        else:
+            t = dict(
+                world=deque(maxlen=4),
+                relative=deque(maxlen=4),
+                world_frame=-100,
+                relative_frame=-100,
+            )
+        world_age, relative_age = frame - t["world_frame"], frame - t["relative_frame"]
+        estimates[tuple(rect)] = dict(
+            vx=float(np.mean(t["world"])) if t["world"] and world_age <= MOTION_TTL else None,
+            relative_vx=(
+                float(np.mean(t["relative"]))
+                if t["relative"] and relative_age <= MOTION_TTL
+                else None
+            ),
+            motion_age=world_age,
+            relative_age=relative_age,
+        )
+        t.update(
+            rect=rect.copy(), player=player_center, frame=frame, camera_sum=0, camera_valid=True
+        )
+        updated.append(t)
+    return estimates, updated + unmatched
+
+
 class PerceivedSMBScene:
     def __init__(self):
         self.reset()
@@ -70,6 +147,9 @@ class PerceivedSMBScene:
         self.bouncing = False
         self.previous_vy = 0.0
         self.objects = {5: [], 6: []}
+        self.relative_enemy_history = {}
+        self.motion_tracks = {5: [], 6: []}
+        self.previous_center = None
 
     def observe(
         self, vision, *, terminated=False, truncated=False, objective_kind=None, goal_direction=1
@@ -115,7 +195,7 @@ class PerceivedSMBScene:
             if len(ordered) > 1 and ordered[0][0] < 0.1 and ordered[1][0] > ordered[0][0] + 0.005:
                 camera_delta = ordered[0][1]
                 camera_known = True
-            elif not np.any(np.diff(terrain.astype(np.int8), axis=1)):
+            else:
                 # Translation of featureless floor is unobservable. Keep the
                 # last estimate, explicitly marked unavailable, rather than
                 # invent a sudden zero world velocity during scrolling.
@@ -139,41 +219,44 @@ class PerceivedSMBScene:
         velocity_known = bool(old and visible and old[2] and camera_known)
         old_enemies = list(self.objects[5])
         velocities = {}
+        relative_velocities = {}
+        estimates = {}
         for cls in (5, 6):
             current = sorted(
                 component_boxes(labels == cls, minimum_area=12 if cls == 5 else 32),
                 key=lambda b: b.w * b.h,
                 reverse=True,
             )[:6]
-            previous = list(self.objects[cls])
-            velocities[cls] = {}
-            history = {}
-            for rect in current:
-                distances = sorted(
-                    (abs(rect.x - old.x + camera_delta) + abs(rect.y - old.y), i)
-                    for i, old in enumerate(previous)
-                )
-                if camera_known and distances and distances[0][0] <= 8:
-                    _, i = distances[0]
-                    old_rect = previous.pop(i)
-                    # A clipped left edge is not an object landmark; use the
-                    # right edge while it remains visible in both frames.
-                    delta = (
-                        rect.right - old_rect.right
-                        if rect.left == old_rect.left == 0
-                        and rect.right < 256
-                        and old_rect.right < 256
-                        else rect.x - old_rect.x
-                    ) + camera_delta
-                    samples = deque(self.object_history[cls].get(tuple(old_rect), ()), maxlen=4)
-                    # Preserve reversal timing instead of averaging opposite directions.
-                    if samples and delta * sum(samples) < 0:
-                        samples.clear()
-                    samples.append(delta)
-                    history[tuple(rect)] = samples
-                    velocities[cls][tuple(rect)] = float(np.mean(samples))
+            estimates[cls], self.motion_tracks[cls] = update_motion_tracks(
+                self.motion_tracks[cls],
+                current,
+                box.centerx if visible else None,
+                frame=self.frames,
+                camera_delta=camera_delta,
+                camera_known=camera_known,
+            )
+            velocities[cls] = {
+                key: value["vx"] for key, value in estimates[cls].items() if value["vx"] is not None
+            }
             self.objects[cls] = current
-            self.object_history[cls] = history
+        relative_velocities = {key: value["relative_vx"] for key, value in estimates[5].items()}
+        motion_memory = {}
+        for cls in (5, 6):
+            candidates = [
+                t
+                for t in self.motion_tracks[cls]
+                if t["relative"] and self.frames - t["relative_frame"] <= MOTION_TTL
+            ]
+            track = min(
+                candidates,
+                key=lambda t: abs(t["rect"].centerx - (t["player"] or box.centerx)),
+                default=None,
+            )
+            if track is not None:
+                motion_memory[cls] = dict(
+                    relative_vx=float(np.mean(track["relative"])),
+                    relative_age=self.frames - track["relative_frame"],
+                )
         platforms = terrain_rectangles(terrain)
         fragmented = len(platforms) > 128
         if fragmented:
@@ -195,6 +278,7 @@ class PerceivedSMBScene:
         for p in moving:
             speed = velocities[6].get(tuple(p["rect"]), 0.0)
             p.update(move_speed=abs(speed), move_dir=1 if speed >= 0 else -1)
+            p.update(estimates[6][tuple(p["rect"])])
         platforms.extend(moving)
         supports = [
             p
@@ -250,7 +334,12 @@ class PerceivedSMBScene:
             # The locomotion slot excludes passive platform carry, matching
             # its meaning in the collision provider and NES motion model.
             vx -= support["move_speed"] * support["move_dir"]
-            velocity_known &= tuple(support["rect"]) in velocities[6]
+            velocity_known &= support.get("motion_age", 5) == 0
+            if support.get("relative_vx") is not None:
+                # Relative body/platform displacement directly measures active
+                # locomotion, even when no shore can register camera motion.
+                vx = -support["relative_vx"]
+                velocity_known = support.get("relative_age", 5) == 0
         self.previous_grounded = grounded
         mario = dict(
             x=float(box.x),
@@ -285,6 +374,10 @@ class PerceivedSMBScene:
         for e in enemies:
             speed = velocities[5].get((e["x"], e["y"], e["w"], e["h"]), 0.0)
             e.update(speed=abs(speed), direction=1 if speed >= 0 else -1)
+            key = (e["x"], e["y"], e["w"], e["h"])
+            e["relative_vx"] = relative_velocities.get(key)
+            e.update(estimates[5][key])
+
         coins = [dict(rect=b, collected=False) for b in component_boxes(labels == 3)]
         goals = component_boxes(labels == 4)
         scene = SimpleNamespace(
@@ -314,21 +407,35 @@ class PerceivedSMBScene:
         )
         if objective_kind == "stomp" and not self.stomp_complete:
             if objective.kind == "stomp":
+                target_enemy = enemies[objective.enemy_index]
                 self.stomp_target = (
-                    objective.left + self.scroll,
-                    objective.right + self.scroll,
+                    objective.left - box.x,
+                    objective.right - box.x,
                     objective.top,
+                    target_enemy.get("relative_vx"),
+                    0,
                 )
-            elif self.stomp_target is not None:
-                left, right, top = self.stomp_target
+            elif self.stomp_target is not None and visible:
+                left, right, top, relative_vx, age = self.stomp_target
+                # Brief disappearance is not completion. Propagate relative
+                # motion briefly; after that retain a recovery direction with
+                # explicitly stale geometry instead of extrapolating forever.
+                delta = relative_vx if relative_vx is not None and age < 4 else 0.0
+                left, right = left + delta, right + delta
+                self.stomp_target = (left, right, top, relative_vx, age + 1)
                 objective = LocalObjective(
                     "stomp",
-                    left - self.scroll,
-                    right - self.scroll,
+                    box.x + left,
+                    box.x + right,
                     top,
-                    direction=1 if (left + right) / 2 >= box.centerx + self.scroll else -1,
+                    direction=1 if (left + right) / 2 >= box.w / 2 else -1,
                 )
-        if not grounded and self.target is not None:
+        if (
+            not grounded
+            and self.target is not None
+            and objective.kind != "stomp"
+            and not (self.target[0] == "stomp" and self.stomp_complete)
+        ):
             kind, left, right, top = self.target[:4]
             direction = self.target[4] if len(self.target) > 4 else goal_direction
             objective = LocalObjective(
@@ -345,6 +452,7 @@ class PerceivedSMBScene:
         # Explicit goals are provided by task configuration, not hidden state.
         features = geometry_features(scene, terminated=terminated, truncated=truncated)
         features["motion_vec"][[1, 2, 6, 7]] = 0
+        self.previous_center = box.centerx if visible else None
         self.previous = (box.x, box.y, visible)
         self.terrain = terrain.copy()
         self.dynamic = dynamic
@@ -362,15 +470,9 @@ class PerceivedSMBScene:
                 int(visible),
                 int(visible and not fragmented),
                 int(velocity_known),
-                int(
-                    bool(enemies)
-                    and all(
-                        tuple(pygame.Rect(e["x"], e["y"], e["w"], e["h"])) in velocities[5]
-                        for e in enemies
-                    )
-                ),
+                int(bool(enemies) and all(e.get("motion_age", 5) == 0 for e in enemies)),
                 0,
-                int(bool(moving) and all(tuple(p["rect"]) in velocities[6] for p in moving)),
+                int(bool(moving) and all(p.get("motion_age", 5) == 0 for p in moving)),
                 0,
                 0,
             ],
@@ -387,4 +489,5 @@ class PerceivedSMBScene:
             player_box=list(box),
             frame=self.frames - 1,
             observation_provider="perceived",
+            motion_memory=motion_memory,
         )

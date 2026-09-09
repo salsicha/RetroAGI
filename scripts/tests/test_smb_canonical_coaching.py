@@ -77,7 +77,7 @@ def test_wait_and_landing_boundaries_are_resolved_before_actor_label():
         )
 
     executor.execute(0, batch=batch("bridge_wait"), motor_primitives=primitive(15))
-    assert executor.committed_action == 0
+    assert executor.committed_action is None  # bridge waits reobserve after one frame
     assert executor.prepare(batch("bridge_board")) is None
     assert executor.prepare(batch("bridge_board")) is None
     executor.execute(2, batch=batch("mount"), motor_primitives=primitive(0))

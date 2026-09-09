@@ -28,8 +28,10 @@ as `mount_platform`, and exiting as `clear_gap`. A required stomp uses the
 clear. Block scenarios declare `task_objective="stomp"`; the Full adapter accepts
 the same explicit `task_objective` request. Direction is likewise an explicit
 `task_direction`. Neither request reveals enemy velocity or future collisions.
-Targets remain fixed in world coordinates during a committed flight, and bounce
-recovery clears the skill goal until support returns.
+Static targets remain fixed in world coordinates during a committed flight.
+Required stomp targets follow the observed enemy; bounce recovery clears the
+skill goal until support returns. The current [stomp repair](smb-stomp-scrolling-repair.md)
+adds camera-independent closing velocity and duration labels at policy takeoffs.
 
 The actor, hierarchy, LSTM, critic, and motor controller keep their architecture
 and tensor shapes. Perception remains swappable across domains. Goal meanings
@@ -104,7 +106,9 @@ There is no policy bootstrap stage. Each of the 30 epochs collects 25 layouts
 per family and interleaves coaching batches with its 1,000 rehearsal updates.
 Earlier epochs remain in replay. Each accepted layout also attempts a varied
 reactive route; there are no independent prerequisite family models.
-All 21 families remain in training; fixed scenes remain excluded. Family scores
+The current run contains 20 independent families: `wait_timing` is an explicit
+alias of `bridge_wait` and receives no duplicate sampling weight. Fixed scenes
+remain excluded. Family scores
 after each epoch measure autonomous completion. Full SMB promotion still
 requires the final measured qualification.
 
@@ -124,3 +128,8 @@ Development verification on September 9, 2026:
 Local detailed reports are under
 `artifacts/smb_composable/coaching_repair_20260909/`. Diagnostic weights are not
 used to initialize the fresh full-volume run.
+
+The subsequent [motion/curriculum repair](smb-motion-curriculum-repair.md) adds
+bounded motion memory, per-frame bridge re-observation, phase-balanced replay,
+actual-policy miss recovery, and an explicit `wait_timing` alias. Its v4 interface
+supersedes the historical contracts and pre-restart status described above.

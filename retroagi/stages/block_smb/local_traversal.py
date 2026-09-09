@@ -232,6 +232,19 @@ def local_target_distance(env, target: LocalObjective) -> float:
     )
 
 
+def stomp_probe_distance(env, target: LocalObjective, base: float = 50) -> float:
+    """Search early enough for an incoming enemy's motion during a NES flight.
+
+    This controls collision-teacher search, not policy playback. A certified
+    hold still has to succeed; speed never substitutes for a collision probe.
+    """
+    if target.kind != "stomp" or env.motion is None or target.enemy_index is None:
+        return base
+    enemy = env.enemies[target.enemy_index]
+    incoming = max(0.0, -target.direction * enemy["speed"] * enemy["direction"])
+    return base + incoming * 64
+
+
 def support_edge_distance(env, direction: int) -> float:
     support = env.mario.get("_platform")
     if support is None:
@@ -338,7 +351,11 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
                 action = 1 if direction > 0 else 3
             else:
                 distance = local_target_distance(env, target)
-                valid = safe_jump_holds(env, target, direction) if distance < 50 else []
+                valid = (
+                    safe_jump_holds(env, target, direction)
+                    if distance < stomp_probe_distance(env, target)
+                    else []
+                )
                 if valid:
                     hold_remaining = valid[len(valid) // 2] - 1
                     in_jump = True

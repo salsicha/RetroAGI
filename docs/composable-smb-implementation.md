@@ -32,8 +32,9 @@ The implementations of the hierarchy, LSTM, critic, adaptive controller and
 executor are shared. The dense ViTs have separate weights. Domain-specific ViT
 embeddings never enter C: semantic probabilities supply deterministic spatial
 features. A/B/C retain lengths 8/16/64; C contains position, canonical semantics,
-support, 35 ordered physical features, eight availability indicators and nine
-fixed spatial features. Coordinates use a 256×240 viewport and common velocity
+support, 35 ordered physical features, eight availability indicators, three
+fixed spatial features, enemy and platform velocity relative to Mario, fresh
+measurement indicators, and estimate ages. The current scene encoder is `canonical_semantic_motion_v4`. Coordinates use a 256×240 viewport and common velocity
 scales. The same local objective replaces simulator finish-marker distances.
 Synthetic finish rectangles are hidden from canonical Block observations. A
 leftward navigation request is an explicit task input for `retreat_recovery`.
@@ -71,8 +72,9 @@ falling defeated states, and emits a stomp event once per transition.
 Two observation lanes remain explicit: collision instrumentation for labels and
 diagnostics, and dense ViT plus a shared temporal tracker for pixel playback.
 The tracker estimates camera motion and object velocity, marks unavailable motion
-and patrol bounds in model inputs, and preserves a takeoff objective in world
-coordinates. Emulator capture crops are padded back into physical coordinates,
+and patrol bounds in model inputs, and preserves static takeoff objectives in
+world coordinates. Required stomps follow the observed enemy during flight;
+relative enemy motion remains observable over scrolling, featureless floor. Emulator capture crops are padded back into physical coordinates,
 not stretched. Pixel encoding has a regression test that fails on any RAM read.
 
 The recovered six-class CNN is loaded offline by a maintained wrapper. Its
@@ -94,7 +96,7 @@ pixel accuracy is insufficient.
 Entrypoint: `python -m scripts.smb_composable_training --config
 scripts/configs/smb_composable_full_volume.json --output-dir <fresh-directory>`.
 The configuration rejects resume/init checkpoints and fixed scenes, and requires
-30 shared-policy epochs and all 21 generated families.
+30 shared-policy epochs and all 20 independent generated families.
 
 1. Recheck the paired motion traces. By default, generate fresh Block perception
    clips and train a dense ViT. With `--perception-checkpoint`, reuse qualified
@@ -102,12 +104,12 @@ The configuration rejects resume/init checkpoints and fixed scenes, and requires
    always fresh. See [sensorimotor repairs](smb-sensorimotor-repair.md).
 2. Initialize one fresh shared core and start epoch 1. There is no policy
    bootstrap or independent per-family training phase.
-3. Run 30 numbered epochs, each collecting 25 new layouts per family (525 total)
+3. Run 30 numbered epochs, each collecting 25 new layouts per family (500 total)
    and applying exactly 1,000 rehearsal updates. Collection and learning interleave
    in batches of up to three layouts per family; earlier epochs remain in replay.
    Status events include the epoch number, batch, stage, and update count. Family
    validation follows each epoch; low scores do not prevent the next epoch.
-   Validation and test each contain 630 layouts. Final Block results gate emulator
+   Validation and test each contain 600 layouts. Final Block results gate emulator
    promotion after the shared run. Fixed scenes remain excluded.
 4. Train ordered Block sequences with carried recurrent context and explicit
    episode resets. This is one-frame truncated BPTT at playback cadence. Verify
@@ -156,7 +158,7 @@ Preflight evidence is under `artifacts/full_smb/composable_implementation/`:
   routes. This is teacher feasibility, not model mastery.
 - A fresh 32-wide core trained for 600 updates learned the `pit_leap` pilot and
   completed separate easy, medium and hard validation cases. This is a smoke test,
-  not qualification of all 21 families.
+  not qualification of all 20 independent families.
 - The first real-emulator capture produced 15 examples across three approaches;
   two timing variants required a longer solution and were recorded as unresolved.
   Subsequent production capture applies stricter safe-exit and deduplication gates.
@@ -283,3 +285,14 @@ as an extra epoch. Independent family-model prerequisites remain removed.
 collection progress also carries the current epoch. `full_volume` records the
 completed epoch's loss and autonomous family results. The latest process/log
 metadata is `artifacts/smb_composable/active_run.json`.
+
+
+## Stomp timing and scrolling repair (2026-09-09)
+
+The [stomp repair audit](smb-stomp-scrolling-repair.md) covers unsafe hold predictions,
+coaching at policy and nearby takeoff states, recovery with forward momentum,
+and camera-independent enemy motion. These examples are collected inside the
+existing numbered epochs. The full-volume schedule is still 30 epochs with
+1,000 policy updates per epoch; no bootstrap or prerequisite family run is added.
+Vision can be reused, while policy observations and replay use the version 3
+contract and must be regenerated for a fresh full-volume run.
