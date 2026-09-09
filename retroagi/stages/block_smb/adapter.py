@@ -158,21 +158,25 @@ class BlockSMBStage:
                         terminated=self._last_terminal,
                         truncated=self._last_truncated,
                         goal_direction=(self.scenario or {}).get("task_direction", 1),
+                        objective_kind=(self.scenario or {}).get("task_objective"),
                     )
                     if self.observation_config.observation_provider == "perceived"
                     else block_oracle_scene(
-                        self.env, terminated=self._last_terminal, truncated=self._last_truncated
+                        self.env,
+                        terminated=self._last_terminal,
+                        truncated=self._last_truncated,
+                        objective_kind=(self.scenario or {}).get("task_objective"),
                     )
                 )
                 if self.observation_config.observation_provider == "oracle":
                     from retroagi.core.smb_scene import preserve_objective
 
-                    self._scene_cache = preserve_objective(self._scene_cache, self.scene_tracker)
                     if self.env.mario["on_ground"]:
                         self.scene_tracker.bouncing = False
                     elif info.get("reward_terms", {}).get("enemy_stomp", 0) > 0:
                         self.scene_tracker.bouncing = True
                     self._scene_cache["bouncing"] = getattr(self.scene_tracker, "bouncing", False)
+                    self._scene_cache = preserve_objective(self._scene_cache, self.scene_tracker)
                 self._scene_frame = self.env.steps
             from retroagi.core.smb_scene import apply_local_target
 

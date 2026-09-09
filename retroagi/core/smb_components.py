@@ -26,6 +26,7 @@ COMPONENT_PREFIXES = {
 
 @dataclass(frozen=True)
 class SMBComponentContract:
+    objective_contract: str = "observable_traversal_v1"
     observation_schema: str = "smb_scene_v2"
     physics_profile: str = "nes_land_v1"
     semantic_classes: tuple = (
@@ -168,7 +169,11 @@ def load_component(model, directory, name, *, contract, architecture):
         raise ValueError("Unknown policy component")
     directory = Path(directory)
     manifest = json.loads((directory / "bundle.json").read_text())
-    if manifest["version"] != 1 or SMBComponentContract(**manifest["contract"]) != contract:
+    if (
+        manifest["version"] != 1
+        or manifest["contract"].get("objective_contract") != contract.objective_contract
+        or SMBComponentContract(**manifest["contract"]) != contract
+    ):
         raise ValueError("Component observation/physics/runtime contract mismatch")
     if manifest["architecture"] != architecture:
         raise ValueError("Component architecture mismatch")
@@ -225,6 +230,8 @@ def load_bundle(directory, *, device="cpu", perception_path=None):
 
     directory = Path(directory)
     manifest = json.loads((directory / "bundle.json").read_text())
+    if manifest["contract"].get("objective_contract") != "observable_traversal_v1":
+        raise ValueError("Legacy bundle requires retraining for observable traversal goals")
     contract = SMBComponentContract(**manifest["contract"])
     model = make_model(hidden_dim=manifest["architecture"]["hidden_dim"], device=device)
     for name in COMPONENT_PREFIXES:
@@ -236,6 +243,7 @@ def load_bundle(directory, *, device="cpu", perception_path=None):
     attach_runtime(model, manifest["runtime"])
     runtime = model.smb_runtime_contract
     if (
+        runtime.objective_contract,
         runtime.schema,
         runtime.physics_profile,
         runtime.jump_hold_frames,
@@ -244,6 +252,7 @@ def load_bundle(directory, *, device="cpu", perception_path=None):
         runtime.min_wait_frames,
         runtime.max_wait_frames,
     ) != (
+        contract.objective_contract,
         contract.observation_schema,
         contract.physics_profile,
         contract.jump_frames,

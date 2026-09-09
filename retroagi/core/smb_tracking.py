@@ -10,9 +10,9 @@ import numpy as np
 import pygame
 import torch
 
-from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.core.smb_geometry import geometry_features
-from retroagi.stages.block_smb.local_traversal import LocalObjective, local_objective
+from retroagi.core.smb_objectives import objective_goal, observable_objective
+from retroagi.stages.block_smb.local_traversal import LocalObjective
 
 
 def component_boxes(mask, minimum_area=1):
@@ -166,7 +166,7 @@ class PerceivedSMBScene:
             skidding=False,
             coyote_frames=0,
             jump_buffer=0,
-            _platform=supports[0] if grounded else None,
+            _platform=max(supports, key=lambda p: bool(p.get("moving"))) if grounded else None,
         )
         enemies = [
             dict(
@@ -205,11 +205,11 @@ class PerceivedSMBScene:
             _terrain_left=goal_direction < 0,
             _goal_credited=False,
         )
-        objective = local_objective(scene) if visible else LocalObjective("finish", 240, 256, 208)
-        if objective_kind == "stomp" and objective.kind == "enemy":
-            from dataclasses import replace
-
-            objective = replace(objective, kind="stomp")
+        objective = (
+            observable_objective(scene, objective_kind=objective_kind)
+            if visible
+            else LocalObjective("finish", 240, 256, 208)
+        )
         if not grounded and self.target is not None:
             kind, left, right, top = self.target[:4]
             direction = self.target[4] if len(self.target) > 4 else goal_direction
@@ -224,13 +224,6 @@ class PerceivedSMBScene:
                 objective.top,
                 objective.direction,
             )
-        skill = {
-            "gap": "clear_gap",
-            "mount": "mount_platform",
-            "enemy": "enemy_clear",
-            "retreat": "retreat_recover",
-            "stomp": "enemy_clear",
-        }.get(objective.kind)
         # Explicit goals are provided by task configuration, not hidden state.
         features = geometry_features(scene, terminated=terminated, truncated=truncated)
         features["motion_vec"][[1, 2, 6, 7]] = 0
@@ -241,9 +234,7 @@ class PerceivedSMBScene:
             scene=scene,
             features=features,
             objective=objective,
-            skill_goal=(
-                skill_goal_encoding(skill) if skill else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
-            ),
+            skill_goal=objective_goal(objective, bouncing=self.bouncing),
             support="ground" if grounded else "air",
             enemy_contact=False,
             bouncing=self.bouncing,

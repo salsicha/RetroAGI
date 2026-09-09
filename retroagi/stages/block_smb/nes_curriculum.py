@@ -30,6 +30,7 @@ def sample_nes_case(*, family, split, seed, index, difficulty="medium", max_reje
         scenario = copy.deepcopy(old.scenario)
         scenario["physics_profile"] = NES_PHYSICS_PROFILE
         scenario["task_direction"] = -1 if family == "retreat_recovery" else 1
+        scenario["task_objective"] = "stomp" if family in ("enemy_stomp", "stomp_mount") else None
         scenario["mario"][1] += 4  # preserve the authored feet position with the NES small box
         if family == "pit_leap":
             # The duration-isolation task begins at a real running takeoff.

@@ -546,7 +546,13 @@ class FullSMBStage:
         vision: Optional[VisionEncoder] = None,
         env_kwargs: Optional[Mapping[str, Any]] = None,
         start_emulator_state: Optional["FullSMBEmulatorState"] = None,
+        task_objective: str | None = None,
+        task_direction: int = 1,
     ):
+        if task_objective not in (None, "stomp") or task_direction not in (-1, 1):
+            raise ValueError("Unsupported explicit traversal task")
+        self.task_objective = task_objective
+        self.task_direction = task_direction
         self.env_config = env_config
         self.start_emulator_state = start_emulator_state
         self.content_spec = content_spec
@@ -796,7 +802,11 @@ class FullSMBStage:
                     or self._perceived_cache[0] != self._geometry_frame
                 ):
                     geometry = self.scene_tracker.observe(
-                        vision, terminated=self._last_terminal, truncated=self._last_truncated
+                        vision,
+                        terminated=self._last_terminal,
+                        truncated=self._last_truncated,
+                        objective_kind=self.task_objective,
+                        goal_direction=self.task_direction,
                     )
                     self._perceived_cache = (self._geometry_frame, geometry)
                 geometry = self._perceived_cache[1]
@@ -821,6 +831,26 @@ class FullSMBStage:
             if self.smb_runtime_contract.schema == "smb_scene_v2":
                 from retroagi.core.smb_scene import apply_local_target
 
+                if self.smb_runtime_contract.observation_provider == "oracle":
+                    from retroagi.core.smb_objectives import observable_objective
+                    from retroagi.core.smb_scene import preserve_objective
+
+                    if self.task_direction < 0:
+                        import pygame
+
+                        from retroagi.core.smb_geometry import geometry_features
+
+                        geometry["scene"]._terrain_left = True
+                        geometry["scene"].goal = pygame.Rect(0, 188, 16, 20)
+                        geometry["features"] = geometry_features(
+                            geometry["scene"],
+                            terminated=self._last_terminal,
+                            truncated=self._last_truncated,
+                        )
+                    geometry["objective"] = observable_objective(
+                        geometry["scene"], objective_kind=self.task_objective
+                    )
+                    geometry = preserve_objective(geometry, self.scene_tracker)
                 geometry = apply_local_target(geometry)
                 geometry["observation_provider"] = self.smb_runtime_contract.observation_provider
             state = geometry["features"]["state_vec"]

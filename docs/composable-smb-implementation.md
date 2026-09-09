@@ -1,5 +1,9 @@
 # Composable SMB implementation and restart
 
+The compatible coaching repair and family-by-family audit are documented in
+[canonical-smb-coaching.md](canonical-smb-coaching.md). This supersedes the initial
+generic collector’s single-duration supervision and incomplete bridge goals.
+
 Implementation date: 2026-09-08. Design: [composable SMB transfer plan](composable-smb-transfer-plan.md).
 
 The [segmentation curriculum guide](smb-segmentation-curriculum.md) documents

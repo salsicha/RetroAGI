@@ -90,6 +90,27 @@ def collect(model, cases, vision, *, log):
                 )
             )
             rows.extend(data)
+            if data:
+                alternative, alt_result = collect_reactive_case(
+                    model,
+                    stage,
+                    family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
+                    seed=sample.sample_seed % (2**31),
+                    takeoff_distance=24 + sample.sample_index % 45,
+                    variant=1 + sample.sample_index % 13,
+                )
+                episodes.append(
+                    dict(
+                        id=sample.scenario_id,
+                        family=sample.family,
+                        split=sample.split,
+                        route_variant=True,
+                        start=len(rows),
+                        length=len(alternative),
+                        **alt_result,
+                    )
+                )
+                rows.extend(alternative)
         finally:
             stage.env.close()
         if number == 1 or number % 10 == 0:
@@ -105,8 +126,12 @@ def collect(model, cases, vision, *, log):
     log(
         dict(
             phase="demonstrations",
-            accepted=sum(e["success"] for e in episodes),
-            attempted=len(episodes),
+            accepted=sum(e["success"] for e in episodes if not e.get("route_variant")),
+            attempted=len(cases),
+            accepted_variants=sum(e["success"] for e in episodes if e.get("route_variant")),
+            safe_duration_sets=sum(
+                e.get("safe_duration_sets", 0) for e in episodes if e["success"]
+            ),
             frames=len(rows),
         )
     )
@@ -238,6 +263,8 @@ def run(config, output):
             init_checkpoint=None,
             fixed_scenes=[],
             runtime="smb_scene_v2",
+            coaching="canonical_collision_coaching_v1",
+            objective_contract="observable_traversal_v1",
             full_level_qualified=False,
         ),
     )

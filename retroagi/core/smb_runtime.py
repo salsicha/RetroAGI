@@ -8,6 +8,7 @@ from retroagi.core.smb_geometry import SCHEMA
 
 @dataclass(frozen=True)
 class SMBRuntimeContract:
+    objective_contract: str = "legacy"
     schema: str = SCHEMA
     motion_observations: bool = True
     adaptive_duration: bool = False
@@ -137,21 +138,40 @@ class ContractExecutor(SMBParameterizedPrimitiveExecutor):
             frames = self.jump_hold_frames[index]
         return frames, index
 
+    def prepare(self, batch):
+        """Resolve observed primitive boundaries before selecting/labeling A.
+
+        Idempotent for one observation; neither this hook nor execute invokes a
+        teacher. Both collectors and playback see the same decision boundary.
+        """
+        metadata = (batch.metadata or {}).get("smb_geometry", {}) if batch else {}
+        if getattr(self, "nes_press_edges", False):
+            if (
+                self._active_jump is not None
+                and self._released
+                and self._left_support
+                and metadata.get("support") in ("ground", "platform")
+            ):
+                self.reset()
+            phase = getattr(metadata.get("objective"), "kind", None)
+            previous = getattr(self, "_previous_bridge_phase", None)
+            if self._active_steady == 0 and (previous, phase) in (
+                ("bridge_wait", "bridge_board"),
+                ("bridge_ride", "bridge_exit"),
+            ):
+                self.reset()
+            self._previous_bridge_phase = phase
+        if metadata.get("bouncing"):
+            self.reset()
+        return self.committed_action
+
     def execute(self, action, *, batch=None, **kwargs):
+        self.prepare(batch)
         self._mapping_jump = int(action) in (2, 4, 5)
         metadata = (batch.metadata or {}).get("smb_geometry", {}) if batch else {}
-        if (
-            getattr(self, "nes_press_edges", False)
-            and self._active_jump is not None
-            and self._released
-            and self._left_support
-            and metadata.get("support") in ("ground", "platform")
-        ):
-            self.reset()
         if metadata.get("bouncing"):
             from retroagi.core.actions import SMBPrimitiveExecution, smb_jump_release_action
 
-            self.reset()
             return SMBPrimitiveExecution(action=int(smb_jump_release_action(action)))
         if self.engine_support:
             kwargs.setdefault("support_override", metadata.get("support"))

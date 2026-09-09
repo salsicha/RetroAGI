@@ -27,6 +27,7 @@ from retroagi.stages.full_smb.train import _policy_action_logits_and_state
 
 def runtime(provider="oracle"):
     return SMBRuntimeContract(
+        objective_contract="observable_traversal_v1",
         schema="smb_scene_v2",
         visual_tokens="canonical",
         physics_profile=NES_PHYSICS_PROFILE,
@@ -92,27 +93,73 @@ def rows_to_data(rows):
     )
 
 
-@torch.no_grad()
-def collect_case(model, stage, actions, *, family=0, seed=0):
-    """Revalidate the teacher through the exact policy executor before retaining labels."""
+def _collect_coached(
+    model, stage, actions=None, *, family=0, seed=0, max_steps=320, takeoff_distance=50, variant=0
+):
+    from retroagi.core.smb_coaching import (
+        COACHING_CONTRACT,
+        coach_choice,
+        safe_jump_indices,
+    )
+
     obs = stage.reset(seed=seed)
     executor = make_smb_executor(model)
+    if stage.env._require_bridge_before_goal:
+        actions = None
     rows = []
-    for frame, intended in enumerate(actions):
+    selected_index = 0
+    selected_valid = [0]
+    decisions = safe_sets = recoveries = 0
+    info = {}
+    for frame in range(max_steps if actions is None else min(max_steps, len(actions))):
         batch = stage.encode_observation(obs)
-        committed = executor.committed_action
-        decision = committed is None
-        count = 1
-        while frame + count < len(actions) and actions[frame + count] == intended:
-            count += 1
-        frames = list(NES_JUMP_FRAMES)
-        index = min(range(16), key=lambda i: abs(frames[i] - count))
-        execution = executor.execute(intended, batch=batch, motor_primitives=primitive(index))
-        motor = int(committed) if committed is not None else intended
+        committed = executor.prepare(batch)
+        bouncing = bool(batch.metadata["smb_geometry"].get("bouncing"))
+        decision = committed is None and not bouncing
+        if decision:
+            if actions is None or stage.env._require_bridge_before_goal:
+                intended, selected_index, selected_valid = coach_choice(
+                    model, stage.env, takeoff_distance=takeoff_distance, variant=variant
+                )
+            else:
+                intended = int(actions[frame])
+                count = 1
+                while frame + count < len(actions) and actions[frame + count] == intended:
+                    count += 1
+                # A rounded-up wait can skip the only safe departure window.
+                selected_index = max(i for i, n in enumerate(NES_JUMP_FRAMES) if n <= count)
+                selected_valid = [selected_index]
+                if intended in (2, 4, 5):
+                    selected_valid = safe_jump_indices(model, stage.env, intended)
+                    if not selected_valid:
+                        return [], dict(
+                            success=False,
+                            frames=len(rows),
+                            executor_verified=True,
+                            coaching=COACHING_CONTRACT,
+                            reason="no_safe_takeoff",
+                        )
+                    selected_index = min(
+                        selected_valid, key=lambda i: abs(NES_JUMP_FRAMES[i] - count)
+                    )
+                elif intended in (1, 3):
+                    selected_valid = list(range(16))  # Walk durations are not trained.
+            decisions += 1
+            safe_sets += intended not in (1, 3) and len(selected_valid) > 1
+        elif committed is not None:
+            intended = int(committed)
+        else:
+            # The physical bounce owns this continuation. A supplied script
+            # must not teach another jump while the executor releases A.
+            from retroagi.core.actions import smb_jump_release_action
+
+            intended = int(smb_jump_release_action(actions[frame] if actions is not None else 1))
+            recoveries += 1
+        execution = executor.execute(
+            intended, batch=batch, motor_primitives=primitive(selected_index)
+        )
         obs, _, done, truncated, info = stage.step(execution.action)
         following = stage.encode_observation(obs)
-        valid = [False] * 16
-        valid[index] = True
         rows.append(
             (
                 batch.src_a.cpu(),
@@ -120,22 +167,37 @@ def collect_case(model, stage, actions, *, family=0, seed=0):
                 batch.src_c.cpu(),
                 batch.metadata["smb_geometry"]["skill_goal"].cpu(),
                 intended,
-                motor,
-                index,
+                int(execution.action) if bouncing else intended,
+                selected_index,
                 decision,
                 following.src_c.cpu(),
                 family,
-                valid,
+                [i in selected_valid for i in range(16)],
             )
         )
         if done or truncated:
             break
-    success = (
-        bool(stage.env._goal_credited)
-        if hasattr(stage.env, "_goal_credited")
-        else bool(info.get("full_smb_signals", {}).get("completion"))
+    success = bool(stage.env._goal_credited)
+    return rows if success else [], dict(
+        success=success,
+        frames=len(rows),
+        executor_verified=True,
+        coaching=COACHING_CONTRACT,
+        decisions=decisions,
+        safe_duration_sets=safe_sets,
+        bounce_continuations=recoveries,
+        teacher=(
+            "reactive_collision"
+            if actions is None or stage.env._require_bridge_before_goal
+            else "verified_route"
+        ),
     )
-    return rows if success else [], dict(success=success, frames=len(rows), executor_verified=True)
+
+
+@torch.no_grad()
+def collect_case(model, stage, actions, *, family=0, seed=0):
+    """Retain complete executable routes with collision-coached decision labels."""
+    return _collect_coached(model, stage, actions, family=family, seed=seed, max_steps=320)
 
 
 @torch.no_grad()
@@ -191,7 +253,8 @@ def playback(model, stage, *, max_steps=320, seed=0, start=None, target=None):
 def save_dataset(data, path, *, episodes, provider):
     torch.save(
         dict(
-            kind="canonical_demonstrations_v2",
+            kind="canonical_demonstrations_v3",
+            coaching="canonical_collision_coaching_v1",
             data=asdict(data),
             episodes=episodes,
             runtime=runtime(provider).manifest(),
@@ -240,85 +303,18 @@ def adapt_world_model(model, data, *, steps=100, learning_rate=3e-4, seed=0):
     )
 
 
-def teacher_choice(env):
-    """Offline local search under current physical state; absent from playback."""
-    from dataclasses import replace
-
-    from retroagi.stages.block_smb.bridge_traversal import bridge_phase
-    from retroagi.stages.block_smb.local_traversal import (
-        local_objective,
-        local_target_distance,
-        safe_jump_holds,
-    )
-
-    if env._require_bridge_before_goal:
-        phase = bridge_phase(env, True)
-        return (1 if phase in ("approach", "board", "exit", "finish") else 0), 0, [0]
-    target = local_objective(env)
-    if (
-        (env._goal_on_stomp or env._require_stomp_before_goal)
-        and not env._stomp_credited
-        and target.kind == "enemy"
-    ):
-        target = replace(target, kind="stomp")
-    direction = target.direction
-    if (
-        env.mario["on_ground"]
-        and target.kind not in ("finish", "retreat")
-        and local_target_distance(env, target) < 50
-    ):
-        holds = safe_jump_holds(env, target, direction)
-        if holds:
-            valid = [NES_JUMP_FRAMES.index(n) for n in holds]
-            return (2 if direction > 0 else 4), valid[len(valid) // 2], valid
-    return (1 if direction > 0 else 3), 0, [0]
-
-
 @torch.no_grad()
-def collect_reactive_case(model, stage, *, family=0, seed=0, max_steps=320):
-    obs = stage.reset(seed=seed)
-    executor = make_smb_executor(model)
-    rows = []
-    for frame in range(max_steps):
-        batch = stage.encode_observation(obs)
-        committed = executor.committed_action
-        # A released arc on support completes before the next decision in the
-        # NES executor. Match that readiness when labeling the next initiation.
-        if (
-            committed is not None
-            and getattr(executor, "_released", False)
-            and stage.env.mario["on_ground"]
-        ):
-            executor.reset()
-            committed = None
-        if committed is None:
-            intended, index, valid_indices = teacher_choice(stage.env)
-        else:
-            intended, index, valid_indices = int(committed), 0, [0]
-        execution = executor.execute(intended, batch=batch, motor_primitives=primitive(index))
-        obs, _, done, truncated, info = stage.step(execution.action)
-        following = stage.encode_observation(obs)
-        valid = [i in valid_indices for i in range(16)]
-        rows.append(
-            (
-                batch.src_a.cpu(),
-                batch.src_b.cpu(),
-                batch.src_c.cpu(),
-                batch.metadata["smb_geometry"]["skill_goal"].cpu(),
-                intended,
-                intended,
-                index,
-                committed is None,
-                following.src_c.cpu(),
-                family,
-                valid,
-            )
-        )
-        if done or truncated:
-            break
-    success = bool(stage.env._goal_credited)
-    return rows if success else [], dict(
-        success=success, frames=len(rows), executor_verified=True, teacher="reactive_physics_search"
+def collect_reactive_case(
+    model, stage, *, family=0, seed=0, max_steps=320, takeoff_distance=50, variant=0
+):
+    return _collect_coached(
+        model,
+        stage,
+        family=family,
+        seed=seed,
+        max_steps=max_steps,
+        takeoff_distance=takeoff_distance,
+        variant=variant,
     )
 
 

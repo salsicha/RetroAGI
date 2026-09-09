@@ -3443,7 +3443,11 @@ def _smb_forward_kwargs(model, batch, deterministic):
     if tuple(metadata["vision_fusion"]["c_state"]) != (12, 12 + expected_state_size):
         raise ValueError("Shared SMB state feature offsets are incompatible")
     executor = getattr(model, "smb_executor", None)
-    committed = executor.committed_action if executor is not None else None
+    committed = (
+        executor.prepare(batch)
+        if hasattr(executor, "prepare")
+        else executor.committed_action if executor is not None else None
+    )
     kwargs = dict(
         skill_goal=geometry["skill_goal"].to(batch.src_c.device) if contract.skill_goals else None,
         critic_feedback_enabled=contract.critic_feedback,

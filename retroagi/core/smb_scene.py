@@ -81,15 +81,14 @@ class CanonicalSMBProjector(VisionHierarchyProjector):
         return batch
 
 
-def block_oracle_scene(env, *, terminated=False, truncated=False):
+def block_oracle_scene(env, *, terminated=False, truncated=False, objective_kind=None):
     """Express Block state in the same visible-window coordinates as NES RAM."""
     from types import SimpleNamespace
 
     import pygame
 
-    from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
     from retroagi.core.smb_geometry import geometry_features
-    from retroagi.stages.block_smb.local_traversal import local_objective
+    from retroagi.core.smb_objectives import objective_goal, observable_objective
 
     scroll = int(env.camera_x)
     viewport = pygame.Rect(0, 0, 256, 240)
@@ -150,13 +149,7 @@ def block_oracle_scene(env, *, terminated=False, truncated=False):
         and env.goal.move(-scroll, 0).colliderect(viewport)
         else None
     )
-    objective = local_objective(scene)
-    skill = {
-        "gap": "clear_gap",
-        "mount": "mount_platform",
-        "enemy": "enemy_clear",
-        "retreat": "retreat_recover",
-    }.get(objective.kind)
+    objective = observable_objective(scene, objective_kind=objective_kind)
     features = geometry_features(
         scene,
         death=bool(terminated and not env._goal_credited),
@@ -169,7 +162,7 @@ def block_oracle_scene(env, *, terminated=False, truncated=False):
         scene=scene,
         features=features,
         objective=objective,
-        skill_goal=skill_goal_encoding(skill) if skill else torch.zeros(1, SKILL_GOAL_ENCODING_DIM),
+        skill_goal=objective_goal(objective),
         support="ground" if mario["on_ground"] else "air",
         enemy_contact=False,
         bouncing=False,
@@ -198,7 +191,7 @@ def canonical_rgb(observation):
 
 def preserve_objective(geometry, tracker):
     """Keep a takeoff target fixed in world coordinates until support returns."""
-    from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
+    from retroagi.core.smb_objectives import objective_goal
     from retroagi.stages.block_smb.local_traversal import LocalObjective
 
     objective = geometry["objective"]
@@ -216,16 +209,7 @@ def preserve_objective(geometry, tracker):
             objective.direction,
         )
     geometry["objective"] = objective
-    skill = {
-        "gap": "clear_gap",
-        "mount": "mount_platform",
-        "enemy": "enemy_clear",
-        "retreat": "retreat_recover",
-        "stomp": "enemy_clear",
-    }.get(objective.kind)
-    geometry["skill_goal"] = (
-        skill_goal_encoding(skill) if skill else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
-    )
+    geometry["skill_goal"] = objective_goal(objective, bouncing=geometry.get("bouncing", False))
     return geometry
 
 

@@ -1,5 +1,9 @@
 # Composable Block SMB → Full SMB transfer and emulator curriculum
 
+The compatible coaching repair and family-by-family audit are documented in
+[canonical-smb-coaching.md](canonical-smb-coaching.md). This supersedes the initial
+generic collector’s single-duration supervision and incomplete bridge goals.
+
 Updated 2026-09-08. The implemented workflow and current verification evidence are
 recorded in [the implementation report](composable-smb-implementation.md). CNN
 creation, training, teacher use and component swaps are detailed in the
