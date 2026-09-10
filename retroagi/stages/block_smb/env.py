@@ -220,6 +220,8 @@ class MarioScenarioEnv:
         self._require_bridge_before_goal = False
         self._bridge_boarded = False
         self._bridge_crossed = False
+        self._bridge_jump_task = None
+        self._bridge_jump_launched = False
         self._goal_requires_support = False
         self._single_jump_attempt = False
         self._attempt_failed = False
@@ -369,6 +371,15 @@ class MarioScenarioEnv:
         )
         self._bridge_boarded = False
         self._bridge_crossed = False
+        self._bridge_jump_task = None
+        self._bridge_jump_launched = False
+        self._bridge_jump_task = scenario.get("bridge_jump_task")
+        if self._bridge_jump_task not in (None, "mount", "dismount"):
+            raise ValueError("Invalid bridge jump task")
+        if self._bridge_jump_task == "dismount":
+            support = next(p for p in self.platforms if p.get("moving"))
+            self.mario["_platform"] = support
+            self._bridge_boarded = True
         self._goal_credited = False
         self._goal_requires_support = bool(
             scenario.get("goal_requires_support") or family in ("pit_leap", "pipe_mount")
@@ -449,6 +460,10 @@ class MarioScenarioEnv:
         terminated = game-ending event (death / goal)
         truncated  = timeout
         """
+        previous_max_x = self._max_x_reached
+        grounded_before = self.mario["on_ground"]
+        support_before = self.mario.get("_platform")
+        carry_dx = 0.0
         self.steps += 1
         reward_terms = self.reward_config.zero_terms()
         terminated = False
@@ -634,13 +649,25 @@ class MarioScenarioEnv:
                 if self.motion is not None:
                     self.motion.vertical_contact()
 
+        if (
+            self._bridge_jump_task
+            and grounded_before
+            and self._airborne_started_with_jump
+            and not self.mario["on_ground"]
+        ):
+            from_bridge = bool(support_before and support_before.get("moving"))
+            self._bridge_jump_launched = (
+                not from_bridge if self._bridge_jump_task == "mount" else from_bridge
+            )
+
         # ── 8. Carry Mario on moving platform ────────────────────────────────
         if (
             self.mario["on_ground"]
             and self.mario["_platform"]
             and self.mario["_platform"]["moving"]
         ):
-            self.mario["x"] += self.mario["_platform"]["delta_x"]
+            carry_dx = self.mario["_platform"]["delta_x"]
+            self.mario["x"] += carry_dx
             mario_rect.x = self.mario["x"]
 
         # ── 9. Coyote time bookkeeping ────────────────────────────────────────
@@ -764,11 +791,32 @@ class MarioScenarioEnv:
                 if bridge and support["rect"].left > bridge["move_min"]:
                     self._bridge_crossed = True
 
+        if self._bridge_jump_task and self._bridge_jump_launched and not death:
+            support = self.mario.get("_platform")
+            landed = not prev_on_ground and self.mario["on_ground"] and support is not None
+            bridge = next(p for p in self.platforms if p.get("moving"))
+            # A physical landing is authoritative, including a valid edge
+            # contact. Requiring full-body containment on its first frame would
+            # reject a successful mount that settles farther onto the platform.
+            mounted = landed and support is bridge
+            dismounted = (
+                landed and not support.get("moving") and support["rect"].left > bridge["move_min"]
+            )
+            if (self._bridge_jump_task == "mount" and mounted) or (
+                self._bridge_jump_task == "dismount" and dismounted
+            ):
+                self._goal_credited = True
+                terminated = True
+                reward_terms["goal"] += self.reward_config.goal
+            if landed:
+                self._bridge_jump_launched = False
+
         # ── 17. Goal ──────────────────────────────────────────────────────────
         # Under goal_on_stomp the rect is only a tracking proxy for shaping
         # and observations; brushing it mid-air must not count as success.
         if (
             self.goal
+            and not self._bridge_jump_task
             and not self._goal_on_stomp
             and not death
             and (not self._require_stomp_before_goal or self._stomp_credited)
@@ -818,6 +866,13 @@ class MarioScenarioEnv:
             death=death,
             terminated=terminated,
             truncated=truncated,
+        )
+        # Attribute the already-paid high-water progress reward to passive carry.
+        # It cannot be farmed by riding back and forth over previously reached x.
+        info["bridge_carry_progress"] = (
+            max(0.0, min(carry_dx, self.mario["x"] - previous_max_x)) * self._progress_per_pixel
+            if not death and self._require_bridge_before_goal
+            else 0.0
         )
         if stomp_geometry is not None:
             info["stomp_geometry"] = stomp_geometry

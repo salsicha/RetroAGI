@@ -102,3 +102,10 @@ then evaluates normal greedy play on the audited failures and successful control
 families. Its weights are development artifacts, not production initialization.
 Results and reproduction scripts are under
 `artifacts/smb_composable/policy_state_repair_v5/`.
+
+## Moving-bridge prerequisites (v6)
+
+The current curriculum adds jump-on/jump-off bridge prerequisites, deduplicates
+bridge scenarios and replay routes, and reinforces productive passive carry.
+See [Moving-bridge prerequisites](smb-bridge-prerequisites.md) for task credit,
+ordering within the 30 epochs, verification, and component compatibility.

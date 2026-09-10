@@ -59,6 +59,7 @@ def snapshot_env_state(env: MarioScenarioEnv) -> dict[str, Any]:
         "_stomp_credited",
         "_bridge_boarded",
         "_bridge_crossed",
+        "_bridge_jump_launched",
         "_attempt_failed",
         "_prev_goal_distance",
         "_episode_energy",

@@ -15,7 +15,7 @@ from retroagi.stages.block_smb.local_traversal import (
     stomp_probe_distance,
 )
 
-COACHING_CONTRACT = "canonical_collision_coaching_v5"
+COACHING_CONTRACT = "canonical_collision_coaching_v6"
 
 
 @contextmanager
@@ -40,6 +40,12 @@ def probe_state(env):
 
 def training_target(env):
     from retroagi.core.smb_objectives import required_stomp
+
+    if getattr(env, "_bridge_jump_task", None):
+        from retroagi.stages.block_smb.local_traversal import LocalObjective
+
+        # The jump task succeeds only on the required collision landing.
+        return LocalObjective("finish", env.goal.left, env.goal.right, env.goal.bottom)
 
     if (env._goal_on_stomp or env._require_stomp_before_goal) and not env._stomp_credited:
         target = required_stomp(env)
@@ -194,6 +200,10 @@ def interior_index(indices):
 
 
 def coach_choice(model, env, *, takeoff_distance=50, variant=0):
+    if getattr(env, "_bridge_jump_task", None):
+        from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_choice
+
+        return bridge_jump_choice(model, env, variant=variant)
     if env._require_bridge_before_goal:
         # Runtime reobserves after one frame. Probe walking now, not obsolete
         # long wait commitments; all later opportunities are reconsidered.

@@ -9,7 +9,6 @@
     "single_gap",
     "stair_climb",
     "platform_chain",
-    "moving_bridge",
     "enemy_hop",
     "enemy_patrol",
     "enemy_gap",
@@ -24,6 +23,9 @@
     "pit_leap",
     "stomp_mount",
     "platform_hop",
+    "bridge_mount",
+    "bridge_dismount",
+    "moving_bridge",
     "bridge_wait"
   ],
   "fixed_scenes": [],
@@ -42,5 +44,9 @@
   "sequence_layouts_per_family": 3,
   "emulator_train_variations": 18,
   "emulator_eval_variations": 100,
-  "epoch_chunk_layouts_per_family": 3
+  "epoch_chunk_layouts_per_family": 3,
+  "bridge_prerequisites": [
+    "bridge_mount",
+    "bridge_dismount"
+  ]
 }

@@ -40,6 +40,8 @@ BLOCK_SMB_MC_FAMILIES = (
     "stomp_mount",
     "platform_hop",
     "bridge_wait",
+    "bridge_mount",
+    "bridge_dismount",
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 
@@ -358,6 +360,18 @@ def block_smb_monte_carlo_family_specs(
             },
         }
     )
+    for family in ("bridge_mount", "bridge_dismount"):
+        schemas[family] = dict(
+            platform_width=[56, 100],
+            platform_speed=[0.6, 1.8],
+            required_jump=True,
+            family_revision=[1, 1],
+            goal=(
+                "stable moving-platform landing"
+                if family == "bridge_mount"
+                else "jump from moving platform to far shore"
+            ),
+        )
     for family in ("wait_timing", "moving_bridge"):
         schemas[family] = {k: v for k, v in schemas["bridge_wait"].items() if k != "a_level_action"}
     schemas["moving_bridge"]["spawn_x"] = [20, 60]
@@ -406,9 +420,13 @@ def block_smb_monte_carlo_family_specs(
                 **base_constraints,
                 "family": family,
                 "max_gap_width": (
-                    200
-                    if family in ("bridge_wait", "wait_timing", "moving_bridge")
-                    else (110 if family == "platform_hop" else 66)
+                    255
+                    if family in ("bridge_mount", "bridge_dismount")
+                    else (
+                        200
+                        if family in ("bridge_wait", "wait_timing", "moving_bridge")
+                        else (110 if family == "platform_hop" else 66)
+                    )
                 ),
                 "minimum_landing_width": (
                     30
@@ -1076,6 +1094,10 @@ def _generate_family_scenario_raw(
         return _pit_leap(rng, difficulty)
     if family == "stomp_mount":
         return _stomp_mount(rng, difficulty)
+    if family in ("bridge_mount", "bridge_dismount"):
+        from .bridge_curriculum import bridge_jump_scenario
+
+        return bridge_jump_scenario(rng, difficulty, family)
     if family == "bridge_wait":
         return _bridge_wait(rng, difficulty)
     if family == "platform_hop":

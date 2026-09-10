@@ -26,6 +26,7 @@ from retroagi.core.smb_learning import (
     save_dataset,
 )
 from retroagi.core.smb_scene import SCENE_ENCODER
+from retroagi.stages.block_smb.bridge_curriculum import BRIDGE_FAMILIES
 from retroagi.stages.block_smb.demonstrations import fit_demonstrations
 from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
 from retroagi.stages.block_smb.nes_curriculum import sample_nes_case
@@ -33,7 +34,7 @@ from scripts.smb_perception_training import block_clips, train_perception
 
 POLICY_STATE_FAMILIES = frozenset(
     "tall_pipe_jump pipe_mount stair_climb platform_chain mixed_section "
-    "chained_obstacles full_smb_opening_proxy enemy_stomp stomp_mount".split()
+    "chained_obstacles full_smb_opening_proxy enemy_stomp stomp_mount bridge_mount bridge_dismount".split()
 )
 
 
@@ -48,21 +49,37 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def samples(config, split, count, *, offset=0, families=None, log=None):
+def samples(config, split, count, *, offset=0, families=None, log=None, scenario_keys=None):
     result = []
     from retroagi.stages.block_smb.nes_curriculum import canonical_families
 
+    seen = scenario_keys if scenario_keys is not None else set()
     for family in canonical_families(families or config["families"]):
         for i in range(count):
-            result.append(
-                sample_nes_case(
+            for retry in range(33):
+                sample = sample_nes_case(
                     family=family,
                     split=split,
                     seed=config["seed"],
-                    index=offset + i,
+                    index=offset + i + retry * 1_000_000,
                     difficulty=("easy", "medium", "hard")[i % 3],
                 )
-            )
+                if family not in BRIDGE_FAMILIES:
+                    break
+                key = json.dumps(
+                    {
+                        k: v
+                        for k, v in sample.scenario.items()
+                        if k != "metadata" and not k.startswith("reward_")
+                    },
+                    sort_keys=True,
+                )
+                if key not in seen:
+                    seen.add(key)
+                    break
+            else:
+                raise QualificationFailure("Could not sample a distinct bridge layout")
+            result.append(sample)
         if log:
             log(
                 dict(
@@ -103,26 +120,27 @@ def collect(model, cases, vision, *, log):
             )
             rows.extend(data)
             if data:
-                alternative, alt_result = collect_reactive_case(
-                    model,
-                    stage,
-                    family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
-                    seed=sample.sample_seed % (2**31),
-                    takeoff_distance=24 + sample.sample_index % 45,
-                    variant=1 + sample.sample_index % 13,
-                )
-                episodes.append(
-                    dict(
-                        id=sample.scenario_id,
-                        family=sample.family,
-                        split=sample.split,
-                        route_variant=True,
-                        start=len(rows),
-                        length=len(alternative),
-                        **alt_result,
+                if sample.family not in ("bridge_wait", "moving_bridge"):
+                    alternative, alt_result = collect_reactive_case(
+                        model,
+                        stage,
+                        family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
+                        seed=sample.sample_seed % (2**31),
+                        takeoff_distance=24 + sample.sample_index % 45,
+                        variant=1 + sample.sample_index % 13,
                     )
-                )
-                rows.extend(alternative)
+                    episodes.append(
+                        dict(
+                            id=sample.scenario_id,
+                            family=sample.family,
+                            split=sample.split,
+                            route_variant=True,
+                            start=len(rows),
+                            length=len(alternative),
+                            **alt_result,
+                        )
+                    )
+                    rows.extend(alternative)
                 if sample.family in POLICY_STATE_FAMILIES or sample.family in (
                     "bridge_wait",
                     "moving_bridge",
@@ -244,12 +262,19 @@ def collect(model, cases, vision, *, log):
                     frames=len(rows),
                 )
             )
+    rows, episodes, duplicate_routes = deduplicate_bridge_routes(rows, episodes)
     log(
         dict(
             phase="demonstrations",
+            duplicate_routes=duplicate_routes,
+            passive_carry_frames=sum(
+                e.get("passive_carry_frames", 0) for e in episodes if e["length"]
+            ),
             accepted=sum(e["success"] for e in episodes if not e.get("route_variant")),
             attempted=len(cases),
-            accepted_variants=sum(e["success"] for e in episodes if e.get("route_variant")),
+            accepted_variants=sum(
+                e["success"] and e["length"] > 0 for e in episodes if e.get("route_variant")
+            ),
             safe_duration_sets=sum(
                 e.get("safe_duration_sets", 0) for e in episodes if e["success"]
             ),
@@ -273,13 +298,59 @@ def collect(model, cases, vision, *, log):
     return rows_to_data(rows), episodes
 
 
+def deduplicate_bridge_routes(rows, episodes):
+    """Keep one copy of an executed bridge route, with truthful replay offsets."""
+    kept, output, seen = [], [], {}
+    duplicates = 0
+    for episode in episodes:
+        route = rows[episode["start"] : episode["start"] + episode["length"]]
+        key = None
+        if route and episode["family"] in BRIDGE_FAMILIES:
+            digest = hashlib.sha256()
+            for row in route:
+                for value in row:
+                    tensor = torch.as_tensor(value).contiguous()
+                    digest.update(str((tuple(tensor.shape), tensor.dtype)).encode())
+                    digest.update(tensor.numpy().tobytes())
+            key = (episode["family"], digest.hexdigest())
+            if key in seen:
+                output.append(dict(episode, start=len(kept), length=0, duplicate_of=seen[key]))
+                duplicates += 1
+                continue
+            seen[key] = episode["id"]
+        output.append(dict(episode, start=len(kept)))
+        kept.extend(route)
+    return kept, output, duplicates
+
+
+def curriculum_families(config, unlocked):
+    prerequisites = config.get("bridge_prerequisites", [])
+    if prerequisites and not set(prerequisites).issubset(config["families"]):
+        raise ValueError("Bridge prerequisites must be included in configured families")
+    return [
+        f
+        for f in config["families"]
+        if unlocked or not prerequisites or f not in ("bridge_wait", "moving_bridge")
+    ]
+
+
+def bridge_prerequisites_learned(config, result):
+    prerequisites = config.get("bridge_prerequisites", [])
+    return all(
+        min(result["rates"].get(f, {"missing": 0}).values()) >= config["family_gate"]
+        for f in prerequisites
+    )
+
+
 def concatenate_demonstrations(left, right):
     return type(left)(
         **{f.name: torch.cat((getattr(left, f.name), getattr(right, f.name))) for f in fields(left)}
     )
 
 
-def train_epoch(model, optimizer, config, vision, *, epoch, data=None, episodes=None, log):
+def train_epoch(
+    model, optimizer, config, vision, *, epoch, data=None, episodes=None, log, scenario_keys=None
+):
     """Collect and learn inside this numbered epoch, retaining earlier replay."""
     total = config["train_layouts_per_family_per_epoch"]
     chunk = config.get("epoch_chunk_layouts_per_family", 3)
@@ -308,7 +379,13 @@ def train_epoch(model, optimizer, config, vision, *, epoch, data=None, episodes=
         )
         fresh, fresh_episodes = collect(
             model,
-            samples(config, "train", count, offset=20000 + epoch * 1000 + offset),
+            samples(
+                config,
+                "train",
+                count,
+                offset=20000 + epoch * 1000 + offset,
+                scenario_keys=scenario_keys,
+            ),
             vision,
             log=lambda event: epoch_log(
                 dict(
@@ -490,7 +567,9 @@ def run(config, output):
             runtime="smb_scene_v2",
             scene_encoder=SCENE_ENCODER,
             coaching=COACHING_CONTRACT,
-            replay_sampling="adaptive_decision_groups_v1",
+            replay_sampling="carry_progress_adaptive_groups_v2",
+            bridge_prerequisites=config.get("bridge_prerequisites", []),
+            bridge_scenario_deduplication=True,
             policy_state_families=sorted(POLICY_STATE_FAMILIES),
             objective_contract="observable_traversal_v4",
             full_level_qualified=False,
@@ -551,13 +630,26 @@ def run(config, output):
         )
         optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
         data, episodes, validation = None, [], None
+        bridge_unlocked = not bool(config.get("bridge_prerequisites"))
+        training_scenarios = set()
         for epoch in range(1, config["epochs"] + 1):
+            epoch_config = dict(config, families=curriculum_families(config, bridge_unlocked))
+            log(
+                dict(
+                    phase="curriculum",
+                    epoch=epoch,
+                    active_families=epoch_config["families"],
+                    bridge_unlocked=bridge_unlocked,
+                    prerequisites=config.get("bridge_prerequisites", []),
+                )
+            )
             data, episodes, loss = train_epoch(
                 model,
                 optimizer,
-                config,
+                epoch_config,
                 vision,
                 epoch=epoch,
+                scenario_keys=training_scenarios,
                 data=data,
                 episodes=episodes,
                 log=log,
@@ -595,6 +687,11 @@ def run(config, output):
                     rates=result["rates"],
                 )
             )
+            if not bridge_unlocked and bridge_prerequisites_learned(config, result):
+                bridge_unlocked = True
+                log(
+                    dict(phase="bridge_prerequisites_learned", epoch=epoch, enables_next_epoch=True)
+                )
             export_bundle(
                 model,
                 output / f"epoch_{epoch:02d}",

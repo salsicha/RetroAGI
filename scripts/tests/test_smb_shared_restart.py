@@ -26,7 +26,7 @@ def test_epochs_preserve_model_budget_replay_and_episode_offsets(monkeypatch):
     )
     seen, fits, events = [], [], []
 
-    def samples(config, split, count, *, offset):
+    def samples(config, split, count, *, offset, scenario_keys=None):
         cases = [(f, split, offset + i) for f in config["families"] for i in range(count)]
         seen.extend(cases)
         return cases

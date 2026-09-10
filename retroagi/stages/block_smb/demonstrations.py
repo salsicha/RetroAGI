@@ -43,8 +43,11 @@ class DemonstrationBatch:
     family: torch.Tensor
     valid_durations: torch.Tensor
     phase: torch.Tensor | None = None
+    carry_progress: torch.Tensor | None = None
 
     def __post_init__(self):
+        if self.carry_progress is None:
+            self.carry_progress = torch.zeros_like(self.family, dtype=torch.float32)
         if self.phase is None:
             self.phase = torch.zeros_like(self.family)
 
@@ -307,6 +310,11 @@ def demonstration_sample_weights(data, family_weights=None):
             continuation = phase_mask & ~data.actor_mask
             if continuation.any():
                 weights[continuation] = 0.25 / continuation.sum()
+            # Passive carry toward the goal is useful behavior, including NOOP
+            # and LEFT braking. The environment pays this progress independent
+            # of RIGHT; retain it in imitation replay without inventing labels.
+            productive = phase_mask & data.actor_mask & ((data.action == 0) | (data.action == 3))
+            weights[productive] *= 1 + (40 * data.carry_progress[productive]).clamp(0, 2)
             weights[phase_mask] /= weights[phase_mask].sum()
         weights[family_mask] /= weights[family_mask].sum()
         if family_weights:

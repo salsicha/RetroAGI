@@ -37,8 +37,13 @@ def sample_nes_case(*, family, split, seed, index, difficulty="medium", max_reje
         scenario = copy.deepcopy(old.scenario)
         scenario["physics_profile"] = NES_PHYSICS_PROFILE
         scenario["task_direction"] = -1 if family == "retreat_recovery" else 1
-        scenario["task_objective"] = "stomp" if family in ("enemy_stomp", "stomp_mount") else None
-        scenario["mario"][1] += 4  # preserve the authored feet position with the NES small box
+        scenario["task_objective"] = (
+            family
+            if family in ("bridge_mount", "bridge_dismount")
+            else "stomp" if family in ("enemy_stomp", "stomp_mount") else None
+        )
+        if old.scenario.get("physics_profile") != NES_PHYSICS_PROFILE:
+            scenario["mario"][1] += 4  # preserve authored feet with the NES small box
         parameters = dict(old.parameters)
         if requested_family != family:
             scenario["metadata"]["family_alias"] = requested_family

@@ -353,7 +353,10 @@ def _collect_coached(
                     "bridge_board": 3,
                     "bridge_ride": 4,
                     "bridge_exit": 5,
+                    "bridge_jump_mount": 3,
+                    "bridge_jump_exit": 5,
                 }.get(sampling_phase, 0),
+                float(info.get("bridge_carry_progress", 0)),
             )
         )
         if done or truncated:
@@ -370,6 +373,8 @@ def _collect_coached(
         policy_frames=policy_frames,
         actual_miss_recovery=recovery_state,
         policy_diagnostics=policy_diagnostics,
+        passive_carry_frames=sum(r[4] in (0, 3) and r[12] > 0 for r in rows),
+        carry_progress=sum(r[12] for r in rows),
         teacher=(
             "reactive_collision"
             if actions is None or stage.env._require_bridge_before_goal
@@ -439,7 +444,7 @@ def save_dataset(data, path, *, episodes, provider):
 
     torch.save(
         dict(
-            kind="canonical_demonstrations_v5",
+            kind="canonical_demonstrations_v6",
             scene_encoder=SCENE_ENCODER,
             coaching=COACHING_CONTRACT,
             data=asdict(data),

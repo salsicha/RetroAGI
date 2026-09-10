@@ -549,7 +549,12 @@ class FullSMBStage:
         task_objective: str | None = None,
         task_direction: int = 1,
     ):
-        if task_objective not in (None, "stomp") or task_direction not in (-1, 1):
+        if task_objective not in (
+            None,
+            "stomp",
+            "bridge_mount",
+            "bridge_dismount",
+        ) or task_direction not in (-1, 1):
             raise ValueError("Unsupported explicit traversal task")
         self.task_objective = task_objective
         self.task_direction = task_direction

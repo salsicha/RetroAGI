@@ -140,3 +140,10 @@ actual bridge braking-state collection, and uses error-adaptive replay with
 retention. Coaching/replay provenance is v5; the v4 scene/runtime interfaces and
 qualified vision weights remain compatible. Validation now reports partial
 family results every ten cases.
+
+## Moving-bridge prerequisites (v6)
+
+The current curriculum adds jump-on/jump-off bridge prerequisites, deduplicates
+bridge scenarios and replay routes, and reinforces productive passive carry.
+See [Moving-bridge prerequisites](smb-bridge-prerequisites.md) for task credit,
+ordering within the 30 epochs, verification, and component compatibility.

@@ -28,6 +28,26 @@ def required_stomp(scene):
 
 
 def observable_objective(scene, *, objective_kind=None):
+    if objective_kind in ("bridge_mount", "bridge_dismount"):
+        moving = [(i, p) for i, p in enumerate(scene.platforms) if p.get("moving")]
+        if moving:
+            i, bridge = min(
+                moving, key=lambda pair: abs(pair[1]["rect"].centerx - scene.mario["x"])
+            )
+            if objective_kind == "bridge_mount":
+                r = bridge["rect"]
+                return LocalObjective("bridge_jump_mount", r.left + 3, r.right - 3, r.top, i)
+            shores = [
+                (j, p["rect"])
+                for j, p in enumerate(scene.platforms)
+                if not p.get("moving") and p["rect"].left > bridge["rect"].left
+            ]
+            if shores:
+                j, r = min(shores, key=lambda pair: pair[1].left)
+                return LocalObjective(
+                    "bridge_jump_exit", r.left, min(r.right, r.left + 48), r.top, j
+                )
+            return LocalObjective("bridge_jump_exit", 240, 256, bridge["rect"].top)
     objective = local_objective(scene)
     m = scene.mario
     direction = -1 if scene._terrain_left else 1
@@ -126,11 +146,20 @@ def objective_goal(objective, *, bouncing=False):
         "bridge_board": "mount_platform",
         "bridge_approach": "mount_platform",
         "bridge_exit": "clear_gap",
+        "bridge_jump_mount": "mount_platform",
+        "bridge_jump_exit": "clear_gap",
     }.get(objective.kind)
     # A required stomp differs from an optional enemy clear in the existing
     # goal magnitude slot. It is an explicit task request in both domains.
     return (
-        skill_goal_encoding(skill, 128 if objective.kind == "stomp" else 0)
+        skill_goal_encoding(
+            skill,
+            (
+                128
+                if objective.kind == "stomp"
+                else 64 if objective.kind.startswith("bridge_jump_") else 0
+            ),
+        )
         if skill and not bouncing
         else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
     )
