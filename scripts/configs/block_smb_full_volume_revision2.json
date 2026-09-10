@@ -74,7 +74,8 @@
     "stair_climb": 1.0,
     "stomp_mount": 2.0,
     "tall_pipe_jump": 2.0,
-    "wait_timing": 1.0
+    "wait_timing": 1.0,
+    "stomp_recovery": 2.0
   },
   "monte_carlo_max_rejections": 32,
   "monte_carlo_parameter_sweep": false,
