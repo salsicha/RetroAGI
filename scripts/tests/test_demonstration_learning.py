@@ -581,6 +581,11 @@ def test_failure_practice_keeps_other_families_and_action_balance():
         family=torch.tensor([0, 0, 1, 1]),
         actor_mask=torch.ones(4, dtype=torch.bool),
         action=torch.tensor([1, 2, 1, 2]),
+        # The demonstration dataclass guarantees these via __post_init__
+        # defaults (absent phase = all-routine, absent carry = zero); the
+        # stand-in must honor the same contract.
+        phase=torch.zeros(4, dtype=torch.long),
+        carry_progress=torch.zeros(4),
     )
     weights = demonstration_sample_weights(data, {1: 5})
     assert weights[:2].sum() == 1
