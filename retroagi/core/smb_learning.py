@@ -106,13 +106,21 @@ def _collect_coached(
     takeoff_delay=0,
     policy_takeoff=False,
     policy_rollout=None,
+    policy_takeoff_number=1,
 ):
     from retroagi.core.smb_coaching import (
         COACHING_CONTRACT,
         coach_choice,
+        interior_index,
         safe_jump_indices,
+        training_target,
     )
 
+    if (
+        policy_rollout not in (None, "takeoff", "miss", "decision", "brake")
+        or policy_takeoff_number < 1
+    ):
+        raise ValueError("Invalid policy-state coaching selection")
     model.eval()  # Policy-takeoff proposals use the same deterministic lane as playback.
     obs = stage.reset(seed=seed)
     executor = make_smb_executor(model)
@@ -126,6 +134,18 @@ def _collect_coached(
     delayed_frames = 0
     stomp_launched = False
     policy_airborne = False
+    attempt_target = None
+    proposed_takeoffs = 0
+    stationary_frames = 0
+    last_policy_x = None
+    policy_diagnostics = dict(
+        decisions=0,
+        jump_proposals=0,
+        unsafe_takeoffs=0,
+        unsafe_holds=0,
+        missed_brakes=0,
+        missed_waits=0,
+    )
     policy_finished = policy_rollout is None
     policy_frames = 0
     recovery_state = None
@@ -147,38 +167,99 @@ def _collect_coached(
         )
         corrected_takeoff = None
         if not policy_finished:
-            policy_airborne |= not stage.env.mario["on_ground"]
-            if policy_airborne and stage.env.mario["on_ground"] and not stage.env._stomp_credited:
+            env = stage.env
+            policy_airborne |= attempt_target is not None and not env.mario["on_ground"]
+            missed = bool(
+                policy_airborne and env.mario["on_ground"] and not attempt_target.reached(env)
+            )
+            target = training_target(env)
+            stationary_frames = stationary_frames + 1 if last_policy_x == env.mario["x"] else 0
+            last_policy_x = env.mario["x"]
+            at_wall = (
+                target.kind == "mount"
+                and stationary_frames >= 4
+                and abs(env.mario["x"] + env.mario["w"] - target.left) <= 1
+            )
+            if missed or at_wall:
                 policy_finished = True
                 recovery_state = dict(
-                    x=stage.env.mario["x"],
-                    vx=stage.env.mario["vx"],
-                    camera=stage.env.camera_x,
+                    x=env.mario["x"],
+                    vx=env.mario["vx"],
+                    camera=env.camera_x,
                     frame=frame,
+                    reason="wall_stall" if at_wall else "missed_landing",
+                    target=target.kind,
                 )
             else:
+                if policy_airborne and env.mario["on_ground"]:
+                    # A successful early enemy does not suppress collection
+                    # at the later pipe/gap in a compound route.
+                    attempt_target = None
+                    policy_airborne = False
                 forward = _policy_action_logits_and_state(
                     model, batch, device=next(model.parameters()).device
                 )
                 proposed = int(forward.logits.argmax(-1))
-                if policy_rollout == "takeoff" and decision and proposed in (2, 4, 5):
-                    valid = safe_jump_indices(model, stage.env, proposed)
-                    if valid:
-                        corrected_takeoff = (proposed, valid[len(valid) // 2], valid)
-                        policy_finished = True
+                if decision and env.mario["on_ground"]:
+                    policy_diagnostics["decisions"] += 1
+                    if env._require_bridge_before_goal:
+                        correction = coach_choice(model, env)
+                        policy_diagnostics["missed_brakes"] += int(
+                            correction[0] in (1, 3)
+                            and (1 if correction[0] == 1 else -1) * env.mario["vx"] < 0
+                            and proposed != correction[0]
+                        )
+                        policy_diagnostics["missed_waits"] += int(
+                            correction[0] == 0 and proposed != 0
+                        )
+                        braking = (
+                            correction[0] in (1, 3)
+                            and (1 if correction[0] == 1 else -1) * env.mario["vx"] < 0
+                        )
+                        if (
+                            policy_rollout == "decision"
+                            or (policy_rollout == "brake" and braking and env._bridge_boarded)
+                        ) and proposed != correction[0]:
+                            corrected_takeoff = correction
+                            policy_finished = True
+                    if proposed in (2, 4, 5):
+                        proposed_takeoffs += 1
+                        policy_diagnostics["jump_proposals"] += 1
+                        valid = safe_jump_indices(model, env, proposed)
+                        policy_diagnostics["unsafe_takeoffs"] += int(not valid)
+                        chosen = int(forward.motor_primitives.hold_duration_logits[0, -1].argmax())
+                        policy_diagnostics["unsafe_holds"] += int(
+                            bool(valid) and chosen not in valid
+                        )
+                        if policy_rollout == "takeoff" and (
+                            not valid or proposed_takeoffs >= policy_takeoff_number
+                        ):
+                            # An impossible takeoff needs an approach/braking
+                            # label now, not an unlabeled executed mistake.
+                            corrected_takeoff = (
+                                (proposed, interior_index(valid), valid)
+                                if valid
+                                else coach_choice(model, env)
+                            )
+                            policy_finished = True
+                        if not policy_finished:
+                            attempt_target = target
+                            policy_airborne = False
                 if not policy_finished:
                     execution = executor.execute(
                         proposed, batch=batch, motor_primitives=forward.motor_primitives
                     )
                     obs, _, done, truncated, info = stage.step(execution.action)
                     policy_frames += 1
-                    if done or truncated or frame >= 159:
+                    if done or truncated or frame >= max_steps - 65:
                         return [], dict(
                             success=False,
-                            reason="no_recoverable_policy_miss",
+                            reason="no_recoverable_policy_state",
                             policy_frames=policy_frames,
+                            policy_diagnostics=policy_diagnostics,
                         )
-                    # Uncorrected policy actions are never successful actor labels.
+                    # Preserve the real observation/controller history, but
+                    # never label an uncorrected prefix as successful coaching.
                     continue
         if decision:
             if corrected_takeoff is not None:
@@ -288,6 +369,7 @@ def _collect_coached(
         bounce_continuations=recoveries,
         policy_frames=policy_frames,
         actual_miss_recovery=recovery_state,
+        policy_diagnostics=policy_diagnostics,
         teacher=(
             "reactive_collision"
             if actions is None or stage.env._require_bridge_before_goal
@@ -353,11 +435,13 @@ def playback(model, stage, *, max_steps=320, seed=0, start=None, target=None):
 
 
 def save_dataset(data, path, *, episodes, provider):
+    from retroagi.core.smb_coaching import COACHING_CONTRACT
+
     torch.save(
         dict(
-            kind="canonical_demonstrations_v4",
+            kind="canonical_demonstrations_v5",
             scene_encoder=SCENE_ENCODER,
-            coaching="canonical_collision_coaching_v4",
+            coaching=COACHING_CONTRACT,
             data=asdict(data),
             episodes=episodes,
             runtime=runtime(provider).manifest(),
@@ -419,6 +503,7 @@ def collect_reactive_case(
     takeoff_delay=0,
     policy_takeoff=False,
     policy_rollout=None,
+    policy_takeoff_number=1,
 ):
     return _collect_coached(
         model,
@@ -431,6 +516,7 @@ def collect_reactive_case(
         takeoff_delay=takeoff_delay,
         policy_takeoff=policy_takeoff,
         policy_rollout=policy_rollout,
+        policy_takeoff_number=policy_takeoff_number,
     )
 
 

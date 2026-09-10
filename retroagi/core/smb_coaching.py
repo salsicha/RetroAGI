@@ -15,7 +15,7 @@ from retroagi.stages.block_smb.local_traversal import (
     stomp_probe_distance,
 )
 
-COACHING_CONTRACT = "canonical_collision_coaching_v4"
+COACHING_CONTRACT = "canonical_collision_coaching_v5"
 
 
 @contextmanager

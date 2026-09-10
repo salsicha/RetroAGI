@@ -296,3 +296,10 @@ existing numbered epochs. The full-volume schedule is still 30 epochs with
 1,000 policy updates per epoch; no bootstrap or prerequisite family run is added.
 Vision can be reused, while policy observations and replay use the version 3
 contract and must be regenerated for a fresh full-volume run.
+
+The current [policy-state coaching revision](smb-policy-state-coaching.md) extends
+actual takeoff and miss recovery across raised-obstacle and stomp families, adds
+actual bridge braking-state collection, and uses error-adaptive replay with
+retention. Coaching/replay provenance is v5; the v4 scene/runtime interfaces and
+qualified vision weights remain compatible. Validation now reports partial
+family results every ten cases.

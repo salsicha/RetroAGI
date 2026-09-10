@@ -12,6 +12,7 @@ from pathlib import Path
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import torch
 
+from retroagi.core.smb_coaching import COACHING_CONTRACT
 from retroagi.core.smb_components import SMBComponentContract, export_bundle
 from retroagi.core.smb_learning import (
     block_stage,
@@ -29,6 +30,11 @@ from retroagi.stages.block_smb.demonstrations import fit_demonstrations
 from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
 from retroagi.stages.block_smb.nes_curriculum import sample_nes_case
 from scripts.smb_perception_training import block_clips, train_perception
+
+POLICY_STATE_FAMILIES = frozenset(
+    "tall_pipe_jump pipe_mount stair_climb platform_chain mixed_section "
+    "chained_obstacles full_smb_opening_proxy enemy_stomp stomp_mount".split()
+)
 
 
 class QualificationFailure(RuntimeError):
@@ -117,8 +123,50 @@ def collect(model, cases, vision, *, log):
                     )
                 )
                 rows.extend(alternative)
+                if sample.family in POLICY_STATE_FAMILIES or sample.family in (
+                    "bridge_wait",
+                    "moving_bridge",
+                ):
+                    modes = (
+                        ("decision", "brake")
+                        if sample.family in ("bridge_wait", "moving_bridge")
+                        else ("takeoff", "miss")
+                    )
+                    for mode in modes:
+                        variation, variation_result = collect_reactive_case(
+                            model,
+                            stage,
+                            family=BLOCK_SMB_MC_FAMILIES.index(sample.family),
+                            seed=sample.sample_seed % (2**31),
+                            policy_rollout=mode,
+                            policy_takeoff_number=(
+                                1 + sample.sample_index % 3
+                                if sample.family
+                                in (
+                                    "chained_obstacles",
+                                    "full_smb_opening_proxy",
+                                    "mixed_section",
+                                    "platform_chain",
+                                    "stair_climb",
+                                )
+                                else 1
+                            ),
+                        )
+                        episodes.append(
+                            dict(
+                                id=sample.scenario_id,
+                                family=sample.family,
+                                split=sample.split,
+                                route_variant=True,
+                                takeoff_variant="actual_" + mode,
+                                start=len(rows),
+                                length=len(variation),
+                                **variation_result,
+                            )
+                        )
+                        rows.extend(variation)
                 if sample.family == "enemy_stomp":
-                    for takeoff in ("nearby", "policy", "actual_takeoff", "actual_miss"):
+                    for takeoff in ("nearby", "policy"):
                         variation, variation_result = collect_reactive_case(
                             model,
                             stage,
@@ -126,9 +174,6 @@ def collect(model, cases, vision, *, log):
                             seed=sample.sample_seed % (2**31),
                             takeoff_delay=3 + sample.sample_index % 7 if takeoff == "nearby" else 0,
                             policy_takeoff=takeoff == "policy",
-                            policy_rollout={"actual_takeoff": "takeoff", "actual_miss": "miss"}.get(
-                                takeoff
-                            ),
                         )
                         episodes.append(
                             dict(
@@ -209,6 +254,17 @@ def collect(model, cases, vision, *, log):
                 e.get("safe_duration_sets", 0) for e in episodes if e["success"]
             ),
             frames=len(rows),
+            policy_diagnostics={
+                key: sum(e.get("policy_diagnostics", {}).get(key, 0) for e in episodes)
+                for key in (
+                    "decisions",
+                    "jump_proposals",
+                    "unsafe_takeoffs",
+                    "unsafe_holds",
+                    "missed_brakes",
+                    "missed_waits",
+                )
+            },
         )
     )
     missing = set(s.family for s in cases) - {e["family"] for e in episodes if e["success"]}
@@ -290,6 +346,7 @@ def train_epoch(model, optimizer, config, vision, *, epoch, data=None, episodes=
                 decision_durations_only=True,
                 walk_durations=False,
                 prioritized=True,
+                adaptive_groups=True,
             )
             completed += updates
             weighted_loss += loss * updates
@@ -304,12 +361,13 @@ def train_epoch(model, optimizer, config, vision, *, epoch, data=None, episodes=
                     loss=loss,
                     replay_frames=len(data.action),
                     layouts_per_family=offset + count,
+                    decision_groups=getattr(model, "last_demonstration_groups", []),
                 )
             )
     return data, episodes, weighted_loss / completed
 
 
-def evaluate(model, cases, vision, *, max_steps=320):
+def evaluate(model, cases, vision, *, max_steps=320, log=None):
     results = []
     for sample in cases:
         stage = block_stage(sample, vision=vision, device=next(model.parameters()).device)
@@ -325,6 +383,20 @@ def evaluate(model, cases, vision, *, max_steps=320):
                 **{k: v for k, v in result.items() if k != "actions"},
             )
         )
+        if log and (len(results) % 10 == 0 or len(results) == len(cases)):
+            family_rows = [r for r in results if r["family"] == sample.family]
+            log(
+                dict(
+                    phase="family_validation_progress",
+                    stage="validation",
+                    completed=len(results),
+                    attempted=len(cases),
+                    family=sample.family,
+                    family_completed=len(family_rows),
+                    family_successes=sum(r["success"] for r in family_rows),
+                    family_deaths=sum(r["death"] for r in family_rows),
+                )
+            )
     rates = {
         family: {
             difficulty: sum(
@@ -417,7 +489,9 @@ def run(config, output):
             fixed_scenes=[],
             runtime="smb_scene_v2",
             scene_encoder=SCENE_ENCODER,
-            coaching="canonical_collision_coaching_v4",
+            coaching=COACHING_CONTRACT,
+            replay_sampling="adaptive_decision_groups_v1",
+            policy_state_families=sorted(POLICY_STATE_FAMILIES),
             objective_contract="observable_traversal_v4",
             full_level_qualified=False,
         ),
@@ -505,7 +579,12 @@ def run(config, output):
                 validation = samples(
                     config, "validation", config["validation_layouts_per_family"], offset=10000
                 )
-            result = evaluate(model, validation, vision)
+            result = evaluate(
+                model,
+                validation,
+                vision,
+                log=lambda event: log(dict(epoch=epoch, epochs=config["epochs"], **event)),
+            )
             log(
                 dict(
                     phase="full_volume",

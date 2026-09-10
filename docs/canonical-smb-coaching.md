@@ -133,3 +133,10 @@ The subsequent [motion/curriculum repair](smb-motion-curriculum-repair.md) adds
 bounded motion memory, per-frame bridge re-observation, phase-balanced replay,
 actual-policy miss recovery, and an explicit `wait_timing` alias. Its v4 interface
 supersedes the historical contracts and pre-restart status described above.
+
+The current [policy-state coaching revision](smb-policy-state-coaching.md) extends
+actual takeoff and miss recovery across raised-obstacle and stomp families, adds
+actual bridge braking-state collection, and uses error-adaptive replay with
+retention. Coaching/replay provenance is v5; the v4 scene/runtime interfaces and
+qualified vision weights remain compatible. Validation now reports partial
+family results every ten cases.

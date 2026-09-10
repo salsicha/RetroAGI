@@ -92,3 +92,10 @@ run). Frozen-vision coaching completed all six original bridge cases across
 easy/medium/hard, produced boarding and exit replay strata, and completed ten
 CUDA optimizer updates with finite loss. These are executable coaching and
 optimizer checks, not a claim of learned autonomous accuracy.
+
+The current [policy-state coaching revision](smb-policy-state-coaching.md) extends
+actual takeoff and miss recovery across raised-obstacle and stomp families, adds
+actual bridge braking-state collection, and uses error-adaptive replay with
+retention. Coaching/replay provenance is v5; the v4 scene/runtime interfaces and
+qualified vision weights remain compatible. Validation now reports partial
+family results every ten cases.

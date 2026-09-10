@@ -347,6 +347,29 @@ def priority_sample_weights(base, groups, priorities):
     return weighted * (mass / current.clamp_min(1e-12))[groups]
 
 
+def adaptive_group_weights(base, groups, counts, errors):
+    """Increase difficult decision-group practice without dropping any family.
+
+    Group support limits the influence of tiny correction sets. Keep 35% of
+    the original group allocation for retention; redistribute the rest within
+    each family. Only training minibatch errors drive this allocation.
+    """
+    group_ids = torch.arange(len(counts))
+    phase = (group_ids // 7) % 6
+    action = group_ids % 7
+    critical = ((phase == 4) & (action != 6)) | (
+        (phase >= 1) & (phase <= 3) & ((action == 0) | (action == 3))
+    )
+    confidence = counts / (counts + 16)
+    factors = 1 + torch.where(critical, 8.0, 3.0) * errors.clamp(0, 1) * confidence
+    weighted = base * factors[groups]
+    families = groups // 42
+    mass = torch.bincount(families, weights=base)
+    current = torch.bincount(families, weights=weighted, minlength=len(mass))
+    weighted *= (mass / current.clamp_min(1e-12))[families]
+    return 0.35 * base + 0.65 * weighted
+
+
 def interior_duration_targets(allowed):
     """Prefer the interior of each collision-safe run, without bridging holes."""
     left = torch.zeros_like(allowed, dtype=torch.float32)
@@ -371,6 +394,7 @@ def fit_demonstrations(
     walk_durations=True,
     prioritized=False,
     family_weights=None,
+    adaptive_groups=False,
 ):
     """Balance families and decision actions; never train on validation data."""
     # Supervise the same soft A context and deterministic transformer used
@@ -387,13 +411,22 @@ def fit_demonstrations(
     base_weights = weights.clone()
     priorities = torch.ones_like(weights)
     groups = demonstration_groups(data)
+    group_counts = torch.bincount(groups).float()
+    group_errors = torch.ones_like(group_counts)
+    group_observations = torch.zeros_like(group_counts)
     allowed_actions = demonstrated_action_sets(data)
     device = next(model.parameters()).device
     losses = []
     components = []
     for update in range(steps):
-        if prioritized and update % 32 == 0:
-            weights = priority_sample_weights(base_weights, groups, priorities)
+        if update % 32 == 0:
+            weights = (
+                adaptive_group_weights(base_weights, groups, group_counts, group_errors)
+                if adaptive_groups
+                else base_weights
+            )
+            if prioritized:
+                weights = priority_sample_weights(weights, groups, priorities)
         ids = torch.multinomial(weights, batch_size, replacement=True, generator=rng)
         a, b, c, g = (getattr(data, k)[ids].to(device) for k in ("a", "b", "c", "goal"))
         motor = data.motor_action[ids].to(device)
@@ -436,6 +469,22 @@ def fit_demonstrations(
         if not torch.isfinite(norm):
             raise FloatingPointError("Nonfinite demonstration gradient")
         optimizer.step()
+        if adaptive_groups:
+            with torch.no_grad():
+                predicted = logits.argmax(-1).cpu()
+                actor_wrong = ~allowed_actions[ids, predicted]
+                duration_wrong = ~data.valid_durations[ids, duration_logits.argmax(-1).cpu()]
+                wrong = (actor_wrong & mask.cpu()) | (duration_wrong & duration_mask.cpu())
+                sampled_groups = groups[ids]
+                counts = torch.bincount(sampled_groups, minlength=len(group_counts)).float()
+                failures = torch.bincount(
+                    sampled_groups, weights=wrong.float(), minlength=len(group_counts)
+                )
+                seen = counts > 0
+                group_errors[seen] = 0.9 * group_errors[seen] + 0.1 * (
+                    failures[seen] / counts[seen]
+                )
+                group_observations += counts
         if prioritized:
             errors = action_losses.detach() * mask + duration_losses.detach() * duration_mask
             priorities[ids] = 0.05 + errors.cpu().clamp(0, 5)
@@ -447,6 +496,22 @@ def fit_demonstrations(
     model.last_demonstration_metrics = dict(
         zip(("action_loss", "duration_loss", "dynamics_loss"), means)
     )
+    if adaptive_groups:
+        final = adaptive_group_weights(base_weights, groups, group_counts, group_errors)
+        masses = torch.bincount(groups, weights=final) / final.sum()
+        model.last_demonstration_groups = [
+            dict(
+                family=int(group) // 42,
+                phase=(int(group) // 7) % 6,
+                action=int(group) % 7,
+                rows=int(group_counts[group]),
+                sampled=int(group_observations[group]),
+                error_ema=float(group_errors[group]),
+                sampling_mass=float(masses[group]),
+            )
+            for group in (group_counts > 0).nonzero().flatten()
+            if int(group) % 7 != 6
+        ]
     return sum(losses) / len(losses)
 
 
