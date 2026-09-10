@@ -38,6 +38,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "pipe_mount",
     "pit_leap",
     "stomp_mount",
+    "stomp_recovery",
     "platform_hop",
     "bridge_wait",
     "bridge_mount",
@@ -308,6 +309,19 @@ def block_smb_monte_carlo_family_specs(
             "patrol_halfwidth": [0, 14],
             "goal": "land on the enemy itself; the goal rides the patrolling target",
             "a_level_action": [2, 2],
+        },
+        "stomp_recovery": {
+            "enemy_offset": [36, 66],
+            "side": [-1, 1],
+            "enemy_speed": [0.0, 0.7],
+            "enemy_initial_direction": [-1, 1],
+            "patrol_halfwidth": [0, 12],
+            "family_revision": [1, 1],
+            "goal": (
+                "the episode starts beside the monster a missed stomp left "
+                "behind; recover by re-approaching (usually turning around), "
+                "letting the patrol come into phase, and landing on it"
+            ),
         },
         "platform_hop": {
             "pit_width": [68, 110],
@@ -1094,6 +1108,8 @@ def _generate_family_scenario_raw(
         return _pit_leap(rng, difficulty)
     if family == "stomp_mount":
         return _stomp_mount(rng, difficulty)
+    if family == "stomp_recovery":
+        return _stomp_recovery(rng, difficulty)
     if family in ("bridge_mount", "bridge_dismount"):
         from .bridge_curriculum import bridge_jump_scenario
 
@@ -1862,6 +1878,83 @@ def _stomp_mount(
             "family_revision": 2,
             "a_level_action": 2,
             "single_jump": True,
+            "difficulty_bin": difficulty,
+        },
+        actions,
+    )
+
+
+def _stomp_recovery(
+    rng: random.Random, difficulty: str
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    # Miss-recovery teacher: the episode STARTS where a missed stomp ends —
+    # Mario standing beside the monster he failed to hit — and the lesson is
+    # the recovery itself: turn toward the target (the common miss overshoots,
+    # leaving it BEHIND), re-approach, let the patrol come into phase, and
+    # land on it. goal_on_stomp ends the episode at the stomp, the goal rides
+    # the enemy so goal-distance shaping pulls toward it from either side,
+    # and per-pixel progress is disabled so the rightward habit earns
+    # nothing. Success is the stomp; walking into the monster is death;
+    # jump-spam burns the clock and fails.
+    offset, patrol_halfwidth, enemy_speed = {
+        "easy": (rng.randint(36, 48), 0, 0.0),
+        "medium": (rng.randint(44, 58), 8, 0.4),
+        "hard": (rng.randint(52, 66), 12, 0.7),
+    }[difficulty]
+    # Easy is the canonical overshoot: monster behind Mario, pure
+    # turn-around interception. The moving tiers randomize the side.
+    side = -1 if difficulty == "easy" else rng.choice((-1, 1))
+    direction = rng.choice((-1, 1)) if enemy_speed else 1
+    mario_x = 170
+    enemy_x = mario_x + side * offset
+    scenario = {
+        "world_width": 340,
+        "mario": [mario_x, 200],
+        "platforms": [[0, 220, 340, 20]],
+        "enemies": [
+            [
+                enemy_x,
+                206,
+                enemy_x - patrol_halfwidth,
+                enemy_x + patrol_halfwidth,
+                enemy_speed,
+                direction,
+            ]
+        ],
+        "coins": [],
+        "goal": [enemy_x - 2, 186, 16, 20],
+        "goal_on_stomp": True,
+        "reward_goal_distance_shaping": 2.0,
+        "reward_progress_per_pixel": 0.0,
+    }
+    # Scripted demonstration in exact physics: approach toward the monster,
+    # one interception jump. Only a credited stomp validates as reachable.
+    approach = 1 if side > 0 else 3
+    leap = 2 if side > 0 else 4
+    oracle_walk, oracle_hold, found = 6, 8, False
+    for walk in sorted(range(0, 25), key=lambda n: (abs(n - 6), n)):
+        for hold in sorted(range(1, 17), key=lambda h: (abs(h - 8), h)):
+            candidate = _pad([approach] * walk + [leap] * hold + [approach])
+            if validate_block_smb_monte_carlo_oracle(scenario, candidate, max_steps=120)[
+                "reachable"
+            ]:
+                oracle_walk, oracle_hold, found = walk, hold, True
+                break
+        if found:
+            break
+    actions = _pad([approach] * oracle_walk + [leap] * oracle_hold + [approach])
+    return (
+        scenario,
+        {
+            "enemy_offset": offset,
+            "side": side,
+            "enemy_x": enemy_x,
+            "enemy_speed": enemy_speed,
+            "enemy_initial_direction": direction,
+            "patrol_halfwidth": patrol_halfwidth,
+            "oracle_walk": oracle_walk,
+            "oracle_hold": oracle_hold,
+            "family_revision": 1,
             "difficulty_bin": difficulty,
         },
         actions,

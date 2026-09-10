@@ -174,6 +174,32 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         )
         self.assertGreaterEqual(int(hard.parameters["pipe_height"]), 62)
 
+    def test_stomp_recovery_starts_beside_the_enemy_and_credits_only_stomps(self):
+        # Miss-recovery teacher: the episode begins in the post-miss state —
+        # Mario already beside the monster, no approach run — the goal rides
+        # the enemy (only a stomp credits), the rightward-progress reward is
+        # off, and the canonical overshoot (monster BEHIND Mario) appears.
+        sides = set()
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
+            for seed in range(6):
+                sample = sample_block_smb_monte_carlo_scenario(
+                    split="validation",
+                    seed=seed,
+                    sample_index=0,
+                    family="stomp_recovery",
+                    difficulty=difficulty,
+                )
+                self.assertTrue(sample.reachability["reachable"], (difficulty, seed))
+                self.assertTrue(sample.scenario["goal_on_stomp"])
+                self.assertEqual(sample.scenario["reward_progress_per_pixel"], 0.0)
+                offset = abs(
+                    sample.parameters["enemy_x"] - sample.scenario["mario"][0]
+                )
+                self.assertLessEqual(offset, 70)
+                sides.add(sample.parameters["side"])
+        self.assertIn(-1, sides)
+        self.assertIn(1, sides)
+
     def test_stomp_oracle_dying_into_enemy_is_not_reachable(self):
         # Regression: under goal_on_stomp the goal rect rides the enemy, so
         # the validator's positional fallback would count the frame where

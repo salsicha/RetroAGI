@@ -36,6 +36,7 @@ BLOCK_SMB_FAMILY_SKILL_GOALS: dict[str, str] = {
     "enemy_gap": "enemy_clear",
     "enemy_stomp": "enemy_clear",
     "stomp_mount": "enemy_clear",
+    "stomp_recovery": "enemy_clear",
     "chained_enemy_gauntlet": "enemy_clear",
     "retreat_recovery": "retreat_recover",
 }
