@@ -71,6 +71,27 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             pipe = TallPipeTraversal.from_stage(stage.scenario, stage.env)
             request = requested_block_smb_skill_goal(stage.scenario)
             request = request if request is not None else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
+            from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+
+            # The hold-duration menu depends on the physics profile: legacy
+            # bins are the values 1..16, NES bins are NES_JUMP_FRAMES (up
+            # to 32 frames). Both have 16 entries; the demonstration tensors
+            # store menu INDICES, so value-1 is only correct for legacy.
+            duration_menu = (
+                NES_JUMP_FRAMES
+                if stage.env.physics_profile == NES_PHYSICS_PROFILE
+                else tuple(range(1, 17))
+            )
+
+            def menu_index(frames: int) -> int:
+                index = 0
+                for slot, entry in enumerate(duration_menu):
+                    if entry <= max(1, frames):
+                        index = slot
+                    else:
+                        break
+                return index
+
             jump_intent = None
             jump_hold = 1
             jump_rows = []
@@ -92,7 +113,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 end = frame + 1
                 while end < len(actions) and actions[end] == action:
                     end += 1
-                hold = min(16, end - frame)
+                hold = min(duration_menu[-1], end - frame)
                 if jump_intent is None and action in (2, 4, 5):
                     jump_intent = action
                     jump_hold = hold
@@ -112,6 +133,11 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 duration = jump_hold if jump_intent is not None else hold
                 if motor_action == 0:
                     duration = max(1, min(16, round((end - frame) / 4)))
+                    duration_index = duration - 1
+                elif motor_action in (2, 4, 5):
+                    duration_index = menu_index(duration)
+                else:
+                    duration_index = min(15, duration - 1)
                 goal = request.clone()
                 phase = None
                 if pipe is not None:
@@ -162,8 +188,13 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 observations.append(observation)
                 states.append(stage.state_features(info))
                 valid = [False] * 16
-                for value in jump_valid if jump_intent is not None and jump_valid else [duration]:
-                    valid[value - 1] = True
+                if jump_intent is not None and jump_valid:
+                    # safe_jump_holds returns exact menu values; record their
+                    # menu positions (NES values exceed 16 by design).
+                    for value in jump_valid:
+                        valid[duration_menu.index(value)] = True
+                else:
+                    valid[duration_index] = True
                 episode.append(
                     [
                         frame,
@@ -172,7 +203,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                         goal.cpu(),
                         action,
                         motor_action,
-                        duration - 1,
+                        duration_index,
                         actor_mask,
                         frame + 1,
                         family_index,
