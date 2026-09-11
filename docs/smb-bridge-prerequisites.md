@@ -21,9 +21,10 @@ interface; simulator collision state is used only for training labels and credit
 
 Widths vary from 88–100 pixels in easy, through 72–84 in medium, to 56–68 in
 hard. Speeds, spawn positions, and shore positions also vary. The coach certifies
-actual landings using all 16 physical hold durations. It waits for a window
-with multiple safe holds and selects an interior hold; alternate coaching uses
-a different safe-window/hold choice. Policy-state correction remains available
+actual landings using all 16 physical hold durations. The base coach waits for
+multiple safe holds and selects an interior hold. Alternate coaching also covers
+both ends of the interval when only the longest hold works, and a longer hold
+within the base window. Policy-state correction remains available
 at actual proposed takeoffs and misses. Autonomous validation has no coach.
 
 The tasks declare `task_objective=bridge_mount` or `bridge_dismount`. Their

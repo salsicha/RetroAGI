@@ -319,7 +319,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 3
+DEMONSTRATION_CONTRACT_VERSION = 4
 
 
 def without_walk_commitments(data):

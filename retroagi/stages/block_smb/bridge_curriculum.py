@@ -67,8 +67,25 @@ def bridge_jump_choice(model, env, *, variant=0):
     from retroagi.core.smb_coaching import interior_index, safe_jump_indices
 
     valid = safe_jump_indices(model, env, 2)
-    if len(valid) >= 3 + variant % 3:
-        index = valid[variant % len(valid)] if variant else interior_index(valid)
+    # Cover the onset of the takeoff window as well as its interior. A policy
+    # can depart a few frames before the middle-window teacher; those states
+    # often require the longest hold and must have jump-duration examples.
+    required_holds = (3, 1, 1, 3)[variant % 4]
+    ready = len(valid) >= required_holds
+    if variant % 4 == 2 and len(valid) == 1:
+        from .geometry_expert import restore_env_state, snapshot_env_state
+
+        # Teach the end as well as the start of the longest-hold-only interval.
+        # Interpolating between its onset and the next (shorter-hold) window
+        # otherwise encourages the duration head to shorten the jump too soon.
+        snapshot = snapshot_env_state(env)
+        try:
+            env.step(0)
+            ready = len(safe_jump_indices(model, env, 2)) != 1
+        finally:
+            restore_env_state(env, snapshot)
+    if ready:
+        index = valid[-1] if variant % 4 == 3 else interior_index(valid)
         return 2, index, valid
     if abs(env.mario["vx"]) > 1 / 16:
         return (3 if env.mario["vx"] > 0 else 1), 0, list(range(16))

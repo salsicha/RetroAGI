@@ -190,7 +190,7 @@ def main():
             missing = (present & {"bridge_mount", "bridge_dismount"}) - set(args.refresh_families)
             if missing:
                 raise ValueError(
-                    f"Cached bridge jump goals and waits need refreshing: {sorted(missing)}"
+                    f"Cached bridge jump goals, waits, and takeoff coverage need refreshing: {sorted(missing)}"
                 )
         if metadata.get("bridge_goal_contract_version", 1) < 2:
             missing = {"bridge_wait", "wait_timing", "moving_bridge"} - set(args.refresh_families)

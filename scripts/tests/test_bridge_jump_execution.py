@@ -166,3 +166,87 @@ def test_training_keeps_physical_duration_labels_through_release(bridge_case):
         assert all("primitive_outcome_target" not in t.info for t in waits)
     finally:
         stage.env.close()
+
+
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_alternate_teaches_the_long_hold_at_window_onset(bridge_case, difficulty):
+    from retroagi.core.smb_coaching import training_target
+    from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_oracle
+    from retroagi.stages.block_smb.local_traversal import safe_jump_holds
+
+    case = sample_block_smb_monte_carlo_scenario(
+        family=bridge_case.family,
+        split="train",
+        seed=101,
+        sample_index=1,
+        difficulty=difficulty,
+        validate_reachability=False,
+    )
+    actions = bridge_jump_oracle(case.scenario, variant=1)
+    departure = actions.index(2)
+    assert departure < list(case.oracle["actions"]).index(2)
+    assert actions.count(2) == 32
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=case.scenario)
+        for action in actions[:departure]:
+            env.step(action)
+        assert safe_jump_holds(env, training_target(env), 1) == [32]
+        for action in actions[departure:]:
+            _, _, done, truncated, _ = env.step(action)
+            if done or truncated:
+                break
+        assert env._goal_credited
+    finally:
+        env.close()
+
+
+def test_hard_dismount_alternatives_do_not_require_five_safe_holds():
+    from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_oracle
+
+    case = sample_block_smb_monte_carlo_scenario(
+        family="bridge_dismount",
+        split="validation",
+        seed=50000,
+        sample_index=710,
+        difficulty="hard",
+        validate_reachability=False,
+    )
+    env = MarioScenarioEnv()
+    try:
+        for variant in (1, 2, 3):
+            actions = bridge_jump_oracle(case.scenario, variant=variant)
+            env.reset(scenario=case.scenario)
+            for action in actions:
+                _, _, done, truncated, _ = env.step(action)
+                if done or truncated:
+                    break
+            assert env._goal_credited, variant
+    finally:
+        env.close()
+
+
+def test_alternate_covers_end_of_longest_hold_only_interval(bridge_case):
+    from retroagi.core.smb_coaching import training_target
+    from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_oracle
+    from retroagi.stages.block_smb.local_traversal import safe_jump_holds
+
+    onset = bridge_jump_oracle(bridge_case.scenario, variant=1)
+    boundary = bridge_jump_oracle(bridge_case.scenario, variant=2)
+    assert boundary.index(2) >= onset.index(2)
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=bridge_case.scenario)
+        for action in boundary[: boundary.index(2)]:
+            env.step(action)
+        assert safe_jump_holds(env, training_target(env), 1) == [32]
+        env.step(0)
+        assert len(safe_jump_holds(env, training_target(env), 1)) > 1
+        env.reset(scenario=bridge_case.scenario)
+        for action in boundary:
+            _, _, done, truncated, _ = env.step(action)
+            if done or truncated:
+                break
+        assert env._goal_credited
+    finally:
+        env.close()
