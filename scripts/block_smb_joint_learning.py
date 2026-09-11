@@ -183,8 +183,15 @@ def main():
         data = torch.load(dataset, weights_only=False)
         metadata_path = dataset.parent / "demonstration_manifest.json"
         metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
-        if metadata.get("contract_version", 1) < DEMONSTRATION_CONTRACT_VERSION:
+        if metadata.get("contract_version", 1) < 2:
             data = align_steady_demonstrations(data)
+        if metadata.get("contract_version", 1) < DEMONSTRATION_CONTRACT_VERSION:
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            missing = (present & {"bridge_mount", "bridge_dismount"}) - set(args.refresh_families)
+            if missing:
+                raise ValueError(
+                    f"Cached bridge jump goals and waits need refreshing: {sorted(missing)}"
+                )
         if metadata.get("bridge_goal_contract_version", 1) < 2:
             missing = {"bridge_wait", "wait_timing", "moving_bridge"} - set(args.refresh_families)
             if missing:

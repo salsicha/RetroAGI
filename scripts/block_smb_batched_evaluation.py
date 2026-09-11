@@ -11,7 +11,6 @@ import numpy as np
 import torch
 
 from retroagi.core.actions import (
-    SMBParameterizedPrimitiveExecutor,
     SMBPrimitiveExecution,
     smb_jump_release_action,
 )
@@ -21,6 +20,7 @@ from retroagi.stages.block_smb.bridge_traversal import bridge_phase, bridge_safe
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.local_traversal import LOCAL_TRAVERSAL_FAMILIES, local_objective
 from retroagi.stages.block_smb.pipe_traversal import TallPipeTraversal
+from retroagi.stages.block_smb.primitive_execution import BlockSMBPrimitiveExecutor
 from retroagi.stages.block_smb.skills import requested_block_smb_skill_goal
 from retroagi.stages.block_smb.tasks import scenario_family
 from retroagi.stages.block_smb.train import (
@@ -73,13 +73,16 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     local=scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES,
                     target=None,
                     enemy=stage.env._require_stomp_before_goal,
-                    bridge=stage.env._require_bridge_before_goal,
+                    bridge=stage.env._require_bridge_before_goal
+                    and not stage.env._bridge_jump_task,
+                    bridge_jump=stage.env._bridge_jump_task,
                     phase="stomp" if stage.env._require_stomp_before_goal else None,
                     recovery=False,
                     opening=stage.env._require_bridge_before_goal,
                     exit_committed=False,
                     contact=False,
-                    executor=SMBParameterizedPrimitiveExecutor(
+                    executor=BlockSMBPrimitiveExecutor(
+                        stage.env,
                         duration_sampling=False,
                         adaptive_duration=config.adaptive_duration_control,
                         steady_primitives=config.steady_duration_primitives,
@@ -107,13 +110,17 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                         phase = (
                             s.pipe.phase
                             if s.pipe
-                            else "bounce_recovery" if s.recovery else target.kind
+                            else "bounce_recovery"
+                            if s.recovery
+                            else target.kind
                         )
                     safe = bridge_safe_wait_frames(env) if s.bridge else []
                     if s.bridge:
                         phase = bridge_phase(env, s.opening)
                         if s.exit_committed and not env._bridge_crossed:
                             phase = "exit"
+                    if s.bridge_jump:
+                        phase = "board" if s.bridge_jump == "mount" else "exit"
                     goal = s.goal.clone()
                     if phase in ("finish", "bounce_recovery") or (
                         s.bridge and phase in ("approach", "board", "exit")
@@ -189,6 +196,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                             duration_bin_values=motor.duration_bin_values,
                             hold_duration=motor.hold_duration[i : i + 1],
                         )
+                        primitive = s.executor.motor_parameters(int(chosen[i]), primitive)
                         execution = s.executor.execute(
                             int(chosen[i]),
                             motor_primitives=primitive,

@@ -55,6 +55,7 @@ class DemonstrationBatch:
 def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32):
     rows = []
     episode_starts = []
+    frame_wait_episodes = set()
     for family_index, sample in cases:
         stage = BlockSMBStage(
             env=MarioScenarioEnv(reward_config=config.reward_config),
@@ -95,7 +96,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             jump_intent = None
             jump_hold = 1
             jump_rows = []
-            bridge = stage.env._require_bridge_before_goal
+            bridge_jump = stage.env._bridge_jump_task
+            bridge = stage.env._require_bridge_before_goal and bridge_jump is None
             enemy = stage.env._require_stomp_before_goal
             opening = True
             bridge_exit_committed = False
@@ -132,7 +134,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 motor_action = jump_intent if jump_intent is not None else action
                 duration = jump_hold if jump_intent is not None else hold
                 if motor_action == 0:
-                    duration = max(1, min(16, round((end - frame) / 4)))
+                    duration = 1 if bridge_jump else max(1, min(16, round((end - frame) / 4)))
                     duration_index = duration - 1
                 elif motor_action in (2, 4, 5):
                     duration_index = menu_index(duration)
@@ -162,6 +164,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     phase = bridge_phase(env, opening)
                     if bridge_exit_committed and not env._bridge_crossed:
                         phase = "exit"
+                if bridge_jump:
+                    phase = "board" if bridge_jump == "mount" else "exit"
                 if phase in ("finish", "bounce_recovery") or (
                     bridge and phase in ("approach", "board", "exit")
                 ):
@@ -251,6 +255,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     c[frame : frame + 1],
                 )
                 row[8] = c[row[8] : row[8] + 1]
+            if bridge_jump:
+                frame_wait_episodes.add(len(rows))
             episode_starts.append(len(rows))
             rows.extend(episode)
         finally:
@@ -260,11 +266,13 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
         *(torch.cat(v) if i in (0, 1, 2, 3, 8) else torch.tensor(v) for i, v in enumerate(columns))
     )
 
-    data = align_steady_demonstrations(data, episode_starts)
+    data = align_steady_demonstrations(
+        data, episode_starts, frame_wait_episodes=frame_wait_episodes
+    )
     return data if config.walk_duration_primitives else without_walk_commitments(data)
 
 
-def align_steady_demonstrations(data, episode_starts=None):
+def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episodes=()):
     """Migrate frame labels to the executor's actual walk/wait commitments.
 
     Call once per dataset. Old cached real-ViT data retain the episode clock
@@ -286,7 +294,11 @@ def align_steady_demonstrations(data, episode_starts=None):
         frame = begin
         while frame < end:
             action = int(data.action[frame])
-            if action not in (0, 1, 3) or not bool(data.actor_mask[frame]):
+            if (
+                (action == 0 and begin in frame_wait_episodes)
+                or action not in (0, 1, 3)
+                or not bool(data.actor_mask[frame])
+            ):
                 frame += 1
                 continue
             stop = frame + 1
@@ -307,7 +319,7 @@ def align_steady_demonstrations(data, episode_starts=None):
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 2
+DEMONSTRATION_CONTRACT_VERSION = 3
 
 
 def without_walk_commitments(data):
@@ -562,6 +574,15 @@ def varied_demonstration(sample, seed, *, robust=False):
     the demonstration pool.
     """
     import random
+
+    if sample.scenario.get("bridge_jump_task"):
+        from .bridge_curriculum import bridge_jump_oracle
+        from .monte_carlo import validate_block_smb_monte_carlo_oracle
+
+        actions = bridge_jump_oracle(sample.scenario, variant=1 + seed % 3)
+        if validate_block_smb_monte_carlo_oracle(sample.scenario, actions)["reachable"]:
+            return replace(sample, oracle={**sample.oracle, "actions": actions})
+        return None
 
     from .bridge_traversal import bridge_walk_state
 

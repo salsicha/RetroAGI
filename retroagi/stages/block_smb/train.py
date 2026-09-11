@@ -75,6 +75,7 @@ from .monte_carlo import (
     summarize_block_smb_monte_carlo_samples,
 )
 from .pipe_traversal import TallPipeTraversal, pipe_completion_metrics, training_rollout_steps
+from .primitive_execution import BlockSMBPrimitiveExecutor
 from .skills import requested_block_smb_skill_goal
 from .stomp import stomp_coaching_target, stomp_completion_metrics
 from .success import evaluate_fixed_success_thresholds, summarize_fixed_success_metrics
@@ -1760,6 +1761,12 @@ def _action_from_model(
     else:
         action_tensor = action_logits.argmax(dim=-1) if deterministic else distribution.sample()
     intent_tensor = action_tensor.clone()
+    if isinstance(primitive_executor, BlockSMBPrimitiveExecutor):
+        motor_action = int(action_tensor.item())
+        if oracle_primitive_active and oracle_wait_frames is None and motor_action in (1, 3):
+            motor_action = 2 if motor_action == 1 else 4
+        motor_primitives = primitive_executor.motor_parameters(motor_action, motor_primitives)
+        model.last_motor_primitives = motor_primitives
     execution = SMBPrimitiveExecution(action=int(action_tensor.item()))
     if recovering_from_stomp:
         # Preserve the policy's horizontal choice while the automatic bounce
@@ -2300,7 +2307,8 @@ def collect_trajectory(
     # Stochastic training rollouts sample the duration bin so the duration
     # head is explored and its REINFORCE log-prob term is well-founded;
     # deterministic evaluation keeps the argmax bin.
-    primitive_executor = SMBParameterizedPrimitiveExecutor(
+    primitive_executor = BlockSMBPrimitiveExecutor(
+        stage.env,
         duration_sampling=not deterministic,
         duration_seed=seed,
         adaptive_duration=adaptive_duration_control,
@@ -2331,7 +2339,7 @@ def collect_trajectory(
     # windows, wait/ride phases) is unsatisfiable there by construction and
     # would coach "never jump". They are coached like the other jump teachers:
     # the moving bridge (mount) or the far shore (dismount) is the landing
-    # target, and the wait cue is the bridge reaching the jump-side end.
+    # target. Waits reobserve each frame, matching the bridge oracle.
     bridge_jump_task = getattr(stage.env, "_bridge_jump_task", None)
     bridge_composite = bool(stage.env._require_bridge_before_goal) and bridge_jump_task is None
     bridge_opening = bridge_composite
@@ -2470,6 +2478,8 @@ def collect_trajectory(
         )
 
         def correct_hold_for(frame_target: float, halfwidth: float) -> float:
+            if primitive_safe_holds:
+                return float(min(primitive_safe_holds, key=lambda n: abs(n - held)))
             if stomp_target is not None:
                 return stomp_target
             if mounted_during_span or bridge_landed or local_landed:
@@ -2541,7 +2551,7 @@ def collect_trajectory(
             )
             span_info["primitive_frame_index"] = offset
             span_info["primitive_target_hold"] = frame_correct
-            if local_family and primitive_safe_holds:
+            if (local_family or bridge_jump_task is not None) and primitive_safe_holds:
                 span_info["primitive_valid_hold_frames"] = primitive_safe_holds
                 span_info["primitive_duration_scale"] = 1.0
             if (
@@ -2579,7 +2589,9 @@ def collect_trajectory(
             step_phase = (
                 pipe_traversal.phase
                 if pipe_traversal is not None
-                else "bounce_recovery" if recovering_local_stomp else step_local_target.kind
+                else "bounce_recovery"
+                if recovering_local_stomp
+                else step_local_target.kind
             )
         safe_waits = bridge_safe_wait_frames(stage.env) if bridge_composite else []
         if bridge_composite:
@@ -2587,8 +2599,10 @@ def collect_trajectory(
             if bridge_exit_committed and not stage.env._bridge_crossed:
                 step_phase = "exit"
         if bridge_jump_task is not None:
-            step_phase = "finish" if stage.env._goal_credited else (
-                "board" if bridge_jump_task == "mount" else "exit"
+            step_phase = (
+                "finish"
+                if stage.env._goal_credited
+                else ("board" if bridge_jump_task == "mount" else "exit")
             )
         # Clear the mount request without changing checkpoint dimensions.
         # The C stream still supplies the finish position; actions stay learned.
@@ -2617,24 +2631,16 @@ def collect_trajectory(
         pre_step_mario_center_x = float(stage.env.mario["x"]) + float(stage.env.mario["w"]) / 2.0
         pre_step_mario_y = float(stage.env.mario["y"])
         wait_event = 1 in safe_waits if bridge_composite else False
-        if not bridge_composite:
+        if not bridge_composite and bridge_jump_task is None:
             for plat in stage.env.platforms:
                 if not plat.get("moving"):
                     continue
-                if bridge_jump_task is not None:
-                    # The jump-side end is fixed by the task: a mount launches
-                    # when the bridge is nearest the takeoff shore (its low
-                    # end), a dismount when it is nearest the landing shore.
-                    near_end = float(
-                        plat["move_min"] if bridge_jump_task == "mount" else plat["move_max"]
-                    )
-                else:
-                    near_end = (
-                        float(plat["move_min"])
-                        if abs(plat["move_min"] - pre_step_mario_center_x)
-                        <= abs(plat["move_max"] - pre_step_mario_center_x)
-                        else float(plat["move_max"])
-                    )
+                near_end = (
+                    float(plat["move_min"])
+                    if abs(plat["move_min"] - pre_step_mario_center_x)
+                    <= abs(plat["move_max"] - pre_step_mario_center_x)
+                    else float(plat["move_max"])
+                )
                 wait_event = abs(float(plat["move_x"]) - near_end) < 6.0
                 break
         oracle_wait_frames = None
@@ -2697,8 +2703,12 @@ def collect_trajectory(
                 enemy_composite,
             ).to(device),
         )
-        if local_family and execution.started:
+        if (local_family or bridge_jump_task is not None) and execution.started:
             primitive_local_target = step_local_target
+            if bridge_jump_task is not None:
+                from retroagi.core.smb_coaching import training_target
+
+                primitive_local_target = training_target(stage.env)
             primitive_safe_holds = (
                 safe_jump_holds(
                     stage.env, primitive_local_target, 1 if execution.action == 2 else -1
@@ -2706,7 +2716,7 @@ def collect_trajectory(
                 if execution.action in (2, 4) and stage.env.mario["on_ground"]
                 else None
             )
-        if local_family and oracle_action is not None:
+        if (local_family or bridge_jump_task is not None) and oracle_action is not None:
             # The safe-set loss supplies duration supervision. Do not add an
             # independent CE label from an old time-indexed oracle hold.
             primitive_aux_loss = _smb_primitive_auxiliary_loss(
@@ -3017,6 +3027,9 @@ def collect_trajectory(
     if wait_span_start is not None:
         wait_spans.append((wait_span_start, len(trajectory.transitions) - 1, wait_span_start_x))
     for span_start, span_end, span_x in wait_spans:
+        if bridge_jump_task is not None:
+            # These waits end at the next observation, with no duration choice.
+            continue
         valid_frames = None
         if bridge_composite:
             safe = temporal_records[span_start].get("bridge_safe_wait_frames") or []
@@ -3026,22 +3039,7 @@ def collect_trajectory(
             held_wait = span_end - span_start + 1
             target_frames = min(valid_frames, key=lambda n: abs(n - held_wait))
         else:
-            wait_anchor_x = span_x
-            if bridge_jump_task is not None:
-                # A rider is carried with the bridge, so its distance to
-                # Mario never changes; the hindsight-correct wait ends when
-                # the bridge reaches the jump-side end of its track.
-                jump_bridge = next((p for p in stage.env.platforms if p.get("moving")), None)
-                if jump_bridge is not None:
-                    jump_end = (
-                        jump_bridge["move_min"]
-                        if bridge_jump_task == "mount"
-                        else jump_bridge["move_max"]
-                    )
-                    wait_anchor_x = float(jump_end) + jump_bridge["rect"].w / 2.0
-            target_frames = block_smb_wait_target_frames(
-                temporal_records, span_start, wait_anchor_x
-            )
+            target_frames = block_smb_wait_target_frames(temporal_records, span_start, span_x)
         if target_frames is None:
             continue
         for offset, index in enumerate(range(span_start, span_end + 1)):

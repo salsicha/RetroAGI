@@ -304,7 +304,7 @@ def test_cached_steady_migration_matches_fresh_collection(monkeypatch):
     align = demonstrations.align_steady_demonstrations
     expected = collect_demonstrations(cases, tiny_config(), StaticBlockVision)
     with monkeypatch.context() as patch:
-        patch.setattr(demonstrations, "align_steady_demonstrations", lambda data, *args: data)
+        patch.setattr(demonstrations, "align_steady_demonstrations", lambda data, *args, **kwargs: data)
         legacy = collect_demonstrations(cases, tiny_config(), StaticBlockVision)
     migrated = align(legacy, [0])
     for field in fields(expected):

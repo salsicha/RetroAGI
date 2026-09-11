@@ -53,9 +53,8 @@ def bridge_jump_scenario(rng, difficulty, family):
         right_shore=shore,
         required_jump=True,
         single_jump=True,
-        # B-teaching: the opening WAIT decision is given, exactly as in
-        # bridge_wait. The executor holds it until the bridge reaches the
-        # jump-side end of its track; the policy owns the jump that follows.
+        # Give the opening WAIT observation, then let the policy reconsider
+        # every frame as the moving target enters and leaves jump range.
         a_level_action=0,
         a_level_action_scope="first_primitive",
         difficulty_bin=difficulty,
@@ -76,7 +75,7 @@ def bridge_jump_choice(model, env, *, variant=0):
     return 0, 0, [0]
 
 
-def bridge_jump_oracle(scenario):
+def bridge_jump_oracle(scenario, *, variant=0):
     from retroagi.core.smb_coaching import physical_batch
     from retroagi.core.smb_learning import primitive, runtime
     from retroagi.core.smb_runtime import make_smb_executor
@@ -96,7 +95,7 @@ def bridge_jump_oracle(scenario):
             batch.metadata["smb_geometry"]["scene"] = env
             committed = executor.prepare(batch)
             if committed is None and env.mario["on_ground"]:
-                action, index, _ = bridge_jump_choice(model, env)
+                action, index, _ = bridge_jump_choice(model, env, variant=variant)
             else:
                 action = committed if committed is not None else 1
                 index = 0
