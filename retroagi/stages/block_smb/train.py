@@ -2326,7 +2326,14 @@ def collect_trajectory(
     stomp_scenario = bool(getattr(stage.env, "_goal_on_stomp", False))
     enemy_composite = bool(stage.env._require_stomp_before_goal)
     enemy_phase = "stomp" if enemy_composite else None
-    bridge_composite = bool(stage.env._require_bridge_before_goal)
+    # bridge_mount / bridge_dismount are single-jump teachers separated from
+    # their target by a permanent gap: the walking-bridge machinery (walk-on
+    # windows, wait/ride phases) is unsatisfiable there by construction and
+    # would coach "never jump". They are coached like the other jump teachers:
+    # the moving bridge (mount) or the far shore (dismount) is the landing
+    # target, and the wait cue is the bridge reaching the jump-side end.
+    bridge_jump_task = getattr(stage.env, "_bridge_jump_task", None)
+    bridge_composite = bool(stage.env._require_bridge_before_goal) and bridge_jump_task is None
     bridge_opening = bridge_composite
     bridge_departure_recorded = False
     bridge_exit_committed = False
@@ -2369,13 +2376,17 @@ def collect_trajectory(
         realized = (mario_center_x - primitive_span_start_x) * primitive_direction
         mounting = pipe_traversal is not None and primitive_span_phase == "mount"
         intercepting = stomp_scenario or (enemy_composite and primitive_span_phase == "stomp")
-        bridge_target = bridge_composite and primitive_span_phase in (
-            "approach",
-            "wait",
-            "board",
-            "ride",
-            "exit",
-        )
+        bridge_target = (
+            bridge_composite
+            and primitive_span_phase
+            in (
+                "approach",
+                "wait",
+                "board",
+                "ride",
+                "exit",
+            )
+        ) or (bridge_jump_task is not None and primitive_span_phase in ("board", "exit"))
         boarding = bridge_target and primitive_span_phase in ("approach", "wait", "board")
         target_x, target_halfwidth = (
             pipe_traversal.target(env) if mounting else (float(goal.centerx), float(goal.w) / 2.0)
@@ -2398,7 +2409,16 @@ def collect_trajectory(
             )
             if support is None:
                 return
-            target_x, target_halfwidth = float(support.centerx), (support.w + env.mario["w"]) / 2.0
+            if boarding:
+                target_left, target_right = float(support.left), float(support.right)
+            else:
+                # Land near the shore's leading edge (the observable exit
+                # objective), not the shore rect's center — a wide shore
+                # would otherwise demand impossible jump distances.
+                target_left = float(support.left)
+                target_right = float(min(support.right, support.left + 48))
+            target_x = (target_left + target_right) / 2.0
+            target_halfwidth = (target_right - target_left + env.mario["w"]) / 2.0
         if intercepting and env.enemies:
             enemy = env.enemies[0]
             target_x = float(enemy["x"]) + float(enemy["w"]) / 2
@@ -2524,7 +2544,13 @@ def collect_trajectory(
             if local_family and primitive_safe_holds:
                 span_info["primitive_valid_hold_frames"] = primitive_safe_holds
                 span_info["primitive_duration_scale"] = 1.0
-            if pipe_traversal is not None or enemy_composite or bridge_composite or local_family:
+            if (
+                pipe_traversal is not None
+                or enemy_composite
+                or bridge_composite
+                or bridge_jump_task is not None
+                or local_family
+            ):
                 span_info["primitive_target_phase"] = primitive_span_phase
                 span_info["primitive_target_x"] = target_x
             # The world model's target for committed-primitive frames is
@@ -2560,6 +2586,10 @@ def collect_trajectory(
             step_phase = bridge_phase(stage.env, bridge_opening)
             if bridge_exit_committed and not stage.env._bridge_crossed:
                 step_phase = "exit"
+        if bridge_jump_task is not None:
+            step_phase = "finish" if stage.env._goal_credited else (
+                "board" if bridge_jump_task == "mount" else "exit"
+            )
         # Clear the mount request without changing checkpoint dimensions.
         # The C stream still supplies the finish position; actions stay learned.
         step_skill_goal = (
@@ -2591,16 +2621,24 @@ def collect_trajectory(
             for plat in stage.env.platforms:
                 if not plat.get("moving"):
                     continue
-                near_end = (
-                    float(plat["move_min"])
-                    if abs(plat["move_min"] - pre_step_mario_center_x)
-                    <= abs(plat["move_max"] - pre_step_mario_center_x)
-                    else float(plat["move_max"])
-                )
+                if bridge_jump_task is not None:
+                    # The jump-side end is fixed by the task: a mount launches
+                    # when the bridge is nearest the takeoff shore (its low
+                    # end), a dismount when it is nearest the landing shore.
+                    near_end = float(
+                        plat["move_min"] if bridge_jump_task == "mount" else plat["move_max"]
+                    )
+                else:
+                    near_end = (
+                        float(plat["move_min"])
+                        if abs(plat["move_min"] - pre_step_mario_center_x)
+                        <= abs(plat["move_max"] - pre_step_mario_center_x)
+                        else float(plat["move_max"])
+                    )
                 wait_event = abs(float(plat["move_x"]) - near_end) < 6.0
                 break
         oracle_wait_frames = None
-        if bridge_composite and oracle_action == 0:
+        if (bridge_composite or bridge_jump_task is not None) and oracle_action == 0:
             start, end = step_index, step_index
             while start > 0 and oracle_actions[start - 1] == 0:
                 start -= 1
@@ -2652,7 +2690,11 @@ def collect_trajectory(
             ),
             enemy_contact_override=(engine_enemy_contact if engine_support else None),
             evaluation_target=block_smb_evaluation_target(
-                stage.env, step_local_target, step_phase, bridge_composite, enemy_composite
+                stage.env,
+                step_local_target,
+                step_phase,
+                bridge_composite or bridge_jump_task is not None,
+                enemy_composite,
             ).to(device),
         )
         if local_family and execution.started:
@@ -2714,6 +2756,8 @@ def collect_trajectory(
             # completes the opening wait, matching the demonstration goals.
             if action != 0 or (execution.released and wait_event):
                 bridge_opening = False
+        elif bridge_jump_task is not None:
+            info["skill_phase"] = step_phase
         stomp_contact = (
             bool((info.get("stomp_geometry") or {}).get("stomp"))
             or float(info["reward_terms"].get("enemy_stomp", 0)) > 0
@@ -2867,8 +2911,10 @@ def collect_trajectory(
                     stage.env.mario.get("on_ground")
                     and stage.env.mario.get("_platform")
                     and stage.env.mario["_platform"].get("moving")
-                ),
-                "shore_support": bool(info.get("bridge_crossed")),
+                )
+                or (bridge_jump_task == "mount" and bool(info.get("goal_reached"))),
+                "shore_support": bool(info.get("bridge_crossed"))
+                or (bridge_jump_task == "dismount" and bool(info.get("goal_reached"))),
                 "terminated": bool(terminated),
                 "truncated": bool(truncated),
                 "x_before": pre_step_mario_center_x,
@@ -2980,7 +3026,22 @@ def collect_trajectory(
             held_wait = span_end - span_start + 1
             target_frames = min(valid_frames, key=lambda n: abs(n - held_wait))
         else:
-            target_frames = block_smb_wait_target_frames(temporal_records, span_start, span_x)
+            wait_anchor_x = span_x
+            if bridge_jump_task is not None:
+                # A rider is carried with the bridge, so its distance to
+                # Mario never changes; the hindsight-correct wait ends when
+                # the bridge reaches the jump-side end of its track.
+                jump_bridge = next((p for p in stage.env.platforms if p.get("moving")), None)
+                if jump_bridge is not None:
+                    jump_end = (
+                        jump_bridge["move_min"]
+                        if bridge_jump_task == "mount"
+                        else jump_bridge["move_max"]
+                    )
+                    wait_anchor_x = float(jump_end) + jump_bridge["rect"].w / 2.0
+            target_frames = block_smb_wait_target_frames(
+                temporal_records, span_start, wait_anchor_x
+            )
         if target_frames is None:
             continue
         for offset, index in enumerate(range(span_start, span_end + 1)):

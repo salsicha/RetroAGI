@@ -379,7 +379,9 @@ def block_smb_monte_carlo_family_specs(
             platform_width=[56, 100],
             platform_speed=[0.6, 1.8],
             required_jump=True,
-            family_revision=[1, 1],
+            single_jump=True,
+            a_level_action=[0, 0],
+            family_revision=[2, 2],
             goal=(
                 "stable moving-platform landing"
                 if family == "bridge_mount"

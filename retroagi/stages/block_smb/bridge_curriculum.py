@@ -37,7 +37,12 @@ def bridge_jump_scenario(rng, difficulty, family):
         bridge_jump_task="mount" if mount else "dismount",
         task_objective=family,
         require_bridge_before_goal=True,
-        reward_goal_distance_shaping=2.0,
+        single_jump_attempt=True,
+        # A rider is paid goal-distance shaping by the bridge's own motion,
+        # and walking toward the leading edge pays for ~50 frames before the
+        # fatal drop — a wrong local optimum. The dismount lesson is a single
+        # jump; goal credit and the coaching carry the signal.
+        reward_goal_distance_shaping=2.0 if mount else 0.0,
         reward_wait_survival=0.0,
     )
     params = dict(
@@ -47,8 +52,14 @@ def bridge_jump_scenario(rng, difficulty, family):
         initial_x=initial,
         right_shore=shore,
         required_jump=True,
+        single_jump=True,
+        # B-teaching: the opening WAIT decision is given, exactly as in
+        # bridge_wait. The executor holds it until the bridge reaches the
+        # jump-side end of its track; the policy owns the jump that follows.
+        a_level_action=0,
+        a_level_action_scope="first_primitive",
         difficulty_bin=difficulty,
-        family_revision=1,
+        family_revision=2,
     )
     return scenario, params, bridge_jump_oracle(scenario)
 

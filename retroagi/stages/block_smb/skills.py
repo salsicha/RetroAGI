@@ -31,6 +31,8 @@ BLOCK_SMB_FAMILY_SKILL_GOALS: dict[str, str] = {
     "tall_pipe_jump": "mount_platform",
     "wait_timing": "wait_pass",
     "bridge_wait": "wait_pass",
+    "bridge_mount": "mount_platform",
+    "bridge_dismount": "clear_gap",
     "enemy_hop": "enemy_clear",
     "enemy_patrol": "enemy_clear",
     "enemy_gap": "enemy_clear",

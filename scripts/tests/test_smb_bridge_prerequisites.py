@@ -246,3 +246,93 @@ def test_mount_credits_actual_edge_landing_without_full_body_containment():
         assert env._goal_credited and not info["death"]
     finally:
         env.close()
+
+
+class TestBridgeJumpTrainingCoaching:
+    """The trainer coaches the jump families as jump teachers, not walkers."""
+
+    @staticmethod
+    def _collect(family, *, seed):
+        import copy
+
+        from retroagi.stages.block_smb.monte_carlo import (
+            sample_block_smb_monte_carlo_scenario,
+        )
+        from retroagi.stages.block_smb.train import (
+            BlockSMBObservationConfig,
+            BlockSMBStage,
+            BlockSMBTrainingConfig,
+            collect_trajectory,
+            make_block_smb_model,
+        )
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        config = BlockSMBTrainingConfig(
+            epochs=1, save_checkpoints=False, log_path="/dev/null"
+        )
+        torch.manual_seed(0)
+        model = make_block_smb_model(config)
+        model.eval()
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="train",
+            seed=20260910,
+            sample_index=0,
+            family=family,
+            difficulty="easy",
+            validate_reachability=False,
+        )
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(reward_config=config.reward_config),
+            scenario=copy.deepcopy(dict(sample.scenario)),
+            vision=BlockVisionTransformer(),
+            observation_config=BlockSMBObservationConfig(),
+        )
+        try:
+            with torch.no_grad():
+                return collect_trajectory(
+                    model,
+                    stage,
+                    sample.scenario_id,
+                    rollout_steps=320,
+                    seed=seed,
+                    deterministic=False,
+                    device=torch.device("cpu"),
+                    skill_goal_conditioning=True,
+                    engine_support=True,
+                )
+        finally:
+            stage.env.close()
+
+    def test_single_jump_scenario_flag_and_env_attempt_termination(self):
+        from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_scenario
+        from retroagi.stages.block_smb.train import block_smb_single_jump_scenario
+        import random
+
+        scenario, params, _ = bridge_jump_scenario(random.Random(0), "easy", "bridge_mount")
+        assert params["single_jump"] is True
+        assert scenario["single_jump_attempt"] is True
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=scenario)
+            assert env._single_jump_attempt
+        finally:
+            env.close()
+
+    @pytest.mark.parametrize("family", ["bridge_mount", "bridge_dismount"])
+    def test_no_walking_bridge_machinery_and_jump_phase_labels(self, family):
+        trajectory = self._collect(family, seed=1004)
+        expected_phase = "board" if family == "bridge_mount" else "exit"
+        phases = {
+            t.info.get("skill_phase")
+            for t in trajectory.transitions
+            if t.info.get("skill_phase")
+        }
+        assert phases <= {expected_phase, "finish"}
+        # The walking-crossing bookkeeping must not label jump-family steps.
+        assert not any(t.info.get("bridge_departure") for t in trajectory.transitions)
+        # Any coached horizontal jump span targets the collision surface,
+        # never the distant goal rect at x=420.
+        for t in trajectory.transitions:
+            if t.action in (2, 4) and t.info.get("primitive_target_x") is not None:
+                assert t.info["primitive_target_phase"] == expected_phase
+                assert t.info["primitive_target_x"] < 400.0
