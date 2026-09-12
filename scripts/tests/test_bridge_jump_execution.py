@@ -162,6 +162,7 @@ def test_training_keeps_physical_duration_labels_through_release(bridge_case):
         for step in jump_rows:
             assert step.duration_bin_values.tolist() == list(NES_JUMP_FRAMES)
             assert step.info["primitive_target_hold"] in step.info["primitive_valid_hold_frames"]
+            assert step.info["primitive_outcome_target"] == step.info["primitive_target_hold"] / 32
         waits = [t for t in trajectory.transitions if t.action == 0]
         assert all("primitive_outcome_target" not in t.info for t in waits)
     finally:
@@ -250,3 +251,77 @@ def test_alternate_covers_end_of_longest_hold_only_interval(bridge_case):
         assert env._goal_credited
     finally:
         env.close()
+
+
+@pytest.mark.parametrize("hold", [8, 32])
+def test_unreachable_bridge_jump_corrects_action_without_inventing_duration(bridge_case, hold):
+    from retroagi.stages.block_smb.adapter import BlockSMBStage
+    from retroagi.stages.block_smb.train import collect_trajectory, make_block_smb_model
+
+    model = make_block_smb_model(tiny_config()).eval()
+    stage = BlockSMBStage(scenario=bridge_case.scenario, vision=StaticBlockVision())
+    try:
+        with torch.no_grad():
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                bridge_case.scenario_id,
+                rollout_steps=160,
+                seed=101,
+                deterministic=True,
+                device=torch.device("cpu"),
+                demonstration_actions=[2] * hold + [1] * 96,
+            )
+        assert not trajectory.success
+        start = trajectory.transitions[0]
+        assert start.info["primitive_unreachable"]
+        assert start.info["jump_overreach"]
+        assert start.info["jump_overreach_action"] == 2
+        assert not any("primitive_target_hold" in t.info for t in trajectory.transitions)
+        assert not any("primitive_outcome_target" in t.info for t in trajectory.transitions)
+    finally:
+        stage.env.close()
+
+
+def test_nes_fallback_coaching_uses_physical_hold_limit():
+    from retroagi.stages.block_smb.train import jump_overreach, sign_coached_hold
+
+    assert sign_coached_hold(28, 40, 90, max_hold=32) == 29
+    assert sign_coached_hold(32, 40, 90, max_hold=32) == 32
+    assert not jump_overreach(28, 40, 90, max_hold=32)
+    assert jump_overreach(32, 40, 90, max_hold=32)
+
+
+@pytest.mark.parametrize("seed", [101, 20260908])
+def test_production_builder_covers_every_bridge_variant_in_every_difficulty(monkeypatch, seed):
+    from collections import defaultdict
+
+    from retroagi.stages.block_smb import demonstrations, monte_carlo
+
+    monkeypatch.setattr(monte_carlo, "BLOCK_SMB_MC_FAMILIES", ("bridge_mount", "bridge_dismount"))
+
+    def sample(**kwargs):
+        return SimpleNamespace(
+            scenario={"bridge_jump_task": kwargs["family"]},
+            difficulty=kwargs["difficulty"],
+            index=kwargs["sample_index"],
+            variant=0,
+        )
+
+    def alternate(case, route_seed, **kwargs):
+        return SimpleNamespace(**{**vars(case), "variant": 1 + route_seed % 3})
+
+    monkeypatch.setattr(monte_carlo, "sample_block_smb_monte_carlo_scenario", sample)
+    monkeypatch.setattr(demonstrations, "varied_demonstration", alternate)
+    monkeypatch.setattr(demonstrations, "collect_demonstrations", lambda cases, *args: cases)
+    config = SimpleNamespace(
+        seed=seed,
+        demonstration_layouts_per_family=6,
+        demonstration_robust_routes=True,
+        demonstration_varied_routes=True,
+    )
+    groups = defaultdict(set)
+    for family, case in demonstrations.build_balanced_demonstrations(config, None):
+        groups[family, case.difficulty, case.index].add(case.variant)
+    assert len(groups) == 12
+    assert all(variants == {0, 1, 2, 3} for variants in groups.values())

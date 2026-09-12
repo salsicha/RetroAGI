@@ -1972,8 +1972,8 @@ def block_smb_wait_target_frames(
     return max(int(minimum), min(int(horizon), best_offset))
 
 
-# Longest hold-duration bin the executor exposes (frames); hindsight hold
-# targets and the expected-hold fraction are both normalized against it.
+# Legacy hold limit for callers without an explicit physics menu. Completed
+# jump spans use their executor's actual duration values instead.
 _SMB_MAX_DURATION_BIN_VALUE = 16.0
 
 # On-target tolerance for jump coaching: landings within this many pixels
@@ -1987,6 +1987,8 @@ def sign_coached_hold(
     realized: float,
     frame_target: float,
     tolerance: float = _SMB_JUMP_TARGET_TOLERANCE,
+    *,
+    max_hold: float = _SMB_MAX_DURATION_BIN_VALUE,
 ) -> float:
     """One bit of duration coaching: direction, not size.
 
@@ -2011,7 +2013,7 @@ def sign_coached_hold(
     if abs(frame_target - realized) < max(float(tolerance), _SMB_JUMP_TARGET_TOLERANCE):
         return float(held)
     direction = 1.0 if frame_target > realized else -1.0
-    return max(1.0, min(float(_SMB_MAX_DURATION_BIN_VALUE), float(held) + direction))
+    return max(1.0, min(float(max_hold), float(held) + direction))
 
 
 def jump_overreach(
@@ -2019,6 +2021,8 @@ def jump_overreach(
     realized: float,
     target: float,
     tolerance: float = _SMB_JUMP_TARGET_TOLERANCE,
+    *,
+    max_hold: float = _SMB_MAX_DURATION_BIN_VALUE,
 ) -> bool:
     """A full-length jump that still fell short of the target.
 
@@ -2029,7 +2033,7 @@ def jump_overreach(
     inside a wide goal is a success, not overreach.
     """
 
-    return float(held) >= float(_SMB_MAX_DURATION_BIN_VALUE) and realized < target - max(
+    return float(held) >= float(max_hold) and realized < target - max(
         float(tolerance), _SMB_JUMP_TARGET_TOLERANCE
     )
 
@@ -2376,6 +2380,26 @@ def collect_trajectory(
             return
         span = primitive_span
         primitive_span = []
+        initiation = trajectory.transitions[span[0]]
+        if (
+            bridge_jump_task is not None
+            and initiation.action in (2, 4)
+            and primitive_safe_holds == []
+        ):
+            # Physics certified that no duration can work at this departure.
+            # Teach the action decision, even if the moving bridge later
+            # overlaps Mario horizontally below its landing surface. There is
+            # no valid duration/release target to attach to this failed arc.
+            initiation.info["jump_overreach"] = True
+            initiation.info["jump_overreach_action"] = initiation.action
+            initiation.info["primitive_unreachable"] = True
+            return
+        duration_values = initiation.duration_bin_values
+        max_hold = (
+            float(duration_values.max())
+            if duration_values is not None
+            else _SMB_MAX_DURATION_BIN_VALUE
+        )
         env = stage.env
         goal = getattr(env, "goal", None)
         if goal is None or not getattr(env, "world_width", 0):
@@ -2494,8 +2518,10 @@ def collect_trajectory(
             ) and abs(frame_target - realized) < halfwidth:
                 # Reaching the pipe's x coordinate below its top is a height
                 # shortfall, not a successful landing or horizontal overshoot.
-                return min(_SMB_MAX_DURATION_BIN_VALUE, float(held) + 1.0)
-            return sign_coached_hold(held, realized, frame_target, tolerance=halfwidth)
+                return min(max_hold, float(held) + 1.0)
+            return sign_coached_hold(
+                held, realized, frame_target, tolerance=halfwidth, max_hold=max_hold
+            )
 
         # Overreach: a full-length jump that still fell short is not a
         # duration mistake — no hold on the menu reaches — so the duration
@@ -2504,17 +2530,16 @@ def collect_trajectory(
         # skill network's chosen jump action is suppressed in that state
         # (walk closer first, or do something else entirely).
         if (
-            enemy_composite
-            and intercepting
-            and stomp_outcome == "undershoot"
-            and held >= _SMB_MAX_DURATION_BIN_VALUE
+            enemy_composite and intercepting and stomp_outcome == "undershoot" and held >= max_hold
         ) or (
             not intercepting
             and not mounted_during_span
             and not bridge_landed
             and not local_landed
             and not primitive_safe_holds
-            and jump_overreach(held, realized, target, tolerance=completion_halfwidth)
+            and jump_overreach(
+                held, realized, target, tolerance=completion_halfwidth, max_hold=max_hold
+            )
         ):
             initiation_info = trajectory.transitions[span[0]].info
             if isinstance(initiation_info, dict):
@@ -2546,9 +2571,7 @@ def collect_trajectory(
                 else float(temporal_records[span_index].get("goal_halfwidth") or 0.0)
             )
             frame_correct = correct_hold_for(frame_target, frame_halfwidth)
-            span_info["primitive_outcome_target"] = frame_correct / float(
-                _SMB_MAX_DURATION_BIN_VALUE
-            )
+            span_info["primitive_outcome_target"] = frame_correct / max_hold
             span_info["primitive_frame_index"] = offset
             span_info["primitive_target_hold"] = frame_correct
             if (local_family or bridge_jump_task is not None) and primitive_safe_holds:

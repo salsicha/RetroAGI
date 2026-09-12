@@ -63,3 +63,7 @@ family/difficulty/seed met the 90% gate. The original validation remained
 
 The probe qualifies this repair on bridge tasks; full-volume evaluation must
 still establish retention alongside all other families.
+
+The subsequent full-volume run exposed production route-selection and
+on-policy correction defects that this bridge-only qualification missed.
+See [the production supervision repair](smb-bridge-production-supervision.md).

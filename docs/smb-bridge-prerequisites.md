@@ -24,8 +24,11 @@ hard. Speeds, spawn positions, and shore positions also vary. The coach certifie
 actual landings using all 16 physical hold durations. The base coach waits for
 multiple safe holds and selects an interior hold. Alternate coaching also covers
 both ends of the interval when only the longest hold works, and a longer hold
-within the base window. Policy-state correction remains available
-at actual proposed takeoffs and misses. Autonomous validation has no coach.
+within the base window. The production builder retains all four routes on
+every bridge layout so difficulty cannot exclude a timing boundary.
+Policy-state correction at unreachable takeoffs supervises the jump decision
+without inventing a hold duration. Duration limits use the actual physics menu.
+Autonomous validation has no coach.
 
 The tasks declare `task_objective=bridge_mount` or `bridge_dismount`. Their
 observable goals use the existing mount/clear-gap skill encodings with magnitude
@@ -34,6 +37,10 @@ stomp magnitude 128 and other task meanings remain unchanged. Neither new task
 exposes future bridge reversal limits to the policy.
 
 ## Ordering within the numbered epochs
+
+This section describes the earlier prerequisite-gated recipe. The current
+full-volume recipe and its verification are described in
+[the production supervision repair](smb-bridge-production-supervision.md).
 
 The full-volume configuration contains 22 independent families and 30 epochs.
 `wait_timing` remains an alias of `bridge_wait`. The two prerequisites are listed

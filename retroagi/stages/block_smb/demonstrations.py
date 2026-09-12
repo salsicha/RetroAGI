@@ -319,7 +319,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 4
+DEMONSTRATION_CONTRACT_VERSION = 5
 
 
 def without_walk_commitments(data):
@@ -729,6 +729,19 @@ def build_balanced_demonstrations(config, vision_factory):
                 sample_index=i,
                 difficulty=("easy", "medium", "hard")[i % 3],
             )
+            if sample.scenario.get("bridge_jump_task") and (
+                config.demonstration_robust_routes or config.demonstration_varied_routes
+            ):
+                # Difficulty already cycles with i % 3. Reusing that index to
+                # select a route permanently omits a boundary in each tier.
+                # Keep the canonical route and both timing boundaries on every
+                # bridge layout, including during later rehearsal.
+                cases.append((family_index, sample))
+                for variant in (1, 2, 3):
+                    alternative = varied_demonstration(sample, variant - 1, robust=True)
+                    if alternative is not None:
+                        cases.append((family_index, alternative))
+                continue
             if config.demonstration_robust_routes:
                 sample = varied_demonstration(sample, config.seed + i, robust=True) or sample
             cases.append((family_index, sample))
