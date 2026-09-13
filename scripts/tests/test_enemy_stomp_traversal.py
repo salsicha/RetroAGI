@@ -90,6 +90,7 @@ def test_successful_stomp_is_coached_to_contact_then_bounce_and_finish_are_separ
     coached = [t for t in trajectory.transitions if t.info.get("primitive_target_phase") == "stomp"]
     assert len(coached) == contact + 1
     assert {t.info["primitive_target_hold"] for t in coached} == {16.0}
+    assert all(16 in t.info["primitive_valid_hold_frames"] for t in coached)
     assert {t.info["primitive_target_x"] for t in coached} == {115.0}
     assert not any(t.info.get("jump_overreach") for t in coached)
     jump = next(s for s in trajectory.spans if s.command.get("primitive") == "jump")
@@ -250,3 +251,98 @@ def test_recovery_policy_credit_combines_jump_and_release_intents():
         assert not result[6].started and not result[6].active
     finally:
         stage.env.close()
+
+
+def medium_audit_sample(index):
+    """The two production failures: short-but-reachable and impossible takeoff."""
+    return sample_block_smb_monte_carlo_scenario(
+        split="validation",
+        seed=50000,
+        sample_index=index,
+        family="enemy_stomp",
+        difficulty="medium",
+    )
+
+
+@pytest.mark.parametrize("steps", [1, 40])
+def test_medium_stomp_uses_certified_holds_even_before_contact_window(steps):
+    from retroagi.core.smb_coaching import training_target
+    from retroagi.stages.block_smb.local_traversal import safe_jump_holds
+    from scripts.tests.test_stomp_coaching import held_policy
+
+    sample = medium_audit_sample(250)
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        safe = safe_jump_holds(env, training_target(env), 1)
+        assert safe == [14, 15, 16]
+    finally:
+        env.close()
+    trajectory = rollout(sample, held_policy(7), steps=steps)
+    start = trajectory.transitions[0]
+    assert start.info["primitive_valid_hold_frames"] == safe
+    assert start.info["primitive_target_hold"] == 14
+    assert not start.info.get("jump_overreach")
+    assert not start.info.get("primitive_unreachable")
+
+
+@pytest.mark.parametrize("steps", [1, 28])
+@pytest.mark.parametrize("hold", [7, 16])
+def test_impossible_medium_stomp_penalizes_takeoff_without_duration_label(steps, hold):
+    from retroagi.core.smb_coaching import training_target
+    from retroagi.stages.block_smb.local_traversal import safe_jump_holds
+    from scripts.tests.test_stomp_coaching import held_policy
+
+    sample = medium_audit_sample(251)
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        assert safe_jump_holds(env, training_target(env), 1) == []
+    finally:
+        env.close()
+    trajectory = rollout(sample, held_policy(hold), steps=steps)
+    start = trajectory.transitions[0]
+    assert start.info["primitive_unreachable"]
+    assert start.info["jump_overreach"]
+    assert start.info["jump_overreach_action"] == 2
+    assert start.info["primitive_target_phase"] == "stomp"
+    assert not any("primitive_target_hold" in t.info for t in trajectory.transitions)
+    assert not any("primitive_outcome_target" in t.info for t in trajectory.transitions)
+
+
+def test_certified_stomp_duration_loss_moves_mass_into_successful_holds():
+    from retroagi.stages.block_smb.train import block_smb_duration_coaching_loss
+    from scripts.tests.test_stomp_coaching import held_policy
+
+    trajectory = rollout(medium_audit_sample(250), held_policy(7), steps=1)
+    step = trajectory.transitions[0]
+    logits = torch.zeros(1, 1, 16, requires_grad=True)
+    step.hold_duration_logits = logits
+    loss = block_smb_duration_coaching_loss(step, device=torch.device("cpu"))
+    loss.backward()
+    assert (logits.grad[..., :13] > 0).all()  # Suppress every invalid hold, including 7 and 8.
+    assert (logits.grad[..., 13:] < 0).all()  # Increase all three certified choices.
+
+
+def test_stomp_certification_tracks_enemy_behind_mario_during_leftward_recovery():
+    from retroagi.core.smb_coaching import training_target
+    from retroagi.stages.block_smb.local_traversal import safe_jump_holds
+    from scripts.tests.test_stomp_coaching import held_policy
+
+    sample = legacy_sample()
+    scenario = dict(sample.scenario, mario=[170, 200], enemies=[[100, 206, 100, 100, 0]])
+    sample = replace(sample, scenario=scenario)
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        target = training_target(env)
+        assert target.kind == "stomp" and target.direction == -1
+        safe = safe_jump_holds(env, target, -1)
+        assert safe
+    finally:
+        env.close()
+    trajectory = rollout(sample, held_policy(7), steps=1, demonstration_actions=[4])
+    start = trajectory.transitions[0]
+    assert start.action == 4
+    assert start.info["primitive_valid_hold_frames"] == safe
+    assert not start.info.get("jump_overreach")

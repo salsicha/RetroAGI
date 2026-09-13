@@ -916,6 +916,23 @@ class TestBlockSMBTraining(unittest.TestCase):
         self.assertEqual(epoch_curriculum[0][0], "level_1_flat.json")
         self.assertEqual(epoch_curriculum[1:4], replay)
 
+    def test_failure_replay_preserves_medium_stomp_bin_and_train_split(self):
+        from retroagi.stages.block_smb.monte_carlo import block_smb_monte_carlo_metadata
+
+        config = tiny_config(monte_carlo_failure_replay_samples_per_epoch=6)
+        failures = {"enemy_stomp:medium": {"failure_count": 8}}
+        replay = build_adaptive_monte_carlo_replay_curriculum(config, failures, epoch=12)
+        repeated = build_adaptive_monte_carlo_replay_curriculum(config, failures, epoch=12)
+        next_epoch = build_adaptive_monte_carlo_replay_curriculum(config, failures, epoch=13)
+        self.assertEqual(replay, repeated)
+        self.assertNotEqual(replay, next_epoch)
+        self.assertEqual(len(replay), 6)
+        for _name, scenario in replay:
+            metadata = block_smb_monte_carlo_metadata(scenario)
+            self.assertEqual(metadata["family"], "enemy_stomp")
+            self.assertEqual(metadata["parameters"]["difficulty_bin"], "medium")
+            self.assertEqual(metadata["split"], "train")
+
     def test_periodic_evaluation_writes_structured_log(self):
         with TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "block_smb.jsonl"

@@ -51,9 +51,17 @@ def test_sampling_balances_decisions_instead_of_held_button_frames():
     case = samples("tall_pipe_jump", 13, "train", 1)[0]
     data = collect_demonstrations([(0, case)], tiny_config(), StaticBlockVision)
     weights = demonstration_sample_weights(data)
-    walk = weights[data.actor_mask & (data.action == 1)].sum()
-    jump = weights[data.actor_mask & (data.action == 2)].sum()
-    assert torch.allclose(walk, jump)
+    # Each objective phase balances its decision actions independently;
+    # finish walking must not dilute the pipe-mount jump group.
+    compared = False
+    for phase in data.phase.unique():
+        decisions = data.actor_mask & (data.phase == phase)
+        if (decisions & (data.action == 1)).any() and (decisions & (data.action == 2)).any():
+            walk = weights[decisions & (data.action == 1)].sum()
+            jump = weights[decisions & (data.action == 2)].sum()
+            assert torch.allclose(walk, jump)
+            compared = True
+    assert compared
     assert weights.sum().item() == pytest.approx(1)
     assert all(data.valid_durations.any(dim=-1))
 
@@ -304,7 +312,9 @@ def test_cached_steady_migration_matches_fresh_collection(monkeypatch):
     align = demonstrations.align_steady_demonstrations
     expected = collect_demonstrations(cases, tiny_config(), StaticBlockVision)
     with monkeypatch.context() as patch:
-        patch.setattr(demonstrations, "align_steady_demonstrations", lambda data, *args, **kwargs: data)
+        patch.setattr(
+            demonstrations, "align_steady_demonstrations", lambda data, *args, **kwargs: data
+        )
         legacy = collect_demonstrations(cases, tiny_config(), StaticBlockVision)
     migrated = align(legacy, [0])
     for field in fields(expected):

@@ -137,5 +137,6 @@
   "vision_checkpoint_path": "data/block_vit/block_vit.pth",
   "walk_duration_primitives": false,
   "world_model_slot_weights": {},
-  "world_model_weight": 0.1
+  "world_model_weight": 0.1,
+  "policy_recovery_samples_per_bin": 2
 }

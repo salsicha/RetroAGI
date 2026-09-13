@@ -327,6 +327,7 @@ class BlockSMBTrainingConfig:
     success_replay_episodes_per_family: int = 8
     success_replay_rehearsals_per_epoch: int = 12
     retention_imitation_weight: float = 0.1
+    policy_recovery_samples_per_bin: int = 0
     # Execute scripted oracle actions during training rollouts on Monte Carlo
     # scenarios that carry them (fixed scenarios have no oracle and stay
     # on-policy). This is the in-loop demonstration channel that supervises the
@@ -508,6 +509,8 @@ class BlockSMBTrainingConfig:
             raise ValueError("monte_carlo_validation_samples must be non-negative")
         if self.monte_carlo_test_samples < 0:
             raise ValueError("monte_carlo_test_samples must be non-negative")
+        if self.policy_recovery_samples_per_bin < 0:
+            raise ValueError("policy_recovery_samples_per_bin must be non-negative")
         if self.monte_carlo_failure_replay_samples_per_epoch < 0:
             raise ValueError("monte_carlo_failure_replay_samples_per_epoch must be non-negative")
         if not self.monte_carlo_distribution_id:
@@ -1018,15 +1021,17 @@ def build_adaptive_monte_carlo_replay_curriculum(
     *,
     epoch: int,
 ) -> list[tuple[str, dict]]:
-    """Sample train scenarios weighted by recent held-out failure families."""
+    """Sample fresh train scenarios in the recent family/difficulty failure bins."""
 
     sample_count = int(config.monte_carlo_failure_replay_samples_per_epoch)
     if sample_count <= 0 or not failure_bins:
         return []
-    family_weights: dict[str, float] = {}
+    bin_weights: dict[tuple[str, str | None], float] = {}
     for bin_name, bin_result in failure_bins.items():
-        family = str(bin_name).split(":", 1)[0]
+        family, separator, difficulty = str(bin_name).partition(":")
         if family not in BLOCK_SMB_MC_FAMILIES:
+            continue
+        if separator and difficulty not in BLOCK_SMB_MC_DIFFICULTY_BINS:
             continue
         failure_count = 1.0
         if isinstance(bin_result, Mapping):
@@ -1034,16 +1039,29 @@ def build_adaptive_monte_carlo_replay_curriculum(
                 failure_count = max(1.0, float(bin_result.get("failure_count", 1.0)))
             except (TypeError, ValueError):
                 failure_count = 1.0
-        family_weights[family] = family_weights.get(family, 0.0) + failure_count
-    if not family_weights:
+        key = (family, difficulty if separator else None)
+        bin_weights[key] = bin_weights.get(key, 0.0) + failure_count
+    if not bin_weights:
         return []
-    return build_monte_carlo_curriculum(
-        config,
-        split="train",
-        sample_count=sample_count,
-        seed=int(config.monte_carlo_seed) + 900_000 + int(epoch),
-        family_weights=family_weights,
-    )
+    seed = int(config.monte_carlo_seed) + 900_000 + int(epoch)
+    rng = random.Random(seed)
+    bins = list(bin_weights)
+    weights = list(bin_weights.values())
+    scenarios = []
+    for sample_index in range(sample_count):
+        family, difficulty = rng.choices(bins, weights=weights, k=1)[0]
+        sample = sample_block_smb_monte_carlo_scenario(
+            distribution_id=config.monte_carlo_distribution_id,
+            split="train",
+            seed=seed,
+            sample_index=sample_index,
+            family=family,
+            difficulty=difficulty,
+            validate_reachability=config.monte_carlo_validate_reachability,
+            max_rejections=config.monte_carlo_max_rejections,
+        )
+        scenarios.append((sample.scenario_id, copy.deepcopy(dict(sample.scenario))))
+    return scenarios
 
 
 def build_epoch_curriculum(
@@ -2350,6 +2368,7 @@ def collect_trajectory(
     bridge_departure_recorded = False
     bridge_exit_committed = False
     local_family = scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES
+    certified_jump_family = local_family or bridge_jump_task is not None or enemy_composite
     primitive_local_target = None
     primitive_safe_holds = None
     recovering_local_stomp = False
@@ -2382,17 +2401,27 @@ def collect_trajectory(
         primitive_span = []
         initiation = trajectory.transitions[span[0]]
         if (
-            bridge_jump_task is not None
+            (
+                bridge_jump_task is not None
+                or (enemy_composite and primitive_span_phase == "stomp")
+                or (
+                    local_family
+                    and primitive_local_target is not None
+                    and primitive_local_target.kind in ("mount", "gap", "enemy")
+                )
+            )
             and initiation.action in (2, 4)
             and primitive_safe_holds == []
         ):
             # Physics certified that no duration can work at this departure.
-            # Teach the action decision, even if the moving bridge later
-            # overlaps Mario horizontally below its landing surface. There is
-            # no valid duration/release target to attach to this failed arc.
+            # Teach the action decision, including short required-stomp
+            # attempts. No duration/release target can fix this departure.
             initiation.info["jump_overreach"] = True
             initiation.info["jump_overreach_action"] = initiation.action
             initiation.info["primitive_unreachable"] = True
+            if enemy_composite and primitive_local_target is not None:
+                initiation.info["primitive_target_phase"] = primitive_span_phase
+                initiation.info["primitive_target_x"] = primitive_local_target.center
             return
         duration_values = initiation.duration_bin_values
         max_hold = (
@@ -2487,8 +2516,8 @@ def collect_trajectory(
                 held,
                 direction=primitive_direction,
             )
-            if stomp_target is None:
-                return  # The unfinished arc has not reached the contact window.
+            if stomp_target is None and not primitive_safe_holds:
+                return  # No contact evidence or certified counterfactual target.
         bridge_landed = bridge_target and any(
             temporal_records[i].get("bridge_support" if boarding else "shore_support", False)
             for i in span
@@ -2530,7 +2559,11 @@ def collect_trajectory(
         # skill network's chosen jump action is suppressed in that state
         # (walk closer first, or do something else entirely).
         if (
-            enemy_composite and intercepting and stomp_outcome == "undershoot" and held >= max_hold
+            enemy_composite
+            and intercepting
+            and not primitive_safe_holds
+            and stomp_outcome == "undershoot"
+            and held >= max_hold
         ) or (
             not intercepting
             and not mounted_during_span
@@ -2574,7 +2607,7 @@ def collect_trajectory(
             span_info["primitive_outcome_target"] = frame_correct / max_hold
             span_info["primitive_frame_index"] = offset
             span_info["primitive_target_hold"] = frame_correct
-            if (local_family or bridge_jump_task is not None) and primitive_safe_holds:
+            if certified_jump_family and primitive_safe_holds:
                 span_info["primitive_valid_hold_frames"] = primitive_safe_holds
                 span_info["primitive_duration_scale"] = 1.0
             if (
@@ -2612,9 +2645,7 @@ def collect_trajectory(
             step_phase = (
                 pipe_traversal.phase
                 if pipe_traversal is not None
-                else "bounce_recovery"
-                if recovering_local_stomp
-                else step_local_target.kind
+                else "bounce_recovery" if recovering_local_stomp else step_local_target.kind
             )
         safe_waits = bridge_safe_wait_frames(stage.env) if bridge_composite else []
         if bridge_composite:
@@ -2726,9 +2757,9 @@ def collect_trajectory(
                 enemy_composite,
             ).to(device),
         )
-        if (local_family or bridge_jump_task is not None) and execution.started:
+        if certified_jump_family and execution.started:
             primitive_local_target = step_local_target
-            if bridge_jump_task is not None:
+            if bridge_jump_task is not None or (enemy_composite and step_phase == "stomp"):
                 from retroagi.core.smb_coaching import training_target
 
                 primitive_local_target = training_target(stage.env)
@@ -2736,10 +2767,16 @@ def collect_trajectory(
                 safe_jump_holds(
                     stage.env, primitive_local_target, 1 if execution.action == 2 else -1
                 )
-                if execution.action in (2, 4) and stage.env.mario["on_ground"]
+                if primitive_local_target is not None
+                and execution.action in (2, 4)
+                and stage.env.mario["on_ground"]
                 else None
             )
-        if (local_family or bridge_jump_task is not None) and oracle_action is not None:
+        if (
+            local_family
+            or bridge_jump_task is not None
+            or (enemy_composite and step_phase == "stomp")
+        ) and oracle_action is not None:
             # The safe-set loss supplies duration supervision. Do not add an
             # independent CE label from an old time-indexed oracle hold.
             primitive_aux_loss = _smb_primitive_auxiliary_loss(
@@ -3712,6 +3749,7 @@ def train_block_smb_epoch(
     vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
     target_model: Optional[torch.nn.Module] = None,
     success_replay: Optional[BlockSMBSuccessReplay] = None,
+    recovery_records: list[dict] | None = None,
 ) -> tuple[dict[str, float], BlockSMBReplayBuffer]:
     model.train()
     if target_model is not None:
@@ -3729,6 +3767,7 @@ def train_block_smb_epoch(
     all_actions: list[int] = []
     update_count = 0
     rollout_budgets: list[int] = []
+    recovery_counts: dict[tuple[str, str], int] = {}
 
     def rollout_budget(scenario) -> int:
         budget = training_rollout_steps(config.rollout_steps, scenario)
@@ -3792,6 +3831,27 @@ def train_block_smb_epoch(
                 walk_duration_primitives=config.walk_duration_primitives,
                 engine_support=config.engine_support_override,
             )
+            if recovery_records is not None and not config.use_oracle_actions:
+                from .policy_recovery import RECOVERY_FAMILIES
+
+                metadata = block_smb_monte_carlo_metadata(scenario)
+                family = metadata.get("family", "")
+                difficulty = metadata.get("parameters", {}).get("difficulty_bin", "")
+                key = (family, difficulty)
+                if (
+                    family in RECOVERY_FAMILIES
+                    and metadata.get("split") == "train"
+                    and recovery_counts.get(key, 0) < config.policy_recovery_samples_per_bin
+                ):
+                    recovery_counts[key] = recovery_counts.get(key, 0) + 1
+                    recovery_records.append(
+                        dict(
+                            scenario=stage.scenario,
+                            scenario_id=scenario_name,
+                            seed=config.seed + epoch * 10_000 + episode,
+                            actions=[step.action for step in trajectory.transitions],
+                        )
+                    )
             _write_block_smb_spans(config, trajectory)
         finally:
             stage.env.close()
@@ -4935,6 +4995,7 @@ def train_and_evaluate_block_smb(
     last_metrics: dict[str, float] = {}
     recent_monte_carlo_failure_bins: Mapping[str, Any] = {}
     demonstration_data = None
+    recovery_history = []
     if config.demonstration_bootstrap_updates or config.demonstration_rehearsal_updates:
         from .demonstrations import build_balanced_demonstrations, fit_demonstrations
 
@@ -4982,6 +5043,7 @@ def train_and_evaluate_block_smb(
             epoch=epoch,
         )
         epoch_curriculum = build_epoch_curriculum(curriculum, replay_curriculum)
+        recovery_records = [] if config.policy_recovery_samples_per_bin else None
         losses, _replay = train_block_smb_epoch(
             model,
             optimizer,
@@ -4992,7 +5054,22 @@ def train_and_evaluate_block_smb(
             vision_factory=vision_factory,
             target_model=target_model,
             success_replay=success_replay,
+            recovery_records=recovery_records,
         )
+        if recovery_records and demonstration_data is not None:
+            from .policy_recovery import collect_policy_recovery
+
+            recovered = collect_policy_recovery(recovery_records, config, vision_factory)
+            if recovered is not None:
+                recovery_history.append(recovered)
+                recovery_history = recovery_history[-3:]
+            _log_block_smb_event(
+                config,
+                "policy_recovery_collected",
+                epoch=epoch + 1,
+                episodes=len(recovery_records),
+                frames=len(recovered.action) if recovered else 0,
+            )
         if demonstration_data is not None and config.demonstration_rehearsal_updates:
             demonstration_weights = None
             if config.mastery_gated_schedule:
@@ -5006,10 +5083,18 @@ def train_and_evaluate_block_smb(
                     index: family_weights[family]
                     for index, family in enumerate(BLOCK_SMB_MC_FAMILIES)
                 }
+            from .policy_recovery import combine_demonstrations
+
+            rehearsal_data = (
+                combine_demonstrations([demonstration_data, *recovery_history])
+                if recovery_history
+                else demonstration_data
+            )
+            losses["policy_recovery_frames"] = sum(len(data.action) for data in recovery_history)
             losses["demonstration_rehearsal_loss"] = fit_demonstrations(
                 model,
                 optimizer,
-                demonstration_data,
+                rehearsal_data,
                 steps=config.demonstration_rehearsal_updates,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
@@ -5108,10 +5193,17 @@ def train_and_evaluate_block_smb(
                     if primitive_score > best_primitive_score and config.checkpoint_path:
                         best_primitive_score = primitive_score
                         best_path = Path(config.checkpoint_path).with_suffix(".best_primitives.pth")
-                        if Path(config.checkpoint_path).exists():
-                            import shutil
-
-                            shutil.copyfile(config.checkpoint_path, best_path)
+                        if config.save_checkpoints:
+                            save_block_smb_checkpoint(
+                                best_path,
+                                model,
+                                optimizer,
+                                epoch=completed_epoch,
+                                global_step=global_step,
+                                config=config,
+                                metrics=last_metrics,
+                                target_model=target_model,
+                            )
                             _log_block_smb_event(
                                 config,
                                 "best_primitive_checkpoint",

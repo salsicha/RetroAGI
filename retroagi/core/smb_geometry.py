@@ -127,6 +127,15 @@ def geometry_features(
         p["rect"]
         for p in scene.platforms
         if (p["rect"].right < m["x"] if facing_left else p["rect"].left > mario_right)
+        or (
+            p["rect"].top < mario_bottom - 1
+            and p["rect"].bottom > m["y"]
+            and (
+                p["rect"].left < m["x"] <= p["rect"].right
+                if facing_left
+                else p["rect"].left <= mario_right < p["rect"].right
+            )
+        )
     ]
     if ahead_platforms:
         next_platform = min(
@@ -134,8 +143,16 @@ def geometry_features(
             key=lambda r: m["x"] - r.right if facing_left else r.left - mario_right,
         )
         next_platform_dx = (
-            (m["x"] - next_platform.right) if facing_left else (next_platform.left - mario_right)
-        ) / ww
+            max(
+                0.0,
+                (
+                    (m["x"] - next_platform.right)
+                    if facing_left
+                    else (next_platform.left - mario_right)
+                ),
+            )
+            / ww
+        )
         next_platform_dy = (next_platform.top - mario_bottom) / wh
 
     def _ground_ahead(offset: float) -> float:

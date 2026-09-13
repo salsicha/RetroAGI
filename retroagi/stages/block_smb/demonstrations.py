@@ -44,8 +44,11 @@ class DemonstrationBatch:
     valid_durations: torch.Tensor
     phase: torch.Tensor | None = None
     carry_progress: torch.Tensor | None = None
+    recovery: torch.Tensor | None = None
 
     def __post_init__(self):
+        if self.recovery is None:
+            self.recovery = torch.zeros_like(self.family, dtype=torch.bool)
         if self.carry_progress is None:
             self.carry_progress = torch.zeros_like(self.family, dtype=torch.float32)
         if self.phase is None:
@@ -54,6 +57,7 @@ class DemonstrationBatch:
 
 def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32):
     rows = []
+    recovery_rows = []
     episode_starts = []
     frame_wait_episodes = set()
     for family_index, sample in cases:
@@ -69,6 +73,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
         try:
             observation = stage.reset(seed=sample.sample_seed % (2**31))
             actions = list(sample.oracle["actions"])
+            supervision_start = int(sample.oracle.get("supervision_start_frame", 0))
             pipe = TallPipeTraversal.from_stage(stage.scenario, stage.env)
             request = requested_block_smb_skill_goal(stage.scenario)
             request = request if request is not None else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
@@ -119,13 +124,9 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 if jump_intent is None and action in (2, 4, 5):
                     jump_intent = action
                     jump_hold = hold
-                    objective = local_objective(env)
-                    if (
-                        (env._goal_on_stomp or env._require_stomp_before_goal)
-                        and not env._stomp_credited
-                        and objective.kind == "enemy"
-                    ):
-                        objective = replace(objective, kind="stomp")
+                    from retroagi.core.smb_coaching import training_target
+
+                    objective = training_target(env)
                     jump_valid = (
                         safe_jump_holds(env, objective, 1 if action == 2 else -1)
                         if action in (2, 4) and env.mario["on_ground"]
@@ -212,6 +213,16 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                         frame + 1,
                         family_index,
                         valid,
+                        {
+                            "enemy": 1,
+                            "stomp": 1,
+                            "gap": 2,
+                            "wait": 2,
+                            "mount": 3,
+                            "board": 3,
+                            "ride": 4,
+                            "exit": 5,
+                        }.get(phase, 0),
                     ]
                 )
                 if jump_intent is not None:
@@ -255,10 +266,14 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     c[frame : frame + 1],
                 )
                 row[8] = c[row[8] : row[8] + 1]
+            episode = episode[supervision_start:]
+            if not episode:
+                raise ValueError("A recovery demonstration must have a supervised suffix")
             if bridge_jump:
                 frame_wait_episodes.add(len(rows))
             episode_starts.append(len(rows))
             rows.extend(episode)
+            recovery_rows.extend([bool(sample.oracle.get("recovery"))] * len(episode))
         finally:
             stage.env.close()
     columns = list(zip(*rows))
@@ -266,10 +281,13 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
         *(torch.cat(v) if i in (0, 1, 2, 3, 8) else torch.tensor(v) for i, v in enumerate(columns))
     )
 
+    data.recovery = torch.tensor(recovery_rows, dtype=torch.bool)
     data = align_steady_demonstrations(
         data, episode_starts, frame_wait_episodes=frame_wait_episodes
     )
-    return data if config.walk_duration_primitives else without_walk_commitments(data)
+    return (
+        data if config.walk_duration_primitives else without_walk_commitments(data, episode_starts)
+    )
 
 
 def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episodes=()):
@@ -319,10 +337,10 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 5
+DEMONSTRATION_CONTRACT_VERSION = 6
 
 
-def without_walk_commitments(data):
+def without_walk_commitments(data, episode_starts=None):
     """Walking reconsiders A every frame; jump and wait commitments remain."""
     data = replace(data, actor_mask=data.actor_mask.clone(), next_c=data.next_c.clone())
     walking = ((data.motor_action == 1) | (data.motor_action == 3)) & (data.c[:, 16] > 0.5)
@@ -330,6 +348,9 @@ def without_walk_commitments(data):
     indices = walking.nonzero().flatten()
     indices = indices[indices < len(data.action) - 1]
     indices = indices[data.c[indices + 1, 26] != 0]
+    if episode_starts is not None:
+        boundaries = torch.tensor(episode_starts, device=indices.device)
+        indices = indices[~torch.isin(indices + 1, boundaries)]
     data.next_c[indices] = data.c[indices + 1]
     return data
 
@@ -343,6 +364,9 @@ def demonstration_groups(data):
 
 def demonstration_sample_weights(data, family_weights=None):
     weights = torch.zeros(len(data.action))
+    recovery = getattr(data, "recovery", None)
+    if recovery is None:
+        recovery = torch.zeros_like(data.family, dtype=torch.bool)
     for family in data.family.unique():
         family_mask = data.family == family
         for phase in data.phase[family_mask].unique():
@@ -350,6 +374,13 @@ def demonstration_sample_weights(data, family_weights=None):
             for action in data.action[phase_mask & data.actor_mask].unique():
                 mask = phase_mask & data.actor_mask & (data.action == action)
                 weights[mask] = 1.0 / mask.sum()
+                repaired = mask & recovery
+                retained = mask & ~recovery
+                if repaired.any() and retained.any():
+                    # Reserve practice for both actual-policy corrections and
+                    # original routes, regardless of their dataset sizes.
+                    weights[repaired] = 0.5 / repaired.sum()
+                    weights[retained] = 0.5 / retained.sum()
             continuation = phase_mask & ~data.actor_mask
             if continuation.any():
                 weights[continuation] = 0.25 / continuation.sum()
