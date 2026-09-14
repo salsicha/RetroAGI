@@ -337,7 +337,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 6
+DEMONSTRATION_CONTRACT_VERSION = 7
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -352,6 +352,28 @@ def without_walk_commitments(data, episode_starts=None):
         boundaries = torch.tensor(episode_starts, device=indices.device)
         indices = indices[~torch.isin(indices + 1, boundaries)]
     data.next_c[indices] = data.c[indices + 1]
+    # A completed jump still owns its landing-release frame and the following
+    # jump-suppression frame. Stair teachers deliberately walk on these frames;
+    # treating them as free actor decisions teaches walking into the next riser.
+    # The motor-action span ends at physical landing, so this also migrates old
+    # frame-walk caches without needing to rerender their observations.
+    from .monte_carlo import BLOCK_SMB_MC_FAMILIES
+
+    stairs = data.family == BLOCK_SMB_MC_FAMILIES.index("stair_climb")
+    jumped = torch.isin(data.motor_action, data.motor_action.new_tensor([2, 4, 5]))
+    walked = (data.motor_action == 1) | (data.motor_action == 3)
+    release = stairs & walked & jumped.roll(1)
+    release[0] = False
+    boundaries = (
+        torch.as_tensor(episode_starts, device=release.device, dtype=torch.long)
+        if episode_starts is not None
+        else (data.c[:, 26] == 0).nonzero().flatten()
+    )
+    release[boundaries] = False
+    suppress = release.roll(1) & stairs & walked
+    suppress[0] = False
+    suppress[boundaries] = False
+    data.actor_mask[release | suppress] = False
     return data
 
 

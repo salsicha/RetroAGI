@@ -245,3 +245,167 @@ def test_suffix_walk_targets_do_not_cross_into_the_next_recovery_episode():
     assert single.action[-1] == 1 and single.actor_mask[-1]
     assert torch.equal(paired.next_c[n - 1], single.next_c[-1])
     assert not torch.equal(paired.next_c[n - 1], paired.c[n])
+
+
+# Epoch-25 easy stair failure: two successful jumps, followed by a final-riser
+# arrival at frame 45. The policy then walked against the wall until timeout.
+STAIR_ARRIVAL = [2] * 10 + [1] * 17 + [2] * 5 + [1] * 13
+
+
+@pytest.mark.parametrize(
+    "tail,reason",
+    [
+        ([1], "landing_recovery"),
+        ([1] * 120, "pause_recovery"),
+        ([0] * 120, "pause_recovery"),
+        ([1] * 8 + [2] + [1] * 120, "retry_recovery"),
+    ],
+)
+def test_stair_final_arrival_pause_and_failed_retry_get_successful_suffixes(tail, reason):
+    from retroagi.core.smb_coaching import training_target
+
+    case = sample("stair_climb", "easy", 60)
+    actions = STAIR_ARRIVAL + tail
+    repairs = repair_policy_actions(case.scenario, actions)
+    assert_completed(case.scenario, repairs)
+    assert len(repairs) <= 3
+    repair = next(
+        r for r in repairs if r["recovery_reason"] == reason and r["supervision_start_frame"] >= 45
+    )
+    start = repair["supervision_start_frame"]
+    assert start >= 45
+    assert repair["actions"][:start] == actions[:start]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=case.scenario)
+        for action in actions[:start]:
+            env.step(action)
+        assert env.mario["on_ground"]
+        assert training_target(env).platform_index == 3
+        assert repair["actions"][start] == 2
+    finally:
+        env.close()
+    if reason == "pause_recovery":
+        # The short settling pause and the extended wall stall both survive
+        # the cap; repairs at earlier steps cannot crowd out the last riser.
+        assert {r["recovery_reason"] for r in repairs} == {
+            "landing_recovery",
+            "stall",
+            "pause_recovery",
+        }
+        assert all(r["supervision_start_frame"] >= 45 for r in repairs)
+        assert start >= 62
+    if reason == "retry_recovery":
+        pause = next(r for r in repairs if r["recovery_reason"] == "pause_recovery")
+        assert pause["supervision_start_frame"] >= start + 16
+
+
+def test_stair_repairs_respect_a_smaller_budget_and_zero_budget():
+    case = sample("stair_climb", "easy", 60)
+    actions = STAIR_ARRIVAL + [1] * 120
+    repairs = repair_policy_actions(case.scenario, actions, max_repairs=1)
+    assert_completed(case.scenario, repairs)
+    assert len(repairs) == 1
+    assert repairs[0]["supervision_start_frame"] == 45
+    assert repair_policy_actions(case.scenario, actions, max_repairs=0) == []
+
+
+def test_numbered_epoch_collects_bounded_train_stair_trajectories():
+    from retroagi.stages.block_smb.train import (
+        make_block_smb_model,
+        make_block_smb_optimizer,
+        train_block_smb_epoch,
+    )
+
+    case = sample_block_smb_monte_carlo_scenario(
+        split="train", seed=914601, sample_index=0, family="stair_climb", difficulty="easy"
+    )
+    config = tiny_config(
+        episodes_per_epoch=2,
+        rollout_steps=2,
+        policy_recovery_samples_per_bin=1,
+        use_oracle_actions=False,
+    )
+    model = make_block_smb_model(config)
+    optimizer = make_block_smb_optimizer(model, config)
+    records = []
+    train_block_smb_epoch(
+        model,
+        optimizer,
+        [(case.scenario_id, case.scenario)],
+        config,
+        0,
+        device=torch.device("cpu"),
+        vision_factory=StaticBlockVision,
+        recovery_records=records,
+    )
+    assert len(records) == 1
+    assert records[0]["scenario_id"] == case.scenario_id
+    assert records[0]["actions"]
+    assert records[0]["seed"] == config.seed
+
+
+def test_stair_landing_release_frames_are_not_learned_as_walk_choices():
+    from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
+    from retroagi.stages.block_smb.primitive_execution import BlockSMBPrimitiveExecutor
+
+    case = sample("stair_climb", "easy", 60)
+    actions = [2] * 10 + [1] * 17 + [2] * 7 + [1] * 16 + [2] * 9 + [1] * 27
+    case = replace(case, oracle={**case.oracle, "actions": actions})
+    data = collect_demonstrations(
+        [(BLOCK_SMB_MC_FAMILIES.index("stair_climb"), case)],
+        tiny_config(walk_duration_primitives=False),
+        StaticBlockVision,
+    )
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=case.scenario)
+        executor = BlockSMBPrimitiveExecutor(env, default_hold_frames=10, walk_primitives=False)
+        for frame in range(40):
+            execution = executor.execute(
+                2,
+                support_override="ground" if env.mario["on_ground"] else "air",
+                enemy_contact_override=False,
+            )
+            env.step(execution.action)
+            if execution.landed:
+                break
+        else:
+            pytest.fail("The first stair jump did not land")
+        assert frame == 25
+        assert execution.action == 1
+        suppressed = executor.execute(2, support_override="ground", enemy_contact_override=False)
+        assert suppressed.action == 1 and not suppressed.started
+        # Walking on these two frames is imposed by the executor even when
+        # the policy requests jump. It must not compete with the next jump's
+        # positive actor label during demonstration rehearsal.
+        assert data.action[frame : frame + 2].tolist() == [1, 1]
+        assert not data.actor_mask[frame : frame + 2].any()
+        assert data.action[frame + 2] == 2 and data.actor_mask[frame + 2]
+    finally:
+        env.close()
+
+
+def test_stair_release_mask_migrates_caches_without_crossing_episode_boundaries():
+    from dataclasses import fields
+
+    from retroagi.stages.block_smb.demonstrations import without_walk_commitments
+    from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
+
+    case = sample("stair_climb", "easy", 60)
+    actions = [2] * 10 + [1] * 17 + [2] * 7 + [1] * 16 + [2] * 9 + [1] * 27
+    data = collect_demonstrations(
+        [(BLOCK_SMB_MC_FAMILIES.index("stair_climb"), replace(case, oracle={"actions": actions}))],
+        tiny_config(walk_duration_primitives=False),
+        StaticBlockVision,
+    )
+    legacy = replace(data, actor_mask=data.actor_mask.clone())
+    legacy.actor_mask[legacy.motor_action == 1] = True
+    migrated = without_walk_commitments(legacy, [0])
+    assert torch.equal(migrated.actor_mask, data.actor_mask)
+    assert torch.equal(without_walk_commitments(migrated, [0]).actor_mask, data.actor_mask)
+    # A new recovery episode may start after frame zero; its walking choices
+    # must not inherit a jump commitment from the preceding episode.
+    separated = replace(legacy, **{f.name: getattr(legacy, f.name)[24:27] for f in fields(legacy)})
+    assert separated.motor_action.tolist() == [2, 1, 1]
+    assert without_walk_commitments(separated, [0, 1]).actor_mask[1:].all()

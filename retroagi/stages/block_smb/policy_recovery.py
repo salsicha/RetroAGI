@@ -14,7 +14,7 @@ from .monte_carlo import BLOCK_SMB_MC_FAMILIES, block_smb_monte_carlo_metadata
 
 RECOVERY_FAMILIES = frozenset(
     "bridge_mount bridge_dismount chained_obstacles mixed_section full_smb_opening_proxy "
-    "chained_enemy_gauntlet tall_pipe_jump pipe_mount enemy_stomp".split()
+    "chained_enemy_gauntlet tall_pipe_jump pipe_mount enemy_stomp stair_climb".split()
 )
 
 
@@ -101,14 +101,21 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
     """Retain completed suffixes only; replay, but never supervise, failed prefixes."""
     env = MarioScenarioEnv()
     repairs = []
+    priorities = []
+    stairs = block_smb_monte_carlo_metadata(scenario).get("family") == "stair_climb"
     captured = set()
     stalled = 0
     just_landed = False
+    jump_target = None
     try:
         env.reset(scenario=scenario, seed=seed)
         env.render = lambda: None
         for frame, action in enumerate(actions):
-            if env.mario["on_ground"] and len(repairs) < max_repairs:
+            if (
+                env.mario["on_ground"]
+                and max_repairs > 0
+                and (stairs or len(repairs) < max_repairs)
+            ):
                 target = training_target(env)
                 bridge = bool(env._bridge_jump_task)
                 relevant = bridge or target.kind in ("mount", "stomp")
@@ -128,16 +135,26 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                     if valid:
                         reason = "departure_window"
                 elif relevant and (stalled >= 3 or just_landed):
-                    valid = safe_jump_holds(env, target, target.direction)
-                    if valid:
-                        reason = "stall" if stalled >= 3 else "landing_recovery"
+                    reason = "stall" if stalled >= 3 else "landing_recovery"
+                    if stairs:
+                        if just_landed and jump_target is not None and not jump_target.reached(env):
+                            reason = "retry_recovery"
+                        elif stalled >= 16:
+                            reason = "pause_recovery"
+                    candidate = (reason, target.kind, target.platform_index, target.enemy_index)
+                    # A prolonged wall stall otherwise repeats all sixteen
+                    # collision probes on every remaining frame.
+                    if candidate not in captured and not safe_jump_holds(
+                        env, target, target.direction
+                    ):
+                        reason = None
                 key = (reason, target.kind, target.platform_index, target.enemy_index)
                 if reason and key not in captured:
                     saved = snapshot_env_state(env)
                     # A bridge disagreement supplies both the next feasible
                     # departure and the closing boundary of its safe window.
                     for closing in (False, True) if bridge else (False,):
-                        if len(repairs) >= max_repairs:
+                        if not stairs and len(repairs) >= max_repairs:
                             break
                         restore_env_state(env, saved)
                         suffix = coached_suffix(env, closing_window=closing)
@@ -151,13 +168,40 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                                     closing_window=closing,
                                 )
                             )
+                            if stairs:
+                                # Early successful steps must not consume the
+                                # whole repair budget before the last riser.
+                                # At that riser retain the arrival, a prolonged
+                                # pause, and a retry when the policy supplies it.
+                                priorities.append(
+                                    (
+                                        target.direction * target.center,
+                                        {
+                                            "retry_recovery": 4,
+                                            "landing_recovery": 3,
+                                            "pause_recovery": 2,
+                                            "stall": 1,
+                                        }.get(reason, 0),
+                                    )
+                                )
+                                if len(repairs) > max_repairs:
+                                    discard = min(
+                                        range(len(priorities)), key=priorities.__getitem__
+                                    )
+                                    priorities.pop(discard)
+                                    repairs.pop(discard)
                     restore_env_state(env, saved)
                     captured.add(key)
             before_x = env.mario["x"]
             before_ground = env.mario["on_ground"]
+            if stairs and before_ground and action in (2, 4):
+                jump_target = training_target(env)
             _, _, done, truncated, _ = env.step(action)
             just_landed = not before_ground and env.mario["on_ground"]
-            stalled = stalled + 1 if abs(env.mario["x"] - before_x) < 1 else 0
+            stationary = abs(env.mario["x"] - before_x) < 1
+            if stairs:
+                stationary &= before_ground and env.mario["on_ground"]
+            stalled = stalled + 1 if stationary else 0
             if done or truncated:
                 break
         return repairs

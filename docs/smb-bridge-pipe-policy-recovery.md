@@ -12,8 +12,8 @@ admitted a physically valid jump from its final position.
 The Block SMB full-volume trainer now records up to two policy trajectories
 per family/difficulty bin during each numbered epoch. It includes bridge mount
 and dismount, pipe teachers, chained obstacles, the enemy gauntlet, mixed
-sections, the opening proxy, and required stomps. Collection uses only fresh
-train-split layouts. It does not copy validation/test failures into training.
+sections, the opening proxy, required stomps, and stair climbs. Collection uses
+only fresh train-split layouts. It does not copy validation/test failures into training.
 
 `policy_recovery.py` replays the exact action prefix and identifies:
 
@@ -105,3 +105,6 @@ The restart uses the existing 30-epoch full-volume recipe, fresh policy and
 optimizer, fresh demonstrations, and the same frozen ViT. Recovery collection
 occurs within those numbered epochs. There is no runtime safety veto or
 additional production training stage.
+
+Stair-specific final-riser coverage and repeated retention checks are described
+in [the stair recovery repair](smb-stair-recovery.md).

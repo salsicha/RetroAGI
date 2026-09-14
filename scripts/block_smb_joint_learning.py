@@ -185,7 +185,7 @@ def main():
         metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
         if metadata.get("contract_version", 1) < 2:
             data = align_steady_demonstrations(data)
-        if metadata.get("contract_version", 1) < DEMONSTRATION_CONTRACT_VERSION:
+        if metadata.get("contract_version", 1) < 6:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             missing = (present & {"bridge_mount", "bridge_dismount"}) - set(args.refresh_families)
             if missing:
@@ -199,7 +199,9 @@ def main():
         source_walk = json.loads((dataset.parent / "config.json").read_text()).get(
             "walk_duration_primitives", True
         )
-        if source_walk and not config.walk_duration_primitives:
+        if not config.walk_duration_primitives and (
+            source_walk or metadata.get("contract_version", 1) < 7
+        ):
             data = without_walk_commitments(data)
         elif not source_walk and config.walk_duration_primitives:
             raise ValueError("Cannot restore walk commitments from frame-walk demonstration data")
