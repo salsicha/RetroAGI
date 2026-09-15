@@ -416,6 +416,8 @@ class BlockSMBTrainingConfig:
     # optimizer, epoch counter, and curriculum. Mutually exclusive with resume.
     init_checkpoint: Optional[Path] = None
     save_checkpoints: bool = False
+    # Preserve these numbered snapshots in addition to the rolling checkpoint.
+    retain_checkpoint_epochs: tuple[int, ...] = ()
     video_dir: Optional[Path] = None
     record_videos: bool = False
     num_envs: int = 1
@@ -478,6 +480,14 @@ class BlockSMBTrainingConfig:
         for name in positive_ints:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if any(
+            isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0
+            for epoch in self.retain_checkpoint_epochs
+        ):
+            raise ValueError("retain_checkpoint_epochs must contain positive integers")
+        object.__setattr__(
+            self, "retain_checkpoint_epochs", tuple(sorted(set(self.retain_checkpoint_epochs)))
+        )
         for name in ("learning_rate", "gamma", "gradient_clip_norm"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
@@ -5272,7 +5282,7 @@ def train_and_evaluate_block_smb(
             )
         history.append(last_metrics)
         if config.save_checkpoints and config.checkpoint_path is not None:
-            save_block_smb_checkpoint(
+            checkpoint = save_block_smb_checkpoint(
                 config.checkpoint_path,
                 model,
                 optimizer,
@@ -5290,6 +5300,19 @@ def train_and_evaluate_block_smb(
                 checkpoint_path=str(config.checkpoint_path),
                 metrics=last_metrics,
             )
+            if completed_epoch in config.retain_checkpoint_epochs:
+                retained_path = config.checkpoint_path.with_name(
+                    f"{config.checkpoint_path.stem}.epoch{completed_epoch}"
+                    f"{config.checkpoint_path.suffix}"
+                )
+                save_checkpoint(retained_path, checkpoint)
+                _log_block_smb_event(
+                    config,
+                    "checkpoint_retained",
+                    epoch=completed_epoch,
+                    global_step=global_step,
+                    checkpoint_path=str(retained_path),
+                )
     if evaluations and evaluations[-1]["epoch"] == config.epochs:
         evaluation = evaluations[-1]["evaluation"]
     else:

@@ -127,3 +127,13 @@ before evaluating with the corrected controller. The regression suite passed
 additional dangerous-duration repair case. Formatting, lint, and whitespace
 checks passed. These checks used isolated checkpoint copies and did not restart
 or update the running full-volume training job.
+
+## Ten-epoch comparison run
+
+The full-volume recipe runs ten epochs and sets `retain_checkpoint_epochs` to
+`[5]`. In addition to the rolling `checkpoints/policy.pth` and best-primitives
+checkpoint, it preserves `checkpoints/policy.epoch5.pth` with its JSON sidecar.
+That snapshot includes model, optimizer, RNG state, configuration, and metrics;
+later epochs do not overwrite it. A `checkpoint_retained` event identifies it
+in the run log. Fresh runs regenerate contract-8 demonstrations so the landing
+and recovery fixes enter both bootstrap training and later rehearsal.
