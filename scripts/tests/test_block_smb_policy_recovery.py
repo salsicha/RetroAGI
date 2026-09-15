@@ -278,11 +278,19 @@ def test_stair_final_arrival_pause_and_failed_retry_get_successful_suffixes(tail
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=case.scenario)
+        from retroagi.stages.block_smb.primitive_execution import JumpReleaseState
+
+        release = JumpReleaseState()
         for action in actions[:start]:
-            env.step(action)
+            _, _, _, _, info = env.step(action)
+            release.observe(env, action, info)
         assert env.mario["on_ground"]
         assert training_target(env).platform_index == 3
-        assert repair["actions"][start] == 2
+        assert (
+            repair["actions"][start : start + release.remaining]
+            == [release.action] * release.remaining
+        )
+        assert repair["actions"][start + release.remaining] == 2
     finally:
         env.close()
     if reason == "pause_recovery":
@@ -399,7 +407,11 @@ def test_stair_release_mask_migrates_caches_without_crossing_episode_boundaries(
         tiny_config(walk_duration_primitives=False),
         StaticBlockVision,
     )
-    legacy = replace(data, actor_mask=data.actor_mask.clone())
+    legacy = replace(
+        data,
+        actor_mask=data.actor_mask.clone(),
+        forced_release=torch.zeros_like(data.forced_release),
+    )
     legacy.actor_mask[legacy.motor_action == 1] = True
     migrated = without_walk_commitments(legacy, [0])
     assert torch.equal(migrated.actor_mask, data.actor_mask)

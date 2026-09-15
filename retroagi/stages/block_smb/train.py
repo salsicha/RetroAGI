@@ -2640,7 +2640,11 @@ def collect_trajectory(
         step_phase = pipe_traversal.phase if pipe_traversal is not None else enemy_phase
         step_local_target = local_objective(stage.env) if local_family else None
         if local_family:
-            if not stage.env.mario["on_ground"] and primitive_local_target is not None:
+            if (
+                not stage.env.mario["on_ground"]
+                and primitive_local_target is not None
+                and (primitive_executor.active or oracle_primitive_active)
+            ):
                 step_local_target = primitive_local_target
             step_phase = (
                 pipe_traversal.phase

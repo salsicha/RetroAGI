@@ -7,6 +7,7 @@ choose the policy's action or replace the episode's final success condition.
 from dataclasses import dataclass
 
 from .geometry_expert import restore_env_state, snapshot_env_state
+from .primitive_execution import JumpReleaseState
 from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
 
 LOCAL_TRAVERSAL_FAMILIES = frozenset(
@@ -299,9 +300,17 @@ def safe_jump_holds(
                     # landing, reject an immediately trapped next-enemy state.
                     recoverable = True
                     if verify_recovery and landed and not env._goal_credited:
+                        # Match the live executor before certifying the next
+                        # takeoff. A stomp resets it and owns no landing delay.
+                        if not bouncing:
+                            for _ in range(2):
+                                _, _, _, _, release_info = env.step(1 if direction > 0 else 3)
+                                if release_info["death"]:
+                                    recoverable = False
+                                    break
                         following = local_objective(env)
                         distance = local_target_distance(env, following)
-                        if following.kind == "enemy" and distance < 50:
+                        if recoverable and following.kind == "enemy" and distance < 50:
                             recoverable = bool(
                                 safe_jump_holds(env, following, direction, verify_recovery=False)
                             )
@@ -327,6 +336,7 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
     actions = []
     hold_remaining = 0
     in_jump = False
+    release = JumpReleaseState()
     try:
         env.reset(scenario=scenario)
         env.render = lambda: None
@@ -343,7 +353,10 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
             if in_jump and env.mario["on_ground"]:
                 in_jump = False
             direction = target.direction
-            if hold_remaining:
+            if release.remaining:
+                hold_remaining = 0
+                action = release.action
+            elif hold_remaining:
                 action = 2 if direction > 0 else 4
                 hold_remaining -= 1
             elif in_jump or not env.mario["on_ground"]:
@@ -364,6 +377,7 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
                 else:
                     action = 1 if direction > 0 else 3
             _, _, done, truncated, info = env.step(action)
+            release.observe(env, action, info)
             actions.append(action)
             if info["reward_terms"]["enemy_stomp"] > 0:
                 hold_remaining = 0

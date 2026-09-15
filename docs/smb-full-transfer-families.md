@@ -88,3 +88,42 @@ No full-volume training was started as part of adding these families.
 The executable local audit is `audit.py`; `physical_audit.json` records geometry
 coverage, and `baseline.json` records checkpoint/source hashes, per-difficulty
 scores and failure details. These held-out samples remain evaluation-only.
+
+## Enemy-on-platform landing transitions (2026-09-15)
+
+The epoch-7 regression exposed a stale local goal: walking off a platform after
+completing an enemy jump restored the previous `enemy_clear` request. Training
+and batched evaluation now retain a takeoff objective only while its primitive
+is active. Ordinary descents recompute the current objective.
+
+Mount-duration certification now includes the Block executor's landing-release
+frame and following jump-suppression frame before checking the next enemy.
+Canonical and varied teachers use the same landing timing. Recovery generation
+inherits pending release frames from the executed prefix, validates completed
+suffixes through the fixed jump executor, and retains late enemy arrivals when
+selecting its limited repair set. Stomp bounces remain exempt from normal jump
+release because they reset the executor.
+
+Demonstration contract 8 records forced-release masks explicitly, including at
+recovery suffix boundaries. Earlier cached labels require regeneration; changing
+only the cache version or applying the old walking-mask migration is insufficient.
+The separate canonical NES executor has different landing/press-edge semantics;
+this change does not impose the Block release delay on that runtime.
+
+Verification regenerated both route variants for all 180 production training
+layouts: all 360 completed with identical actions through the real executor.
+With unchanged epoch-7 weights, the exact 60 enemy-on-platform validation/test
+cases improved from 32/60 to 50/60 (easy 14/20, medium 19/20, hard 17/20). The
+remaining takeoff/duration errors require learning from the corrected labels;
+this score is not a claim of complete mastery or improved Full SMB transfer.
+Artifacts are in `artifacts/block_smb/enemy_on_platform_fix_20260915/`.
+
+The exact 810-case, all-family validation comparison with epoch-7 weights rose
+from 780/810 to 790/810. Enemy-on-platform improved from 17/30 to 27/30; every
+other family's success count was unchanged. The comparison regenerated the
+original layouts with the pre-fix sampler and checked their logged parameters
+before evaluating with the corrected controller. The regression suite passed
+235 tests; a final targeted run passed all 10 transition tests, including the
+additional dangerous-duration repair case. Formatting, lint, and whitespace
+checks passed. These checks used isolated checkpoint copies and did not restart
+or update the running full-volume training job.

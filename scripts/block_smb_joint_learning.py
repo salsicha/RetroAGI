@@ -181,8 +181,20 @@ def main():
             raise ValueError("Cached demonstration observation layout does not match this run")
     if dataset.exists():
         data = torch.load(dataset, weights_only=False)
+        # Old pickles predate the explicit splice mask. Contract validation
+        # below requires their rows to be regenerated before training.
+        if getattr(data, "forced_release", None) is None:
+            data.forced_release = torch.zeros_like(data.family, dtype=torch.bool)
         metadata_path = dataset.parent / "demonstration_manifest.json"
         metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+        if metadata.get("contract_version", 1) < 8:
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            missing = present - set(args.refresh_families)
+            if missing:
+                raise ValueError(
+                    "Cached jump transitions need regeneration for the landing-release contract: "
+                    f"{sorted(missing)}"
+                )
         if metadata.get("contract_version", 1) < 2:
             data = align_steady_demonstrations(data)
         if metadata.get("contract_version", 1) < 6:

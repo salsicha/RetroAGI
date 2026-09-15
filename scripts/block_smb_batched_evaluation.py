@@ -105,14 +105,16 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     phase = s.pipe.phase if s.pipe else s.phase
                     target = local_objective(env) if s.local else None
                     if s.local:
-                        if not env.mario["on_ground"] and s.target is not None:
+                        if (
+                            not env.mario["on_ground"]
+                            and s.target is not None
+                            and s.executor.active
+                        ):
                             target = s.target
                         phase = (
                             s.pipe.phase
                             if s.pipe
-                            else "bounce_recovery"
-                            if s.recovery
-                            else target.kind
+                            else "bounce_recovery" if s.recovery else target.kind
                         )
                     safe = bridge_safe_wait_frames(env) if s.bridge else []
                     if s.bridge:

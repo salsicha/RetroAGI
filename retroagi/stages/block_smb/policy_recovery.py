@@ -1,6 +1,6 @@
 """Training-only successful suffixes from the policy's actual approach states."""
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from types import SimpleNamespace
 
 import torch
@@ -11,6 +11,7 @@ from .env import MarioScenarioEnv
 from .geometry_expert import restore_env_state, snapshot_env_state
 from .local_traversal import local_target_distance, safe_jump_holds, support_edge_distance
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES, block_smb_monte_carlo_metadata
+from .primitive_execution import JumpReleaseState, teacher_route_reachable
 from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
 
 RECOVERY_FAMILIES = frozenset(
@@ -30,17 +31,22 @@ def interior_hold(valid, menu=tuple(range(1, 17))):
     return run[len(run) // 2]
 
 
-def coached_suffix(env, *, closing_window=False, max_frames=320):
+def coached_suffix(env, *, closing_window=False, max_frames=320, release_state=None):
     """Complete from a grounded decision state; never used by policy playback."""
+    initial = snapshot_env_state(env)
     actions = []
     remaining = 0
     direction = 1
     airborne = False
     retreat = 0
+    release = replace(release_state) if release_state is not None else JumpReleaseState()
     for _ in range(max_frames):
         if env.mario["on_ground"]:
             airborne = False
-        if remaining:
+        if release.remaining:
+            remaining = 0
+            action = release.action
+        elif remaining:
             action = 2 if direction > 0 else 4
             remaining -= 1
         elif airborne or not env.mario["on_ground"]:
@@ -90,13 +96,23 @@ def coached_suffix(env, *, closing_window=False, max_frames=320):
             else:
                 action = 1 if direction > 0 else 3
         _, _, done, truncated, info = env.step(action)
+        release.observe(env, action, info)
         actions.append(action)
         if info["reward_terms"]["enemy_stomp"] > 0:
             remaining = 0
             airborne = True
         if done or truncated:
             break
-    return actions if env._goal_credited else None
+    if not env._goal_credited:
+        return None
+    final = snapshot_env_state(env)
+    try:
+        restore_env_state(env, initial)
+        return (
+            actions if teacher_route_reachable(env, actions, release_state=release_state) else None
+        )
+    finally:
+        restore_env_state(env, final)
 
 
 def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
@@ -107,10 +123,12 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
     family = block_smb_monte_carlo_metadata(scenario).get("family")
     stairs = family in ("stair_climb", "stair_gap")
     transfer_failure = family in TRANSFER_FAILURE_FAMILIES
+    prioritize_late = stairs or family == "enemy_on_platform"
     captured = set()
     stalled = 0
     just_landed = False
     jump_target = None
+    release = JumpReleaseState()
     try:
         env.reset(scenario=scenario, seed=seed)
         env.render = lambda: None
@@ -118,7 +136,7 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
             if (
                 env.mario["on_ground"]
                 and max_repairs > 0
-                and (stairs or len(repairs) < max_repairs)
+                and (prioritize_late or len(repairs) < max_repairs)
             ):
                 target = training_target(env)
                 bridge = bool(env._bridge_jump_task)
@@ -162,10 +180,10 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                     # A bridge disagreement supplies both the next feasible
                     # departure and the closing boundary of its safe window.
                     for closing in (False, True) if bridge else (False,):
-                        if not stairs and len(repairs) >= max_repairs:
+                        if not prioritize_late and len(repairs) >= max_repairs:
                             break
                         restore_env_state(env, saved)
-                        suffix = coached_suffix(env, closing_window=closing)
+                        suffix = coached_suffix(env, closing_window=closing, release_state=release)
                         if suffix is not None:
                             repairs.append(
                                 dict(
@@ -176,11 +194,10 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                                     closing_window=closing,
                                 )
                             )
-                            if stairs:
-                                # Early successful steps must not consume the
-                                # whole repair budget before the last riser.
-                                # At that riser retain the arrival, a prolonged
-                                # pause, and a retry when the policy supplies it.
+                            if prioritize_late:
+                                # Keep late arrivals/retries represented: early
+                                # mounts must not crowd out the final riser or
+                                # the enemy on the platform.
                                 priorities.append(
                                     (
                                         target.direction * target.center,
@@ -204,7 +221,8 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
             before_ground = env.mario["on_ground"]
             if stairs and before_ground and action in (2, 4):
                 jump_target = training_target(env)
-            _, _, done, truncated, _ = env.step(action)
+            _, _, done, truncated, info = env.step(action)
+            release.observe(env, action, info)
             just_landed = not before_ground and env.mario["on_ground"]
             stationary = abs(env.mario["x"] - before_x) < 1
             if stairs:

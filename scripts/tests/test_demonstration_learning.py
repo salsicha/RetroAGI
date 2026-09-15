@@ -455,7 +455,8 @@ def test_frame_walk_cache_migration_matches_fresh_collection():
     ground_walk = ((migrated.motor_action == 1) | (migrated.motor_action == 3)) & (
         migrated.c[:, 16] > 0.5
     )
-    assert migrated.actor_mask[ground_walk].all()
+    assert migrated.actor_mask[ground_walk & ~migrated.forced_release].all()
+    assert not migrated.actor_mask[migrated.forced_release].any()
 
 
 def test_robust_gap_route_has_margin_at_its_takeoff():

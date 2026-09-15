@@ -45,8 +45,11 @@ class DemonstrationBatch:
     phase: torch.Tensor | None = None
     carry_progress: torch.Tensor | None = None
     recovery: torch.Tensor | None = None
+    forced_release: torch.Tensor | None = None
 
     def __post_init__(self):
+        if self.forced_release is None:
+            self.forced_release = torch.zeros_like(self.family, dtype=torch.bool)
         if self.recovery is None:
             self.recovery = torch.zeros_like(self.family, dtype=torch.bool)
         if self.carry_progress is None:
@@ -58,6 +61,7 @@ class DemonstrationBatch:
 def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32):
     rows = []
     recovery_rows = []
+    release_rows = []
     episode_starts = []
     frame_wait_episodes = set()
     for family_index, sample in cases:
@@ -70,6 +74,10 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             ),
         )
         episode = []
+        episode_release = []
+        from .primitive_execution import JumpReleaseState
+
+        release = JumpReleaseState()
         try:
             observation = stage.reset(seed=sample.sample_seed % (2**31))
             actions = list(sample.oracle["actions"])
@@ -116,7 +124,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     jump_rows = []
                 if recovering_stomp and env.mario["on_ground"]:
                     recovering_stomp = False
-                actor_mask = jump_intent is None and not recovering_stomp
+                episode_release.append(bool(release.remaining))
+                actor_mask = jump_intent is None and not recovering_stomp and not release.remaining
                 end = frame + 1
                 while end < len(actions) and actions[end] == action:
                     end += 1
@@ -190,6 +199,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     bridge and opening and action == 0 and 1 in bridge_safe_wait_frames(env)
                 )
                 observation, reward, done, truncated, info = env.step(action)
+                release.observe(env, action, info)
                 observations.append(observation)
                 states.append(stage.state_features(info))
                 valid = [False] * 16
@@ -273,6 +283,9 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 frame_wait_episodes.add(len(rows))
             episode_starts.append(len(rows))
             rows.extend(episode)
+            release_rows.extend(
+                episode_release[supervision_start : supervision_start + len(episode)]
+            )
             recovery_rows.extend([bool(sample.oracle.get("recovery"))] * len(episode))
         finally:
             stage.env.close()
@@ -282,6 +295,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     )
 
     data.recovery = torch.tensor(recovery_rows, dtype=torch.bool)
+    data.forced_release = torch.tensor(release_rows, dtype=torch.bool)
     data = align_steady_demonstrations(
         data, episode_starts, frame_wait_episodes=frame_wait_episodes
     )
@@ -337,7 +351,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 7
+DEMONSTRATION_CONTRACT_VERSION = 8
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -378,6 +392,9 @@ def without_walk_commitments(data, episode_starts=None):
     suppress[0] = False
     suppress[boundaries] = False
     data.actor_mask[release | suppress] = False
+    forced_release = getattr(data, "forced_release", None)
+    if forced_release is not None:
+        data.actor_mask[forced_release] = False
     return data
 
 
@@ -648,8 +665,9 @@ def varied_demonstration(sample, seed, *, robust=False):
     actions = []
     remaining = 0
     airborne = False
-    settling = 0
-    bouncing = False
+    from .primitive_execution import JumpReleaseState
+
+    release = JumpReleaseState()
     direction = 1
     takeoff_distance = rng.randint(12, 75)
     gap_lead = rng.randint(10, 24) if robust else 0
@@ -662,8 +680,6 @@ def varied_demonstration(sample, seed, *, robust=False):
                 airborne = False
                 if robust:
                     remaining = 0
-                    settling = 0 if bouncing else 2
-                bouncing = False
             if env._require_bridge_before_goal:
                 state = bridge_walk_state(env)
                 action = (
@@ -672,9 +688,9 @@ def varied_demonstration(sample, seed, *, robust=False):
                     or (state is not None and 0 in bridge_safe_wait_frames(env))
                     else 0
                 )
-            elif settling:
-                action = 1 if direction > 0 else 3
-                settling -= 1
+            elif release.remaining:
+                remaining = 0
+                action = release.action
             elif remaining:
                 action = 2 if direction > 0 else 4
                 remaining -= 1
@@ -742,11 +758,11 @@ def varied_demonstration(sample, seed, *, robust=False):
                 else:
                     action = 1 if direction > 0 else 3
             _, _, done, truncated, info = env.step(action)
+            release.observe(env, action, info)
             actions.append(action)
             if info["reward_terms"]["enemy_stomp"] > 0:
                 remaining = 0
                 airborne = True
-                bouncing = True
             if done or truncated:
                 break
         if env._goal_credited:

@@ -144,8 +144,8 @@ def test_actual_policy_failures_supply_complete_recovery_suffixes(family):
         start = repair["supervision_start_frame"]
         assert repair["actions"][:start] == actions[:start]
         assert validate_block_smb_monte_carlo_oracle(item.scenario, repair["actions"])["reachable"]
-        if top_arrival is not None:
-            assert start >= top_arrival
+    if top_arrival is not None:
+        assert any(r["supervision_start_frame"] >= top_arrival for r in repairs)
 
 
 @pytest.mark.parametrize("family", TRANSFER_FAILURE_FAMILIES)

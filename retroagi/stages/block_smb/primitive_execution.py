@@ -1,7 +1,7 @@
 """Physical duration mapping shared by Block training and evaluation."""
 
 from copy import copy
-from dataclasses import is_dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 
 import torch
 
@@ -45,3 +45,99 @@ class BlockSMBPrimitiveExecutor(SMBParameterizedPrimitiveExecutor):
                 action=0, started=True, active=True, released=True, hold_frames=1
             )
         return super()._start_steady_primitive(action_value, motor_primitives)
+
+
+@dataclass
+class JumpReleaseState:
+    """Track executor-owned landing frames while replaying executed actions.
+
+    A normal jump releases on landing and suppresses a new jump for one more
+    frame. Stomps reset the executor, and ordinary falls own no release frames.
+    Teachers and repair splices must preserve this state across their prefix.
+    """
+
+    remaining: int = 0
+    action: int = 1
+    jumping: bool = False
+    airborne: bool = False
+    bouncing: bool = False
+
+    def observe(self, env, action, info):
+        if self.remaining:
+            self.remaining -= 1
+        if info["reward_terms"]["enemy_stomp"] > 0:
+            self.jumping = self.airborne = False
+            self.remaining = 0
+            self.bouncing = True
+        if self.bouncing:
+            if env.mario["on_ground"]:
+                self.bouncing = False
+            return
+        if not self.jumping and action in (2, 4, 5):
+            self.jumping = True
+            self.action = {2: 1, 4: 3, 5: 0}[action]
+        if self.jumping:
+            self.airborne |= not env.mario["on_ground"]
+            if self.airborne and env.mario["on_ground"]:
+                self.remaining = 2
+                self.jumping = self.airborne = False
+
+
+def teacher_route_reachable(env, actions, *, release_state=None):
+    """Validate a raw teacher suffix through fixed jump execution, then restore.
+
+    Walking/waiting are already expanded into physics frames. A splice may
+    start inside a landing release; consume its inherited frames first.
+    """
+    from types import SimpleNamespace
+
+    from .geometry_expert import restore_env_state, snapshot_env_state
+
+    saved = snapshot_env_state(env)
+    release = replace(release_state) if release_state is not None else JumpReleaseState()
+    executor = BlockSMBPrimitiveExecutor(
+        env, duration_sampling=False, adaptive_duration=False, steady_primitives=False
+    )
+    bouncing = release.bouncing
+    try:
+        for frame, requested in enumerate(actions):
+            if release.remaining:
+                action = release.action
+                release.remaining -= 1
+            elif bouncing:
+                action = {2: 1, 4: 3, 5: 0}.get(requested, requested)
+            else:
+                chosen = executor.committed_action
+                chosen = requested if chosen is None else chosen
+                motor = None
+                if not executor.active and chosen in (2, 4, 5):
+                    held = 0
+                    for future in actions[frame:]:
+                        if future != requested:
+                            break
+                        held += 1
+                    menu = executor.jump_frames
+                    slot = min(range(len(menu)), key=lambda i: abs(menu[i] - held))
+                    logits = torch.full((1, 16), -30.0)
+                    logits[0, slot] = 30.0
+                    motor = SimpleNamespace(
+                        hold_duration_logits=logits, duration_bin_values=torch.tensor(menu)
+                    )
+                action = executor.execute(
+                    chosen,
+                    motor_primitives=motor,
+                    support_override="ground" if env.mario["on_ground"] else "air",
+                ).action
+            if action != requested:
+                return False
+            _, _, done, truncated, info = env.step(action)
+            if info["reward_terms"]["enemy_stomp"] > 0:
+                executor.reset()
+                bouncing = True
+            elif env.mario["on_ground"]:
+                bouncing = False
+            if done or truncated:
+                break
+        return bool(env._goal_credited)
+    finally:
+        restore_env_state(env, saved)
