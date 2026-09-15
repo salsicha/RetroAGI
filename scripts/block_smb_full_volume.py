@@ -1,4 +1,4 @@
-"""Reproducible 30-epoch family-only training with optional qualified initialization.
+"""Reproducible 10-epoch family-only training with optional qualified initialization.
 
 Run with python -m scripts.block_smb_full_volume --output-dir PATH.
 --preflight runs real CUDA optimization and frozen perception on representative

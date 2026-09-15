@@ -7,11 +7,12 @@ choose the policy's action or replace the episode's final success condition.
 from dataclasses import dataclass
 
 from .geometry_expert import restore_env_state, snapshot_env_state
+from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
 
 LOCAL_TRAVERSAL_FAMILIES = frozenset(
     "tall_pipe_jump pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery "
     "platform_chain mixed_section full_smb_opening_proxy enemy_patrol enemy_gap "
-    "chained_obstacles chained_enemy_gauntlet".split()
+    "chained_obstacles chained_enemy_gauntlet".split() + list(TRANSFER_FAILURE_FAMILIES)
 )
 
 

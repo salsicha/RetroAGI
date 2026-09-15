@@ -13,6 +13,11 @@ import pygame
 
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
+from .transfer_failure_families import (
+    TRANSFER_FAILURE_FAMILIES,
+    TRANSFER_FAILURE_SCHEMAS,
+    transfer_failure_scenario,
+)
 
 BLOCK_SMB_MC_SCHEMA_VERSION = "block_smb_monte_carlo.v1"
 DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID = "block_smb_mc_v1"
@@ -43,6 +48,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "bridge_wait",
     "bridge_mount",
     "bridge_dismount",
+    *TRANSFER_FAILURE_FAMILIES,
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 
@@ -374,6 +380,7 @@ def block_smb_monte_carlo_family_specs(
             },
         }
     )
+    schemas.update(TRANSFER_FAILURE_SCHEMAS)
     for family in ("bridge_mount", "bridge_dismount"):
         schemas[family] = dict(
             platform_width=[56, 100],
@@ -447,7 +454,7 @@ def block_smb_monte_carlo_family_specs(
                 "minimum_landing_width": (
                     30
                     if family in ("pipe_mount", "tall_pipe_jump")
-                    else (36 if family == "stair_climb" else 40)
+                    else (32 if family == "stair_gap" else (36 if family == "stair_climb" else 40))
                 ),
             },
             oracle=oracle,
@@ -1072,6 +1079,8 @@ def _generate_family_scenario_raw(
     difficulty = difficulty or _difficulty_bin(rng, split)
     if difficulty not in BLOCK_SMB_MC_DIFFICULTY_BINS:
         raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
+    if family in TRANSFER_FAILURE_FAMILIES:
+        return transfer_failure_scenario(family, rng, difficulty)
     if family == "flat_run":
         return _flat_run(rng, difficulty)
     if family == "single_gap":

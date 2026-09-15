@@ -11,10 +11,12 @@ from .env import MarioScenarioEnv
 from .geometry_expert import restore_env_state, snapshot_env_state
 from .local_traversal import local_target_distance, safe_jump_holds, support_edge_distance
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES, block_smb_monte_carlo_metadata
+from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
 
 RECOVERY_FAMILIES = frozenset(
     "bridge_mount bridge_dismount chained_obstacles mixed_section full_smb_opening_proxy "
     "chained_enemy_gauntlet tall_pipe_jump pipe_mount enemy_stomp stair_climb".split()
+    + list(TRANSFER_FAILURE_FAMILIES)
 )
 
 
@@ -102,7 +104,9 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
     env = MarioScenarioEnv()
     repairs = []
     priorities = []
-    stairs = block_smb_monte_carlo_metadata(scenario).get("family") == "stair_climb"
+    family = block_smb_monte_carlo_metadata(scenario).get("family")
+    stairs = family in ("stair_climb", "stair_gap")
+    transfer_failure = family in TRANSFER_FAILURE_FAMILIES
     captured = set()
     stalled = 0
     just_landed = False
@@ -118,7 +122,11 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
             ):
                 target = training_target(env)
                 bridge = bool(env._bridge_jump_task)
-                relevant = bridge or target.kind in ("mount", "stomp")
+                relevant = (
+                    bridge
+                    or target.kind in ("mount", "stomp")
+                    or (transfer_failure and target.kind in ("gap", "enemy"))
+                )
                 reason = None
                 valid = None
                 if relevant and action in (2, 4):
