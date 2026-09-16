@@ -157,7 +157,7 @@ The family uses the normal local traversal teacher, robust/varied demonstrations
 policy recovery, and independent train/validation/test sampling. Duration labels
 must survive the actual moving hazard, landing release, and the following local
 objective; complete demonstrations must reach the exit alive. The full-volume
-recipe gives this family weight 2 and runs **15 epochs**, retaining epoch 5.
+recipe gives this family weight 2 and runs **15 epochs**, retaining epochs 5 and 10.
 Both coached and autonomous CUDA preflight batches include the new family.
 
 This is generated Block practice for clearing occupied pipes. It preserves the

@@ -38,7 +38,7 @@
   "entropy_weight": 0.01,
   "episodes_per_epoch": 2,
   "epochs": 15,
-  "retain_checkpoint_epochs": [5],
+  "retain_checkpoint_epochs": [5, 10],
   "evaluation_episodes": 1,
   "evaluation_interval_epochs": 1,
   "evaluation_max_steps": 320,
