@@ -75,7 +75,7 @@ def geometry_features(
         return {"dx": best_dx, "dy": best_dy, "dist": min(best_dist, 1.0)}
 
     active_coins = [c for c in scene.coins if not c["collected"]]
-    active_enemies = [e for e in scene.enemies if not e["dead"]]
+    active_enemies = [e for e in scene.enemies if not e["dead"] and e["h"] > 0]
 
     nc = (
         _nearest(active_coins, lambda c: c["rect"])

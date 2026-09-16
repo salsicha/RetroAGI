@@ -214,7 +214,7 @@ def block_oracle_scene(env, *, terminated=False, truncated=False, objective_kind
             "patrol_max": e["patrol_max"] - scroll,
         }
         for e in env.enemies
-        if not e["dead"] and 0 <= e["x"] - scroll + e["w"] and e["x"] - scroll < 256
+        if not e["dead"] and e["h"] > 0 and 0 <= e["x"] - scroll + e["w"] and e["x"] - scroll < 256
     ]
     coins = [
         {**c, "rect": c["rect"].move(-scroll, 0)}

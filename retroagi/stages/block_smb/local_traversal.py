@@ -138,6 +138,7 @@ def local_objective(env) -> LocalObjective:
     for i, enemy in enumerate(env.enemies):
         if (
             not enemy["dead"]
+            and enemy["h"] > 0
             and enemy["x"] + enemy["w"] > x
             and enemy["x"] < goal.right
             and not _clear_path_under(
@@ -211,6 +212,7 @@ def _left_objective(env) -> LocalObjective:
     for i, e in enumerate(env.enemies):
         if (
             not e["dead"]
+            and e["h"] > 0
             and e["x"] < x + m["w"]
             and e["x"] + e["w"] > goal.left
             and not _clear_path_under(env, e["x"], e["x"] + e["w"], e["y"] + e["h"])

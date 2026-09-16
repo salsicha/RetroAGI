@@ -1,4 +1,4 @@
-"""Reproducible 10-epoch family-only training with optional qualified initialization.
+"""Reproducible 15-epoch family-only training with optional qualified initialization.
 
 Run with python -m scripts.block_smb_full_volume --output-dir PATH.
 --preflight runs real CUDA optimization and frozen perception on representative
@@ -82,7 +82,12 @@ def main():
             sample_block_smb_monte_carlo_scenario(
                 split="validation", seed=2, sample_index=0, family=family, difficulty="hard"
             )
-            for family in ("retreat_recovery", "moving_bridge", "chained_obstacles")
+            for family in (
+                "retreat_recovery",
+                "moving_bridge",
+                "chained_obstacles",
+                "piranha_avoidance",
+            )
         ]
         metrics, _ = train_block_smb_epoch(
             model,
@@ -99,7 +104,7 @@ def main():
             sample_block_smb_monte_carlo_scenario(
                 split="validation", seed=2, sample_index=0, family=family, difficulty="easy"
             )
-            for family in ("tall_pipe_jump", "flat_run", "bridge_wait")
+            for family in ("tall_pipe_jump", "flat_run", "bridge_wait", "piranha_avoidance")
         ]
         on_policy_metrics, _ = train_block_smb_epoch(
             model,

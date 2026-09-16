@@ -130,10 +130,42 @@ or update the running full-volume training job.
 
 ## Ten-epoch comparison run
 
-The full-volume recipe runs ten epochs and sets `retain_checkpoint_epochs` to
+The September 15 comparison recipe ran ten epochs and set `retain_checkpoint_epochs` to
 `[5]`. In addition to the rolling `checkpoints/policy.pth` and best-primitives
 checkpoint, it preserves `checkpoints/policy.epoch5.pth` with its JSON sidecar.
 That snapshot includes model, optimizer, RNG state, configuration, and metrics;
 later epochs do not overwrite it. A `checkpoint_retained` event identifies it
 in the run log. Fresh runs regenerate contract-8 demonstrations so the landing
 and recovery fixes enter both bootstrap training and later rehearsal.
+
+
+## Piranha Plant avoidance (2026-09-16)
+
+`piranha_avoidance` appends a 28th family without changing existing family IDs.
+It samples a solid pipe with a stationary, vertically cycling plant in its
+mouth. Easy/medium/hard tiers vary pipe height (22–42 pixels), pipe width
+(32–48), and exposed plant height (16–24). Approach position, rise/retraction
+speed, exposed/hidden dwell times, and initial phase vary independently.
+
+Contact with an exposed plant is fatal from every direction, including above;
+it never grants stomp credit or a bounce. Fully retracted plants have no
+collision body and are absent from rendered and geometric observations. The
+existing walking enemies retain their stomp behavior. Physics probes snapshot
+and restore plant phase along with the rest of the environment.
+
+The family uses the normal local traversal teacher, robust/varied demonstrations,
+policy recovery, and independent train/validation/test sampling. Duration labels
+must survive the actual moving hazard, landing release, and the following local
+objective; complete demonstrations must reach the exit alive. The full-volume
+recipe gives this family weight 2 and runs **15 epochs**, retaining epoch 5.
+Both coached and autonomous CUDA preflight batches include the new family.
+
+This is generated Block practice for clearing occupied pipes. It preserves the
+existing observation dimensions and does not expose the cycle timer to the
+policy. Its cycle is a proxy, not an exact reproduction of NES plant timing or
+Mario-proximity suppression. Native NES evaluation remains necessary to measure
+transfer after training.
+
+Validation artifacts: `artifacts/block_smb/piranha_family_20260916/` contains
+collision/observation/controller regression results, the production-layout route
+audit, and the real frozen-vision CUDA preflight.

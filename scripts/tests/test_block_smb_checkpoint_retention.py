@@ -47,8 +47,8 @@ def test_retained_epochs_reject_invalid_numbers(epochs):
         tiny_config(retain_checkpoint_epochs=epochs)
 
 
-def test_full_volume_recipe_runs_ten_epochs_and_preserves_epoch_five():
+def test_full_volume_recipe_runs_fifteen_epochs_and_preserves_epoch_five():
     recipe = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
-    assert recipe["epochs"] == 10
+    assert recipe["epochs"] == 15
     assert recipe["retain_checkpoint_epochs"] == [5]
     assert recipe["save_checkpoints"]

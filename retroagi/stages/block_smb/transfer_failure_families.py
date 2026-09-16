@@ -5,9 +5,19 @@ held-out action traces. They keep Block physics and the existing observation
 contract; NES duration calibration remains a separate transfer requirement.
 """
 
-TRANSFER_FAILURE_FAMILIES = ("stair_gap", "landing_enemy", "enemy_on_platform")
+TRANSFER_FAILURE_FAMILIES = ("stair_gap", "landing_enemy", "enemy_on_platform", "piranha_avoidance")
 
 TRANSFER_FAILURE_SCHEMAS = {
+    "piranha_avoidance": {
+        "family_revision": [1, 1],
+        "pipe_height": [22, 42],
+        "pipe_width": [32, 48],
+        "plant_height": [16, 24],
+        "rise_frames": [12, 20],
+        "exposed_frames": [40, 64],
+        "hidden_frames": [24, 40],
+        "goal": "clear a pipe with a cycling non-stompable plant and finish alive",
+    },
     "stair_gap": {
         "family_revision": [1, 1],
         "step_height": [24, 24],
@@ -99,6 +109,42 @@ def transfer_failure_scenario(family, rng, difficulty):
         }
         params.update(
             platform_height=height, platform_width=width, enemy_offset=offset, enemy_speed=speed
+        )
+    elif family == "piranha_avoidance":
+        height = (24, 32, 40)[tier] + rng.randint(-2, 2)
+        width = (32, 40, 48)[tier]
+        left = rng.randint(112, 140)
+        plant_height = (16, 20, 24)[tier]
+        rise = rng.randint(12, 20)
+        exposed = rng.randint(40, 64)
+        hidden = rng.randint(24, 40)
+        phase = rng.randrange(2 * rise + exposed + hidden)
+        scenario = {
+            "world_width": 352,
+            "mario": [rng.randint(24, 40), 204],
+            "platforms": [[0, 220, 352, 20], [left, 220 - height, width, height]],
+            "enemies": [
+                {
+                    "kind": "piranha_plant",
+                    "x": left + (width - 12) // 2,
+                    "pipe_top": 220 - height,
+                    "plant_height": plant_height,
+                    "rise_frames": rise,
+                    "exposed_frames": exposed,
+                    "hidden_frames": hidden,
+                    "phase": phase,
+                }
+            ],
+            "goal": [324, 204, 16, 16],
+        }
+        params.update(
+            pipe_height=height,
+            pipe_width=width,
+            plant_height=plant_height,
+            rise_frames=rise,
+            exposed_frames=exposed,
+            hidden_frames=hidden,
+            phase=phase,
         )
     else:
         raise ValueError(f"Unknown transfer failure family: {family}")

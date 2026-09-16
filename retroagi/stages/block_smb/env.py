@@ -163,7 +163,8 @@ class MarioScenarioEnv:
     coins         : list of [x, y, w, h]
     enemies       : list of [x, y, patrol_min, patrol_max] or
                     [x, y, patrol_min, patrol_max, speed] or
-                    dict with keys x,y,patrol_min,patrol_max,speed,edge_aware
+                    dict with keys x,y,patrol_min,patrol_max,speed,edge_aware;
+                    a piranha_plant uses kind,x,pipe_top and optional cycle durations
     goal          : [x, y, w, h]
     """
 
@@ -344,7 +345,7 @@ class MarioScenarioEnv:
         self.enemies = []
         for e in scenario.get("enemies", []):
             enemy = self._parse_enemy(e)
-            if self.motion is not None:
+            if self.motion is not None and enemy.get("kind") != "piranha_plant":
                 # NES Goomba damage body is 10x6, four pixels above its
                 # physical feet. Background support is a separate probe.
                 enemy.update(w=10, h=6, foot_offset=4, y=enemy["y"] + 4)
@@ -737,7 +738,7 @@ class MarioScenarioEnv:
                 stomp_geometry = geometry
             if not mario_rect.colliderect(er):
                 continue
-            if geometry["stomp"]:
+            if geometry["stomp"] and enemy.get("stompable", True):
                 # Stomp!
                 enemy["dead"] = True
                 self._stomp_credited = True
@@ -906,6 +907,8 @@ class MarioScenarioEnv:
 
         # Enemies
         for enemy in self.enemies:
+            if enemy["h"] <= 0:
+                continue
             sx = int(enemy["x"]) - cam
             sy = int(enemy["y"])
             if enemy["dead"]:
@@ -1023,6 +1026,12 @@ class MarioScenarioEnv:
 
     def _update_enemy(self, enemy: dict, platform_rects: list):
         """Move enemy, apply gravity, resolve platform collisions, patrol logic."""
+        if enemy.get("kind") == "piranha_plant":
+            from .piranha import position_plant
+
+            enemy["plant_tick"] += 1
+            position_plant(enemy)
+            return
         # Gravity
         enemy["vy"] += self.gravity
         if enemy["vy"] > self.max_fall_speed:
@@ -1094,6 +1103,10 @@ class MarioScenarioEnv:
     @staticmethod
     def _parse_enemy(e) -> dict:
         """Accept [x,y,pmin,pmax[,speed[,direction]]] or a dictionary."""
+        if isinstance(e, dict) and e.get("kind") == "piranha_plant":
+            from .piranha import parse_plant
+
+            return parse_plant(e)
         if isinstance(e, dict):
             x, y = float(e["x"]), float(e["y"])
             pmin, pmax = float(e["patrol_min"]), float(e["patrol_max"])
