@@ -73,7 +73,8 @@ def evaluate(model, cases, config, vision_factory, *, autonomous=False, batched=
                 scenario=scenario,
                 vision=vision_factory(),
                 observation_config=BlockSMBObservationConfig(
-                    motion_observations=config.motion_observations
+                    motion_observations=config.motion_observations,
+                    hazard_observations=config.hazard_observations,
                 ),
             )
             try:
@@ -141,6 +142,7 @@ def main():
     parser.add_argument("--fixed-duration", action="store_true")
     parser.add_argument("--frame-walk", action="store_true")
     parser.add_argument("--motion-observations", action="store_true")
+    parser.add_argument("--hazard-observations", action="store_true")
     parser.add_argument("--varied-demonstrations", action="store_true")
     parser.add_argument("--robust-demonstrations", action="store_true")
     parser.add_argument("--prioritized-demonstrations", action="store_true")
@@ -166,6 +168,7 @@ def main():
         demonstration_bootstrap_updates=0,
         demonstration_rehearsal_updates=0,
         motion_observations=args.motion_observations,
+        hazard_observations=args.hazard_observations,
         walk_duration_primitives=not args.frame_walk,
         autonomous_policy=args.autonomous,
         demonstration_varied_routes=args.varied_demonstrations,
@@ -233,6 +236,13 @@ def main():
                     != config.motion_observations
                 ):
                     raise ValueError("Checkpoint motion-observation layout does not match this run")
+                if (
+                    bool(checkpoint["config"].get("hazard_observations", False))
+                    != config.hazard_observations
+                ):
+                    raise ValueError(
+                        "Checkpoint enemy-history observation layout does not match this run"
+                    )
                 model.load_state_dict(checkpoint["states"]["model"])
             optimizer = make_block_smb_optimizer(model, config)
             replay = BlockSMBSuccessReplay(seed=seed)

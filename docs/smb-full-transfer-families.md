@@ -169,3 +169,57 @@ transfer after training.
 Validation artifacts: `artifacts/block_smb/piranha_family_20260916/` contains
 collision/observation/controller regression results, the production-layout route
 audit, and the real frozen-vision CUDA preflight.
+
+
+## Phase-robust plant teaching and observable history (2026-09-17)
+
+The plant audit found identical single-frame inputs paired with different safe
+jump-duration labels: a low rising plant and a low retracting plant looked the
+same, while the teacher could inspect their cycle phases. More death penalties
+would not resolve that ambiguity.
+
+Plant duration probes, canonical routes, varied routes, and recovery suffixes
+now hold each plant at its full collision height throughout certification. In
+this generated family, that maximum is fixed by the visible pipe width (32/40/48
+pixels corresponds to a 16/20/24-pixel plant). Certification is independent of
+cycle phase; it does not invent a 24-pixel plant on the narrowest pipe. Completed
+routes must also replay successfully against the original cycling environment
+through the normal primitive executor. Probe snapshots restore all live state.
+The simulation still cycles normally and all plant contacts remain lethal.
+
+The full-volume recipe enables `hazard_observations`, a versioned extension to
+the existing motion-aware geometry contract. Six shared Block/NES features add
+visible-enemy presence, observed vertical velocity, velocity availability,
+visibility transitions, time since a visibility transition, and time since last
+sighting. Velocity comes from consecutive observed positions; occluded/offscreen
+objects and missing frames do not imply a measured zero. These inputs contain no
+cycle phase or future rollout. Visibility ages saturate at 64 frames and vertical
+velocity uses an 8-pixel-per-frame scale. History resets between episodes and
+re-encoding a frame does not advance it.
+
+Recovery trajectory budgets now count failures only. Plant repair selection
+continues through later arrivals and attempts, retaining later valid suffixes
+within the existing per-trajectory budget. Successful episodes still enter the
+normal success-replay machinery.
+
+Plant family revision 2 and demonstration contract 9 identify the new teaching
+rules. Old plant labels must be regenerated; the new history input layout also
+requires fresh demonstrations. Checkpoint restore rejects a history-layout
+mismatch even though the model tensor dimensions happen to match. Checkpoints
+without the flag retain their prior inputs, including Full SMB transfer. New
+full-volume training remains 15 epochs with retained checkpoints at 5 and 10.
+The history extension currently supports `smb_geometry_v1`; it is not enabled for
+the separate canonical `smb_scene_v2` projection.
+
+Validation passed 201 distinct regression tests across the main and additional
+history/cache checks. All 34 previously failed audit trajectories still have
+verified repair suffixes. Route verification completed all 60 original plant
+audit layouts and all 360 canonical
+and varied routes across 180 generated training layouts with the real executor.
+Tests cover phase-independent labels, shifted-cycle replay, identical pixels with
+distinct observed vertical motion, NES history, checkpoint compatibility, and
+bounded failure recovery. A real frozen-ViT/CUDA preflight exercises both coached
+and autonomous optimization. These are correction checks, not evidence of a new
+trained policy's success rate or Full SMB transfer. Validation artifacts are in
+`artifacts/block_smb/piranha_corrections_20260917/`. Applying these changes does not
+modify the code already loaded by an existing trainer.

@@ -44,10 +44,15 @@ class BlockSMBObservationConfig:
     state_min: float = -1.0
     state_max: float = 1.0
     motion_observations: bool = False
+    hazard_observations: bool = False
     scene_schema: str = "smb_geometry_v1"
     observation_provider: str = "oracle"
 
     def __post_init__(self) -> None:
+        if self.hazard_observations and (
+            not self.motion_observations or self.scene_schema != "smb_geometry_v1"
+        ):
+            raise ValueError("Enemy history v1 requires the motion-aware legacy geometry contract")
         if self.observation_provider not in ("oracle", "perceived"):
             raise ValueError("Unsupported observation provider")
         if self.observation_provider == "perceived" and self.scene_schema != "smb_scene_v2":
@@ -98,12 +103,18 @@ class BlockSMBStage:
         from retroagi.core.smb_tracking import PerceivedSMBScene
 
         self.scene_tracker = PerceivedSMBScene()
+        from retroagi.core.smb_enemy_history import EnemyObservationHistory
+
+        self.enemy_history = EnemyObservationHistory()
+        self._hazard_features = self.enemy_history.cached.copy()
         self._scene_frame = None
         self._scene_cache = None
 
     def reset(self, seed: Optional[int] = None):
         obs, info = self.env.reset(scenario=self.scenario, seed=seed)
         self.last_info = info
+        self.enemy_history.reset()
+        self._hazard_features = self.enemy_history.observe(self.env, self.env.steps)
         self._last_episode_mask = 1.0
         self._last_terminal = False
         self._last_truncated = False
@@ -118,6 +129,7 @@ class BlockSMBStage:
     def step(self, action: SMBAction | int):
         obs, reward, terminated, truncated, info = self.env.step(block_smb_action(action))
         self.last_info = info
+        self._hazard_features = self.enemy_history.observe(self.env, self.env.steps)
         self._last_episode_mask = 0.0 if terminated or truncated else 1.0
         self._last_terminal = terminated
         self._last_truncated = truncated
@@ -244,6 +256,8 @@ class BlockSMBStage:
         state = self._normalize_state_vec(info["state_vec"])
         if self.observation_config.motion_observations:
             state = np.concatenate((state, self._normalize_state_vec(info["motion_vec"])))
+        if self.observation_config.hazard_observations:
+            state = np.concatenate((state, self._hazard_features))
         return state
 
     def _normalize_state_vec(self, state_vec: Any) -> np.ndarray:

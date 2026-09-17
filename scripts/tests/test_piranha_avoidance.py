@@ -123,3 +123,59 @@ def test_generated_routes_clear_live_plants_without_stomp_credit(difficulty):
 def test_invalid_plant_timing_is_rejected():
     with pytest.raises(ValueError):
         parse_plant(dict(x=120, pipe_top=180, rise_frames=0))
+
+
+def test_plant_duration_labels_do_not_depend_on_cycle_phase():
+    from retroagi.stages.block_smb.piranha import position_plant
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        family="piranha_avoidance",
+        split="train",
+        seed=12,
+        difficulty="medium",
+        sample_index=0,
+    )
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        for action in sample.oracle["actions"]:
+            if action == 2:
+                break
+            env.step(action)
+        results = []
+        for phase in (0, 2, 20, 65, 100):
+            env.enemies[0]["plant_tick"] = phase
+            position_plant(env.enemies[0])
+            before = snapshot_env_state(env)
+            results.append(safe_jump_holds(env, local_objective(env), 1))
+            assert snapshot_env_state(env) == before
+        assert results[0] and all(holds == results[0] for holds in results)
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_conservative_routes_survive_shifted_cycles_through_real_executor(difficulty):
+    from copy import deepcopy
+
+    from retroagi.stages.block_smb.demonstrations import varied_demonstration
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        family="piranha_avoidance",
+        split="train",
+        seed=13,
+        difficulty=difficulty,
+        sample_index=0,
+    )
+    variant = varied_demonstration(sample, 13, robust=True)
+    assert variant is not None and variant.oracle["actions"] != sample.oracle["actions"]
+    for phase in (0, 20, 70, 100):
+        scenario = deepcopy(sample.scenario)
+        scenario["enemies"][0]["phase"] = phase
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=scenario)
+            assert teacher_route_reachable(env, sample.oracle["actions"])
+            assert teacher_route_reachable(env, variant.oracle["actions"])
+        finally:
+            env.close()

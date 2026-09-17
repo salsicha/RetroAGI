@@ -9,7 +9,7 @@ TRANSFER_FAILURE_FAMILIES = ("stair_gap", "landing_enemy", "enemy_on_platform", 
 
 TRANSFER_FAILURE_SCHEMAS = {
     "piranha_avoidance": {
-        "family_revision": [1, 1],
+        "family_revision": [2, 2],
         "pipe_height": [22, 42],
         "pipe_width": [32, 48],
         "plant_height": [16, 24],
@@ -111,6 +111,7 @@ def transfer_failure_scenario(family, rng, difficulty):
             platform_height=height, platform_width=width, enemy_offset=offset, enemy_speed=speed
         )
     elif family == "piranha_avoidance":
+        params["family_revision"] = 2
         height = (24, 32, 40)[tier] + rng.randint(-2, 2)
         width = (32, 40, 48)[tier]
         left = rng.randint(112, 140)

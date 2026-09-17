@@ -75,6 +75,7 @@ def main():
                 architecture_name=config.architecture_name,
                 architecture_config=config.architecture_config,
                 motion_observations=config.motion_observations,
+                hazard_observations=config.hazard_observations,
                 restore_rng=False,
             )
         optimizer = make_block_smb_optimizer(model, probe)

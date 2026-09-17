@@ -124,6 +124,9 @@ class NESGeometry:
         self.reset()
 
     def reset(self):
+        from retroagi.core.smb_enemy_history import EnemyObservationHistory
+
+        self.enemy_history = EnemyObservationHistory()
         self.previous = None
         self.previous_enemies = {}
         self.previous_platforms = {}
@@ -317,6 +320,7 @@ class NESGeometry:
             terminated=terminated,
             truncated=truncated,
         )
+        features["hazard_vec"] = self.enemy_history.observe(scene, frame)
         result = dict(
             scene=scene,
             features=features,

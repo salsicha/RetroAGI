@@ -44,6 +44,7 @@ from retroagi.core import (
 )
 from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
+from retroagi.core.smb_enemy_history import HAZARD_NAMES
 
 from .adapter import (
     BLOCK_SMB_SPEC,
@@ -244,6 +245,7 @@ class BlockSMBTrainingConfig:
     rollout_steps: int = 32
     autonomous_policy: bool = False
     motion_observations: bool = False
+    hazard_observations: bool = False
     learning_rate: float = 3e-4
     numeric_policy_learning_rate: float | None = None
     demonstration_layouts_per_family: int = 36
@@ -480,6 +482,8 @@ class BlockSMBTrainingConfig:
         for name in positive_ints:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if self.hazard_observations and not self.motion_observations:
+            raise ValueError("hazard_observations requires motion_observations")
         if any(
             isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0
             for epoch in self.retain_checkpoint_epochs
@@ -3825,7 +3829,8 @@ def train_block_smb_epoch(
             scenario=block_smb_policy_scenario(scenario, config.autonomous_policy),
             vision=vision_factory(),
             observation_config=BlockSMBObservationConfig(
-                motion_observations=config.motion_observations
+                motion_observations=config.motion_observations,
+                hazard_observations=config.hazard_observations,
             ),
         )
         try:
@@ -3854,6 +3859,7 @@ def train_block_smb_epoch(
                 key = (family, difficulty)
                 if (
                     family in RECOVERY_FAMILIES
+                    and not trajectory.success
                     and metadata.get("split") == "train"
                     and recovery_counts.get(key, 0) < config.policy_recovery_samples_per_bin
                 ):
@@ -3899,7 +3905,8 @@ def train_block_smb_epoch(
                     ),
                     vision=vision_factory(),
                     observation_config=BlockSMBObservationConfig(
-                        motion_observations=config.motion_observations
+                        motion_observations=config.motion_observations,
+                        hazard_observations=config.hazard_observations,
                     ),
                 )
                 try:
@@ -3944,7 +3951,8 @@ def train_block_smb_epoch(
                         ),
                         vision=vision_factory(),
                         observation_config=BlockSMBObservationConfig(
-                            motion_observations=config.motion_observations
+                            motion_observations=config.motion_observations,
+                            hazard_observations=config.hazard_observations,
                         ),
                     )
                     try:
@@ -4097,7 +4105,8 @@ def evaluate_block_smb_monte_carlo(
                     ),
                     vision=vision_factory(),
                     observation_config=BlockSMBObservationConfig(
-                        motion_observations=config.motion_observations
+                        motion_observations=config.motion_observations,
+                        hazard_observations=config.hazard_observations,
                     ),
                 )
                 try:
@@ -4546,7 +4555,8 @@ def evaluate_block_smb(
                     scenario=block_smb_policy_scenario(scenario, config.autonomous_policy),
                     vision=vision_factory(),
                     observation_config=BlockSMBObservationConfig(
-                        motion_observations=config.motion_observations
+                        motion_observations=config.motion_observations,
+                        hazard_observations=config.hazard_observations,
                     ),
                 )
                 try:
@@ -4754,7 +4764,8 @@ def save_block_smb_checkpoint(
             "smb_observation": {
                 "schema": SCHEMA,
                 "features": list(STATE_NAMES)
-                + (list(MOTION_NAMES) if config.motion_observations else []),
+                + (list(MOTION_NAMES) if config.motion_observations else [])
+                + (list(HAZARD_NAMES) if config.hazard_observations else []),
             },
             "stage": {
                 "name": BLOCK_SMB_SPEC.name,
@@ -4817,6 +4828,7 @@ def restore_block_smb_checkpoint(
     architecture_config: Optional[Mapping[str, Any]] = None,
     restore_rng: bool = True,
     motion_observations: bool | None = None,
+    hazard_observations: bool | None = None,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
@@ -4826,6 +4838,13 @@ def restore_block_smb_checkpoint(
     if checkpoint["checkpoint_kind"] != BLOCK_SMB_CHECKPOINT_KIND:
         raise ValueError("checkpoint kind does not match Block SMB trainer")
     checkpoint_config = checkpoint.get("config", {})
+    if (
+        hazard_observations is not None
+        and bool(checkpoint_config.get("hazard_observations", False)) != hazard_observations
+    ):
+        raise ValueError(
+            "Checkpoint enemy-history observation contract does not match requested config"
+        )
     if (
         motion_observations is not None
         and bool(checkpoint_config.get("motion_observations", False)) != motion_observations
@@ -4936,6 +4955,7 @@ def train_and_evaluate_block_smb(
             architecture_name=config.architecture_name,
             architecture_config=config.architecture_config,
             motion_observations=config.motion_observations,
+            hazard_observations=config.hazard_observations,
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
@@ -4951,6 +4971,7 @@ def train_and_evaluate_block_smb(
             architecture_name=config.architecture_name,
             architecture_config=config.architecture_config,
             motion_observations=config.motion_observations,
+            hazard_observations=config.hazard_observations,
             restore_rng=False,
         )
         if target_model is not None:

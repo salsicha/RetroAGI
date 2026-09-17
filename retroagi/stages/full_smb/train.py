@@ -3444,7 +3444,11 @@ def _smb_forward_kwargs(model, batch, deterministic):
         and geometry.get("observation_provider") != contract.observation_provider
     ):
         raise ValueError("Policy and batch observation providers differ")
-    expected_state_size = 35 if contract.motion_observations else 27
+    from retroagi.core.smb_enemy_history import HAZARD_NAMES
+
+    expected_state_size = (35 if contract.motion_observations else 27) + (
+        len(HAZARD_NAMES) if contract.hazard_observations else 0
+    )
     if tuple(metadata["vision_fusion"]["c_state"]) != (12, 12 + expected_state_size):
         raise ValueError("Shared SMB state feature offsets are incompatible")
     executor = getattr(model, "smb_executor", None)

@@ -269,6 +269,8 @@ def safe_jump_holds(
     snapshot includes goal credit and reward potentials so probes cannot leak
     credit, shaping, or platform phase into the live episode.
     """
+    from .piranha import freeze_plant_envelopes
+
     snapshot = snapshot_env_state(env)
     original_render = env.__dict__.get("render")
     env.render = lambda: None
@@ -279,6 +281,7 @@ def safe_jump_holds(
         menu = NES_JUMP_FRAMES if env.physics_profile == NES_PHYSICS_PROFILE else range(1, 17)
         for hold in menu:
             restore_env_state(env, snapshot)
+            freeze_plant_envelopes(env)
             airborne = False
             bouncing = False
             for frame in range(96):
@@ -334,6 +337,13 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
     """Generate a replayable sequence by solving successive local obstacles."""
     from .env import MarioScenarioEnv
 
+    if any(
+        isinstance(e, dict) and e.get("kind") == "piranha_plant"
+        for e in scenario.get("enemies", [])
+    ):
+        from .piranha import plant_oracle
+
+        return plant_oracle(scenario, max_steps)
     env = MarioScenarioEnv()
     actions = []
     hold_remaining = 0

@@ -56,7 +56,7 @@ def test_new_families_append_without_renumbering_cached_family_labels():
 @pytest.mark.parametrize("difficulty", ("easy", "medium", "hard"))
 def test_new_family_routes_complete_in_training_collector(family, difficulty):
     item = sample(family, difficulty)
-    assert item.parameters["family_revision"] == 1
+    assert item.parameters["family_revision"] == (2 if family == "piranha_avoidance" else 1)
     assert item.reachability["reachable"]
     trajectory = rollout(item, PhaseIntentPolicy(), steps=320, use_oracle_actions=True)
     assert trajectory.success

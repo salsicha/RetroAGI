@@ -70,7 +70,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             scenario=sample.scenario,
             vision=vision_factory(),
             observation_config=BlockSMBObservationConfig(
-                motion_observations=config.motion_observations
+                motion_observations=config.motion_observations,
+                hazard_observations=config.hazard_observations,
             ),
         )
         episode = []
@@ -351,7 +352,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 8
+DEMONSTRATION_CONTRACT_VERSION = 9
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -649,6 +650,14 @@ def varied_demonstration(sample, seed, *, robust=False):
     """
     import random
 
+    if any(
+        isinstance(e, dict) and e.get("kind") == "piranha_plant"
+        for e in sample.scenario.get("enemies", [])
+    ):
+        from .piranha import plant_oracle
+
+        actions = plant_oracle(sample.scenario, variant=1 + seed % 3)
+        return replace(sample, oracle={**sample.oracle, "actions": actions}) if actions else None
     if sample.scenario.get("bridge_jump_task"):
         from .bridge_curriculum import bridge_jump_oracle
         from .monte_carlo import validate_block_smb_monte_carlo_oracle

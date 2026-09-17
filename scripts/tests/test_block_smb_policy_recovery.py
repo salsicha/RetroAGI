@@ -421,3 +421,50 @@ def test_stair_release_mask_migrates_caches_without_crossing_episode_boundaries(
     separated = replace(legacy, **{f.name: getattr(legacy, f.name)[24:27] for f in fields(legacy)})
     assert separated.motor_action.tolist() == [2, 1, 1]
     assert without_walk_commitments(separated, [0, 1]).actor_mask[1:].all()
+
+
+def test_successful_rollouts_do_not_use_failure_recovery_budget(monkeypatch):
+    from retroagi.stages.block_smb import train
+
+    case = sample_block_smb_monte_carlo_scenario(
+        split="train", seed=914601, sample_index=0, family="piranha_avoidance", difficulty="easy"
+    )
+    config = tiny_config(episodes_per_epoch=3, rollout_steps=2, policy_recovery_samples_per_bin=1)
+    model = train.make_block_smb_model(config)
+    optimizer = train.make_block_smb_optimizer(model, config)
+    collect = train.collect_trajectory
+    calls = []
+
+    def controlled_result(*args, **kwargs):
+        trajectory = collect(*args, **kwargs)
+        # Exercise success followed by failure in the same family/difficulty bin.
+        last = trajectory.transitions[-1]
+        last.done = True
+        last.info = {**last.info, "goal_reached": not calls}
+        calls.append(kwargs["seed"])
+        return trajectory
+
+    monkeypatch.setattr(train, "collect_trajectory", controlled_result)
+    records = []
+    train.train_block_smb_epoch(
+        model,
+        optimizer,
+        [(case.scenario_id, case.scenario)],
+        config,
+        0,
+        device=torch.device("cpu"),
+        vision_factory=StaticBlockVision,
+        recovery_records=records,
+    )
+    assert len(records) == 1 and records[0]["seed"] == config.seed + 1
+
+
+def test_plant_recovery_retains_later_attempt_with_small_budget():
+    case = sample("piranha_avoidance", "easy", 810)
+    actions = [0] * 8 + [2] + [1] * 65
+    repairs = repair_policy_actions(case.scenario, actions, max_repairs=1)
+    assert len(repairs) == 1
+    assert repairs[0]["supervision_start_frame"] > 20
+    assert_completed(case.scenario, repairs)
+    start = repairs[0]["supervision_start_frame"]
+    assert repairs[0]["actions"][:start] == actions[:start]

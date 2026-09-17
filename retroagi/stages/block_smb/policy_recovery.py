@@ -32,6 +32,18 @@ def interior_hold(valid, menu=tuple(range(1, 17))):
 
 
 def coached_suffix(env, *, closing_window=False, max_frames=320, release_state=None):
+    from .piranha import conservative_suffix, has_plants
+
+    if has_plants(env):
+        return conservative_suffix(env, max_frames=max_frames, release_state=release_state)
+    return _coached_suffix(
+        env, closing_window=closing_window, max_frames=max_frames, release_state=release_state
+    )
+
+
+def _coached_suffix(
+    env, *, closing_window=False, max_frames=320, release_state=None, hold_variant=0
+):
     """Complete from a grounded decision state; never used by policy playback."""
     initial = snapshot_env_state(env)
     actions = []
@@ -80,7 +92,10 @@ def coached_suffix(env, *, closing_window=False, max_frames=320, release_state=N
                     if env.physics_profile == NES_PHYSICS_PROFILE
                     else tuple(range(1, 17))
                 )
-                remaining = interior_hold(valid, menu) - 1
+                chosen = interior_hold(valid, menu)
+                if hold_variant:
+                    chosen = valid[(valid.index(chosen) + hold_variant) % len(valid)]
+                remaining = chosen - 1
                 airborne = True
                 retreat = 0
                 action = 2 if direction > 0 else 4
@@ -123,8 +138,10 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
     family = block_smb_monte_carlo_metadata(scenario).get("family")
     stairs = family in ("stair_climb", "stair_gap")
     transfer_failure = family in TRANSFER_FAILURE_FAMILIES
-    prioritize_late = stairs or family == "enemy_on_platform"
+    plants = family == "piranha_avoidance"
+    prioritize_late = stairs or family == "enemy_on_platform" or plants
     captured = set()
+    plant_attempt = 0
     stalled = 0
     just_landed = False
     jump_target = None
@@ -175,6 +192,12 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                     ):
                         reason = None
                 key = (reason, target.kind, target.platform_index, target.enemy_index)
+                if plants:
+                    key += (
+                        plant_attempt,
+                        int(env.mario["x"] // 8),
+                        tuple(e["h"] // 4 for e in env.enemies),
+                    )
                 if reason and key not in captured:
                     saved = snapshot_env_state(env)
                     # A bridge disagreement supplies both the next feasible
@@ -200,7 +223,7 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                                 # the enemy on the platform.
                                 priorities.append(
                                     (
-                                        target.direction * target.center,
+                                        frame if plants else target.direction * target.center,
                                         {
                                             "retry_recovery": 4,
                                             "landing_recovery": 3,
@@ -219,6 +242,8 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                     captured.add(key)
             before_x = env.mario["x"]
             before_ground = env.mario["on_ground"]
+            if plants and before_ground and action in (2, 4) and not release.remaining:
+                plant_attempt += 1
             if stairs and before_ground and action in (2, 4):
                 jump_target = training_target(env)
             _, _, done, truncated, info = env.step(action)
