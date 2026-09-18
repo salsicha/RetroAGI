@@ -223,3 +223,47 @@ and autonomous optimization. These are correction checks, not evidence of a new
 trained policy's success rate or Full SMB transfer. Validation artifacts are in
 `artifacts/block_smb/piranha_corrections_20260917/`. Applying these changes does not
 modify the code already loaded by an existing trainer.
+
+
+## Demonstration history collection correction (2026-09-18)
+
+The first history-aware run exposed a collection bug: `collect_demonstrations`
+advanced `env.step` directly, but enemy history belongs to `BlockSMBStage.step`.
+Every bootstrap, rehearsal, and recovery demonstration therefore repeated the
+six reset-time history values throughout its trajectory. Autonomous training
+and evaluation advanced the adapter correctly, producing different inputs for
+the same route. The previous tests covered live Block/NES history and input
+layout compatibility but did not compare collected demonstrations with playback.
+
+Collection now advances the adapter before saving each next observation. This
+also reconstructs history throughout unsupervised recovery prefixes. New tests
+compare every collected C input and the terminal next-C target against normal
+playback, both with history enabled and with the legacy layout, including a
+recovery splice after frame 12. They fail on the old collector and pass with the
+correction. No policy-time action rule or hazard physics changed.
+
+Demonstration contract 10 invalidates all history-enabled caches from earlier
+contracts, including non-plant families and recovery rows. Regenerate their
+observations from the original routes; relabeling the manifest is insufficient.
+Checkpoint input dimensions and feature meanings are unchanged. An already
+running trainer continues to use its loaded collector and stale in-memory data;
+it needs a restart with regenerated demonstrations to use this correction.
+
+The frozen epoch-12 checkpoint reproduced the logged 28/60 plant successes on
+the exact validation/test layouts. A separate audit collected 72 routes from
+36 independent training layouts using the real frozen ViT: 6,950 of 7,064 rows
+had incorrect history before the fix. Velocity was marked available in zero
+old rows versus 5,030 corrected rows. All other observation columns, actions,
+goals, masks, and safe-duration labels were identical between collectors.
+All 107 regression tests, formatting, and lint checks passed.
+Artifacts are in `artifacts/block_smb/piranha_history_fix_20260918/`.
+
+
+A controlled 1,000-update fine-tune used the same frozen epoch-12 weights,
+training routes, seed, and optimizer settings in both conditions. Stale-history
+and corrected-history data each produced 23/60 held-out successes, below the
+28/60 baseline. Freezing runtime history to mimic the old demonstrations gave
+32/60 with unchanged weights, as a diagnostic only. These checks establish the
+input mismatch and its removal; they do not establish that this correction
+alone resolves plant avoidance or improves retention. The experimental weights
+are isolated artifacts and are not installed into the active training run.

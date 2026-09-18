@@ -199,7 +199,9 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 opening_ready = (
                     bridge and opening and action == 0 and 1 in bridge_safe_wait_frames(env)
                 )
-                observation, reward, done, truncated, info = env.step(action)
+                # Advance adapter-owned observation history just as live rollouts do.
+                # Direct env.step leaves all temporal features frozen at reset.
+                observation, reward, done, truncated, info = stage.step(action)
                 release.observe(env, action, info)
                 observations.append(observation)
                 states.append(stage.state_features(info))
@@ -352,7 +354,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 9
+DEMONSTRATION_CONTRACT_VERSION = 10
 
 
 def without_walk_commitments(data, episode_starts=None):

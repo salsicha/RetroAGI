@@ -200,6 +200,10 @@ def main():
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             if "piranha_avoidance" in present - set(args.refresh_families):
                 raise ValueError("Cached plant labels need regeneration for phase-robust teaching")
+        if config.hazard_observations and metadata.get("contract_version", 1) < 10:
+            raise ValueError(
+                "Cached enemy-history observations were frozen at reset; regenerate all demonstrations"
+            )
         if metadata.get("contract_version", 1) < 8:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             missing = present - set(args.refresh_families)

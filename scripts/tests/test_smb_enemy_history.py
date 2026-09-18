@@ -119,7 +119,8 @@ def test_history_contract_requires_motion_and_supported_projection():
 
 
 @pytest.mark.parametrize(
-    "contract,history,message", [(8, True, "plant labels"), (9, False, "enemy-history")]
+    "contract,history,message",
+    [(8, True, "plant labels"), (9, False, "enemy-history"), (9, True, "frozen at reset")],
 )
 def test_cached_demonstrations_require_new_labels_and_matching_history(
     tmp_path, monkeypatch, contract, history, message
@@ -196,3 +197,56 @@ def test_full_smb_history_projection_forward_and_snapshot_restore():
         torch.testing.assert_close(first.src_c, stage.encode_observation(restored).src_c)
     finally:
         stage.close()
+
+
+@pytest.mark.parametrize("history", [False, True])
+@pytest.mark.parametrize("supervision_start", [0, 12])
+def test_demonstrations_and_recovery_match_live_history_on_every_frame(supervision_start, history):
+    from dataclasses import replace
+
+    from retroagi.stages.block_smb.demonstrations import collect_demonstrations
+    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        family="piranha_avoidance",
+        split="train",
+        seed=13,
+        difficulty="medium",
+        sample_index=0,
+    )
+    sample = replace(
+        sample,
+        oracle={
+            **sample.oracle,
+            "supervision_start_frame": supervision_start,
+            "recovery": bool(supervision_start),
+        },
+    )
+    config = tiny_config(
+        motion_observations=True, hazard_observations=history, walk_duration_primitives=False
+    )
+    data = collect_demonstrations([(27, sample)], config, StaticBlockVision)
+    stage = BlockSMBStage(
+        scenario=sample.scenario,
+        vision=StaticBlockVision(),
+        observation_config=BlockSMBObservationConfig(
+            motion_observations=True, hazard_observations=history
+        ),
+    )
+    expected = []
+    try:
+        frame = stage.reset(seed=sample.sample_seed % (2**31))
+        for action in sample.oracle["actions"]:
+            expected.append(stage.encode_observation(frame).src_c)
+            frame, _, done, truncated, _ = stage.step(action)
+            if done or truncated:
+                break
+        lo, hi = stage.encode_observation(frame).metadata["vision_fusion"]["c_state"]
+        expected = torch.cat(expected)[supervision_start:]
+        if history:
+            assert expected[:, hi - 4].any()  # Velocity becomes available after observation.
+            assert expected[:, hi - 5].abs().max() > 0  # Rising/retracting motion is represented.
+        torch.testing.assert_close(data.c, expected)
+        torch.testing.assert_close(data.next_c[-1:], stage.encode_observation(frame).src_c)
+    finally:
+        stage.env.close()
