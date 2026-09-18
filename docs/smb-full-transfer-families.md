@@ -267,3 +267,12 @@ and corrected-history data each produced 23/60 held-out successes, below the
 input mismatch and its removal; they do not establish that this correction
 alone resolves plant avoidance or improves retention. The experimental weights
 are isolated artifacts and are not installed into the active training run.
+
+
+## Twenty-epoch run with five-epoch snapshots (2026-09-18)
+
+The full-volume recipe now runs 20 epochs and natively retains snapshots at
+5, 10, 15, and 20. Each `policy.epochN.pth` has a matching JSON sidecar and
+contains model, optimizer, RNG state, configuration, and metrics. The rolling
+checkpoint continues to update independently. Fresh training regenerates
+contract-10 demonstrations, including the enemy-history collection correction.

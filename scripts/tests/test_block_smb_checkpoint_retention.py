@@ -11,7 +11,7 @@ from retroagi.stages.block_smb.train import train_and_evaluate_block_smb
 from scripts.tests.test_block_smb_training import static_vision_factory, tiny_config
 
 
-@pytest.mark.parametrize("retained_epochs", [[5], [5, 10]])
+@pytest.mark.parametrize("retained_epochs", [[5], [5, 10], [5, 10, 15, 20]])
 def test_numbered_snapshots_survive_later_training(tmp_path, retained_epochs):
     previous = torch.get_num_threads()
     torch.set_num_threads(1)
@@ -54,8 +54,8 @@ def test_retained_epochs_reject_invalid_numbers(epochs):
         tiny_config(retain_checkpoint_epochs=epochs)
 
 
-def test_full_volume_recipe_runs_fifteen_epochs_and_preserves_epochs_five_and_ten():
+def test_full_volume_recipe_runs_twenty_epochs_with_five_epoch_snapshots():
     recipe = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
-    assert recipe["epochs"] == 15
-    assert recipe["retain_checkpoint_epochs"] == [5, 10]
+    assert recipe["epochs"] == 20
+    assert recipe["retain_checkpoint_epochs"] == [5, 10, 15, 20]
     assert recipe["save_checkpoints"]
