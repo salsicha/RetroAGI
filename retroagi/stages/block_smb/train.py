@@ -643,8 +643,8 @@ class BlockSMBTransition:
     noop_allowed: bool = False
     # Normalized expected hold duration (graph-attached) emitted while a jump
     # primitive was engaged this frame; paired post-hoc with the primitive's
-    # hindsight landing error (info["primitive_outcome"]) for the per-frame
-    # primitive-outcome loss.
+    # hindsight landing error. Fixed control trains it only at initiation;
+    # adaptive control also trains the predictions consumed during flight.
     expected_hold: torch.Tensor | None = None
     # HSP1: graph-attached release logit while the primitive is engaged,
     # span-supervised toward "the hindsight-correct hold has elapsed".
@@ -2599,7 +2599,8 @@ def collect_trajectory(
             span_info = trajectory.transitions[span_index].info
             if not isinstance(span_info, dict):
                 continue
-            # Every stomp frame learns the same eventual interception hold.
+            # Retain the eventual interception target throughout the span for
+            # outcome prediction and adaptive duration supervision.
             # Comparing a historical enemy position with Mario's terminal
             # position would contradict valid moving-target interceptions.
             frame_goal_x = (
@@ -2663,7 +2664,9 @@ def collect_trajectory(
             step_phase = (
                 pipe_traversal.phase
                 if pipe_traversal is not None
-                else "bounce_recovery" if recovering_local_stomp else step_local_target.kind
+                else "bounce_recovery"
+                if recovering_local_stomp
+                else step_local_target.kind
             )
         safe_waits = bridge_safe_wait_frames(stage.env) if bridge_composite else []
         if bridge_composite:
@@ -3613,20 +3616,28 @@ def compute_block_smb_losses(
         critic_terms.append(
             step.criticism.pow(2).mean() + _critic_action_outcome_loss(model, step, device=device)
         )
-        # Train the discrete duration choice, including in-flight beliefs.
-        # Waits map their frame target back through the executor's scale.
+        # Fixed commitments consume the duration head only at initiation.
+        # A feedforward continuation does not contain the original takeoff
+        # state or selected hold, so backfilling that choice into every flight
+        # frame teaches an unobservable target and overweights longer arcs.
+        # Adaptive control still consumes duration predictions during flight.
         outcome_target = (
             step.info.get("primitive_outcome_target") if isinstance(step.info, Mapping) else None
         )
-        if step.hold_duration_logits is not None and outcome_target is not None:
-            primitive_outcome_terms.append(block_smb_duration_coaching_loss(step, device=device))
-        elif step.expected_hold is not None and outcome_target is not None:
-            primitive_outcome_terms.append(
-                (step.expected_hold.to(device=device) - float(outcome_target)) ** 2
-            )
         frame_index = (
             step.info.get("primitive_frame_index") if isinstance(step.info, Mapping) else None
         )
+        duration_decision = config.adaptive_duration_control or frame_index in (None, 0)
+        if (
+            duration_decision
+            and step.hold_duration_logits is not None
+            and outcome_target is not None
+        ):
+            primitive_outcome_terms.append(block_smb_duration_coaching_loss(step, device=device))
+        elif duration_decision and step.expected_hold is not None and outcome_target is not None:
+            primitive_outcome_terms.append(
+                (step.expected_hold.to(device=device) - float(outcome_target)) ** 2
+            )
         target_hold = (
             step.info.get("primitive_target_hold") if isinstance(step.info, Mapping) else None
         )

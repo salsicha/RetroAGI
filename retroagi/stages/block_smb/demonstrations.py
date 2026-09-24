@@ -813,13 +813,14 @@ def build_balanced_demonstrations(config, vision_factory):
                 sample_index=i,
                 difficulty=("easy", "medium", "hard")[i % 3],
             )
-            if sample.scenario.get("bridge_jump_task") and (
+            if (sample.scenario.get("bridge_jump_task") or family == "piranha_avoidance") and (
                 config.demonstration_robust_routes or config.demonstration_varied_routes
             ):
                 # Difficulty already cycles with i % 3. Reusing that index to
                 # select a route permanently omits a boundary in each tier.
-                # Keep the canonical route and both timing boundaries on every
-                # bridge layout, including during later rehearsal.
+                # Plant variants use the same modulo-three selection, so keep
+                # the canonical route and every alternate in every tier for
+                # both families, including during later rehearsal.
                 cases.append((family_index, sample))
                 for variant in (1, 2, 3):
                     alternative = varied_demonstration(sample, variant - 1, robust=True)

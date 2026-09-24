@@ -293,16 +293,24 @@ def test_nes_fallback_coaching_uses_physical_hold_limit():
 
 
 @pytest.mark.parametrize("seed", [101, 20260908])
-def test_production_builder_covers_every_bridge_variant_in_every_difficulty(monkeypatch, seed):
+def test_production_builder_covers_bridge_and_plant_variants_in_every_difficulty(monkeypatch, seed):
     from collections import defaultdict
 
     from retroagi.stages.block_smb import demonstrations, monte_carlo
 
-    monkeypatch.setattr(monte_carlo, "BLOCK_SMB_MC_FAMILIES", ("bridge_mount", "bridge_dismount"))
+    monkeypatch.setattr(
+        monte_carlo,
+        "BLOCK_SMB_MC_FAMILIES",
+        ("bridge_mount", "bridge_dismount", "piranha_avoidance"),
+    )
 
     def sample(**kwargs):
         return SimpleNamespace(
-            scenario={"bridge_jump_task": kwargs["family"]},
+            scenario=(
+                {}
+                if kwargs["family"] == "piranha_avoidance"
+                else {"bridge_jump_task": kwargs["family"]}
+            ),
             difficulty=kwargs["difficulty"],
             index=kwargs["sample_index"],
             variant=0,
@@ -323,5 +331,5 @@ def test_production_builder_covers_every_bridge_variant_in_every_difficulty(monk
     groups = defaultdict(set)
     for family, case in demonstrations.build_balanced_demonstrations(config, None):
         groups[family, case.difficulty, case.index].add(case.variant)
-    assert len(groups) == 12
+    assert len(groups) == 18
     assert all(variants == {0, 1, 2, 3} for variants in groups.values())

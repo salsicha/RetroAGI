@@ -90,6 +90,50 @@ def test_short_second_pipe_jump_gets_certified_longer_hold_and_complete_recovery
     )
 
 
+def test_stomp_repairs_cover_later_interceptions_without_losing_first_departure():
+    case = sample("enemy_stomp", "medium", 259)
+    runs = [
+        (2, 12),
+        (1, 20),
+        (2, 1),
+        (1, 17),
+        (3, 1),
+        (4, 15),
+        (3, 18),
+        (1, 1),
+        (2, 12),
+        (1, 19),
+        (3, 1),
+        (4, 16),
+        (3, 18),
+        (1, 4),
+        (2, 10),
+        (1, 155),
+    ]
+    actions = [action for action, count in runs for _ in range(count)]
+    repairs = repair_policy_actions(case.scenario, actions)
+    assert_completed(case.scenario, repairs)
+    assert len(repairs) == 3
+    starts = [r["supervision_start_frame"] for r in repairs]
+    assert 0 in starts and max(starts) >= 85
+    for repair in repairs:
+        start = repair["supervision_start_frame"]
+        assert repair["actions"][:start] == actions[:start]
+
+
+def test_plant_retry_repairs_preserve_first_mistake_with_bounded_capacity():
+    case = sample("piranha_avoidance", "medium", 824)
+    runs = [(1, 8), (2, 9), (1, 21), (2, 2), (1, 18), (3, 16), (1, 11), (2, 9), (1, 9)]
+    actions = [action for action, count in runs for _ in range(count)]
+    repairs = repair_policy_actions(case.scenario, actions)
+    assert_completed(case.scenario, repairs)
+    starts = [r["supervision_start_frame"] for r in repairs]
+    assert len(repairs) == 3 and 8 in starts and max(starts) >= 57
+    pair = repair_policy_actions(case.scenario, actions, max_repairs=2)
+    assert len(pair) == 2 and pair[0]["supervision_start_frame"] == 8
+    assert pair[1]["supervision_start_frame"] >= 57
+
+
 @pytest.mark.parametrize("left", [False, True])
 def test_next_platform_retains_blocking_pipe_at_wall_contact(left):
     env = MarioScenarioEnv()

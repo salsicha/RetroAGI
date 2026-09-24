@@ -139,7 +139,9 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
     stairs = family in ("stair_climb", "stair_gap")
     transfer_failure = family in TRANSFER_FAILURE_FAMILIES
     plants = family == "piranha_avoidance"
-    prioritize_late = stairs or family == "enemy_on_platform" or plants
+    stomp = family == "enemy_stomp"
+    revisit_states = plants or stomp
+    prioritize_late = stairs or family == "enemy_on_platform" or revisit_states
     captured = set()
     plant_attempt = 0
     stalled = 0
@@ -198,6 +200,15 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                         int(env.mario["x"] // 8),
                         tuple(e["h"] // 4 for e in env.enemies),
                     )
+                elif stomp:
+                    # Returning to the same enemy from the other side or with
+                    # different momentum is a new interception problem. A
+                    # family/object-only key suppresses those later repairs.
+                    key += (
+                        target.direction,
+                        int(env.mario["x"] // 8),
+                        round(env.mario["vx"] * 2),
+                    )
                 if reason and key not in captured:
                     saved = snapshot_env_state(env)
                     # A bridge disagreement supplies both the next feasible
@@ -223,7 +234,9 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                                 # the enemy on the platform.
                                 priorities.append(
                                     (
-                                        frame if plants else target.direction * target.center,
+                                        frame
+                                        if revisit_states
+                                        else target.direction * target.center,
                                         {
                                             "retry_recovery": 4,
                                             "landing_recovery": 3,
@@ -233,8 +246,16 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                                     )
                                 )
                                 if len(repairs) > max_repairs:
+                                    # Keep the first corrected departure as
+                                    # well as later recovery states. Otherwise
+                                    # repeated plant retries evict the very
+                                    # mistake that caused the failed prefix.
                                     discard = min(
-                                        range(len(priorities)), key=priorities.__getitem__
+                                        range(
+                                            1 if revisit_states and max_repairs > 1 else 0,
+                                            len(priorities),
+                                        ),
+                                        key=priorities.__getitem__,
                                     )
                                     priorities.pop(discard)
                                     repairs.pop(discard)
