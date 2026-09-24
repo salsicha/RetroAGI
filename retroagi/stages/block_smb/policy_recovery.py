@@ -31,9 +31,19 @@ def interior_hold(valid, menu=tuple(range(1, 17))):
     return run[len(run) // 2]
 
 
-def coached_suffix(env, *, closing_window=False, max_frames=320, release_state=None):
+def coached_suffix(
+    env, *, closing_window=False, max_frames=320, release_state=None, observation_history=None
+):
     from .piranha import conservative_suffix, has_plants
+    from .piranha_tactics import timed_plant, timed_suffix
 
+    if timed_plant(env) is not None:
+        return timed_suffix(
+            env,
+            max_frames=max_frames,
+            release_state=release_state,
+            observation_history=observation_history,
+        )
     if has_plants(env):
         return conservative_suffix(env, max_frames=max_frames, release_state=release_state)
     return _coached_suffix(
@@ -151,7 +161,13 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
     try:
         env.reset(scenario=scenario, seed=seed)
         env.render = lambda: None
+        from retroagi.core.smb_enemy_history import EnemyObservationHistory
+
+        from .piranha_tactics import tactical_choice, timed_plant
+
+        history = EnemyObservationHistory()
         for frame, action in enumerate(actions):
+            plant_features = history.observe(env, env.steps)
             if (
                 env.mario["on_ground"]
                 and max_repairs > 0
@@ -166,7 +182,16 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                 )
                 reason = None
                 valid = None
-                if relevant and action in (2, 4):
+                if timed_plant(env) is not None and not release.remaining:
+                    _, desired, valid = tactical_choice(env, plant_features)
+                    held = 0
+                    for future in actions[frame:]:
+                        if future != action:
+                            break
+                        held += 1
+                    if action != desired or (action == 2 and held not in valid):
+                        reason = "tactic" if action != desired else "duration"
+                elif relevant and action in (2, 4):
                     valid = safe_jump_holds(env, target, 1 if action == 2 else -1)
                     held = 0
                     for future in actions[frame:]:
@@ -199,6 +224,7 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                         plant_attempt,
                         int(env.mario["x"] // 8),
                         tuple(e["h"] // 4 for e in env.enemies),
+                        round(float(plant_features[5]) * 64) if timed_plant(env) else 0,
                     )
                 elif stomp:
                     # Returning to the same enemy from the other side or with
@@ -217,7 +243,12 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                         if not prioritize_late and len(repairs) >= max_repairs:
                             break
                         restore_env_state(env, saved)
-                        suffix = coached_suffix(env, closing_window=closing, release_state=release)
+                        suffix = coached_suffix(
+                            env,
+                            closing_window=closing,
+                            release_state=release,
+                            observation_history=history,
+                        )
                         if suffix is not None:
                             repairs.append(
                                 dict(

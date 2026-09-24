@@ -14,7 +14,9 @@ class BlockSMBPrimitiveExecutor(SMBParameterizedPrimitiveExecutor):
         self.jump_frames = (
             NES_JUMP_FRAMES if env.physics_profile == NES_PHYSICS_PROFILE else tuple(range(1, 17))
         )
-        self.reobserve_bridge_wait = bool(env._bridge_jump_task)
+        self.reobserve_bridge_wait = bool(env._bridge_jump_task) or any(
+            e.get("timed_crossing") for e in env.enemies
+        )
         super().__init__(max_hold_frames=max(self.jump_frames), **kwargs)
 
     def motor_parameters(self, action, motor):

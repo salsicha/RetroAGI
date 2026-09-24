@@ -13,7 +13,8 @@ from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
 LOCAL_TRAVERSAL_FAMILIES = frozenset(
     "tall_pipe_jump pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery "
     "platform_chain mixed_section full_smb_opening_proxy enemy_patrol enemy_gap "
-    "chained_obstacles chained_enemy_gauntlet".split() + list(TRANSFER_FAILURE_FAMILIES)
+    "chained_obstacles chained_enemy_gauntlet".split()
+    + list(TRANSFER_FAILURE_FAMILIES)
 )
 
 
@@ -261,7 +262,12 @@ def support_edge_distance(env, direction: int) -> float:
 
 
 def safe_jump_holds(
-    env, objective: LocalObjective, direction: int, *, verify_recovery: bool = True
+    env,
+    objective: LocalObjective,
+    direction: int,
+    *,
+    verify_recovery: bool = True,
+    plant_history=None,
 ) -> list[int]:
     """Replay the 1–16-frame menu through landing or terminal success, then restore.
 
@@ -270,6 +276,10 @@ def safe_jump_holds(
     credit, shaping, or platform phase into the live episode.
     """
     from .piranha import freeze_plant_envelopes
+    from .piranha_tactics import timed_plant, timed_safe_holds
+
+    if timed_plant(env) is not None:
+        return timed_safe_holds(env, plant_history, direction)
 
     snapshot = snapshot_env_state(env)
     original_render = env.__dict__.get("render")

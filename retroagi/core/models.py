@@ -1399,6 +1399,11 @@ class TacticsNetwork(nn.Module):
     def __init__(self, seq_len_c: int, d_model: int, strategy_dim: int) -> None:
         super().__init__()
         self.input_projection = nn.Linear(1, d_model)
+        # C slots have different meanings. Without positions, attention plus
+        # mean pooling is invariant to exchanging geometry and hazard ages.
+        # A learned zero-initialized gain preserves legacy checkpoint behavior.
+        self.feature_positions = PositionalEncoding(d_model, max_len=seq_len_c)
+        self.feature_position_gain = nn.Parameter(torch.zeros(()))
         layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=2,
@@ -1409,13 +1414,23 @@ class TacticsNetwork(nn.Module):
         self.strategy_projection = nn.Linear(strategy_dim, d_model)
         self.stance_head = nn.Linear(d_model, len(TACTIC_STANCES))
         self.context_head = nn.Linear(d_model, d_model)
+        # The supervised stance must influence skills, rather than being a
+        # disconnected diagnostic head beside the learned context. Zero init
+        # preserves the behavior of checkpoints predating tactical training.
+        self.stance_context = nn.Linear(len(TACTIC_STANCES), d_model, bias=False)
+        nn.init.zeros_(self.stance_context.weight)
 
     def forward(self, state, strategy_context=None):
         tokens = self.input_projection(state.float().unsqueeze(-1))
+        tokens = (
+            tokens + self.feature_position_gain * self.feature_positions.pe[:, : tokens.size(1)]
+        )
         if strategy_context is not None:
             tokens = tokens + self.strategy_projection(strategy_context.float()).unsqueeze(1)
         pooled = self.encoder(tokens).mean(dim=1)
-        return self.stance_head(pooled), self.context_head(pooled)
+        logits = self.stance_head(pooled)
+        context = self.context_head(pooled) + self.stance_context(logits.softmax(dim=-1))
+        return logits, context
 
 
 class StrategyNetwork(nn.Module):
@@ -2135,6 +2150,7 @@ class AgentWorldModelCritic(nn.Module):
             )
         strategy_context = self.strategy_network(self._stance_history)
         tactic_stance_logits, tactic_context = self.tactics_network(src_C, strategy_context)
+        self.last_tactic_logits = tactic_stance_logits
         stance_probabilities = torch.softmax(tactic_stance_logits, dim=-1)
         self._stance_history = torch.cat(
             (self._stance_history[:, 1:, :], stance_probabilities.detach().unsqueeze(1)),

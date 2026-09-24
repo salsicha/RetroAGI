@@ -9,14 +9,15 @@ TRANSFER_FAILURE_FAMILIES = ("stair_gap", "landing_enemy", "enemy_on_platform", 
 
 TRANSFER_FAILURE_SCHEMAS = {
     "piranha_avoidance": {
-        "family_revision": [2, 2],
+        "family_revision": [3, 3],
         "pipe_height": [22, 42],
-        "pipe_width": [32, 48],
-        "plant_height": [16, 24],
+        "pipe_width": [32, 52],
+        "plant_height": [16, 80],
         "rise_frames": [12, 20],
         "exposed_frames": [40, 64],
-        "hidden_frames": [24, 40],
-        "goal": "clear a pipe with a cycling non-stompable plant and finish alive",
+        "hidden_frames": [24, 64],
+        "crossing_modes": ["clearance", "timed"],
+        "goal": "choose whether to advance or wait for observed retraction, clear the pipe, and finish alive",
     },
     "stair_gap": {
         "family_revision": [1, 1],
@@ -111,7 +112,7 @@ def transfer_failure_scenario(family, rng, difficulty):
             platform_height=height, platform_width=width, enemy_offset=offset, enemy_speed=speed
         )
     elif family == "piranha_avoidance":
-        params["family_revision"] = 2
+        params["family_revision"] = 3
         height = (24, 32, 40)[tier] + rng.randint(-2, 2)
         width = (32, 40, 48)[tier]
         left = rng.randint(112, 140)
@@ -147,6 +148,28 @@ def transfer_failure_scenario(family, rng, difficulty):
             hidden_frames=hidden,
             phase=phase,
         )
+        # Independent of difficulty: every tier practices both geometric
+        # clearance and phase-dependent departures. Tall timed plants cannot
+        # be cleared at full exposure, so holding has a real physical purpose.
+        timed = bool(rng.randrange(2))
+        params["crossing_mode"] = "timed" if timed else "clearance"
+        if timed:
+            # Width identifies the geometry class even while its plant is
+            # hidden. Identical observations must not receive incompatible
+            # "cross exposed" and "wait for retraction" targets.
+            scenario["platforms"][1][2] = width + 4
+            plant = scenario["enemies"][0]
+            phase = rng.randrange(2 * rise + exposed + hidden + 24)
+            plant.update(
+                timed_crossing=True,
+                plant_height=80,
+                hidden_frames=hidden + 24,
+                x=left + (width + 4 - 12) // 2,
+                phase=phase,
+            )
+            params.update(
+                plant_height=80, hidden_frames=hidden + 24, pipe_width=width + 4, phase=phase
+            )
     else:
         raise ValueError(f"Unknown transfer failure family: {family}")
     scenario["goal_requires_support"] = True

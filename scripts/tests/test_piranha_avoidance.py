@@ -167,6 +167,19 @@ def test_conservative_routes_survive_shifted_cycles_through_real_executor(diffic
         difficulty=difficulty,
         sample_index=0,
     )
+    # This regression concerns the clearance subfamily. Timed routes must
+    # replan their waiting period when the cycle changes.
+    for seed in range(14, 50):
+        if sample.parameters["crossing_mode"] == "clearance":
+            break
+        sample = sample_block_smb_monte_carlo_scenario(
+            family="piranha_avoidance",
+            split="train",
+            seed=seed,
+            difficulty=difficulty,
+            sample_index=0,
+        )
+    assert sample.parameters["crossing_mode"] == "clearance"
     variant = varied_demonstration(sample, 13, robust=True)
     assert variant is not None and variant.oracle["actions"] != sample.oracle["actions"]
     for phase in (0, 20, 70, 100):

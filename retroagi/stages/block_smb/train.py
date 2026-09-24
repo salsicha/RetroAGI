@@ -368,6 +368,7 @@ class BlockSMBTrainingConfig:
     # unlike a raw signed-error push, whose asymmetric magnitudes collapse
     # the head to the shortest bin.
     primitive_outcome_weight: float = 0.5
+    tactic_loss_weight: float = 0.5
     # One bit of duration coaching per finished jump: overshoot relabels
     # the hold one step shorter, undershoot one step longer, on-target
     # anchors the hold that was used. Direction, not size: magnitude-scaled
@@ -598,6 +599,7 @@ class BlockSMBTrainingConfig:
             self.value_loss_weight,
             self.action_aux_weight,
             self.oracle_action_loss_weight,
+            self.tactic_loss_weight,
             self.retention_imitation_weight,
             self.noop_loss_weight,
             self.critic_loss_weight,
@@ -651,6 +653,8 @@ class BlockSMBTransition:
     release_logit: torch.Tensor | None = None
     hold_duration_logits: torch.Tensor | None = None
     duration_bin_values: torch.Tensor | None = None
+    tactic_logits: torch.Tensor | None = None
+    tactic_target: int = -1
 
 
 @dataclass
@@ -834,6 +838,12 @@ def block_smb_noop_allowed_for_step(
 
     step = max(0, int(step_index))
     if isinstance(scenario, Mapping):
+        if any(
+            isinstance(e, Mapping) and e.get("timed_crossing") for e in scenario.get("enemies", ())
+        ):
+            # Waiting is decided from current exposure history, not the old
+            # oracle's episode clock after the policy takes a different route.
+            return True
         metadata = block_smb_monte_carlo_metadata(scenario)
         if metadata:
             try:
@@ -2599,6 +2609,11 @@ def collect_trajectory(
             span_info = trajectory.transitions[span_index].info
             if not isinstance(span_info, dict):
                 continue
+            from .piranha_tactics import timed_plant
+
+            span_info["timed_unsafe_takeoff"] = (
+                timed_plant(stage.env) is not None and not primitive_safe_holds
+            )
             # Retain the eventual interception target throughout the span for
             # outcome prediction and adaptive duration supervision.
             # Comparing a historical enemy position with Mario's terminal
@@ -2726,6 +2741,11 @@ def collect_trajectory(
             while end < len(oracle_actions) and oracle_actions[end] == 0:
                 end += 1
             oracle_wait_frames = end - start
+        tactic_decision = (
+            bool(stage.env.mario["on_ground"])
+            and not primitive_executor.active
+            and not oracle_primitive_active
+        )
         (
             action,
             log_prob,
@@ -2786,7 +2806,10 @@ def collect_trajectory(
                 primitive_local_target = training_target(stage.env)
             primitive_safe_holds = (
                 safe_jump_holds(
-                    stage.env, primitive_local_target, 1 if execution.action == 2 else -1
+                    stage.env,
+                    primitive_local_target,
+                    1 if execution.action == 2 else -1,
+                    plant_history=stage._hazard_features,
                 )
                 if primitive_local_target is not None
                 and execution.action in (2, 4)
@@ -2809,6 +2832,13 @@ def collect_trajectory(
                 dtype=log_prob.dtype,
             )
         was_on_ground = bool(stage.env.mario.get("on_ground"))
+        from .piranha_tactics import tactic_label
+
+        tactic_target = (
+            tactic_label(stage.env, stage._hazard_features, oracle_action)
+            if tactic_decision
+            else -1
+        )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         if oracle_action is not None:
             # Demonstrations share one span from takeoff through landing,
@@ -2963,6 +2993,8 @@ def collect_trajectory(
                 duration_bin_values=getattr(
                     getattr(model, "last_motor_primitives", None), "duration_bin_values", None
                 ),
+                tactic_logits=getattr(model, "last_tactic_logits", None),
+                tactic_target=tactic_target,
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -3553,9 +3585,17 @@ def compute_block_smb_losses(
     jump_overreach_terms = []
     critic_terms = []
     primitive_outcome_terms = []
+    tactic_terms = []
     release_timing_terms = []
     oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
+        if step.tactic_target >= 0 and step.tactic_logits is not None:
+            tactic_terms.append(
+                F.cross_entropy(
+                    step.tactic_logits.to(device),
+                    torch.tensor([step.tactic_target], device=device),
+                )
+            )
         return_target = returns[index].view(1)
         reward_target = torch.tensor([step.reward], dtype=torch.float32, device=device)
         value_pred = model.predict_value(step.batch.src_c.detach())
@@ -3627,7 +3667,9 @@ def compute_block_smb_losses(
         frame_index = (
             step.info.get("primitive_frame_index") if isinstance(step.info, Mapping) else None
         )
-        duration_decision = config.adaptive_duration_control or frame_index in (None, 0)
+        duration_decision = (
+            config.adaptive_duration_control or frame_index in (None, 0)
+        ) and not step.info.get("timed_unsafe_takeoff", False)
         if (
             duration_decision
             and step.hold_duration_logits is not None
@@ -3669,6 +3711,7 @@ def compute_block_smb_losses(
         if primitive_outcome_terms
         else loss_policy.new_zeros(())
     )
+    loss_tactic = torch.stack(tactic_terms).mean() if tactic_terms else loss_policy.new_zeros(())
     loss_release_timing = (
         torch.stack(release_timing_terms).mean()
         if release_timing_terms
@@ -3692,11 +3735,14 @@ def compute_block_smb_losses(
         + config.jump_overreach_weight * loss_jump_overreach
         + config.critic_loss_weight * loss_critic_feedback
         + config.primitive_outcome_weight * loss_primitive_outcome
+        + config.tactic_loss_weight * loss_tactic
         + config.release_timing_weight * loss_release_timing
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
     losses = {
+        "loss_tactic": loss_tactic,
+        "tactic_supervised_steps": torch.tensor(float(len(tactic_terms)), device=device),
         "loss_representation": loss_representation,
         "loss_dynamics": loss_dynamics,
         **{
@@ -4091,6 +4137,8 @@ def evaluate_block_smb_monte_carlo(
     scenario_results: dict[str, dict[str, Any]] = {}
     family_rollups: dict[str, dict[str, Any]] = {}
     bin_rollups: dict[str, dict[str, Any]] = {}
+    piranha_mode_rollups: dict[str, dict[str, Any]] = {}
+    tactic_correct = tactic_decisions = 0
     returns: list[float] = []
     successes: list[float] = []
     all_actions: list[int] = []
@@ -4140,6 +4188,12 @@ def evaluate_block_smb_monte_carlo(
                 finally:
                     stage.env.close()
                 actions = [step.action for step in trajectory.transitions]
+                for step in trajectory.transitions:
+                    if step.tactic_target >= 0 and step.tactic_logits is not None:
+                        tactic_decisions += 1
+                        tactic_correct += int(
+                            step.tactic_logits.argmax(-1).item() == step.tactic_target
+                        )
                 max_progress = (
                     max(
                         float(step.info.get("max_x_reached", 0.0))
@@ -4298,6 +4352,13 @@ def evaluate_block_smb_monte_carlo(
                 result,
                 scenario_actions,
             )
+            if sample.family == "piranha_avoidance":
+                _add_monte_carlo_rollup(
+                    piranha_mode_rollups,
+                    f"{sample.parameters.get('crossing_mode', 'clearance')}:{sample.difficulty_bin}",
+                    result,
+                    scenario_actions,
+                )
 
     families = _finalize_monte_carlo_rollups(family_rollups)
     bins = _finalize_monte_carlo_rollups(bin_rollups)
@@ -4330,6 +4391,12 @@ def evaluate_block_smb_monte_carlo(
         "rejected_sample_count": int(sum(sample_set.rejected_counts.values())),
         "families": families,
         "difficulty_bins": bins,
+        "piranha_crossing_modes": _finalize_monte_carlo_rollups(piranha_mode_rollups),
+        "piranha_tactics": {
+            "decisions": tactic_decisions,
+            "correct": tactic_correct,
+            "accuracy": tactic_correct / tactic_decisions if tactic_decisions else None,
+        },
         "failure_bins": failure_bins,
         "action_counts": summarize_block_smb_monte_carlo_action_counts(all_actions),
         "scenario_ids": [sample.scenario_id for sample in sample_set.samples],
@@ -5052,6 +5119,7 @@ def train_and_evaluate_block_smb(
                 optimizer,
                 demonstration_data,
                 steps=config.demonstration_bootstrap_updates,
+                tactic_loss_weight=config.tactic_loss_weight,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5063,6 +5131,7 @@ def train_and_evaluate_block_smb(
                 loss=bootstrap_loss,
                 updates=config.demonstration_bootstrap_updates,
                 frames=len(demonstration_data.action),
+                tactic_metrics=getattr(model, "last_demonstration_metrics", {}),
             )
             if target_model is not None:
                 update_target_network(target_model, model, tau=1.0)
@@ -5142,6 +5211,7 @@ def train_and_evaluate_block_smb(
                 optimizer,
                 rehearsal_data,
                 steps=config.demonstration_rehearsal_updates,
+                tactic_loss_weight=config.tactic_loss_weight,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5149,6 +5219,9 @@ def train_and_evaluate_block_smb(
                 seed=config.seed + epoch + 1,
             )
             losses["demonstration_rehearsal_updates"] = config.demonstration_rehearsal_updates
+            demonstration_metrics = getattr(model, "last_demonstration_metrics", {})
+            if "tactic_loss" in demonstration_metrics:
+                losses["demonstration_tactic_loss"] = demonstration_metrics["tactic_loss"]
             if target_model is not None:
                 update_target_network(target_model, model, tau=1.0)
         losses["adaptive_replay_samples"] = float(len(replay_curriculum))

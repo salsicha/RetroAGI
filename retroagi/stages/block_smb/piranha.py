@@ -57,6 +57,7 @@ def parse_plant(spec):
         edge_aware=False,
         on_ground=False,
         dead=False,
+        timed_crossing=bool(spec.get("timed_crossing", False)),
     )
     position_plant(enemy)
     return enemy
@@ -107,6 +108,10 @@ def plant_oracle(scenario, max_steps=320, *, variant=0):
     try:
         env.reset(scenario=scenario)
         env.render = lambda: None
+        from .piranha_tactics import timed_plant, timed_suffix
+
+        if timed_plant(env) is not None:
+            return timed_suffix(env, max_frames=max_steps, variant=variant) or []
         return conservative_suffix(env, max_frames=max_steps, variant=variant) or []
     finally:
         env.close()
