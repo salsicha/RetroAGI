@@ -44,3 +44,16 @@ artifacts/full_smb/sweep_chained_*
 # (fresh_block_smb_20260704_005140) is committed, so no broad pattern here.
 artifacts/fresh_block_smb_20260703_234530/
 artifacts/block_smb/full_curve_*
+
+# Generated experiment workspaces, including checkpoints, recordings, logs,
+# run metadata, and scratch analysis scripts. Keep curated reference artifacts
+# eligible for commits; add an explicit exception when curating another result.
+/artifacts/block_smb/*
+!/artifacts/block_smb/cuda_start_20260626_1447/
+!/artifacts/block_smb/known_good_scripted_seed20260622/
+!/artifacts/block_smb/real_block_vit_seed20260622/
+/artifacts/full_smb/*
+!/artifacts/full_smb/documented_benchmark_seed0/
+!/artifacts/full_smb/p3a_env_check.json
+!/artifacts/full_smb/recording_manifest.npz
+/artifacts/smb_composable/
