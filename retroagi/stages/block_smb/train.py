@@ -655,6 +655,7 @@ class BlockSMBTransition:
     duration_bin_values: torch.Tensor | None = None
     tactic_logits: torch.Tensor | None = None
     tactic_target: int = -1
+    tactic_actions: tuple[bool, ...] = ()
 
 
 @dataclass
@@ -2744,6 +2745,7 @@ def collect_trajectory(
         tactic_decision = (
             bool(stage.env.mario["on_ground"])
             and not primitive_executor.active
+            and not primitive_executor._suppress_until_non_jump
             and not oracle_primitive_active
         )
         (
@@ -2832,12 +2834,25 @@ def collect_trajectory(
                 dtype=log_prob.dtype,
             )
         was_on_ground = bool(stage.env.mario.get("on_ground"))
-        from .piranha_tactics import tactic_label
+        from .tactics import compatible_actions, tactic_label
 
         tactic_target = (
-            tactic_label(stage.env, stage._hazard_features, oracle_action)
+            tactic_label(
+                stage.env,
+                stage._hazard_features,
+                oracle_action,
+                family=scenario_family(stage.scenario),
+                phase=step_phase,
+            )
             if tactic_decision
             else -1
+        )
+        tactic_actions = tuple(compatible_actions(stage.env, tactic_target))
+        predicted_tactic = getattr(model, "last_tactic_logits", None)
+        predicted_tactic_actions = (
+            compatible_actions(stage.env, int(predicted_tactic.detach().argmax(-1).item()))
+            if tactic_target >= 0 and predicted_tactic is not None
+            else None
         )
         next_observation, reward, terminated, truncated, info = stage.step(action)
         if oracle_action is not None:
@@ -2859,6 +2874,8 @@ def collect_trajectory(
             float((info.get("reward_terms") or {}).get("enemy_stomp", 0.0) or 0.0) > 0.0
         )
         info = dict(info)
+        if predicted_tactic_actions is not None:
+            info["tactic_action_agreement"] = bool(predicted_tactic_actions[action])
         info["goal_reached"] = _goal_reached(stage.env)
         if bridge_composite:
             info["skill_phase"] = step_phase
@@ -2995,6 +3012,7 @@ def collect_trajectory(
                 ),
                 tactic_logits=getattr(model, "last_tactic_logits", None),
                 tactic_target=tactic_target,
+                tactic_actions=tactic_actions,
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -3586,9 +3604,17 @@ def compute_block_smb_losses(
     critic_terms = []
     primitive_outcome_terms = []
     tactic_terms = []
+    tactic_action_terms = []
     release_timing_terms = []
     oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
+        if step.tactic_target >= 0 and any(step.tactic_actions):
+            allowed = torch.tensor(step.tactic_actions, device=device, dtype=torch.bool)
+            tactic_action_terms.append(
+                -torch.logsumexp(
+                    F.log_softmax(step.logits_a.to(device)[:, -1, :6], dim=-1)[:, allowed], dim=-1
+                ).mean()
+            )
         if step.tactic_target >= 0 and step.tactic_logits is not None:
             tactic_terms.append(
                 F.cross_entropy(
@@ -3712,6 +3738,11 @@ def compute_block_smb_losses(
         else loss_policy.new_zeros(())
     )
     loss_tactic = torch.stack(tactic_terms).mean() if tactic_terms else loss_policy.new_zeros(())
+    loss_tactic_action = (
+        torch.stack(tactic_action_terms).mean()
+        if tactic_action_terms
+        else loss_policy.new_zeros(())
+    )
     loss_release_timing = (
         torch.stack(release_timing_terms).mean()
         if release_timing_terms
@@ -3735,13 +3766,14 @@ def compute_block_smb_losses(
         + config.jump_overreach_weight * loss_jump_overreach
         + config.critic_loss_weight * loss_critic_feedback
         + config.primitive_outcome_weight * loss_primitive_outcome
-        + config.tactic_loss_weight * loss_tactic
+        + config.tactic_loss_weight * (loss_tactic + loss_tactic_action)
         + config.release_timing_weight * loss_release_timing
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
     )
     losses = {
         "loss_tactic": loss_tactic,
+        "loss_tactic_action": loss_tactic_action,
         "tactic_supervised_steps": torch.tensor(float(len(tactic_terms)), device=device),
         "loss_representation": loss_representation,
         "loss_dynamics": loss_dynamics,
@@ -4138,7 +4170,7 @@ def evaluate_block_smb_monte_carlo(
     family_rollups: dict[str, dict[str, Any]] = {}
     bin_rollups: dict[str, dict[str, Any]] = {}
     piranha_mode_rollups: dict[str, dict[str, Any]] = {}
-    tactic_correct = tactic_decisions = 0
+    tactical_counts = {}
     returns: list[float] = []
     successes: list[float] = []
     all_actions: list[int] = []
@@ -4190,10 +4222,10 @@ def evaluate_block_smb_monte_carlo(
                 actions = [step.action for step in trajectory.transitions]
                 for step in trajectory.transitions:
                     if step.tactic_target >= 0 and step.tactic_logits is not None:
-                        tactic_decisions += 1
-                        tactic_correct += int(
-                            step.tactic_logits.argmax(-1).item() == step.tactic_target
-                        )
+                        counts = tactical_counts.setdefault(sample.family, [0, 0, 0])
+                        counts[0] += 1
+                        counts[1] += int(step.tactic_logits.argmax(-1).item() == step.tactic_target)
+                        counts[2] += int(step.info.get("tactic_action_agreement", False))
                 max_progress = (
                     max(
                         float(step.info.get("max_x_reached", 0.0))
@@ -4392,15 +4424,23 @@ def evaluate_block_smb_monte_carlo(
         "families": families,
         "difficulty_bins": bins,
         "piranha_crossing_modes": _finalize_monte_carlo_rollups(piranha_mode_rollups),
-        "piranha_tactics": {
-            "decisions": tactic_decisions,
-            "correct": tactic_correct,
-            "accuracy": tactic_correct / tactic_decisions if tactic_decisions else None,
+        "tactics_by_family": {
+            family: {
+                "decisions": n,
+                "correct": correct,
+                "accuracy": correct / n,
+                "action_agreement": agreement / n,
+            }
+            for family, (n, correct, agreement) in tactical_counts.items()
         },
         "failure_bins": failure_bins,
         "action_counts": summarize_block_smb_monte_carlo_action_counts(all_actions),
         "scenario_ids": [sample.scenario_id for sample in sample_set.samples],
     }
+    evaluation["piranha_tactics"] = evaluation["tactics_by_family"].get(
+        "piranha_avoidance",
+        {"decisions": 0, "correct": 0, "accuracy": None, "action_agreement": None},
+    )
     evaluation["action_collapse"] = {
         "all_noop": block_smb_action_counts_all_noop(evaluation["action_counts"]),
         **action_distribution_stats(
@@ -5222,6 +5262,10 @@ def train_and_evaluate_block_smb(
             demonstration_metrics = getattr(model, "last_demonstration_metrics", {})
             if "tactic_loss" in demonstration_metrics:
                 losses["demonstration_tactic_loss"] = demonstration_metrics["tactic_loss"]
+            if "tactic_action_loss" in demonstration_metrics:
+                losses["demonstration_tactic_action_loss"] = demonstration_metrics[
+                    "tactic_action_loss"
+                ]
             if target_model is not None:
                 update_target_network(target_model, model, tau=1.0)
         losses["adaptive_replay_samples"] = float(len(replay_curriculum))

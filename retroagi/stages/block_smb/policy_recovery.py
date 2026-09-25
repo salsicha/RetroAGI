@@ -12,12 +12,16 @@ from .geometry_expert import restore_env_state, snapshot_env_state
 from .local_traversal import local_target_distance, safe_jump_holds, support_edge_distance
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES, block_smb_monte_carlo_metadata
 from .primitive_execution import JumpReleaseState, teacher_route_reachable
+from .tactics import TACTICAL_FAMILIES
 from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
 
-RECOVERY_FAMILIES = frozenset(
-    "bridge_mount bridge_dismount chained_obstacles mixed_section full_smb_opening_proxy "
-    "chained_enemy_gauntlet tall_pipe_jump pipe_mount enemy_stomp stair_climb".split()
-    + list(TRANSFER_FAILURE_FAMILIES)
+RECOVERY_FAMILIES = (
+    frozenset(
+        "bridge_mount bridge_dismount chained_obstacles mixed_section full_smb_opening_proxy "
+        "chained_enemy_gauntlet tall_pipe_jump pipe_mount enemy_stomp stair_climb".split()
+        + list(TRANSFER_FAILURE_FAMILIES)
+    )
+    | TACTICAL_FAMILIES
 )
 
 
@@ -73,6 +77,11 @@ def _coached_suffix(
             remaining -= 1
         elif airborne or not env.mario["on_ground"]:
             action = 1 if direction > 0 else 3
+        elif env._require_bridge_before_goal and not env._bridge_jump_task:
+            from .bridge_traversal import bridge_phase
+
+            phase = bridge_phase(env, True)
+            action = 1 if phase in ("approach", "board", "exit", "finish") else 0
         else:
             target = training_target(env)
             direction = target.direction
@@ -182,7 +191,31 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                 )
                 reason = None
                 valid = None
-                if timed_plant(env) is not None and not release.remaining:
+                if (
+                    env._require_bridge_before_goal
+                    and not env._bridge_jump_task
+                    and not release.remaining
+                ):
+                    from .bridge_traversal import bridge_phase
+
+                    desired = (
+                        1
+                        if bridge_phase(env, True) in ("approach", "board", "exit", "finish")
+                        else 0
+                    )
+                    if action != desired:
+                        reason = "tactic"
+                elif (
+                    family in ("enemy_patrol", "retreat_recovery")
+                    and action in (0, 1, 3)
+                    and not release.remaining
+                ):
+                    from .tactics import compatible_actions, tactic_label
+
+                    label = tactic_label(env, plant_features, family=family)
+                    if label >= 0 and not compatible_actions(env, label)[action]:
+                        reason = "tactic"
+                elif timed_plant(env) is not None and not release.remaining:
                     _, desired, valid = tactical_choice(env, plant_features)
                     held = 0
                     for future in actions[frame:]:

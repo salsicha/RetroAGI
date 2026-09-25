@@ -47,8 +47,14 @@ class DemonstrationBatch:
     recovery: torch.Tensor | None = None
     forced_release: torch.Tensor | None = None
     tactic: torch.Tensor | None = None
+    tactic_actions: torch.Tensor | None = None
+    duration_consumed: torch.Tensor | None = None
 
     def __post_init__(self):
+        if self.tactic_actions is None:
+            self.tactic_actions = torch.zeros((len(self.family), 6), dtype=torch.bool)
+        if self.duration_consumed is None:
+            self.duration_consumed = torch.ones_like(self.family, dtype=torch.bool)
         if self.tactic is None:
             self.tactic = torch.full_like(self.family, -1)
         if self.forced_release is None:
@@ -66,6 +72,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     recovery_rows = []
     release_rows = []
     tactic_rows = []
+    tactic_action_rows = []
+    duration_consumed_rows = []
     episode_starts = []
     frame_wait_episodes = set()
     for family_index, sample in cases:
@@ -81,6 +89,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
         episode = []
         episode_release = []
         episode_tactics = []
+        episode_tactic_actions = []
+        episode_duration_consumed = []
         from .primitive_execution import JumpReleaseState
 
         release = JumpReleaseState()
@@ -132,10 +142,12 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     recovering_stomp = False
                 episode_release.append(bool(release.remaining))
                 actor_mask = jump_intent is None and not recovering_stomp and not release.remaining
-                from .piranha_tactics import tactic_label, timed_plant
+                from .piranha_tactics import timed_plant
+                from .tactics import compatible_actions, tactic_label
 
-                episode_tactics.append(
-                    tactic_label(env, stage._hazard_features, action) if actor_mask else -1
+                free_decision = actor_mask
+                episode_duration_consumed.append(
+                    not (action == 0 and (bridge_jump or timed_plant(env)))
                 )
                 end = frame + 1
                 while end < len(actions) and actions[end] == action:
@@ -218,6 +230,22 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 opening_ready = (
                     bridge and opening and action == 0 and 1 in bridge_safe_wait_frames(env)
                 )
+                tactic = (
+                    tactic_label(
+                        env,
+                        stage._hazard_features,
+                        action,
+                        family=scenario_family(stage.scenario),
+                        phase=phase,
+                    )
+                    if free_decision
+                    else -1
+                )
+                episode_tactics.append(tactic)
+                allowed_tactic_actions = compatible_actions(env, tactic)
+                if tactic >= 0:
+                    allowed_tactic_actions[action] = True
+                episode_tactic_actions.append(allowed_tactic_actions)
                 # Advance adapter-owned observation history just as live rollouts do.
                 # Direct env.step leaves all temporal features frozen at reset.
                 observation, reward, done, truncated, info = stage.step(action)
@@ -309,6 +337,12 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 episode_release[supervision_start : supervision_start + len(episode)]
             )
             recovery_rows.extend([bool(sample.oracle.get("recovery"))] * len(episode))
+            tactic_action_rows.extend(
+                episode_tactic_actions[supervision_start : supervision_start + len(episode)]
+            )
+            duration_consumed_rows.extend(
+                episode_duration_consumed[supervision_start : supervision_start + len(episode)]
+            )
             tactic_rows.extend(
                 episode_tactics[supervision_start : supervision_start + len(episode)]
             )
@@ -322,6 +356,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     data.recovery = torch.tensor(recovery_rows, dtype=torch.bool)
     data.forced_release = torch.tensor(release_rows, dtype=torch.bool)
     data.tactic = torch.tensor(tactic_rows, dtype=torch.long)
+    data.tactic_actions = torch.tensor(tactic_action_rows, dtype=torch.bool)
+    data.duration_consumed = torch.tensor(duration_consumed_rows, dtype=torch.bool)
     data = align_steady_demonstrations(
         data, episode_starts, frame_wait_episodes=frame_wait_episodes
     )
@@ -377,7 +413,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 11
+DEMONSTRATION_CONTRACT_VERSION = 12
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -468,6 +504,30 @@ def demonstration_sample_weights(data, family_weights=None):
     return weights
 
 
+def observed_decision_groups(data):
+    cached = getattr(data, "_observed_decision_groups", None)
+    if cached is not None:
+        return cached
+    keys = torch.cat((data.a.float(), data.b.float(), data.c, data.goal), dim=1).numpy()
+    keys = np.ascontiguousarray(np.round(keys, 6))
+    packed = keys.view(np.dtype((np.void, keys.dtype.itemsize * keys.shape[1]))).ravel()
+    _, inverse = np.unique(packed, return_inverse=True)
+    data._observed_decision_groups = torch.from_numpy(inverse)
+    return data._observed_decision_groups
+
+
+def demonstrated_tactic_sets(data):
+    """Do not contradict successful early/late departures from one observation."""
+    groups = observed_decision_groups(data)
+    labels = torch.zeros((int(groups.max()) + 1, 4), dtype=torch.bool)
+    actions = torch.zeros((int(groups.max()) + 1, 6), dtype=torch.bool)
+    mask = data.actor_mask & (data.tactic >= 0)
+    labels[groups[mask], data.tactic[mask]] = True
+    for action in range(6):
+        actions[groups[mask & data.tactic_actions[:, action]], action] = True
+    return labels[groups], actions[groups]
+
+
 def demonstrated_action_sets(data):
     """Union valid demonstrated choices at the same observed decision state.
 
@@ -477,11 +537,7 @@ def demonstrated_action_sets(data):
     cached = getattr(data, "_valid_action_sets", None)
     if cached is not None:
         return cached
-    keys = torch.cat((data.a.float(), data.b.float(), data.c, data.goal), dim=1).numpy()
-    keys = np.ascontiguousarray(np.round(keys, 6))
-    packed = keys.view(np.dtype((np.void, keys.dtype.itemsize * keys.shape[1]))).ravel()
-    _, inverse = np.unique(packed, return_inverse=True)
-    groups = torch.from_numpy(inverse)
+    groups = observed_decision_groups(data)
     choices = torch.zeros((int(groups.max()) + 1, 6), dtype=torch.bool)
     choices[groups[data.actor_mask], data.action[data.actor_mask]] = True
     allowed = choices[groups]
@@ -567,6 +623,7 @@ def fit_demonstrations(
     group_errors = torch.ones_like(group_counts)
     group_observations = torch.zeros_like(group_counts)
     allowed_actions = demonstrated_action_sets(data)
+    allowed_tactics, allowed_tactic_actions = demonstrated_tactic_sets(data)
     device = next(model.parameters()).device
     losses = []
     components = []
@@ -596,8 +653,21 @@ def fit_demonstrations(
         tactic_mask = (tactic_targets >= 0) & mask
         tactic_logits = getattr(model, "last_tactic_logits", None)
         tactic_loss = outputs[4].new_zeros(())
+        tactic_action_loss = outputs[4].new_zeros(())
         if tactic_mask.any() and tactic_logits is not None:
-            tactic_loss = F.cross_entropy(tactic_logits[tactic_mask], tactic_targets[tactic_mask])
+            tactic_loss = -torch.logsumexp(
+                F.log_softmax(tactic_logits, dim=-1).masked_fill(
+                    ~allowed_tactics[ids].to(device), -1e9
+                ),
+                dim=-1,
+            )[tactic_mask].mean()
+        tactic_actions = allowed_tactic_actions[ids].to(device)
+        tactic_action_mask = tactic_mask & tactic_actions.any(dim=-1)
+        if tactic_action_mask.any():
+            tactic_action_loss = -torch.logsumexp(
+                F.log_softmax(outputs[4][:, -1, :6], dim=-1).masked_fill(~tactic_actions, -1e9),
+                dim=-1,
+            )[tactic_action_mask].mean()
         logits = outputs[4][:, -1, :6]
         action_losses = -torch.logsumexp(
             F.log_softmax(logits, dim=-1).masked_fill(~allowed_actions[ids].to(device), -1e9),
@@ -620,10 +690,15 @@ def fit_demonstrations(
             duration_mask = duration_mask & (motor != 1) & (motor != 3)
         # Timed plant waits reobserve every frame; no duration head is
         # consumed for those decisions, only the tactic and motor action.
-        duration_mask = duration_mask & ~((motor == 0) & (tactic_targets >= 0))
+        duration_mask = duration_mask & data.duration_consumed[ids].to(device)
         duration_loss = (duration_losses * duration_mask).sum() / duration_mask.sum().clamp_min(1)
         dynamics = F.mse_loss(outputs[1], data.next_c[ids].to(device))
-        loss = action_loss + duration_loss + 0.1 * dynamics + tactic_loss_weight * tactic_loss
+        loss = (
+            action_loss
+            + duration_loss
+            + 0.1 * dynamics
+            + tactic_loss_weight * (tactic_loss + tactic_action_loss)
+        )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -657,12 +732,16 @@ def fit_demonstrations(
                     duration_loss.detach(),
                     dynamics.detach(),
                     tactic_loss.detach(),
+                    tactic_action_loss.detach(),
                 )
             )
         )
     means = torch.stack(components).mean(0).cpu().tolist()
     model.last_demonstration_metrics = dict(
-        zip(("action_loss", "duration_loss", "dynamics_loss", "tactic_loss"), means)
+        zip(
+            ("action_loss", "duration_loss", "dynamics_loss", "tactic_loss", "tactic_action_loss"),
+            means,
+        )
     )
     if adaptive_groups:
         final = adaptive_group_weights(base_weights, groups, group_counts, group_errors)
