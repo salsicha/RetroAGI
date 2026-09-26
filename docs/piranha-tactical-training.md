@@ -59,8 +59,11 @@ demonstration bootstrap/rehearsal. The full-volume recipe enables motion and
 hazard observations. Joint batches update tactics, A, and B; no oracle stance
 or action is injected during autonomous evaluation.
 
-Timed waits reobserve every physics frame. Their duration head is not trained,
-because the executor does not consume a duration for those waits. Recovery
+Plant waits reobserve every physics frame in both crossing modes. Their duration
+head is not trained, because the executor does not consume a duration for those
+waits. The executor previously keyed this on the private `timed_crossing` flag,
+so a wait chosen at a clearance pipe, which looks identical while its plant is
+hidden, committed 4–64 frames and could not react to a retraction. Recovery
 collection detects premature departures and missed opportunities, preserves
 observation history across the failed prefix, and labels only successful
 corrected suffixes.

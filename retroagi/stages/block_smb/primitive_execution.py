@@ -14,8 +14,11 @@ class BlockSMBPrimitiveExecutor(SMBParameterizedPrimitiveExecutor):
         self.jump_frames = (
             NES_JUMP_FRAMES if env.physics_profile == NES_PHYSICS_PROFILE else tuple(range(1, 17))
         )
+        # Every plant layout re-decides waits each frame. Keying this on the
+        # private timed_crossing flag gave observationally identical clearance
+        # layouts 4-64 frame committed waits that could not react to retraction.
         self.reobserve_bridge_wait = bool(env._bridge_jump_task) or any(
-            e.get("timed_crossing") for e in env.enemies
+            e.get("kind") == "piranha_plant" for e in env.enemies
         )
         super().__init__(max_hold_frames=max(self.jump_frames), **kwargs)
 

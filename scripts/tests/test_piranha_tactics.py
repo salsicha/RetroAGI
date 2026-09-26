@@ -45,6 +45,11 @@ def single_thread():
 
 @lru_cache(None)
 def timed_sample(difficulty="hard"):
+    return crossing_sample("timed", difficulty)
+
+
+@lru_cache(None)
+def crossing_sample(mode, difficulty="hard"):
     for seed in range(20):
         sample = sample_block_smb_monte_carlo_scenario(
             family="piranha_avoidance",
@@ -53,9 +58,9 @@ def timed_sample(difficulty="hard"):
             seed=seed,
             sample_index=0,
         )
-        if sample.parameters["crossing_mode"] == "timed":
+        if sample.parameters["crossing_mode"] == mode:
             return sample
-    raise AssertionError("No temporal practice in the family")
+    raise AssertionError(f"No {mode} practice in the family")
 
 
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
@@ -119,10 +124,13 @@ def test_timing_targets_do_not_read_hidden_cycle_and_unknown_empty_pipe_waits():
         env.close()
 
 
-def test_temporal_wait_reobserves_every_frame():
+@pytest.mark.parametrize("mode", ["timed", "clearance"])
+def test_plant_waits_reobserve_every_frame_in_both_crossing_modes(mode):
+    # A hidden plant looks the same in both modes, so the private
+    # timed_crossing flag must not change how a chosen wait executes.
     env = MarioScenarioEnv()
     try:
-        env.reset(scenario=timed_sample().scenario)
+        env.reset(scenario=crossing_sample(mode).scenario)
         executor = BlockSMBPrimitiveExecutor(env, steady_primitives=True)
         for _ in range(5):
             execution = executor.execute(0, support_override="ground")
@@ -130,6 +138,39 @@ def test_temporal_wait_reobserves_every_frame():
             env.step(execution.action)
     finally:
         env.close()
+
+
+def test_clearance_waits_are_frame_decisions_without_duration_labels():
+    from dataclasses import replace
+
+    from retroagi.stages.block_smb.piranha import conservative_suffix
+
+    config = tiny_config(
+        motion_observations=True,
+        hazard_observations=True,
+        adaptive_duration_control=False,
+        walk_duration_primitives=False,
+    )
+    sample = crossing_sample("clearance")
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        env.render = lambda: None
+        for _ in range(12):
+            env.step(0)
+        suffix = conservative_suffix(env)
+    finally:
+        env.close()
+    assert suffix
+    waited = replace(sample, oracle={**sample.oracle, "actions": [0] * 12 + suffix})
+    data = collect_demonstrations(
+        [(BLOCK_SMB_MC_FAMILIES.index(sample.family), waited)], config, StaticBlockVision
+    )
+    waits = data.action == 0
+    assert int(waits.sum()) == 12
+    assert data.actor_mask[waits].all()
+    assert (data.duration[waits] == 0).all()
+    assert not data.duration_consumed[waits].any()
 
 
 def test_demonstrations_jointly_train_tactics_skill_and_primitive():

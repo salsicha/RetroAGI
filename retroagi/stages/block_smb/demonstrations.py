@@ -126,6 +126,11 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             jump_hold = 1
             jump_rows = []
             bridge_jump = stage.env._bridge_jump_task
+            from .piranha import has_plants
+
+            # Must match BlockSMBPrimitiveExecutor: these layouts re-decide
+            # waits every frame, so no wait duration is ever consumed.
+            frame_waits = bool(bridge_jump) or has_plants(stage.env)
             bridge = stage.env._require_bridge_before_goal and bridge_jump is None
             enemy = stage.env._require_stomp_before_goal
             opening = True
@@ -142,13 +147,10 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     recovering_stomp = False
                 episode_release.append(bool(release.remaining))
                 actor_mask = jump_intent is None and not recovering_stomp and not release.remaining
-                from .piranha_tactics import timed_plant
                 from .tactics import compatible_actions, tactic_label
 
                 free_decision = actor_mask
-                episode_duration_consumed.append(
-                    not (action == 0 and (bridge_jump or timed_plant(env)))
-                )
+                episode_duration_consumed.append(not (action == 0 and frame_waits))
                 end = frame + 1
                 while end < len(actions) and actions[end] == action:
                     end += 1
@@ -172,11 +174,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 motor_action = jump_intent if jump_intent is not None else action
                 duration = jump_hold if jump_intent is not None else hold
                 if motor_action == 0:
-                    duration = (
-                        1
-                        if bridge_jump or timed_plant(env)
-                        else max(1, min(16, round((end - frame) / 4)))
-                    )
+                    duration = 1 if frame_waits else max(1, min(16, round((end - frame) / 4)))
                     duration_index = duration - 1
                 elif motor_action in (2, 4, 5):
                     duration_index = menu_index(duration)
@@ -329,7 +327,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             episode = episode[supervision_start:]
             if not episode:
                 raise ValueError("A recovery demonstration must have a supervised suffix")
-            if bridge_jump or timed_plant(stage.env) is not None:
+            if frame_waits:
                 frame_wait_episodes.add(len(rows))
             episode_starts.append(len(rows))
             rows.extend(episode)
