@@ -224,6 +224,16 @@ In other words, the LSTM is the short-term predictive memory of the system. It
 does not directly choose the action, but its carried state is now a first-class
 actor input before the policy emits the next initial action.
 
+`architecture_config["world_model_memory_dim"] = N` (default 0) makes that
+memory episodic and supervised. A 32-unit observation encoder adds individual
+C-stream slots to the LSTM input, because the mean, spread and extremes of the
+whole stream cannot say how tall a plant was. A linear memory head reads the
+updated hidden state and is trained against `N` observable memory targets
+(`enemy_peak_exposure` for Block SMB). The actor reads the memory only through
+the carried state; it receives no explicit memory input. See
+[piranha-tactical-training.md](piranha-tactical-training.md#lstm-episodic-memory)
+for how carried states are trained from batched demonstrations.
+
 ## Critic Feedback
 
 The critic maps the LSTM-predicted next C stream to A-level feedback:

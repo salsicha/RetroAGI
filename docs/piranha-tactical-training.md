@@ -109,9 +109,11 @@ backed up; timed routes ran up to about 250 of the 320 evaluation frames.
 height of the most recently seen enemy this episode, divided by 64 and capped at
 1, and zero before any sighting. The shared Block/NES history computes it; it is
 versioned separately from the six v1 hazard features, and checkpoints, runtime
-contracts and cached demonstrations must match. The full-volume recipe enables
-it. It occupies one C-stream slot taken from the pooled vision summary, so no
-model shape changes, but earlier checkpoints are rejected.
+contracts and cached demonstrations must match. It occupies one C-stream slot
+taken from the pooled vision summary, so no model shape changes, but earlier
+checkpoints are rejected. The full-volume recipe now obtains this memory from
+the world-model LSTM instead (next section); the joint and family learning
+tools still offer the input through `--hazard-memory-observations`.
 
 Timed-plant training rollouts now last at least the teacher's completion time
 plus one plant cycle and 32 frames, so a missed window can be retried within
@@ -145,3 +147,67 @@ seed with overshoot corrections. Seed-to-seed differences that large mean the
 probe does not separate the memory and teacher changes from the executor fix;
 the probe also has no online learning or recovery, which the overshoot
 corrections target. A full-volume run and held-out evaluation are required.
+
+
+## LSTM episodic memory
+
+The world-model LSTM can hold the same memory as the peak-exposure input, so the
+adapter need not compute it for the policy. `architecture_config`
+`world_model_memory_dim: 1` adds two pieces to the world model:
+
+- a 32-unit encoder that gives the LSTM individual C-stream slots;
+- a linear memory head on the updated hidden state, trained to report
+  `enemy_peak_exposure` with weight `world_model_memory_weight`.
+
+The actor reads the carried hidden and cell state through
+`world_model_actor_context`, as before, and has no explicit memory input. The
+strategy network's rolling stance history stays reset in this mode, because
+batched demonstration fitting cannot train it.
+
+Demonstration rows are sampled independently, so each row needs the state that
+a rollout would carry into it. Collected demonstrations now record each row's
+position in its episode and the observable memory target.
+`refresh_demonstration_memory` replays every stored episode in order with its
+demonstrated actions and the current weights, starting from an empty state, and
+stores the state entering each row. Updates then fit each row from its stored
+state, so gradients reach the LSTM through the memory head, the dynamics
+prediction and the actor context. States are refreshed every
+`memory_refresh_interval` updates and at the start of every fit. Recovery
+demonstrations start their memory at the first supervised row. Online rollouts
+record the prediction and its target, and the trainer adds the same loss.
+Batched demonstrations with recurrent state are rejected unless the model has a
+memory head and a positive refresh interval.
+
+The full-volume recipe enables recurrent state, `world_model_memory_dim: 1`,
+`world_model_memory_weight: 1.0` and `memory_refresh_interval: 250`, and turns
+`hazard_memory_observations` off. The joint and family learning tools evaluate
+in batches without carried state, so they drop these settings and stay
+feedforward. A refresh replays every stored row once: 49,000 piranha rows took
+2.2 seconds on the development GPU, about the time of 50 updates. Its cost
+grows linearly with the dataset, and it runs 40 times during a 10,000-update
+bootstrap and four times per 1,000-update rehearsal.
+
+Verification: the piranha-only probe from the previous section (90 training
+layouts, 4,000 updates, 60 held-out layouts, successes within 320 steps) was
+run on four seeds for each form of memory:
+
+| Seed | LSTM memory | Peak-exposure input |
+| --- | --- | --- |
+| default | 58 | 52 |
+| 7 | 42 | 52 |
+| 11 | 53 | 48 |
+| 13 | 55 | 46 |
+
+Across the four seeds the LSTM memory succeeded on 145 of 152 timed layouts and
+the explicit input on 137. Clearance results were 63 and 61 of 88. With the
+LSTM state reset every frame, the default-seed weights fell from 58 to 45. The
+policy therefore uses the carried memory.
+
+The memory is approximate. Across evaluation frames its mean absolute error
+was 0.16–0.24, against targets between 0 and 1. States go stale between
+refreshes: 250 updates after a refresh, the squared error on the states used
+for training was half that on freshly replayed states. Refreshing every 50
+updates or raising the weight to 5 did not reduce the error after 4,000
+updates. More updates did reduce it: freshly replayed error fell from 0.23 to
+0.10 between 2,000 and 4,000 updates. A full-volume run and held-out
+evaluation remain the deciding test.

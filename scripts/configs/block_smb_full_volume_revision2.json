@@ -3,7 +3,7 @@
     "checkpoint_transfer_enabled": true,
     "critic_feedback_enabled": true,
     "hierarchy_enabled": true,
-    "recurrent_state_enabled": false,
+    "recurrent_state_enabled": true,
     "vision_enabled": true,
     "world_model_enabled": true
   },
@@ -17,7 +17,8 @@
   "adaptive_duration_control": false,
   "architecture_config": {
     "controller_schedule": "constant",
-    "hidden_dim": 128
+    "hidden_dim": 128,
+    "world_model_memory_dim": 1
   },
   "architecture_name": "agent_world_model_critic",
   "autonomous_policy": true,
@@ -59,6 +60,7 @@
   "mastery_gated_schedule": true,
   "mastery_retention_grace_evals": 3,
   "mastery_retention_weight": 0.25,
+  "memory_refresh_interval": 250,
   "monte_carlo_distribution_id": "block_smb_mc_v1",
   "monte_carlo_failure_replay_samples_per_epoch": 64,
   "monte_carlo_family_pass_rate_gate": 0.9,
@@ -94,7 +96,7 @@
   "monte_carlo_validation_samples": 630,
   "motion_observations": true,
   "hazard_observations": true,
-  "hazard_memory_observations": true,
+  "hazard_memory_observations": false,
   "noop_loss_weight": 0.0,
   "num_envs": 1,
   "numeric_policy_learning_rate": 0.0005,
@@ -144,6 +146,7 @@
   "video_dir": null,
   "vision_checkpoint_path": "data/block_vit/block_vit.pth",
   "walk_duration_primitives": false,
+  "world_model_memory_weight": 1.0,
   "world_model_slot_weights": {},
   "world_model_weight": 0.1,
   "policy_recovery_samples_per_bin": 2

@@ -38,6 +38,19 @@ from retroagi.stages.block_smb.train import (
 DIFFICULTIES = ("easy", "medium", "hard")
 
 
+def feedforward_recipe(values):
+    """Batched evaluation carries no LSTM state, so drop episodic LSTM memory."""
+    values = dict(values)
+    values["architecture_config"] = {
+        key: value
+        for key, value in values["architecture_config"].items()
+        if key != "world_model_memory_dim"
+    }
+    values["ablation"] = {**values["ablation"], "recurrent_state_enabled": False}
+    values.update(world_model_memory_weight=0.0, memory_refresh_interval=0)
+    return values
+
+
 def samples(family, seed, split, count, offset=0):
     return [
         sample_block_smb_monte_carlo_scenario(
@@ -165,7 +178,9 @@ def main():
         parser.error("Unknown family")
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
-    values = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    values = feedforward_recipe(
+        json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    )
     values.update(
         demonstration_bootstrap_updates=0,
         demonstration_rehearsal_updates=0,
@@ -192,8 +207,6 @@ def main():
     config = BlockSMBTrainingConfig(**_normalize_config_values(values))
     if args.fixed_duration:
         config = replace(config, adaptive_duration_control=False)
-    if args.method == "demonstrations":
-        config = replace(config, ablation=replace(config.ablation, recurrent_state_enabled=False))
     vision_factory, _ = _make_vision_factory(config, None)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "arguments.json").write_text(json.dumps(vars(args), default=str, indent=2))

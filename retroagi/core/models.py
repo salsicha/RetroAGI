@@ -264,6 +264,7 @@ class _ActionCandidate:
     criticism: torch.Tensor
     evaluation: CriticActionEvaluation
     next_world_model_state: WorldModelState | None
+    memory_prediction: torch.Tensor | None = None
 
 
 class PositionalEncoding(nn.Module):
@@ -985,6 +986,9 @@ class WorldModel(nn.Module):
         ratio_bc=4,
         primitive_feature_dim=WORLD_MODEL_PRIMITIVE_FEATURE_DIM,
         primitive_embedding_dim=WORLD_MODEL_PRIMITIVE_EMBEDDING_DIM,
+        observation_dim=0,
+        state_dim=None,
+        memory_dim=0,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -993,15 +997,31 @@ class WorldModel(nn.Module):
         self.ratio_bc = ratio_bc
         self.primitive_feature_dim = int(primitive_feature_dim)
         self.primitive_embedding_dim = int(primitive_embedding_dim)
+        self.observation_dim = int(observation_dim)
+        self.memory_dim = int(memory_dim)
         if self.primitive_feature_dim <= 0:
             raise ValueError("primitive_feature_dim must be positive")
         if self.primitive_embedding_dim <= 0:
             raise ValueError("primitive_embedding_dim must be positive")
+        if self.observation_dim < 0 or self.memory_dim < 0:
+            raise ValueError("observation_dim and memory_dim must be non-negative")
+        if self.observation_dim and not state_dim:
+            raise ValueError("observation_dim requires the C-stream state_dim")
         self.primitive_encoder = nn.Sequential(
             nn.Linear(self.primitive_feature_dim * 4, self.primitive_embedding_dim),
             nn.Tanh(),
         )
-        input_size = 16 + self.primitive_embedding_dim
+        # Episodic memory needs individual observation slots: the mean, spread
+        # and extremes of the whole C stream cannot say how tall a plant was.
+        # Disabled by default, so older models build exactly as before.
+        self.observation_encoder = (
+            nn.Sequential(nn.Linear(int(state_dim), self.observation_dim), nn.Tanh())
+            if self.observation_dim
+            else None
+        )
+        self.memory_head = nn.Linear(hidden_size, self.memory_dim) if self.memory_dim else None
+        self.last_memory_prediction: torch.Tensor | None = None
+        input_size = 16 + self.primitive_embedding_dim + self.observation_dim
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -1206,6 +1226,9 @@ class WorldModel(nn.Module):
             dtype,
         )
         primitive_embedding = self.primitive_encoder(primitive_summary)
+        observation = (
+            (self.observation_encoder(state),) if self.observation_encoder is not None else ()
+        )
         action_features = torch.cat(
             (
                 self._summary_features(state),
@@ -1213,6 +1236,7 @@ class WorldModel(nn.Module):
                 self._summary_features(w_context),
                 self._summary_features(b_context),
                 primitive_embedding,
+                *observation,
             ),
             dim=1,
         ).unsqueeze(1)
@@ -1235,6 +1259,10 @@ class WorldModel(nn.Module):
             torch.cat((out[:, -1, :], primitive_embedding), dim=1)
         )
         self.last_primitive_outcome = self._decode_primitive_outcome(outcome_raw)
+        # Read from the updated state, which the actor sees at the next decision.
+        self.last_memory_prediction = (
+            self.memory_head(out[:, -1, :]) if self.memory_head is not None else None
+        )
         if return_state:
             return prediction, recurrent_state.detach()
         return prediction
@@ -1490,6 +1518,7 @@ class AgentWorldModelCritic(nn.Module):
         critic_motion_threshold=DEFAULT_ACTION_MOTION_THRESHOLD,
         direct_c_state_context=False,
         ranked_candidate_search=False,
+        world_model_memory_dim=0,
     ):
         super().__init__()
         if int(max_action_refinement_passes) <= 0:
@@ -1544,7 +1573,13 @@ class AgentWorldModelCritic(nn.Module):
             d_model=d_model,
             controller_schedule=controller_schedule,
         )
-        self.world_model = WorldModel(ratio_bc=ratio_bc)
+        self.world_model_memory_dim = int(world_model_memory_dim)
+        self.world_model = WorldModel(
+            ratio_bc=ratio_bc,
+            observation_dim=32 if self.world_model_memory_dim else 0,
+            state_dim=seq_len_c,
+            memory_dim=self.world_model_memory_dim,
+        )
         self.critic = Critic(seq_len_c, seq_len_a, d_model)
         self.world_model_actor_context = nn.Sequential(
             nn.Linear(self.world_model.hidden_size * 2, d_model),
@@ -1601,6 +1636,11 @@ class AgentWorldModelCritic(nn.Module):
         self.strategy_network = StrategyNetwork(32)
         torch.set_rng_state(rng_state_tactics)
         self._stance_history = None
+        # With a memory world model the LSTM carries episode context. Batched
+        # demonstrations cannot train a carried stance history, so keep it
+        # reset (inert) instead of letting carried LSTM state also carry it.
+        self.carry_stance_history = not self.world_model_memory_dim
+        self.last_memory_prediction: torch.Tensor | None = None
 
     def transition_representation(self, state):
         return self.transition_representation_head(state)
@@ -2014,6 +2054,7 @@ class AgentWorldModelCritic(nn.Module):
         return_world_model_state=False,
         world_model_enabled=True,
     ) -> _ActionCandidate:
+        self.world_model.last_memory_prediction = None
         next_state_pred, next_world_model_state, primitive_outcome = self._world_model_prediction(
             src_C,
             actions,
@@ -2043,6 +2084,7 @@ class AgentWorldModelCritic(nn.Module):
             criticism=evaluation.feedback,
             evaluation=evaluation,
             next_world_model_state=next_world_model_state,
+            memory_prediction=self.world_model.last_memory_prediction,
         )
 
     @staticmethod
@@ -2139,6 +2181,7 @@ class AgentWorldModelCritic(nn.Module):
         history_len = getattr(self.strategy_network, "history", 8)
         if (
             world_model_state is None
+            or not self.carry_stance_history
             or self._stance_history is None
             or self._stance_history.size(0) != src_C.size(0)
         ):
@@ -2349,6 +2392,7 @@ class AgentWorldModelCritic(nn.Module):
             primitive_params=selected_candidate.primitive_params,
         )
         self.last_primitive_outcome = selected_candidate.primitive_outcome
+        self.last_memory_prediction = selected_candidate.memory_prediction
 
         outputs = (
             actions1,

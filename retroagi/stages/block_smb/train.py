@@ -370,6 +370,11 @@ class BlockSMBTrainingConfig:
     # the head to the shortest bin.
     primitive_outcome_weight: float = 0.5
     tactic_loss_weight: float = 0.5
+    # Episodic world-model memory (architecture_config world_model_memory_dim):
+    # weight of the LSTM's observable-hazard-memory target, and how many
+    # demonstration updates reuse carried states before they are replayed.
+    world_model_memory_weight: float = 0.0
+    memory_refresh_interval: int = 0
     # One bit of duration coaching per finished jump: overshoot relabels
     # the hold one step shorter, undershoot one step longer, on-target
     # anchors the hold that was used. Direction, not size: magnitude-scaled
@@ -507,10 +512,19 @@ class BlockSMBTrainingConfig:
             )
         if min(self.demonstration_bootstrap_updates, self.demonstration_rehearsal_updates) < 0:
             raise ValueError("demonstration update counts must be non-negative")
+        if self.world_model_memory_weight < 0 or self.memory_refresh_interval < 0:
+            raise ValueError("world-model memory weight and refresh interval must be non-negative")
+        memory_world_model = int(self.architecture_config.get("world_model_memory_dim", 0)) > 0
         if (
-            self.demonstration_bootstrap_updates or self.demonstration_rehearsal_updates
-        ) and self.ablation.recurrent_state_enabled:
-            raise ValueError("Batched demonstrations require recurrent_state_enabled=false")
+            (self.demonstration_bootstrap_updates or self.demonstration_rehearsal_updates)
+            and self.ablation.recurrent_state_enabled
+            and not (memory_world_model and self.memory_refresh_interval)
+        ):
+            # Batched rows need the carried state a rollout would bring to them.
+            raise ValueError(
+                "Batched demonstrations require recurrent_state_enabled=false unless a "
+                "memory world model refreshes carried states"
+            )
         if self.generated_scenarios < 0:
             raise ValueError("generated_scenarios must be non-negative")
         if self.monte_carlo_train_samples_per_epoch < 0:
@@ -659,6 +673,9 @@ class BlockSMBTransition:
     tactic_logits: torch.Tensor | None = None
     tactic_target: int = -1
     tactic_actions: tuple[bool, ...] = ()
+    # Graph-attached world-model memory prediction and its observable target.
+    memory_prediction: torch.Tensor | None = None
+    memory_target: torch.Tensor | None = None
 
 
 @dataclass
@@ -2837,6 +2854,10 @@ def collect_trajectory(
                 dtype=log_prob.dtype,
             )
         was_on_ground = bool(stage.env.mario.get("on_ground"))
+        # The world model just read this frame; its memory must report what
+        # has been observed so far, before the step updates the history.
+        memory_prediction = getattr(model, "last_memory_prediction", None)
+        memory_target = torch.as_tensor(stage._hazard_memory, dtype=torch.float32)
         from .tactics import compatible_actions, tactic_label
 
         tactic_target = (
@@ -3016,6 +3037,8 @@ def collect_trajectory(
                 tactic_logits=getattr(model, "last_tactic_logits", None),
                 tactic_target=tactic_target,
                 tactic_actions=tactic_actions,
+                memory_prediction=memory_prediction,
+                memory_target=memory_target,
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -3609,8 +3632,16 @@ def compute_block_smb_losses(
     tactic_terms = []
     tactic_action_terms = []
     release_timing_terms = []
+    memory_terms = []
     oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
+        if step.memory_prediction is not None and step.memory_target is not None:
+            memory_terms.append(
+                F.mse_loss(
+                    step.memory_prediction.to(device),
+                    step.memory_target.to(device).view_as(step.memory_prediction),
+                )
+            )
         if step.tactic_target >= 0 and any(step.tactic_actions):
             allowed = torch.tensor(step.tactic_actions, device=device, dtype=torch.bool)
             tactic_action_terms.append(
@@ -3741,6 +3772,9 @@ def compute_block_smb_losses(
         else loss_policy.new_zeros(())
     )
     loss_tactic = torch.stack(tactic_terms).mean() if tactic_terms else loss_policy.new_zeros(())
+    loss_world_model_memory = (
+        torch.stack(memory_terms).mean() if memory_terms else loss_policy.new_zeros(())
+    )
     loss_tactic_action = (
         torch.stack(tactic_action_terms).mean()
         if tactic_action_terms
@@ -3770,6 +3804,7 @@ def compute_block_smb_losses(
         + config.critic_loss_weight * loss_critic_feedback
         + config.primitive_outcome_weight * loss_primitive_outcome
         + config.tactic_loss_weight * (loss_tactic + loss_tactic_action)
+        + config.world_model_memory_weight * loss_world_model_memory
         + config.release_timing_weight * loss_release_timing
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
@@ -3777,6 +3812,7 @@ def compute_block_smb_losses(
     losses = {
         "loss_tactic": loss_tactic,
         "loss_tactic_action": loss_tactic_action,
+        "loss_world_model_memory": loss_world_model_memory,
         "tactic_supervised_steps": torch.tensor(float(len(tactic_terms)), device=device),
         "loss_representation": loss_representation,
         "loss_dynamics": loss_dynamics,
@@ -5178,6 +5214,8 @@ def train_and_evaluate_block_smb(
                 demonstration_data,
                 steps=config.demonstration_bootstrap_updates,
                 tactic_loss_weight=config.tactic_loss_weight,
+                memory_weight=config.world_model_memory_weight,
+                memory_refresh_interval=config.memory_refresh_interval,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5270,6 +5308,8 @@ def train_and_evaluate_block_smb(
                 rehearsal_data,
                 steps=config.demonstration_rehearsal_updates,
                 tactic_loss_weight=config.tactic_loss_weight,
+                memory_weight=config.world_model_memory_weight,
+                memory_refresh_interval=config.memory_refresh_interval,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5284,6 +5324,8 @@ def train_and_evaluate_block_smb(
                 losses["demonstration_tactic_action_loss"] = demonstration_metrics[
                     "tactic_action_loss"
                 ]
+            if "memory_loss" in demonstration_metrics:
+                losses["demonstration_memory_loss"] = demonstration_metrics["memory_loss"]
             if target_model is not None:
                 update_target_network(target_model, model, tau=1.0)
         losses["adaptive_replay_samples"] = float(len(replay_curriculum))

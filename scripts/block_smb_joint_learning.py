@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import random
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict, fields
 from functools import lru_cache
 from pathlib import Path
 
@@ -30,7 +30,7 @@ from retroagi.stages.block_smb.train import (
     make_block_smb_optimizer,
     save_block_smb_checkpoint,
 )
-from scripts.block_smb_family_learning import evaluate, samples
+from scripts.block_smb_family_learning import evaluate, feedforward_recipe, samples
 
 
 def group_family_evaluation(cases, combined):
@@ -142,7 +142,9 @@ def main():
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     torch.use_deterministic_algorithms(True)
-    values = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    values = feedforward_recipe(
+        json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    )
     values.update(
         demonstration_bootstrap_updates=0,
         demonstration_rehearsal_updates=0,
@@ -163,7 +165,6 @@ def main():
         numeric_policy_learning_rate=args.numeric_learning_rate,
     )
     config = BlockSMBTrainingConfig(**_normalize_config_values(values))
-    config = replace(config, ablation=replace(config.ablation, recurrent_state_enabled=False))
     vision, _ = _make_vision_factory(config, None)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "arguments.json").write_text(json.dumps(vars(args), default=str, indent=2))
@@ -251,6 +252,8 @@ def main():
             data = without_walk_commitments(data)
         elif not source_walk and config.walk_duration_primitives:
             raise ValueError("Cannot restore walk commitments from frame-walk demonstration data")
+        # Older pickles also lack the episodic-memory rows; fill the defaults.
+        data.__post_init__()
     else:
         datasets = []
         for index, family in enumerate(BLOCK_SMB_MC_FAMILIES):

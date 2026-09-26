@@ -123,13 +123,18 @@ def make_agent_world_model_critic(
     config: Mapping[str, Any] | None = None,
 ) -> AgentWorldModelCritic:
     values = dict(config or {})
-    unknown_keys = set(values) - {"hidden_dim", "controller_schedule"}
+    unknown_keys = set(values) - {"hidden_dim", "controller_schedule", "world_model_memory_dim"}
     if unknown_keys:
         raise ValueError(f"unknown architecture config keys: {sorted(unknown_keys)}")
     hidden_dim = int(values.get("hidden_dim", 64))
     controller_schedule = str(values.get("controller_schedule", "constant"))
+    # Number of episodic-memory targets the world-model LSTM learns to hold;
+    # zero keeps the summary-only LSTM of earlier checkpoints.
+    world_model_memory_dim = int(values.get("world_model_memory_dim", 0))
     if hidden_dim <= 0:
         raise ValueError("hidden_dim must be positive")
+    if world_model_memory_dim < 0:
+        raise ValueError("world_model_memory_dim must be non-negative")
     if controller_schedule not in SUPPORTED_CONTROLLER_SCHEDULES:
         raise ValueError(
             "controller_schedule must be one of "
@@ -152,6 +157,7 @@ def make_agent_world_model_critic(
         pause_action_ids=pause_action_ids,
         motion_position_dims=motion_position_dims,
         direct_c_state_context=stage.name in SMB_STAGE_NAMES,
+        world_model_memory_dim=world_model_memory_dim,
     )
 
 
