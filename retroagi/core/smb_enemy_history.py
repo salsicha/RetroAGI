@@ -2,6 +2,10 @@
 
 No simulator cycle, hidden patrol bounds, or future observations enter these
 features. Missing velocity is distinct from a measured zero velocity.
+
+The optional memory extension remembers how tall the most recently seen enemy
+has been exposed this episode. A feedforward policy otherwise cannot tell a
+tall retracted plant from a short one once both are hidden.
 """
 
 import numpy as np
@@ -14,6 +18,9 @@ HAZARD_NAMES = (
     "enemy_visibility_age",
     "enemy_last_seen_age",
 )
+# Separate from HAZARD_NAMES so six-feature checkpoints keep their exact layout.
+HAZARD_MEMORY_NAMES = ("enemy_peak_exposure",)
+PEAK_EXPOSURE_SCALE = 64.0
 
 
 class EnemyObservationHistory:
@@ -26,6 +33,9 @@ class EnemyObservationHistory:
         self.changed_at = None
         self.last_frame = None
         self.cached = np.zeros(len(HAZARD_NAMES), dtype=np.float32)
+        self.peaks = {}
+        self.last_key = None
+        self.memory = np.zeros(len(HAZARD_MEMORY_NAMES), dtype=np.float32)
 
     def observe(self, scene, frame):
         if frame == self.last_frame:
@@ -46,7 +56,7 @@ class EnemyObservationHistory:
             if h <= 0:
                 continue
             key = (enemy.get("slot", index), enemy.get("kind", "walking"))
-            candidates.append((abs(x + w / 2 - scene.mario["x"]), key, y))
+            candidates.append((abs(x + w / 2 - scene.mario["x"]), key, y, h))
         current = min(candidates, key=lambda row: row[0]) if candidates else None
         visible = current is not None
         before = self.previous
@@ -61,6 +71,13 @@ class EnemyObservationHistory:
             self.changed_at = frame
         if visible:
             self.last_seen = frame
+            # Per-object peak: a re-emerging plant keeps its identity while rising.
+            self.peaks[current[1]] = max(self.peaks.get(current[1], 0.0), current[3])
+            self.last_key = current[1]
+        self.memory = np.array(
+            [min(1.0, self.peaks.get(self.last_key, 0.0) / PEAK_EXPOSURE_SCALE)],
+            dtype=np.float32,
+        )
         unseen_age = 1.0 if self.last_seen is None else min(1.0, (frame - self.last_seen) / 64)
         self.cached = np.array(
             [
@@ -76,3 +93,7 @@ class EnemyObservationHistory:
         self.previous = (current[1], current[2]) if visible else None
         self.last_frame = frame
         return self.cached.copy()
+
+    def memory_features(self):
+        """Tallest exposure of the latest-seen enemy; zero before any sighting."""
+        return self.memory.copy()

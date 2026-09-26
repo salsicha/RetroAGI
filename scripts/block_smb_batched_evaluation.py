@@ -55,6 +55,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                 observation_config=BlockSMBObservationConfig(
                     motion_observations=config.motion_observations,
                     hazard_observations=config.hazard_observations,
+                    hazard_memory_observations=config.hazard_memory_observations,
                 ),
             )
             observation = stage.reset(seed=sample.sample_seed % (2**31))

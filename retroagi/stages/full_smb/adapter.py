@@ -863,6 +863,8 @@ class FullSMBStage:
                 state = np.concatenate((state, geometry["features"]["motion_vec"]))
             if self.smb_runtime_contract.hazard_observations:
                 state = np.concatenate((state, geometry["features"]["hazard_vec"]))
+            if self.smb_runtime_contract.hazard_memory_observations:
+                state = np.concatenate((state, geometry["features"]["hazard_memory_vec"]))
             state = np.clip(state, -1.0, 1.0)
             if self.smb_runtime_contract.schema == "smb_scene_v2":
                 state[[7, 8, 28, 29, 33, 34]] = 0

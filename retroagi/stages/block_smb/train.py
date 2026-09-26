@@ -44,7 +44,7 @@ from retroagi.core import (
 )
 from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
-from retroagi.core.smb_enemy_history import HAZARD_NAMES
+from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, HAZARD_NAMES
 
 from .adapter import (
     BLOCK_SMB_SPEC,
@@ -246,6 +246,7 @@ class BlockSMBTrainingConfig:
     autonomous_policy: bool = False
     motion_observations: bool = False
     hazard_observations: bool = False
+    hazard_memory_observations: bool = False
     learning_rate: float = 3e-4
     numeric_policy_learning_rate: float | None = None
     demonstration_layouts_per_family: int = 36
@@ -485,6 +486,8 @@ class BlockSMBTrainingConfig:
                 raise ValueError(f"{name} must be positive")
         if self.hazard_observations and not self.motion_observations:
             raise ValueError("hazard_observations requires motion_observations")
+        if self.hazard_memory_observations and not self.hazard_observations:
+            raise ValueError("hazard_memory_observations requires hazard_observations")
         if any(
             isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0
             for epoch in self.retain_checkpoint_epochs
@@ -3920,6 +3923,7 @@ def train_block_smb_epoch(
             observation_config=BlockSMBObservationConfig(
                 motion_observations=config.motion_observations,
                 hazard_observations=config.hazard_observations,
+                hazard_memory_observations=config.hazard_memory_observations,
             ),
         )
         try:
@@ -3996,6 +4000,7 @@ def train_block_smb_epoch(
                     observation_config=BlockSMBObservationConfig(
                         motion_observations=config.motion_observations,
                         hazard_observations=config.hazard_observations,
+                        hazard_memory_observations=config.hazard_memory_observations,
                     ),
                 )
                 try:
@@ -4042,6 +4047,7 @@ def train_block_smb_epoch(
                         observation_config=BlockSMBObservationConfig(
                             motion_observations=config.motion_observations,
                             hazard_observations=config.hazard_observations,
+                            hazard_memory_observations=config.hazard_memory_observations,
                         ),
                     )
                     try:
@@ -4198,6 +4204,7 @@ def evaluate_block_smb_monte_carlo(
                     observation_config=BlockSMBObservationConfig(
                         motion_observations=config.motion_observations,
                         hazard_observations=config.hazard_observations,
+                        hazard_memory_observations=config.hazard_memory_observations,
                     ),
                 )
                 try:
@@ -4675,6 +4682,7 @@ def evaluate_block_smb(
                     observation_config=BlockSMBObservationConfig(
                         motion_observations=config.motion_observations,
                         hazard_observations=config.hazard_observations,
+                        hazard_memory_observations=config.hazard_memory_observations,
                     ),
                 )
                 try:
@@ -4883,7 +4891,8 @@ def save_block_smb_checkpoint(
                 "schema": SCHEMA,
                 "features": list(STATE_NAMES)
                 + (list(MOTION_NAMES) if config.motion_observations else [])
-                + (list(HAZARD_NAMES) if config.hazard_observations else []),
+                + (list(HAZARD_NAMES) if config.hazard_observations else [])
+                + (list(HAZARD_MEMORY_NAMES) if config.hazard_memory_observations else []),
             },
             "stage": {
                 "name": BLOCK_SMB_SPEC.name,
@@ -4947,6 +4956,7 @@ def restore_block_smb_checkpoint(
     restore_rng: bool = True,
     motion_observations: bool | None = None,
     hazard_observations: bool | None = None,
+    hazard_memory_observations: bool | None = None,
 ) -> dict[str, Any]:
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
@@ -4963,6 +4973,12 @@ def restore_block_smb_checkpoint(
         raise ValueError(
             "Checkpoint enemy-history observation contract does not match requested config"
         )
+    if (
+        hazard_memory_observations is not None
+        and bool(checkpoint_config.get("hazard_memory_observations", False))
+        != hazard_memory_observations
+    ):
+        raise ValueError("Checkpoint enemy peak-exposure memory does not match requested config")
     if (
         motion_observations is not None
         and bool(checkpoint_config.get("motion_observations", False)) != motion_observations
@@ -5074,6 +5090,7 @@ def train_and_evaluate_block_smb(
             architecture_config=config.architecture_config,
             motion_observations=config.motion_observations,
             hazard_observations=config.hazard_observations,
+            hazard_memory_observations=config.hazard_memory_observations,
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
@@ -5090,6 +5107,7 @@ def train_and_evaluate_block_smb(
             architecture_config=config.architecture_config,
             motion_observations=config.motion_observations,
             hazard_observations=config.hazard_observations,
+            hazard_memory_observations=config.hazard_memory_observations,
             restore_rng=False,
         )
         if target_model is not None:

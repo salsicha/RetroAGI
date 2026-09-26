@@ -321,6 +321,7 @@ class NESGeometry:
             truncated=truncated,
         )
         features["hazard_vec"] = self.enemy_history.observe(scene, frame)
+        features["hazard_memory_vec"] = self.enemy_history.memory_features()
         result = dict(
             scene=scene,
             features=features,

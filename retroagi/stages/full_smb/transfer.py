@@ -136,7 +136,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
         require_transfer_source_gate=require_transfer_source_gate,
     )
     source_transfer_gate = block_smb_checkpoint_transfer_source_gate(source_checkpoint)
-    from retroagi.core.smb_enemy_history import HAZARD_NAMES
+    from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, HAZARD_NAMES
     from retroagi.core.smb_geometry import MOTION_NAMES, SCHEMA, STATE_NAMES
 
     declared = source_checkpoint.get("specs", {}).get("smb_observation")
@@ -148,6 +148,8 @@ def transfer_block_smb_checkpoint_to_full_smb(
         )
         if source_checkpoint.get("config", {}).get("hazard_observations", False):
             expected += list(HAZARD_NAMES)
+        if source_checkpoint.get("config", {}).get("hazard_memory_observations", False):
+            expected += list(HAZARD_MEMORY_NAMES)
         if declared.get("schema") != SCHEMA or declared.get("features") != expected:
             raise ValueError("Block checkpoint observation schema or feature order is incompatible")
     architecture_name, architecture_config = policy_architecture_from_checkpoint(source_checkpoint)

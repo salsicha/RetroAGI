@@ -2,7 +2,10 @@
 
 No live cycle phase or remaining timer is used to choose a departure. The
 teacher certifies against the shortest hidden interval and fastest emergence
-in the timed family, after actually observing the plant disappear.
+in the timed family, after actually observing the plant disappear. Certified
+departures are taken from any grounded approach near the pipe, including a
+running one; otherwise the teacher stops in the staging window without
+overshooting it.
 """
 
 from dataclasses import replace
@@ -11,6 +14,8 @@ from retroagi.core.models import TACTIC_STANCES
 from retroagi.core.smb_enemy_history import EnemyObservationHistory
 
 MIN_HIDDEN_FRAMES = 48
+# Certified departures are searched within this distance of the pipe.
+DEPARTURE_REACH = 65
 
 
 def hold_menu(env):
@@ -24,15 +29,53 @@ def timed_plant(env):
 
 
 def fresh_retraction(history):
-    # An initially empty pipe has unknown phase. Require a recent sighting,
-    # not merely invisibility or the time elapsed since episode reset.
-    return history is not None and history[0] == 0 and 0 < history[5] * 64 <= 8
+    # An initially empty pipe has unknown phase. Require an observed
+    # disappearance, not merely invisibility or time since episode reset.
+    # The probe certifies against the remaining minimum hidden interval, so
+    # any age inside that interval may be probed.
+    return history is not None and history[0] == 0 and 0 < history[5] * 64 < MIN_HIDDEN_FRAMES
 
 
-def staging_x(env):
-    plant = timed_plant(env)
-    pipe = next(p["rect"] for p in env.platforms if p["rect"].top == plant["pipe_top"])
-    return float(pipe.left - 32)
+def plant_pipe(env, plant):
+    return next(p["rect"] for p in env.platforms if p["rect"].top == plant["pipe_top"])
+
+
+def staging_x(env, plant=None):
+    return float(plant_pipe(env, plant or timed_plant(env)).left - 32)
+
+
+def settle_x(env, action):
+    """Where Mario comes to rest after one frame of `action` and then coasting."""
+    from .geometry_expert import restore_env_state, snapshot_env_state
+
+    saved = snapshot_env_state(env)
+    original_render = env.__dict__.get("render")
+    env.render = lambda: None
+    try:
+        env.step(action)
+        for _ in range(40):
+            if abs(env.mario["vx"]) < 1e-9:
+                break
+            env.step(0)
+        return env.mario["x"]
+    finally:
+        restore_env_state(env, saved)
+        if original_render is None:
+            del env.__dict__["render"]
+        else:
+            env.render = original_render
+
+
+def approach_choice(env, target):
+    """Walk to the staging window and brake early enough to stop inside it."""
+    x, vx = env.mario["x"], env.mario["vx"]
+    if x > target + 4:
+        if vx > 0.5:
+            return "hold_area", 0
+        return ("retreat", 3) if settle_x(env, 3) >= target - 2 else ("hold_area", 0)
+    if x < target - 2 or vx < -0.5:
+        return ("advance", 1) if settle_x(env, 1) <= target + 4 else ("hold_area", 0)
+    return "hold_area", 0
 
 
 def timed_safe_holds(env, history, direction=1):
@@ -89,15 +132,12 @@ def tactical_choice(env, history):
     plant = timed_plant(env)
     if plant is None or env.mario["x"] >= plant["x"] + plant["w"]:
         return "advance", 1, []
-    target = staging_x(env)
-    if env.mario["x"] < target - 2:
-        return "advance", 1, []
-    if env.mario["x"] > target + 4:
-        return "retreat", 3, []
-    if abs(env.mario["vx"]) > 0.5:
-        return "hold_area", 0, []
-    valid = timed_safe_holds(env, history)
-    return ("advance", 2, valid) if valid else ("hold_area", 0, [])
+    if plant_pipe(env, plant).left - env.mario["x"] - env.mario["w"] < DEPARTURE_REACH:
+        valid = timed_safe_holds(env, history)
+        if valid:
+            return "advance", 2, valid
+    stance, action = approach_choice(env, staging_x(env, plant))
+    return stance, action, []
 
 
 def tactic_label(env, history, action=None):
@@ -163,3 +203,51 @@ def timed_suffix(env, *, max_frames=320, release_state=None, variant=0, observat
         )
     finally:
         restore_env_state(env, saved)
+
+
+def overshoot_demonstration(sample, *, margin=12):
+    """A timed route that runs past the staging window and is then corrected.
+
+    Teacher routes brake early and never overshoot, so retreat would otherwise
+    be taught only by sparse policy-recovery rows, which the demonstration
+    sampler upweights to a full action group. The overshooting prefix is
+    replayed without supervision; the teacher labels only the correction.
+    """
+    from dataclasses import replace
+
+    from .env import MarioScenarioEnv
+    from .primitive_execution import teacher_route_reachable
+
+    if not any(
+        isinstance(e, dict) and e.get("timed_crossing")
+        for e in sample.scenario.get("enemies", ())
+    ):
+        return None
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        env.render = lambda: None
+        plant = timed_plant(env)
+        target = staging_x(env, plant)
+        history = EnemyObservationHistory()
+        prefix = []
+        while env.mario["x"] <= target + margin:
+            history.observe(env, env.steps)
+            _, _, done, truncated, info = env.step(1)
+            prefix.append(1)
+            if done or truncated or info["death"] or len(prefix) > 120:
+                return None
+        suffix = timed_suffix(env, observation_history=history, max_frames=320 - len(prefix))
+        if not suffix:
+            return None
+        actions = prefix + suffix
+        env.reset(scenario=sample.scenario)
+        if not teacher_route_reachable(env, actions):
+            return None
+        return replace(
+            sample,
+            oracle={**sample.oracle, "actions": actions, "supervision_start_frame": len(prefix)},
+        )
+    finally:
+        env.close()
+

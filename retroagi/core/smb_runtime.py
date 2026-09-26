@@ -12,6 +12,7 @@ class SMBRuntimeContract:
     schema: str = SCHEMA
     motion_observations: bool = True
     hazard_observations: bool = False
+    hazard_memory_observations: bool = False
     adaptive_duration: bool = False
     walk_primitives: bool = False
     steady_primitives: bool = True
@@ -46,6 +47,8 @@ class SMBRuntimeContract:
             raise ValueError(f"Unsupported SMB observation schema: {self.schema}")
         if self.hazard_observations and (not self.motion_observations or self.schema != SCHEMA):
             raise ValueError("Enemy history v1 requires the motion-aware legacy geometry contract")
+        if self.hazard_memory_observations and not self.hazard_observations:
+            raise ValueError("Enemy peak-exposure memory extends enemy history v1")
         if self.frame_skip != 1:
             raise ValueError("SMB geometry contract requires one emulator frame per decision")
         if self.visual_tokens not in (
@@ -73,6 +76,7 @@ class SMBRuntimeContract:
         return cls(
             motion_observations=bool(config.get("motion_observations", False)),
             hazard_observations=bool(config.get("hazard_observations", False)),
+            hazard_memory_observations=bool(config.get("hazard_memory_observations", False)),
             adaptive_duration=bool(config.get("adaptive_duration_control", True)),
             walk_primitives=bool(config.get("walk_duration_primitives", True)),
             steady_primitives=bool(config.get("steady_duration_primitives", True)),

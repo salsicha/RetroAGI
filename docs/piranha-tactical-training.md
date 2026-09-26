@@ -13,24 +13,34 @@ Every difficulty samples two types of crossing, independently of difficulty:
   clear the obstacle while the plant is fully exposed.
 - **Timed:** an 80-pixel plant makes full-exposure clearance impossible from
   the ground. Mario approaches a staging point 32 pixels before the pipe,
-  stops, observes retraction, and jumps during a certified hidden interval.
-  Overshooting the staging point teaches retreat and another approach.
+  brakes early enough to stop inside it, observes retraction, and jumps during
+  a certified hidden interval. A certified departure found earlier on the
+  approach, including a running one, is taken instead of stopping.
 
 Timed pipe widths are 36/44/52 pixels, versus 32/40/48 for clearance pipes.
-This observable geometry distinguishes the classes even when the plant is
-hidden; a private scenario flag never enters the policy input. Pipe heights
-remain 22–26/30–34/38–42 pixels. Timed plants remain hidden for 48–64 frames;
+The policy's state features do not encode pipe width, so while a plant is
+hidden the two classes look identical until the plant has been seen. The
+peak-exposure memory input carries that sighting forward. A private scenario
+flag never enters the policy input or the executor. Pipe heights remain
+22–26/30–34/38–42 pixels. Timed plants remain hidden for 48–64 frames;
 rise/retraction lasts 12–20 frames and full exposure lasts 40–64. Initial phase
 is sampled over the entire cycle.
 
 The timed teacher uses the same visible-enemy history as the policy adapter.
 An initially empty pipe has unknown phase and is not a departure cue. The
-teacher requires an observed disappearance within the past eight frames and
-certifies candidate holds against the shortest allowed hidden interval and
-fastest emergence, with a rounding margin. It never uses the episode's hidden
-phase or actual remaining timer to choose a departure. Physics probes restore
-the full environment state. Timed routes are regenerated after a phase change;
-replaying a stale time-indexed action list is intentionally not guaranteed safe.
+teacher requires an observed disappearance and certifies candidate holds
+against the shortest allowed hidden interval and fastest emergence, with a
+rounding margin, so any disappearance younger than 48 frames may be probed.
+It never uses the episode's hidden phase or actual remaining timer to choose a
+departure. Physics probes restore the full environment state. Timed routes are
+regenerated after a phase change; replaying a stale time-indexed action list is
+intentionally not guaranteed safe.
+
+Each timed layout also contributes an overshoot correction: an unsupervised
+prefix walks past the staging window, then the teacher brakes, retreats, waits
+and departs. Canonical routes no longer overshoot, so without these rows
+retreat would be taught only by sparse policy-recovery rows, upweighted the
+same way.
 
 The existing goal, progress, contact-death, and time rewards remain in use.
 There is no reward for predicting a stance or for accumulating wait time.
@@ -85,3 +95,53 @@ to measure learned performance.
 Use the existing full-volume launcher with its updated default recipe and a
 fresh output directory. Recollect demonstrations rather than loading contract-10
 caches. Existing running processes do not acquire these changes automatically.
+
+
+## Robust teachers and peak-exposure memory (contract 13)
+
+A piranha-only diagnosis traced most failures to clearance pipes. While a plant
+was hidden, a timed pipe and its clearance twin produced identical state
+features, so the policy paused at clearance pipes, and the executor committed
+those waits for 4–64 frames. Every timed route overshot its staging window and
+backed up; timed routes ran up to about 250 of the 320 evaluation frames.
+
+`hazard_memory_observations` appends `enemy_peak_exposure`: the tallest exposed
+height of the most recently seen enemy this episode, divided by 64 and capped at
+1, and zero before any sighting. The shared Block/NES history computes it; it is
+versioned separately from the six v1 hazard features, and checkpoints, runtime
+contracts and cached demonstrations must match. The full-volume recipe enables
+it. It occupies one C-stream slot taken from the pooled vision summary, so no
+model shape changes, but earlier checkpoints are rejected.
+
+Timed-plant training rollouts now last at least the teacher's completion time
+plus one plant cycle and 32 frames, so a missed window can be retried within
+the episode. Evaluation budgets are unchanged.
+
+Demonstration contract 13 requires regenerated plant demonstrations; the
+joint-learning tool rejects older cached plant routes. Start a fresh
+full-volume run; running processes do not acquire these changes.
+
+Clearance demonstrations take off at the first feasible frame, with one
+certified hold in 84% of routes. A revised clearance teacher also credited
+landings anywhere past the plant, took off at the middle of the largest
+certified set, varied takeoffs between routes and waited for unseen plants. It
+lowered held-out clearance success in the piranha-only probe below and was not
+adopted. Nor was restricting timed tactic-action targets to the teacher's own
+motor command (walk only while approaching, jump only when certified): it cut
+clearance success from 22 to 12 of 22 in the same probe, apparently by
+suppressing jumps near every visible plant.
+
+Verification: across 60 training layouts with four routes each, every timed
+teacher route replays through the real executor without a death. Canonical
+timed routes contain no retreat frames and average 145 frames (maximum 204);
+28 of 116 departures are running jumps.
+
+A piranha-only probe fitted 4,000 demonstration updates on 90 training layouts
+and evaluated 60 held-out validation layouts greedily with the normal executor,
+counting successes within 320 steps. The previous code scored 41/60, with 15 of
+22 clearance layouts timing out. With the same weights, the executor fix alone
+scored 53/60. This revision scored 58/60 and 52/60 on two seeds, and 51/60 on one
+seed with overshoot corrections. Seed-to-seed differences that large mean the
+probe does not separate the memory and teacher changes from the executor fix;
+the probe also has no online learning or recovery, which the overshoot
+corrections target. A full-volume run and held-out evaluation are required.

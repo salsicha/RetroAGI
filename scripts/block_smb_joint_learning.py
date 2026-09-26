@@ -121,6 +121,7 @@ def main():
     p.add_argument("--prioritized-demonstrations", action="store_true")
     p.add_argument("--motion-observations", action="store_true")
     p.add_argument("--hazard-observations", action="store_true")
+    p.add_argument("--hazard-memory-observations", action="store_true")
     p.add_argument("--dataset", type=Path)
     p.add_argument("--refresh-families", nargs="*", default=[])
     p.add_argument("--init-checkpoint", type=Path)
@@ -148,6 +149,7 @@ def main():
         device="cuda",
         motion_observations=args.motion_observations,
         hazard_observations=args.hazard_observations,
+        hazard_memory_observations=args.hazard_memory_observations,
         walk_duration_primitives=not args.frame_walk,
         adaptive_duration_control=not args.fixed_duration,
         autonomous_policy=True,
@@ -186,6 +188,12 @@ def main():
         and bool(source_config.get("hazard_observations", False)) != config.hazard_observations
     ):
         raise ValueError("Cached enemy-history observation layout does not match this run")
+    if (
+        args.dataset
+        and bool(source_config.get("hazard_memory_observations", False))
+        != config.hazard_memory_observations
+    ):
+        raise ValueError("Cached enemy peak-exposure layout does not match this run")
     if dataset.exists():
         data = torch.load(dataset, weights_only=False)
         # Old pickles predate the explicit splice mask. Contract validation
@@ -196,6 +204,11 @@ def main():
         metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
         if bool(metadata.get("hazard_observations", False)) != config.hazard_observations:
             raise ValueError("Cached enemy-history observation manifest does not match this run")
+        if (
+            bool(metadata.get("hazard_memory_observations", False))
+            != config.hazard_memory_observations
+        ):
+            raise ValueError("Cached enemy peak-exposure manifest does not match this run")
         if metadata.get("contract_version", 1) < 9:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             if "piranha_avoidance" in present - set(args.refresh_families):
@@ -204,6 +217,10 @@ def main():
             raise ValueError(
                 "Cached enemy-history observations were frozen at reset; regenerate all demonstrations"
             )
+        if metadata.get("contract_version", 1) < 13:
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            if "piranha_avoidance" in present - set(args.refresh_families):
+                raise ValueError("Cached plant routes predate the contract-13 teacher")
         if metadata.get("contract_version", 1) < 8:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             missing = present - set(args.refresh_families)
@@ -295,6 +312,7 @@ def main():
                 bridge_goal_contract_version=2,
                 motion_observations=config.motion_observations,
                 hazard_observations=config.hazard_observations,
+                hazard_memory_observations=config.hazard_memory_observations,
             ),
             indent=2,
         )
@@ -313,6 +331,11 @@ def main():
             != config.hazard_observations
         ):
             raise ValueError("Checkpoint enemy-history observation layout does not match this run")
+        if (
+            bool(checkpoint["config"].get("hazard_memory_observations", False))
+            != config.hazard_memory_observations
+        ):
+            raise ValueError("Checkpoint enemy peak-exposure layout does not match this run")
         model.load_state_dict(checkpoint["states"]["model"])
     optimizer = make_block_smb_optimizer(model, config)
     passes = 0

@@ -94,6 +94,7 @@
   "monte_carlo_validation_samples": 630,
   "motion_observations": true,
   "hazard_observations": true,
+  "hazard_memory_observations": true,
   "noop_loss_weight": 0.0,
   "num_envs": 1,
   "numeric_policy_learning_rate": 0.0005,

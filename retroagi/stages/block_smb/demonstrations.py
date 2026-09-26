@@ -84,6 +84,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             observation_config=BlockSMBObservationConfig(
                 motion_observations=config.motion_observations,
                 hazard_observations=config.hazard_observations,
+                hazard_memory_observations=config.hazard_memory_observations,
             ),
         )
         episode = []
@@ -411,7 +412,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 12
+DEMONSTRATION_CONTRACT_VERSION = 13
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -943,6 +944,12 @@ def build_balanced_demonstrations(config, vision_factory):
                     alternative = varied_demonstration(sample, variant - 1, robust=True)
                     if alternative is not None:
                         cases.append((family_index, alternative))
+                if family == "piranha_avoidance":
+                    from .piranha_tactics import overshoot_demonstration
+
+                    corrected = overshoot_demonstration(sample)
+                    if corrected is not None:
+                        cases.append((family_index, corrected))
                 continue
             if config.demonstration_robust_routes:
                 sample = varied_demonstration(sample, config.seed + i, robust=True) or sample

@@ -7,7 +7,11 @@ import pygame
 import pytest
 import torch
 
-from retroagi.core.smb_enemy_history import HAZARD_NAMES, EnemyObservationHistory
+from retroagi.core.smb_enemy_history import (
+    HAZARD_MEMORY_NAMES,
+    HAZARD_NAMES,
+    EnemyObservationHistory,
+)
 from retroagi.core.smb_runtime import SMBRuntimeContract
 from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
 from retroagi.stages.block_smb.train import (
@@ -69,6 +73,56 @@ def test_history_tracks_visibility_and_missing_velocity_without_hidden_timers():
     assert history.observe(scene, 1)[0] == 0  # Offscreen boxes are unavailable.
 
 
+def test_peak_exposure_memory_remembers_what_disappeared():
+    history = EnemyObservationHistory()
+    plant = dict(x=120, y=180, w=12, h=0, kind="piranha_plant")
+    scene = SimpleNamespace(mario={"x": 40}, enemies=[plant], platforms=[])
+
+    def seen(frame, height):
+        plant.update(h=height, y=180 - height)
+        features = history.observe(scene, frame)
+        return features, history.memory_features()[0]
+
+    features, memory = seen(0, 0)
+    assert features[5] == 1 and memory == 0  # Never seen: no height is known.
+    assert seen(1, 20)[1] == pytest.approx(20 / 64)
+    assert seen(2, 80)[1] == 1  # Saturates beyond 64 exposed pixels.
+    for frame in range(3, 40):
+        features, memory = seen(frame, 0)
+        assert features[0] == 0 and memory == 1  # Held while the plant hides.
+    assert seen(40, 7)[1] == 1  # A re-emerging plant keeps its identity.
+    np.testing.assert_array_equal(history.memory_features(), history.memory_features())
+    history.reset()
+    assert history.memory_features()[0] == 0
+    # Only the part above a pipe counts, as for the other history features.
+    scene.platforms = [{"rect": pygame.Rect(112, 170, 32, 50)}]
+    assert seen(0, 30)[1] == pytest.approx(20 / 64)
+
+
+def test_block_state_appends_memory_only_when_enabled():
+    sizes = {}
+    for memory in (False, True):
+        stage = BlockSMBStage(
+            scenario=contact_scenario(phase=20, mario=(40, 204)),
+            vision=StaticBlockVision(),
+            observation_config=BlockSMBObservationConfig(
+                motion_observations=True,
+                hazard_observations=True,
+                hazard_memory_observations=memory,
+            ),
+        )
+        try:
+            stage.reset()
+            _, _, _, _, info = stage.step(0)
+            state = stage.state_features(info)
+            sizes[memory] = state.shape[0]
+            if memory:
+                assert state[-1] == stage.enemy_history.memory_features()[0] > 0
+        finally:
+            stage.env.close()
+    assert sizes == {False: 35 + len(HAZARD_NAMES), True: 35 + len(HAZARD_NAMES) + 1}
+
+
 def test_nes_and_block_use_the_same_vertical_motion_history():
     ram = ram_scene()
     ram[0x0F], ram[0x16] = 1, 0x0D  # Piranha slot.
@@ -107,9 +161,42 @@ def test_history_checkpoint_declares_layout_and_rejects_semantic_mismatch(tmp_pa
     assert SMBRuntimeContract.from_block_config(checkpoint["config"]).hazard_observations == enabled
 
 
+@pytest.mark.parametrize("memory", [False, True])
+def test_memory_checkpoint_declares_layout_and_rejects_mismatch(tmp_path, memory):
+    config = tiny_config(
+        motion_observations=True, hazard_observations=True, hazard_memory_observations=memory
+    )
+    model = make_block_smb_model(config)
+    path = tmp_path / "policy.pth"
+    save_block_smb_checkpoint(
+        path,
+        model,
+        torch.optim.Adam(model.parameters()),
+        config=config,
+        epoch=1,
+        global_step=1,
+        metrics={},
+    )
+    checkpoint = restore_block_smb_checkpoint(
+        path, model, hazard_observations=True, hazard_memory_observations=memory
+    )
+    names = checkpoint["specs"]["smb_observation"]["features"]
+    assert (names[-1:] == list(HAZARD_MEMORY_NAMES)) == memory
+    with pytest.raises(ValueError, match="peak-exposure"):
+        restore_block_smb_checkpoint(path, model, hazard_memory_observations=not memory)
+    contract = SMBRuntimeContract.from_block_config(checkpoint["config"])
+    assert contract.hazard_memory_observations == memory
+
+
 def test_history_contract_requires_motion_and_supported_projection():
     with pytest.raises(ValueError):
         BlockSMBObservationConfig(hazard_observations=True)
+    with pytest.raises(ValueError, match="peak-exposure"):
+        BlockSMBObservationConfig(motion_observations=True, hazard_memory_observations=True)
+    with pytest.raises(ValueError, match="peak-exposure"):
+        SMBRuntimeContract(hazard_memory_observations=True)
+    with pytest.raises(ValueError, match="hazard_memory_observations"):
+        tiny_config(motion_observations=True, hazard_memory_observations=True)
     with pytest.raises(ValueError):
         SMBRuntimeContract(hazard_observations=True, motion_observations=False)
     with pytest.raises(ValueError):
@@ -199,9 +286,31 @@ def test_full_smb_history_projection_forward_and_snapshot_restore():
         stage.close()
 
 
-@pytest.mark.parametrize("history", [False, True])
+def test_full_smb_projects_peak_exposure_memory_after_history():
+    from retroagi.stages.full_smb.adapter import FullSMBStage
+    from scripts.tests.test_smb_transfer_contract import ContractVision, RAMEnv
+
+    contract = SMBRuntimeContract(hazard_observations=True, hazard_memory_observations=True)
+    stage = FullSMBStage(env=RAMEnv(), vision=ContractVision())
+    stage.configure_policy_runtime(contract)
+    try:
+        stage.reset()
+        ram = stage.env.ram
+        ram[0x0F], ram[0x16] = 1, 0x0D
+        ram[0x87], ram[0xCF], ram[0xB6], ram[0x49A] = 150, 164, 1, 9
+        batch = stage.encode_observation(stage._last_observation)
+        assert tuple(batch.metadata["vision_fusion"]["c_state"]) == (12, 54)
+        memory = batch.metadata["smb_geometry"]["features"]["hazard_memory_vec"]
+        assert batch.src_c[0, 53] == memory[0] > 0
+    finally:
+        stage.close()
+
+
+@pytest.mark.parametrize("history,memory", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("supervision_start", [0, 12])
-def test_demonstrations_and_recovery_match_live_history_on_every_frame(supervision_start, history):
+def test_demonstrations_and_recovery_match_live_history_on_every_frame(
+    supervision_start, history, memory
+):
     from dataclasses import replace
 
     from retroagi.stages.block_smb.demonstrations import collect_demonstrations
@@ -223,14 +332,19 @@ def test_demonstrations_and_recovery_match_live_history_on_every_frame(supervisi
         },
     )
     config = tiny_config(
-        motion_observations=True, hazard_observations=history, walk_duration_primitives=False
+        motion_observations=True,
+        hazard_observations=history,
+        hazard_memory_observations=memory,
+        walk_duration_primitives=False,
     )
     data = collect_demonstrations([(27, sample)], config, StaticBlockVision)
     stage = BlockSMBStage(
         scenario=sample.scenario,
         vision=StaticBlockVision(),
         observation_config=BlockSMBObservationConfig(
-            motion_observations=True, hazard_observations=history
+            motion_observations=True,
+            hazard_observations=history,
+            hazard_memory_observations=memory,
         ),
     )
     expected = []
@@ -244,8 +358,11 @@ def test_demonstrations_and_recovery_match_live_history_on_every_frame(supervisi
         lo, hi = stage.encode_observation(frame).metadata["vision_fusion"]["c_state"]
         expected = torch.cat(expected)[supervision_start:]
         if history:
-            assert expected[:, hi - 4].any()  # Velocity becomes available after observation.
-            assert expected[:, hi - 5].abs().max() > 0  # Rising/retracting motion is represented.
+            offset = int(memory)
+            assert expected[:, hi - 4 - offset].any()  # Velocity is available after observation.
+            assert expected[:, hi - 5 - offset].abs().max() > 0  # Rising/retracting motion.
+        if memory:
+            assert expected[:, hi - 1].max() > 0  # The plant's exposed height is remembered.
         torch.testing.assert_close(data.c, expected)
         torch.testing.assert_close(data.next_c[-1:], stage.encode_observation(frame).src_c)
     finally:

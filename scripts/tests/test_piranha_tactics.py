@@ -349,3 +349,178 @@ def test_evaluation_reports_temporal_and_clearance_crossings_separately(monkeypa
     assert all(v["sample_count"] == 1 for v in evaluation["piranha_crossing_modes"].values())
     assert evaluation["piranha_tactics"]["decisions"] > 0
     assert 0 <= evaluation["piranha_tactics"]["accuracy"] <= 1
+
+
+def _timed_samples(count=12, difficulty="medium"):
+    samples = []
+    for seed in range(60):
+        sample = sample_block_smb_monte_carlo_scenario(
+            family="piranha_avoidance",
+            split="train",
+            difficulty=difficulty,
+            seed=seed,
+            sample_index=0,
+        )
+        if sample.parameters["crossing_mode"] == "timed":
+            samples.append(sample)
+            if len(samples) == count:
+                break
+    return samples
+
+
+def _departure_state(env, sample):
+    """Replay a teacher route to its first grounded departure; return its history."""
+    env.reset(scenario=sample.scenario)
+    history = EnemyObservationHistory()
+    for action in sample.oracle["actions"]:
+        features = history.observe(env, env.steps)
+        if action == 2 and env.mario["on_ground"]:
+            return features
+        env.step(action)
+    raise AssertionError("Route never departs")
+
+
+def test_timed_teacher_stops_in_the_staging_window_without_overshoot():
+    from retroagi.stages.block_smb.piranha_tactics import staging_x
+
+    env = MarioScenarioEnv()
+    try:
+        for sample in _timed_samples():
+            actions = sample.oracle["actions"]
+            assert 3 not in actions  # No overshoot-and-retreat approach.
+            env.reset(scenario=sample.scenario)
+            target = staging_x(env)
+            for action in actions:
+                if action == 2 and env.mario["on_ground"]:
+                    break
+                if env.mario["on_ground"] and action == 0 and env.mario["vx"] == 0:
+                    assert target - 2 <= env.mario["x"] <= target + 4
+                env.step(action)
+    finally:
+        env.close()
+
+
+def test_certified_departure_window_spans_the_minimum_hidden_interval():
+    import numpy as np
+
+    from retroagi.stages.block_smb.piranha_tactics import MIN_HIDDEN_FRAMES
+
+    sample = next(s for s in _timed_samples() if s.oracle["actions"].count(0) > 20)
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        for action in sample.oracle["actions"]:
+            if action == 0 and env.mario["vx"] == 0 and env.mario["on_ground"]:
+                break
+            env.step(action)
+
+        def history(age):
+            return np.array([0, 0, 0, -float(age == 1), age / 64, age / 64], dtype=np.float32)
+
+        assert not fresh_retraction(history(MIN_HIDDEN_FRAMES))
+        assert not fresh_retraction(np.array([1, 0, 1, 0, 0, 0], dtype=np.float32))
+        holds = [set(timed_safe_holds(env, history(age))) for age in range(1, MIN_HIDDEN_FRAMES)]
+        assert all(fresh_retraction(history(age)) for age in range(1, MIN_HIDDEN_FRAMES))
+        assert holds[0]
+        # Less remaining hidden time can only remove certified holds.
+        assert all(later <= earlier for earlier, later in zip(holds, holds[1:]))
+        assert any(holds[age - 1] for age in range(9, MIN_HIDDEN_FRAMES))
+    finally:
+        env.close()
+
+
+def test_running_departures_are_certified():
+    env = MarioScenarioEnv()
+    try:
+        for sample in _timed_samples(count=30):
+            features = _departure_state(env, sample)
+            if env.mario["vx"] > 0.5:
+                assert fresh_retraction(features)
+                assert timed_safe_holds(env, features)
+                return
+        raise AssertionError("No certified running departure in the timed family")
+    finally:
+        env.close()
+
+
+def test_timed_training_budget_leaves_room_for_the_next_window():
+    from retroagi.stages.block_smb.pipe_traversal import training_rollout_steps
+
+    sample = timed_sample()
+    plant = sample.scenario["enemies"][0]
+    cycle = 2 * plant["rise_frames"] + plant["exposed_frames"] + plant["hidden_frames"]
+    completion = sample.oracle["expected_completion_steps"]
+    assert training_rollout_steps(160, sample.scenario) >= completion + cycle
+    clearance = crossing_sample("clearance")
+    completion = clearance.oracle["expected_completion_steps"]
+    assert training_rollout_steps(160, clearance.scenario) == max(160, int(completion * 1.5))
+
+
+def test_uncertified_clearance_takeoffs_receive_no_hindsight_duration_target():
+    config = tiny_config(
+        motion_observations=True,
+        hazard_observations=True,
+        hazard_memory_observations=True,
+        adaptive_duration_control=False,
+        walk_duration_primitives=False,
+    )
+    model = make_block_smb_model(config)
+    sample = crossing_sample("clearance")
+    stage = BlockSMBStage(
+        scenario=sample.scenario,
+        vision=StaticBlockVision(),
+        observation_config=BlockSMBObservationConfig(
+            motion_observations=True, hazard_observations=True, hazard_memory_observations=True
+        ),
+    )
+    try:
+        # A full jump from the spawn cannot clear a clearance pipe and plant.
+        trajectory = collect_trajectory(
+            model,
+            stage,
+            sample.scenario_id,
+            rollout_steps=40,
+            seed=0,
+            deterministic=True,
+            device=torch.device("cpu"),
+            demonstration_actions=[2] * 16 + [1] * 24,
+            adaptive_duration_control=False,
+            walk_duration_primitives=False,
+        )
+    finally:
+        stage.env.close()
+    initiation = trajectory.transitions[0].info
+    assert initiation["primitive_unreachable"] and initiation["jump_overreach"]
+    assert not any("primitive_target_hold" in t.info for t in trajectory.transitions[:16])
+
+
+def test_overshoot_demonstration_supervises_only_the_correction():
+    from retroagi.stages.block_smb.piranha_tactics import overshoot_demonstration, staging_x
+
+    sample = timed_sample()
+    corrected = overshoot_demonstration(sample)
+    assert corrected is not None
+    start = corrected.oracle["supervision_start_frame"]
+    actions = corrected.oracle["actions"]
+    assert set(actions[:start]) == {1} and 3 in actions[start:]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        assert teacher_route_reachable(env, actions)
+        for action in actions[:start]:
+            env.step(action)
+        assert env.mario["x"] > staging_x(env) + 4
+    finally:
+        env.close()
+    config = tiny_config(
+        motion_observations=True,
+        hazard_observations=True,
+        adaptive_duration_control=False,
+        walk_duration_primitives=False,
+    )
+    data = collect_demonstrations(
+        [(BLOCK_SMB_MC_FAMILIES.index(sample.family), corrected)], config, StaticBlockVision
+    )
+    retreat = TACTIC_STANCES.index("retreat")
+    assert (data.tactic[data.actor_mask] == retreat).any()
+    assert not data.recovery.any()  # Original practice, weighted with the other routes.

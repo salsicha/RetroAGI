@@ -75,6 +75,7 @@ def evaluate(model, cases, config, vision_factory, *, autonomous=False, batched=
                 observation_config=BlockSMBObservationConfig(
                     motion_observations=config.motion_observations,
                     hazard_observations=config.hazard_observations,
+                    hazard_memory_observations=config.hazard_memory_observations,
                 ),
             )
             try:
@@ -143,6 +144,7 @@ def main():
     parser.add_argument("--frame-walk", action="store_true")
     parser.add_argument("--motion-observations", action="store_true")
     parser.add_argument("--hazard-observations", action="store_true")
+    parser.add_argument("--hazard-memory-observations", action="store_true")
     parser.add_argument("--varied-demonstrations", action="store_true")
     parser.add_argument("--robust-demonstrations", action="store_true")
     parser.add_argument("--prioritized-demonstrations", action="store_true")
@@ -169,6 +171,7 @@ def main():
         demonstration_rehearsal_updates=0,
         motion_observations=args.motion_observations,
         hazard_observations=args.hazard_observations,
+        hazard_memory_observations=args.hazard_memory_observations,
         walk_duration_primitives=not args.frame_walk,
         autonomous_policy=args.autonomous,
         demonstration_varied_routes=args.varied_demonstrations,
@@ -242,6 +245,13 @@ def main():
                 ):
                     raise ValueError(
                         "Checkpoint enemy-history observation layout does not match this run"
+                    )
+                if (
+                    bool(checkpoint["config"].get("hazard_memory_observations", False))
+                    != config.hazard_memory_observations
+                ):
+                    raise ValueError(
+                        "Checkpoint enemy peak-exposure layout does not match this run"
                     )
                 model.load_state_dict(checkpoint["states"]["model"])
             optimizer = make_block_smb_optimizer(model, config)

@@ -46,7 +46,25 @@ def training_rollout_steps(requested: int, scenario: Mapping[str, Any] | None) -
             # Composite oracles near 200 frames were always cut off at 160.
             # Include recovery time for both live rollouts and replay.
             completion = (metadata.get("oracle") or {}).get("expected_completion_steps") or 0
-            return max(requested, 120, int(completion * 1.5))
+            budget = max(requested, 120, int(completion * 1.5))
+            plant = next(
+                (
+                    e
+                    for e in scenario.get("enemies", ())
+                    if isinstance(e, Mapping) and e.get("timed_crossing")
+                ),
+                None,
+            )
+            if plant is not None:
+                # A missed departure window costs one full plant cycle. Leave
+                # room to practice the next window instead of truncating first.
+                cycle = (
+                    2 * int(plant.get("rise_frames", 16))
+                    + int(plant.get("exposed_frames", 48))
+                    + int(plant.get("hidden_frames", 32))
+                )
+                budget = max(budget, completion + cycle + 32)
+            return budget
     return requested
 
 
