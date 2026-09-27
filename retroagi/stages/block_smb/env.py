@@ -222,6 +222,7 @@ class MarioScenarioEnv:
         self._bridge_boarded = False
         self._bridge_crossed = False
         self._bridge_jump_task = None
+        self._bridge_then_terrain = False
         self._bridge_jump_launched = False
         self._goal_requires_support = False
         self._single_jump_attempt = False
@@ -375,6 +376,7 @@ class MarioScenarioEnv:
         self._bridge_jump_task = None
         self._bridge_jump_launched = False
         self._bridge_jump_task = scenario.get("bridge_jump_task")
+        self._bridge_then_terrain = bool(scenario.get("bridge_then_terrain", False))
         if self._bridge_jump_task not in (None, "mount", "dismount"):
             raise ValueError("Invalid bridge jump task")
         if self._bridge_jump_task == "dismount":

@@ -21,6 +21,7 @@ from retroagi.core.smb_supervision import OracleSceneVision
 from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
 from retroagi.stages.block_smb.demonstrations import DemonstrationBatch
 from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.stages.block_smb.hierarchy import bridge_training_active
 from retroagi.stages.block_smb.train import BlockSMBTrainingConfig, make_block_smb_model
 from retroagi.stages.full_smb.train import _policy_action_logits_and_state
 
@@ -153,7 +154,7 @@ def _collect_coached(
         batch = stage.encode_observation(obs)
         committed = executor.prepare(batch)
         sampling_phase = batch.metadata["smb_geometry"]["objective"].kind
-        if stage.env._require_bridge_before_goal:
+        if bridge_training_active(stage.env):
             from retroagi.core.smb_objectives import observable_objective
 
             # Collision phase is a replay stratum only, never a policy input.
@@ -202,7 +203,7 @@ def _collect_coached(
                 proposed = int(forward.logits.argmax(-1))
                 if decision and env.mario["on_ground"]:
                     policy_diagnostics["decisions"] += 1
-                    if env._require_bridge_before_goal:
+                    if bridge_training_active(env):
                         correction = coach_choice(model, env)
                         policy_diagnostics["missed_brakes"] += int(
                             correction[0] in (1, 3)
@@ -311,7 +312,7 @@ def _collect_coached(
                 stomp_launched |= intended in (2, 4, 5)
             if intended == 0 and getattr(executor, "_bridge_wait_context", False):
                 selected_index, selected_valid = 0, [0]
-            if stage.env._require_bridge_before_goal and intended == 1:
+            if bridge_training_active(stage.env) and intended == 1:
                 from retroagi.core.smb_coaching import bridge_target
 
                 if bridge_target(stage.env) == "exit":

@@ -9,6 +9,7 @@ from retroagi.core.smb_coaching import training_target
 
 from .env import MarioScenarioEnv
 from .geometry_expert import restore_env_state, snapshot_env_state
+from .hierarchy import bridge_training_active
 from .local_traversal import local_target_distance, safe_jump_holds, support_edge_distance
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES, block_smb_monte_carlo_metadata
 from .primitive_execution import JumpReleaseState, teacher_route_reachable
@@ -77,7 +78,7 @@ def _coached_suffix(
             remaining -= 1
         elif airborne or not env.mario["on_ground"]:
             action = 1 if direction > 0 else 3
-        elif env._require_bridge_before_goal and not env._bridge_jump_task:
+        elif bridge_training_active(env) and not env._bridge_jump_task:
             from .bridge_traversal import bridge_phase
 
             phase = bridge_phase(env, True)
@@ -192,7 +193,7 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                 reason = None
                 valid = None
                 if (
-                    env._require_bridge_before_goal
+                    bridge_training_active(env)
                     and not env._bridge_jump_task
                     and not release.remaining
                 ):

@@ -239,6 +239,12 @@ def main():
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             if present & REPOSITIONING_FAMILIES - set(args.refresh_families):
                 raise ValueError("Cached repositioning routes predate their tactical labels")
+        if metadata.get("contract_version", 1) < 15:
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            if present - set(args.refresh_families):
+                raise ValueError(
+                    "Cached demonstrations need contract-15 joint hierarchy intent labels"
+                )
         if metadata.get("contract_version", 1) < 8:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             missing = present - set(args.refresh_families)
@@ -373,6 +379,7 @@ def main():
             memory_refresh_interval=config.memory_refresh_interval,
             memory_unroll=config.memory_unroll_steps,
             strategy_loss_weight=config.strategy_loss_weight,
+            strategy_intent_loss_weight=config.strategy_intent_loss_weight,
         )
         print(
             json.dumps(

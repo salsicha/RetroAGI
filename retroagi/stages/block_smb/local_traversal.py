@@ -15,6 +15,7 @@ LOCAL_TRAVERSAL_FAMILIES = frozenset(
     "platform_chain mixed_section full_smb_opening_proxy enemy_patrol enemy_gap "
     "chained_obstacles chained_enemy_gauntlet".split()
     + list(TRANSFER_FAILURE_FAMILIES)
+    + ["tactics_obstacle_sequence", "strategy_mixed_sequence", "strategy_bridge_then_gap"]
 )
 
 
@@ -383,6 +384,10 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
                 hold_remaining -= 1
             elif in_jump or not env.mario["on_ground"]:
                 action = 1 if direction > 0 else 3
+            elif getattr(env, "_bridge_then_terrain", False) and not env._bridge_crossed:
+                from .bridge_traversal import bridge_phase
+
+                action = 1 if bridge_phase(env, True) in ("approach", "board", "exit") else 0
             elif target.kind in ("finish", "retreat"):
                 action = 1 if direction > 0 else 3
             else:

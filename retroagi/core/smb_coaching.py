@@ -200,11 +200,13 @@ def interior_index(indices):
 
 
 def coach_choice(model, env, *, takeoff_distance=50, variant=0):
+    from retroagi.stages.block_smb.hierarchy import bridge_training_active
+
     if getattr(env, "_bridge_jump_task", None):
         from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_choice
 
         return bridge_jump_choice(model, env, variant=variant)
-    if env._require_bridge_before_goal:
+    if bridge_training_active(env):
         # Runtime reobserves after one frame. Probe walking now, not obsolete
         # long wait commitments; all later opportunities are reconsidered.
         target = bridge_target(env)

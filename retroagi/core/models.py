@@ -141,6 +141,9 @@ def action_level_world_model_state_dict(
         migrated[position_gain] = torch.zeros_like(current[position_gain])
         position_table = "strategy_network.history_positions.pe"
         migrated[position_table] = current[position_table]
+    intent_context = "strategy_network.intent_context.weight"
+    if intent_context in current and intent_context not in state_dict:
+        migrated[intent_context] = torch.zeros_like(current[intent_context])
     return migrated, tuple(skipped)
 
 
@@ -1559,10 +1562,11 @@ class StrategyNetwork(nn.Module):
     reads the history of distinct recent stances and summarizes it into a
     context that conditions the next tactical decision. With an objective
     head it also names the current skill goal from the observation, the
-    carried world-model memory and that history. The head only reads them:
+    carried world-model memory and that history. The objective head only reads them:
     its prediction reaches the policy solely as a replacement skill goal
     (`learned_skill_goals`), so training it cannot change a policy that still
-    acts on scripted goals.
+    acts on scripted goals. A separate intent head learns advance/hold/retreat
+    jointly with skills, trains the history encoder, and conditions tactics.
     """
 
     def __init__(
@@ -1596,17 +1600,38 @@ class StrategyNetwork(nn.Module):
                 nn.Tanh(),
                 nn.Linear(64, int(objectives)),
             )
+        self.intent_head = None
+        self.intent_context = None
+        self.last_intent_logits = None
+        if state_dim:
+            self.intent_head = nn.Sequential(
+                nn.Linear(int(state_dim) + self.memory_dim + d_model, 64),
+                nn.Tanh(),
+                nn.Linear(64, len(TACTIC_STANCES)),
+            )
+            self.intent_context = nn.Linear(len(TACTIC_STANCES), d_model, bias=False)
+            nn.init.zeros_(self.intent_context.weight)
 
     def forward(self, stance_history, state=None, memory=None):
         tokens = self.input_projection(stance_history.float())
         tokens = tokens + self.position_gain * self.history_positions.pe[:, : tokens.size(1)]
         context = self.encoder(tokens).mean(dim=1)
-        if self.objective_head is None or state is None:
+        self.last_intent_logits = None
+        if state is None:
             return context, None
         if memory is None:
             memory = context.new_zeros(context.size(0), self.memory_dim)
         features = torch.cat((state.float(), memory.float(), context), dim=1).detach()
-        return context, self.objective_head(features)
+        objective = self.objective_head(features) if self.objective_head is not None else None
+        if self.intent_head is not None:
+            # Intent supervises the temporal strategy encoder itself. Memory
+            # remains trained by its own recurrent/policy objectives.
+            intent_features = torch.cat(
+                (state.float().detach(), memory.float().detach(), context), dim=1
+            )
+            self.last_intent_logits = self.intent_head(intent_features)
+            context = context + self.intent_context(self.last_intent_logits.softmax(-1))
+        return context, objective
 
 
 class AgentWorldModelCritic(nn.Module):
@@ -2344,6 +2369,7 @@ class AgentWorldModelCritic(nn.Module):
             stance_history, src_C, strategy_memory
         )
         self.last_objective_logits = objective_logits
+        self.last_strategy_logits = self.strategy_network.last_intent_logits
         if self.learned_skill_goals and objective_logits is not None:
             skill_goal = self.objective_skill_goals[objective_logits.detach().argmax(dim=-1)]
         tactic_stance_logits, tactic_context = self.tactics_network(src_C, strategy_context)

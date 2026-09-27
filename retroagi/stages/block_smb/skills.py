@@ -20,6 +20,8 @@ from .tasks import scenario_family
 
 # Which measurable goal each scenario family requests of the skill layer.
 BLOCK_SMB_FAMILY_SKILL_GOALS: dict[str, str] = {
+    "tactics_bridge_sequence": "wait_pass",
+    "strategy_bridge_then_gap": "wait_pass",
     "single_gap": "clear_gap",
     "pit_leap": "clear_gap",
     "platform_hop": "clear_gap",

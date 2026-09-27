@@ -346,6 +346,7 @@ def main():
                         memory_refresh_interval=config.memory_refresh_interval,
                         memory_unroll=config.memory_unroll_steps,
                         strategy_loss_weight=config.strategy_loss_weight,
+                        strategy_intent_loss_weight=config.strategy_intent_loss_weight,
                     )
                     metrics = dict(
                         mean_return=None,

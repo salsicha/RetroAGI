@@ -9,7 +9,14 @@ These labels do not select or override the policy's action at playback.
 from retroagi.core.models import TACTIC_STANCES
 
 BRIDGE_FAMILIES = frozenset(
-    ("bridge_wait", "wait_timing", "moving_bridge", "bridge_mount", "bridge_dismount")
+    (
+        "bridge_wait",
+        "wait_timing",
+        "moving_bridge",
+        "bridge_mount",
+        "bridge_dismount",
+        "tactics_bridge_sequence",
+    )
 )
 OBSTACLE_FAMILIES = frozenset(
     (
@@ -25,6 +32,17 @@ OBSTACLE_FAMILIES = frozenset(
         "chained_enemy_gauntlet",
         "mixed_section",
         "full_smb_opening_proxy",
+        "flat_run",
+        "single_gap",
+        "pit_leap",
+        "pipe_mount",
+        "platform_hop",
+        "enemy_hop",
+        "enemy_gap",
+        "stomp_mount",
+        "tactics_obstacle_sequence",
+        "strategy_mixed_sequence",
+        "strategy_bridge_then_gap",
     )
 )
 # Demonstrations reverse direction here: back off an enemy before stomping
@@ -93,7 +111,9 @@ def tactic_label(env, history=None, action=None, *, family, phase=None):
         )
         return TACTIC_STANCES.index(stance) if stance is not None else -1
 
-    if family in ("bridge_wait", "wait_timing", "moving_bridge"):
+    if family in ("bridge_wait", "wait_timing", "moving_bridge", "tactics_bridge_sequence") or (
+        family == "strategy_bridge_then_gap" and not env._bridge_crossed
+    ):
         from .bridge_traversal import bridge_phase
 
         current = bridge_phase(env, True)
@@ -142,6 +162,17 @@ def tactic_label(env, history=None, action=None, *, family, phase=None):
     if safe_ground_motion(env, backward):
         return TACTIC_STANCES.index(action_stance(env, backward))
     return -1
+
+
+def hierarchy_intent(env, history=None, action=None, *, family, phase, decision, previous=-1):
+    """Carry the chosen intent through a committed skill, including its flight.
+
+    A teacher labels fresh decisions; learner actions are never their own targets.
+    Landing releases and in-flight corrections retain the takeoff intent.
+    """
+    if not decision:
+        return previous
+    return tactic_label(env, history, action, family=family, phase=phase)
 
 
 def compatible_actions(env, label):

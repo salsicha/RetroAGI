@@ -13,6 +13,7 @@ import pygame
 
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
+from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES, hierarchy_scenario
 from .transfer_failure_families import (
     TRANSFER_FAILURE_FAMILIES,
     TRANSFER_FAILURE_SCHEMAS,
@@ -49,6 +50,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "bridge_mount",
     "bridge_dismount",
     *TRANSFER_FAILURE_FAMILIES,
+    *HIERARCHY_FAMILIES,
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 
@@ -433,6 +435,12 @@ def block_smb_monte_carlo_family_specs(
         mount_rise=[28, 52],
         goal_x=[35, 85],
     )
+    for family in HIERARCHY_FAMILIES:
+        schemas[family] = {
+            "family_revision": [1, 1],
+            "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
+            "prerequisites": list(FAMILY_PREREQUISITES[family]),
+        }
     return {
         family: BlockSMBScenarioFamilySpec(
             schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
@@ -447,7 +455,14 @@ def block_smb_monte_carlo_family_specs(
                     if family in ("bridge_mount", "bridge_dismount")
                     else (
                         200
-                        if family in ("bridge_wait", "wait_timing", "moving_bridge")
+                        if family
+                        in (
+                            "bridge_wait",
+                            "wait_timing",
+                            "moving_bridge",
+                            "tactics_bridge_sequence",
+                            "strategy_bridge_then_gap",
+                        )
                         else (110 if family == "platform_hop" else 66)
                     )
                 ),
@@ -1081,6 +1096,8 @@ def _generate_family_scenario_raw(
         raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
     if family in TRANSFER_FAILURE_FAMILIES:
         return transfer_failure_scenario(family, rng, difficulty)
+    if family in HIERARCHY_FAMILIES:
+        return hierarchy_scenario(family, rng, difficulty)
     if family == "flat_run":
         return _flat_run(rng, difficulty)
     if family == "single_gap":

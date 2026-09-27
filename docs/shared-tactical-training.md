@@ -1,5 +1,67 @@
 # Shared tactical training
 
+## Joint hierarchy training and prerequisite stages (contract 15)
+
+All basic skill families now supervise tactical and strategic intent alongside
+the action and duration losses. Clearing a gap teaches `advance`; waiting for
+or riding a moving platform teaches `hold_area`. Successful demonstrations and
+physics-based teachers label decisions. The selected intent is retained through
+the committed skill and its landing release, so a jump's flight still trains
+the higher layers. Motor-action compatibility is supervised only when the
+executor allows a fresh decision, avoiding contradictory targets during a jump.
+
+Strategy has two supervised outputs: the current skill objective and the
+strategic intent. The intent loss trains the strategy history encoder directly,
+and its predicted distribution conditions tactics. Tactics continues to
+condition the skill/action policy. The objective head retains its separate
+gradient clipping. The production recipe enables `learned_skill_goals`, so the
+predicted objective chooses the skill goal at execution; scripted goals remain
+training targets and evaluation references. Every minibatch updates all layers
+together, including during bootstrap and rehearsal.
+
+Four explicit families add continuous sequences in one world and recurrent
+episode:
+
+| Family | Sequence | Prerequisites |
+| --- | --- | --- |
+| `tactics_bridge_sequence` | Wait, board, hold while riding, exit | `wait_timing`, `bridge_mount`, `bridge_dismount` |
+| `tactics_obstacle_sequence` | Approach, clear enemy, climb obstacles, clear enemy | `enemy_hop`, `tall_pipe_jump`, `enemy_patrol` |
+| `strategy_bridge_then_gap` | Wait/board/ride/exit, jump a gap, climb to the goal | `tactics_bridge_sequence`, `single_gap`, `stair_climb` |
+| `strategy_mixed_sequence` | Clear enemy, jump gap, clear enemy, climb | `tactics_obstacle_sequence`, `single_gap` |
+
+The tactical sequences reuse the existing randomized bridge and obstacle
+generators. The bridge/gap strategy sequence extends the world beyond the
+bridge, switches to terrain traversal after crossing, and retains the same
+memory throughout. Oracle reachability checks the complete sequence against
+the normal final goal; reaching an intermediate obstacle does not end it.
+
+With `hierarchy_curriculum` enabled (the production recipe), prerequisites must
+meet the held-out family success gate in every difficulty bin before a sequence
+unlocks. The gate is currently 90%. Explicit hierarchy families additionally
+require 90% tactical and strategic-intent accuracy. Existing `chained_obstacles`,
+`chained_enemy_gauntlet`, `mixed_section`, and `full_smb_opening_proxy` also have
+prerequisites. See `FAMILY_PREREQUISITES` in `hierarchy.py` for the full graph.
+
+Locked families are excluded from bootstrap data, rollout sampling, rehearsal,
+and failure replay. Their demonstrations are generated only after unlocking.
+Held-out evaluation still measures all families. Unlocks are retained to avoid
+oscillating between curricula; basic skill retention continues alongside the
+sequences. Checkpoints store mastery and unlock state, and logs report active,
+locked, and newly unlocked families. A weights-only initialization still needs
+fresh held-out evidence before unlocking sequences.
+
+`strategy_intent_loss_weight` defaults to 0.5. `strategy_loss_weight` controls
+skill-objective supervision separately. Evaluation reports
+`strategy_intent_by_family` alongside `tactics_by_family`, `strategy_by_family`,
+and whole-sequence success. Older demonstration caches require regeneration
+or refreshing every included family to obtain the new intent labels. Older
+policy/actor weights initialize the added intent-to-tactics projection at zero.
+
+These are implementation changes; their effect on learning has not yet been
+measured in a new training run. A running process must be restarted to load them.
+
+## Earlier implementation and measurements
+
 Tactical supervision now covers 18 families, including the existing
 `piranha_avoidance` family:
 

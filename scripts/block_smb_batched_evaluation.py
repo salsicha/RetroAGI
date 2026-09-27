@@ -20,6 +20,7 @@ from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
 from retroagi.stages.block_smb.bridge_traversal import bridge_phase, bridge_safe_wait_frames
 from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.stages.block_smb.hierarchy import bridge_training_active
 from retroagi.stages.block_smb.local_traversal import LOCAL_TRAVERSAL_FAMILIES, local_objective
 from retroagi.stages.block_smb.pipe_traversal import TallPipeTraversal
 from retroagi.stages.block_smb.primitive_execution import BlockSMBPrimitiveExecutor
@@ -142,6 +143,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                 goals = []
                 for s in active:
                     env = s.stage.env
+                    s.bridge = bridge_training_active(env) and not s.bridge_jump
                     phase = s.pipe.phase if s.pipe else s.phase
                     target = local_objective(env) if s.local else None
                     if s.local:
@@ -154,7 +156,9 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                         phase = (
                             s.pipe.phase
                             if s.pipe
-                            else "bounce_recovery" if s.recovery else target.kind
+                            else "bounce_recovery"
+                            if s.recovery
+                            else target.kind
                         )
                     safe = bridge_safe_wait_frames(env) if s.bridge else []
                     if s.bridge:
@@ -168,7 +172,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                         s.bridge and phase in ("approach", "board", "exit")
                     ):
                         goal.zero_()
-                    if s.local and phase not in ("finish", "bounce_recovery"):
+                    if s.local and not s.bridge and phase not in ("finish", "bounce_recovery"):
                         goal = skill_goal_encoding(
                             {
                                 "gap": "clear_gap",

@@ -24,6 +24,7 @@ from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, EnemyObservatio
 from .adapter import BlockSMBObservationConfig, BlockSMBStage
 from .bridge_traversal import bridge_phase, bridge_safe_wait_frames
 from .env import MarioScenarioEnv
+from .hierarchy import bridge_training_active
 from .local_traversal import (
     LOCAL_TRAVERSAL_FAMILIES,
     local_objective,
@@ -214,10 +215,12 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             opening = True
             bridge_exit_committed = False
             recovering_stomp = False
+            intent = -1
             observations = [observation]
             states = [stage.state_features(stage.last_info)]
             for frame, action in enumerate(actions):
                 env = stage.env
+                bridge = bridge_training_active(env) and bridge_jump is None
                 memory_history.observe(env, env.steps)
                 episode_memory.append(memory_history.memory_features())
                 if jump_intent is not None and env.mario["on_ground"]:
@@ -227,7 +230,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     recovering_stomp = False
                 episode_release.append(bool(release.remaining))
                 actor_mask = jump_intent is None and not recovering_stomp and not release.remaining
-                from .tactics import compatible_actions, tactic_label
+                from .tactics import compatible_actions, hierarchy_intent
 
                 free_decision = actor_mask
                 episode_duration_consumed.append(not (action == 0 and frame_waits))
@@ -265,7 +268,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 if pipe is not None:
                     pipe.observe(env)
                     phase = pipe.phase
-                elif scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES:
+                elif scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES and not bridge:
                     target = local_objective(env)
                     phase = target.kind
                     goal = skill_goal_encoding(
@@ -308,20 +311,19 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                 opening_ready = (
                     bridge and opening and action == 0 and 1 in bridge_safe_wait_frames(env)
                 )
-                tactic = (
-                    tactic_label(
-                        env,
-                        stage._hazard_features,
-                        action,
-                        family=scenario_family(stage.scenario),
-                        phase=phase,
-                    )
-                    if free_decision
-                    else -1
+                intent = hierarchy_intent(
+                    env,
+                    stage._hazard_features,
+                    action,
+                    family=scenario_family(stage.scenario),
+                    phase=phase,
+                    decision=free_decision,
+                    previous=intent,
                 )
+                tactic = intent
                 episode_tactics.append(tactic)
-                allowed_tactic_actions = compatible_actions(env, tactic)
-                if tactic >= 0:
+                allowed_tactic_actions = compatible_actions(env, tactic if free_decision else -1)
+                if tactic >= 0 and free_decision:
                     allowed_tactic_actions[action] = True
                 episode_tactic_actions.append(allowed_tactic_actions)
                 # Advance adapter-owned observation history just as live rollouts do.
@@ -498,7 +500,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 14
+DEMONSTRATION_CONTRACT_VERSION = 15
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -612,7 +614,7 @@ def demonstrated_tactic_sets(data):
     groups = observed_decision_groups(data)
     labels = torch.zeros((int(groups.max()) + 1, 4), dtype=torch.bool)
     actions = torch.zeros((int(groups.max()) + 1, 6), dtype=torch.bool)
-    mask = data.actor_mask & (data.tactic >= 0)
+    mask = (data.tactic >= 0) & ~data.context
     labels[groups[mask], data.tactic[mask]] = True
     for action in range(6):
         actions[groups[mask & data.tactic_actions[:, action]], action] = True
@@ -826,6 +828,7 @@ def fit_demonstrations(
     memory_refresh_interval=0,
     memory_unroll=0,
     strategy_loss_weight=0.0,
+    strategy_intent_loss_weight=0.5,
     progress=None,
 ):
     """Balance families and decision actions; never train on validation data.
@@ -914,7 +917,16 @@ def fit_demonstrations(
         if strategy_loss_weight and objective_logits is not None:
             strategy_loss = F.cross_entropy(objective_logits, objectives[ids].to(device))
         tactic_targets = data.tactic[ids].to(device)
-        tactic_mask = (tactic_targets >= 0) & mask
+        tactic_mask = tactic_targets >= 0
+        intent_logits = getattr(model, "last_strategy_logits", None)
+        intent_loss = outputs[4].new_zeros(())
+        if tactic_mask.any() and intent_logits is not None:
+            intent_loss = -torch.logsumexp(
+                F.log_softmax(intent_logits, dim=-1).masked_fill(
+                    ~allowed_tactics[ids].to(device), -1e9
+                ),
+                dim=-1,
+            )[tactic_mask].mean()
         tactic_logits = getattr(model, "last_tactic_logits", None)
         tactic_loss = outputs[4].new_zeros(())
         tactic_action_loss = outputs[4].new_zeros(())
@@ -926,7 +938,7 @@ def fit_demonstrations(
                 dim=-1,
             )[tactic_mask].mean()
         tactic_actions = allowed_tactic_actions[ids].to(device)
-        tactic_action_mask = tactic_mask & tactic_actions.any(dim=-1)
+        tactic_action_mask = tactic_mask & mask & tactic_actions.any(dim=-1)
         if tactic_action_mask.any():
             tactic_action_loss = -torch.logsumexp(
                 F.log_softmax(outputs[4][:, -1, :6], dim=-1).masked_fill(~tactic_actions, -1e9),
@@ -964,6 +976,7 @@ def fit_demonstrations(
             + tactic_loss_weight * (tactic_loss + tactic_action_loss)
             + memory_weight * memory_loss
             + strategy_loss_weight * strategy_loss
+            + strategy_intent_loss_weight * intent_loss
         )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -1001,6 +1014,7 @@ def fit_demonstrations(
                     tactic_action_loss.detach(),
                     memory_loss.detach(),
                     strategy_loss.detach(),
+                    intent_loss.detach(),
                 )
             )
         )
@@ -1015,6 +1029,7 @@ def fit_demonstrations(
                 loss=float(np.mean(losses[-250:])),
                 memory_loss=float(memory_loss.detach()),
                 strategy_loss=float(strategy_loss.detach()),
+                strategy_intent_loss=float(intent_loss.detach()),
                 elapsed_seconds=round(now - started, 2),
             )
             last_report = now
@@ -1029,6 +1044,7 @@ def fit_demonstrations(
                 "tactic_action_loss",
                 "memory_loss",
                 "strategy_loss",
+                "strategy_intent_loss",
             ),
             means,
         )
@@ -1100,7 +1116,7 @@ def varied_demonstration(sample, seed, *, robust=False):
                 airborne = False
                 if robust:
                     remaining = 0
-            if env._require_bridge_before_goal:
+            if bridge_training_active(env):
                 state = bridge_walk_state(env)
                 action = (
                     1
@@ -1294,24 +1310,31 @@ def with_varied_demonstrations(cases, seed, *, robust=False):
     ]
 
 
-def build_balanced_demonstrations(config, vision_factory):
+def build_balanced_demonstrations(config, vision_factory, *, families=None):
     """Independent training layouts and successful route variants for every family."""
     from .monte_carlo import BLOCK_SMB_MC_FAMILIES, sample_block_smb_monte_carlo_scenario
 
+    families = set(BLOCK_SMB_MC_FAMILIES if families is None else families)
+    if not families or families - set(BLOCK_SMB_MC_FAMILIES):
+        raise ValueError("Demonstration families must be a nonempty subset of the family catalog")
     cases = []
+    completed_layouts = 0
     progress = _CollectionProgress(
         config,
         "generate_routes",
-        len(BLOCK_SMB_MC_FAMILIES) * config.demonstration_layouts_per_family,
+        len(families) * config.demonstration_layouts_per_family,
     )
     for family_index, family in enumerate(BLOCK_SMB_MC_FAMILIES):
+        if family not in families:
+            continue
         for i in range(config.demonstration_layouts_per_family):
             progress.update(
-                family_index * config.demonstration_layouts_per_family + i,
+                completed_layouts,
                 force=i == 0,
                 family=family,
                 trajectories=len(cases),
             )
+            completed_layouts += 1
             sample = sample_block_smb_monte_carlo_scenario(
                 family=family,
                 seed=config.seed,

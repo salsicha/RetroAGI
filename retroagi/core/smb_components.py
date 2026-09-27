@@ -15,7 +15,11 @@ import torch
 from retroagi.core.smb_geometry import MOTION_NAMES, STATE_NAMES
 from retroagi.core.smb_scene import AVAILABILITY_NAMES, SCENE_ENCODER
 
-STRATEGY_OBJECTIVE_PREFIXES = ("strategy_network.objective_head.",)
+STRATEGY_OBJECTIVE_PREFIXES = (
+    "strategy_network.objective_head.",
+    "strategy_network.intent_head.",
+    "strategy_network.intent_context.",
+)
 STRATEGY_POSITION_KEYS = (
     "strategy_network.position_gain",
     "strategy_network.history_positions.pe",
@@ -204,6 +208,10 @@ def load_component(model, directory, name, *, contract, architecture):
     if "strategy_network.position_gain" in missing:
         merged["strategy_network.position_gain"] = torch.zeros_like(
             merged["strategy_network.position_gain"]
+        )
+    if "strategy_network.intent_context.weight" in missing:
+        merged["strategy_network.intent_context.weight"] = torch.zeros_like(
+            merged["strategy_network.intent_context.weight"]
         )
     model.load_state_dict(merged, strict=True)
     model.full_level_qualified = False

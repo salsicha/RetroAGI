@@ -319,8 +319,10 @@ class BlockSMBTrainingConfig:
     # Mastery-gated schedule: focus MC train sampling on families that have not
     # yet cleared the family pass-rate gate, keep a small retention share for
     # mastered families, and unlock difficulties per family (easy -> medium ->
-    # hard) as each bin clears the gate. Every family always has nonzero weight.
+    # hard) as each bin clears the gate. Eligible families retain practice.
     mastery_gated_schedule: bool = False
+    # Sequence families unlock only after held-out prerequisite mastery.
+    hierarchy_curriculum: bool = False
     mastery_retention_weight: float = 0.25
     # Graduated retention: a newly-mastered family keeps elevated practice
     # for this many evaluations, then ramps down over the same number of
@@ -371,6 +373,7 @@ class BlockSMBTrainingConfig:
     # the head to the shortest bin.
     primitive_outcome_weight: float = 0.5
     tactic_loss_weight: float = 0.5
+    strategy_intent_loss_weight: float = 0.5
     # Episodic world-model memory (architecture_config world_model_memory_dim):
     # weight of the LSTM's observable-hazard-memory target, and how many
     # demonstration updates reuse carried states before they are replayed.
@@ -529,6 +532,7 @@ class BlockSMBTrainingConfig:
                 self.memory_refresh_interval,
                 self.memory_unroll_steps,
                 self.strategy_loss_weight,
+                self.strategy_intent_loss_weight,
             )
             < 0
         ):
@@ -537,6 +541,12 @@ class BlockSMBTrainingConfig:
             )
         if self.learned_skill_goals and not self.skill_goal_conditioning:
             raise ValueError("learned_skill_goals requires skill_goal_conditioning")
+        if self.hierarchy_curriculum and (
+            not self.mastery_gated_schedule or self.monte_carlo_validation_samples <= 0
+        ):
+            raise ValueError(
+                "hierarchy_curriculum requires mastery scheduling and held-out validation"
+            )
         memory_world_model = int(self.architecture_config.get("world_model_memory_dim", 0)) > 0
         if (
             (self.demonstration_bootstrap_updates or self.demonstration_rehearsal_updates)
@@ -702,6 +712,7 @@ class BlockSMBTransition:
     # Strategy objective logits and the scripted objective (-1: no skill goals).
     objective_logits: torch.Tensor | None = None
     objective_target: int = -1
+    strategy_logits: torch.Tensor | None = None
 
 
 @dataclass
@@ -1184,6 +1195,8 @@ def update_block_smb_mastery_state(
 
     families = monte_carlo_validation.get("families", {})
     bins = monte_carlo_validation.get("difficulty_bins", {})
+    from .hierarchy import HIERARCHY_FAMILIES
+
     updated: dict[str, dict[str, Any]] = {}
     for family in BLOCK_SMB_MC_FAMILIES:
         previous = state.get(family, {})
@@ -1193,6 +1206,7 @@ def update_block_smb_mastery_state(
             "unlocked_difficulties": list(previous.get("unlocked_difficulties", ["easy"])),
             "mastered": bool(previous.get("mastered", False)),
             "mastered_evals": int(previous.get("mastered_evals", 0)),
+            "hierarchy_unlocked": bool(previous.get("hierarchy_unlocked", False)),
         }
         rollup = families.get(family)
         if isinstance(rollup, Mapping) and "success_rate" in rollup:
@@ -1215,12 +1229,31 @@ def update_block_smb_mastery_state(
             float(bin_rates.get(difficulty, 0.0)) >= family_pass_rate_gate
             for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS
         )
+        if family in HIERARCHY_FAMILIES:
+            record["tactic_accuracy"] = float(
+                monte_carlo_validation.get("tactics_by_family", {})
+                .get(family, {})
+                .get("accuracy", 0.0)
+            )
+            record["strategy_intent_accuracy"] = float(
+                monte_carlo_validation.get("strategy_intent_by_family", {})
+                .get(family, {})
+                .get("accuracy", 0.0)
+            )
+            record["mastered"] &= (
+                min(record["tactic_accuracy"], record["strategy_intent_accuracy"])
+                >= family_pass_rate_gate
+            )
         # Graduated retention: count consecutive evaluations at mastery so
         # the practice weight can ease off gradually. A regression resets
         # the count — the family returns to full focus and, once it passes
         # again, restarts the ramp instead of dropping straight to the floor.
         record["mastered_evals"] = record["mastered_evals"] + 1 if record["mastered"] else 0
         updated[family] = record
+    from .hierarchy import eligible_families
+
+    for family in eligible_families(BLOCK_SMB_MC_FAMILIES, updated):
+        updated[family]["hierarchy_unlocked"] = True
     return updated
 
 
@@ -1294,6 +1327,10 @@ def build_mastery_monte_carlo_curriculum(
         retention_grace_evals=config.mastery_retention_grace_evals,
     )
     families = list(BLOCK_SMB_MC_FAMILIES)
+    if config.hierarchy_curriculum:
+        from .hierarchy import eligible_families
+
+        families = list(eligible_families(families, state))
     weight_values = [weights[family] for family in families]
     rng = random.Random(int(config.monte_carlo_seed) + 800_000 + int(phase))
     scenarios: list[tuple[str, dict]] = []
@@ -1333,6 +1370,7 @@ def summarize_block_smb_mastery_state(
                 "unlocked_difficulties": list(record.get("unlocked_difficulties", ["easy"])),
                 "mastered": bool(record.get("mastered", False)),
                 "mastered_evals": int(record.get("mastered_evals", 0)),
+                "hierarchy_unlocked": bool(record.get("hierarchy_unlocked", False)),
             }
             for family, record in state.items()
         },
@@ -2436,10 +2474,13 @@ def collect_trajectory(
     # the moving bridge (mount) or the far shore (dismount) is the landing
     # target. Waits reobserve each frame, matching the bridge oracle.
     bridge_jump_task = getattr(stage.env, "_bridge_jump_task", None)
+    from .hierarchy import bridge_training_active
+
     bridge_composite = bool(stage.env._require_bridge_before_goal) and bridge_jump_task is None
     bridge_opening = bridge_composite
     bridge_departure_recorded = False
     bridge_exit_committed = False
+    hierarchy_target = -1
     local_family = scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES
     certified_jump_family = local_family or bridge_jump_task is not None or enemy_composite
     primitive_local_target = None
@@ -2705,6 +2746,7 @@ def collect_trajectory(
             span_info["primitive_outcome_batch"] = trajectory.transitions[span[-1]].next_batch
 
     for step_index in range(rollout_steps):
+        bridge_composite = bridge_training_active(stage.env) and bridge_jump_task is None
         batch = apply_block_smb_ablations(stage.encode_observation(observation), ablation_config)
         batch.src_a = batch.src_a.to(device)
         batch.src_b = batch.src_b.to(device)
@@ -2764,6 +2806,7 @@ def collect_trajectory(
         )
         if (
             local_family
+            and not bridge_composite
             and skill_goal_conditioning
             and step_phase not in ("finish", "bounce_recovery")
         ):
@@ -2900,20 +2943,21 @@ def collect_trajectory(
             if step_skill_goal is not None
             else -1
         )
-        from .tactics import compatible_actions, tactic_label
+        from .tactics import compatible_actions, hierarchy_intent
 
-        tactic_target = (
-            tactic_label(
-                stage.env,
-                stage._hazard_features,
-                oracle_action,
-                family=scenario_family(stage.scenario),
-                phase=step_phase,
-            )
-            if tactic_decision
-            else -1
+        hierarchy_target = hierarchy_intent(
+            stage.env,
+            stage._hazard_features,
+            oracle_action,
+            family=scenario_family(stage.scenario),
+            phase=step_phase,
+            decision=tactic_decision,
+            previous=hierarchy_target,
         )
-        tactic_actions = tuple(compatible_actions(stage.env, tactic_target))
+        tactic_target = hierarchy_target
+        tactic_actions = tuple(
+            compatible_actions(stage.env, tactic_target if tactic_decision else -1)
+        )
         predicted_tactic = getattr(model, "last_tactic_logits", None)
         predicted_tactic_actions = (
             compatible_actions(stage.env, int(predicted_tactic.detach().argmax(-1).item()))
@@ -3083,6 +3127,7 @@ def collect_trajectory(
                 memory_target=memory_target,
                 objective_logits=objective_logits,
                 objective_target=objective_target,
+                strategy_logits=getattr(model, "last_strategy_logits", None),
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -3232,7 +3277,9 @@ def collect_trajectory(
             # These waits end at the next observation, with no duration choice.
             continue
         valid_frames = None
-        if bridge_composite:
+        if temporal_records[span_start].get("bridge_safe_wait_frames") is not None:
+            # The episode may already be traversing terrain after the bridge.
+            # Coach each wait against the phase in which that span began.
             safe = temporal_records[span_start].get("bridge_safe_wait_frames") or []
             valid_frames = [float(n) for n in range(4, 65, 4) if n in safe]
             if not valid_frames:
@@ -3678,8 +3725,16 @@ def compute_block_smb_losses(
     release_timing_terms = []
     memory_terms = []
     strategy_terms = []
+    strategy_intent_terms = []
     oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
+        if step.tactic_target >= 0 and step.strategy_logits is not None:
+            strategy_intent_terms.append(
+                F.cross_entropy(
+                    step.strategy_logits.to(device),
+                    torch.tensor([step.tactic_target], device=device),
+                )
+            )
         if step.objective_target >= 0 and step.objective_logits is not None:
             strategy_terms.append(
                 F.cross_entropy(
@@ -3830,6 +3885,11 @@ def compute_block_smb_losses(
     loss_strategy = (
         torch.stack(strategy_terms).mean() if strategy_terms else loss_policy.new_zeros(())
     )
+    loss_strategy_intent = (
+        torch.stack(strategy_intent_terms).mean()
+        if strategy_intent_terms
+        else loss_policy.new_zeros(())
+    )
     loss_tactic_action = (
         torch.stack(tactic_action_terms).mean()
         if tactic_action_terms
@@ -3861,6 +3921,7 @@ def compute_block_smb_losses(
         + config.tactic_loss_weight * (loss_tactic + loss_tactic_action)
         + config.world_model_memory_weight * loss_world_model_memory
         + config.strategy_loss_weight * loss_strategy
+        + config.strategy_intent_loss_weight * loss_strategy_intent
         + config.release_timing_weight * loss_release_timing
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
@@ -3870,6 +3931,10 @@ def compute_block_smb_losses(
         "loss_tactic_action": loss_tactic_action,
         "loss_world_model_memory": loss_world_model_memory,
         "loss_strategy": loss_strategy,
+        "loss_strategy_intent": loss_strategy_intent,
+        "strategy_intent_supervised_steps": torch.tensor(
+            float(len(strategy_intent_terms)), device=device
+        ),
         "tactic_supervised_steps": torch.tensor(float(len(tactic_terms)), device=device),
         "loss_representation": loss_representation,
         "loss_dynamics": loss_dynamics,
@@ -4273,6 +4338,7 @@ def evaluate_block_smb_monte_carlo(
     # family -> [frames, summed absolute memory error]; [decisions, correct]
     memory_errors: dict[str, list[float]] = {}
     strategy_counts: dict[str, list[int]] = {}
+    strategy_intent_counts: dict[str, list[int]] = {}
     returns: list[float] = []
     successes: list[float] = []
     all_actions: list[int] = []
@@ -4324,6 +4390,12 @@ def evaluate_block_smb_monte_carlo(
                     stage.env.close()
                 actions = [step.action for step in trajectory.transitions]
                 for step in trajectory.transitions:
+                    if step.tactic_target >= 0 and step.strategy_logits is not None:
+                        intent = strategy_intent_counts.setdefault(sample.family, [0, 0])
+                        intent[0] += 1
+                        intent[1] += int(
+                            step.strategy_logits.argmax(-1).item() == step.tactic_target
+                        )
                     if step.tactic_target >= 0 and step.tactic_logits is not None:
                         counts = tactical_counts.setdefault(sample.family, [0, 0, 0])
                         counts[0] += 1
@@ -4557,6 +4629,10 @@ def evaluate_block_smb_monte_carlo(
         "strategy_by_family": {
             family: {"decisions": n, "accuracy": correct / n}
             for family, (n, correct) in strategy_counts.items()
+        },
+        "strategy_intent_by_family": {
+            family: {"frames": n, "accuracy": correct / n}
+            for family, (n, correct) in strategy_intent_counts.items()
         },
         "memory_error_by_family": {
             family: {"frames": int(n), "mean_absolute_error": total / n}
@@ -4988,6 +5064,7 @@ def save_block_smb_checkpoint(
     config: BlockSMBTrainingConfig,
     metrics: Mapping[str, float],
     target_model: Optional[torch.nn.Module] = None,
+    mastery_state: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     states = {
         "model": model.state_dict(),
@@ -4998,6 +5075,8 @@ def save_block_smb_checkpoint(
     }
     if target_model is not None:
         states["target_model"] = target_model.state_dict()
+    if mastery_state is not None:
+        states["mastery"] = copy.deepcopy(dict(mastery_state))
     from retroagi.core.smb_geometry import MOTION_NAMES, SCHEMA, STATE_NAMES
 
     checkpoint = build_checkpoint(
@@ -5264,6 +5343,15 @@ def train_and_evaluate_block_smb(
     elif target_model is not None:
         update_target_network(target_model, model, tau=1.0)
     mastery_state = initial_block_smb_mastery_state()
+    if config.resume_path is not None:
+        mastery_state.update(checkpoint.get("states", {}).get("mastery", {}))
+    from .hierarchy import eligible_families, hierarchy_status
+
+    active_families = (
+        eligible_families(BLOCK_SMB_MC_FAMILIES, mastery_state)
+        if config.hierarchy_curriculum
+        else BLOCK_SMB_MC_FAMILIES
+    )
     mastery_phase = 0
     best_primitive_score = float("-inf")
     success_replay = BlockSMBSuccessReplay(
@@ -5276,6 +5364,12 @@ def train_and_evaluate_block_smb(
         curriculum.extend(
             build_mastery_monte_carlo_curriculum(config, mastery_state, phase=mastery_phase)
         )
+        if config.hierarchy_curriculum:
+            curriculum = [
+                (name, scene)
+                for name, scene in curriculum
+                if scenario_family(scene) in active_families
+            ]
     else:
         curriculum = build_curriculum(
             config,
@@ -5316,6 +5410,12 @@ def train_and_evaluate_block_smb(
     recent_monte_carlo_failure_bins: Mapping[str, Any] = {}
     demonstration_data = None
     recovery_history = []
+    if config.hierarchy_curriculum:
+        _log_block_smb_event(
+            config,
+            "hierarchy_curriculum_started",
+            **hierarchy_status(BLOCK_SMB_MC_FAMILIES, mastery_state),
+        )
     if config.demonstration_bootstrap_updates or config.demonstration_rehearsal_updates:
         from .demonstrations import (
             build_balanced_demonstrations,
@@ -5323,7 +5423,11 @@ def train_and_evaluate_block_smb(
             log_demonstration_progress,
         )
 
-        demonstration_data = build_balanced_demonstrations(config, vision_factory)
+        demonstration_data = (
+            build_balanced_demonstrations(config, vision_factory, families=active_families)
+            if config.hierarchy_curriculum
+            else build_balanced_demonstrations(config, vision_factory)
+        )
         if start_epoch == 0 and config.demonstration_bootstrap_updates and not bootstrap_completed:
             bootstrap_loss = fit_demonstrations(
                 model,
@@ -5335,6 +5439,7 @@ def train_and_evaluate_block_smb(
                 memory_refresh_interval=config.memory_refresh_interval,
                 memory_unroll=config.memory_unroll_steps,
                 strategy_loss_weight=config.strategy_loss_weight,
+                strategy_intent_loss_weight=config.strategy_intent_loss_weight,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5369,6 +5474,7 @@ def train_and_evaluate_block_smb(
                         "demonstration_bootstrap_updates": config.demonstration_bootstrap_updates,
                     },
                     target_model=target_model,
+                    mastery_state=mastery_state,
                 )
                 log_demonstration_progress(
                     config,
@@ -5387,10 +5493,16 @@ def train_and_evaluate_block_smb(
                 reason="max_epochs",
             )
         foundation_failure_bins = recent_monte_carlo_failure_bins
+        if config.hierarchy_curriculum:
+            foundation_failure_bins = {
+                key: value
+                for key, value in foundation_failure_bins.items()
+                if str(key).split(":")[0] in active_families
+            }
         if jump_foundation_active and isinstance(recent_monte_carlo_failure_bins, Mapping):
             foundation_failure_bins = {
                 key: value
-                for key, value in recent_monte_carlo_failure_bins.items()
+                for key, value in foundation_failure_bins.items()
                 if str(key).split(":")[0] in BLOCK_SMB_JUMP_FOUNDATION_FAMILIES
             }
         replay_curriculum = build_adaptive_monte_carlo_replay_curriculum(
@@ -5457,6 +5569,7 @@ def train_and_evaluate_block_smb(
                 memory_refresh_interval=config.memory_refresh_interval,
                 memory_unroll=config.memory_unroll_steps,
                 strategy_loss_weight=config.strategy_loss_weight,
+                strategy_intent_loss_weight=config.strategy_intent_loss_weight,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5482,6 +5595,10 @@ def train_and_evaluate_block_smb(
                 losses["demonstration_memory_loss"] = demonstration_metrics["memory_loss"]
             if "strategy_loss" in demonstration_metrics:
                 losses["demonstration_strategy_loss"] = demonstration_metrics["strategy_loss"]
+            if "strategy_intent_loss" in demonstration_metrics:
+                losses["demonstration_strategy_intent_loss"] = demonstration_metrics[
+                    "strategy_intent_loss"
+                ]
             if target_model is not None:
                 update_target_network(target_model, model, tau=1.0)
         losses["adaptive_replay_samples"] = float(len(replay_curriculum))
@@ -5582,6 +5699,7 @@ def train_and_evaluate_block_smb(
                                 config=config,
                                 metrics=last_metrics,
                                 target_model=target_model,
+                                mastery_state=mastery_state,
                             )
                             _log_block_smb_event(
                                 config,
@@ -5602,6 +5720,28 @@ def train_and_evaluate_block_smb(
                     monte_carlo_validation,
                     family_pass_rate_gate=config.monte_carlo_family_pass_rate_gate,
                 )
+                if config.hierarchy_curriculum:
+                    unlocked = eligible_families(BLOCK_SMB_MC_FAMILIES, mastery_state)
+                    new_families = tuple(f for f in unlocked if f not in active_families)
+                    _log_block_smb_event(
+                        config,
+                        "hierarchy_curriculum_updated",
+                        epoch=completed_epoch,
+                        newly_unlocked=list(new_families),
+                        **hierarchy_status(BLOCK_SMB_MC_FAMILIES, mastery_state),
+                    )
+                    if (
+                        new_families
+                        and demonstration_data is not None
+                        and completed_epoch < config.epochs
+                    ):
+                        from .policy_recovery import combine_demonstrations
+
+                        new_data = build_balanced_demonstrations(
+                            config, vision_factory, families=new_families
+                        )
+                        demonstration_data = combine_demonstrations([demonstration_data, new_data])
+                    active_families = unlocked
                 mastery_phase += 1
                 curriculum = load_fixed_scenarios(config.fixed_scenarios)
                 curriculum.extend(
@@ -5611,6 +5751,12 @@ def train_and_evaluate_block_smb(
                         phase=mastery_phase,
                     )
                 )
+                if config.hierarchy_curriculum:
+                    curriculum = [
+                        (name, scene)
+                        for name, scene in curriculum
+                        if scenario_family(scene) in active_families
+                    ]
                 mastery_summary = summarize_block_smb_mastery_state(mastery_state)
                 last_metrics["eval_mastered_family_count"] = float(
                     len(mastery_summary["mastered_families"])
@@ -5656,6 +5802,7 @@ def train_and_evaluate_block_smb(
                 config=config,
                 metrics=last_metrics,
                 target_model=target_model,
+                mastery_state=mastery_state,
             )
             _log_block_smb_event(
                 config,
