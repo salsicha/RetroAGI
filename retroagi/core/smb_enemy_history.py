@@ -34,6 +34,8 @@ class EnemyObservationHistory:
         self.last_frame = None
         self.cached = np.zeros(len(HAZARD_NAMES), dtype=np.float32)
         self.peaks = {}
+        self.identities = {}
+        self.next_identity = 0
         self.last_key = None
         self.memory = np.zeros(len(HAZARD_MEMORY_NAMES), dtype=np.float32)
 
@@ -41,8 +43,21 @@ class EnemyObservationHistory:
         if frame == self.last_frame:
             return self.cached.copy()
         candidates = []
+        identities = {}
         for index, enemy in enumerate(scene.enemies):
-            if enemy.get("dead") or enemy["h"] <= 0:
+            if enemy.get("dead"):
+                continue
+            slot = (enemy.get("slot", index), enemy.get("kind", "walking"))
+            identity = self.identities.get(slot)
+            if identity is None:
+                identity = self.next_identity
+                self.next_identity += 1
+            identities[slot] = identity
+            # Adapters with reusable slots provide a lifetime generation.
+            # Otherwise absence retires the identity, but retraction/occlusion
+            # does not: hidden objects remain in the scene's enemy list.
+            key = (*slot, enemy.get("generation", identity))
+            if enemy["h"] <= 0:
                 continue
             x, y, w, h = (float(enemy[k]) for k in ("x", "y", "w", "h"))
             left = getattr(scene, "camera_x", 0.0)
@@ -55,8 +70,8 @@ class EnemyObservationHistory:
                     h = min(h, max(0.0, r.top - y))
             if h <= 0:
                 continue
-            key = (enemy.get("slot", index), enemy.get("kind", "walking"))
             candidates.append((abs(x + w / 2 - scene.mario["x"]), key, y, h))
+        self.identities = identities
         current = min(candidates, key=lambda row: row[0]) if candidates else None
         visible = current is not None
         before = self.previous

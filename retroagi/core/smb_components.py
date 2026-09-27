@@ -16,6 +16,10 @@ from retroagi.core.smb_geometry import MOTION_NAMES, STATE_NAMES
 from retroagi.core.smb_scene import AVAILABILITY_NAMES, SCENE_ENCODER
 
 STRATEGY_OBJECTIVE_PREFIXES = ("strategy_network.objective_head.",)
+STRATEGY_POSITION_KEYS = (
+    "strategy_network.position_gain",
+    "strategy_network.history_positions.pe",
+)
 COMPONENT_PREFIXES = {
     "actor": ("agent.", "tactics_network.", "strategy_network.", "world_model_actor_context."),
     "world_model": ("world_model.",),
@@ -188,12 +192,19 @@ def load_component(model, directory, name, *, contract, architecture):
     missing = expected.keys() - state.keys()
     if (
         state.keys() - expected.keys()
-        or any(not key.startswith(STRATEGY_OBJECTIVE_PREFIXES) for key in missing)
+        or any(
+            not key.startswith(STRATEGY_OBJECTIVE_PREFIXES) and key not in STRATEGY_POSITION_KEYS
+            for key in missing
+        )
         or any(state[k].shape != expected[k].shape for k in state)
     ):
         raise ValueError("Component tensor layout mismatch")
     merged = model.state_dict()
     merged.update(state)
+    if "strategy_network.position_gain" in missing:
+        merged["strategy_network.position_gain"] = torch.zeros_like(
+            merged["strategy_network.position_gain"]
+        )
     model.load_state_dict(merged, strict=True)
     model.full_level_qualified = False
     if hasattr(model, "smb_executor"):

@@ -5164,7 +5164,14 @@ def restore_block_smb_checkpoint(
         try:
             optimizer.load_state_dict(states["optimizer"])
         except ValueError:
-            if not load_result.missing_keys and not skipped_world_model_keys:
+            legacy_strategy = "strategy_network.position_gain" not in states["model"] and hasattr(
+                getattr(model, "strategy_network", None), "position_gain"
+            )
+            if (
+                not load_result.missing_keys
+                and not skipped_world_model_keys
+                and not legacy_strategy
+            ):
                 raise
     if target_model is not None:
         target_state = states.get("target_model", states["model"])
@@ -5215,6 +5222,7 @@ def train_and_evaluate_block_smb(
     )
     start_epoch = 0
     global_step = 0
+    bootstrap_completed = False
     _initialize_block_smb_log(config)
     if config.resume_path is not None:
         checkpoint = restore_block_smb_checkpoint(
@@ -5231,6 +5239,9 @@ def train_and_evaluate_block_smb(
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
+        bootstrap_completed = (
+            checkpoint.get("metrics", {}).get("demonstration_bootstrap_updates", 0) > 0
+        )
     elif config.init_checkpoint is not None:
         # Weights-only warm start: model parameters come from the checkpoint,
         # everything else (optimizer, epochs, curriculum, mastery state) is
@@ -5306,10 +5317,14 @@ def train_and_evaluate_block_smb(
     demonstration_data = None
     recovery_history = []
     if config.demonstration_bootstrap_updates or config.demonstration_rehearsal_updates:
-        from .demonstrations import build_balanced_demonstrations, fit_demonstrations
+        from .demonstrations import (
+            build_balanced_demonstrations,
+            fit_demonstrations,
+            log_demonstration_progress,
+        )
 
         demonstration_data = build_balanced_demonstrations(config, vision_factory)
-        if start_epoch == 0 and config.demonstration_bootstrap_updates:
+        if start_epoch == 0 and config.demonstration_bootstrap_updates and not bootstrap_completed:
             bootstrap_loss = fit_demonstrations(
                 model,
                 optimizer,
@@ -5324,6 +5339,9 @@ def train_and_evaluate_block_smb(
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
                 seed=config.seed,
+                progress=lambda phase, **payload: log_demonstration_progress(
+                    config, "demonstration_bootstrap_progress", phase=phase, **payload
+                ),
             )
             _log_block_smb_event(
                 config,
@@ -5335,6 +5353,29 @@ def train_and_evaluate_block_smb(
             )
             if target_model is not None:
                 update_target_network(target_model, model, tau=1.0)
+            if config.save_checkpoints and config.checkpoint_path is not None:
+                bootstrap_path = config.checkpoint_path.with_name(
+                    f"{config.checkpoint_path.stem}.bootstrap{config.checkpoint_path.suffix}"
+                )
+                save_block_smb_checkpoint(
+                    bootstrap_path,
+                    model,
+                    optimizer,
+                    epoch=0,
+                    global_step=global_step,
+                    config=config,
+                    metrics={
+                        "demonstration_bootstrap_loss": bootstrap_loss,
+                        "demonstration_bootstrap_updates": config.demonstration_bootstrap_updates,
+                    },
+                    target_model=target_model,
+                )
+                log_demonstration_progress(
+                    config,
+                    "demonstration_bootstrap_checkpoint_saved",
+                    checkpoint_path=str(bootstrap_path),
+                    updates=config.demonstration_bootstrap_updates,
+                )
     for epoch in range(start_epoch, config.epochs):
         if jump_foundation_active and epoch >= config.jump_foundation_max_epochs:
             jump_foundation_active = False
@@ -5421,6 +5462,13 @@ def train_and_evaluate_block_smb(
                 prioritized=config.demonstration_prioritized,
                 family_weights=demonstration_weights,
                 seed=config.seed + epoch + 1,
+                progress=lambda phase, **payload: log_demonstration_progress(
+                    config,
+                    "demonstration_rehearsal_progress",
+                    phase=phase,
+                    epoch=epoch + 1,
+                    **payload,
+                ),
             )
             losses["demonstration_rehearsal_updates"] = config.demonstration_rehearsal_updates
             demonstration_metrics = getattr(model, "last_demonstration_metrics", {})

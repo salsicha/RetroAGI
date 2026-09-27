@@ -134,6 +134,13 @@ def action_level_world_model_state_dict(
             skipped.append(key)
             continue
         migrated[key] = value
+    # Legacy strategy encoders were permutation invariant. Preserve their
+    # initial behavior when loading, while allowing position gain to learn.
+    position_gain = "strategy_network.position_gain"
+    if position_gain in current and position_gain not in state_dict:
+        migrated[position_gain] = torch.zeros_like(current[position_gain])
+        position_table = "strategy_network.history_positions.pe"
+        migrated[position_table] = current[position_table]
     return migrated, tuple(skipped)
 
 
@@ -1570,6 +1577,8 @@ class StrategyNetwork(nn.Module):
         super().__init__()
         self.history = int(history)
         self.input_projection = nn.Linear(len(TACTIC_STANCES), d_model)
+        self.history_positions = PositionalEncoding(d_model, max_len=self.history)
+        self.position_gain = nn.Parameter(torch.ones(()))
         layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=2,
@@ -1590,6 +1599,7 @@ class StrategyNetwork(nn.Module):
 
     def forward(self, stance_history, state=None, memory=None):
         tokens = self.input_projection(stance_history.float())
+        tokens = tokens + self.position_gain * self.history_positions.pe[:, : tokens.size(1)]
         context = self.encoder(tokens).mean(dim=1)
         if self.objective_head is None or state is None:
             return context, None

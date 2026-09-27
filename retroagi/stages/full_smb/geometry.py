@@ -129,6 +129,8 @@ class NESGeometry:
         self.enemy_history = EnemyObservationHistory()
         self.previous = None
         self.previous_enemies = {}
+        self.active_enemy_kinds = {}
+        self.enemy_generations = {}
         self.previous_platforms = {}
         self.bouncing = False
         self.previous_states = {}
@@ -179,6 +181,7 @@ class NESGeometry:
         unavailable = ["coyote", "jump_buffer"]  # NES has neither simulator mechanic.
         unsupported_objects = []
         next_enemies = {}
+        active_enemy_kinds = {}
         next_platforms = {}
         stomped = False
         next_states = {}
@@ -223,6 +226,9 @@ class NESGeometry:
             if kind > 0x15:
                 unsupported_objects.append(kind)
                 continue
+            active_enemy_kinds[slot] = kind
+            if self.active_enemy_kinds.get(slot) != kind:
+                self.enemy_generations[slot] = self.enemy_generations.get(slot, 0) + 1
             enemy = _box(ram, slot + 1, scroll)
             if enemy.right < 0 or enemy.left > 256:
                 continue
@@ -251,6 +257,7 @@ class NESGeometry:
                     patrol_max=enemy.x,
                     slot=slot,
                     kind=kind,
+                    generation=self.enemy_generations[slot],
                 )
             )
         if enemies:
@@ -343,6 +350,7 @@ class NESGeometry:
         )
         self.previous = (world_x, box.y)
         self.previous_enemies = next_enemies
+        self.active_enemy_kinds = active_enemy_kinds
         self.previous_states = next_states
         self.previous_platforms = next_platforms
         self.frames += 1

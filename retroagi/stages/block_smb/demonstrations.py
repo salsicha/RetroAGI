@@ -6,6 +6,7 @@ Evaluation uses only the learned policy and normal primitive controller.
 """
 
 import copy
+import time
 from dataclasses import dataclass, fields, replace
 
 import numpy as np
@@ -104,7 +105,40 @@ def demonstration_rows(data, mask):
     )
 
 
+def log_demonstration_progress(config, event, **payload):
+    """Expose long CPU setup and fitting phases in both run logs."""
+    if config.log_path is None:
+        return
+    from .train import _log_block_smb_event
+
+    _log_block_smb_event(config, event, **payload)
+    print(f"{event}: {payload}", flush=True)
+
+
+class _CollectionProgress:
+    def __init__(self, config, phase, total):
+        self.config, self.phase, self.total = config, phase, total
+        self.started = self.last_report = time.monotonic()
+        self.update(0, force=True)
+
+    def update(self, completed, *, force=False, **payload):
+        now = time.monotonic()
+        if force or completed == self.total or now - self.last_report >= 30:
+            log_demonstration_progress(
+                self.config,
+                "demonstration_collection_progress",
+                phase=self.phase,
+                completed=completed,
+                total=self.total,
+                elapsed_seconds=round(now - self.started, 2),
+                **payload,
+            )
+            self.last_report = now
+
+
 def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32):
+    cases = list(cases)
+    progress = _CollectionProgress(config, "encode_trajectories", len(cases))
     rows = []
     recovery_rows = []
     release_rows = []
@@ -115,7 +149,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     context_rows = []
     episode_starts = []
     frame_wait_episodes = set()
-    for family_index, sample in cases:
+    for case_index, (family_index, sample) in enumerate(cases):
         stage = BlockSMBStage(
             env=MarioScenarioEnv(reward_config=config.reward_config),
             scenario=sample.scenario,
@@ -391,6 +425,8 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             memory_rows.extend(episode_memory[: len(episode)])
         finally:
             stage.env.close()
+        progress.update(case_index + 1, family_index=family_index, frames=len(rows))
+    log_demonstration_progress(config, "demonstration_dataset_assembly", frames=len(rows))
     columns = list(zip(*rows))
     data = DemonstrationBatch(
         *(torch.cat(v) if i in (0, 1, 2, 3, 8) else torch.tensor(v) for i, v in enumerate(columns))
@@ -645,7 +681,7 @@ def interior_duration_targets(allowed):
 
 
 @torch.no_grad()
-def refresh_demonstration_memory(model, data, *, chunk_size=1024):
+def refresh_demonstration_memory(model, data, *, chunk_size=1024, progress=None):
     """Store the carried state entering every demonstration row.
 
     Each stored episode, including unsupervised context rows, is replayed in
@@ -666,6 +702,8 @@ def refresh_demonstration_memory(model, data, *, chunk_size=1024):
     episodes = sorted(zip(starts, ends), key=lambda span: span[0] - span[1])
     stored = torch.zeros((len(data.action), 2 * layers * hidden + history * stances))
     inputs = None
+    completed_rows = 0
+    last_report = time.monotonic()
     for first in range(0, len(episodes), chunk_size):
         chunk = episodes[first : first + chunk_size]
         state = model.initial_world_model_state(len(chunk), device)
@@ -698,6 +736,13 @@ def refresh_demonstration_memory(model, data, *, chunk_size=1024):
             if inputs is None:
                 inputs = torch.zeros((len(data.action), step_inputs.size(1)))
             inputs[rows] = step_inputs.cpu()
+            completed_rows += active
+            now = time.monotonic()
+            if progress is not None and now - last_report >= 30:
+                progress(
+                    "memory_refresh_rows", frames=completed_rows, total_frames=len(data.action)
+                )
+                last_report = now
     data.memory_state = stored
     data.world_model_inputs = inputs if inputs is not None else torch.zeros((0, 0))
     return data
@@ -781,6 +826,7 @@ def fit_demonstrations(
     memory_refresh_interval=0,
     memory_unroll=0,
     strategy_loss_weight=0.0,
+    progress=None,
 ):
     """Balance families and decision actions; never train on validation data.
 
@@ -795,6 +841,9 @@ def fit_demonstrations(
     # otherwise change B's conditioning despite forcing the final action.
     # cuDNN recurrent backward requires training mode; recurrent dropout is
     # absent in this feedforward demonstration path.
+    started = last_report = time.monotonic()
+    if progress is not None:
+        progress("started", updates=0, total_updates=steps, frames=len(data.action))
     model.eval()
     for module in model.modules():
         if isinstance(module, torch.nn.RNNBase):
@@ -818,7 +867,16 @@ def fit_demonstrations(
     components = []
     for update in range(steps):
         if memory and update % memory_refresh_interval == 0:
-            refresh_demonstration_memory(model, data)
+            if progress is not None:
+                progress("memory_refresh_started", updates=update, total_updates=steps)
+            refresh_demonstration_memory(model, data, progress=progress)
+            if progress is not None:
+                progress(
+                    "memory_refresh_completed",
+                    updates=update,
+                    total_updates=steps,
+                    elapsed_seconds=round(time.monotonic() - started, 2),
+                )
         if update % 32 == 0:
             weights = (
                 adaptive_group_weights(base_weights, groups, group_counts, group_errors)
@@ -946,6 +1004,20 @@ def fit_demonstrations(
                 )
             )
         )
+        now = time.monotonic()
+        if progress is not None and (
+            (update + 1) % 250 == 0 or update + 1 == steps or now - last_report >= 30
+        ):
+            progress(
+                "updates",
+                updates=update + 1,
+                total_updates=steps,
+                loss=float(np.mean(losses[-250:])),
+                memory_loss=float(memory_loss.detach()),
+                strategy_loss=float(strategy_loss.detach()),
+                elapsed_seconds=round(now - started, 2),
+            )
+            last_report = now
     means = torch.stack(components).mean(0).cpu().tolist()
     model.last_demonstration_metrics = dict(
         zip(
@@ -1227,8 +1299,19 @@ def build_balanced_demonstrations(config, vision_factory):
     from .monte_carlo import BLOCK_SMB_MC_FAMILIES, sample_block_smb_monte_carlo_scenario
 
     cases = []
+    progress = _CollectionProgress(
+        config,
+        "generate_routes",
+        len(BLOCK_SMB_MC_FAMILIES) * config.demonstration_layouts_per_family,
+    )
     for family_index, family in enumerate(BLOCK_SMB_MC_FAMILIES):
         for i in range(config.demonstration_layouts_per_family):
+            progress.update(
+                family_index * config.demonstration_layouts_per_family + i,
+                force=i == 0,
+                family=family,
+                trajectories=len(cases),
+            )
             sample = sample_block_smb_monte_carlo_scenario(
                 family=family,
                 seed=config.seed,
@@ -1269,4 +1352,5 @@ def build_balanced_demonstrations(config, vision_factory):
                 )
                 if alternative is not None:
                     cases.append((family_index, alternative))
+    progress.update(progress.total, trajectories=len(cases))
     return collect_demonstrations(cases, config, vision_factory)

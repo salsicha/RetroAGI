@@ -217,6 +217,22 @@ development GPU, about the time of 50 updates. Its cost grows linearly with the
 dataset, and it runs 40 times during a 10,000-update bootstrap and four times
 per 1,000-update rehearsal.
 
+Training writes collection progress to `events.jsonl` and the console, including
+route generation, trajectory encoding, and frame counts. Bootstrap and rehearsal
+report update counts, losses, elapsed time, and memory refresh progress. Collection
+reports at family boundaries and approximately every 30 seconds between trajectories;
+a single trajectory can take longer. After bootstrap, checkpoint-enabled runs save
+`checkpoints/policy.bootstrap.pth` before starting the first epoch. The full-volume
+launcher can reuse it through `--init-checkpoint`; the core trainer also recognizes
+completed bootstrap when resuming that checkpoint.
+
+The strategy history now includes positional encoding, so different orders of the
+same stances can produce different decisions. Loading older policy weights or actor
+components starts the new position gain at zero to preserve their initial behavior;
+fresh models start at one. NES enemy history tracks each slot's active lifetime,
+preserving exposure through retraction and camera movement while separating enemies
+that later reuse a slot.
+
 Verification: the piranha-only probe from the previous section (90 training
 layouts, 4,000 updates, 60 held-out layouts, successes within 320 steps) was
 run on four seeds for each form of memory:
@@ -264,4 +280,3 @@ The loss therefore hurt through the objective's influence on tactics. In the
 final revision the objective head only reads its inputs, and a unit test checks
 that its loss changes no other weight. Evaluation memory error ranged from 0.17
 to 0.23 in the final runs.
-
