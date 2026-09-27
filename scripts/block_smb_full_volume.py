@@ -78,6 +78,7 @@ def main():
                 hazard_observations=config.hazard_observations,
                 hazard_memory_observations=config.hazard_memory_observations,
                 restore_rng=False,
+                migrate_world_model_memory=True,
             )
         optimizer = make_block_smb_optimizer(model, probe)
         samples = [

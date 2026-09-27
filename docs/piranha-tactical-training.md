@@ -160,32 +160,62 @@ adapter need not compute it for the policy. `architecture_config`
   `enemy_peak_exposure` with weight `world_model_memory_weight`.
 
 The actor reads the carried hidden and cell state through
-`world_model_actor_context`, as before, and has no explicit memory input. The
-strategy network's rolling stance history stays reset in this mode, because
-batched demonstration fitting cannot train it.
+`world_model_actor_context`, as before, and has no explicit memory input.
 
 Demonstration rows are sampled independently, so each row needs the state that
-a rollout would carry into it. Collected demonstrations now record each row's
-position in its episode and the observable memory target.
-`refresh_demonstration_memory` replays every stored episode in order with its
-demonstrated actions and the current weights, starting from an empty state, and
-stores the state entering each row. Updates then fit each row from its stored
-state, so gradients reach the LSTM through the memory head, the dynamics
-prediction and the actor context. States are refreshed every
-`memory_refresh_interval` updates and at the start of every fit. Recovery
-demonstrations start their memory at the first supervised row. Online rollouts
-record the prediction and its target, and the trainer adds the same loss.
-Batched demonstrations with recurrent state are rejected unless the model has a
-memory head and a positive refresh interval.
+a rollout would carry into it. Collected demonstrations record each row's
+position in its episode, the observable memory target, and whether the row is
+context. `refresh_demonstration_memory` replays every stored episode in order
+with its demonstrated actions and the current weights, starting from an empty
+state. It stores the state entering each row and the row's parameter-free LSTM
+inputs. States are refreshed every `memory_refresh_interval` updates and at the
+start of every fit. Online rollouts record the prediction and its target, and
+the trainer adds the same loss. Batched demonstrations with recurrent state are
+rejected unless the model has a memory head and a positive refresh interval.
+
+With `memory_unroll_steps: N`, each sampled row's state is rebuilt from the
+stored state up to N rows earlier in its episode, replaying the stored inputs
+with gradients. Action, duration, tactic and memory losses at the row then
+train what the LSTM keeps. Without the unroll the carried state is a constant,
+and only the memory head and next-state prediction train the LSTM, so it can
+learn to keep nothing but the supervised peak exposure. The memory head is also
+supervised at every replayed row. On freshly refreshed states the unrolled
+state equals the stored one.
+
+The replayed prefixes of recovery and correction routes stay as context rows:
+never sampled or supervised, but replayed, so the memory entering a repaired
+suffix includes what the failed prefix saw. Earlier revisions dropped the
+prefix and started memory at the suffix, which taught the head that a plant seen
+before a stall had not been seen. Demonstration contract 14 adds these rows.
+
+Rollouts, batched evaluation, Full SMB playback and demonstration refreshes all
+start an episode from the same empty state; a missing state would also drop the
+actor's recurrent context on the first frame. The batched evaluator carries
+each level's state, so the joint and family learning tools train and evaluate
+the recipe's memory model. `--feedforward` restores their previous feedforward
+setup, and their cached datasets must be regenerated at contract 14 unless it
+is set.
+
+A weights-only warm start (`--init-checkpoint`, including checkpoints from the
+joint and family tools) can add the memory to a checkpoint trained without it.
+The LSTM's input weights gain zero columns for the observation encoder and the
+new heads keep their initialization, so the loaded model first behaves exactly
+like the checkpoint. Resuming, and checkpoints that already have a memory, still
+require an identical architecture.
+
+Evaluation reports `memory_error_by_family`, the mean absolute memory error
+over evaluated frames, and the batched evaluator reports the same quantity. The
+Full SMB transfer probe traces the memory prediction beside the peak exposure the
+NES geometry computes, because the observation encoder reads raw C-stream slots,
+including pooled vision features that differ on the NES.
 
 The full-volume recipe enables recurrent state, `world_model_memory_dim: 1`,
-`world_model_memory_weight: 1.0` and `memory_refresh_interval: 250`, and turns
-`hazard_memory_observations` off. The joint and family learning tools evaluate
-in batches without carried state, so they drop these settings and stay
-feedforward. A refresh replays every stored row once: 49,000 piranha rows took
-2.2 seconds on the development GPU, about the time of 50 updates. Its cost
-grows linearly with the dataset, and it runs 40 times during a 10,000-update
-bootstrap and four times per 1,000-update rehearsal.
+`world_model_memory_weight: 1.0`, `memory_refresh_interval: 250` and
+`memory_unroll_steps: 8`, and turns `hazard_memory_observations` off. A refresh
+replays every stored row once: 49,000 piranha rows took 2.2 seconds on the
+development GPU, about the time of 50 updates. Its cost grows linearly with the
+dataset, and it runs 40 times during a 10,000-update bootstrap and four times
+per 1,000-update rehearsal.
 
 Verification: the piranha-only probe from the previous section (90 training
 layouts, 4,000 updates, 60 held-out layouts, successes within 320 steps) was
@@ -211,3 +241,27 @@ updates or raising the weight to 5 did not reduce the error after 4,000
 updates. More updates did reduce it: freshly replayed error fell from 0.23 to
 0.10 between 2,000 and 4,000 updates. A full-volume run and held-out
 evaluation remain the deciding test.
+
+### Training through the carried state
+
+The second revision added the unroll (`memory_unroll_steps: 8`), context rows,
+the carried stance history, and a strategy objective head. The same piranha
+probe was run on the same four seeds:
+
+| Seed | Previous LSTM memory | Unroll, objective feeding tactics | Final |
+| --- | --- | --- | --- |
+| default | 58 | 41 | 54 |
+| 7 | 42 | 49 | 49 |
+| 11 | 53 | 52 | 58 |
+| 13 | 55 | 51 | 53 |
+
+The final revision averages 53.5 of 60, against 52.0 before it and 49.5 for the
+explicit peak-exposure input. In the middle column the objective's prediction
+also fed the tactics network, and its loss trained the LSTM through the unroll.
+Detaching the objective's memory input still gave 43 on the default seed, while
+the unroll with no strategy loss gave 52 on both the default seed and seed 7.
+The loss therefore hurt through the objective's influence on tactics. In the
+final revision the objective head only reads its inputs, and a unit test checks
+that its loss changes no other weight. Evaluation memory error ranged from 0.17
+to 0.23 in the final runs.
+

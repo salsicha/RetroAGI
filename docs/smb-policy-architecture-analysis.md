@@ -234,6 +234,12 @@ the carried state; it receives no explicit memory input. See
 [piranha-tactical-training.md](piranha-tactical-training.md#lstm-episodic-memory)
 for how carried states are trained from batched demonstrations.
 
+The carried `WorldModelState` also holds the strategy network's history of
+distinct tactical stances. The strategy network reads that history, the C
+stream and the LSTM state, and names the current skill goal; with
+`learned_skill_goals` its choice replaces the scripted objective selector. See
+[shared-tactical-training.md](shared-tactical-training.md#strategy-objectives).
+
 ## Critic Feedback
 
 The critic maps the LSTM-predicted next C stream to A-level feedback:

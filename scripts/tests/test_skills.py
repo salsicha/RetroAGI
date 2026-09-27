@@ -157,8 +157,10 @@ class TestTacticsAndStrategyNetworks(unittest.TestCase):
         torch.testing.assert_close(first[0], second[0])
         self.assertIn(model.last_tactic_stance, TACTIC_STANCES)
         # Gradient path exists: stance logits participate in the graph.
-        logits, context = model.tactics_network(
-            src_c, model.strategy_network(torch.zeros(1, 8, len(TACTIC_STANCES)))
+        strategy_context, objective_logits = model.strategy_network(
+            torch.zeros(1, 8, len(TACTIC_STANCES)), src_c
         )
+        self.assertEqual(objective_logits.shape, (1, 6))
+        logits, context = model.tactics_network(src_c, strategy_context)
         self.assertEqual(logits.shape, (1, len(TACTIC_STANCES)))
         self.assertTrue(context.requires_grad)

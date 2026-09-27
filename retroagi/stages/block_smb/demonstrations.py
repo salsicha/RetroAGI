@@ -5,13 +5,18 @@ rollouts. Teachers supervise actions AND commitment lengths, including walks.
 Evaluation uses only the learned policy and normal primitive controller.
 """
 
-from dataclasses import dataclass, replace
+import copy
+from dataclasses import dataclass, fields, replace
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from retroagi.core.models import WorldModelState
+from retroagi.core.models import (
+    WorldModelState,
+    clip_policy_and_objective_gradients,
+    skill_goal_objective,
+)
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, EnemyObservationHistory
 
@@ -57,6 +62,12 @@ class DemonstrationBatch:
     frame_index: torch.Tensor | None = None
     memory_target: torch.Tensor | None = None
     memory_state: torch.Tensor | None = None
+    # Replayed prefixes of recovery and correction routes: never supervised or
+    # sampled, but they rebuild the memory a policy carried into the suffix.
+    context: torch.Tensor | None = None
+    # Parameter-free world-model LSTM inputs of each row (refreshed with the
+    # carried states), so fitting can unroll the LSTM with gradients.
+    world_model_inputs: torch.Tensor | None = None
 
     def __post_init__(self):
         if self.frame_index is None:
@@ -66,6 +77,10 @@ class DemonstrationBatch:
             self.memory_target = torch.zeros((len(self.family), len(HAZARD_MEMORY_NAMES)))
         if self.memory_state is None:
             self.memory_state = torch.zeros((len(self.family), 0))
+        if self.context is None:
+            self.context = torch.zeros_like(self.family, dtype=torch.bool)
+        if self.world_model_inputs is None:
+            self.world_model_inputs = torch.zeros((len(self.family), 0))
         if self.tactic_actions is None:
             self.tactic_actions = torch.zeros((len(self.family), 6), dtype=torch.bool)
         if self.duration_consumed is None:
@@ -82,6 +97,13 @@ class DemonstrationBatch:
             self.phase = torch.zeros_like(self.family)
 
 
+def demonstration_rows(data, mask):
+    """The rows of `data` selected by `mask`; whole episodes keep their clock."""
+    return DemonstrationBatch(
+        **{field.name: getattr(data, field.name)[mask] for field in fields(DemonstrationBatch)}
+    )
+
+
 def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32):
     rows = []
     recovery_rows = []
@@ -90,6 +112,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     tactic_action_rows = []
     duration_consumed_rows = []
     memory_rows = []
+    context_rows = []
     episode_starts = []
     frame_wait_episodes = set()
     for family_index, sample in cases:
@@ -111,8 +134,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
         episode_memory = []
         from .primitive_execution import JumpReleaseState
 
-        # An observer starting at the first supervised row, like a policy whose
-        # carried memory starts there. Recovery prefixes are not stored.
+        # The same observer a live policy has, from the replayed prefix onward.
         memory_history = EnemyObservationHistory()
 
         release = JumpReleaseState()
@@ -162,8 +184,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
             states = [stage.state_features(stage.last_info)]
             for frame, action in enumerate(actions):
                 env = stage.env
-                if frame >= supervision_start:
-                    memory_history.observe(env, env.steps)
+                memory_history.observe(env, env.steps)
                 episode_memory.append(memory_history.memory_features())
                 if jump_intent is not None and env.mario["on_ground"]:
                     jump_intent = None
@@ -349,27 +370,25 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
                     c[frame : frame + 1],
                 )
                 row[8] = c[row[8] : row[8] + 1]
-            episode = episode[supervision_start:]
-            if not episode:
+            if len(episode) <= supervision_start:
                 raise ValueError("A recovery demonstration must have a supervised suffix")
+            # The replayed prefix stays as unsupervised context rows.
+            for row in episode[:supervision_start]:
+                row[7] = False
             if frame_waits:
                 frame_wait_episodes.add(len(rows))
             episode_starts.append(len(rows))
             rows.extend(episode)
-            release_rows.extend(
-                episode_release[supervision_start : supervision_start + len(episode)]
-            )
+            context_rows.extend(frame < supervision_start for frame in range(len(episode)))
+            release_rows.extend(episode_release[: len(episode)])
             recovery_rows.extend([bool(sample.oracle.get("recovery"))] * len(episode))
-            tactic_action_rows.extend(
-                episode_tactic_actions[supervision_start : supervision_start + len(episode)]
-            )
-            duration_consumed_rows.extend(
-                episode_duration_consumed[supervision_start : supervision_start + len(episode)]
-            )
+            tactic_action_rows.extend(episode_tactic_actions[: len(episode)])
+            duration_consumed_rows.extend(episode_duration_consumed[: len(episode)])
             tactic_rows.extend(
-                episode_tactics[supervision_start : supervision_start + len(episode)]
+                -1 if frame < supervision_start else tactic
+                for frame, tactic in enumerate(episode_tactics[: len(episode)])
             )
-            memory_rows.extend(episode_memory[supervision_start : supervision_start + len(episode)])
+            memory_rows.extend(episode_memory[: len(episode)])
         finally:
             stage.env.close()
     columns = list(zip(*rows))
@@ -383,6 +402,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     data.tactic_actions = torch.tensor(tactic_action_rows, dtype=torch.bool)
     data.duration_consumed = torch.tensor(duration_consumed_rows, dtype=torch.bool)
     data.memory_target = torch.as_tensor(np.stack(memory_rows), dtype=torch.float32)
+    data.context = torch.tensor(context_rows, dtype=torch.bool)
     frame_index = torch.arange(len(rows))
     for start in episode_starts:
         frame_index[start:] -= frame_index[start].clone()
@@ -442,7 +462,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 13
+DEMONSTRATION_CONTRACT_VERSION = 14
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -486,6 +506,9 @@ def without_walk_commitments(data, episode_starts=None):
     forced_release = getattr(data, "forced_release", None)
     if forced_release is not None:
         data.actor_mask[forced_release] = False
+    context = getattr(data, "context", None)
+    if context is not None:
+        data.actor_mask[context] = False
     return data
 
 
@@ -501,6 +524,9 @@ def demonstration_sample_weights(data, family_weights=None):
     recovery = getattr(data, "recovery", None)
     if recovery is None:
         recovery = torch.zeros_like(data.family, dtype=torch.bool)
+    context = getattr(data, "context", None)
+    if context is None:
+        context = torch.zeros_like(data.family, dtype=torch.bool)
     for family in data.family.unique():
         family_mask = data.family == family
         for phase in data.phase[family_mask].unique():
@@ -515,7 +541,7 @@ def demonstration_sample_weights(data, family_weights=None):
                     # original routes, regardless of their dataset sizes.
                     weights[repaired] = 0.5 / repaired.sum()
                     weights[retained] = 0.5 / retained.sum()
-            continuation = phase_mask & ~data.actor_mask
+            continuation = phase_mask & ~data.actor_mask & ~context
             if continuation.any():
                 weights[continuation] = 0.25 / continuation.sum()
             # Passive carry toward the goal is useful behavior, including NOOP
@@ -523,8 +549,8 @@ def demonstration_sample_weights(data, family_weights=None):
             # of RIGHT; retain it in imitation replay without inventing labels.
             productive = phase_mask & data.actor_mask & ((data.action == 0) | (data.action == 3))
             weights[productive] *= 1 + (40 * data.carry_progress[productive]).clamp(0, 2)
-            weights[phase_mask] /= weights[phase_mask].sum()
-        weights[family_mask] /= weights[family_mask].sum()
+            weights[phase_mask] /= weights[phase_mask].sum().clamp_min(1e-12)
+        weights[family_mask] /= weights[family_mask].sum().clamp_min(1e-12)
         if family_weights:
             weight = float(family_weights.get(int(family), 1.0))
             if weight <= 0:
@@ -620,30 +646,40 @@ def interior_duration_targets(allowed):
 
 @torch.no_grad()
 def refresh_demonstration_memory(model, data, *, chunk_size=1024):
-    """Store the carried world-model state entering every demonstration row.
+    """Store the carried state entering every demonstration row.
 
-    Each stored episode is replayed in order through the current model with
-    its demonstrated actions, from an empty state at its first row. Batched
-    updates then see the memory a policy would carry rather than a reset.
-    States go stale as weights change, so training refreshes them periodically.
+    Each stored episode, including unsupervised context rows, is replayed in
+    order through the current model with its demonstrated actions from an
+    empty state. Batched updates then see the memory (LSTM state and distinct
+    stance history) a policy would carry rather than a reset. The parameter-
+    free LSTM inputs of each row are stored too, so fitting can unroll the
+    LSTM with gradients. States go stale as weights change; training
+    refreshes them periodically.
     """
     device = next(model.parameters()).device
-    layers = model.world_model.num_layers
-    hidden = model.world_model.hidden_size
+    world_model = model.world_model
+    layers, hidden = world_model.num_layers, world_model.hidden_size
+    history = model.strategy_network.history
+    stances = model.strategy_network.input_projection.in_features
     starts = (data.frame_index == 0).nonzero().flatten().tolist()
     ends = starts[1:] + [len(data.action)]
     episodes = sorted(zip(starts, ends), key=lambda span: span[0] - span[1])
-    stored = torch.zeros((len(data.action), 2, layers, hidden))
+    stored = torch.zeros((len(data.action), 2 * layers * hidden + history * stances))
+    inputs = None
     for first in range(0, len(episodes), chunk_size):
         chunk = episodes[first : first + chunk_size]
         state = model.initial_world_model_state(len(chunk), device)
+        state = WorldModelState(
+            state.hidden, state.cell, torch.zeros((len(chunk), history, stances), device=device)
+        )
         for t in range(chunk[0][1] - chunk[0][0]):
             # Longest episodes come first, so the active ones form a prefix.
             active = sum(end - start > t for start, end in chunk)
             rows = torch.tensor([start + t for start, _ in chunk[:active]])
-            state = WorldModelState(state.hidden[:, :active], state.cell[:, :active])
-            stored[rows, 0] = state.hidden.transpose(0, 1).cpu()
-            stored[rows, 1] = state.cell.transpose(0, 1).cpu()
+            state = WorldModelState(
+                state.hidden[:, :active], state.cell[:, :active], state.stance[:active]
+            )
+            stored[rows] = _flatten_memory_state(state).cpu()
             a, b, c, g, motor = (
                 getattr(data, key)[rows].to(device)
                 for key in ("a", "b", "c", "goal", "motor_action")
@@ -658,17 +694,73 @@ def refresh_demonstration_memory(model, data, *, chunk_size=1024):
                 world_model_state=state,
                 return_world_model_state=True,
             )[-1]
-    data.memory_state = stored.flatten(1)
+            step_inputs = model.last_world_model_inputs
+            if inputs is None:
+                inputs = torch.zeros((len(data.action), step_inputs.size(1)))
+            inputs[rows] = step_inputs.cpu()
+    data.memory_state = stored
+    data.world_model_inputs = inputs if inputs is not None else torch.zeros((0, 0))
     return data
 
 
+def _flatten_memory_state(state):
+    return torch.cat(
+        (
+            state.hidden.transpose(0, 1).flatten(1),
+            state.cell.transpose(0, 1).flatten(1),
+            state.stance.flatten(1),
+        ),
+        dim=1,
+    )
+
+
 def carried_memory_state(model, data, ids, device):
+    """The stored state entering rows `ids` (LSTM state and stance history)."""
     layers = model.world_model.num_layers
     hidden = model.world_model.hidden_size
-    carried = data.memory_state[ids].view(len(ids), 2, layers, hidden).to(device)
+    history = model.strategy_network.history
+    size = layers * hidden
+    carried = data.memory_state[ids].to(device)
     return WorldModelState(
-        carried[:, 0].transpose(0, 1).contiguous(), carried[:, 1].transpose(0, 1).contiguous()
+        carried[:, :size].view(len(ids), layers, hidden).transpose(0, 1).contiguous(),
+        carried[:, size : 2 * size].view(len(ids), layers, hidden).transpose(0, 1).contiguous(),
+        carried[:, 2 * size :].view(len(ids), history, -1),
     )
+
+
+def unrolled_memory_state(model, data, ids, device, steps):
+    """Carried state entering `ids`, rebuilt over the last `steps` rows with gradients.
+
+    Starts from the stored state up to `steps` rows earlier in the same
+    episode and replays the stored LSTM inputs, so losses at `ids` train
+    what the LSTM keeps. Also returns the memory head's predictions and
+    targets at the replayed rows.
+    """
+    stored = carried_memory_state(model, data, ids, device)
+    if steps <= 0:
+        return stored, [], []
+    back = data.frame_index[ids].clamp(max=steps)
+    state = carried_memory_state(model, data, ids - back, device)
+    hidden, cell = state.hidden, state.cell
+    predictions, targets = [], []
+    world_model = model.world_model
+    for offset in range(steps, 0, -1):
+        active = back >= offset
+        if not active.any():
+            continue
+        rows = (ids - offset).clamp_min(0)
+        out, advanced = world_model.advance(
+            data.world_model_inputs[rows].to(device),
+            data.c[rows].to(device),
+            WorldModelState(hidden, cell),
+        )
+        keep = active.to(device).view(1, -1, 1)
+        hidden = torch.where(keep, advanced.hidden, hidden)
+        cell = torch.where(keep, advanced.cell, cell)
+        if world_model.memory_head is not None:
+            predictions.append(world_model.memory_head(out)[active.to(device)])
+            targets.append(data.memory_target[rows[active]].to(device))
+    return WorldModelState(hidden, cell, stored.stance), predictions, targets
 
 
 def fit_demonstrations(
@@ -687,12 +779,16 @@ def fit_demonstrations(
     tactic_loss_weight=0.5,
     memory_weight=0.0,
     memory_refresh_interval=0,
+    memory_unroll=0,
+    strategy_loss_weight=0.0,
 ):
     """Balance families and decision actions; never train on validation data.
 
     With a memory world model and a positive refresh interval, every row is
-    fitted from the carried world-model state entering it, and the LSTM is
-    trained to report the row's observable hazard memory.
+    fitted from the carried state entering it, rebuilt with gradients over up
+    to `memory_unroll` earlier rows, and the LSTM is trained to report the
+    observable hazard memory. The strategy network learns each row's
+    objective: the skill goal the teacher supplied, or none.
     """
     # Supervise the same soft A context and deterministic transformer used
     # during greedy execution. Gumbel draws in the other A slots and dropout
@@ -717,6 +813,7 @@ def fit_demonstrations(
     memory = memory_refresh_interval > 0 and (
         getattr(getattr(model, "world_model", None), "memory_head", None) is not None
     )
+    objectives = skill_goal_objective(data.goal)
     losses = []
     components = []
     for update in range(steps):
@@ -734,6 +831,11 @@ def fit_demonstrations(
         a, b, c, g = (getattr(data, k)[ids].to(device) for k in ("a", "b", "c", "goal"))
         motor = data.motor_action[ids].to(device)
         mask = data.actor_mask[ids].to(device)
+        carried, window_predictions, window_targets = (
+            unrolled_memory_state(model, data, ids, device, memory_unroll)
+            if memory
+            else (None, [], [])
+        )
         outputs = model(
             a,
             b,
@@ -741,13 +843,18 @@ def fit_demonstrations(
             skill_goal=g,
             forced_action=motor,
             critic_feedback_enabled=False,
-            world_model_state=carried_memory_state(model, data, ids, device) if memory else None,
+            world_model_state=carried,
         )
         memory_loss = outputs[4].new_zeros(())
         if memory and memory_weight:
             memory_loss = F.mse_loss(
-                model.last_memory_prediction, data.memory_target[ids].to(device)
+                torch.cat((model.last_memory_prediction, *window_predictions)),
+                torch.cat((data.memory_target[ids].to(device), *window_targets)),
             )
+        strategy_loss = outputs[4].new_zeros(())
+        objective_logits = getattr(model, "last_objective_logits", None)
+        if strategy_loss_weight and objective_logits is not None:
+            strategy_loss = F.cross_entropy(objective_logits, objectives[ids].to(device))
         tactic_targets = data.tactic[ids].to(device)
         tactic_mask = (tactic_targets >= 0) & mask
         tactic_logits = getattr(model, "last_tactic_logits", None)
@@ -798,10 +905,11 @@ def fit_demonstrations(
             + 0.1 * dynamics
             + tactic_loss_weight * (tactic_loss + tactic_action_loss)
             + memory_weight * memory_loss
+            + strategy_loss_weight * strategy_loss
         )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        norm = clip_policy_and_objective_gradients(model, 1.0)
         if not torch.isfinite(norm):
             raise FloatingPointError("Nonfinite demonstration gradient")
         optimizer.step()
@@ -834,6 +942,7 @@ def fit_demonstrations(
                     tactic_loss.detach(),
                     tactic_action_loss.detach(),
                     memory_loss.detach(),
+                    strategy_loss.detach(),
                 )
             )
         )
@@ -847,6 +956,7 @@ def fit_demonstrations(
                 "tactic_loss",
                 "tactic_action_loss",
                 "memory_loss",
+                "strategy_loss",
             ),
             means,
         )
@@ -1010,6 +1120,92 @@ def varied_demonstration(sample, seed, *, robust=False):
         env.close()
 
 
+ENEMY_WAIT_FRAMES = (8, 12, 16, 20, 24)
+
+
+def _enemy_ahead(env, near=32.0, far=112.0):
+    """A live moving walker ahead toward the goal, within approach range.
+
+    Waiting for a stationary enemy changes nothing but the clock.
+    """
+    from .tactics import goal_direction
+
+    direction = goal_direction(env)
+    center = env.mario["x"] + env.mario["w"] / 2
+    for enemy in env.enemies:
+        if (
+            enemy.get("dead")
+            or enemy.get("kind") == "piranha_plant"
+            or not float(enemy.get("speed", 0.0))
+        ):
+            continue
+        ahead = (enemy["x"] + enemy["w"] / 2 - center) * direction
+        if near <= ahead <= far:
+            return True
+    return False
+
+
+def enemy_wait_demonstration(sample, seed):
+    """A successful route that holds while an enemy approaches, then stomps it.
+
+    Canonical enemy routes never wait, so the tactical layer never sees a hold
+    near an enemy, and stomp takeoffs cover only the enemy positions of one
+    timing. Only layouts that require a stomp qualify: waiting lets the enemy
+    walk into stomp range, whereas in avoidance layouts it only shifts timing
+    and lowered success in the probe. The canonical prefix runs to the first
+    grounded walking decision with an enemy in approach range; Mario then
+    waits a multiple of four frames (the executor's wait granularity) while
+    grounded and alive, and the recovery teacher completes the level from
+    there. Only complete routes are kept.
+    """
+    import random
+
+    from .monte_carlo import validate_block_smb_monte_carlo_oracle
+    from .policy_recovery import coached_suffix
+    from .primitive_execution import JumpReleaseState
+
+    scenario = sample.scenario
+    if scenario.get("single_jump_attempt") or scenario.get("bridge_jump_task"):
+        return None
+    actions = list(sample.oracle["actions"])
+    env = MarioScenarioEnv()
+    release = JumpReleaseState()
+    try:
+        env.reset(scenario=copy.deepcopy(dict(scenario)), seed=0)
+        env.render = lambda: None
+        if not (env._require_stomp_before_goal or env._goal_on_stomp):
+            return None
+        for frame, action in enumerate(actions):
+            if (
+                action in (1, 3)
+                and env.mario["on_ground"]
+                and not release.remaining
+                and _enemy_ahead(env)
+            ):
+                break
+            _, _, done, truncated, info = env.step(action)
+            release.observe(env, action, info)
+            if done or truncated:
+                return None
+        else:
+            return None
+        waits = random.Random(seed).choice(ENEMY_WAIT_FRAMES)
+        for _ in range(waits):
+            _, _, done, truncated, info = env.step(0)
+            release.observe(env, 0, info)
+            if info["death"] or done or truncated or not env.mario["on_ground"]:
+                return None
+        suffix = coached_suffix(env, release_state=release)
+        if not suffix:
+            return None
+        route = actions[:frame] + [0] * waits + list(suffix)
+    finally:
+        env.close()
+    if not validate_block_smb_monte_carlo_oracle(scenario, route)["reachable"]:
+        return None
+    return replace(sample, oracle={**sample.oracle, "actions": route})
+
+
 def with_robust_demonstrations(cases, seed):
     return [
         (index, varied_demonstration(sample, seed + i, robust=True) or sample)
@@ -1063,6 +1259,10 @@ def build_balanced_demonstrations(config, vision_factory):
             if config.demonstration_robust_routes:
                 sample = varied_demonstration(sample, config.seed + i, robust=True) or sample
             cases.append((family_index, sample))
+            if config.demonstration_enemy_wait_routes:
+                waiting = enemy_wait_demonstration(sample, config.seed + i + 200000)
+                if waiting is not None:
+                    cases.append((family_index, waiting))
             if config.demonstration_varied_routes:
                 alternative = varied_demonstration(
                     sample, config.seed + i + 100000, robust=config.demonstration_robust_routes

@@ -207,7 +207,12 @@ def test_history_contract_requires_motion_and_supported_projection():
 
 @pytest.mark.parametrize(
     "contract,history,message",
-    [(8, True, "plant labels"), (9, False, "enemy-history"), (9, True, "frozen at reset")],
+    [
+        (8, True, "plant labels"),
+        (9, False, "enemy-history"),
+        (9, True, "frozen at reset"),
+        (13, True, "episodic memory"),
+    ],
 )
 def test_cached_demonstrations_require_new_labels_and_matching_history(
     tmp_path, monkeypatch, contract, history, message
@@ -363,7 +368,9 @@ def test_demonstrations_and_recovery_match_live_history_on_every_frame(
             assert expected[:, hi - 5 - offset].abs().max() > 0  # Rising/retracting motion.
         if memory:
             assert expected[:, hi - 1].max() > 0  # The plant's exposed height is remembered.
-        torch.testing.assert_close(data.c, expected)
+        # Replayed recovery prefixes remain as unsupervised context rows.
+        assert int(data.context.sum()) == supervision_start
+        torch.testing.assert_close(data.c[data.context.logical_not()], expected)
         torch.testing.assert_close(data.next_c[-1:], stage.encode_observation(frame).src_c)
     finally:
         stage.env.close()

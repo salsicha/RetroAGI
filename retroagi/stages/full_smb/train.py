@@ -3391,6 +3391,9 @@ def _policy_action_logits_and_state(
         kwargs = _smb_forward_kwargs(model, batch, deterministic)
         if not contract.recurrent_state:
             world_model_state = None
+        elif world_model_state is None and hasattr(model, "initial_world_model_state"):
+            # Match Block training: an episode starts from the empty state.
+            world_model_state = model.initial_world_model_state(src_c.size(0), device)
     outputs = model(
         src_a,
         src_b,

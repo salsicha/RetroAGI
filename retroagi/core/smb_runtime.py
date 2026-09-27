@@ -21,6 +21,9 @@ class SMBRuntimeContract:
     world_model: bool = True
     deterministic_critic: bool = True
     skill_goals: bool = True
+    # The policy's strategy network chooses skill goals instead of the scripted
+    # local-objective selector.
+    learned_skill_goals: bool = False
     engine_support: bool = True
     frame_skip: int = 1
     hold_run_button: bool = True
@@ -85,6 +88,7 @@ class SMBRuntimeContract:
             world_model=bool(ablation.get("world_model_enabled", True)),
             deterministic_critic=bool(config.get("deterministic_critic_gates", False)),
             skill_goals=bool(config.get("skill_goal_conditioning", True)),
+            learned_skill_goals=bool(config.get("learned_skill_goals", False)),
             engine_support=bool(config.get("engine_support_override", False)),
         )
 
@@ -107,6 +111,8 @@ def attach_runtime(model, manifest):
         )
     if hasattr(model, "ranked_candidate_search"):
         model.ranked_candidate_search = False
+    if hasattr(model, "learned_skill_goals"):
+        model.learned_skill_goals = contract.learned_skill_goals
     if hasattr(model, "deterministic_critic_slots"):
         from retroagi.stages.block_smb.adapter import block_smb_deterministic_critic_slots
 

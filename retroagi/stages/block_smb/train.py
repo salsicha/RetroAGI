@@ -43,6 +43,7 @@ from retroagi.core import (
     to_plain_data,
 )
 from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
+from retroagi.core.models import clip_policy_and_objective_gradients, skill_goal_objective
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, HAZARD_NAMES
 
@@ -375,6 +376,16 @@ class BlockSMBTrainingConfig:
     # demonstration updates reuse carried states before they are replayed.
     world_model_memory_weight: float = 0.0
     memory_refresh_interval: int = 0
+    # Demonstration fitting rebuilds each row's carried state over this many
+    # earlier rows with gradients, so policy losses train what the LSTM keeps.
+    memory_unroll_steps: int = 0
+    # The strategy network learns the current objective (skill goal or none);
+    # with learned_skill_goals its prediction replaces the scripted selector.
+    strategy_loss_weight: float = 0.0
+    learned_skill_goals: bool = False
+    # Add a route per walking-enemy layout that holds while the enemy
+    # approaches, then engages from the new position.
+    demonstration_enemy_wait_routes: bool = False
     # One bit of duration coaching per finished jump: overshoot relabels
     # the hold one step shorter, undershoot one step longer, on-target
     # anchors the hold that was used. Direction, not size: magnitude-scaled
@@ -512,8 +523,20 @@ class BlockSMBTrainingConfig:
             )
         if min(self.demonstration_bootstrap_updates, self.demonstration_rehearsal_updates) < 0:
             raise ValueError("demonstration update counts must be non-negative")
-        if self.world_model_memory_weight < 0 or self.memory_refresh_interval < 0:
-            raise ValueError("world-model memory weight and refresh interval must be non-negative")
+        if (
+            min(
+                self.world_model_memory_weight,
+                self.memory_refresh_interval,
+                self.memory_unroll_steps,
+                self.strategy_loss_weight,
+            )
+            < 0
+        ):
+            raise ValueError(
+                "world-model memory, unroll and strategy settings must be non-negative"
+            )
+        if self.learned_skill_goals and not self.skill_goal_conditioning:
+            raise ValueError("learned_skill_goals requires skill_goal_conditioning")
         memory_world_model = int(self.architecture_config.get("world_model_memory_dim", 0)) > 0
         if (
             (self.demonstration_bootstrap_updates or self.demonstration_rehearsal_updates)
@@ -676,6 +699,9 @@ class BlockSMBTransition:
     # Graph-attached world-model memory prediction and its observable target.
     memory_prediction: torch.Tensor | None = None
     memory_target: torch.Tensor | None = None
+    # Strategy objective logits and the scripted objective (-1: no skill goals).
+    objective_logits: torch.Tensor | None = None
+    objective_target: int = -1
 
 
 @dataclass
@@ -1376,6 +1402,8 @@ def make_block_smb_model(config: BlockSMBTrainingConfig) -> torch.nn.Module:
         model.deterministic_critic_slots = (
             block_smb_deterministic_critic_slots() if config.deterministic_critic_gates else None
         )
+    if hasattr(model, "learned_skill_goals"):
+        model.learned_skill_goals = bool(config.learned_skill_goals)
     return model
 
 
@@ -2682,6 +2710,14 @@ def collect_trajectory(
         batch.src_b = batch.src_b.to(device)
         batch.src_c = batch.src_c.to(device)
         carried_state = world_model_state if ablation_config.recurrent_state_enabled else None
+        if (
+            carried_state is None
+            and ablation_config.recurrent_state_enabled
+            and hasattr(model, "initial_world_model_state")
+        ):
+            # An episode starts from the empty state, as fitting assumes; no
+            # state at all would also drop the actor's recurrent context.
+            carried_state = model.initial_world_model_state(batch.src_c.size(0), device)
         oracle_action = (
             int(oracle_actions[step_index]) if step_index < len(oracle_actions) else None
         )
@@ -2858,6 +2894,12 @@ def collect_trajectory(
         # has been observed so far, before the step updates the history.
         memory_prediction = getattr(model, "last_memory_prediction", None)
         memory_target = torch.as_tensor(stage._hazard_memory, dtype=torch.float32)
+        objective_logits = getattr(model, "last_objective_logits", None)
+        objective_target = (
+            int(skill_goal_objective(step_skill_goal.reshape(-1)))
+            if step_skill_goal is not None
+            else -1
+        )
         from .tactics import compatible_actions, tactic_label
 
         tactic_target = (
@@ -3039,6 +3081,8 @@ def collect_trajectory(
                 tactic_actions=tactic_actions,
                 memory_prediction=memory_prediction,
                 memory_target=memory_target,
+                objective_logits=objective_logits,
+                objective_target=objective_target,
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -3633,8 +3677,16 @@ def compute_block_smb_losses(
     tactic_action_terms = []
     release_timing_terms = []
     memory_terms = []
+    strategy_terms = []
     oracle_supervised_steps = 0
     for index, step in enumerate(transitions):
+        if step.objective_target >= 0 and step.objective_logits is not None:
+            strategy_terms.append(
+                F.cross_entropy(
+                    step.objective_logits.to(device).reshape(1, -1),
+                    torch.tensor([step.objective_target], device=device),
+                )
+            )
         if step.memory_prediction is not None and step.memory_target is not None:
             memory_terms.append(
                 F.mse_loss(
@@ -3775,6 +3827,9 @@ def compute_block_smb_losses(
     loss_world_model_memory = (
         torch.stack(memory_terms).mean() if memory_terms else loss_policy.new_zeros(())
     )
+    loss_strategy = (
+        torch.stack(strategy_terms).mean() if strategy_terms else loss_policy.new_zeros(())
+    )
     loss_tactic_action = (
         torch.stack(tactic_action_terms).mean()
         if tactic_action_terms
@@ -3805,6 +3860,7 @@ def compute_block_smb_losses(
         + config.primitive_outcome_weight * loss_primitive_outcome
         + config.tactic_loss_weight * (loss_tactic + loss_tactic_action)
         + config.world_model_memory_weight * loss_world_model_memory
+        + config.strategy_loss_weight * loss_strategy
         + config.release_timing_weight * loss_release_timing
         + imagined_rollout_weight * imagined_losses["loss_imagined_rollout"]
         - config.entropy_weight * entropy_bonus
@@ -3813,6 +3869,7 @@ def compute_block_smb_losses(
         "loss_tactic": loss_tactic,
         "loss_tactic_action": loss_tactic_action,
         "loss_world_model_memory": loss_world_model_memory,
+        "loss_strategy": loss_strategy,
         "tactic_supervised_steps": torch.tensor(float(len(tactic_terms)), device=device),
         "loss_representation": loss_representation,
         "loss_dynamics": loss_dynamics,
@@ -3935,7 +3992,7 @@ def train_block_smb_epoch(
         optimizer.zero_grad(set_to_none=True)
         losses["loss_total"].backward()
         check_model_gradients(model)
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_norm)
+        grad_norm = clip_policy_and_objective_gradients(model, config.gradient_clip_norm)
         if not torch.isfinite(grad_norm).item():
             raise FloatingPointError("gradient norm is NaN or infinite")
         optimizer.step()
@@ -4213,6 +4270,9 @@ def evaluate_block_smb_monte_carlo(
     bin_rollups: dict[str, dict[str, Any]] = {}
     piranha_mode_rollups: dict[str, dict[str, Any]] = {}
     tactical_counts = {}
+    # family -> [frames, summed absolute memory error]; [decisions, correct]
+    memory_errors: dict[str, list[float]] = {}
+    strategy_counts: dict[str, list[int]] = {}
     returns: list[float] = []
     successes: list[float] = []
     all_actions: list[int] = []
@@ -4269,6 +4329,24 @@ def evaluate_block_smb_monte_carlo(
                         counts[0] += 1
                         counts[1] += int(step.tactic_logits.argmax(-1).item() == step.tactic_target)
                         counts[2] += int(step.info.get("tactic_action_agreement", False))
+                    if step.memory_prediction is not None and step.memory_target is not None:
+                        error = memory_errors.setdefault(sample.family, [0, 0.0])
+                        error[0] += 1
+                        error[1] += float(
+                            (
+                                step.memory_prediction.detach().cpu().reshape(-1)
+                                - step.memory_target.reshape(-1)
+                            )
+                            .abs()
+                            .mean()
+                        )
+                    if step.objective_target >= 0 and step.objective_logits is not None:
+                        objective = strategy_counts.setdefault(sample.family, [0, 0])
+                        objective[0] += 1
+                        objective[1] += int(
+                            int(step.objective_logits.argmax(-1).reshape(-1)[0])
+                            == step.objective_target
+                        )
                 max_progress = (
                     max(
                         float(step.info.get("max_x_reached", 0.0))
@@ -4475,6 +4553,14 @@ def evaluate_block_smb_monte_carlo(
                 "action_agreement": agreement / n,
             }
             for family, (n, correct, agreement) in tactical_counts.items()
+        },
+        "strategy_by_family": {
+            family: {"decisions": n, "accuracy": correct / n}
+            for family, (n, correct) in strategy_counts.items()
+        },
+        "memory_error_by_family": {
+            family: {"frames": int(n), "mean_absolute_error": total / n}
+            for family, (n, total) in memory_errors.items()
         },
         "failure_bins": failure_bins,
         "action_counts": summarize_block_smb_monte_carlo_action_counts(all_actions),
@@ -4980,6 +5066,31 @@ def _should_evaluate_epoch(config: BlockSMBTrainingConfig, completed_epoch: int)
     )
 
 
+def load_block_smb_model_state(model: torch.nn.Module, state: Mapping[str, torch.Tensor]):
+    """Load policy weights, migrating older layouts; reject real mismatches.
+
+    Returns the load result and the obsolete world-model keys that were skipped.
+    """
+    model_state, skipped_world_model_keys = action_level_world_model_state_dict(model, state)
+    load_result = model.load_state_dict(model_state, strict=False)
+    allowed_missing_prefixes = (
+        "transition_representation_head.",
+        "reward_head.",
+        "value_head.",
+        *ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
+    )
+    unexpected = list(load_result.unexpected_keys)
+    unsupported_missing = [
+        key for key in load_result.missing_keys if not key.startswith(allowed_missing_prefixes)
+    ]
+    if unexpected or unsupported_missing:
+        raise ValueError(
+            "checkpoint model state is incompatible with Block SMB trainer; "
+            f"missing={unsupported_missing}, unexpected={unexpected}"
+        )
+    return load_result, skipped_world_model_keys
+
+
 def restore_block_smb_checkpoint(
     path: Path,
     model: torch.nn.Module,
@@ -4993,7 +5104,14 @@ def restore_block_smb_checkpoint(
     motion_observations: bool | None = None,
     hazard_observations: bool | None = None,
     hazard_memory_observations: bool | None = None,
+    migrate_world_model_memory: bool = False,
 ) -> dict[str, Any]:
+    """Restore a Block SMB checkpoint into `model`.
+
+    `migrate_world_model_memory` lets a weights-only warm start add the
+    episodic world-model memory to a checkpoint trained without it: the new
+    LSTM input columns start at zero and the new heads keep their init.
+    """
     checkpoint = load_checkpoint(path, map_location=map_location)
     if checkpoint["stage"] != BLOCK_SMB_SPEC.name:
         raise ValueError("checkpoint stage does not match block_smb")
@@ -5030,40 +5148,23 @@ def restore_block_smb_checkpoint(
             )
     checkpoint_architecture_config = checkpoint_config.get("architecture_config")
     if architecture_config is not None and checkpoint_architecture_config is not None:
-        if dict(checkpoint_architecture_config) != dict(architecture_config):
+        saved, requested = dict(checkpoint_architecture_config), dict(architecture_config)
+        if migrate_world_model_memory and not int(saved.get("world_model_memory_dim", 0)):
+            saved.pop("world_model_memory_dim", None)
+            requested.pop("world_model_memory_dim", None)
+        if saved != requested:
             raise ValueError(
                 "checkpoint architecture config "
                 f"{checkpoint_architecture_config!r} does not match "
                 f"{dict(architecture_config)!r}"
             )
     states = checkpoint["states"]
-    model_state, skipped_world_model_keys = action_level_world_model_state_dict(
-        model,
-        states["model"],
-    )
-    load_result = model.load_state_dict(model_state, strict=False)
-    allowed_missing_prefixes = (
-        "transition_representation_head.",
-        "reward_head.",
-        "value_head.",
-        *ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES,
-    )
-    unexpected = list(load_result.unexpected_keys)
-    unsupported_missing = [
-        key for key in load_result.missing_keys if not key.startswith(allowed_missing_prefixes)
-    ]
-    if unexpected or unsupported_missing:
-        raise ValueError(
-            "checkpoint model state is incompatible with Block SMB trainer; "
-            f"missing={unsupported_missing}, unexpected={unexpected}"
-        )
+    load_result, skipped_world_model_keys = load_block_smb_model_state(model, states["model"])
     if optimizer is not None:
         try:
             optimizer.load_state_dict(states["optimizer"])
         except ValueError:
-            if unsupported_missing or (
-                not load_result.missing_keys and not skipped_world_model_keys
-            ):
+            if not load_result.missing_keys and not skipped_world_model_keys:
                 raise
     if target_model is not None:
         target_state = states.get("target_model", states["model"])
@@ -5145,6 +5246,7 @@ def train_and_evaluate_block_smb(
             hazard_observations=config.hazard_observations,
             hazard_memory_observations=config.hazard_memory_observations,
             restore_rng=False,
+            migrate_world_model_memory=True,
         )
         if target_model is not None:
             update_target_network(target_model, model, tau=1.0)
@@ -5216,6 +5318,8 @@ def train_and_evaluate_block_smb(
                 tactic_loss_weight=config.tactic_loss_weight,
                 memory_weight=config.world_model_memory_weight,
                 memory_refresh_interval=config.memory_refresh_interval,
+                memory_unroll=config.memory_unroll_steps,
+                strategy_loss_weight=config.strategy_loss_weight,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5310,6 +5414,8 @@ def train_and_evaluate_block_smb(
                 tactic_loss_weight=config.tactic_loss_weight,
                 memory_weight=config.world_model_memory_weight,
                 memory_refresh_interval=config.memory_refresh_interval,
+                memory_unroll=config.memory_unroll_steps,
+                strategy_loss_weight=config.strategy_loss_weight,
                 decision_durations_only=not config.adaptive_duration_control,
                 walk_durations=config.walk_duration_primitives,
                 prioritized=config.demonstration_prioritized,
@@ -5326,6 +5432,8 @@ def train_and_evaluate_block_smb(
                 ]
             if "memory_loss" in demonstration_metrics:
                 losses["demonstration_memory_loss"] = demonstration_metrics["memory_loss"]
+            if "strategy_loss" in demonstration_metrics:
+                losses["demonstration_strategy_loss"] = demonstration_metrics["strategy_loss"]
             if target_model is not None:
                 update_target_network(target_model, model, tau=1.0)
         losses["adaptive_replay_samples"] = float(len(replay_curriculum))

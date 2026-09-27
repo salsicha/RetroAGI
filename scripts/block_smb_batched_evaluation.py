@@ -1,7 +1,8 @@
 """Batched autonomous evaluation with the normal primitive executor.
 
-Restricted to the feedforward qualification recipe. Every physics frame still
-runs; batching removes repeated GPU launch overhead across independent levels.
+Every physics frame still runs; batching removes repeated GPU launch overhead
+across independent levels. With recurrent state each level carries its own
+world-model state (LSTM memory and stance history) from frame to frame.
 """
 
 from collections import Counter
@@ -14,6 +15,7 @@ from retroagi.core.actions import (
     SMBPrimitiveExecution,
     smb_jump_release_action,
 )
+from retroagi.core.models import WorldModelState, skill_goal_objective
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
 from retroagi.stages.block_smb.bridge_traversal import bridge_phase, bridge_safe_wait_frames
@@ -30,16 +32,49 @@ from retroagi.stages.block_smb.train import (
 from retroagi.stages.block_smb.vision import BlockVisionTransformer
 
 
+def _stack_states(model, memories, device):
+    """One batched world-model state; levels without one start empty."""
+    history = model.strategy_network.history
+    stances = model.strategy_network.input_projection.in_features
+    states = []
+    for memory in memories:
+        if memory is None:
+            empty = model.initial_world_model_state(1, device)
+            memory = WorldModelState(
+                empty.hidden, empty.cell, torch.zeros((1, history, stances), device=device)
+            )
+        states.append(memory)
+    return WorldModelState(
+        torch.cat([m.hidden for m in states], dim=1),
+        torch.cat([m.cell for m in states], dim=1),
+        torch.cat([m.stance for m in states], dim=0),
+    )
+
+
+def _record_memory_and_strategy(model, active, goal):
+    prediction = getattr(model, "last_memory_prediction", None)
+    logits = getattr(model, "last_objective_logits", None)
+    objectives = skill_goal_objective(goal).cpu()
+    for i, s in enumerate(active):
+        if prediction is not None:
+            target = torch.as_tensor(s.stage._hazard_memory, dtype=torch.float32)
+            s.memory_error[0] += 1
+            s.memory_error[1] += float((prediction[i].cpu() - target).abs().mean())
+        if logits is not None:
+            s.objectives[0] += 1
+            s.objectives[1] += int(int(logits[i].argmax()) == int(objectives[i]))
+
+
 def evaluate_batched(model, cases, config, vision_factory, *, return_actions=False):
     if (
-        config.ablation.recurrent_state_enabled
-        or not config.engine_support_override
+        not config.engine_support_override
         or not config.skill_goal_conditioning
         or config.ranked_candidate_search
     ):
         raise ValueError(
-            "Batched qualification requires feedforward autonomous control with engine support and local goals"
+            "Batched qualification requires autonomous control with engine support and local goals"
         )
+    recurrent = bool(config.ablation.recurrent_state_enabled)
     if any((config.ablation.vision_enabled is False, config.ablation.hierarchy_enabled is False)):
         raise ValueError("Batched qualification requires the complete observation")
     model.eval()
@@ -91,6 +126,9 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                         walk_primitives=config.walk_duration_primitives,
                     ),
                     actions=[],
+                    memory=None,
+                    memory_error=[0, 0.0],
+                    objectives=[0, 0],
                     done=False,
                     death=False,
                     last_phase=None,
@@ -160,6 +198,9 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                         for k in ("src_a", "src_b", "src_c")
                     )
                 goal = torch.cat(goals).to(device)
+                carried = (
+                    _stack_states(model, [s.memory for s in active], device) if recurrent else None
+                )
                 # First pass reads A. Second pass conditions B on each actual
                 # action, including commitments already owned by the executor.
                 model(
@@ -169,7 +210,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     skill_goal=goal,
                     forced_action=torch.zeros(len(active), device=device, dtype=torch.long),
                     critic_feedback_enabled=False,
-                    world_model_state=None,
+                    world_model_state=carried,
                     world_model_enabled=config.ablation.world_model_enabled,
                 )
                 chosen = model.last_policy_logits_a[:, -1, :6].argmax(-1)
@@ -177,17 +218,26 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     commitment = s.executor.committed_action
                     if commitment is not None and not (s.recovery or s.phase == "bounce_recovery"):
                         chosen[i] = commitment
-                model(
+                outputs = model(
                     a,
                     b,
                     c,
                     skill_goal=goal,
                     forced_action=chosen,
                     critic_feedback_enabled=False,
-                    world_model_state=None,
+                    world_model_state=carried,
                     world_model_enabled=config.ablation.world_model_enabled,
+                    return_world_model_state=recurrent,
                 )
                 motor = model.last_motor_primitives
+                _record_memory_and_strategy(model, active, goal)
+                if recurrent and outputs[-1] is not None:
+                    for i, s in enumerate(active):
+                        s.memory = WorldModelState(
+                            outputs[-1].hidden[:, i : i + 1],
+                            outputs[-1].cell[:, i : i + 1],
+                            outputs[-1].stance[i : i + 1],
+                        )
                 for i, s in enumerate(active):
                     env = s.stage.env
                     if s.recovery or s.phase == "bounce_recovery":
@@ -271,11 +321,19 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     )
                 )
         rates = {d: yes / total for d, (yes, total) in counts.items() if total}
+        frames = sum(s.memory_error[0] for s in states)
+        decisions = sum(s.objectives[0] for s in states)
         result = dict(
             rates=rates,
             counts=counts,
             passed=all(r >= 0.9 for r in rates.values()),
             failures=failures,
+            memory_mean_absolute_error=(
+                sum(s.memory_error[1] for s in states) / frames if frames else None
+            ),
+            strategy_accuracy=(
+                sum(s.objectives[1] for s in states) / decisions if decisions else None
+            ),
         )
         if return_actions:
             result["actions"] = [s.actions for s in states]

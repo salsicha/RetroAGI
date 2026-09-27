@@ -27,7 +27,15 @@ OBSTACLE_FAMILIES = frozenset(
         "full_smb_opening_proxy",
     )
 )
-TACTICAL_FAMILIES = BRIDGE_FAMILIES | OBSTACLE_FAMILIES | {"piranha_avoidance"}
+# Demonstrations reverse direction here: back off an enemy before stomping
+# it, or reposition on a narrow platform before the next hop.
+REPOSITIONING_FAMILIES = frozenset(("stomp_recovery", "platform_chain"))
+# Stomp recovery has no local objective to certify online positioning with,
+# so only its successful demonstrations supply tactical targets.
+DEMONSTRATION_ONLY_TACTICS = frozenset(("stomp_recovery",))
+TACTICAL_FAMILIES = (
+    BRIDGE_FAMILIES | OBSTACLE_FAMILIES | REPOSITIONING_FAMILIES | {"piranha_avoidance"}
+)
 
 
 def goal_direction(env):
@@ -72,6 +80,8 @@ def tactic_label(env, history=None, action=None, *, family, phase=None):
         from .piranha_tactics import tactic_label as plant_label
 
         return plant_label(env, history, action)
+    if action is None and family in DEMONSTRATION_ONLY_TACTICS:
+        return -1
     if action is not None:
         # Riding/braking can require directional corrections while retaining
         # the same tactical intent. Successful route variants may depart at

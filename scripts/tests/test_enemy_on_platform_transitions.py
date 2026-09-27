@@ -136,8 +136,10 @@ def test_recovery_preserves_release_masks_at_splice():
         tiny_config(walk_duration_primitives=False),
         StaticBlockVision,
     )
-    assert data.forced_release[:2].all()
-    assert not data.actor_mask[:2].any()
+    # The replayed prefix is unsupervised context; the suffix opens in a release.
+    assert int(data.context.sum()) == start
+    assert data.forced_release[start : start + 2].all()
+    assert not data.actor_mask[: start + 2].any()
     assert (data.actor_mask & (data.action == 2)).any()
 
 

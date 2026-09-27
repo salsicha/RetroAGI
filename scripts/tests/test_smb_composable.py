@@ -350,3 +350,43 @@ def test_retreat_is_an_explicit_task_input_without_rendered_goal_markers():
     )
     assert left["objective"].direction == -1 and right["objective"].direction == 1
     assert left["features"]["state_vec"][15] < 0 < right["features"]["state_vec"][15]
+
+
+def test_actor_bundles_predating_the_strategy_objective_still_load(tmp_path):
+    import hashlib
+    import json
+
+    first, second = model(), model()
+    contract = SMBComponentContract()
+    architecture = {"hidden_dim": 8}
+    directory = tmp_path / "bundle"
+    export_bundle(first, directory, contract=contract, architecture=architecture)
+    # Rewrite the actor as an older bundle without the objective head.
+    state = torch.load(directory / "actor.pth", weights_only=True)
+    state = {k: v for k, v in state.items() if not k.startswith("strategy_network.objective_head.")}
+    torch.save(state, directory / "actor.pth")
+    manifest = json.loads((directory / "bundle.json").read_text())
+    manifest["components"]["actor"]["sha256"] = hashlib.sha256(
+        (directory / "actor.pth").read_bytes()
+    ).hexdigest()
+    (directory / "bundle.json").write_text(json.dumps(manifest))
+    head = {
+        k: v.clone()
+        for k, v in second.state_dict().items()
+        if k.startswith("strategy_network.objective_head.")
+    }
+    load_component(second, directory, "actor", contract=contract, architecture=architecture)
+    for key, value in second.state_dict().items():
+        if key in head:
+            assert torch.equal(value, head[key])
+        elif key in state:
+            assert torch.equal(value, state[key])
+    # Any other missing tensor is still a layout mismatch.
+    state.pop(next(iter(state)))
+    torch.save(state, directory / "actor.pth")
+    manifest["components"]["actor"]["sha256"] = hashlib.sha256(
+        (directory / "actor.pth").read_bytes()
+    ).hexdigest()
+    (directory / "bundle.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="layout mismatch"):
+        load_component(second, directory, "actor", contract=contract, architecture=architecture)

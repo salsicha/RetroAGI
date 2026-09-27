@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import random
-from dataclasses import asdict, fields
+from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 
@@ -14,9 +14,9 @@ import torch
 from retroagi.stages.block_smb.cli import _make_vision_factory, _normalize_config_values
 from retroagi.stages.block_smb.demonstrations import (
     DEMONSTRATION_CONTRACT_VERSION,
-    DemonstrationBatch,
     align_steady_demonstrations,
     collect_demonstrations,
+    demonstration_rows,
     fit_demonstrations,
     varied_demonstration,
     with_robust_demonstrations,
@@ -24,8 +24,11 @@ from retroagi.stages.block_smb.demonstrations import (
     without_walk_commitments,
 )
 from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
+from retroagi.stages.block_smb.policy_recovery import combine_demonstrations
+from retroagi.stages.block_smb.tactics import REPOSITIONING_FAMILIES
 from retroagi.stages.block_smb.train import (
     BlockSMBTrainingConfig,
+    load_block_smb_model_state,
     make_block_smb_model,
     make_block_smb_optimizer,
     save_block_smb_checkpoint,
@@ -122,6 +125,11 @@ def main():
     p.add_argument("--motion-observations", action="store_true")
     p.add_argument("--hazard-observations", action="store_true")
     p.add_argument("--hazard-memory-observations", action="store_true")
+    p.add_argument(
+        "--feedforward",
+        action="store_true",
+        help="drop the recipe's recurrent LSTM memory and strategy settings",
+    )
     p.add_argument("--dataset", type=Path)
     p.add_argument("--refresh-families", nargs="*", default=[])
     p.add_argument("--init-checkpoint", type=Path)
@@ -142,9 +150,9 @@ def main():
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     torch.use_deterministic_algorithms(True)
-    values = feedforward_recipe(
-        json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
-    )
+    values = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    if args.feedforward:
+        values = feedforward_recipe(values)
     values.update(
         demonstration_bootstrap_updates=0,
         demonstration_rehearsal_updates=0,
@@ -222,6 +230,15 @@ def main():
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             if "piranha_avoidance" in present - set(args.refresh_families):
                 raise ValueError("Cached plant routes predate the contract-13 teacher")
+        if metadata.get("contract_version", 1) < 14:
+            if config.memory_refresh_interval:
+                raise ValueError(
+                    "Cached demonstrations predate episodic memory rows; regenerate them or "
+                    "pass --feedforward"
+                )
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            if present & REPOSITIONING_FAMILIES - set(args.refresh_families):
+                raise ValueError("Cached repositioning routes predate their tactical labels")
         if metadata.get("contract_version", 1) < 8:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             missing = present - set(args.refresh_families)
@@ -276,9 +293,7 @@ def main():
                 json.dumps(dict(event="demonstrations", family=family, frames=len(part.action))),
                 flush=True,
             )
-        data = DemonstrationBatch(
-            *(torch.cat([getattr(d, f.name) for d in datasets]) for f in fields(DemonstrationBatch))
-        )
+        data = combine_demonstrations(datasets)
         torch.save(data, dataset)
     if args.refresh_families:
         if set(args.refresh_families) - set(BLOCK_SMB_MC_FAMILIES):
@@ -294,12 +309,7 @@ def main():
                     refreshed, args.seed + 100000, robust=args.robust_demonstrations
                 )
             part = collect_demonstrations(refreshed, config, vision)
-            data = DemonstrationBatch(
-                *(
-                    torch.cat((getattr(data, f.name)[keep], getattr(part, f.name)))
-                    for f in fields(data)
-                )
-            )
+            data = combine_demonstrations([demonstration_rows(data, keep), part])
             print(
                 json.dumps(
                     dict(event="refreshed_demonstrations", family=family, frames=len(part.action))
@@ -339,7 +349,7 @@ def main():
             != config.hazard_memory_observations
         ):
             raise ValueError("Checkpoint enemy peak-exposure layout does not match this run")
-        model.load_state_dict(checkpoint["states"]["model"])
+        load_block_smb_model_state(model, checkpoint["states"]["model"])
     optimizer = make_block_smb_optimizer(model, config)
     passes = 0
     practice_weights = {
@@ -358,6 +368,11 @@ def main():
             walk_durations=config.walk_duration_primitives,
             prioritized=config.demonstration_prioritized,
             family_weights=practice_weights,
+            tactic_loss_weight=config.tactic_loss_weight,
+            memory_weight=config.world_model_memory_weight,
+            memory_refresh_interval=config.memory_refresh_interval,
+            memory_unroll=config.memory_unroll_steps,
+            strategy_loss_weight=config.strategy_loss_weight,
         )
         print(
             json.dumps(
@@ -454,12 +469,7 @@ def main():
                         robust=args.robust_demonstrations,
                     )
                 extra = collect_demonstrations(extra_cases, config, vision)
-                data = DemonstrationBatch(
-                    *(
-                        torch.cat((getattr(data, f.name), getattr(extra, f.name)))
-                        for f in fields(data)
-                    )
-                )
+                data = combine_demonstrations([data, extra])
     tests = None
     if passes >= 2:
         tests = evaluate_family_set(

@@ -29,6 +29,7 @@ from retroagi.stages.block_smb.train import (
     BlockSMBTrainingConfig,
     block_smb_policy_scenario,
     collect_trajectory,
+    load_block_smb_model_state,
     make_block_smb_model,
     make_block_smb_optimizer,
     save_block_smb_checkpoint,
@@ -39,7 +40,7 @@ DIFFICULTIES = ("easy", "medium", "hard")
 
 
 def feedforward_recipe(values):
-    """Batched evaluation carries no LSTM state, so drop episodic LSTM memory."""
+    """The recipe without carried state or episodic LSTM memory."""
     values = dict(values)
     values["architecture_config"] = {
         key: value
@@ -47,7 +48,11 @@ def feedforward_recipe(values):
         if key != "world_model_memory_dim"
     }
     values["ablation"] = {**values["ablation"], "recurrent_state_enabled": False}
-    values.update(world_model_memory_weight=0.0, memory_refresh_interval=0)
+    values.update(
+        world_model_memory_weight=0.0,
+        memory_refresh_interval=0,
+        memory_unroll_steps=0,
+    )
     return values
 
 
@@ -158,6 +163,11 @@ def main():
     parser.add_argument("--motion-observations", action="store_true")
     parser.add_argument("--hazard-observations", action="store_true")
     parser.add_argument("--hazard-memory-observations", action="store_true")
+    parser.add_argument(
+        "--feedforward",
+        action="store_true",
+        help="drop the recipe's recurrent LSTM memory and strategy settings",
+    )
     parser.add_argument("--varied-demonstrations", action="store_true")
     parser.add_argument("--robust-demonstrations", action="store_true")
     parser.add_argument("--prioritized-demonstrations", action="store_true")
@@ -178,9 +188,9 @@ def main():
         parser.error("Unknown family")
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
-    values = feedforward_recipe(
-        json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
-    )
+    values = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    if args.feedforward:
+        values = feedforward_recipe(values)
     values.update(
         demonstration_bootstrap_updates=0,
         demonstration_rehearsal_updates=0,
@@ -266,7 +276,7 @@ def main():
                     raise ValueError(
                         "Checkpoint enemy peak-exposure layout does not match this run"
                     )
-                model.load_state_dict(checkpoint["states"]["model"])
+                load_block_smb_model_state(model, checkpoint["states"]["model"])
             optimizer = make_block_smb_optimizer(model, config)
             replay = BlockSMBSuccessReplay(seed=seed)
             cases = samples(family, 99173, "validation", args.eval_per_difficulty * 3)
@@ -331,6 +341,11 @@ def main():
                         decision_durations_only=not config.adaptive_duration_control,
                         walk_durations=config.walk_duration_primitives,
                         prioritized=config.demonstration_prioritized,
+                        tactic_loss_weight=config.tactic_loss_weight,
+                        memory_weight=config.world_model_memory_weight,
+                        memory_refresh_interval=config.memory_refresh_interval,
+                        memory_unroll=config.memory_unroll_steps,
+                        strategy_loss_weight=config.strategy_loss_weight,
                     )
                     metrics = dict(
                         mean_return=None,

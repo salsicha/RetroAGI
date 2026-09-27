@@ -132,6 +132,19 @@ def main():
                                     src_b=batch.src_b.tolist(),
                                     src_c=batch.src_c.tolist(),
                                     skill_goal=g["skill_goal"].tolist(),
+                                    # LSTM memory against the geometry's own
+                                    # peak exposure, to check transfer.
+                                    memory_prediction=(
+                                        None
+                                        if model.last_memory_prediction is None
+                                        else model.last_memory_prediction.reshape(-1).tolist()
+                                    ),
+                                    memory_target=g["features"]["hazard_memory_vec"].tolist(),
+                                    strategy_objective=(
+                                        None
+                                        if model.last_objective_logits is None
+                                        else int(model.last_objective_logits.argmax(-1)[0])
+                                    ),
                                     intent=intent,
                                     action=execution.action,
                                     hold_frames=execution.hold_frames,

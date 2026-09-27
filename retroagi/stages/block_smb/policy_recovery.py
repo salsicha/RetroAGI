@@ -377,6 +377,6 @@ def combine_demonstrations(batches):
             field.name: torch.cat([getattr(batch, field.name) for batch in batches])
             for field in fields(DemonstrationBatch)
             # Carried states depend on the weights at refresh; recompute them.
-            if field.name != "memory_state"
+            if field.name not in ("memory_state", "world_model_inputs")
         }
     )

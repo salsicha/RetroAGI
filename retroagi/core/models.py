@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .skills import SKILL_GOAL_ENCODING_DIM
+from .skills import SKILL_GOAL_ENCODING_DIM, SKILL_GOAL_TYPES
 
 SUPPORTED_CONTROLLER_SCHEDULES = ("constant", "linear")
 ACTION_LEVEL_WORLD_MODEL_ALLOWED_MISSING_PREFIXES = (
@@ -41,6 +41,11 @@ ACTION_HEAD_ALLOWED_MISSING_PREFIXES = (
     "agent.fc_primitive_post_release.",
 )
 ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES = ("world_model_actor_context.",)
+WORLD_MODEL_MEMORY_ALLOWED_MISSING_PREFIXES = (
+    "world_model.observation_encoder.",
+    "world_model.memory_head.",
+)
+WORLD_MODEL_LSTM_INPUT_WEIGHT = "world_model.lstm.weight_ih_l0"
 ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context.",)
 LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES = ("agent.c_state_context_b.",)
 SKILL_LAYER_ALLOWED_MISSING_PREFIXES = (
@@ -56,6 +61,7 @@ ACTION_EVALUATION_ALLOWED_MISSING_PREFIXES = (
     *LEVEL_B_PRIMITIVE_ALLOWED_MISSING_PREFIXES,
     *ACTION_HEAD_ALLOWED_MISSING_PREFIXES,
     *ACTOR_WORLD_MODEL_CONTEXT_ALLOWED_MISSING_PREFIXES,
+    *WORLD_MODEL_MEMORY_ALLOWED_MISSING_PREFIXES,
     *ACTOR_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
     *LEVEL_B_C_STATE_CONTEXT_ALLOWED_MISSING_PREFIXES,
     *SKILL_LAYER_ALLOWED_MISSING_PREFIXES,
@@ -91,6 +97,21 @@ def action_level_world_model_state_dict(
             skipped.append(key)
             continue
         expected = current.get(key)
+        observation_dim = int(getattr(getattr(model, "world_model", None), "observation_dim", 0))
+        if (
+            key == WORLD_MODEL_LSTM_INPUT_WEIGHT
+            and expected is not None
+            and observation_dim
+            and value.ndim == 2
+            and value.size(0) == expected.size(0)
+            and value.size(1) == expected.size(1) - observation_dim
+        ):
+            # Observation features are appended to the LSTM input; zero
+            # columns keep the checkpoint's recurrence exactly at first.
+            padded = value.new_zeros(expected.shape)
+            padded[:, : value.size(1)] = value
+            migrated[key] = padded
+            continue
         if (
             expected is not None
             and key.startswith("world_model.")
@@ -118,13 +139,22 @@ def action_level_world_model_state_dict(
 
 @dataclass(frozen=True)
 class WorldModelState:
-    """LSTM state carried between world-model calls."""
+    """LSTM state carried between world-model calls.
+
+    `stance` optionally carries the strategy network's recent distinct
+    tactical stances, [batch, history, stances], with the same episode.
+    """
 
     hidden: torch.Tensor
     cell: torch.Tensor
+    stance: torch.Tensor | None = None
 
     def detach(self):
-        return WorldModelState(self.hidden.detach(), self.cell.detach())
+        return WorldModelState(
+            self.hidden.detach(),
+            self.cell.detach(),
+            None if self.stance is None else self.stance.detach(),
+        )
 
 
 @dataclass(frozen=True)
@@ -265,6 +295,7 @@ class _ActionCandidate:
     evaluation: CriticActionEvaluation
     next_world_model_state: WorldModelState | None
     memory_prediction: torch.Tensor | None = None
+    world_model_inputs: torch.Tensor | None = None
 
 
 class PositionalEncoding(nn.Module):
@@ -1021,6 +1052,7 @@ class WorldModel(nn.Module):
         )
         self.memory_head = nn.Linear(hidden_size, self.memory_dim) if self.memory_dim else None
         self.last_memory_prediction: torch.Tensor | None = None
+        self.last_step_inputs: torch.Tensor | None = None
         input_size = 16 + self.primitive_embedding_dim + self.observation_dim
         self.lstm = nn.LSTM(
             input_size=input_size,
@@ -1187,6 +1219,36 @@ class WorldModel(nn.Module):
             replan_logit=raw[:, 6],
         )
 
+    def step_inputs(self, state, action, w_context, b_context, primitive_context=None):
+        """Parameter-free LSTM inputs: slot summaries and the primitive summary."""
+        return torch.cat(
+            (
+                self._summary_features(state),
+                self._summary_features(action),
+                self._summary_features(w_context),
+                self._summary_features(b_context),
+                self._primitive_summary_features(
+                    primitive_context, state.size(0), state.device, state.dtype
+                ),
+            ),
+            dim=1,
+        )
+
+    def _lstm_step(self, step_inputs, state, recurrent_state):
+        summaries, primitive_summary = step_inputs[:, :16], step_inputs[:, 16:]
+        primitive_embedding = self.primitive_encoder(primitive_summary)
+        observation = (
+            (self.observation_encoder(state),) if self.observation_encoder is not None else ()
+        )
+        features = torch.cat((summaries, primitive_embedding, *observation), dim=1).unsqueeze(1)
+        out, (hidden, cell) = self.lstm(features, (recurrent_state.hidden, recurrent_state.cell))
+        return out, WorldModelState(hidden, cell), primitive_embedding
+
+    def advance(self, step_inputs, state, recurrent_state):
+        """One differentiable LSTM step from stored inputs; returns the new state."""
+        out, recurrent_state, _ = self._lstm_step(step_inputs, state, recurrent_state)
+        return out[:, -1, :], recurrent_state
+
     def forward(
         self,
         state,
@@ -1219,37 +1281,15 @@ class WorldModel(nn.Module):
             .unsqueeze(0)
             .expand(batch_size, -1, -1)
         )
-        primitive_summary = self._primitive_summary_features(
-            primitive_context,
-            batch_size,
-            device,
-            dtype,
-        )
-        primitive_embedding = self.primitive_encoder(primitive_summary)
-        observation = (
-            (self.observation_encoder(state),) if self.observation_encoder is not None else ()
-        )
-        action_features = torch.cat(
-            (
-                self._summary_features(state),
-                self._summary_features(action),
-                self._summary_features(w_context),
-                self._summary_features(b_context),
-                primitive_embedding,
-                *observation,
-            ),
-            dim=1,
-        ).unsqueeze(1)
-
+        step_inputs = self.step_inputs(state, action, w_context, b_context, primitive_context)
+        # Kept so demonstration fitting can replay this step with gradients.
+        self.last_step_inputs = step_inputs.detach()
         recurrent_state = self._coerce_state(initial_state, batch_size, device, dtype)
         chunk_masks = self._normalize_episode_mask(episode_mask, batch_size, 1, device, dtype)
-
         recurrent_state = self._mask_state(recurrent_state, chunk_masks[:, 0])
-        out, (hidden, cell) = self.lstm(
-            action_features,
-            (recurrent_state.hidden, recurrent_state.cell),
+        out, recurrent_state, primitive_embedding = self._lstm_step(
+            step_inputs, state, recurrent_state
         )
-        recurrent_state = WorldModelState(hidden, cell)
         action_hidden = out[:, -1, :].unsqueeze(1).expand(-1, seq_len_c, -1)
         slot_features = torch.stack([state, action, w_context, b_context], dim=-1)
         primitive_slots = primitive_embedding.unsqueeze(1).expand(-1, seq_len_c, -1)
@@ -1461,15 +1501,72 @@ class TacticsNetwork(nn.Module):
         return logits, context
 
 
+# The strategy network's objective: which skill goal applies now, or none.
+STRATEGY_OBJECTIVES = (*SKILL_GOAL_TYPES, "none")
+
+
+def skill_goal_objective(goal: torch.Tensor) -> torch.Tensor:
+    """Objective class of skill-goal encodings; all-zero goals are `none`."""
+    types = goal[..., : len(SKILL_GOAL_TYPES)]
+    return torch.where(
+        types.abs().sum(-1) > 0,
+        types.argmax(-1),
+        torch.full_like(types[..., 0], len(SKILL_GOAL_TYPES), dtype=torch.long),
+    )
+
+
+STRATEGY_OBJECTIVE_PREFIX = "strategy_network.objective_head."
+
+
+def clip_policy_and_objective_gradients(model: nn.Module, max_norm: float) -> torch.Tensor:
+    """Clip the strategy objective head separately from everything else.
+
+    The head is a pure reader, so its loss must not shrink the policy's own
+    clipped update through a shared global norm. Returns the policy's norm.
+    """
+    policy, objective = [], []
+    for name, parameter in model.named_parameters():
+        (objective if name.startswith(STRATEGY_OBJECTIVE_PREFIX) else policy).append(parameter)
+    if objective:
+        torch.nn.utils.clip_grad_norm_(objective, max_norm)
+    return torch.nn.utils.clip_grad_norm_(policy, max_norm)
+
+
+def advance_stance_history(history: torch.Tensor, stance: torch.Tensor) -> torch.Tensor:
+    """Record a stance only when it differs from the latest recorded one.
+
+    The history is then a sequence of distinct tactics, not the last few
+    frames; a repeated stance refreshes the latest entry in place.
+    """
+    last = history[:, -1]
+    same = (last.abs().sum(-1) > 0) & (last.argmax(-1) == stance.argmax(-1))
+    appended = torch.cat((history[:, 1:], stance.unsqueeze(1)), dim=1)
+    refreshed = torch.cat((history[:, :-1], stance.unsqueeze(1)), dim=1)
+    return torch.where(same.view(-1, 1, 1), refreshed, appended)
+
+
 class StrategyNetwork(nn.Module):
     """Transformer over the recent sequence of tactical stances.
 
     Sits above the tactics network and decides the sequence of tactics: it
-    reads the rolling history of stance distributions and summarizes it into
-    a context that conditions the next tactical decision.
+    reads the history of distinct recent stances and summarizes it into a
+    context that conditions the next tactical decision. With an objective
+    head it also names the current skill goal from the observation, the
+    carried world-model memory and that history. The head only reads them:
+    its prediction reaches the policy solely as a replacement skill goal
+    (`learned_skill_goals`), so training it cannot change a policy that still
+    acts on scripted goals.
     """
 
-    def __init__(self, d_model: int, history: int = 8) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        history: int = 8,
+        *,
+        state_dim: int = 0,
+        memory_dim: int = 0,
+        objectives: int = 0,
+    ) -> None:
         super().__init__()
         self.history = int(history)
         self.input_projection = nn.Linear(len(TACTIC_STANCES), d_model)
@@ -1480,10 +1577,26 @@ class StrategyNetwork(nn.Module):
             batch_first=True,
         )
         self.encoder = nn.TransformerEncoder(layer, num_layers=1)
+        self.memory_dim = int(memory_dim)
+        self.objective_head = None
+        if objectives:
+            if state_dim <= 0:
+                raise ValueError("An objective head needs the observation state_dim")
+            self.objective_head = nn.Sequential(
+                nn.Linear(int(state_dim) + self.memory_dim + d_model, 64),
+                nn.Tanh(),
+                nn.Linear(64, int(objectives)),
+            )
 
-    def forward(self, stance_history):
+    def forward(self, stance_history, state=None, memory=None):
         tokens = self.input_projection(stance_history.float())
-        return self.encoder(tokens).mean(dim=1)
+        context = self.encoder(tokens).mean(dim=1)
+        if self.objective_head is None or state is None:
+            return context, None
+        if memory is None:
+            memory = context.new_zeros(context.size(0), self.memory_dim)
+        features = torch.cat((state.float(), memory.float(), context), dim=1).detach()
+        return context, self.objective_head(features)
 
 
 class AgentWorldModelCritic(nn.Module):
@@ -1633,14 +1746,25 @@ class AgentWorldModelCritic(nn.Module):
         # existing checkpoints keep identical downstream initialization.
         rng_state_tactics = torch.get_rng_state()
         self.tactics_network = TacticsNetwork(seq_len_c, 32, 32)
-        self.strategy_network = StrategyNetwork(32)
+        self.strategy_network = StrategyNetwork(
+            32,
+            state_dim=seq_len_c,
+            memory_dim=self.world_model.hidden_size * 2,
+            objectives=len(STRATEGY_OBJECTIVES),
+        )
         torch.set_rng_state(rng_state_tactics)
-        self._stance_history = None
-        # With a memory world model the LSTM carries episode context. Batched
-        # demonstrations cannot train a carried stance history, so keep it
-        # reset (inert) instead of letting carried LSTM state also carry it.
-        self.carry_stance_history = not self.world_model_memory_dim
+        # Each objective's skill-goal encoding (magnitude zero; `none` is zero).
+        goal_table = torch.zeros(len(STRATEGY_OBJECTIVES), SKILL_GOAL_ENCODING_DIM)
+        goal_table[: len(SKILL_GOAL_TYPES), : len(SKILL_GOAL_TYPES)] = torch.eye(
+            len(SKILL_GOAL_TYPES)
+        )
+        self.register_buffer("objective_skill_goals", goal_table, persistent=False)
+        # When set, the strategy network's objective replaces any supplied
+        # skill goal, so no scripted objective selector is needed at playback.
+        self.learned_skill_goals = False
         self.last_memory_prediction: torch.Tensor | None = None
+        self.last_objective_logits: torch.Tensor | None = None
+        self.last_world_model_inputs: torch.Tensor | None = None
 
     def transition_representation(self, state):
         return self.transition_representation_head(state)
@@ -1739,6 +1863,29 @@ class AgentWorldModelCritic(nn.Module):
             recurrent_features = recurrent_features * mask.view(-1, 1)
         context = self.world_model_actor_context(recurrent_features)
         return context.unsqueeze(1).expand(-1, src_A.size(1), -1)
+
+    def _strategy_inputs(self, world_model_state, src_C, episode_mask=None):
+        """Carried distinct-stance history and world-model memory, if any."""
+        batch = src_C.size(0)
+        shape = (batch, self.strategy_network.history, len(TACTIC_STANCES))
+        stance = getattr(world_model_state, "stance", None)
+        if stance is None or tuple(stance.shape) != shape:
+            stance = src_C.new_zeros(shape)
+        stance = stance.to(device=src_C.device, dtype=src_C.dtype)
+        memory = None
+        if world_model_state is not None:
+            if isinstance(world_model_state, WorldModelState):
+                hidden, cell = world_model_state.hidden, world_model_state.cell
+            else:
+                hidden, cell = world_model_state
+            memory = torch.cat((hidden[-1], cell[-1]), dim=-1).to(
+                device=src_C.device, dtype=src_C.dtype
+            )
+        mask = self._actor_episode_mask(episode_mask, batch, src_C.device, src_C.dtype)
+        if mask is not None:
+            stance = stance * mask.view(-1, 1, 1)
+            memory = None if memory is None else memory * mask.view(-1, 1)
+        return stance, memory
 
     def _agent_forward(
         self,
@@ -2055,6 +2202,7 @@ class AgentWorldModelCritic(nn.Module):
         world_model_enabled=True,
     ) -> _ActionCandidate:
         self.world_model.last_memory_prediction = None
+        self.world_model.last_step_inputs = None
         next_state_pred, next_world_model_state, primitive_outcome = self._world_model_prediction(
             src_C,
             actions,
@@ -2085,6 +2233,7 @@ class AgentWorldModelCritic(nn.Module):
             evaluation=evaluation,
             next_world_model_state=next_world_model_state,
             memory_prediction=self.world_model.last_memory_prediction,
+            world_model_inputs=self.world_model.last_step_inputs,
         )
 
     @staticmethod
@@ -2178,27 +2327,19 @@ class AgentWorldModelCritic(nn.Module):
             src_A,
             episode_mask=episode_mask,
         )
-        history_len = getattr(self.strategy_network, "history", 8)
-        if (
-            world_model_state is None
-            or not self.carry_stance_history
-            or self._stance_history is None
-            or self._stance_history.size(0) != src_C.size(0)
-        ):
-            self._stance_history = torch.zeros(
-                src_C.size(0),
-                history_len,
-                len(TACTIC_STANCES),
-                device=src_C.device,
-            )
-        strategy_context = self.strategy_network(self._stance_history)
+        stance_history, strategy_memory = self._strategy_inputs(
+            world_model_state, src_C, episode_mask
+        )
+        strategy_context, objective_logits = self.strategy_network(
+            stance_history, src_C, strategy_memory
+        )
+        self.last_objective_logits = objective_logits
+        if self.learned_skill_goals and objective_logits is not None:
+            skill_goal = self.objective_skill_goals[objective_logits.detach().argmax(dim=-1)]
         tactic_stance_logits, tactic_context = self.tactics_network(src_C, strategy_context)
         self.last_tactic_logits = tactic_stance_logits
         stance_probabilities = torch.softmax(tactic_stance_logits, dim=-1)
-        self._stance_history = torch.cat(
-            (self._stance_history[:, 1:, :], stance_probabilities.detach().unsqueeze(1)),
-            dim=1,
-        )
+        next_stance_history = advance_stance_history(stance_history, stance_probabilities.detach())
         self.last_tactic_stance = TACTIC_STANCES[int(stance_probabilities[0].argmax())]
         self.last_actor_world_model_context = (
             None if actor_world_model_context is None else actor_world_model_context.detach()
@@ -2393,6 +2534,7 @@ class AgentWorldModelCritic(nn.Module):
         )
         self.last_primitive_outcome = selected_candidate.primitive_outcome
         self.last_memory_prediction = selected_candidate.memory_prediction
+        self.last_world_model_inputs = selected_candidate.world_model_inputs
 
         outputs = (
             actions1,
@@ -2410,5 +2552,10 @@ class AgentWorldModelCritic(nn.Module):
             selected_candidate.b,
         )
         if return_world_model_state:
-            return (*outputs, selected_candidate.next_world_model_state)
+            next_state = selected_candidate.next_world_model_state
+            if next_state is not None:
+                next_state = WorldModelState(
+                    next_state.hidden, next_state.cell, next_stance_history.detach()
+                )
+            return (*outputs, next_state)
         return outputs

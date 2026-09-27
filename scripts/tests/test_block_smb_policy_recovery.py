@@ -9,6 +9,7 @@ import torch
 from retroagi.core.smb_geometry import geometry_features
 from retroagi.stages.block_smb.demonstrations import (
     collect_demonstrations,
+    demonstration_rows,
     demonstration_sample_weights,
 )
 from retroagi.stages.block_smb.env import MarioScenarioEnv
@@ -73,6 +74,10 @@ def test_post_stomp_pipe_stall_is_repaired_and_only_suffix_is_supervised():
     config = tiny_config(walk_duration_primitives=False)
     repaired = replace(case, oracle=repair)
     data = collect_demonstrations([(11, repaired)], config, StaticBlockVision)
+    # The failed prefix is kept only as unsupervised context for memory.
+    assert len(data.action) == len(repair["actions"])
+    assert int(data.context.sum()) == start and not data.actor_mask[:start].any()
+    data = demonstration_rows(data, ~data.context)
     assert len(data.action) == len(repair["actions"]) - start
     assert data.recovery.all()
     assert int(data.action[0]) == 2 and data.actor_mask[0]

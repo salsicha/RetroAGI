@@ -15,6 +15,7 @@ import torch
 from retroagi.core.smb_geometry import MOTION_NAMES, STATE_NAMES
 from retroagi.core.smb_scene import AVAILABILITY_NAMES, SCENE_ENCODER
 
+STRATEGY_OBJECTIVE_PREFIXES = ("strategy_network.objective_head.",)
 COMPONENT_PREFIXES = {
     "actor": ("agent.", "tactics_network.", "strategy_network.", "world_model_actor_context."),
     "world_model": ("world_model.",),
@@ -182,13 +183,19 @@ def load_component(model, directory, name, *, contract, architecture):
         raise ValueError("Component checksum mismatch")
     state = torch.load(path, map_location="cpu", weights_only=True)
     expected = component_states(model)[name]
-    if state.keys() != expected.keys() or any(state[k].shape != expected[k].shape for k in state):
+    # Bundles predating the strategy objective keep the new, behavior-neutral
+    # objective weights of the receiving model.
+    missing = expected.keys() - state.keys()
+    if (
+        state.keys() - expected.keys()
+        or any(not key.startswith(STRATEGY_OBJECTIVE_PREFIXES) for key in missing)
+        or any(state[k].shape != expected[k].shape for k in state)
+    ):
         raise ValueError("Component tensor layout mismatch")
     merged = model.state_dict()
     merged.update(state)
     model.load_state_dict(merged, strict=True)
     model.full_level_qualified = False
-    model._stance_history = None
     if hasattr(model, "smb_executor"):
         model.smb_executor.reset()
     return entry
