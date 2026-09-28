@@ -319,11 +319,18 @@ def test_production_builder_covers_bridge_and_plant_variants_in_every_difficulty
     def alternate(case, route_seed, **kwargs):
         return SimpleNamespace(**{**vars(case), "variant": 1 + route_seed % 3})
 
+    def arrivals(case, index):
+        return [SimpleNamespace(**{**vars(case), "variant": "arrival"})]
+
+    from retroagi.stages.block_smb import piranha_tactics
+
     monkeypatch.setattr(monte_carlo, "sample_block_smb_monte_carlo_scenario", sample)
     monkeypatch.setattr(demonstrations, "varied_demonstration", alternate)
+    monkeypatch.setattr(piranha_tactics, "arrival_demonstrations", arrivals)
     monkeypatch.setattr(demonstrations, "collect_demonstrations", lambda cases, *args: cases)
     config = SimpleNamespace(
         seed=seed,
+        log_path=None,
         demonstration_layouts_per_family=6,
         demonstration_robust_routes=True,
         demonstration_varied_routes=True,
@@ -332,4 +339,8 @@ def test_production_builder_covers_bridge_and_plant_variants_in_every_difficulty
     for family, case in demonstrations.build_balanced_demonstrations(config, None):
         groups[family, case.difficulty, case.index].add(case.variant)
     assert len(groups) == 18
-    assert all(variants == {0, 1, 2, 3} for variants in groups.values())
+    plant = monte_carlo.BLOCK_SMB_MC_FAMILIES.index("piranha_avoidance")
+    for (family, _difficulty, _index), variants in groups.items():
+        # Plant layouts also teach corrections from learner arrival states.
+        expected = {0, 1, 2, 3} | ({"arrival"} if family == plant else set())
+        assert variants == expected
