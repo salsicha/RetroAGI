@@ -471,6 +471,43 @@ class SMBAdaptiveController:
         action = self._active_jump if self._active_jump is not None else self._active_steady
         return None if action is None else int(action)
 
+    def resolve_landing(
+        self,
+        *,
+        batch: Any = None,
+        vision: Any = None,
+        support_override: str | None = None,
+        enemy_contact_override: bool | None = None,
+    ) -> bool:
+        """Close a jump that landed after its button was already released.
+
+        Call before choosing the frame's action. A released button leaves the
+        next press edge available on the first grounded frame, so that frame
+        is a fresh policy decision rather than a forced release; the caller
+        attributes the landing to the step that produced it. A jump still held
+        at landing is left to execute(), which releases it and suppresses one
+        more frame. Returns True when a jump was closed.
+        """
+
+        if self._active_jump is None or not self._released or not self._left_support:
+            return False
+        if vision is None and batch is not None:
+            vision = _vision_from_batch(batch)
+        support_name = (
+            str(support_override).lower()
+            if support_override is not None
+            else _vision_support_name(vision)
+        )
+        enemy_contact = (
+            bool(enemy_contact_override)
+            if enemy_contact_override is not None
+            else _vision_enemy_contact(vision)
+        )
+        if enemy_contact or support_name not in {SMB_SUPPORT_GROUND, SMB_SUPPORT_PLATFORM}:
+            return False
+        self.reset()
+        return True
+
     def reset(self) -> None:
         self._active_jump: SMBAction | None = None
         self._active_steady: SMBAction | None = None

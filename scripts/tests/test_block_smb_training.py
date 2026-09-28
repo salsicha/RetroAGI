@@ -2200,6 +2200,96 @@ class TestSignCoachingAndOverreach(unittest.TestCase):
             self.assertLessEqual(target, 1.0)
 
 
+class TestLandingHandoffAndInteriorDurations(unittest.TestCase):
+    def test_released_landing_lets_the_next_jump_start_on_the_first_grounded_frame(self):
+        # Forced jumps on flat ground: every hold ends mid-flight, so the
+        # controller hands back the first grounded frame. Each landing is
+        # recorded on the physical landing step and the next jump starts on
+        # the very next frame, instead of two forced release frames later.
+        from retroagi.stages.block_smb.vision import BlockVisionTransformer
+
+        scenario = {
+            "world_width": 2000,
+            "mario": [40, 200],
+            "platforms": [[0, 220, 2000, 20]],
+            "coins": [],
+            "enemies": [],
+            "goal": [1900, 200, 16, 20],
+            "metadata": {
+                "block_smb_monte_carlo": {
+                    "family": "flat_run",
+                    "parameters": {"a_level_action": 2},
+                }
+            },
+        }
+        model = make_block_smb_model(tiny_config())
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(), scenario=scenario, vision=BlockVisionTransformer()
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                "landing_handoff_probe",
+                rollout_steps=160,
+                seed=3,
+                deterministic=True,
+                device=torch.device("cpu"),
+            )
+        finally:
+            stage.env.close()
+        jumps = [
+            span
+            for span in trajectory.spans
+            if span.level == "motor_primitive" and span.command.get("primitive") == "jump"
+        ]
+        landings = [
+            next(e["frame"] for e in span.events if e.get("event") == "landing")
+            for span in jumps
+            if any(e.get("event") == "landing" for e in span.events)
+        ]
+        self.assertGreaterEqual(len(landings), 2)
+        starts = [span.start_frame for span in jumps]
+        for landing in landings:
+            following = [start for start in starts if start > landing]
+            if following:
+                self.assertEqual(min(following), landing + 1)
+
+    def test_online_duration_coaching_prefers_the_middle_of_the_safe_range(self):
+        from types import SimpleNamespace
+
+        from retroagi.stages.block_smb.train import block_smb_duration_coaching_loss
+
+        def step(peak):
+            logits = torch.full((1, 1, 16), -4.0)
+            logits[0, 0, peak - 1] = 4.0
+            return SimpleNamespace(
+                hold_duration_logits=logits.requires_grad_(),
+                duration_bin_values=None,
+                info={
+                    "primitive_valid_hold_frames": list(range(5, 16)),
+                    "primitive_duration_scale": 1.0,
+                },
+            )
+
+        device = torch.device("cpu")
+        middle = block_smb_duration_coaching_loss(step(10), device=device)
+        edge = block_smb_duration_coaching_loss(step(15), device=device)
+        # Both holds are certified; the edge sits beside an unsafe hold.
+        self.assertLess(float(middle), float(edge))
+
+        flat = SimpleNamespace(
+            hold_duration_logits=torch.zeros(1, 1, 16, requires_grad=True),
+            duration_bin_values=None,
+            info={"primitive_valid_hold_frames": list(range(5, 16))},
+        )
+        block_smb_duration_coaching_loss(flat, device=device).backward()
+        gradient = flat.hold_duration_logits.grad[0, 0]
+        # Descent raises the middle of the safe run more than its edges.
+        self.assertLess(float(gradient[9]), float(gradient[14]))
+        self.assertLess(float(gradient[9]), float(gradient[4]))
+
+
 class TestJumpFoundationSequencing(unittest.TestCase):
     def test_foundation_curriculum_samples_only_jump_teachers(self):
         from retroagi.stages.block_smb.train import build_curriculum

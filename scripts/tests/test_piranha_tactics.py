@@ -188,7 +188,10 @@ def test_demonstrations_jointly_train_tactics_skill_and_primitive():
     assert {TACTIC_STANCES.index("advance"), TACTIC_STANCES.index("hold_area")} <= set(
         data.tactic.tolist()
     )
-    assert (data.tactic[~data.actor_mask] == -1).all()
+    flight = (data.motor_action == 2) & ~data.actor_mask
+    assert flight.any()
+    assert (data.tactic[flight] == TACTIC_STANCES.index("advance")).all()
+    assert not data.tactic_actions[flight].any()
     assert (data.duration[data.action == 0] == 0).all()
     assert data.actor_mask[data.action == 0].all()
     merged = combine_demonstrations([data, data])
@@ -238,7 +241,7 @@ def test_demonstrations_jointly_train_tactics_skill_and_primitive():
     assert not torch.equal(*choices)
 
 
-def test_online_tactic_loss_is_decision_masked_and_reaches_the_stance_head():
+def test_online_intent_spans_flight_while_action_coaching_is_decision_masked():
     torch.manual_seed(5)
     config = tiny_config(
         motion_observations=True,
@@ -273,7 +276,9 @@ def test_online_tactic_loss_is_decision_masked_and_reaches_the_stance_head():
         assert {TACTIC_STANCES.index("advance"), TACTIC_STANCES.index("hold_area")} <= {
             t.tactic_target for t in labels
         }
-        assert len(labels) < len(trajectory.transitions)
+        assert len(labels) == len(trajectory.transitions)
+        assert any(not any(t.tactic_actions) for t in labels)
+        assert any(any(t.tactic_actions) for t in labels)
         losses = compute_block_smb_losses(
             model, trajectory.transitions, config, torch.device("cpu")
         )
@@ -430,14 +435,28 @@ def test_certified_departure_window_spans_the_minimum_hidden_interval():
 
 
 def test_running_departures_are_certified():
+    # Timed plants are raised whenever a runner arrives, so teacher routes
+    # depart from a stop. Certification must still admit a departure made
+    # at speed: retime a layout so the plant retracts as a runner approaches.
+    from retroagi.stages.block_smb.piranha import runner_crossing_frame
+
+    sample = timed_sample("medium")
     env = MarioScenarioEnv()
     try:
-        for sample in _timed_samples(count=30):
-            features = _departure_state(env, sample)
-            if env.mario["vx"] > 0.5:
-                assert fresh_retraction(features)
-                assert timed_safe_holds(env, features)
-                return
+        for retracted_at in range(4, 40, 3):
+            scenario = deepcopy(sample.scenario)
+            plant = scenario["enemies"][0]
+            rise, exposed = plant["rise_frames"], plant["exposed_frames"]
+            period = 2 * rise + exposed + plant["hidden_frames"]
+            plant["phase"] = (2 * rise + exposed - retracted_at) % period
+            env.reset(scenario=scenario)
+            history = EnemyObservationHistory()
+            for _ in range(runner_crossing_frame(scenario, plant)):
+                features = history.observe(env, env.steps)
+                if env.mario["vx"] > 0.5 and fresh_retraction(features):
+                    if timed_safe_holds(env, features):
+                        return
+                env.step(1)
         raise AssertionError("No certified running departure in the timed family")
     finally:
         env.close()
@@ -466,8 +485,13 @@ def test_uncertified_clearance_takeoffs_receive_no_hindsight_duration_target():
     )
     model = make_block_smb_model(config)
     sample = crossing_sample("clearance")
+    # Beyond any spawn jump's reach: the lower hard pipe can otherwise be
+    # mounted at its edge from spawn, which is a certified takeoff.
+    scenario = deepcopy(sample.scenario)
+    scenario["platforms"][1][0] += 24
+    scenario["enemies"][0]["x"] += 24
     stage = BlockSMBStage(
-        scenario=sample.scenario,
+        scenario=scenario,
         vision=StaticBlockVision(),
         observation_config=BlockSMBObservationConfig(
             motion_observations=True, hazard_observations=True, hazard_memory_observations=True

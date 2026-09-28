@@ -70,7 +70,9 @@ def test_each_added_family_supplies_tactic_and_compatible_motor_targets(family):
     # Every trained jump still has a physically certified duration target.
     jumps = mask & ((data.action == 2) | (data.action == 4))
     assert data.valid_durations[jumps].any(dim=-1).all()
-    assert (data.tactic[data.forced_release] == -1).all()
+    assert torch.equal(data.tactic[data.forced_release], data.tactic.roll(1)[data.forced_release])
+    assert not data.actor_mask[data.forced_release].any()
+    assert not data.tactic_actions[data.forced_release].any()
 
 
 @pytest.mark.parametrize(
@@ -90,7 +92,7 @@ def test_tactical_wait_labels_do_not_disable_consumed_wait_durations(family, con
     assert (data.duration_consumed[waits] == consumed).all()
 
 
-def test_leftward_goal_is_advance_and_ordinary_families_are_not_labeled():
+def test_leftward_goal_is_advance_across_skill_families():
     env = MarioScenarioEnv()
     try:
         env.reset(
@@ -107,8 +109,9 @@ def test_leftward_goal_is_advance_and_ordinary_families_are_not_labeled():
         assert tactic_label(env, action=1, family="retreat_recovery") == retreat
         assert tactic_label(env, family="retreat_recovery") == advance
         assert compatible_actions(env, advance) == [False, False, False, True, True, False]
-        assert tactic_label(env, action=1, family="flat_run") == -1
-        assert tactic_label(env, family="single_gap") == -1
+        assert tactic_label(env, action=1, family="flat_run") == retreat
+        assert tactic_label(env, family="single_gap") == advance
+        assert tactic_label(env, family="unknown_family") == -1
     finally:
         env.close()
 

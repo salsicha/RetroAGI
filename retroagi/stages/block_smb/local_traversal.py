@@ -317,8 +317,10 @@ def safe_jump_holds(
                     recoverable = True
                     if verify_recovery and landed and not env._goal_credited:
                         # Match the live executor before certifying the next
-                        # takeoff. A stomp resets it and owns no landing delay.
-                        if not bouncing:
+                        # takeoff. A stomp resets it and a jump released in
+                        # the air hands back its first grounded frame; only a
+                        # jump still held at landing owns release frames.
+                        if not bouncing and frame < hold:
                             for _ in range(2):
                                 _, _, _, _, release_info = env.step(1 if direction > 0 else 3)
                                 if release_info["death"]:
@@ -342,6 +344,69 @@ def safe_jump_holds(
             del env.__dict__["render"]
         else:
             env.render = original_render
+
+
+# Beyond any single jump's horizontal reach, including an approaching enemy.
+TAKEOFF_PROBE_DISTANCE = 128
+# A window this wide leaves the interior hold two or three holds of margin.
+ROBUST_TAKEOFF_HOLDS = 6
+
+
+def takeoff_timing_actions(env, *, plant_history=None) -> list[bool] | None:
+    """Where the next jump should launch from, at a grounded decision.
+
+    Returns a six-slot allowed-action mask toward the current training target,
+    or None when no label is certain. Where no hold is certified only moving
+    toward the target is allowed. On the window's thin opening edge (fewer
+    than ROBUST_TAKEOFF_HOLDS certified holds, and one more running frame
+    certifies more) keep running; the spawn hop launched from there. Once the
+    window is robust or stops widening, running and jumping are both allowed;
+    on its last frame, where one more running frame closes it, only the jump
+    is. Probes restore the full environment state.
+    """
+    from retroagi.core.smb_coaching import training_target
+
+    if not env.mario["on_ground"]:
+        return None
+    objective = training_target(env)
+    if objective.kind not in ("stomp", "mount", "gap", "enemy"):
+        return None
+    direction = objective.direction
+    run, jump = (1, 2) if direction > 0 else (3, 4)
+
+    def certified():
+        target = training_target(env)
+        if target.kind not in ("stomp", "mount", "gap", "enemy"):
+            return []
+        if local_target_distance(env, target) >= TAKEOFF_PROBE_DISTANCE:
+            return []
+        return safe_jump_holds(env, target, target.direction, plant_history=plant_history)
+
+    now = certified()
+    snapshot = snapshot_env_state(env)
+    original_render = env.__dict__.get("render")
+    env.render = lambda: None
+    try:
+        _, _, done, truncated, info = env.step(run)
+        run_survives = not (info["death"] or truncated) and (not done or bool(env._goal_credited))
+        later = certified() if now and run_survives and not done else []
+    finally:
+        restore_env_state(env, snapshot)
+        if original_render is None:
+            del env.__dict__["render"]
+        else:
+            env.render = original_render
+    allowed = [False] * 6
+    if not now:
+        if not run_survives:
+            return None
+        allowed[run] = True
+    elif not run_survives or not later:
+        allowed[jump] = True
+    else:
+        allowed[run] = True
+        allowed[jump] = len(now) >= ROBUST_TAKEOFF_HOLDS or len(now) >= len(later)
+    return allowed
 
 
 def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:

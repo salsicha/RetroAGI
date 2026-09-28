@@ -9,8 +9,8 @@ TRANSFER_FAILURE_FAMILIES = ("stair_gap", "landing_enemy", "enemy_on_platform", 
 
 TRANSFER_FAILURE_SCHEMAS = {
     "piranha_avoidance": {
-        "family_revision": [3, 3],
-        "pipe_height": [22, 42],
+        "family_revision": [4, 4],
+        "pipe_height": [22, 36],
         "pipe_width": [32, 52],
         "plant_height": [16, 80],
         "rise_frames": [12, 20],
@@ -112,11 +112,14 @@ def transfer_failure_scenario(family, rng, difficulty):
             platform_height=height, platform_width=width, enemy_offset=offset, enemy_speed=speed
         )
     elif family == "piranha_avoidance":
-        params["family_revision"] = 3
-        height = (24, 32, 40)[tier] + rng.randint(-2, 2)
+        params["family_revision"] = 4
+        # Hard clearance keeps at least ~5 px of vertical margin over a fully
+        # raised plant (a 62-66 px obstacle top against a ~68 px jump left
+        # 0-3 of 720 running takeoffs and needed a 3 px pipe-lip landing).
+        height = (24, 32, 34)[tier] + rng.randint(-2, 2)
         width = (32, 40, 48)[tier]
         left = rng.randint(112, 140)
-        plant_height = (16, 20, 24)[tier]
+        plant_height = (16, 20, 20)[tier]
         rise = rng.randint(12, 20)
         exposed = rng.randint(40, 64)
         hidden = rng.randint(24, 40)
@@ -159,14 +162,18 @@ def transfer_failure_scenario(family, rng, difficulty):
             # "cross exposed" and "wait for retraction" targets.
             scenario["platforms"][1][2] = width + 4
             plant = scenario["enemies"][0]
-            phase = rng.randrange(2 * rise + exposed + hidden + 24)
             plant.update(
                 timed_crossing=True,
                 plant_height=80,
                 hidden_frames=hidden + 24,
                 x=left + (width + 4 - 12) // 2,
-                phase=phase,
             )
+            # A uniformly random phase let most timed layouts be run straight
+            # through, so the family rarely required the wait it teaches.
+            from .piranha import exposed_arrival_phase
+
+            phase = exposed_arrival_phase(scenario, rng)
+            plant["phase"] = phase
             params.update(
                 plant_height=80, hidden_frames=hidden + 24, pipe_width=width + 4, phase=phase
             )

@@ -500,7 +500,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 15
+DEMONSTRATION_CONTRACT_VERSION = 16
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -515,32 +515,9 @@ def without_walk_commitments(data, episode_starts=None):
         boundaries = torch.tensor(episode_starts, device=indices.device)
         indices = indices[~torch.isin(indices + 1, boundaries)]
     data.next_c[indices] = data.c[indices + 1]
-    # A completed jump still owns its landing-release frame and the following
-    # jump-suppression frame. Stair and transfer-failure teachers walk here;
-    # treating them as free actor decisions teaches walking into the next riser.
-    # The motor-action span ends at physical landing, so this also migrates old
-    # frame-walk caches without needing to rerender their observations.
-    from .monte_carlo import BLOCK_SMB_MC_FAMILIES
-    from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
-
-    release_families = data.family.new_tensor(
-        [BLOCK_SMB_MC_FAMILIES.index(f) for f in ("stair_climb", *TRANSFER_FAILURE_FAMILIES)]
-    )
-    release_family = torch.isin(data.family, release_families)
-    jumped = torch.isin(data.motor_action, data.motor_action.new_tensor([2, 4, 5]))
-    walked = (data.motor_action == 1) | (data.motor_action == 3)
-    release = release_family & walked & jumped.roll(1)
-    release[0] = False
-    boundaries = (
-        torch.as_tensor(episode_starts, device=release.device, dtype=torch.long)
-        if episode_starts is not None
-        else (data.c[:, 26] == 0).nonzero().flatten()
-    )
-    release[boundaries] = False
-    suppress = release.roll(1) & release_family & walked
-    suppress[0] = False
-    suppress[boundaries] = False
-    data.actor_mask[release | suppress] = False
+    # Only jumps still held at landing own release frames. Motor intent stays
+    # a jump throughout flight, so its transition to walking cannot tell us
+    # whether the button was already released. Use the physical replay mask.
     forced_release = getattr(data, "forced_release", None)
     if forced_release is not None:
         data.actor_mask[forced_release] = False
@@ -668,6 +645,11 @@ def adaptive_group_weights(base, groups, counts, errors):
     current = torch.bincount(families, weights=weighted, minlength=len(mass))
     weighted *= (mass / current.clamp_min(1e-12))[families]
     return 0.35 * base + 0.65 * weighted
+
+
+# Weight of the interior-duration preference added to safe-set likelihood, in
+# demonstration fitting and in online coaching alike.
+INTERIOR_DURATION_WEIGHT = 0.2
 
 
 def interior_duration_targets(allowed):
@@ -957,7 +939,9 @@ def fit_demonstrations(
         # Safe-set likelihood alone can settle on a boundary hold: eight
         # frames worked in training but a nearby hard gap required nine.
         # Favor an interior duration so small timing errors retain a margin.
-        duration_losses -= 0.2 * (interior_duration_targets(allowed) * duration_log_probs).sum(-1)
+        duration_losses -= INTERIOR_DURATION_WEIGHT * (
+            interior_duration_targets(allowed) * duration_log_probs
+        ).sum(-1)
         # A feedforward policy without the executor's commitment state cannot
         # infer a past chosen duration from an arbitrary continuation frame.
         # Fixed commitments only consume this head at initiation.
@@ -1356,10 +1340,9 @@ def build_balanced_demonstrations(config, vision_factory, *, families=None):
                     if alternative is not None:
                         cases.append((family_index, alternative))
                 if family == "piranha_avoidance":
-                    from .piranha_tactics import overshoot_demonstration
+                    from .piranha_tactics import arrival_demonstrations
 
-                    corrected = overshoot_demonstration(sample)
-                    if corrected is not None:
+                    for corrected in arrival_demonstrations(sample, i):
                         cases.append((family_index, corrected))
                 continue
             if config.demonstration_robust_routes:

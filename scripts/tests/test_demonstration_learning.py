@@ -438,13 +438,15 @@ def test_walk_replanning_preserves_jump_and_wait_commitments():
     assert wait.started and executor.committed_action == 0
 
 
-def test_frame_walk_cache_migration_matches_fresh_collection():
+@pytest.mark.parametrize("family", ["tall_pipe_jump", "stair_climb", "enemy_on_platform"])
+def test_frame_walk_cache_migration_matches_fresh_collection(family):
     from dataclasses import fields, replace
 
     from retroagi.stages.block_smb.demonstrations import without_walk_commitments
+    from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
 
     config = tiny_config()
-    cases = [(0, samples("tall_pipe_jump", 13, "train", 1)[0])]
+    cases = [(BLOCK_SMB_MC_FAMILIES.index(family), samples(family, 13, "train", 1)[0])]
     cached = collect_demonstrations(cases, config, StaticBlockVision)
     migrated = without_walk_commitments(cached)
     fresh = collect_demonstrations(
@@ -457,6 +459,33 @@ def test_frame_walk_cache_migration_matches_fresh_collection():
     )
     assert migrated.actor_mask[ground_walk & ~migrated.forced_release].all()
     assert not migrated.actor_mask[migrated.forced_release].any()
+
+
+def test_joint_learning_rejects_cached_landing_labels(tmp_path, monkeypatch):
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    from scripts import block_smb_joint_learning
+
+    source = tmp_path / "source"
+    source.mkdir()
+    dataset = source / "demonstrations.pth"
+    torch.save(
+        SimpleNamespace(family=torch.tensor([0]), forced_release=torch.tensor([False])), dataset
+    )
+    (source / "config.json").write_text("{}")
+    (source / "demonstration_manifest.json").write_text(json.dumps({"contract_version": 15}))
+    monkeypatch.setattr(
+        block_smb_joint_learning, "_make_vision_factory", lambda *args: (None, None)
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["joint_learning", "--output-dir", str(tmp_path / "run"), "--dataset", str(dataset)],
+    )
+    with pytest.raises(ValueError, match="contract-16 landing handoff"):
+        block_smb_joint_learning.main()
 
 
 def test_robust_gap_route_has_margin_at_its_takeoff():

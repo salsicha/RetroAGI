@@ -306,8 +306,17 @@ def test_impossible_medium_stomp_penalizes_takeoff_without_duration_label(steps,
     assert start.info["jump_overreach"]
     assert start.info["jump_overreach_action"] == 2
     assert start.info["primitive_target_phase"] == "stomp"
-    assert not any("primitive_target_hold" in t.info for t in trajectory.transitions)
-    assert not any("primitive_outcome_target" in t.info for t in trajectory.transitions)
+    # A later jump started on the first grounded frame is a new decision.
+    first = next(
+        (
+            trajectory.transitions[:i]
+            for i in range(1, len(trajectory.transitions))
+            if trajectory.transitions[i].action == 2 and trajectory.transitions[i - 1].action != 2
+        ),
+        trajectory.transitions,
+    )
+    assert not any("primitive_target_hold" in t.info for t in first)
+    assert not any("primitive_outcome_target" in t.info for t in first)
 
 
 def test_certified_stomp_duration_loss_moves_mass_into_successful_holds():

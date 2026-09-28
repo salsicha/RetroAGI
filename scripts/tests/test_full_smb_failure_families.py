@@ -11,6 +11,7 @@ from retroagi.stages.block_smb.demonstrations import (
     with_robust_demonstrations,
 )
 from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.stages.block_smb.hierarchy import HIERARCHY_FAMILIES
 from retroagi.stages.block_smb.local_traversal import LOCAL_TRAVERSAL_FAMILIES, local_objective
 from retroagi.stages.block_smb.monte_carlo import (
     BLOCK_SMB_MC_FAMILIES,
@@ -46,7 +47,8 @@ def test_new_families_append_without_renumbering_cached_family_labels():
         "stomp_recovery platform_hop bridge_wait bridge_mount bridge_dismount"
     ).split()
     assert BLOCK_SMB_MC_FAMILIES[:24] == tuple(original)
-    assert BLOCK_SMB_MC_FAMILIES[24:] == TRANSFER_FAILURE_FAMILIES
+    assert BLOCK_SMB_MC_FAMILIES[24:28] == TRANSFER_FAILURE_FAMILIES
+    assert BLOCK_SMB_MC_FAMILIES[28:] == HIERARCHY_FAMILIES
     assert set(TRANSFER_FAILURE_FAMILIES) <= LOCAL_TRAVERSAL_FAMILIES & RECOVERY_FAMILIES
     config = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
     assert all(config["monte_carlo_family_weights"][f] > 0 for f in TRANSFER_FAILURE_FAMILIES)
@@ -56,7 +58,7 @@ def test_new_families_append_without_renumbering_cached_family_labels():
 @pytest.mark.parametrize("difficulty", ("easy", "medium", "hard"))
 def test_new_family_routes_complete_in_training_collector(family, difficulty):
     item = sample(family, difficulty)
-    assert item.parameters["family_revision"] == (3 if family == "piranha_avoidance" else 1)
+    assert item.parameters["family_revision"] == (4 if family == "piranha_avoidance" else 1)
     assert item.reachability["reachable"]
     trajectory = rollout(item, PhaseIntentPolicy(), steps=320, use_oracle_actions=True)
     assert trajectory.success
@@ -159,9 +161,10 @@ def test_new_training_demonstrations_keep_jump_credit_and_mask_forced_release(fa
     assert (data.actor_mask & (data.action == 2)).any()
     walked = (data.motor_action == 1) | (data.motor_action == 3)
     jumped = torch.isin(data.motor_action, torch.tensor([2, 4, 5]))
-    release = walked & jumped.roll(1)
-    release[0] = False
-    suppressed = release.roll(1) & walked
-    suppressed[0] = False
-    assert release.any()
-    assert not data.actor_mask[release | suppressed].any()
+    landing = walked & jumped.roll(1)
+    landing[0] = False
+    assert landing.any()
+    assert not data.actor_mask[data.forced_release].any()
+    free_walk = walked & (data.c[:, 16] > 0.5) & ~data.forced_release
+    assert free_walk.any()
+    assert data.actor_mask[free_walk].all()

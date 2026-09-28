@@ -283,6 +283,66 @@ class TestSMBActionVocabulary(unittest.TestCase):
         self.assertFalse(suppressed.started)
         self.assertTrue(rejump.started)
 
+    def test_jump_released_in_air_hands_first_grounded_frame_back(self):
+        # The button went up mid-flight, so the next press edge exists on the
+        # first grounded frame: resolve_landing closes the jump before the
+        # decision and a jump command there starts a new jump at once.
+        executor = SMBParameterizedPrimitiveExecutor()
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[6.0, 0.0, 0.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 4.0]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+        started = executor.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="ground"
+        )
+        released = executor.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="air"
+        )
+        self.assertTrue(started.started)
+        self.assertTrue(released.released)
+        self.assertEqual(released.action, int(SMBAction.RIGHT))
+        self.assertFalse(executor.resolve_landing(support_override="air"))
+        self.assertEqual(executor.committed_action, int(SMBAction.RIGHT_JUMP))
+
+        self.assertTrue(executor.resolve_landing(support_override="ground"))
+        self.assertIsNone(executor.committed_action)
+        rejump = executor.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="ground"
+        )
+        self.assertTrue(rejump.started)
+        self.assertEqual(rejump.action, int(SMBAction.RIGHT_JUMP))
+
+    def test_resolve_landing_leaves_held_jumps_and_enemy_contact_to_execute(self):
+        motor = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[0.0, 0.0, 6.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 8.0]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+        held = SMBParameterizedPrimitiveExecutor()
+        held.execute(SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="ground")
+        held.execute(SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="air")
+        # Still inside its 8-frame hold at landing: the button is down, so the
+        # executor's own release-and-suppress path handles it.
+        self.assertFalse(held.resolve_landing(support_override="ground"))
+        landed = held.execute(
+            SMBAction.RIGHT_JUMP, motor_primitives=motor, support_override="ground"
+        )
+        self.assertTrue(landed.landed)
+        self.assertEqual(landed.action, int(SMBAction.RIGHT))
+
+        contact = SMBParameterizedPrimitiveExecutor()
+        short = SimpleNamespace(
+            hold_duration_logits=torch.tensor([[[6.0, 0.0, 0.0]]]),
+            duration_bin_values=torch.tensor([1.0, 2.0, 4.0]),
+            cancel_logit=torch.tensor([[-4.0]]),
+        )
+        contact.execute(SMBAction.RIGHT_JUMP, motor_primitives=short, support_override="ground")
+        contact.execute(SMBAction.RIGHT_JUMP, motor_primitives=short, support_override="air")
+        self.assertFalse(
+            contact.resolve_landing(support_override="ground", enemy_contact_override=True)
+        )
+
     def test_enemy_contact_override_blocks_vision_proximity_cancel(self):
         # The vision contact guess flags proximity and was cancelling stomp
         # arcs just before impact. With engine truth saying "no contact",
@@ -748,9 +808,7 @@ class TestSteadyPrimitives(unittest.TestCase):
         self.assertEqual(start.hold_frames, 64)
         # Walks are unscaled: bin 4 stays a 4-frame walk.
         executor2 = SMBParameterizedPrimitiveExecutor()
-        walk = executor2.execute(
-            SMBAction.RIGHT, motor_primitives=self._motor([0.0, 6.0, -6.0])
-        )
+        walk = executor2.execute(SMBAction.RIGHT, motor_primitives=self._motor([0.0, 6.0, -6.0]))
         self.assertEqual(walk.hold_frames, 4)
 
     def test_steady_disabled_passes_actions_through(self):

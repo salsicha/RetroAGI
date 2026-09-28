@@ -219,6 +219,15 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                 )
                 chosen = model.last_policy_logits_a[:, -1, :6].argmax(-1)
                 for i, s in enumerate(active):
+                    if not (
+                        s.recovery
+                        or s.phase == "bounce_recovery"
+                        or block_smb_single_jump_scenario(s.stage.scenario)
+                    ):
+                        s.executor.resolve_landing(
+                            support_override="ground" if s.stage.env.mario["on_ground"] else "air",
+                            enemy_contact_override=s.contact,
+                        )
                     commitment = s.executor.committed_action
                     if commitment is not None and not (s.recovery or s.phase == "bounce_recovery"):
                         chosen[i] = commitment

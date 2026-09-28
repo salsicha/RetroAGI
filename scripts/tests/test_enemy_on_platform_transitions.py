@@ -8,7 +8,7 @@ import torch
 
 from retroagi.stages.block_smb.demonstrations import collect_demonstrations
 from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.geometry_expert import snapshot_env_state
+from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
 from retroagi.stages.block_smb.local_traversal import local_objective, safe_jump_holds
 from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
 from retroagi.stages.block_smb.policy_recovery import repair_policy_actions
@@ -39,7 +39,7 @@ def platform_scenario(*, hard=False):
     )
 
 
-def test_mount_certificate_includes_release_before_next_enemy_jump():
+def test_mount_certificate_hands_the_first_grounded_frame_to_the_next_enemy_jump():
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=platform_scenario(hard=True))
@@ -47,12 +47,18 @@ def test_mount_certificate_includes_release_before_next_enemy_jump():
             env.step(1)
         saved = snapshot_env_state(env)
         valid = safe_jump_holds(env, local_objective(env), 1)
-        assert 14 in valid and 16 not in valid
+        assert 14 in valid and 16 in valid
         assert snapshot_env_state(env) == saved
-        # The excluded hold lands alive, but the required release kills Mario.
+        # The 16-frame hold is released mid-air and lands beside the enemy.
         for action in [2] * 16 + [1] * 10:
             _, _, _, _, info = env.step(action)
         assert env.mario["on_ground"] and not info["death"]
+        landed = snapshot_env_state(env)
+        # The button is already up, so the controller hands back the first
+        # grounded frame and a jump from there survives ...
+        assert safe_jump_holds(env, local_objective(env), 1)
+        # ... whereas the former two forced release frames walk into the enemy.
+        restore_env_state(env, landed)
         env.step(1)
         _, _, _, _, info = env.step(1)
         assert info["death"]
@@ -111,9 +117,10 @@ def test_completed_enemy_goal_does_not_return_when_walking_off_platform(batched)
         assert any(t.info.get("skill_phase") == "finish" for t in trajectory.transitions)
 
 
-def test_recovery_preserves_release_masks_at_splice():
+def test_recovery_after_a_released_landing_supervises_the_first_grounded_frame():
     case = replace(sample("enemy_on_platform", "easy", split="train"), scenario=platform_scenario())
-    # Landing on the platform with the next enemy still ahead.
+    # Landing on the platform with the next enemy still ahead; the 7-frame
+    # hold is released long before the landing.
     actions = [1] * 10 + [2] * 7 + [1] * 120
     # Preserve dataset provenance independently of the explicit task identity.
     case.scenario["metadata"] = {
@@ -122,13 +129,12 @@ def test_recovery_preserves_release_masks_at_splice():
     repairs = repair_policy_actions(case.scenario, actions)
     repair = next(r for r in repairs if r["recovery_reason"] == "landing_recovery")
     start = repair["supervision_start_frame"]
-    assert repair["actions"][start : start + 2] == [1, 1]
+    # No forced release frames at the splice: the correction can jump at once.
+    assert repair["actions"][start] == 2
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=case.scenario)
         assert teacher_route_reachable(env, repair["actions"])
-        invalid = repair["actions"][:start] + repair["actions"][start + 2 :]
-        assert not teacher_route_reachable(env, invalid)
     finally:
         env.close()
     data = collect_demonstrations(
@@ -136,11 +142,12 @@ def test_recovery_preserves_release_masks_at_splice():
         tiny_config(walk_duration_primitives=False),
         StaticBlockVision,
     )
-    # The replayed prefix is unsupervised context; the suffix opens in a release.
+    # The replayed prefix is unsupervised context; the suffix opens on a
+    # supervised decision rather than a release.
     assert int(data.context.sum()) == start
-    assert data.forced_release[start : start + 2].all()
-    assert not data.actor_mask[: start + 2].any()
-    assert (data.actor_mask & (data.action == 2)).any()
+    assert not data.forced_release[start : start + 2].any()
+    assert not data.actor_mask[:start].any()
+    assert data.actor_mask[start] and int(data.action[start]) == 2
 
 
 @pytest.mark.parametrize("index", [35, 53, 56, 101, 161])
@@ -165,7 +172,8 @@ def test_previous_hard_fallback_routes_obey_executor_timing(index):
 def test_dangerous_mount_duration_gets_an_executor_valid_repair():
     case = platform_scenario(hard=True)
     case["metadata"] = {"block_smb_monte_carlo": {"family": "enemy_on_platform"}}
-    repairs = repair_policy_actions(case, [1] * 8 + [2] * 16 + [1] * 12)
+    # Only 9-16 frame holds from this takeoff reach the platform alive.
+    repairs = repair_policy_actions(case, [1] * 8 + [2] * 6 + [1] * 12)
     repair = next(
         r
         for r in repairs

@@ -56,9 +56,12 @@ class BlockSMBPrimitiveExecutor(SMBParameterizedPrimitiveExecutor):
 class JumpReleaseState:
     """Track executor-owned landing frames while replaying executed actions.
 
-    A normal jump releases on landing and suppresses a new jump for one more
-    frame. Stomps reset the executor, and ordinary falls own no release frames.
-    Teachers and repair splices must preserve this state across their prefix.
+    A jump whose button was released in the air owns no landing frames: the
+    first grounded frame is a fresh decision (resolve_landing). A jump still
+    held when it lands releases on landing and suppresses a new jump for one
+    more frame. Stomps reset the executor, and ordinary falls own no release
+    frames. Teachers and repair splices must preserve this state across their
+    prefix.
     """
 
     remaining: int = 0
@@ -84,7 +87,7 @@ class JumpReleaseState:
         if self.jumping:
             self.airborne |= not env.mario["on_ground"]
             if self.airborne and env.mario["on_ground"]:
-                self.remaining = 2
+                self.remaining = 2 if action in (2, 4, 5) else 0
                 self.jumping = self.airborne = False
 
 
@@ -112,6 +115,9 @@ def teacher_route_reachable(env, actions, *, release_state=None):
             elif bouncing:
                 action = {2: 1, 4: 3, 5: 0}.get(requested, requested)
             else:
+                executor.resolve_landing(
+                    support_override="ground" if env.mario["on_ground"] else "air"
+                )
                 chosen = executor.committed_action
                 chosen = requested if chosen is None else chosen
                 motor = None

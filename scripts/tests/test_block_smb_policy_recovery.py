@@ -402,7 +402,7 @@ def test_numbered_epoch_collects_bounded_train_stair_trajectories():
     assert records[0]["seed"] == config.seed
 
 
-def test_stair_landing_release_frames_are_not_learned_as_walk_choices():
+def test_stair_landing_after_air_release_is_a_fresh_actor_decision():
     from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
     from retroagi.stages.block_smb.primitive_execution import BlockSMBPrimitiveExecutor
 
@@ -419,25 +419,25 @@ def test_stair_landing_release_frames_are_not_learned_as_walk_choices():
         env.reset(scenario=case.scenario)
         executor = BlockSMBPrimitiveExecutor(env, default_hold_frames=10, walk_primitives=False)
         for frame in range(40):
+            support = "ground" if env.mario["on_ground"] else "air"
+            if executor.resolve_landing(support_override=support):
+                break
             execution = executor.execute(
                 2,
-                support_override="ground" if env.mario["on_ground"] else "air",
+                support_override=support,
                 enemy_contact_override=False,
             )
             env.step(execution.action)
-            if execution.landed:
-                break
         else:
             pytest.fail("The first stair jump did not land")
         assert frame == 25
-        assert execution.action == 1
-        suppressed = executor.execute(2, support_override="ground", enemy_contact_override=False)
-        assert suppressed.action == 1 and not suppressed.started
-        # Walking on these two frames is imposed by the executor even when
-        # the policy requests jump. It must not compete with the next jump's
-        # positive actor label during demonstration rehearsal.
+        restarted = executor.execute(2, support_override="ground", enemy_contact_override=False)
+        assert restarted.action == 2 and restarted.started
+        # The teacher chose to walk here after releasing in flight. Those
+        # frames are decisions; the executor also permits an immediate jump.
         assert data.action[frame : frame + 2].tolist() == [1, 1]
-        assert not data.actor_mask[frame : frame + 2].any()
+        assert data.actor_mask[frame : frame + 2].all()
+        assert not data.forced_release[frame : frame + 2].any()
         assert data.action[frame + 2] == 2 and data.actor_mask[frame + 2]
     finally:
         env.close()

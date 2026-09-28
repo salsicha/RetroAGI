@@ -158,7 +158,8 @@ def test_wait_reward_only_pays_noop_before_a_safe_departure():
 
 
 def test_duration_loss_accepts_any_bin_in_the_safe_window():
-    for chosen, expected_small in ((3, True), (4, True), (15, False)):
+    losses = []
+    for chosen in (3, 4, 15):
         logits = torch.full((1, 1, 16), -30.0)
         logits[..., chosen] = 30.0
         step = SimpleNamespace(
@@ -170,8 +171,11 @@ def test_duration_loss_accepts_any_bin_in_the_safe_window():
                 "primitive_valid_hold_frames": [16, 20],
             },
         )
-        loss = float(block_smb_duration_coaching_loss(step, device=torch.device("cpu")))
-        assert (loss < 1e-6) == expected_small
+        losses.append(float(block_smb_duration_coaching_loss(step, device=torch.device("cpu"))))
+    # The interior preference penalizes collapsing onto either safe bin, but
+    # both must still beat the unsafe 64-frame wait and be equally preferred.
+    assert losses[0] == pytest.approx(losses[1])
+    assert max(losses[:2]) < losses[2]
 
 
 def test_boarding_jump_targets_bridge_support_and_keeps_success_credit():

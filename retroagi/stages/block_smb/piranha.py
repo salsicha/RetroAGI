@@ -67,6 +67,50 @@ def has_plants(env):
     return any(e.get("kind") == "piranha_plant" for e in env.enemies)
 
 
+def runner_crossing_frame(scenario, plant, *, limit=240):
+    """Frames for a runner who never stops to reach the plant's centre line.
+
+    Jumping does not raise horizontal speed, so no route that never waits
+    crosses the plant earlier; the pipe itself is left out of this probe.
+    """
+    import copy
+
+    from .env import MarioScenarioEnv
+
+    flat = copy.deepcopy({k: v for k, v in scenario.items() if k != "enemies"})
+    flat["platforms"] = [scenario["platforms"][0]]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=flat)
+        env.render = lambda: None
+        centre = float(plant["x"]) + float(plant.get("w", 12)) / 2.0
+        frames = 0
+        while env.mario["x"] + env.mario["w"] / 2.0 < centre and frames < limit:
+            env.step(1)
+            frames += 1
+        return frames
+    finally:
+        env.close()
+
+
+def exposed_arrival_phase(scenario, rng, *, lead=8, lag=16):
+    """A cycle phase that holds the plant fully raised while a runner crosses.
+
+    The plant is fully exposed from `lead` frames before the earliest possible
+    no-wait crossing until `lag` frames after it, so every timed layout
+    requires waiting for an observed retraction.
+    """
+    plant = scenario["enemies"][0]
+    rise = int(plant["rise_frames"])
+    exposed = int(plant["exposed_frames"])
+    period = 2 * rise + exposed + int(plant["hidden_frames"])
+    if exposed < lead + lag:
+        raise ValueError("Exposure is too short to cover a runner's crossing")
+    crossing = runner_crossing_frame(scenario, plant)
+    cycle = rise + lead + rng.randrange(exposed - lead - lag + 1)
+    return (cycle - crossing) % period
+
+
 def freeze_plant_envelopes(env):
     """Training probe only: certify against the plant's full collision envelope.
 

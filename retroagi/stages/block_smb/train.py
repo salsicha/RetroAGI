@@ -61,6 +61,7 @@ from .local_traversal import (
     TRAVERSAL_COUNT_FIELDS,
     local_objective,
     safe_jump_holds,
+    takeoff_timing_actions,
     traversal_metrics,
 )
 from .monte_carlo import (
@@ -175,6 +176,9 @@ DEFAULT_BLOCK_SMB_FAILURE_FOCUS_MC_FAMILY_WEIGHT_ITEMS = (
     ("platform_hop", 2.0),
 )
 DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES = 64
+# Families whose jumps launched from uncertified positions (spawn hops, stomps
+# launched too early or too late) get takeoff-timing action labels online.
+TAKEOFF_TIMING_FAMILIES = frozenset(("enemy_stomp", "piranha_avoidance"))
 ROUTINE_BLOCK_SMB_MC_REQUIRED_TRAIN_FAMILIES = (
     "chained_obstacles",
     "chained_enemy_gauntlet",
@@ -2260,7 +2264,19 @@ def block_smb_duration_coaching_loss(
             .flatten()
         )
         if indices.numel():
-            return -torch.logsumexp(F.log_softmax(logits, dim=-1)[:, indices], dim=-1).mean()
+            from .demonstrations import INTERIOR_DURATION_WEIGHT, interior_duration_targets
+
+            # Every certified hold succeeds, but the edges of the safe run sit
+            # next to failures: prefer the interior so small state differences
+            # between nearby takeoffs keep the chosen hold safe.
+            log_probs = F.log_softmax(logits, dim=-1)
+            allowed = torch.zeros_like(log_probs, dtype=torch.bool)
+            allowed[:, indices] = True
+            interior = interior_duration_targets(allowed).to(dtype=log_probs.dtype)
+            return (
+                -torch.logsumexp(log_probs[:, indices], dim=-1)
+                - INTERIOR_DURATION_WEIGHT * (interior * log_probs).sum(-1)
+            ).mean()
     target = float(step.info["primitive_target_hold"]) / float(
         step.info.get("primitive_duration_scale", 1.0)
     )
@@ -2465,6 +2481,7 @@ def collect_trajectory(
     engine_enemy_contact = False
     oracle_primitive_active = False
     stomp_scenario = bool(getattr(stage.env, "_goal_on_stomp", False))
+    takeoff_timing_coaching = scenario_family(stage.scenario) in TAKEOFF_TIMING_FAMILIES
     enemy_composite = bool(stage.env._require_stomp_before_goal)
     enemy_phase = "stomp" if enemy_composite else None
     # bridge_mount / bridge_dismount are single-jump teachers separated from
@@ -2760,6 +2777,25 @@ def collect_trajectory(
             # An episode starts from the empty state, as fitting assumes; no
             # state at all would also drop the actor's recurrent context.
             carried_state = model.initial_world_model_state(batch.src_c.size(0), device)
+        # A jump released in the air hands its first grounded frame back to the
+        # policy. Attribute the landing to the step that produced it and close
+        # the span there, before this frame's decision. Single-jump teachers
+        # end at the landing and keep the executor's own landing frame.
+        if (
+            not single_jump_scenario
+            and trajectory.transitions
+            and primitive_executor.resolve_landing(
+                batch=batch,
+                support_override=(
+                    (SMB_SUPPORT_GROUND if stage.env.mario.get("on_ground") else SMB_SUPPORT_AIR)
+                    if engine_support
+                    else None
+                ),
+                enemy_contact_override=(engine_enemy_contact if engine_support else None),
+            )
+        ):
+            temporal_records[-1]["landed"] = True
+            _complete_primitive_span()
         oracle_action = (
             int(oracle_actions[step_index]) if step_index < len(oracle_actions) else None
         )
@@ -2958,6 +2994,23 @@ def collect_trajectory(
         tactic_actions = tuple(
             compatible_actions(stage.env, tactic_target if tactic_decision else -1)
         )
+        if (
+            takeoff_timing_coaching
+            and forced_action is None
+            and not deterministic
+            and tactic_decision
+            and oracle_action is None
+        ):
+            # A stance of "advance" admits both running and jumping. Narrow it
+            # to where the jump should launch from: never before the certified
+            # window (the spawn hop), and no later than its last frame.
+            timing = takeoff_timing_actions(stage.env, plant_history=stage._hazard_features)
+            if timing is not None:
+                refined = tuple(a and b for a, b in zip(tactic_actions, timing))
+                if any(refined):
+                    tactic_actions = refined
+                elif tactic_target < 0:
+                    tactic_actions = tuple(timing)
         predicted_tactic = getattr(model, "last_tactic_logits", None)
         predicted_tactic_actions = (
             compatible_actions(stage.env, int(predicted_tactic.detach().argmax(-1).item()))
@@ -3749,7 +3802,9 @@ def compute_block_smb_losses(
                     step.memory_target.to(device).view_as(step.memory_prediction),
                 )
             )
-        if step.tactic_target >= 0 and any(step.tactic_actions):
+        # Stance-compatible actions, or takeoff-timing labels where no stance
+        # label exists; either way only decision frames carry any.
+        if any(step.tactic_actions):
             allowed = torch.tensor(step.tactic_actions, device=device, dtype=torch.bool)
             tactic_action_terms.append(
                 -torch.logsumexp(
