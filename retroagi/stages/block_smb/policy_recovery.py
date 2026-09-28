@@ -10,7 +10,13 @@ from retroagi.core.smb_coaching import training_target
 from .env import MarioScenarioEnv
 from .geometry_expert import restore_env_state, snapshot_env_state
 from .hierarchy import bridge_training_active
-from .local_traversal import local_target_distance, safe_jump_holds, support_edge_distance
+from .local_traversal import (
+    blocking_wall_distance,
+    local_target_distance,
+    safe_jump_holds,
+    support_edge_distance,
+    takeoff_timing_actions,
+)
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES, block_smb_monte_carlo_metadata
 from .primitive_execution import JumpReleaseState, teacher_route_reachable
 from .tactics import TACTICAL_FAMILIES
@@ -57,9 +63,19 @@ def coached_suffix(
 
 
 def _coached_suffix(
-    env, *, closing_window=False, max_frames=320, release_state=None, hold_variant=0
+    env,
+    *,
+    closing_window=False,
+    max_frames=320,
+    release_state=None,
+    hold_variant=0,
+    robust_takeoff=False,
 ):
-    """Complete from a grounded decision state; never used by policy playback."""
+    """Complete from a grounded decision state; never used by policy playback.
+
+    With robust_takeoff, launch only where the online takeoff-timing labels
+    allow a jump, so demonstrations never contradict them.
+    """
     initial = snapshot_env_state(env)
     actions = []
     remaining = 0
@@ -88,12 +104,17 @@ def _coached_suffix(
             direction = target.direction
             bridge = bool(env._bridge_jump_task)
             distance = local_target_distance(env, target)
+            wall = blocking_wall_distance(env, target)
             ready = bridge or distance < 65 or support_edge_distance(env, direction) < 24
             valid = (
                 safe_jump_holds(env, target, direction)
                 if ready and (bridge or target.kind not in ("finish", "retreat"))
                 else []
             )
+            if valid and robust_takeoff and not bridge:
+                timing = takeoff_timing_actions(env)
+                if timing is not None and not timing[2 if direction > 0 else 4]:
+                    valid = []
             if bridge and valid and closing_window:
                 saved = snapshot_env_state(env)
                 try:
@@ -121,9 +142,10 @@ def _coached_suffix(
                 action = 2 if direction > 0 else 4
             elif bridge:
                 action = 0 if abs(env.mario["vx"]) < 1 / 16 else (3 if env.mario["vx"] > 0 else 1)
-            elif retreat or (target.kind == "mount" and distance <= 1):
-                # Some mounts require a run-up. Recheck certification while
-                # backing away instead of permanently pushing into the wall.
+            elif retreat or (wall is not None and wall <= 1):
+                # Some mounts and plant pipes require a run-up. Recheck
+                # certification while backing away instead of permanently
+                # pushing into the wall.
                 if not retreat:
                     retreat = 8
                 retreat -= 1

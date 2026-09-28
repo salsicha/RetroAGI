@@ -12,6 +12,7 @@ from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapsho
 from retroagi.stages.block_smb.local_traversal import (
     local_objective,
     local_target_distance,
+    plant_clearance_target,
     stomp_probe_distance,
 )
 
@@ -51,7 +52,7 @@ def training_target(env):
         target = required_stomp(env)
         if target is not None:
             return target
-    return local_objective(env)
+    return plant_clearance_target(env, local_objective(env))
 
 
 def probe_executor(model):

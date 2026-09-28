@@ -239,12 +239,19 @@ def main():
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             if present & REPOSITIONING_FAMILIES - set(args.refresh_families):
                 raise ValueError("Cached repositioning routes predate their tactical labels")
-        if metadata.get("contract_version", 1) < DEMONSTRATION_CONTRACT_VERSION:
+        if metadata.get("contract_version", 1) < 16:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             if present - set(args.refresh_families):
                 raise ValueError(
-                    "Cached demonstrations need regeneration for contract-"
-                    f"{DEMONSTRATION_CONTRACT_VERSION} landing handoff and arrival teaching"
+                    "Cached demonstrations need regeneration for contract-16 landing "
+                    "handoff and arrival teaching"
+                )
+        if metadata.get("contract_version", 1) < 17:
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            if "piranha_avoidance" in present - set(args.refresh_families):
+                raise ValueError(
+                    "Cached piranha routes predate contract-17 plant clearance targets; "
+                    "pass --refresh-families piranha_avoidance"
                 )
         if metadata.get("contract_version", 1) < 8:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}

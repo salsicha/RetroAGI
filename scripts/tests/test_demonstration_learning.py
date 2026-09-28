@@ -461,21 +461,35 @@ def test_frame_walk_cache_migration_matches_fresh_collection(family):
     assert not migrated.actor_mask[migrated.forced_release].any()
 
 
-def test_joint_learning_rejects_cached_landing_labels(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "version, family, message",
+    [
+        (15, "flat_run", "contract-16 landing handoff"),
+        (16, "piranha_avoidance", "contract-17 plant clearance"),
+    ],
+)
+def test_joint_learning_rejects_stale_cached_labels(
+    tmp_path, monkeypatch, version, family, message
+):
     import json
     import sys
     from types import SimpleNamespace
 
+    from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
     from scripts import block_smb_joint_learning
 
     source = tmp_path / "source"
     source.mkdir()
     dataset = source / "demonstrations.pth"
     torch.save(
-        SimpleNamespace(family=torch.tensor([0]), forced_release=torch.tensor([False])), dataset
+        SimpleNamespace(
+            family=torch.tensor([BLOCK_SMB_MC_FAMILIES.index(family)]),
+            forced_release=torch.tensor([False]),
+        ),
+        dataset,
     )
     (source / "config.json").write_text("{}")
-    (source / "demonstration_manifest.json").write_text(json.dumps({"contract_version": 15}))
+    (source / "demonstration_manifest.json").write_text(json.dumps({"contract_version": version}))
     monkeypatch.setattr(
         block_smb_joint_learning, "_make_vision_factory", lambda *args: (None, None)
     )
@@ -484,7 +498,7 @@ def test_joint_learning_rejects_cached_landing_labels(tmp_path, monkeypatch):
         "argv",
         ["joint_learning", "--output-dir", str(tmp_path / "run"), "--dataset", str(dataset)],
     )
-    with pytest.raises(ValueError, match="contract-16 landing handoff"):
+    with pytest.raises(ValueError, match=message):
         block_smb_joint_learning.main()
 
 

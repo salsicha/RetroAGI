@@ -122,7 +122,12 @@ def tactic_label(env, history=None, action=None, *, family, phase=None):
 
     from retroagi.core.smb_coaching import training_target
 
-    from .local_traversal import local_target_distance, safe_jump_holds, support_edge_distance
+    from .local_traversal import (
+        blocking_wall_distance,
+        local_target_distance,
+        safe_jump_holds,
+        support_edge_distance,
+    )
 
     target = training_target(env)
     direction = goal_direction(env) if target.kind in ("finish", "retreat") else target.direction
@@ -149,7 +154,8 @@ def tactic_label(env, history=None, action=None, *, family, phase=None):
         return TACTIC_STANCES.index(action_stance(env, forward))
     # At a wall, moving away creates a new takeoff opportunity. Certify that
     # the fallback is supported; never label a retreat into a pit as safe.
-    if target.kind == "mount" and distance <= 1:
+    wall = blocking_wall_distance(env, target)
+    if wall is not None and wall <= 1:
         return (
             TACTIC_STANCES.index(action_stance(env, backward))
             if safe_ground_motion(env, backward)

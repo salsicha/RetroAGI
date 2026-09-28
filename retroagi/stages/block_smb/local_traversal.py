@@ -158,6 +158,59 @@ def local_objective(env) -> LocalObjective:
     return min(candidates, key=lambda pair: pair[0])[1] if candidates else finish
 
 
+def _plant_pipe_index(env, plant):
+    """Index of the pipe a piranha plant emerges from, if any."""
+    return next(
+        (
+            i
+            for i, p in enumerate(env.platforms)
+            if not p.get("moving")
+            and p["rect"].top == plant["pipe_top"]
+            and p["rect"].left <= plant["x"] < p["rect"].right
+        ),
+        None,
+    )
+
+
+def plant_clearance_target(env, objective: LocalObjective) -> LocalObjective:
+    """Training-only: getting past a pipe's plant is the goal, not landing on the pipe.
+
+    Clearing pipe and plant to the floor beyond is as good as landing past the
+    plant on the pipe, and far more forgiving; landing on the pipe's near lip
+    is not progress. Uses the plant even while it is hidden, so this must
+    supply teacher labels only, never observations (see local_objective).
+    """
+    m = env.mario
+    for i, plant in enumerate(env.enemies):
+        if plant.get("kind") != "piranha_plant" or objective.direction < 0:
+            continue
+        pipe = _plant_pipe_index(env, plant)
+        if pipe is None or plant["x"] + plant["w"] <= m["x"]:
+            continue
+        rect = env.platforms[pipe]["rect"]
+        on_pipe = m["on_ground"] and m.get("_platform") is env.platforms[pipe]
+        if objective.platform_index == pipe or objective.enemy_index == i or on_pipe:
+            return LocalObjective(
+                "enemy", plant["x"], rect.right + 24, rect.top, pipe, enemy_index=i
+            )
+    return objective
+
+
+def blocking_wall_distance(env, target: LocalObjective) -> float | None:
+    """Distance to the near side of a raised surface blocking the target, if any.
+
+    Pressed against it, a takeoff needs a run-up: the teacher backs away and
+    re-certifies instead of pushing into the wall.
+    """
+    if target.platform_index is None or (target.kind != "mount" and target.enemy_index is None):
+        return None
+    rect = env.platforms[target.platform_index]["rect"]
+    m = env.mario
+    if rect.top >= m["y"] + m["h"] - 1:
+        return None
+    return rect.left - m["x"] - m["w"] if target.direction > 0 else m["x"] - rect.right
+
+
 def _left_objective(env) -> LocalObjective:
     """Mirror obstacle selection without changing world coordinates or physics."""
     m = env.mario

@@ -29,6 +29,7 @@ from .local_traversal import (
     LOCAL_TRAVERSAL_FAMILIES,
     local_objective,
     local_target_distance,
+    plant_clearance_target,
     safe_jump_holds,
     support_edge_distance,
 )
@@ -500,7 +501,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 16
+DEMONSTRATION_CONTRACT_VERSION = 17
 
 
 def without_walk_commitments(data, episode_starts=None):
@@ -1117,7 +1118,7 @@ def varied_demonstration(sample, seed, *, robust=False):
             elif airborne or not env.mario["on_ground"]:
                 action = 1 if direction > 0 else 3
             else:
-                target = local_objective(env)
+                target = plant_clearance_target(env, local_objective(env))
                 if (
                     (env._goal_on_stomp or env._require_stomp_before_goal)
                     and not env._stomp_credited

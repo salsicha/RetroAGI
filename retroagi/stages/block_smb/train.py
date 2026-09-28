@@ -60,6 +60,7 @@ from .local_traversal import (
     LOCAL_TRAVERSAL_FAMILIES,
     TRAVERSAL_COUNT_FIELDS,
     local_objective,
+    plant_clearance_target,
     safe_jump_holds,
     takeoff_timing_actions,
     traversal_metrics,
@@ -2944,7 +2945,9 @@ def collect_trajectory(
             primitive_safe_holds = (
                 safe_jump_holds(
                     stage.env,
-                    primitive_local_target,
+                    # Certify getting past a pipe's plant, not landing on the
+                    # pipe; the observable objective stays unchanged.
+                    plant_clearance_target(stage.env, primitive_local_target),
                     1 if execution.action == 2 else -1,
                     plant_history=stage._hazard_features,
                 )

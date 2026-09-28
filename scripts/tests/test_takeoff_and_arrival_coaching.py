@@ -214,3 +214,100 @@ def test_training_rollouts_narrow_the_spawn_stance_to_running():
             False,
             False,
         ], family
+
+
+def test_plant_pipes_are_taught_as_get_past_the_plant_not_land_on_the_pipe():
+    from retroagi.core.smb_coaching import training_target
+    from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
+    from retroagi.stages.block_smb.local_traversal import local_objective, safe_jump_holds
+    from retroagi.stages.block_smb.piranha import freeze_plant_envelopes
+
+    sample = piranha("clearance")
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=copy.deepcopy(sample.scenario))
+        env.render = lambda: None
+        pipe, plant = env.platforms[1], env.enemies[0]
+        # Observations keep the visible geometry: a hidden plant stays hidden.
+        assert local_objective(env).kind == "mount"
+        target = training_target(env)
+        assert target.kind == "enemy" and target.enemy_index == 0 and target.platform_index == 1
+
+        # Clearing the whole pipe to the floor beyond is certified; the near
+        # lip in front of the plant is not progress.
+        outcomes = set()
+        for _ in range(60):
+            holds = safe_jump_holds(env, training_target(env), 1)
+            for hold in holds:
+                saved = snapshot_env_state(env)
+                freeze_plant_envelopes(env)
+                airborne = False
+                for frame in range(96):
+                    env.step(2 if frame < hold else 1)
+                    airborne |= not env.mario["on_ground"]
+                    if airborne and env.mario["on_ground"]:
+                        break
+                on_pipe = env.mario.get("_platform") is pipe
+                past = env.mario["x"] >= plant["x"] + plant["w"]
+                outcomes.add("floor" if not on_pipe else "past" if past else "lip")
+                restore_env_state(env, saved)
+            if not env.mario["on_ground"]:
+                break
+            env.step(1)
+        assert "floor" in outcomes and "lip" not in outcomes
+    finally:
+        env.close()
+
+
+def test_plant_clearance_teacher_jumps_the_whole_pipe_from_a_robust_window():
+    from retroagi.stages.block_smb.local_traversal import takeoff_timing_actions
+
+    for start in (0, 20):
+        sample = piranha("clearance", start=start)
+        actions = list(sample.oracle["actions"])
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=copy.deepcopy(sample.scenario))
+            env.render = lambda: None
+            takeoff = actions.index(2)
+            for action in actions[:takeoff]:
+                env.step(action)
+            # The teacher launches only where the online takeoff label allows it.
+            assert takeoff_timing_actions(env)[2]
+            airborne = False
+            for action in actions[takeoff:]:
+                env.step(action)
+                airborne |= not env.mario["on_ground"]
+                if airborne and env.mario["on_ground"]:
+                    break
+            assert env.mario.get("_platform") is not env.platforms[1]
+            assert env.mario["x"] > env.platforms[1]["rect"].right - 1
+        finally:
+            env.close()
+
+
+def test_wall_retreat_rule_sees_the_pipe_under_a_plant_target():
+    from retroagi.core.smb_coaching import training_target
+    from retroagi.stages.block_smb.local_traversal import (
+        blocking_wall_distance,
+        local_objective,
+        local_target_distance,
+    )
+
+    sample = piranha("clearance", difficulty="hard")
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=copy.deepcopy(sample.scenario))
+        env.render = lambda: None
+        mount = local_objective(env)
+        # Unchanged for ordinary mounts: the wall is the target's near edge.
+        assert blocking_wall_distance(env, mount) == local_target_distance(env, mount)
+        before = env.mario["x"]
+        while True:
+            env.step(1)
+            if env.mario["x"] <= before:
+                break
+            before = env.mario["x"]
+        assert blocking_wall_distance(env, training_target(env)) <= 1
+    finally:
+        env.close()

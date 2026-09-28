@@ -133,7 +133,11 @@ def conservative_suffix(env, *, max_frames=320, release_state=None, variant=0):
     try:
         freeze_plant_envelopes(env)
         actions = _coached_suffix(
-            env, max_frames=max_frames, release_state=release_state, hold_variant=variant
+            env,
+            max_frames=max_frames,
+            release_state=release_state,
+            hold_variant=variant,
+            robust_takeoff=True,
         )
         restore_env_state(env, saved)
         if actions is not None and teacher_route_reachable(
