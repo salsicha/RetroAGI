@@ -167,6 +167,9 @@ teacher that improves through maximum-likelihood training and EM relabeling.
 The [hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)
 extends that roadmap with persistent primitives, learned skills, tactics,
 landmark routes, and per-level improvement loops grounded in real play.
+The [universal embodied framework design](docs/universal-embodied-framework.md)
+describes how the same machinery can serve any game or robot, with a
+low-fidelity simulation → photoreal simulation → real robot promotion ladder.
 The current known-good baseline is a scripted policy artifact at
 `artifacts/block_smb/known_good_scripted_seed20260622/`.
 Full SMB cannot commit ROM-derived emulator artifacts, so its checked-in
