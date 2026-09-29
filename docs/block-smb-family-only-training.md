@@ -76,15 +76,26 @@ after every epoch. The frozen ViT, motion observations, fixed jump/wait
 commitments, per-frame walking, and feedforward carried-state configuration
 match the demonstrated learning path.
 
-Evaluation episodes, evaluation layouts, teacher routes and demonstration
-replays are independent, so the recipe runs them on `parallel_workers` (12)
-single-threaded CPU worker processes; the results match the in-process path.
-Evaluation layouts are generated once per run. Training rollouts and their
-policy updates run on the CPU (`online_training_device`), where batch-of-one
-policy calls are about twice as fast as on the GPU; demonstration fitting stays
-on the GPU. Validation, which steers the curriculum, runs after every epoch;
-the reported test split runs every `monte_carlo_test_interval_epochs` (5)
-epochs and after the last.
+Evaluation episodes, evaluation layouts, training layouts, teacher routes and
+demonstration replays are independent, so the recipe runs them on
+`parallel_workers` (12) single-threaded CPU worker processes; the results match
+the in-process path. Evaluation layouts are generated once per run.
+
+Training rollouts also run on the workers. Policy updates backpropagate through
+each step's policy call, which cannot leave the worker that ran it, so workers
+play each update batch's episodes without gradients using the current weights
+and record every step's policy inputs and decisions. The learner then re-runs
+all of the batch's policy calls as one batched forward pass and rebuilds the
+terms the losses consume (`rollout_workers.py`). With dropout off, the rebuilt
+terms, losses and gradients match in-process rollouts to float rounding; in
+training, dropout and Gumbel noise are drawn afresh in the re-run. Every
+episode still plays with the weights of the update batch it joins. The learner
+runs on the CPU (`online_training_device`), which is faster than the GPU for
+these many small per-step losses; demonstration fitting stays on the GPU.
+
+Validation, which steers the curriculum, runs after every epoch; the reported
+test split runs every `monte_carlo_test_interval_epochs` (5) epochs and after
+the last.
 
 A random initialization receives 10,000 demonstration bootstrap updates. An
 explicit `--init-checkpoint` uses weights only, skips bootstrap, and starts a new

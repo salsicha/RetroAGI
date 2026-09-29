@@ -12,6 +12,7 @@ import copy
 import io
 import multiprocessing
 import os
+import pickle
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -27,23 +28,28 @@ def _initialize_worker(vision_bytes, deterministic):
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(deterministic)
     vision = torch.load(io.BytesIO(vision_bytes), map_location="cpu", weights_only=False)
-    _WORKER.update(vision=vision, policy=None, policy_version=None)
+    _WORKER.update(vision=vision, policy=None, policy_key=None, policy_version=None)
 
 
 def worker_vision():
     return _WORKER["vision"]
 
 
-def worker_policy(config, path, version):
-    """The published policy in this worker, loaded once per version."""
-    if _WORKER["policy_version"] != version:
+def worker_policy(config, path, version, *, training=False):
+    """The published policy in this worker, loaded once per version.
+
+    Training rollouts act in training mode (dropout on), as in-process
+    training rollouts do; evaluation acts in evaluation mode.
+    """
+    key = pickle.dumps(config)
+    if _WORKER["policy_key"] != key:
         from .train import make_block_smb_model
 
-        model = make_block_smb_model(config)
-        model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
-        model.eval()
-        _WORKER.update(policy=model, policy_version=version)
-    return _WORKER["policy"]
+        _WORKER.update(policy=make_block_smb_model(config), policy_key=key, policy_version=None)
+    if _WORKER["policy_version"] != version:
+        _WORKER["policy"].load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
+        _WORKER["policy_version"] = version
+    return _WORKER["policy"].train(training)
 
 
 def cpu_copy(module):

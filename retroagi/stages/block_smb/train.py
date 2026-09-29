@@ -435,11 +435,13 @@ class BlockSMBTrainingConfig:
     # The held-out test split is only reported; the curriculum steers on
     # validation. Measure it every N epochs and always after the last one.
     monte_carlo_test_interval_epochs: int = 1
-    # CPU worker processes for evaluation episodes, evaluation layouts,
-    # teacher routes and demonstration replays; 0 runs them in-process.
+    # CPU worker processes for training rollouts, evaluation episodes,
+    # training and evaluation layouts, teacher routes and demonstration
+    # replays; 0 runs them in-process.
     parallel_workers: int = 0
-    # Device for training rollouts and their policy updates (None: `device`).
-    # Batch-of-one policy calls run faster on the CPU than on a GPU; batched
+    # Device for the online phase's policy updates (None: `device`); without
+    # workers it also plays the training rollouts. Batch-of-one policy calls
+    # and the per-step losses run faster on the CPU than on a GPU; batched
     # demonstration fitting stays on `device`.
     online_training_device: Optional[str] = None
     cover_curriculum_per_epoch: bool = True
@@ -731,6 +733,9 @@ class BlockSMBTransition:
     objective_logits: torch.Tensor | None = None
     objective_target: int = -1
     strategy_logits: torch.Tensor | None = None
+    # Inputs and decisions of this step's policy call, kept when the rollout
+    # ran without gradients; recompute_policy_terms rebuilds the terms above.
+    policy_record: dict[str, Any] | None = None
 
 
 @dataclass
@@ -1120,6 +1125,7 @@ def build_adaptive_monte_carlo_replay_curriculum(
     failure_bins: Mapping[str, Any],
     *,
     epoch: int,
+    pool: Any = None,
 ) -> list[tuple[str, dict]]:
     """Sample fresh train scenarios in the recent family/difficulty failure bins."""
 
@@ -1147,21 +1153,42 @@ def build_adaptive_monte_carlo_replay_curriculum(
     rng = random.Random(seed)
     bins = list(bin_weights)
     weights = list(bin_weights.values())
-    scenarios = []
-    for sample_index in range(sample_count):
-        family, difficulty = rng.choices(bins, weights=weights, k=1)[0]
-        sample = sample_block_smb_monte_carlo_scenario(
-            distribution_id=config.monte_carlo_distribution_id,
-            split="train",
-            seed=seed,
-            sample_index=sample_index,
-            family=family,
-            difficulty=difficulty,
-            validate_reachability=config.monte_carlo_validate_reachability,
-            max_rejections=config.monte_carlo_max_rejections,
+    choices = [rng.choices(bins, weights=weights, k=1)[0] for _ in range(sample_count)]
+    return _train_layouts(config, seed, choices, pool)
+
+
+def _train_layouts(config, seed, choices, pool=None):
+    """Train layouts for (family, difficulty) choices; each is independent of the others."""
+    specs = [
+        (
+            config.monte_carlo_distribution_id,
+            seed,
+            sample_index,
+            family,
+            difficulty,
+            config.monte_carlo_validate_reachability,
+            config.monte_carlo_max_rejections,
         )
-        scenarios.append((sample.scenario_id, copy.deepcopy(dict(sample.scenario))))
-    return scenarios
+        for sample_index, (family, difficulty) in enumerate(choices)
+    ]
+    if pool is None:
+        return [_train_layout_task(spec) for spec in specs]
+    return list(pool.map(_train_layout_task, specs, chunksize=4))
+
+
+def _train_layout_task(spec):
+    distribution_id, seed, sample_index, family, difficulty, validate, max_rejections = spec
+    sample = sample_block_smb_monte_carlo_scenario(
+        distribution_id=distribution_id,
+        split="train",
+        seed=seed,
+        sample_index=sample_index,
+        family=family,
+        difficulty=difficulty,
+        validate_reachability=validate,
+        max_rejections=max_rejections,
+    )
+    return sample.scenario_id, copy.deepcopy(dict(sample.scenario))
 
 
 def build_epoch_curriculum(
@@ -1326,6 +1353,7 @@ def build_mastery_monte_carlo_curriculum(
     state: Mapping[str, Mapping[str, Any]],
     *,
     phase: int,
+    pool: Any = None,
 ) -> list[tuple[str, dict]]:
     """Sample a train curriculum focused on unmastered families.
 
@@ -1350,24 +1378,14 @@ def build_mastery_monte_carlo_curriculum(
 
         families = list(eligible_families(families, state))
     weight_values = [weights[family] for family in families]
-    rng = random.Random(int(config.monte_carlo_seed) + 800_000 + int(phase))
-    scenarios: list[tuple[str, dict]] = []
-    for sample_index in range(sample_count):
+    seed = int(config.monte_carlo_seed) + 800_000 + int(phase)
+    rng = random.Random(seed)
+    choices = []
+    for _ in range(sample_count):
         family = rng.choices(families, weights=weight_values, k=1)[0]
         unlocked = list(state.get(family, {}).get("unlocked_difficulties", ["easy"]))
-        difficulty = rng.choice(unlocked or ["easy"])
-        sample = sample_block_smb_monte_carlo_scenario(
-            distribution_id=config.monte_carlo_distribution_id,
-            split="train",
-            seed=int(config.monte_carlo_seed) + 800_000 + int(phase),
-            sample_index=sample_index,
-            family=family,
-            difficulty=difficulty,
-            validate_reachability=config.monte_carlo_validate_reachability,
-            max_rejections=config.monte_carlo_max_rejections,
-        )
-        scenarios.append((sample.scenario_id, copy.deepcopy(dict(sample.scenario))))
-    return scenarios
+        choices.append((family, rng.choice(unlocked or ["easy"])))
+    return _train_layouts(config, seed, choices, pool)
 
 
 def summarize_block_smb_mastery_state(
@@ -1806,6 +1824,7 @@ def _action_from_model(
     support_override: str | None = None,
     enemy_contact_override: bool | None = None,
     evaluation_target: torch.Tensor | None = None,
+    record: dict[str, Any] | None = None,
 ) -> tuple[
     int,
     torch.Tensor,
@@ -1817,6 +1836,7 @@ def _action_from_model(
     torch.Tensor | None,
     torch.Tensor | None,
 ]:
+    """One policy decision. `record` receives what recompute_policy_terms needs."""
     episode = (batch.metadata or {}).get("episode", {})
     episode_mask = episode.get("mask") if isinstance(episode, Mapping) else None
     if episode_mask is not None:
@@ -1964,6 +1984,74 @@ def _action_from_model(
                 dtype=action_tensor.dtype,
                 device=action_tensor.device,
             )
+    log_prob, entropy, primitive_aux_loss, expected_hold, release_logit = _action_step_terms(
+        action_logits,
+        motor_primitives,
+        intent=int(intent_tensor.item()),
+        action=int(action_tensor.item()),
+        execution=execution,
+        supplied_action=supplied_action,
+        committed_action=committed_action,
+        deterministic=deterministic,
+        oracle_action=oracle_action,
+        recovering_from_stomp=recovering_from_stomp,
+    )
+    if record is not None:
+        record.update(
+            forced_action=(
+                int(prediction_action)
+                if prediction_action is not None
+                else (int(searched_action_id) if searched_action_id is not None else None)
+            ),
+            intent=int(intent_tensor.item()),
+            action=int(action_tensor.item()),
+            execution=execution,
+            supplied_action=supplied_action,
+            committed_action=committed_action,
+            deterministic=deterministic,
+            oracle_action=oracle_action,
+            recovering_from_stomp=recovering_from_stomp,
+            duration_bin_values=(
+                getattr(motor_primitives, "duration_bin_values", None)
+                if isinstance(primitive_executor, BlockSMBPrimitiveExecutor)
+                else None
+            ),
+            episode_mask=episode_mask,
+        )
+    return (
+        int(action_tensor.item()),
+        log_prob,
+        entropy,
+        primitive_aux_loss,
+        (actions1, actions2, next_state_pred, criticism, logits_a),
+        next_world_model_state,
+        execution,
+        expected_hold,
+        release_logit,
+    )
+
+
+def _action_step_terms(
+    action_logits: torch.Tensor,
+    motor_primitives: Any,
+    *,
+    intent: int,
+    action: int,
+    execution: SMBPrimitiveExecution,
+    supplied_action: int | None,
+    committed_action: int | None,
+    deterministic: bool,
+    oracle_action: int | None,
+    recovering_from_stomp: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """Graph-attached policy terms of one decision, from its logits and outcome."""
+    distribution = torch.distributions.Categorical(logits=action_logits)
+    device = action_logits.device
+    oracle_action_tensor = (
+        torch.tensor([int(oracle_action)], dtype=torch.long, device=device)
+        if oracle_action is not None
+        else None
+    )
     # A supplied intent is not an on-policy sample. Only the learned duration
     # receives policy credit in isolation episodes; demonstrations use CE.
     log_prob = (
@@ -1975,13 +2063,13 @@ def _action_from_model(
             not execution.started
             and (execution.active or execution.released or execution.cancelled or execution.landed)
         )
-        else distribution.log_prob(intent_tensor).squeeze(0)
+        else distribution.log_prob(torch.tensor([intent], device=device)).squeeze(0)
     )
     if oracle_action is None and not deterministic:
         log_prob = log_prob + _smb_primitive_duration_log_prob(
             motor_primitives,
             execution,
-            device=action_logits.device,
+            device=device,
             dtype=log_prob.dtype,
         )
     entropy = distribution.entropy().squeeze(0)
@@ -2004,9 +2092,9 @@ def _action_from_model(
         )
         recovery_distribution = torch.distributions.Categorical(logits=recovery_logits)
         recovery_index = torch.tensor(
-            [{0: 0, 1: 1, 3: 2}[int(action_tensor.item())]],
+            [{0: 0, 1: 1, 3: 2}[int(action)]],
             dtype=torch.long,
-            device=action_logits.device,
+            device=device,
         )
         log_prob = recovery_distribution.log_prob(recovery_index).squeeze(0)
         entropy = recovery_distribution.entropy().squeeze(0)
@@ -2015,32 +2103,22 @@ def _action_from_model(
         oracle_action_tensor,
         execution,
         action_count=BLOCK_SMB_ACTION_COUNT,
-        device=action_logits.device,
+        device=device,
         dtype=log_prob.dtype,
     )
     expected_hold = _smb_expected_hold_fraction(
         motor_primitives,
         execution,
-        device=action_logits.device,
+        device=device,
         dtype=log_prob.dtype,
     )
     release_logit = _smb_release_logit(
         motor_primitives,
         execution,
-        device=action_logits.device,
+        device=device,
         dtype=log_prob.dtype,
     )
-    return (
-        int(action_tensor.item()),
-        log_prob,
-        entropy,
-        primitive_aux_loss,
-        (actions1, actions2, next_state_pred, criticism, logits_a),
-        next_world_model_state,
-        execution,
-        expected_hold,
-        release_logit,
-    )
+    return log_prob, entropy, primitive_aux_loss, expected_hold, release_logit
 
 
 def _smb_primitive_duration_log_prob(
@@ -2457,6 +2535,7 @@ def collect_trajectory(
     walk_duration_primitives: bool = True,
     engine_support: bool = True,
     demonstration_actions: Sequence[int] | None = None,
+    record_policy_inputs: bool = False,
 ) -> BlockSMBTrajectory:
     ablation_config = _ablation_config(ablation)
     observation = stage.reset(seed=seed)
@@ -2897,6 +2976,15 @@ def collect_trajectory(
             and not primitive_executor._suppress_until_non_jump
             and not oracle_primitive_active
         )
+        policy_record = (
+            {
+                "world_model_state": carried_state,
+                "skill_goal": step_skill_goal,
+                "aux_override": False,
+            }
+            if record_policy_inputs
+            else None
+        )
         (
             action,
             log_prob,
@@ -2948,6 +3036,7 @@ def collect_trajectory(
                 bridge_composite or bridge_jump_task is not None,
                 enemy_composite,
             ).to(device),
+            record=policy_record,
         )
         if certified_jump_family and execution.started:
             primitive_local_target = step_local_target
@@ -2984,6 +3073,8 @@ def collect_trajectory(
                 device=device,
                 dtype=log_prob.dtype,
             )
+            if policy_record is not None:
+                policy_record["aux_override"] = True
         was_on_ground = bool(stage.env.mario.get("on_ground"))
         # The world model just read this frame; its memory must report what
         # has been observed so far, before the step updates the history.
@@ -3197,6 +3288,7 @@ def collect_trajectory(
                 objective_logits=objective_logits,
                 objective_target=objective_target,
                 strategy_logits=getattr(model, "last_strategy_logits", None),
+                policy_record=policy_record,
             )
         )
         # Per-frame primitive-outcome bookkeeping: track the frames of the
@@ -4089,7 +4181,15 @@ def train_block_smb_epoch(
     target_model: Optional[torch.nn.Module] = None,
     success_replay: Optional[BlockSMBSuccessReplay] = None,
     recovery_records: list[dict] | None = None,
+    pool: Any = None,
 ) -> tuple[dict[str, float], BlockSMBReplayBuffer]:
+    """Online rollouts and policy updates for one epoch.
+
+    With a worker pool, each update batch's episodes play concurrently on CPU
+    workers with the current weights and the learner recomputes their policy
+    terms (rollout_workers). Every episode still plays with the weights of
+    the update batch it joins, as in-process rollouts do.
+    """
     model.train()
     if target_model is not None:
         target_model.eval()
@@ -4107,16 +4207,71 @@ def train_block_smb_epoch(
     update_count = 0
     rollout_budgets: list[int] = []
     recovery_counts: dict[tuple[str, str], int] = {}
+    worker_config = replace(config, device="cpu", log_path=None) if pool is not None else None
+    published: list[Any] = [None]
 
-    def rollout_budget(scenario) -> int:
-        budget = training_rollout_steps(config.rollout_steps, scenario)
-        rollout_budgets.append(budget)
-        return budget
+    def play(jobs: list[dict[str, Any]]) -> list[tuple[BlockSMBTrajectory, dict]]:
+        """(trajectory, policy scenario) of each job, played with the current weights."""
+        if pool is not None:
+            from .rollout_workers import rollout_task, unpack_trajectory
+
+            if published[0] is None:
+                published[0] = pool.publish_policy(model)
+            path, version = published[0]
+            payloads = pool.map(rollout_task, [(worker_config, path, version, job) for job in jobs])
+            return [unpack_trajectory(payload) for payload in payloads]
+        played = []
+        for job in jobs:
+            stage = BlockSMBStage(
+                env=MarioScenarioEnv(reward_config=config.reward_config),
+                scenario=block_smb_policy_scenario(
+                    copy.deepcopy(job["scenario"]) if job["copy"] else job["scenario"],
+                    config.autonomous_policy,
+                ),
+                vision=vision_factory(),
+                observation_config=BlockSMBObservationConfig(
+                    motion_observations=config.motion_observations,
+                    hazard_observations=config.hazard_observations,
+                    hazard_memory_observations=config.hazard_memory_observations,
+                ),
+            )
+            try:
+                trajectory = collect_trajectory(
+                    model,
+                    stage,
+                    job["scenario_name"],
+                    rollout_steps=job["rollout_steps"],
+                    seed=job["seed"],
+                    deterministic=job["deterministic"],
+                    device=device,
+                    ablation=config.ablation,
+                    use_oracle_actions=job["use_oracle_actions"],
+                    adaptive_duration_control=config.adaptive_duration_control,
+                    skill_goal_conditioning=config.skill_goal_conditioning,
+                    steady_duration_primitives=config.steady_duration_primitives,
+                    walk_duration_primitives=config.walk_duration_primitives,
+                    engine_support=config.engine_support_override,
+                    demonstration_actions=job["demonstration_actions"],
+                )
+            finally:
+                stage.env.close()
+            played.append((trajectory, stage.scenario))
+        return played
+
+    def wave_size(remaining: int) -> int:
+        # An update batch's episodes all play with the same weights.
+        if pool is None:
+            return 1
+        return min(update_batch_size - len(replay.trajectories), remaining)
 
     def flush_update_batch() -> None:
         nonlocal replay, total_update_episodes, update_count
         if not replay.trajectories:
             return
+        if pool is not None:
+            from .rollout_workers import recompute_policy_terms
+
+            recompute_policy_terms(model, replay.trajectories, config, device)
         losses = compute_block_smb_losses(
             model,
             replay.transitions(),
@@ -4132,6 +4287,7 @@ def train_block_smb_epoch(
         if not torch.isfinite(grad_norm).item():
             raise FloatingPointError("gradient norm is NaN or infinite")
         optimizer.step()
+        published[0] = None
         if target_model is not None:
             update_target_network(target_model, model, config.target_network_tau)
         batch_episodes = len(replay.trajectories)
@@ -4143,35 +4299,26 @@ def train_block_smb_epoch(
         update_count += 1
         replay.clear()
 
-    for episode in range(episode_count):
-        scenario_name, scenario = curriculum[(epoch * episode_count + episode) % len(curriculum)]
-        stage = BlockSMBStage(
-            env=MarioScenarioEnv(reward_config=config.reward_config),
-            scenario=block_smb_policy_scenario(scenario, config.autonomous_policy),
-            vision=vision_factory(),
-            observation_config=BlockSMBObservationConfig(
-                motion_observations=config.motion_observations,
-                hazard_observations=config.hazard_observations,
-                hazard_memory_observations=config.hazard_memory_observations,
-            ),
-        )
-        try:
-            trajectory = collect_trajectory(
-                model,
-                stage,
-                scenario_name,
-                rollout_steps=rollout_budget(scenario),
-                seed=config.seed + epoch * 10_000 + episode,
-                deterministic=False,
-                device=device,
-                ablation=config.ablation,
-                use_oracle_actions=config.use_oracle_actions,
-                adaptive_duration_control=config.adaptive_duration_control,
-                skill_goal_conditioning=config.skill_goal_conditioning,
-                steady_duration_primitives=config.steady_duration_primitives,
-                walk_duration_primitives=config.walk_duration_primitives,
-                engine_support=config.engine_support_override,
+    episode = 0
+    while episode < episode_count:
+        jobs = []
+        for index in range(episode, episode + wave_size(episode_count - episode)):
+            scenario_name, scenario = curriculum[(epoch * episode_count + index) % len(curriculum)]
+            jobs.append(
+                dict(
+                    scenario_name=scenario_name,
+                    scenario=scenario,
+                    copy=False,
+                    seed=config.seed + epoch * 10_000 + index,
+                    rollout_steps=training_rollout_steps(config.rollout_steps, scenario),
+                    deterministic=False,
+                    use_oracle_actions=config.use_oracle_actions,
+                    demonstration_actions=None,
+                )
             )
+        for job, (trajectory, policy_scenario) in zip(jobs, play(jobs)):
+            scenario_name, scenario = job["scenario_name"], job["scenario"]
+            rollout_budgets.append(job["rollout_steps"])
             if recovery_records is not None and not config.use_oracle_actions:
                 from .policy_recovery import RECOVERY_FAMILIES
 
@@ -4188,24 +4335,25 @@ def train_block_smb_epoch(
                     recovery_counts[key] = recovery_counts.get(key, 0) + 1
                     recovery_records.append(
                         dict(
-                            scenario=stage.scenario,
+                            scenario=policy_scenario,
                             scenario_id=scenario_name,
-                            seed=config.seed + epoch * 10_000 + episode,
+                            seed=job["seed"],
                             actions=[step.action for step in trajectory.transitions],
                         )
                     )
             _write_block_smb_spans(config, trajectory)
-        finally:
-            stage.env.close()
-        replay.add(trajectory)
-        if success_replay is not None:
-            metadata = block_smb_monte_carlo_metadata(scenario)
-            family = str(metadata.get("family", "") or "") if isinstance(metadata, Mapping) else ""
-            success_replay.add(trajectory, family, scenario_name, scenario)
-        total_returns.append(trajectory.total_return)
-        all_actions.extend(step.action for step in trajectory.transitions)
-        if len(replay.trajectories) >= update_batch_size:
-            flush_update_batch()
+            replay.add(trajectory)
+            if success_replay is not None:
+                metadata = block_smb_monte_carlo_metadata(scenario)
+                family = (
+                    str(metadata.get("family", "") or "") if isinstance(metadata, Mapping) else ""
+                )
+                success_replay.add(trajectory, family, scenario_name, scenario)
+            total_returns.append(trajectory.total_return)
+            all_actions.extend(step.action for step in trajectory.transitions)
+            if len(replay.trajectories) >= update_batch_size:
+                flush_update_batch()
+        episode += len(jobs)
 
     replay_metrics: dict[str, float] = {}
     if success_replay is not None:
@@ -4219,98 +4367,85 @@ def train_block_smb_epoch(
         if rehearsals:
             rehearsal_successes = 0
             rehearsal_by_family: dict[str, list[int]] = {}
-            for rehearsal_index, rehearsal in enumerate(rehearsals):
-                stage = BlockSMBStage(
-                    env=MarioScenarioEnv(reward_config=config.reward_config),
-                    scenario=block_smb_policy_scenario(
-                        copy.deepcopy(rehearsal["scenario"]), config.autonomous_policy
+            retain = config.retention_imitation_weight > 0
+
+            def rehearsal_job(index: int, demonstration: bool) -> dict[str, Any]:
+                rehearsal = rehearsals[index]
+                return dict(
+                    scenario_name=rehearsal["scenario_id"],
+                    scenario=rehearsal["scenario"],
+                    copy=True,
+                    seed=config.seed + 900_000 + epoch * 100 + index,
+                    rollout_steps=training_rollout_steps(
+                        config.rollout_steps, rehearsal["scenario"]
                     ),
-                    vision=vision_factory(),
-                    observation_config=BlockSMBObservationConfig(
-                        motion_observations=config.motion_observations,
-                        hazard_observations=config.hazard_observations,
-                        hazard_memory_observations=config.hazard_memory_observations,
-                    ),
+                    deterministic=demonstration,
+                    use_oracle_actions=False,
+                    demonstration_actions=rehearsal["actions"] if demonstration else None,
                 )
-                try:
-                    trajectory = collect_trajectory(
-                        model,
-                        stage,
-                        rehearsal["scenario_id"],
-                        rollout_steps=rollout_budget(rehearsal["scenario"]),
-                        seed=config.seed + 900_000 + epoch * 100 + rehearsal_index,
-                        deterministic=False,
-                        device=device,
-                        ablation=config.ablation,
-                        adaptive_duration_control=config.adaptive_duration_control,
-                        skill_goal_conditioning=config.skill_goal_conditioning,
-                        steady_duration_primitives=config.steady_duration_primitives,
-                        walk_duration_primitives=config.walk_duration_primitives,
-                        engine_support=config.engine_support_override,
+
+            index = 0
+            while index < len(rehearsals):
+                wave = range(index, index + wave_size(len(rehearsals) - index))
+                played = play([rehearsal_job(i, False) for i in wave])
+                # Demonstrations for failed rehearsals share the wave's weights
+                # unless an update intervenes; then they replay after it.
+                failed = [i for i, (trajectory, _) in zip(wave, played) if not trajectory.success]
+                prepared = (
+                    dict(zip(failed, play([rehearsal_job(i, True) for i in failed])))
+                    if pool is not None and retain and failed
+                    else {}
+                )
+                for i, (trajectory, _) in zip(wave, played):
+                    rehearsal = rehearsals[i]
+                    rollout_budgets.append(
+                        training_rollout_steps(config.rollout_steps, rehearsal["scenario"])
                     )
-                finally:
-                    stage.env.close()
-                replay.add(trajectory)
-                total_returns.append(trajectory.total_return)
-                all_actions.extend(step.action for step in trajectory.transitions)
-                family_counts = rehearsal_by_family.setdefault(rehearsal["family"], [0, 0])
-                family_counts[0] += 1
-                if trajectory.success:
-                    family_counts[1] += 1
-                    rehearsal_successes += 1
-                    success_replay.add(
-                        trajectory,
-                        rehearsal["family"],
-                        rehearsal["scenario_id"],
-                        rehearsal["scenario"],
-                    )
-                if len(replay.trajectories) >= update_batch_size:
-                    flush_update_batch()
-                if not trajectory.success and config.retention_imitation_weight > 0:
-                    demo_stage = BlockSMBStage(
-                        env=MarioScenarioEnv(reward_config=config.reward_config),
-                        scenario=block_smb_policy_scenario(
-                            copy.deepcopy(rehearsal["scenario"]), config.autonomous_policy
-                        ),
-                        vision=vision_factory(),
-                        observation_config=BlockSMBObservationConfig(
-                            motion_observations=config.motion_observations,
-                            hazard_observations=config.hazard_observations,
-                            hazard_memory_observations=config.hazard_memory_observations,
-                        ),
-                    )
-                    try:
-                        demonstration = collect_trajectory(
-                            model,
-                            demo_stage,
+                    replay.add(trajectory)
+                    total_returns.append(trajectory.total_return)
+                    all_actions.extend(step.action for step in trajectory.transitions)
+                    family_counts = rehearsal_by_family.setdefault(rehearsal["family"], [0, 0])
+                    family_counts[0] += 1
+                    if trajectory.success:
+                        family_counts[1] += 1
+                        rehearsal_successes += 1
+                        success_replay.add(
+                            trajectory,
+                            rehearsal["family"],
                             rehearsal["scenario_id"],
-                            rollout_steps=rollout_budget(rehearsal["scenario"]),
-                            seed=config.seed + 900_000 + epoch * 100 + rehearsal_index,
-                            deterministic=True,
-                            device=device,
-                            ablation=config.ablation,
-                            adaptive_duration_control=config.adaptive_duration_control,
-                            skill_goal_conditioning=config.skill_goal_conditioning,
-                            steady_duration_primitives=config.steady_duration_primitives,
-                            walk_duration_primitives=config.walk_duration_primitives,
-                            engine_support=config.engine_support_override,
-                            demonstration_actions=rehearsal["actions"],
+                            rehearsal["scenario"],
                         )
-                    finally:
-                        demo_stage.env.close()
-                    if demonstration.success:
-                        for step in demonstration.transitions:
-                            step.info["retention_demo"] = True
-                        replay.add(demonstration)
-                        replay_metrics["retention_demonstrations"] = (
-                            replay_metrics.get("retention_demonstrations", 0.0) + 1
-                        )
-                    else:
-                        replay_metrics["retention_demonstration_rejections"] = (
-                            replay_metrics.get("retention_demonstration_rejections", 0.0) + 1
-                        )
+                    updated = False
                     if len(replay.trajectories) >= update_batch_size:
                         flush_update_batch()
+                        updated = True
+                    if not trajectory.success and retain:
+                        demonstration = (
+                            prepared[i]
+                            if i in prepared and not updated
+                            else play([rehearsal_job(i, True)])[0]
+                        )[0]
+                        rollout_budgets.append(
+                            training_rollout_steps(config.rollout_steps, rehearsal["scenario"])
+                        )
+                        if demonstration.success:
+                            for step in demonstration.transitions:
+                                step.info["retention_demo"] = True
+                            replay.add(demonstration)
+                            replay_metrics["retention_demonstrations"] = (
+                                replay_metrics.get("retention_demonstrations", 0.0) + 1
+                            )
+                        else:
+                            replay_metrics["retention_demonstration_rejections"] = (
+                                replay_metrics.get("retention_demonstration_rejections", 0.0) + 1
+                            )
+                        if len(replay.trajectories) >= update_batch_size:
+                            flush_update_batch()
+                            updated = True
+                    index = i + 1
+                    if updated and pool is not None:
+                        # Later rehearsals of this wave played with the old weights.
+                        break
             replay_metrics["success_rehearsals"] = float(len(rehearsals))
             replay_metrics["success_rehearsal_success_rate"] = rehearsal_successes / len(rehearsals)
             # Per-family rehearsal outcomes split "forgot a retained skill"
@@ -4611,7 +4746,7 @@ def _monte_carlo_sample_task(task):
     from .parallel import worker_policy, worker_vision
 
     config, policy_path, policy_version, sample, split, record_dir = task
-    model = worker_policy(config, policy_path, policy_version)
+    model = worker_policy(config, policy_path, policy_version, training=False)
     with torch.no_grad():
         return _monte_carlo_sample_outcome(
             model,
@@ -5617,7 +5752,9 @@ def _train_and_evaluate_block_smb(
     if config.mastery_gated_schedule:
         curriculum = load_fixed_scenarios(config.fixed_scenarios)
         curriculum.extend(
-            build_mastery_monte_carlo_curriculum(config, mastery_state, phase=mastery_phase)
+            build_mastery_monte_carlo_curriculum(
+                config, mastery_state, phase=mastery_phase, pool=pool
+            )
         )
         if config.hierarchy_curriculum:
             curriculum = [
@@ -5765,6 +5902,7 @@ def _train_and_evaluate_block_smb(
             config,
             foundation_failure_bins,
             epoch=epoch,
+            pool=pool,
         )
         epoch_curriculum = build_epoch_curriculum(curriculum, replay_curriculum)
         recovery_records = [] if config.policy_recovery_samples_per_bin else None
@@ -5781,6 +5919,7 @@ def _train_and_evaluate_block_smb(
             target_model=target_model,
             success_replay=success_replay,
             recovery_records=recovery_records,
+            pool=pool,
         )
         if online_device != device:
             _move_training_state(device, model, optimizer, target_model)
@@ -6011,6 +6150,7 @@ def _train_and_evaluate_block_smb(
                         config,
                         mastery_state,
                         phase=mastery_phase,
+                        pool=pool,
                     )
                 )
                 if config.hierarchy_curriculum:

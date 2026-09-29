@@ -145,6 +145,182 @@ def test_training_run_shares_one_pool_with_demonstrations_and_evaluation(monkeyp
     assert result["history"][0]["demonstration_rehearsal_updates"] == 1
 
 
+def _rollout(model, config, sample, *, seed, demonstration_actions=None):
+    import copy
+
+    from retroagi.stages.block_smb.train import (
+        BlockSMBObservationConfig,
+        BlockSMBStage,
+        MarioScenarioEnv,
+        block_smb_policy_scenario,
+        collect_trajectory,
+    )
+
+    stage = BlockSMBStage(
+        env=MarioScenarioEnv(reward_config=config.reward_config),
+        scenario=block_smb_policy_scenario(
+            copy.deepcopy(sample.scenario), config.autonomous_policy
+        ),
+        vision=StaticBlockVision(),
+        observation_config=BlockSMBObservationConfig(
+            motion_observations=config.motion_observations,
+            hazard_observations=config.hazard_observations,
+            hazard_memory_observations=config.hazard_memory_observations,
+        ),
+    )
+    torch.manual_seed(seed)
+    try:
+        trajectory = collect_trajectory(
+            model,
+            stage,
+            sample.scenario_id,
+            rollout_steps=60,
+            seed=seed,
+            deterministic=demonstration_actions is not None,
+            device=torch.device("cpu"),
+            ablation=config.ablation,
+            skill_goal_conditioning=config.skill_goal_conditioning,
+            demonstration_actions=demonstration_actions,
+            record_policy_inputs=True,
+        )
+    finally:
+        stage.env.close()
+    return trajectory, stage.scenario
+
+
+def test_recomputed_policy_terms_match_the_rollout_graph():
+    # Without dropout both passes are deterministic, so a worker trajectory's
+    # recomputed terms, losses and gradients equal the in-process rollout's.
+    from dataclasses import replace as replace_dataclass
+
+    from retroagi.stages.block_smb.rollout_workers import (
+        pack_trajectory,
+        recompute_policy_terms,
+        unpack_trajectory,
+    )
+    from retroagi.stages.block_smb.train import compute_block_smb_losses
+    from scripts.block_smb_family_learning import samples
+
+    config = tiny_config(autonomous_policy=True)
+    torch.manual_seed(3)
+    model = make_block_smb_model(config).eval()
+    cases = [
+        (samples("stomp_mount", 5, "train", 1)[0], None),
+        (samples("bridge_wait", 5, "train", 1)[0], None),
+        (samples("stair_climb", 5, "train", 1)[0], None),
+    ]
+    cases.append((cases[2][0], list(cases[2][0].oracle["actions"])))
+    names = (
+        "log_prob",
+        "entropy",
+        "primitive_aux_loss",
+        "expected_hold",
+        "release_logit",
+        "next_state_pred",
+        "criticism",
+        "logits_a",
+        "hold_duration_logits",
+        "tactic_logits",
+        "memory_prediction",
+        "objective_logits",
+        "strategy_logits",
+    )
+    for seed, (sample, demonstration) in enumerate(cases):
+        trajectory, scenario = _rollout(
+            model, config, sample, seed=seed, demonstration_actions=demonstration
+        )
+        rebuilt, rebuilt_scenario = unpack_trajectory(pack_trajectory(trajectory, scenario))
+        assert rebuilt_scenario == scenario
+        recompute_policy_terms(model, [rebuilt], config, torch.device("cpu"))
+        for original, recomputed in zip(trajectory.transitions, rebuilt.transitions):
+            for name in names:
+                a, b = getattr(original, name), getattr(recomputed, name)
+                assert (a is None) == (b is None), name
+                if a is not None:
+                    assert a.shape == b.shape, name
+                    assert torch.allclose(a, b, atol=1e-5, rtol=1e-4), name
+        gradients = []
+        for transitions in (trajectory.transitions, rebuilt.transitions):
+            model.zero_grad(set_to_none=True)
+            losses = compute_block_smb_losses(
+                model,
+                transitions,
+                config,
+                torch.device("cpu"),
+                trajectories=[replace_dataclass(trajectory, transitions=transitions)],
+            )
+            losses["loss_total"].backward(retain_graph=True)
+            gradients.append(
+                torch.cat([p.grad.reshape(-1) for p in model.parameters() if p.grad is not None])
+            )
+        assert torch.allclose(gradients[0], gradients[1], atol=1e-5, rtol=1e-3)
+
+
+def test_pooled_training_epoch_keeps_update_batches_and_bookkeeping(pool):
+    from retroagi.stages.block_smb.train import (
+        BlockSMBSuccessReplay,
+        make_block_smb_optimizer,
+        train_block_smb_epoch,
+    )
+    from scripts.block_smb_family_learning import samples
+
+    config = tiny_config(
+        autonomous_policy=True,
+        rollout_steps=24,
+        update_batch_episodes=3,
+        success_replay_rehearsals_per_epoch=4,
+        retention_imitation_weight=0.1,
+        policy_recovery_samples_per_bin=1,
+    )
+    curriculum = [
+        (sample.scenario_id, sample.scenario)
+        for family in ("flat_run", "stomp_mount", "stair_climb")
+        for sample in samples(family, 11, "train", 3)
+    ]
+    torch.manual_seed(0)
+    model = make_block_smb_model(config)
+    records = []
+    metrics, _ = train_block_smb_epoch(
+        model,
+        make_block_smb_optimizer(model, config),
+        curriculum,
+        config,
+        0,
+        device=torch.device("cpu"),
+        vision_factory=StaticBlockVision,
+        success_replay=BlockSMBSuccessReplay(max_episodes_per_family=4, seed=0),
+        recovery_records=records,
+        pool=pool,
+    )
+    # Every update batch holds three episodes played with that batch's weights.
+    assert metrics["episodes"] >= len(curriculum)
+    assert metrics["optimizer_updates"] == -(-metrics["episodes"] // 3)
+    assert torch.isfinite(torch.tensor(metrics["loss_total"]))
+    assert metrics["train_total_actions"] > 0
+    assert all(record["actions"] and record["scenario"] for record in records)
+
+
+def test_pooled_training_layouts_match_sequential(pool):
+    from retroagi.stages.block_smb.train import (
+        build_adaptive_monte_carlo_replay_curriculum,
+        build_mastery_monte_carlo_curriculum,
+        initial_block_smb_mastery_state,
+    )
+
+    config = tiny_config(
+        monte_carlo_train_samples_per_epoch=6,
+        monte_carlo_failure_replay_samples_per_epoch=4,
+    )
+    state = initial_block_smb_mastery_state()
+    assert build_mastery_monte_carlo_curriculum(
+        config, state, phase=2, pool=pool
+    ) == build_mastery_monte_carlo_curriculum(config, state, phase=2)
+    bins = {"enemy_stomp:medium": {"failure_count": 2}, "piranha_avoidance": {"failure_count": 1}}
+    assert build_adaptive_monte_carlo_replay_curriculum(
+        config, bins, epoch=3, pool=pool
+    ) == build_adaptive_monte_carlo_replay_curriculum(config, bins, epoch=3)
+
+
 def test_parallel_settings_are_validated():
     with pytest.raises(ValueError, match="parallel_workers"):
         tiny_config(parallel_workers=-1)
