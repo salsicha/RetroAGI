@@ -123,7 +123,9 @@ def test_production_training_runs_bootstrap_and_balanced_rehearsal(monkeypatch):
     data = collect_demonstrations(
         [(0, samples("flat_run", 7, "train", 1)[0])], config, StaticBlockVision
     )
-    monkeypatch.setattr(demonstrations, "build_balanced_demonstrations", lambda *args: data)
+    monkeypatch.setattr(
+        demonstrations, "build_balanced_demonstrations", lambda *args, **kwargs: data
+    )
     result = train_and_evaluate_block_smb(config, vision_factory=StaticBlockVision)
     assert result["history"][0]["demonstration_rehearsal_updates"] == 2
     assert result["history"][0]["episodes"] == 1

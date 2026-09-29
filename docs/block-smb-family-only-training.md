@@ -76,6 +76,16 @@ after every epoch. The frozen ViT, motion observations, fixed jump/wait
 commitments, per-frame walking, and feedforward carried-state configuration
 match the demonstrated learning path.
 
+Evaluation episodes, evaluation layouts, teacher routes and demonstration
+replays are independent, so the recipe runs them on `parallel_workers` (12)
+single-threaded CPU worker processes; the results match the in-process path.
+Evaluation layouts are generated once per run. Training rollouts and their
+policy updates run on the CPU (`online_training_device`), where batch-of-one
+policy calls are about twice as fast as on the GPU; demonstration fitting stays
+on the GPU. Validation, which steers the curriculum, runs after every epoch;
+the reported test split runs every `monte_carlo_test_interval_epochs` (5)
+epochs and after the last.
+
 A random initialization receives 10,000 demonstration bootstrap updates. An
 explicit `--init-checkpoint` uses weights only, skips bootstrap, and starts a new
 optimizer and epoch counter. The launcher records the resolved configuration,

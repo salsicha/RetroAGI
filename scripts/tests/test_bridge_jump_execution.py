@@ -327,13 +327,16 @@ def test_production_builder_covers_bridge_and_plant_variants_in_every_difficulty
     monkeypatch.setattr(monte_carlo, "sample_block_smb_monte_carlo_scenario", sample)
     monkeypatch.setattr(demonstrations, "varied_demonstration", alternate)
     monkeypatch.setattr(piranha_tactics, "arrival_demonstrations", arrivals)
-    monkeypatch.setattr(demonstrations, "collect_demonstrations", lambda cases, *args: cases)
+    monkeypatch.setattr(
+        demonstrations, "collect_demonstrations", lambda cases, *args, **kwargs: cases
+    )
     config = SimpleNamespace(
         seed=seed,
         log_path=None,
         demonstration_layouts_per_family=6,
         demonstration_robust_routes=True,
         demonstration_varied_routes=True,
+        demonstration_enemy_wait_routes=False,
     )
     groups = defaultdict(set)
     for family, case in demonstrations.build_balanced_demonstrations(config, None):

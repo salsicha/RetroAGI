@@ -432,6 +432,16 @@ class BlockSMBTrainingConfig:
     walk_duration_primitives: bool = True
     evaluation_episodes: int = 1
     evaluation_max_steps: int = 200
+    # The held-out test split is only reported; the curriculum steers on
+    # validation. Measure it every N epochs and always after the last one.
+    monte_carlo_test_interval_epochs: int = 1
+    # CPU worker processes for evaluation episodes, evaluation layouts,
+    # teacher routes and demonstration replays; 0 runs them in-process.
+    parallel_workers: int = 0
+    # Device for training rollouts and their policy updates (None: `device`).
+    # Batch-of-one policy calls run faster on the CPU than on a GPU; batched
+    # demonstration fitting stays on `device`.
+    online_training_device: Optional[str] = None
     cover_curriculum_per_epoch: bool = True
     update_batch_episodes: int = 16
     action_gate_min_distinct_actions: int = 2
@@ -502,12 +512,15 @@ class BlockSMBTrainingConfig:
             "evaluation_max_steps",
             "num_envs",
             "evaluation_interval_epochs",
+            "monte_carlo_test_interval_epochs",
             "update_batch_episodes",
             "action_gate_min_distinct_actions",
         )
         for name in positive_ints:
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if self.parallel_workers < 0:
+            raise ValueError("parallel_workers must be non-negative")
         if self.hazard_observations and not self.motion_observations:
             raise ValueError("hazard_observations requires motion_observations")
         if self.hazard_memory_observations and not self.hazard_observations:
@@ -4334,48 +4347,39 @@ def train_block_smb_epoch(
     return epoch_losses, replay
 
 
-def evaluate_block_smb_monte_carlo(
-    model: torch.nn.Module,
+def _evaluation_sample_set(
     config: BlockSMBTrainingConfig,
     *,
     split: str,
     sample_count: int,
-    device: torch.device,
-    vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
-    record_dir: Optional[Path] = None,
-    stratified_repeats_per_difficulty: int = 0,
-) -> dict[str, Any]:
-    """Evaluate a policy on a held-out Monte Carlo split.
-
-    With ``stratified_repeats_per_difficulty`` > 0 the sample set is a fixed
-    family x difficulty sweep — every family measured on the same layouts at
-    every evaluation — instead of a joint draw of ``sample_count`` layouts
-    whose per-family slices are only ~2 layouts each.
-    """
-
-    if (
-        sample_count <= 0
-        and not config.monte_carlo_parameter_sweep
-        and stratified_repeats_per_difficulty <= 0
-    ):
-        raise ValueError("sample_count must be positive")
+    stratified_repeats_per_difficulty: int,
+    pool: Any = None,
+):
+    """Held-out layouts; with a pool, generated on its workers once per run."""
     if config.monte_carlo_parameter_sweep:
+        repeats = int(config.monte_carlo_sweep_repeats_per_difficulty)
+    else:
+        repeats = max(0, int(stratified_repeats_per_difficulty))
+    key = (
+        config.monte_carlo_distribution_id,
+        split,
+        int(config.monte_carlo_seed),
+        repeats,
+        int(sample_count),
+        config.monte_carlo_validate_reachability,
+        config.monte_carlo_max_rejections,
+    )
+    if pool is not None and key in pool.sample_sets:
+        return pool.sample_sets[key]
+    if repeats > 0:
         sample_set = sample_block_smb_monte_carlo_parameter_sweep(
             distribution_id=config.monte_carlo_distribution_id,
             split=split,
             seed=int(config.monte_carlo_seed),
-            repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
+            repeats_per_difficulty=repeats,
             validate_reachability=config.monte_carlo_validate_reachability,
             max_rejections=config.monte_carlo_max_rejections,
-        )
-    elif stratified_repeats_per_difficulty > 0:
-        sample_set = sample_block_smb_monte_carlo_parameter_sweep(
-            distribution_id=config.monte_carlo_distribution_id,
-            split=split,
-            seed=int(config.monte_carlo_seed),
-            repeats_per_difficulty=int(stratified_repeats_per_difficulty),
-            validate_reachability=config.monte_carlo_validate_reachability,
-            max_rejections=config.monte_carlo_max_rejections,
+            executor=pool,
         )
     else:
         sample_set = sample_block_smb_monte_carlo_split(
@@ -4387,7 +4391,72 @@ def evaluate_block_smb_monte_carlo(
             validate_reachability=config.monte_carlo_validate_reachability,
             max_rejections=config.monte_carlo_max_rejections,
         )
+    if pool is not None:
+        pool.sample_sets[key] = sample_set
+    return sample_set
+
+
+def evaluate_block_smb_monte_carlo(
+    model: torch.nn.Module,
+    config: BlockSMBTrainingConfig,
+    *,
+    split: str,
+    sample_count: int,
+    device: torch.device,
+    vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
+    record_dir: Optional[Path] = None,
+    stratified_repeats_per_difficulty: int = 0,
+    pool: Any = None,
+) -> dict[str, Any]:
+    """Evaluate a policy on a held-out Monte Carlo split.
+
+    With ``stratified_repeats_per_difficulty`` > 0 the sample set is a fixed
+    family x difficulty sweep — every family measured on the same layouts at
+    every evaluation — instead of a joint draw of ``sample_count`` layouts
+    whose per-family slices are only ~2 layouts each.
+
+    With a worker pool the layouts are generated once per run and the
+    episodes run on its CPU workers; results are aggregated in layout order.
+    """
+
+    if (
+        sample_count <= 0
+        and not config.monte_carlo_parameter_sweep
+        and stratified_repeats_per_difficulty <= 0
+    ):
+        raise ValueError("sample_count must be positive")
+    sample_set = _evaluation_sample_set(
+        config,
+        split=split,
+        sample_count=sample_count,
+        stratified_repeats_per_difficulty=stratified_repeats_per_difficulty,
+        pool=pool,
+    )
     model.eval()
+    if pool is None:
+        with torch.no_grad():
+            outcomes = [
+                _monte_carlo_sample_outcome(
+                    model,
+                    config,
+                    sample,
+                    split=split,
+                    device=device,
+                    vision_factory=vision_factory,
+                    record_dir=record_dir,
+                )
+                for sample in sample_set.samples
+            ]
+    else:
+        policy_path, policy_version = pool.publish_policy(model)
+        worker_config = replace(config, device="cpu", log_path=None)
+        outcomes = pool.map(
+            _monte_carlo_sample_task,
+            [
+                (worker_config, policy_path, policy_version, sample, split, record_dir)
+                for sample in sample_set.samples
+            ],
+        )
     scenario_results: dict[str, dict[str, Any]] = {}
     family_rollups: dict[str, dict[str, Any]] = {}
     bin_rollups: dict[str, dict[str, Any]] = {}
@@ -4403,245 +4472,54 @@ def evaluate_block_smb_monte_carlo(
     primitive_jump_spans = 0
     primitive_jump_landings = 0
     primitive_duration_gaps: list[float] = []
-    with torch.no_grad():
-        for sample_index, sample in enumerate(sample_set.samples):
-            scenario_returns: list[float] = []
-            scenario_successes: list[float] = []
-            scenario_actions: list[int] = []
-            scenario_max_progress: list[float] = []
-            scenario_mounts: list[bool] = []
-            scenario_stomps: list[bool] = []
-            bridge_counts = [0] * 8
-            local_counts = [0] * 6
-            stomp_outcomes: dict[str, int] = {}
-            for episode in range(config.evaluation_episodes):
-                stage = BlockSMBStage(
-                    env=MarioScenarioEnv(reward_config=config.reward_config),
-                    scenario=block_smb_policy_scenario(
-                        copy.deepcopy(dict(sample.scenario)), config.autonomous_policy
-                    ),
-                    vision=vision_factory(),
-                    observation_config=BlockSMBObservationConfig(
-                        motion_observations=config.motion_observations,
-                        hazard_observations=config.hazard_observations,
-                        hazard_memory_observations=config.hazard_memory_observations,
-                    ),
-                )
-                try:
-                    trajectory = collect_trajectory(
-                        model,
-                        stage,
-                        sample.scenario_id,
-                        rollout_steps=config.evaluation_max_steps,
-                        seed=int(sample.sample_seed % (2**31)) + episode,
-                        deterministic=True,
-                        device=device,
-                        record_frames=record_dir is not None,
-                        ablation=config.ablation,
-                        adaptive_duration_control=config.adaptive_duration_control,
-                        skill_goal_conditioning=config.skill_goal_conditioning,
-                        steady_duration_primitives=config.steady_duration_primitives,
-                        walk_duration_primitives=config.walk_duration_primitives,
-                        engine_support=config.engine_support_override,
-                    )
-                finally:
-                    stage.env.close()
-                actions = [step.action for step in trajectory.transitions]
-                for step in trajectory.transitions:
-                    if step.tactic_target >= 0 and step.strategy_logits is not None:
-                        intent = strategy_intent_counts.setdefault(sample.family, [0, 0])
-                        intent[0] += 1
-                        intent[1] += int(
-                            step.strategy_logits.argmax(-1).item() == step.tactic_target
-                        )
-                    if step.tactic_target >= 0 and step.tactic_logits is not None:
-                        counts = tactical_counts.setdefault(sample.family, [0, 0, 0])
-                        counts[0] += 1
-                        counts[1] += int(step.tactic_logits.argmax(-1).item() == step.tactic_target)
-                        counts[2] += int(step.info.get("tactic_action_agreement", False))
-                    if step.memory_prediction is not None and step.memory_target is not None:
-                        error = memory_errors.setdefault(sample.family, [0, 0.0])
-                        error[0] += 1
-                        error[1] += float(
-                            (
-                                step.memory_prediction.detach().cpu().reshape(-1)
-                                - step.memory_target.reshape(-1)
-                            )
-                            .abs()
-                            .mean()
-                        )
-                    if step.objective_target >= 0 and step.objective_logits is not None:
-                        objective = strategy_counts.setdefault(sample.family, [0, 0])
-                        objective[0] += 1
-                        objective[1] += int(
-                            int(step.objective_logits.argmax(-1).reshape(-1)[0])
-                            == step.objective_target
-                        )
-                max_progress = (
-                    max(
-                        float(step.info.get("max_x_reached", 0.0))
-                        for step in trajectory.transitions
-                    )
-                    if trajectory.transitions
-                    else 0.0
-                )
-                scenario_returns.append(trajectory.total_return)
-                scenario_successes.append(float(trajectory.success))
-                scenario_actions.extend(actions)
-                scenario_max_progress.append(max_progress)
-                if sample.family in LOCAL_TRAVERSAL_FAMILIES:
-                    last = trajectory.transitions[-1] if trajectory.transitions else None
-                    completed = int(last.info.get("local_objectives_completed", 0)) if last else 0
-                    timed_out = bool(
-                        last is not None and (last.info.get("truncated") or not last.done)
-                    )
-                    death = bool(last is not None and last.info.get("death"))
-                    for i, value in enumerate(
-                        (
-                            1,
-                            completed > 0,
-                            completed,
-                            completed > 0 and trajectory.success,
-                            timed_out,
-                            death,
-                        )
-                    ):
-                        local_counts[i] += int(value)
-                if sample.family in ("bridge_wait", "wait_timing", "moving_bridge"):
-                    departed = any(t.info.get("bridge_departure") for t in trajectory.transitions)
-                    safe = any(t.info.get("bridge_departure_safe") for t in trajectory.transitions)
-                    boarded = any(t.info.get("bridge_boarded") for t in trajectory.transitions)
-                    crossed = any(t.info.get("bridge_crossed") for t in trajectory.transitions)
-                    events = sum(
-                        t.info.get("bridge_wait_release") == "event" for t in trajectory.transitions
-                    )
-                    timers = sum(
-                        t.info.get("bridge_wait_release") == "timer" for t in trajectory.transitions
-                    )
-                    for i, value in enumerate(
-                        (
-                            1,
-                            departed,
-                            safe,
-                            boarded,
-                            crossed,
-                            boarded and trajectory.success,
-                            events,
-                            timers,
-                        )
-                    ):
-                        bridge_counts[i] += int(value)
-                if sample.family == "enemy_stomp":
-                    scenario_stomps.append(
-                        any(t.info.get("stomp_completed", False) for t in trajectory.transitions)
-                    )
-                if sample.family == "stomp_mount":
-                    outcome = str(
-                        trajectory.transitions[-1].info.get("stomp_outcome", "no_contact")
-                    )
-                    stomp_outcomes[outcome] = stomp_outcomes.get(outcome, 0) + 1
-                if sample.family == "tall_pipe_jump":
-                    scenario_mounts.append(
-                        any(step.info.get("pipe_mounted", False) for step in trajectory.transitions)
-                    )
-                # HSP1 primitive metrics: landing rate and duration
-                # calibration of jump spans against hindsight targets.
-                for span in trajectory.spans:
-                    if span.level != "motor_primitive":
-                        continue
-                    if span.command.get("primitive") != "jump":
-                        continue
-                    primitive_jump_spans += 1
-                    if span.termination_reason == "success":
-                        primitive_jump_landings += 1
-                    start_info = trajectory.transitions[span.start_frame].info
-                    target_hold = (
-                        start_info.get("primitive_target_hold")
-                        if isinstance(start_info, Mapping)
-                        else None
-                    )
-                    held = span.command.get("held_frames")
-                    if target_hold is not None and held is not None:
-                        primitive_duration_gaps.append(
-                            abs(float(held) - float(target_hold)) / _SMB_MAX_DURATION_BIN_VALUE
-                        )
-                if record_dir is not None:
-                    split_record_dir = record_dir / f"monte_carlo_{split}"
-                    split_record_dir.mkdir(parents=True, exist_ok=True)
-                    frames = np.stack(trajectory.frames) if trajectory.frames else np.empty((0,))
-                    np.savez_compressed(
-                        split_record_dir / f"{sample.scenario_id}_episode{episode}.npz",
-                        frames=frames,
-                        actions=np.array(actions, dtype=np.int64),
-                        rewards=np.array(
-                            [step.reward for step in trajectory.transitions],
-                            dtype=np.float32,
-                        ),
-                    )
-            success_rate = float(np.mean(scenario_successes)) if scenario_successes else 0.0
-            mean_return = float(np.mean(scenario_returns)) if scenario_returns else 0.0
-            max_progress = float(max(scenario_max_progress)) if scenario_max_progress else 0.0
-            action_counts = summarize_block_smb_monte_carlo_action_counts(scenario_actions)
-            result = {
-                "scenario_id": sample.scenario_id,
-                "family": sample.family,
-                "split": sample.split,
-                "sample_index": sample.sample_index,
-                "difficulty_bin": sample.difficulty_bin,
-                "parameters": dict(sample.parameters),
-                "return": mean_return,
-                "success_rate": success_rate,
-                "episodes": config.evaluation_episodes,
-                "max_progress": max_progress,
-                "action_counts": action_counts,
-            }
-            if sample.family == "tall_pipe_jump":
-                result["pipe_metrics"] = pipe_completion_metrics(
-                    len(scenario_mounts),
-                    sum(scenario_mounts),
-                    sum(
-                        bool(mounted and success)
-                        for mounted, success in zip(scenario_mounts, scenario_successes)
-                    ),
-                )
-            if sample.family in LOCAL_TRAVERSAL_FAMILIES:
-                result["traversal_metrics"] = traversal_metrics(*local_counts)
-            if sample.family in ("bridge_wait", "wait_timing", "moving_bridge"):
-                result["bridge_metrics"] = bridge_completion_metrics(*bridge_counts)
-            if sample.family == "enemy_stomp":
-                result["enemy_stomp_metrics"] = stomp_completion_metrics(
-                    len(scenario_stomps),
-                    sum(scenario_stomps),
-                    sum(
-                        bool(stomp and success)
-                        for stomp, success in zip(scenario_stomps, scenario_successes)
-                    ),
-                )
-            if sample.family == "stomp_mount":
-                result["stomp_outcome_counts"] = stomp_outcomes
-            scenario_results[sample.scenario_id] = result
-            returns.extend(scenario_returns)
-            successes.extend(scenario_successes)
-            all_actions.extend(scenario_actions)
+    for sample, outcome in zip(sample_set.samples, outcomes):
+        result = outcome["result"]
+        scenario_returns = outcome["returns"]
+        scenario_successes = outcome["successes"]
+        scenario_actions = outcome["actions"]
+        if outcome["strategy_intent"][0]:
+            intent = strategy_intent_counts.setdefault(sample.family, [0, 0])
+            intent[0] += outcome["strategy_intent"][0]
+            intent[1] += outcome["strategy_intent"][1]
+        if outcome["tactics"][0]:
+            counts = tactical_counts.setdefault(sample.family, [0, 0, 0])
+            for index, value in enumerate(outcome["tactics"]):
+                counts[index] += value
+        if outcome["memory_errors"]:
+            error = memory_errors.setdefault(sample.family, [0, 0.0])
+            for value in outcome["memory_errors"]:
+                error[0] += 1
+                error[1] += value
+        if outcome["strategy"][0]:
+            objective = strategy_counts.setdefault(sample.family, [0, 0])
+            objective[0] += outcome["strategy"][0]
+            objective[1] += outcome["strategy"][1]
+        primitive_jump_spans += outcome["jump_spans"]
+        primitive_jump_landings += outcome["jump_landings"]
+        primitive_duration_gaps.extend(outcome["duration_gaps"])
+        scenario_results[sample.scenario_id] = result
+        returns.extend(scenario_returns)
+        successes.extend(scenario_successes)
+        all_actions.extend(scenario_actions)
+        _add_monte_carlo_rollup(
+            family_rollups,
+            sample.family,
+            result,
+            scenario_actions,
+        )
+        _add_monte_carlo_rollup(
+            bin_rollups,
+            f"{sample.family}:{sample.difficulty_bin}",
+            result,
+            scenario_actions,
+        )
+        if sample.family == "piranha_avoidance":
             _add_monte_carlo_rollup(
-                family_rollups,
-                sample.family,
+                piranha_mode_rollups,
+                f"{sample.parameters.get('crossing_mode', 'clearance')}:{sample.difficulty_bin}",
                 result,
                 scenario_actions,
             )
-            _add_monte_carlo_rollup(
-                bin_rollups,
-                f"{sample.family}:{sample.difficulty_bin}",
-                result,
-                scenario_actions,
-            )
-            if sample.family == "piranha_avoidance":
-                _add_monte_carlo_rollup(
-                    piranha_mode_rollups,
-                    f"{sample.parameters.get('crossing_mode', 'clearance')}:{sample.difficulty_bin}",
-                    result,
-                    scenario_actions,
-                )
 
     families = _finalize_monte_carlo_rollups(family_rollups)
     bins = _finalize_monte_carlo_rollups(bin_rollups)
@@ -4727,6 +4605,258 @@ def evaluate_block_smb_monte_carlo(
         ),
     }
     return evaluation
+
+
+def _monte_carlo_sample_task(task):
+    from .parallel import worker_policy, worker_vision
+
+    config, policy_path, policy_version, sample, split, record_dir = task
+    model = worker_policy(config, policy_path, policy_version)
+    with torch.no_grad():
+        return _monte_carlo_sample_outcome(
+            model,
+            config,
+            sample,
+            split=split,
+            device=torch.device("cpu"),
+            vision_factory=worker_vision,
+            record_dir=record_dir,
+        )
+
+
+def _monte_carlo_sample_outcome(
+    model: torch.nn.Module,
+    config: BlockSMBTrainingConfig,
+    sample: Any,
+    *,
+    split: str,
+    device: torch.device,
+    vision_factory: Callable[[], VisionEncoder],
+    record_dir: Optional[Path],
+) -> dict[str, Any]:
+    """Episodes on one evaluation layout: its result row and metric contributions."""
+    # [decisions, correct, action agreement]; [frames, correct]; [decisions, correct]
+    tactics = [0, 0, 0]
+    strategy_intent = [0, 0]
+    strategy = [0, 0]
+    memory_errors: list[float] = []
+    jump_spans = 0
+    jump_landings = 0
+    duration_gaps: list[float] = []
+    scenario_returns: list[float] = []
+    scenario_successes: list[float] = []
+    scenario_actions: list[int] = []
+    scenario_max_progress: list[float] = []
+    scenario_mounts: list[bool] = []
+    scenario_stomps: list[bool] = []
+    bridge_counts = [0] * 8
+    local_counts = [0] * 6
+    stomp_outcomes: dict[str, int] = {}
+    for episode in range(config.evaluation_episodes):
+        stage = BlockSMBStage(
+            env=MarioScenarioEnv(reward_config=config.reward_config),
+            scenario=block_smb_policy_scenario(
+                copy.deepcopy(dict(sample.scenario)), config.autonomous_policy
+            ),
+            vision=vision_factory(),
+            observation_config=BlockSMBObservationConfig(
+                motion_observations=config.motion_observations,
+                hazard_observations=config.hazard_observations,
+                hazard_memory_observations=config.hazard_memory_observations,
+            ),
+        )
+        try:
+            trajectory = collect_trajectory(
+                model,
+                stage,
+                sample.scenario_id,
+                rollout_steps=config.evaluation_max_steps,
+                seed=int(sample.sample_seed % (2**31)) + episode,
+                deterministic=True,
+                device=device,
+                record_frames=record_dir is not None,
+                ablation=config.ablation,
+                adaptive_duration_control=config.adaptive_duration_control,
+                skill_goal_conditioning=config.skill_goal_conditioning,
+                steady_duration_primitives=config.steady_duration_primitives,
+                walk_duration_primitives=config.walk_duration_primitives,
+                engine_support=config.engine_support_override,
+            )
+        finally:
+            stage.env.close()
+        actions = [step.action for step in trajectory.transitions]
+        for step in trajectory.transitions:
+            if step.tactic_target >= 0 and step.strategy_logits is not None:
+                strategy_intent[0] += 1
+                strategy_intent[1] += int(
+                    step.strategy_logits.argmax(-1).item() == step.tactic_target
+                )
+            if step.tactic_target >= 0 and step.tactic_logits is not None:
+                tactics[0] += 1
+                tactics[1] += int(step.tactic_logits.argmax(-1).item() == step.tactic_target)
+                tactics[2] += int(step.info.get("tactic_action_agreement", False))
+            if step.memory_prediction is not None and step.memory_target is not None:
+                memory_errors.append(
+                    float(
+                        (
+                            step.memory_prediction.detach().cpu().reshape(-1)
+                            - step.memory_target.reshape(-1)
+                        )
+                        .abs()
+                        .mean()
+                    )
+                )
+            if step.objective_target >= 0 and step.objective_logits is not None:
+                strategy[0] += 1
+                strategy[1] += int(
+                    int(step.objective_logits.argmax(-1).reshape(-1)[0]) == step.objective_target
+                )
+        max_progress = (
+            max(float(step.info.get("max_x_reached", 0.0)) for step in trajectory.transitions)
+            if trajectory.transitions
+            else 0.0
+        )
+        scenario_returns.append(trajectory.total_return)
+        scenario_successes.append(float(trajectory.success))
+        scenario_actions.extend(actions)
+        scenario_max_progress.append(max_progress)
+        if sample.family in LOCAL_TRAVERSAL_FAMILIES:
+            last = trajectory.transitions[-1] if trajectory.transitions else None
+            completed = int(last.info.get("local_objectives_completed", 0)) if last else 0
+            timed_out = bool(last is not None and (last.info.get("truncated") or not last.done))
+            death = bool(last is not None and last.info.get("death"))
+            for i, value in enumerate(
+                (
+                    1,
+                    completed > 0,
+                    completed,
+                    completed > 0 and trajectory.success,
+                    timed_out,
+                    death,
+                )
+            ):
+                local_counts[i] += int(value)
+        if sample.family in ("bridge_wait", "wait_timing", "moving_bridge"):
+            departed = any(t.info.get("bridge_departure") for t in trajectory.transitions)
+            safe = any(t.info.get("bridge_departure_safe") for t in trajectory.transitions)
+            boarded = any(t.info.get("bridge_boarded") for t in trajectory.transitions)
+            crossed = any(t.info.get("bridge_crossed") for t in trajectory.transitions)
+            events = sum(
+                t.info.get("bridge_wait_release") == "event" for t in trajectory.transitions
+            )
+            timers = sum(
+                t.info.get("bridge_wait_release") == "timer" for t in trajectory.transitions
+            )
+            for i, value in enumerate(
+                (
+                    1,
+                    departed,
+                    safe,
+                    boarded,
+                    crossed,
+                    boarded and trajectory.success,
+                    events,
+                    timers,
+                )
+            ):
+                bridge_counts[i] += int(value)
+        if sample.family == "enemy_stomp":
+            scenario_stomps.append(
+                any(t.info.get("stomp_completed", False) for t in trajectory.transitions)
+            )
+        if sample.family == "stomp_mount":
+            outcome = str(trajectory.transitions[-1].info.get("stomp_outcome", "no_contact"))
+            stomp_outcomes[outcome] = stomp_outcomes.get(outcome, 0) + 1
+        if sample.family == "tall_pipe_jump":
+            scenario_mounts.append(
+                any(step.info.get("pipe_mounted", False) for step in trajectory.transitions)
+            )
+        # HSP1 primitive metrics: landing rate and duration
+        # calibration of jump spans against hindsight targets.
+        for span in trajectory.spans:
+            if span.level != "motor_primitive":
+                continue
+            if span.command.get("primitive") != "jump":
+                continue
+            jump_spans += 1
+            if span.termination_reason == "success":
+                jump_landings += 1
+            start_info = trajectory.transitions[span.start_frame].info
+            target_hold = (
+                start_info.get("primitive_target_hold") if isinstance(start_info, Mapping) else None
+            )
+            held = span.command.get("held_frames")
+            if target_hold is not None and held is not None:
+                duration_gaps.append(
+                    abs(float(held) - float(target_hold)) / _SMB_MAX_DURATION_BIN_VALUE
+                )
+        if record_dir is not None:
+            split_record_dir = record_dir / f"monte_carlo_{split}"
+            split_record_dir.mkdir(parents=True, exist_ok=True)
+            frames = np.stack(trajectory.frames) if trajectory.frames else np.empty((0,))
+            np.savez_compressed(
+                split_record_dir / f"{sample.scenario_id}_episode{episode}.npz",
+                frames=frames,
+                actions=np.array(actions, dtype=np.int64),
+                rewards=np.array(
+                    [step.reward for step in trajectory.transitions],
+                    dtype=np.float32,
+                ),
+            )
+    success_rate = float(np.mean(scenario_successes)) if scenario_successes else 0.0
+    mean_return = float(np.mean(scenario_returns)) if scenario_returns else 0.0
+    max_progress = float(max(scenario_max_progress)) if scenario_max_progress else 0.0
+    action_counts = summarize_block_smb_monte_carlo_action_counts(scenario_actions)
+    result = {
+        "scenario_id": sample.scenario_id,
+        "family": sample.family,
+        "split": sample.split,
+        "sample_index": sample.sample_index,
+        "difficulty_bin": sample.difficulty_bin,
+        "parameters": dict(sample.parameters),
+        "return": mean_return,
+        "success_rate": success_rate,
+        "episodes": config.evaluation_episodes,
+        "max_progress": max_progress,
+        "action_counts": action_counts,
+    }
+    if sample.family == "tall_pipe_jump":
+        result["pipe_metrics"] = pipe_completion_metrics(
+            len(scenario_mounts),
+            sum(scenario_mounts),
+            sum(
+                bool(mounted and success)
+                for mounted, success in zip(scenario_mounts, scenario_successes)
+            ),
+        )
+    if sample.family in LOCAL_TRAVERSAL_FAMILIES:
+        result["traversal_metrics"] = traversal_metrics(*local_counts)
+    if sample.family in ("bridge_wait", "wait_timing", "moving_bridge"):
+        result["bridge_metrics"] = bridge_completion_metrics(*bridge_counts)
+    if sample.family == "enemy_stomp":
+        result["enemy_stomp_metrics"] = stomp_completion_metrics(
+            len(scenario_stomps),
+            sum(scenario_stomps),
+            sum(
+                bool(stomp and success)
+                for stomp, success in zip(scenario_stomps, scenario_successes)
+            ),
+        )
+    if sample.family == "stomp_mount":
+        result["stomp_outcome_counts"] = stomp_outcomes
+    return {
+        "result": result,
+        "returns": scenario_returns,
+        "successes": scenario_successes,
+        "actions": scenario_actions,
+        "tactics": tactics,
+        "strategy_intent": strategy_intent,
+        "strategy": strategy,
+        "memory_errors": memory_errors,
+        "jump_spans": jump_spans,
+        "jump_landings": jump_landings,
+        "duration_gaps": duration_gaps,
+    }
 
 
 def _add_monte_carlo_rollup(
@@ -4918,6 +5048,8 @@ def evaluate_block_smb(
     device: torch.device,
     vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
     record_dir: Optional[Path] = None,
+    pool: Any = None,
+    include_test: bool = True,
 ) -> dict[str, Any]:
     model.eval()
     fixed = load_fixed_scenarios(config.fixed_scenarios)
@@ -5043,8 +5175,9 @@ def evaluate_block_smb(
             stratified_repeats_per_difficulty=(
                 config.monte_carlo_validation_repeats_per_difficulty
             ),
+            pool=pool,
         )
-    if config.monte_carlo_test_samples > 0:
+    if config.monte_carlo_test_samples > 0 and include_test:
         test_record_dir = record_dir / "monte_carlo" if record_dir is not None else None
         evaluation["monte_carlo_test"] = evaluate_block_smb_monte_carlo(
             model,
@@ -5057,6 +5190,7 @@ def evaluate_block_smb(
             stratified_repeats_per_difficulty=(
                 config.monte_carlo_validation_repeats_per_difficulty
             ),
+            pool=pool,
         )
     if not fixed:
         primary = evaluation.get("monte_carlo_validation", {})
@@ -5344,14 +5478,77 @@ def make_block_smb_optimizer(model, config):
     return optim.AdamW(groups, lr=config.learning_rate)
 
 
+def _includes_test_split(config: BlockSMBTrainingConfig, completed_epoch: int) -> bool:
+    return (
+        completed_epoch % config.monte_carlo_test_interval_epochs == 0
+        or completed_epoch >= config.epochs
+    )
+
+
+def _vision_factory_on(
+    vision_factory: Callable[[], VisionEncoder], device: torch.device
+) -> Callable[[], VisionEncoder]:
+    """A factory for one copy of the frozen vision encoder on `device`."""
+    vision = vision_factory()
+    if not isinstance(vision, torch.nn.Module):
+        return vision_factory
+    vision = copy.deepcopy(vision).to(device)
+
+    def factory() -> VisionEncoder:
+        return vision
+
+    return factory
+
+
+def _move_training_state(
+    device: torch.device,
+    model: torch.nn.Module,
+    optimizer: optim.Optimizer,
+    target_model: Optional[torch.nn.Module] = None,
+) -> None:
+    """Move the policy, its target network and the optimizer moments to `device`."""
+    model.to(device)
+    if target_model is not None:
+        target_model.to(device)
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            # AdamW keeps its step counter on the CPU.
+            if torch.is_tensor(value) and key != "step":
+                state[key] = value.to(device)
+
+
 def train_and_evaluate_block_smb(
     config: Optional[BlockSMBTrainingConfig] = None,
     *,
     vision_factory: Callable[[], VisionEncoder] = BlockVisionTransformer,
 ) -> dict[str, Any]:
     config = config or BlockSMBTrainingConfig()
+    if not config.parallel_workers:
+        return _train_and_evaluate_block_smb(config, vision_factory=vision_factory, pool=None)
+    from .parallel import BlockSMBWorkerPool
+
+    with BlockSMBWorkerPool(
+        config.parallel_workers, vision_factory(), deterministic=config.deterministic
+    ) as pool:
+        return _train_and_evaluate_block_smb(config, vision_factory=vision_factory, pool=pool)
+
+
+def _train_and_evaluate_block_smb(
+    config: BlockSMBTrainingConfig,
+    *,
+    vision_factory: Callable[[], VisionEncoder],
+    pool: Any,
+) -> dict[str, Any]:
     seed_everything(config.seed, config.deterministic)
     device = select_device(config.device)
+    online_device = (
+        select_device(config.online_training_device) if config.online_training_device else device
+    )
+    online_vision_factory = (
+        _vision_factory_on(vision_factory, online_device)
+        if online_device != device
+        else vision_factory
+    )
     model = make_block_smb_model(config).to(device)
     optimizer = make_block_smb_optimizer(model, config)
     target_model = (
@@ -5481,10 +5678,11 @@ def train_and_evaluate_block_smb(
             log_demonstration_progress,
         )
 
-        demonstration_data = (
-            build_balanced_demonstrations(config, vision_factory, families=active_families)
-            if config.hierarchy_curriculum
-            else build_balanced_demonstrations(config, vision_factory)
+        demonstration_data = build_balanced_demonstrations(
+            config,
+            vision_factory,
+            families=active_families if config.hierarchy_curriculum else None,
+            pool=pool,
         )
         if start_epoch == 0 and config.demonstration_bootstrap_updates and not bootstrap_completed:
             bootstrap_loss = fit_demonstrations(
@@ -5570,22 +5768,26 @@ def train_and_evaluate_block_smb(
         )
         epoch_curriculum = build_epoch_curriculum(curriculum, replay_curriculum)
         recovery_records = [] if config.policy_recovery_samples_per_bin else None
+        if online_device != device:
+            _move_training_state(online_device, model, optimizer, target_model)
         losses, _replay = train_block_smb_epoch(
             model,
             optimizer,
             epoch_curriculum,
             config,
             epoch,
-            device=device,
-            vision_factory=vision_factory,
+            device=online_device,
+            vision_factory=online_vision_factory,
             target_model=target_model,
             success_replay=success_replay,
             recovery_records=recovery_records,
         )
+        if online_device != device:
+            _move_training_state(device, model, optimizer, target_model)
         if recovery_records and demonstration_data is not None:
             from .policy_recovery import collect_policy_recovery
 
-            recovered = collect_policy_recovery(recovery_records, config, vision_factory)
+            recovered = collect_policy_recovery(recovery_records, config, vision_factory, pool=pool)
             if recovered is not None:
                 recovery_history.append(recovered)
                 recovery_history = recovery_history[-3:]
@@ -5679,6 +5881,8 @@ def train_and_evaluate_block_smb(
                 device=device,
                 vision_factory=vision_factory,
                 record_dir=config.video_dir if config.record_videos else None,
+                pool=pool,
+                include_test=_includes_test_split(config, completed_epoch),
             )
             evaluations.append(
                 {
@@ -5796,7 +6000,7 @@ def train_and_evaluate_block_smb(
                         from .policy_recovery import combine_demonstrations
 
                         new_data = build_balanced_demonstrations(
-                            config, vision_factory, families=new_families
+                            config, vision_factory, families=new_families, pool=pool
                         )
                         demonstration_data = combine_demonstrations([demonstration_data, new_data])
                     active_families = unlocked
@@ -5892,6 +6096,7 @@ def train_and_evaluate_block_smb(
             device=device,
             vision_factory=vision_factory,
             record_dir=config.video_dir if config.record_videos else None,
+            pool=pool,
         )
         evaluations.append(
             {

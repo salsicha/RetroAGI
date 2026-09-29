@@ -138,10 +138,47 @@ class _CollectionProgress:
             self.last_report = now
 
 
-def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32):
+_ROW_COLUMNS = (
+    "a",
+    "b",
+    "c",
+    "goal",
+    "action",
+    "motor_action",
+    "duration",
+    "actor_mask",
+    "next_c",
+    "family",
+    "valid_durations",
+    "phase",
+)
+
+
+def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32, pool=None):
+    """Replay teacher routes through the live observation pipeline.
+
+    With a worker pool the routes replay concurrently on CPU workers; episodes
+    are assembled in case order either way.
+    """
     cases = list(cases)
     progress = _CollectionProgress(config, "encode_trajectories", len(cases))
-    rows = []
+    if pool is None:
+        episodes = (
+            encode_demonstration_episode(
+                family_index, sample, config, vision_factory(), vision_batch_size
+            )
+            for family_index, sample in cases
+        )
+    else:
+        cpu_config = replace(config, device="cpu", log_path=None)
+        episodes = pool.map(
+            _encode_demonstration_task,
+            [
+                (family_index, sample, cpu_config, vision_batch_size)
+                for family_index, sample in cases
+            ],
+        )
+    columns = {name: [] for name in _ROW_COLUMNS}
     recovery_rows = []
     release_rows = []
     tactic_rows = []
@@ -151,288 +188,30 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     context_rows = []
     episode_starts = []
     frame_wait_episodes = set()
-    for case_index, (family_index, sample) in enumerate(cases):
-        stage = BlockSMBStage(
-            env=MarioScenarioEnv(reward_config=config.reward_config),
-            scenario=sample.scenario,
-            vision=vision_factory(),
-            observation_config=BlockSMBObservationConfig(
-                motion_observations=config.motion_observations,
-                hazard_observations=config.hazard_observations,
-                hazard_memory_observations=config.hazard_memory_observations,
-            ),
-        )
-        episode = []
-        episode_release = []
-        episode_tactics = []
-        episode_tactic_actions = []
-        episode_duration_consumed = []
-        episode_memory = []
-        from .primitive_execution import JumpReleaseState
-
-        # The same observer a live policy has, from the replayed prefix onward.
-        memory_history = EnemyObservationHistory()
-
-        release = JumpReleaseState()
-        try:
-            observation = stage.reset(seed=sample.sample_seed % (2**31))
-            actions = list(sample.oracle["actions"])
-            supervision_start = int(sample.oracle.get("supervision_start_frame", 0))
-            pipe = TallPipeTraversal.from_stage(stage.scenario, stage.env)
-            request = requested_block_smb_skill_goal(stage.scenario)
-            request = request if request is not None else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
-            from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
-
-            # The hold-duration menu depends on the physics profile: legacy
-            # bins are the values 1..16, NES bins are NES_JUMP_FRAMES (up
-            # to 32 frames). Both have 16 entries; the demonstration tensors
-            # store menu INDICES, so value-1 is only correct for legacy.
-            duration_menu = (
-                NES_JUMP_FRAMES
-                if stage.env.physics_profile == NES_PHYSICS_PROFILE
-                else tuple(range(1, 17))
-            )
-
-            def menu_index(frames: int) -> int:
-                index = 0
-                for slot, entry in enumerate(duration_menu):
-                    if entry <= max(1, frames):
-                        index = slot
-                    else:
-                        break
-                return index
-
-            jump_intent = None
-            jump_hold = 1
-            jump_rows = []
-            bridge_jump = stage.env._bridge_jump_task
-            from .piranha import has_plants
-
-            # Must match BlockSMBPrimitiveExecutor: these layouts re-decide
-            # waits every frame, so no wait duration is ever consumed.
-            frame_waits = bool(bridge_jump) or has_plants(stage.env)
-            bridge = stage.env._require_bridge_before_goal and bridge_jump is None
-            enemy = stage.env._require_stomp_before_goal
-            opening = True
-            bridge_exit_committed = False
-            recovering_stomp = False
-            intent = -1
-            observations = [observation]
-            states = [stage.state_features(stage.last_info)]
-            for frame, action in enumerate(actions):
-                env = stage.env
-                bridge = bridge_training_active(env) and bridge_jump is None
-                memory_history.observe(env, env.steps)
-                episode_memory.append(memory_history.memory_features())
-                if jump_intent is not None and env.mario["on_ground"]:
-                    jump_intent = None
-                    jump_rows = []
-                if recovering_stomp and env.mario["on_ground"]:
-                    recovering_stomp = False
-                episode_release.append(bool(release.remaining))
-                actor_mask = jump_intent is None and not recovering_stomp and not release.remaining
-                from .tactics import compatible_actions, hierarchy_intent
-
-                free_decision = actor_mask
-                episode_duration_consumed.append(not (action == 0 and frame_waits))
-                end = frame + 1
-                while end < len(actions) and actions[end] == action:
-                    end += 1
-                hold = min(duration_menu[-1], end - frame)
-                if jump_intent is None and action in (2, 4, 5):
-                    jump_intent = action
-                    jump_hold = hold
-                    from retroagi.core.smb_coaching import training_target
-
-                    objective = training_target(env)
-                    jump_valid = (
-                        safe_jump_holds(
-                            env,
-                            objective,
-                            1 if action == 2 else -1,
-                            plant_history=stage._hazard_features,
-                        )
-                        if action in (2, 4) and env.mario["on_ground"]
-                        else []
-                    )
-                motor_action = jump_intent if jump_intent is not None else action
-                duration = jump_hold if jump_intent is not None else hold
-                if motor_action == 0:
-                    duration = 1 if frame_waits else max(1, min(16, round((end - frame) / 4)))
-                    duration_index = duration - 1
-                elif motor_action in (2, 4, 5):
-                    duration_index = menu_index(duration)
-                else:
-                    duration_index = min(15, duration - 1)
-                goal = request.clone()
-                phase = None
-                if pipe is not None:
-                    pipe.observe(env)
-                    phase = pipe.phase
-                elif scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES and not bridge:
-                    target = local_objective(env)
-                    phase = target.kind
-                    goal = skill_goal_encoding(
-                        {
-                            "gap": "clear_gap",
-                            "mount": "mount_platform",
-                            "enemy": "enemy_clear",
-                            "retreat": "retreat_recover",
-                        }.get(phase, "mount_platform")
-                    )
-                elif enemy and env._stomp_credited:
-                    phase = "finish"
-                if recovering_stomp:
-                    phase = "bounce_recovery"
-                if bridge:
-                    phase = bridge_phase(env, opening)
-                    if bridge_exit_committed and not env._bridge_crossed:
-                        phase = "exit"
-                if bridge_jump:
-                    phase = "board" if bridge_jump == "mount" else "exit"
-                if phase in ("finish", "bounce_recovery") or (
-                    bridge and phase in ("approach", "board", "exit")
-                ):
-                    goal = torch.zeros_like(request)
-                # Match the live collector: a committed arc keeps the local
-                # objective from takeoff, even while no surface is underneath.
-                if jump_intent is not None:
-                    if not jump_rows:
-                        jump_goal = goal.clone()
-                    else:
-                        goal = jump_goal
-                if bridge:
-                    next_action = actions[frame + 1] if frame + 1 < len(actions) else None
-                    if phase == "exit" and (action in (1, 2) or (action == 0 and next_action == 1)):
-                        bridge_exit_committed = True
-                    if action in (3, 4) or (
-                        action == 0 and (frame == 0 or actions[frame - 1] != 0)
-                    ):
-                        bridge_exit_committed = False
-                opening_ready = (
-                    bridge and opening and action == 0 and 1 in bridge_safe_wait_frames(env)
-                )
-                intent = hierarchy_intent(
-                    env,
-                    stage._hazard_features,
-                    action,
-                    family=scenario_family(stage.scenario),
-                    phase=phase,
-                    decision=free_decision,
-                    previous=intent,
-                )
-                tactic = intent
-                episode_tactics.append(tactic)
-                allowed_tactic_actions = compatible_actions(env, tactic if free_decision else -1)
-                if tactic >= 0 and free_decision:
-                    allowed_tactic_actions[action] = True
-                episode_tactic_actions.append(allowed_tactic_actions)
-                # Advance adapter-owned observation history just as live rollouts do.
-                # Direct env.step leaves all temporal features frozen at reset.
-                observation, reward, done, truncated, info = stage.step(action)
-                release.observe(env, action, info)
-                observations.append(observation)
-                states.append(stage.state_features(info))
-                valid = [False] * 16
-                if jump_intent is not None and jump_valid:
-                    # safe_jump_holds returns exact menu values; record their
-                    # menu positions (NES values exceed 16 by design).
-                    for value in jump_valid:
-                        valid[duration_menu.index(value)] = True
-                else:
-                    valid[duration_index] = True
-                episode.append(
-                    [
-                        frame,
-                        frame,
-                        frame,
-                        goal.cpu(),
-                        action,
-                        motor_action,
-                        duration_index,
-                        actor_mask,
-                        frame + 1,
-                        family_index,
-                        valid,
-                        {
-                            "enemy": 1,
-                            "stomp": 1,
-                            "gap": 2,
-                            "wait": 2,
-                            "mount": 3,
-                            "board": 3,
-                            "ride": 4,
-                            "exit": 5,
-                        }.get(phase, 0),
-                    ]
-                )
-                if jump_intent is not None:
-                    jump_rows.append(len(episode) - 1)
-                    if env.mario["on_ground"] or info["reward_terms"]["enemy_stomp"] > 0 or done:
-                        for i in jump_rows:
-                            episode[i][8] = frame + 1
-                        jump_intent = None
-                        jump_rows = []
-                if info["reward_terms"]["enemy_stomp"] > 0:
-                    recovering_stomp = True
-                if bridge and (action != 0 or opening_ready):
-                    opening = False
-                if done or truncated:
-                    break
-            if not stage.env._goal_credited:
-                raise ValueError(f"Failed demonstration: {sample.scenario_id}")
-            # The frozen encoder is feedforward. Batch the exact rendered
-            # frames through the normal projector, avoiding duplicate vision
-            # calls for each next/current observation pair.
-            streams = [[], [], []]
-            size = vision_batch_size if isinstance(stage.vision, BlockVisionTransformer) else 1
-            with torch.no_grad():
-                for start in range(0, len(observations), size):
-                    images = np.stack(observations[start : start + size])
-                    vision = stage.vision.encode(images if size > 1 else images[0])
-                    batch = stage.vision_projector.project(
-                        vision,
-                        state=torch.as_tensor(
-                            np.stack(states[start : start + size]), device=vision.position.device
-                        ),
-                    )
-                    for stream, value in zip(streams, (batch.src_a, batch.src_b, batch.src_c)):
-                        stream.append(value.detach().cpu())
-            a, b, c = (torch.cat(values) for values in streams)
-            for row in episode:
-                frame = row[0]
-                row[0], row[1], row[2] = (
-                    a[frame : frame + 1],
-                    b[frame : frame + 1],
-                    c[frame : frame + 1],
-                )
-                row[8] = c[row[8] : row[8] + 1]
-            if len(episode) <= supervision_start:
-                raise ValueError("A recovery demonstration must have a supervised suffix")
-            # The replayed prefix stays as unsupervised context rows.
-            for row in episode[:supervision_start]:
-                row[7] = False
-            if frame_waits:
-                frame_wait_episodes.add(len(rows))
-            episode_starts.append(len(rows))
-            rows.extend(episode)
-            context_rows.extend(frame < supervision_start for frame in range(len(episode)))
-            release_rows.extend(episode_release[: len(episode)])
-            recovery_rows.extend([bool(sample.oracle.get("recovery"))] * len(episode))
-            tactic_action_rows.extend(episode_tactic_actions[: len(episode)])
-            duration_consumed_rows.extend(episode_duration_consumed[: len(episode)])
-            tactic_rows.extend(
-                -1 if frame < supervision_start else tactic
-                for frame, tactic in enumerate(episode_tactics[: len(episode)])
-            )
-            memory_rows.extend(episode_memory[: len(episode)])
-        finally:
-            stage.env.close()
-        progress.update(case_index + 1, family_index=family_index, frames=len(rows))
-    log_demonstration_progress(config, "demonstration_dataset_assembly", frames=len(rows))
-    columns = list(zip(*rows))
+    frames = 0
+    for case_index, ((family_index, _sample), episode) in enumerate(zip(cases, episodes)):
+        if episode["frame_waits"]:
+            frame_wait_episodes.add(frames)
+        episode_starts.append(frames)
+        for name in _ROW_COLUMNS:
+            columns[name].append(episode[name])
+        context_rows.extend(episode["context"])
+        release_rows.extend(episode["release"])
+        recovery_rows.extend(episode["recovery"])
+        tactic_action_rows.extend(episode["tactic_actions"])
+        duration_consumed_rows.extend(episode["duration_consumed"])
+        tactic_rows.extend(episode["tactic"])
+        memory_rows.extend(episode["memory"])
+        frames += len(episode["action"])
+        progress.update(case_index + 1, family_index=family_index, frames=frames)
+    log_demonstration_progress(config, "demonstration_dataset_assembly", frames=frames)
     data = DemonstrationBatch(
-        *(torch.cat(v) if i in (0, 1, 2, 3, 8) else torch.tensor(v) for i, v in enumerate(columns))
+        *(
+            torch.cat(columns[name])
+            if name in ("a", "b", "c", "goal", "next_c")
+            else torch.tensor([value for part in columns[name] for value in part])
+            for name in _ROW_COLUMNS
+        )
     )
 
     data.recovery = torch.tensor(recovery_rows, dtype=torch.bool)
@@ -442,7 +221,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     data.duration_consumed = torch.tensor(duration_consumed_rows, dtype=torch.bool)
     data.memory_target = torch.as_tensor(np.stack(memory_rows), dtype=torch.float32)
     data.context = torch.tensor(context_rows, dtype=torch.bool)
-    frame_index = torch.arange(len(rows))
+    frame_index = torch.arange(frames)
     for start in episode_starts:
         frame_index[start:] -= frame_index[start].clone()
     data.frame_index = frame_index
@@ -452,6 +231,296 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     return (
         data if config.walk_duration_primitives else without_walk_commitments(data, episode_starts)
     )
+
+
+def _encode_demonstration_task(task):
+    from .parallel import worker_vision
+
+    family_index, sample, config, vision_batch_size = task
+    return encode_demonstration_episode(
+        family_index, sample, config, worker_vision(), vision_batch_size
+    )
+
+
+def encode_demonstration_episode(family_index, sample, config, vision, vision_batch_size=32):
+    """One teacher route replayed and labeled, as per-row columns."""
+    stage = BlockSMBStage(
+        env=MarioScenarioEnv(reward_config=config.reward_config),
+        scenario=sample.scenario,
+        vision=vision,
+        observation_config=BlockSMBObservationConfig(
+            motion_observations=config.motion_observations,
+            hazard_observations=config.hazard_observations,
+            hazard_memory_observations=config.hazard_memory_observations,
+        ),
+    )
+    episode = []
+    episode_release = []
+    episode_tactics = []
+    episode_tactic_actions = []
+    episode_duration_consumed = []
+    episode_memory = []
+    from .primitive_execution import JumpReleaseState
+
+    # The same observer a live policy has, from the replayed prefix onward.
+    memory_history = EnemyObservationHistory()
+
+    release = JumpReleaseState()
+    try:
+        observation = stage.reset(seed=sample.sample_seed % (2**31))
+        actions = list(sample.oracle["actions"])
+        supervision_start = int(sample.oracle.get("supervision_start_frame", 0))
+        pipe = TallPipeTraversal.from_stage(stage.scenario, stage.env)
+        request = requested_block_smb_skill_goal(stage.scenario)
+        request = request if request is not None else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
+        from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+
+        # The hold-duration menu depends on the physics profile: legacy
+        # bins are the values 1..16, NES bins are NES_JUMP_FRAMES (up
+        # to 32 frames). Both have 16 entries; the demonstration tensors
+        # store menu INDICES, so value-1 is only correct for legacy.
+        duration_menu = (
+            NES_JUMP_FRAMES
+            if stage.env.physics_profile == NES_PHYSICS_PROFILE
+            else tuple(range(1, 17))
+        )
+
+        def menu_index(frames: int) -> int:
+            index = 0
+            for slot, entry in enumerate(duration_menu):
+                if entry <= max(1, frames):
+                    index = slot
+                else:
+                    break
+            return index
+
+        jump_intent = None
+        jump_hold = 1
+        jump_rows = []
+        bridge_jump = stage.env._bridge_jump_task
+        from .piranha import has_plants
+
+        # Must match BlockSMBPrimitiveExecutor: these layouts re-decide
+        # waits every frame, so no wait duration is ever consumed.
+        frame_waits = bool(bridge_jump) or has_plants(stage.env)
+        bridge = stage.env._require_bridge_before_goal and bridge_jump is None
+        enemy = stage.env._require_stomp_before_goal
+        opening = True
+        bridge_exit_committed = False
+        recovering_stomp = False
+        intent = -1
+        observations = [observation]
+        states = [stage.state_features(stage.last_info)]
+        for frame, action in enumerate(actions):
+            env = stage.env
+            bridge = bridge_training_active(env) and bridge_jump is None
+            memory_history.observe(env, env.steps)
+            episode_memory.append(memory_history.memory_features())
+            if jump_intent is not None and env.mario["on_ground"]:
+                jump_intent = None
+                jump_rows = []
+            if recovering_stomp and env.mario["on_ground"]:
+                recovering_stomp = False
+            episode_release.append(bool(release.remaining))
+            actor_mask = jump_intent is None and not recovering_stomp and not release.remaining
+            from .tactics import compatible_actions, hierarchy_intent
+
+            free_decision = actor_mask
+            episode_duration_consumed.append(not (action == 0 and frame_waits))
+            end = frame + 1
+            while end < len(actions) and actions[end] == action:
+                end += 1
+            hold = min(duration_menu[-1], end - frame)
+            if jump_intent is None and action in (2, 4, 5):
+                jump_intent = action
+                jump_hold = hold
+                from retroagi.core.smb_coaching import training_target
+
+                objective = training_target(env)
+                jump_valid = (
+                    safe_jump_holds(
+                        env,
+                        objective,
+                        1 if action == 2 else -1,
+                        plant_history=stage._hazard_features,
+                    )
+                    if action in (2, 4) and env.mario["on_ground"]
+                    else []
+                )
+            motor_action = jump_intent if jump_intent is not None else action
+            duration = jump_hold if jump_intent is not None else hold
+            if motor_action == 0:
+                duration = 1 if frame_waits else max(1, min(16, round((end - frame) / 4)))
+                duration_index = duration - 1
+            elif motor_action in (2, 4, 5):
+                duration_index = menu_index(duration)
+            else:
+                duration_index = min(15, duration - 1)
+            goal = request.clone()
+            phase = None
+            if pipe is not None:
+                pipe.observe(env)
+                phase = pipe.phase
+            elif scenario_family(stage.scenario) in LOCAL_TRAVERSAL_FAMILIES and not bridge:
+                target = local_objective(env)
+                phase = target.kind
+                goal = skill_goal_encoding(
+                    {
+                        "gap": "clear_gap",
+                        "mount": "mount_platform",
+                        "enemy": "enemy_clear",
+                        "retreat": "retreat_recover",
+                    }.get(phase, "mount_platform")
+                )
+            elif enemy and env._stomp_credited:
+                phase = "finish"
+            if recovering_stomp:
+                phase = "bounce_recovery"
+            if bridge:
+                phase = bridge_phase(env, opening)
+                if bridge_exit_committed and not env._bridge_crossed:
+                    phase = "exit"
+            if bridge_jump:
+                phase = "board" if bridge_jump == "mount" else "exit"
+            if phase in ("finish", "bounce_recovery") or (
+                bridge and phase in ("approach", "board", "exit")
+            ):
+                goal = torch.zeros_like(request)
+            # Match the live collector: a committed arc keeps the local
+            # objective from takeoff, even while no surface is underneath.
+            if jump_intent is not None:
+                if not jump_rows:
+                    jump_goal = goal.clone()
+                else:
+                    goal = jump_goal
+            if bridge:
+                next_action = actions[frame + 1] if frame + 1 < len(actions) else None
+                if phase == "exit" and (action in (1, 2) or (action == 0 and next_action == 1)):
+                    bridge_exit_committed = True
+                if action in (3, 4) or (action == 0 and (frame == 0 or actions[frame - 1] != 0)):
+                    bridge_exit_committed = False
+            opening_ready = bridge and opening and action == 0 and 1 in bridge_safe_wait_frames(env)
+            intent = hierarchy_intent(
+                env,
+                stage._hazard_features,
+                action,
+                family=scenario_family(stage.scenario),
+                phase=phase,
+                decision=free_decision,
+                previous=intent,
+            )
+            tactic = intent
+            episode_tactics.append(tactic)
+            allowed_tactic_actions = compatible_actions(env, tactic if free_decision else -1)
+            if tactic >= 0 and free_decision:
+                allowed_tactic_actions[action] = True
+            episode_tactic_actions.append(allowed_tactic_actions)
+            # Advance adapter-owned observation history just as live rollouts do.
+            # Direct env.step leaves all temporal features frozen at reset.
+            observation, reward, done, truncated, info = stage.step(action)
+            release.observe(env, action, info)
+            observations.append(observation)
+            states.append(stage.state_features(info))
+            valid = [False] * 16
+            if jump_intent is not None and jump_valid:
+                # safe_jump_holds returns exact menu values; record their
+                # menu positions (NES values exceed 16 by design).
+                for value in jump_valid:
+                    valid[duration_menu.index(value)] = True
+            else:
+                valid[duration_index] = True
+            episode.append(
+                [
+                    frame,
+                    frame,
+                    frame,
+                    goal.cpu(),
+                    action,
+                    motor_action,
+                    duration_index,
+                    actor_mask,
+                    frame + 1,
+                    family_index,
+                    valid,
+                    {
+                        "enemy": 1,
+                        "stomp": 1,
+                        "gap": 2,
+                        "wait": 2,
+                        "mount": 3,
+                        "board": 3,
+                        "ride": 4,
+                        "exit": 5,
+                    }.get(phase, 0),
+                ]
+            )
+            if jump_intent is not None:
+                jump_rows.append(len(episode) - 1)
+                if env.mario["on_ground"] or info["reward_terms"]["enemy_stomp"] > 0 or done:
+                    for i in jump_rows:
+                        episode[i][8] = frame + 1
+                    jump_intent = None
+                    jump_rows = []
+            if info["reward_terms"]["enemy_stomp"] > 0:
+                recovering_stomp = True
+            if bridge and (action != 0 or opening_ready):
+                opening = False
+            if done or truncated:
+                break
+        if not stage.env._goal_credited:
+            raise ValueError(f"Failed demonstration: {sample.scenario_id}")
+        # The frozen encoder is feedforward. Batch the exact rendered
+        # frames through the normal projector, avoiding duplicate vision
+        # calls for each next/current observation pair.
+        streams = [[], [], []]
+        size = vision_batch_size if isinstance(stage.vision, BlockVisionTransformer) else 1
+        with torch.no_grad():
+            for start in range(0, len(observations), size):
+                images = np.stack(observations[start : start + size])
+                vision = stage.vision.encode(images if size > 1 else images[0])
+                batch = stage.vision_projector.project(
+                    vision,
+                    state=torch.as_tensor(
+                        np.stack(states[start : start + size]), device=vision.position.device
+                    ),
+                )
+                for stream, value in zip(streams, (batch.src_a, batch.src_b, batch.src_c)):
+                    stream.append(value.detach().cpu())
+        a, b, c = (torch.cat(values) for values in streams)
+        count = len(episode)
+        if count <= supervision_start:
+            raise ValueError("A recovery demonstration must have a supervised suffix")
+        rows = torch.tensor([row[0] for row in episode])
+        # The replayed prefix stays as unsupervised context rows.
+        for row in episode[:supervision_start]:
+            row[7] = False
+        return {
+            "a": a.index_select(0, rows),
+            "b": b.index_select(0, rows),
+            "c": c.index_select(0, rows),
+            "goal": torch.cat([row[3] for row in episode]),
+            "action": [row[4] for row in episode],
+            "motor_action": [row[5] for row in episode],
+            "duration": [row[6] for row in episode],
+            "actor_mask": [row[7] for row in episode],
+            "next_c": c.index_select(0, torch.tensor([row[8] for row in episode])),
+            "family": [row[9] for row in episode],
+            "valid_durations": [row[10] for row in episode],
+            "phase": [row[11] for row in episode],
+            "frame_waits": frame_waits,
+            "context": [frame < supervision_start for frame in range(count)],
+            "release": episode_release[:count],
+            "recovery": [bool(sample.oracle.get("recovery"))] * count,
+            "tactic_actions": episode_tactic_actions[:count],
+            "duration_consumed": episode_duration_consumed[:count],
+            "tactic": [
+                -1 if frame < supervision_start else tactic
+                for frame, tactic in enumerate(episode_tactics[:count])
+            ],
+            "memory": np.stack(episode_memory[:count]),
+        }
+    finally:
+        stage.env.close()
 
 
 def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episodes=()):
@@ -1295,69 +1364,92 @@ def with_varied_demonstrations(cases, seed, *, robust=False):
     ]
 
 
-def build_balanced_demonstrations(config, vision_factory, *, families=None):
-    """Independent training layouts and successful route variants for every family."""
-    from .monte_carlo import BLOCK_SMB_MC_FAMILIES, sample_block_smb_monte_carlo_scenario
+def build_balanced_demonstrations(config, vision_factory, *, families=None, pool=None):
+    """Independent training layouts and successful route variants for every family.
+
+    Layouts are independent; a worker pool generates their routes concurrently
+    and the cases keep the sequential order.
+    """
+    from .monte_carlo import BLOCK_SMB_MC_FAMILIES
 
     families = set(BLOCK_SMB_MC_FAMILIES if families is None else families)
     if not families or families - set(BLOCK_SMB_MC_FAMILIES):
         raise ValueError("Demonstration families must be a nonempty subset of the family catalog")
-    cases = []
-    completed_layouts = 0
-    progress = _CollectionProgress(
-        config,
-        "generate_routes",
-        len(families) * config.demonstration_layouts_per_family,
+    options = (
+        config.seed,
+        config.demonstration_robust_routes,
+        config.demonstration_varied_routes,
+        config.demonstration_enemy_wait_routes,
     )
-    for family_index, family in enumerate(BLOCK_SMB_MC_FAMILIES):
-        if family not in families:
-            continue
-        for i in range(config.demonstration_layouts_per_family):
-            progress.update(
-                completed_layouts,
-                force=i == 0,
-                family=family,
-                trajectories=len(cases),
-            )
-            completed_layouts += 1
-            sample = sample_block_smb_monte_carlo_scenario(
-                family=family,
-                seed=config.seed,
-                split="train",
-                sample_index=i,
-                difficulty=("easy", "medium", "hard")[i % 3],
-            )
-            if (sample.scenario.get("bridge_jump_task") or family == "piranha_avoidance") and (
-                config.demonstration_robust_routes or config.demonstration_varied_routes
-            ):
-                # Difficulty already cycles with i % 3. Reusing that index to
-                # select a route permanently omits a boundary in each tier.
-                # Plant variants use the same modulo-three selection, so keep
-                # the canonical route and every alternate in every tier for
-                # both families, including during later rehearsal.
-                cases.append((family_index, sample))
-                for variant in (1, 2, 3):
-                    alternative = varied_demonstration(sample, variant - 1, robust=True)
-                    if alternative is not None:
-                        cases.append((family_index, alternative))
-                if family == "piranha_avoidance":
-                    from .piranha_tactics import arrival_demonstrations
-
-                    for corrected in arrival_demonstrations(sample, i):
-                        cases.append((family_index, corrected))
-                continue
-            if config.demonstration_robust_routes:
-                sample = varied_demonstration(sample, config.seed + i, robust=True) or sample
-            cases.append((family_index, sample))
-            if config.demonstration_enemy_wait_routes:
-                waiting = enemy_wait_demonstration(sample, config.seed + i + 200000)
-                if waiting is not None:
-                    cases.append((family_index, waiting))
-            if config.demonstration_varied_routes:
-                alternative = varied_demonstration(
-                    sample, config.seed + i + 100000, robust=config.demonstration_robust_routes
-                )
-                if alternative is not None:
-                    cases.append((family_index, alternative))
+    layouts = [
+        (family_index, family, i, *options)
+        for family_index, family in enumerate(BLOCK_SMB_MC_FAMILIES)
+        if family in families
+        for i in range(config.demonstration_layouts_per_family)
+    ]
+    progress = _CollectionProgress(config, "generate_routes", len(layouts))
+    routes = (
+        map(_layout_routes_task, layouts)
+        if pool is None
+        else pool.map(_layout_routes_task, layouts)
+    )
+    cases = []
+    for completed_layouts, (layout, layout_cases) in enumerate(zip(layouts, routes)):
+        progress.update(
+            completed_layouts,
+            force=layout[2] == 0,
+            family=layout[1],
+            trajectories=len(cases),
+        )
+        cases.extend(layout_cases)
     progress.update(progress.total, trajectories=len(cases))
-    return collect_demonstrations(cases, config, vision_factory)
+    return collect_demonstrations(cases, config, vision_factory, pool=pool)
+
+
+def _layout_routes_task(layout):
+    return layout_routes(*layout)
+
+
+def layout_routes(family_index, family, i, seed, robust, varied, enemy_wait):
+    """Teacher routes for training layout `i` of a family: canonical and variants."""
+    from .monte_carlo import sample_block_smb_monte_carlo_scenario
+
+    cases = []
+    sample = sample_block_smb_monte_carlo_scenario(
+        family=family,
+        seed=seed,
+        split="train",
+        sample_index=i,
+        difficulty=("easy", "medium", "hard")[i % 3],
+    )
+    if (sample.scenario.get("bridge_jump_task") or family == "piranha_avoidance") and (
+        robust or varied
+    ):
+        # Difficulty already cycles with i % 3. Reusing that index to
+        # select a route permanently omits a boundary in each tier.
+        # Plant variants use the same modulo-three selection, so keep
+        # the canonical route and every alternate in every tier for
+        # both families, including during later rehearsal.
+        cases.append((family_index, sample))
+        for variant in (1, 2, 3):
+            alternative = varied_demonstration(sample, variant - 1, robust=True)
+            if alternative is not None:
+                cases.append((family_index, alternative))
+        if family == "piranha_avoidance":
+            from .piranha_tactics import arrival_demonstrations
+
+            for corrected in arrival_demonstrations(sample, i):
+                cases.append((family_index, corrected))
+        return cases
+    if robust:
+        sample = varied_demonstration(sample, seed + i, robust=True) or sample
+    cases.append((family_index, sample))
+    if enemy_wait:
+        waiting = enemy_wait_demonstration(sample, seed + i + 200000)
+        if waiting is not None:
+            cases.append((family_index, waiting))
+    if varied:
+        alternative = varied_demonstration(sample, seed + i + 100000, robust=robust)
+        if alternative is not None:
+            cases.append((family_index, alternative))
+    return cases

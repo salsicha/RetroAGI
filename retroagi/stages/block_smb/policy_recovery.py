@@ -368,18 +368,21 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
         env.close()
 
 
-def collect_policy_recovery(records, config, vision_factory):
+def _repair_task(record):
+    return repair_policy_actions(record["scenario"], record["actions"], seed=record["seed"])
+
+
+def collect_policy_recovery(records, config, vision_factory, *, pool=None):
     from .demonstrations import collect_demonstrations
 
-    cases = []
     for record in records:
-        metadata = block_smb_monte_carlo_metadata(record["scenario"])
-        if metadata.get("split") != "train":
+        if block_smb_monte_carlo_metadata(record["scenario"]).get("split") != "train":
             raise ValueError("Policy recovery supervision must come from the train split")
-        family = metadata["family"]
-        for repair in repair_policy_actions(
-            record["scenario"], record["actions"], seed=record["seed"]
-        ):
+    repairs = map(_repair_task, records) if pool is None else pool.map(_repair_task, records)
+    cases = []
+    for record, record_repairs in zip(records, repairs):
+        family = block_smb_monte_carlo_metadata(record["scenario"])["family"]
+        for repair in record_repairs:
             sample = SimpleNamespace(
                 scenario=record["scenario"],
                 scenario_id=record["scenario_id"],
@@ -389,7 +392,7 @@ def collect_policy_recovery(records, config, vision_factory):
             cases.append((BLOCK_SMB_MC_FAMILIES.index(family), sample))
     if not cases:
         return None
-    return collect_demonstrations(cases, config, vision_factory)
+    return collect_demonstrations(cases, config, vision_factory, pool=pool)
 
 
 def combine_demonstrations(batches):

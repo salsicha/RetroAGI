@@ -276,7 +276,7 @@ def test_production_training_fits_and_rehearses_lstm_memory(monkeypatch, timed_d
     monkeypatch.setattr(
         demonstrations,
         "build_balanced_demonstrations",
-        lambda *args: replace(timed_demonstrations),
+        lambda *args, **kwargs: replace(timed_demonstrations),
     )
     result = train_and_evaluate_block_smb(config, vision_factory=StaticBlockVision)
     epoch = result["history"][0]

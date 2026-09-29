@@ -664,8 +664,13 @@ def sample_block_smb_monte_carlo_parameter_sweep(
     families: Optional[Iterable[str]] = None,
     validate_reachability: bool = True,
     max_rejections: int = 32,
+    executor: Any = None,
 ) -> BlockSMBMonteCarloSampleSet:
-    """Return a deterministic family x difficulty Monte Carlo sweep."""
+    """Return a deterministic family x difficulty Monte Carlo sweep.
+
+    Layouts are independent, so an ``executor`` with an order-preserving
+    ``map`` may generate them concurrently with identical results.
+    """
 
     if split not in BLOCK_SMB_MC_SPLITS:
         raise ValueError(f"split must be one of {BLOCK_SMB_MC_SPLITS}")
@@ -680,26 +685,32 @@ def sample_block_smb_monte_carlo_parameter_sweep(
         choices = ", ".join(BLOCK_SMB_MC_FAMILIES)
         raise ValueError(f"unknown Block SMB Monte Carlo family {unknown!r}; expected {choices}")
 
+    specs = [
+        (
+            distribution_id,
+            split,
+            seed,
+            family,
+            difficulty,
+            repeat,
+            validate_reachability,
+            max_rejections,
+        )
+        for family in selected_families
+        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS
+        for repeat in range(int(repeats_per_difficulty))
+    ]
+    specs = [(index, *spec) for index, spec in enumerate(specs)]
     samples: list[BlockSMBScenarioSample] = []
     rejected_counts: Counter[str] = Counter()
-    sample_index = 0
-    for family in selected_families:
-        for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
-            for repeat in range(int(repeats_per_difficulty)):
-                candidate = sample_block_smb_monte_carlo_scenario(
-                    distribution_id=distribution_id,
-                    split=split,
-                    seed=seed,
-                    sample_index=sample_index,
-                    family=family,
-                    difficulty=difficulty,
-                    validate_reachability=validate_reachability,
-                    max_rejections=max_rejections,
-                    rejection_counter=rejected_counts,
-                )
-                sample = _with_sweep_metadata(candidate, repeat=repeat)
-                samples.append(sample)
-                sample_index += 1
+    results = (
+        map(_sweep_sample, specs)
+        if executor is None
+        else executor.map(_sweep_sample, specs, chunksize=4)
+    )
+    for sample, rejected in results:
+        samples.append(sample)
+        rejected_counts.update(rejected)
     return BlockSMBMonteCarloSampleSet(
         schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
         distribution_id=distribution_id,
@@ -708,6 +719,33 @@ def sample_block_smb_monte_carlo_parameter_sweep(
         samples=tuple(samples),
         rejected_counts=dict(rejected_counts),
     )
+
+
+def _sweep_sample(spec):
+    (
+        sample_index,
+        distribution_id,
+        split,
+        seed,
+        family,
+        difficulty,
+        repeat,
+        validate_reachability,
+        max_rejections,
+    ) = spec
+    rejected: Counter[str] = Counter()
+    candidate = sample_block_smb_monte_carlo_scenario(
+        distribution_id=distribution_id,
+        split=split,
+        seed=seed,
+        sample_index=sample_index,
+        family=family,
+        difficulty=difficulty,
+        validate_reachability=validate_reachability,
+        max_rejections=max_rejections,
+        rejection_counter=rejected,
+    )
+    return _with_sweep_metadata(candidate, repeat=repeat), rejected
 
 
 def validate_block_smb_monte_carlo_oracle(

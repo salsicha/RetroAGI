@@ -243,13 +243,15 @@ def test_numbered_epochs_rehearse_actual_policy_repairs_with_bounded_retention(m
     case = sample("chained_obstacles", "easy", 333)
     data = collect_demonstrations([(11, case)], config, StaticBlockVision)
     repaired = replace(data, recovery=torch.ones_like(data.recovery))
-    monkeypatch.setattr(demonstrations, "build_balanced_demonstrations", lambda *args: data)
+    monkeypatch.setattr(
+        demonstrations, "build_balanced_demonstrations", lambda *args, **kwargs: data
+    )
 
     def update(*args, recovery_records, **kwargs):
         recovery_records.append({"from_policy": True})
         return {"episodes": 1}, None
 
-    def collect(records, *args):
+    def collect(records, *args, **kwargs):
         assert records == [{"from_policy": True}]
         return repaired
 
