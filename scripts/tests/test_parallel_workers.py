@@ -56,6 +56,34 @@ def test_pooled_demonstrations_match_in_process(pool):
         assert torch.equal(getattr(actual, field.name), getattr(expected, field.name)), field.name
 
 
+def _holds_tensor(value):
+    if torch.is_tensor(value):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_tensor(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_tensor(item) for item in value)
+    return False
+
+
+def test_worker_results_are_copied_not_shared_tensors(pool):
+    # Tensors cross processes as file descriptors; thousands of pending
+    # results exceed a systemd service's 1,024-descriptor soft limit.
+    from retroagi.stages.block_smb.demonstrations import _encode_demonstration_task
+    from retroagi.stages.block_smb.train import _monte_carlo_sample_task
+    from scripts.block_smb_family_learning import samples
+
+    config = tiny_config(evaluation_max_steps=12)
+    sample = samples("flat_run", 7, "train", 1)[0]
+    [episode] = pool.map(_encode_demonstration_task, [(0, sample, config, 32)])
+    path, version = pool.publish_policy(make_block_smb_model(config))
+    [outcome] = pool.map(
+        _monte_carlo_sample_task, [(config, path, version, sample, "validation", None)]
+    )
+    assert episode["action"] and not _holds_tensor(episode)
+    assert outcome["actions"] and not _holds_tensor(outcome)
+
+
 def test_pooled_layout_sweep_matches_sequential(pool):
     kwargs = dict(
         split="validation",

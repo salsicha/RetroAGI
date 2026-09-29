@@ -152,6 +152,7 @@ _ROW_COLUMNS = (
     "valid_durations",
     "phase",
 )
+_TENSOR_COLUMNS = ("a", "b", "c", "goal", "next_c")
 
 
 def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=32, pool=None):
@@ -171,12 +172,18 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
         )
     else:
         cpu_config = replace(config, device="cpu", log_path=None)
-        episodes = pool.map(
-            _encode_demonstration_task,
-            [
-                (family_index, sample, cpu_config, vision_batch_size)
-                for family_index, sample in cases
-            ],
+        episodes = (
+            {
+                name: torch.from_numpy(value) if name in _TENSOR_COLUMNS else value
+                for name, value in episode.items()
+            }
+            for episode in pool.map(
+                _encode_demonstration_task,
+                [
+                    (family_index, sample, cpu_config, vision_batch_size)
+                    for family_index, sample in cases
+                ],
+            )
         )
     columns = {name: [] for name in _ROW_COLUMNS}
     recovery_rows = []
@@ -208,7 +215,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     data = DemonstrationBatch(
         *(
             torch.cat(columns[name])
-            if name in ("a", "b", "c", "goal", "next_c")
+            if name in _TENSOR_COLUMNS
             else torch.tensor([value for part in columns[name] for value in part])
             for name in _ROW_COLUMNS
         )
@@ -237,9 +244,14 @@ def _encode_demonstration_task(task):
     from .parallel import worker_vision
 
     family_index, sample, config, vision_batch_size = task
-    return encode_demonstration_episode(
+    episode = encode_demonstration_episode(
         family_index, sample, config, worker_vision(), vision_batch_size
     )
+    # Tensors cross processes as shared file descriptors, and thousands of
+    # pending results exhaust a service's descriptor limit; arrays are copied.
+    return {
+        name: value.numpy() if name in _TENSOR_COLUMNS else value for name, value in episode.items()
+    }
 
 
 def encode_demonstration_episode(family_index, sample, config, vision, vision_batch_size=32):
