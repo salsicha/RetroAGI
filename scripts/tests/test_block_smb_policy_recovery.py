@@ -63,6 +63,7 @@ def test_early_bridge_departure_repairs_wait_for_the_robust_window(departure):
         assert repair["actions"][:start] == actions[:start]
         assert repair["actions"][start] == 0
         assert repair["actions"].index(2) >= departure + 10
+        assert repair["actions"].count(2) == 32  # The longest certified hold.
 
 
 def test_waiting_past_the_robust_window_is_repaired():

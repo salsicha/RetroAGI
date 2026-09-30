@@ -2754,9 +2754,17 @@ def collect_trajectory(
             temporal_records[i].get("pipe_contact", False) for i in span
         )
 
+        # A bridge departure's timing drifts between rounds; the longest
+        # certified hold lands through almost the whole window, so coach it.
+        coached_holds = (
+            [max(primitive_safe_holds)]
+            if bridge_jump_task is not None and primitive_safe_holds
+            else primitive_safe_holds
+        )
+
         def correct_hold_for(frame_target: float, halfwidth: float) -> float:
-            if primitive_safe_holds:
-                return float(min(primitive_safe_holds, key=lambda n: abs(n - held)))
+            if coached_holds:
+                return float(min(coached_holds, key=lambda n: abs(n - held)))
             if stomp_target is not None:
                 return stomp_target
             if mounted_during_span or bridge_landed or local_landed:
@@ -2838,7 +2846,7 @@ def collect_trajectory(
             span_info["primitive_frame_index"] = offset
             span_info["primitive_target_hold"] = frame_correct
             if certified_jump_family and primitive_safe_holds:
-                span_info["primitive_valid_hold_frames"] = primitive_safe_holds
+                span_info["primitive_valid_hold_frames"] = coached_holds
                 span_info["primitive_duration_scale"] = 1.0
             if (
                 pipe_traversal is not None

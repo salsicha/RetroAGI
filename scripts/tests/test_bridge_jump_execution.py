@@ -86,7 +86,9 @@ def test_demonstrations_preserve_bridge_goal_and_have_successful_alternate(bridg
     assert data.actor_mask[data.action == 0].all()
     alternative = varied_demonstration(bridge_case, 101, robust=True)
     assert alternative is not None
-    assert alternative.oracle["actions"] != bridge_case.oracle["actions"]
+    if bridge_case.family == "bridge_mount":
+        # Dismount windows never certify enough holds for a deeper departure.
+        assert alternative.oracle["actions"] != bridge_case.oracle["actions"]
 
 
 def test_batched_and_sequential_bridge_goals_and_waits_match(bridge_case):
@@ -161,7 +163,8 @@ def test_training_keeps_physical_duration_labels_through_release(bridge_case):
         assert jump_rows and any(t.action == 1 for t in jump_rows)
         for step in jump_rows:
             assert step.duration_bin_values.tolist() == list(NES_JUMP_FRAMES)
-            assert step.info["primitive_target_hold"] in step.info["primitive_valid_hold_frames"]
+            # Bridge departures are coached toward the longest certified hold.
+            assert step.info["primitive_valid_hold_frames"] == [step.info["primitive_target_hold"]]
             assert step.info["primitive_outcome_target"] == step.info["primitive_target_hold"] / 32
         waits = [t for t in trajectory.transitions if t.action == 0]
         assert all("primitive_outcome_target" not in t.info for t in waits)
@@ -208,13 +211,14 @@ def test_teacher_departs_from_the_robust_window(bridge_case, difficulty):
             env.step(actions[departure - 1])
             now, later = bridge_takeoff_window(env, certify)
             assert bridge_jump_allowed(now, later), variant
-            assert actions.count(2) in now
+            # The longest certified hold tolerates departure-timing drift.
+            assert actions.count(2) == max(now)
             for action in actions[departure:]:
                 _, _, done, truncated, _ = env.step(action)
                 if done or truncated:
                     break
             assert env._goal_credited, variant
-        assert departures[0] <= departures[1] <= departures[2]
+        assert departures[:3] == sorted(departures[:3])
     finally:
         env.close()
 
@@ -242,6 +246,14 @@ def test_hard_dismount_alternatives_do_not_require_five_safe_holds():
             assert env._goal_credited, variant
     finally:
         env.close()
+
+
+def test_bridge_demonstrations_accept_only_the_longest_hold(bridge_case):
+    data = collect_demonstrations([(0, bridge_case)], tiny_config(), StaticBlockVision)
+    jumps = data.motor_action == 2
+    assert jumps.any()
+    assert (data.valid_durations[jumps].sum(-1) == 1).all()
+    assert data.valid_durations[jumps][:, NES_JUMP_FRAMES.index(32)].all()
 
 
 def test_bridge_labels_wait_through_the_thin_opening_edge(bridge_case):

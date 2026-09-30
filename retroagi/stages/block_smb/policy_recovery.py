@@ -127,7 +127,9 @@ def _coached_suffix(
                     if env.physics_profile == NES_PHYSICS_PROFILE
                     else tuple(range(1, 17))
                 )
-                chosen = interior_hold(valid, menu)
+                # Bridge departures take the longest certified hold, which
+                # tolerates departure-timing drift across the window.
+                chosen = max(valid) if bridge else interior_hold(valid, menu)
                 if hold_variant:
                     chosen = valid[(valid.index(chosen) + hold_variant) % len(valid)]
                 remaining = chosen - 1

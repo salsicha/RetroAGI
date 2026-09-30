@@ -261,6 +261,14 @@ def main():
                     "Cached bridge jump routes predate contract-18 robust departures; "
                     f"pass --refresh-families {' '.join(sorted(stale))}"
                 )
+        if metadata.get("contract_version", 1) < 19:
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            stale = present & {"bridge_mount", "bridge_dismount"} - set(args.refresh_families)
+            if stale:
+                raise ValueError(
+                    "Cached bridge jump routes predate contract-19 longest holds; "
+                    f"pass --refresh-families {' '.join(sorted(stale))}"
+                )
         if metadata.get("contract_version", 1) < 8:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             missing = present - set(args.refresh_families)

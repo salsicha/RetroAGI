@@ -436,8 +436,10 @@ def encode_demonstration_episode(family_index, sample, config, vision, vision_ba
             valid = [False] * 16
             if jump_intent is not None and jump_valid:
                 # safe_jump_holds returns exact menu values; record their
-                # menu positions (NES values exceed 16 by design).
-                for value in jump_valid:
+                # menu positions (NES values exceed 16 by design). Bridge
+                # departures accept only the longest certified hold, as the
+                # teacher and online coaching do.
+                for value in [max(jump_valid)] if bridge_jump else jump_valid:
                     valid[duration_menu.index(value)] = True
             else:
                 valid[duration_index] = True
@@ -582,7 +584,7 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
     return data
 
 
-DEMONSTRATION_CONTRACT_VERSION = 18
+DEMONSTRATION_CONTRACT_VERSION = 19
 
 
 def without_walk_commitments(data, episode_starts=None):

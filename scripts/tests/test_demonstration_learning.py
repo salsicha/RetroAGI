@@ -469,6 +469,7 @@ def test_frame_walk_cache_migration_matches_fresh_collection(family):
         (15, "flat_run", "contract-16 landing handoff"),
         (16, "piranha_avoidance", "contract-17 plant clearance"),
         (17, "bridge_mount", "contract-18 robust departures"),
+        (18, "bridge_dismount", "contract-19 longest holds"),
     ],
 )
 def test_joint_learning_rejects_stale_cached_labels(

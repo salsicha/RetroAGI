@@ -115,17 +115,19 @@ def bridge_takeoff_actions(env, certify):
 
 
 def bridge_jump_choice(model, env, *, variant=0):
-    from retroagi.core.smb_coaching import interior_index, safe_jump_indices
+    from retroagi.core.smb_coaching import safe_jump_indices
 
     from .local_traversal import ROBUST_TAKEOFF_HOLDS
 
     valid, later = bridge_takeoff_window(env, lambda: safe_jump_indices(model, env, 2))
-    # Variants launch progressively deeper into the widening window; each
-    # still launches once the window narrows or is about to close.
-    robust = ROBUST_TAKEOFF_HOLDS + (0, 1, 2, 0)[variant % 4]
+    # Variants launch one or two holds deeper into the widening window (nine
+    # holds leave fast hard bridges 2-4 frames before the longest hold stops
+    # landing); each still launches once the window narrows or is about to
+    # close. The longest certified hold lands through almost the whole
+    # window, so it tolerates a departure that drifts a few frames early.
+    robust = ROBUST_TAKEOFF_HOLDS + (0, 1, 2, 1)[variant % 4]
     if bridge_jump_allowed(valid, later, robust):
-        index = valid[-1] if variant % 4 == 3 else interior_index(valid)
-        return 2, index, valid
+        return 2, valid[-1], valid
     if abs(env.mario["vx"]) > 1 / 16:
         return (3 if env.mario["vx"] > 0 else 1), 0, list(range(16))
     return 0, 0, [0]
