@@ -63,28 +63,67 @@ def bridge_jump_scenario(rng, difficulty, family):
     return scenario, params, bridge_jump_oracle(scenario)
 
 
+def bridge_takeoff_window(env, certify):
+    """Holds certified now and after one more waiting frame, for a waiting jump.
+
+    `certify` lists the holds certified in the current state. The probe
+    restores the full environment state.
+    """
+    from .geometry_expert import restore_env_state, snapshot_env_state
+
+    now = certify() if env.mario["on_ground"] else []
+    if not now:
+        return now, []
+    snapshot = snapshot_env_state(env)
+    original_render = env.__dict__.get("render")
+    env.render = lambda: None
+    try:
+        _, _, done, truncated, info = env.step(0)
+        waiting = env.mario["on_ground"] and not (done or truncated or info["death"])
+        later = certify() if waiting else []
+    finally:
+        restore_env_state(env, snapshot)
+        if original_render is None:
+            del env.__dict__["render"]
+        else:
+            env.render = original_render
+    return now, later
+
+
+def bridge_jump_allowed(now, later, robust=None):
+    """Whether a waiting jump should launch now.
+
+    A departure window opens with only the longest hold certified while the
+    target is still far, and widens as the bridge approaches. Launching on
+    that thin opening edge leaves a frame or two of timing margin, so wait
+    while fewer than `robust` holds are certified and the set is not
+    shrinking; launch once it is robust, starts to narrow, or is closing.
+    """
+    from .local_traversal import ROBUST_TAKEOFF_HOLDS
+
+    robust = ROBUST_TAKEOFF_HOLDS if robust is None else robust
+    return bool(now) and (not later or len(now) >= robust or len(later) < len(now))
+
+
+def bridge_takeoff_actions(env, certify):
+    """Six-slot wait/jump labels at a grounded bridge-jump decision."""
+    now, later = bridge_takeoff_window(env, certify)
+    labels = [False] * 6
+    labels[0] = not (now and not later)
+    labels[2] = bridge_jump_allowed(now, later)
+    return labels
+
+
 def bridge_jump_choice(model, env, *, variant=0):
     from retroagi.core.smb_coaching import interior_index, safe_jump_indices
 
-    valid = safe_jump_indices(model, env, 2)
-    # Cover the onset of the takeoff window as well as its interior. A policy
-    # can depart a few frames before the middle-window teacher; those states
-    # often require the longest hold and must have jump-duration examples.
-    required_holds = (3, 1, 1, 3)[variant % 4]
-    ready = len(valid) >= required_holds
-    if variant % 4 == 2 and len(valid) == 1:
-        from .geometry_expert import restore_env_state, snapshot_env_state
+    from .local_traversal import ROBUST_TAKEOFF_HOLDS
 
-        # Teach the end as well as the start of the longest-hold-only interval.
-        # Interpolating between its onset and the next (shorter-hold) window
-        # otherwise encourages the duration head to shorten the jump too soon.
-        snapshot = snapshot_env_state(env)
-        try:
-            env.step(0)
-            ready = len(safe_jump_indices(model, env, 2)) != 1
-        finally:
-            restore_env_state(env, snapshot)
-    if ready:
+    valid, later = bridge_takeoff_window(env, lambda: safe_jump_indices(model, env, 2))
+    # Variants launch progressively deeper into the widening window; each
+    # still launches once the window narrows or is about to close.
+    robust = ROBUST_TAKEOFF_HOLDS + (0, 1, 2, 0)[variant % 4]
+    if bridge_jump_allowed(valid, later, robust):
         index = valid[-1] if variant % 4 == 3 else interior_index(valid)
         return 2, index, valid
     if abs(env.mario["vx"]) > 1 / 16:

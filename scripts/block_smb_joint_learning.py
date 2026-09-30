@@ -253,6 +253,14 @@ def main():
                     "Cached piranha routes predate contract-17 plant clearance targets; "
                     "pass --refresh-families piranha_avoidance"
                 )
+        if metadata.get("contract_version", 1) < 18:
+            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
+            stale = present & {"bridge_mount", "bridge_dismount"} - set(args.refresh_families)
+            if stale:
+                raise ValueError(
+                    "Cached bridge jump routes predate contract-18 robust departures; "
+                    f"pass --refresh-families {' '.join(sorted(stale))}"
+                )
         if metadata.get("contract_version", 1) < 8:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
             missing = present - set(args.refresh_families)

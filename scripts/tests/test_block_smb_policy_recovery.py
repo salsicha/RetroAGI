@@ -48,17 +48,31 @@ def assert_completed(scenario, repairs):
         ]
 
 
-def test_early_bridge_departure_gets_successful_opening_and_closing_continuations():
+@pytest.mark.parametrize("departure", [37, 38])
+def test_early_bridge_departure_repairs_wait_for_the_robust_window(departure):
+    # Frame 37 is physically impossible; frame 38 is the thin opening edge,
+    # where only the longest hold lands. Both repairs wait, then depart.
     case = sample("bridge_mount", "easy", 666)
-    actions = [0] * 37 + [2] * 32 + [1] * 100
+    actions = [0] * departure + [2] * 32 + [1] * 100
     repairs = repair_policy_actions(case.scenario, actions)
     assert_completed(case.scenario, repairs)
-    assert {r["closing_window"] for r in repairs} == {False, True}
-    assert all(r["supervision_start_frame"] == 37 for r in repairs)
+    assert all(r["supervision_start_frame"] == departure for r in repairs)
+    assert all(r["recovery_reason"] == "takeoff" for r in repairs)
     for repair in repairs:
         start = repair["supervision_start_frame"]
         assert repair["actions"][:start] == actions[:start]
-        assert repair["actions"][start] == 0  # Jumping here is physically impossible.
+        assert repair["actions"][start] == 0
+        assert repair["actions"].index(2) >= departure + 10
+
+
+def test_waiting_past_the_robust_window_is_repaired():
+    case = sample("bridge_mount", "easy", 666)
+    actions = [0] * 240
+    repairs = repair_policy_actions(case.scenario, actions)
+    assert_completed(case.scenario, repairs)
+    first = repairs[0]
+    assert first["recovery_reason"] == "departure_window"
+    assert first["actions"][first["supervision_start_frame"]] == 2
 
 
 def test_post_stomp_pipe_stall_is_repaired_and_only_suffix_is_supervised():

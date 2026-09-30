@@ -3102,7 +3102,7 @@ def collect_trajectory(
             compatible_actions(stage.env, tactic_target if tactic_decision else -1)
         )
         if (
-            takeoff_timing_coaching
+            (takeoff_timing_coaching or bridge_jump_task is not None)
             and forced_action is None
             and not deterministic
             and tactic_decision
@@ -3110,8 +3110,19 @@ def collect_trajectory(
         ):
             # A stance of "advance" admits both running and jumping. Narrow it
             # to where the jump should launch from: never before the certified
-            # window (the spawn hop), and no later than its last frame.
-            timing = takeoff_timing_actions(stage.env, plant_history=stage._hazard_features)
+            # window (the spawn hop), and no later than its last frame. Bridge
+            # jumps wait instead of running, and launch from the robust window.
+            if bridge_jump_task is not None:
+                from retroagi.core.smb_coaching import training_target
+
+                from .bridge_curriculum import bridge_takeoff_actions
+
+                timing = bridge_takeoff_actions(
+                    stage.env,
+                    lambda: safe_jump_holds(stage.env, training_target(stage.env), 1),
+                )
+            else:
+                timing = takeoff_timing_actions(stage.env, plant_history=stage._hazard_features)
             if timing is not None:
                 refined = tuple(a and b for a, b in zip(tactic_actions, timing))
                 if any(refined):

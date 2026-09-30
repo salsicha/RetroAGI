@@ -42,9 +42,7 @@ def interior_hold(valid, menu=tuple(range(1, 17))):
     return run[len(run) // 2]
 
 
-def coached_suffix(
-    env, *, closing_window=False, max_frames=320, release_state=None, observation_history=None
-):
+def coached_suffix(env, *, max_frames=320, release_state=None, observation_history=None):
     from .piranha import conservative_suffix, has_plants
     from .piranha_tactics import timed_plant, timed_suffix
 
@@ -57,15 +55,12 @@ def coached_suffix(
         )
     if has_plants(env):
         return conservative_suffix(env, max_frames=max_frames, release_state=release_state)
-    return _coached_suffix(
-        env, closing_window=closing_window, max_frames=max_frames, release_state=release_state
-    )
+    return _coached_suffix(env, max_frames=max_frames, release_state=release_state)
 
 
 def _coached_suffix(
     env,
     *,
-    closing_window=False,
     max_frames=320,
     release_state=None,
     hold_variant=0,
@@ -115,16 +110,15 @@ def _coached_suffix(
                 timing = takeoff_timing_actions(env)
                 if timing is not None and not timing[2 if direction > 0 else 4]:
                     valid = []
-            if bridge and valid and closing_window:
-                saved = snapshot_env_state(env)
-                try:
-                    env.step(0)
-                    # The last feasible departure also teaches a boundary
-                    # that the usual first-safe or interior routes omit.
-                    if safe_jump_holds(env, training_target(env), direction):
-                        valid = []
-                finally:
-                    restore_env_state(env, saved)
+            if bridge and valid:
+                from .bridge_curriculum import bridge_jump_allowed, bridge_takeoff_window
+
+                # Depart from the robust window the online labels teach.
+                now, later = bridge_takeoff_window(
+                    env, lambda: safe_jump_holds(env, training_target(env), direction)
+                )
+                if not bridge_jump_allowed(now, later):
+                    valid = []
             if valid:
                 from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
 
@@ -170,6 +164,15 @@ def _coached_suffix(
         )
     finally:
         restore_env_state(env, final)
+
+
+def _bridge_departure_allowed(env, target):
+    from .bridge_curriculum import bridge_jump_allowed, bridge_takeoff_window
+
+    now, later = bridge_takeoff_window(
+        env, lambda: safe_jump_holds(env, training_target(env), target.direction)
+    )
+    return bridge_jump_allowed(now, later)
 
 
 def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
@@ -254,11 +257,12 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                         if future != action:
                             break
                         held += 1
-                    if held not in valid:
+                    if bridge and valid and not _bridge_departure_allowed(env, target):
+                        reason = "takeoff"
+                    elif held not in valid:
                         reason = "takeoff" if not valid else "duration"
                 elif bridge and action == 0:
-                    valid = safe_jump_holds(env, target, 1)
-                    if valid:
+                    if _bridge_departure_allowed(env, target):
                         reason = "departure_window"
                 elif relevant and (stalled >= 3 or just_landed):
                     reason = "stall" if stalled >= 3 else "landing_recovery"
@@ -293,15 +297,10 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                     )
                 if reason and key not in captured:
                     saved = snapshot_env_state(env)
-                    # A bridge disagreement supplies both the next feasible
-                    # departure and the closing boundary of its safe window.
-                    for closing in (False, True) if bridge else (False,):
-                        if not prioritize_late and len(repairs) >= max_repairs:
-                            break
+                    if prioritize_late or len(repairs) < max_repairs:
                         restore_env_state(env, saved)
                         suffix = coached_suffix(
                             env,
-                            closing_window=closing,
                             release_state=release,
                             observation_history=history,
                         )
@@ -312,7 +311,6 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                                     supervision_start_frame=frame,
                                     recovery=True,
                                     recovery_reason=reason,
-                                    closing_window=closing,
                                 )
                             )
                             if prioritize_late:

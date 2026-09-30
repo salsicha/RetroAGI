@@ -137,9 +137,14 @@ def tactic_label(env, history=None, action=None, *, family, phase=None):
     if family in ("bridge_mount", "bridge_dismount"):
         if env._goal_credited:
             return -1
-        # A geometrically reachable departure is an advance; otherwise hold
-        # only when the current moving support remains safe while waiting.
-        if safe_jump_holds(env, target, direction):
+        # Depart from the robust interior of the window, not its thin opening
+        # edge; otherwise hold while the current moving support stays safe.
+        from .bridge_curriculum import bridge_jump_allowed, bridge_takeoff_window
+
+        now, later = bridge_takeoff_window(
+            env, lambda: safe_jump_holds(env, training_target(env), direction)
+        )
+        if bridge_jump_allowed(now, later):
             return TACTIC_STANCES.index(action_stance(env, forward))
         return TACTIC_STANCES.index("hold_area") if safe_ground_motion(env, 0) else -1
 

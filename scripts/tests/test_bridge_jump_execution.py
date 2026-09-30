@@ -170,9 +170,15 @@ def test_training_keeps_physical_duration_labels_through_release(bridge_case):
 
 
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
-def test_alternate_teaches_the_long_hold_at_window_onset(bridge_case, difficulty):
+def test_teacher_departs_from_the_robust_window(bridge_case, difficulty):
+    # The window opens with only the longest hold certified; departing on
+    # that thin edge left a frame or two of timing margin.
     from retroagi.core.smb_coaching import training_target
-    from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_oracle
+    from retroagi.stages.block_smb.bridge_curriculum import (
+        bridge_jump_allowed,
+        bridge_jump_oracle,
+        bridge_takeoff_window,
+    )
     from retroagi.stages.block_smb.local_traversal import safe_jump_holds
 
     case = sample_block_smb_monte_carlo_scenario(
@@ -183,21 +189,32 @@ def test_alternate_teaches_the_long_hold_at_window_onset(bridge_case, difficulty
         difficulty=difficulty,
         validate_reachability=False,
     )
-    actions = bridge_jump_oracle(case.scenario, variant=1)
-    departure = actions.index(2)
-    assert departure < list(case.oracle["actions"]).index(2)
-    assert actions.count(2) == 32
     env = MarioScenarioEnv()
+
+    def certify():
+        return safe_jump_holds(env, training_target(env), 1)
+
     try:
-        env.reset(scenario=case.scenario)
-        for action in actions[:departure]:
-            env.step(action)
-        assert safe_jump_holds(env, training_target(env), 1) == [32]
-        for action in actions[departure:]:
-            _, _, done, truncated, _ = env.step(action)
-            if done or truncated:
-                break
-        assert env._goal_credited
+        departures = []
+        for variant in range(4):
+            actions = bridge_jump_oracle(case.scenario, variant=variant)
+            departure = actions.index(2)
+            departures.append(departure)
+            env.reset(scenario=case.scenario)
+            for action in actions[: departure - 1]:
+                env.step(action)
+            if variant == 0:
+                assert not bridge_jump_allowed(*bridge_takeoff_window(env, certify))
+            env.step(actions[departure - 1])
+            now, later = bridge_takeoff_window(env, certify)
+            assert bridge_jump_allowed(now, later), variant
+            assert actions.count(2) in now
+            for action in actions[departure:]:
+                _, _, done, truncated, _ = env.step(action)
+                if done or truncated:
+                    break
+            assert env._goal_credited, variant
+        assert departures[0] <= departures[1] <= departures[2]
     finally:
         env.close()
 
@@ -227,28 +244,36 @@ def test_hard_dismount_alternatives_do_not_require_five_safe_holds():
         env.close()
 
 
-def test_alternate_covers_end_of_longest_hold_only_interval(bridge_case):
+def test_bridge_labels_wait_through_the_thin_opening_edge(bridge_case):
     from retroagi.core.smb_coaching import training_target
-    from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_oracle
-    from retroagi.stages.block_smb.local_traversal import safe_jump_holds
+    from retroagi.stages.block_smb.bridge_curriculum import bridge_takeoff_actions
+    from retroagi.stages.block_smb.local_traversal import ROBUST_TAKEOFF_HOLDS, safe_jump_holds
+    from retroagi.stages.block_smb.tactics import TACTIC_STANCES, tactic_label
 
-    onset = bridge_jump_oracle(bridge_case.scenario, variant=1)
-    boundary = bridge_jump_oracle(bridge_case.scenario, variant=2)
-    assert boundary.index(2) >= onset.index(2)
     env = MarioScenarioEnv()
+
+    def certify():
+        return safe_jump_holds(env, training_target(env), 1)
+
     try:
         env.reset(scenario=bridge_case.scenario)
-        for action in boundary[: boundary.index(2)]:
-            env.step(action)
-        assert safe_jump_holds(env, training_target(env), 1) == [32]
-        env.step(0)
-        assert len(safe_jump_holds(env, training_target(env), 1)) > 1
-        env.reset(scenario=bridge_case.scenario)
-        for action in boundary:
-            _, _, done, truncated, _ = env.step(action)
-            if done or truncated:
+        edge = robust = None
+        for frame in range(240):
+            holds = certify()
+            labels = bridge_takeoff_actions(env, certify)
+            stance = TACTIC_STANCES[tactic_label(env, family=bridge_case.family)]
+            if holds and edge is None:
+                edge = frame
+                # First certified frame: wait, the window is still widening.
+                assert len(holds) < ROBUST_TAKEOFF_HOLDS
+                assert labels == [True, False, False, False, False, False]
+                assert stance == "hold_area"
+            if labels[2]:
+                robust = frame
+                assert stance == "advance"
                 break
-        assert env._goal_credited
+            env.step(0)
+        assert edge is not None and robust is not None and robust > edge
     finally:
         env.close()
 
