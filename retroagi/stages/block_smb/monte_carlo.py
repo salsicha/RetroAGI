@@ -1042,6 +1042,17 @@ def _finish_layout(family, scenario, params):
         scenario["task_direction"] = -1
 
 
+def _as_played(family, scenario):
+    """A copy of an authored layout as the sampler will play it (after _finish_layout).
+
+    Generators that search for their own scripted route must search this
+    copy: the finished layout moves Mario's spawn and can change the task.
+    """
+    played = copy.deepcopy(scenario)
+    _finish_layout(family, played, {})
+    return played
+
+
 def _verified_route(family, scenario, authored_actions):
     """The first route that completes the layout: (actions, source, reachability).
 
@@ -1877,12 +1888,15 @@ def _stomp_mount(
     }
     # Reachability remains an exact-physics check. Direction/phase variation
     # invalidates the old single time-indexed hold per tier. Pick a reachable
-    # scripted demonstration; ordinary policy rollouts never execute it.
+    # scripted demonstration; ordinary policy rollouts never execute it. Only
+    # holds the jump executor can play (the NES jump menu) are tried, on the
+    # layout as the sampler will play it.
+    played = _as_played("stomp_mount", scenario)
     preferred = {"easy": 8, "medium": 10, "hard": 12}[difficulty]
     oracle_hold = preferred
-    for hold in sorted(range(1, 17), key=lambda h: (abs(h - preferred), h)):
+    for hold in sorted(NES_JUMP_FRAMES, key=lambda h: (abs(h - preferred), h)):
         actions = _pad([2] * hold + [1] * 60)
-        if validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=60)["reachable"]:
+        if validate_block_smb_monte_carlo_oracle(played, actions, max_steps=60)["reachable"]:
             oracle_hold = hold
             break
     actions = _pad([2] * oracle_hold + [1] * 60)
@@ -1948,15 +1962,16 @@ def _stomp_recovery(
     }
     # Scripted demonstration in exact physics: approach toward the monster,
     # one interception jump. Only a credited stomp validates as reachable.
+    # Only holds the jump executor can play (the NES jump menu) are tried, on
+    # the layout as the sampler will play it.
     approach = 1 if side > 0 else 3
     leap = 2 if side > 0 else 4
+    played = _as_played("stomp_recovery", scenario)
     oracle_walk, oracle_hold, found = 6, 8, False
     for walk in sorted(range(0, 25), key=lambda n: (abs(n - 6), n)):
-        for hold in sorted(range(1, 17), key=lambda h: (abs(h - 8), h)):
+        for hold in sorted(NES_JUMP_FRAMES, key=lambda h: (abs(h - 8), h)):
             candidate = _pad([approach] * walk + [leap] * hold + [approach])
-            if validate_block_smb_monte_carlo_oracle(scenario, candidate, max_steps=120)[
-                "reachable"
-            ]:
+            if validate_block_smb_monte_carlo_oracle(played, candidate, max_steps=120)["reachable"]:
                 oracle_walk, oracle_hold, found = walk, hold, True
                 break
         if found:
@@ -2010,14 +2025,10 @@ def _platform_hop(
         "goal_requires_support": True,
         "single_jump_attempt": True,
     }
+    # A placeholder route: the sampler (_verified_route) always replaces it
+    # with the middle reachable immediate jump on the NES jump menu, played
+    # on the finished layout's running takeoff.
     oracle_hold = {"easy": 10, "medium": 12, "hard": 14}[difficulty]
-    # Credit the landing itself. The old script could touch the goal while
-    # airborne and terminate before missing the platform altogether.
-    for hold in sorted(range(1, 17), key=lambda h: (abs(h - oracle_hold), h)):
-        actions = _pad([2] * hold + [1] * 80)
-        if validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=80)["reachable"]:
-            oracle_hold = hold
-            break
     actions = _pad([2] * oracle_hold + [1] * 80)
     return (
         scenario,

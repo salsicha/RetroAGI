@@ -16,7 +16,10 @@ from retroagi.stages.block_smb.monte_carlo import (
     sample_block_smb_monte_carlo_split,
     validate_block_smb_monte_carlo_oracle,
 )
-from retroagi.stages.block_smb.pipe_traversal import training_rollout_steps
+from retroagi.stages.block_smb.pipe_traversal import (
+    ENEMY_STOMP_MIN_TRAINING_STEPS,
+    training_rollout_steps,
+)
 from retroagi.stages.block_smb.skills import achieved_block_smb_skill_goals
 from retroagi.stages.block_smb.stomp import stomp_coaching_target
 from retroagi.stages.block_smb.train import (
@@ -127,14 +130,19 @@ def test_persistent_jump_request_cannot_start_a_primitive_during_stomp_bounce():
 
 
 def test_leftward_recovery_coaching_uses_the_direction_of_the_interception():
-    assert stomp_coaching_target([geometry(x=140)], 8, direction=-1) == (9.0, "undershoot")
-    assert stomp_coaching_target([geometry(x=90)], 8, direction=-1) == (7.0, "overshoot")
+    assert stomp_coaching_target([geometry(x=140)], 8, direction=-1) == (10.0, "undershoot")
+    assert stomp_coaching_target([geometry(x=90)], 8, direction=-1) == (6.0, "overshoot")
 
 
 def test_training_budget_includes_old_replay_scenarios_but_evaluation_honors_its_limit():
     sample = legacy_sample()
-    assert training_rollout_steps(60, sample.scenario) == 160
-    assert training_rollout_steps(200, sample.scenario) == 200
+    # At least 240 frames, and half again the oracle's NES completion time.
+    completion = sample.oracle["expected_completion_steps"]
+    expected = max(ENEMY_STOMP_MIN_TRAINING_STEPS, int(completion * 1.5))
+    assert training_rollout_steps(60, sample.scenario) == expected > completion
+    assert training_rollout_steps(400, sample.scenario) == 400
+    # Old replay scenarios without generator metadata still get the floor.
+    assert training_rollout_steps(60, {"require_stomp_before_goal": True}) == 240
     trajectory = rollout(sample, PhaseIntentPolicy(), steps=60)
     assert len(trajectory.transitions) == 60 and not trajectory.success
     assert trajectory.transitions[-1].info["stomp_completed"]
@@ -232,7 +240,8 @@ def test_real_optimizer_can_train_a_complete_composite_oracle():
         vision_factory=StaticBlockVision,
     )
     assert metrics["train_total_actions"] > 60
-    assert metrics["training_rollout_steps_max"] == 160
+    completion = sample.oracle["expected_completion_steps"]
+    assert metrics["training_rollout_steps_max"] == max(240, int(completion * 1.5))
     assert metrics["loss_primitive_outcome"] > 0
     assert all(torch.isfinite(p).all() for p in model.parameters())
 

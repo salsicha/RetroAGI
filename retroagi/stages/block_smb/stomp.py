@@ -4,6 +4,8 @@ from typing import Any, Mapping, Sequence
 
 import pygame
 
+from retroagi.core.smb_physics import NES_JUMP_FRAMES
+
 
 def stomp_collision_geometry(mario: pygame.Rect, enemy: pygame.Rect, vy: float) -> dict[str, Any]:
     """Use the same integer rectangles and approach test as the physics engine."""
@@ -12,7 +14,9 @@ def stomp_collision_geometry(mario: pygame.Rect, enemy: pygame.Rect, vy: float) 
     gap = (
         float(mario.left - enemy.right)
         if mario.left >= enemy.right
-        else float(mario.right - enemy.left) if mario.right <= enemy.left else 0.0
+        else float(mario.right - enemy.left)
+        if mario.right <= enemy.left
+        else 0.0
     )
     return {
         "mario_rect": list(mario),
@@ -34,8 +38,11 @@ def stomp_coaching_target(
 
     Re-evaluate recorded collision geometry so a credited goal alone cannot
     anchor a physically invalid contact. A real stomp anchors the hold even
-    when the centers are outside the narrower goal proxy. Misses take a
-    one-bin step toward contact; unfinished arcs receive no invented target.
+    when the centers are outside the narrower goal proxy. Holds are frame
+    counts on the NES jump menu (NES_JUMP_FRAMES): a stomp keeps the hold that
+    was played, and a miss moves one step along the menu toward contact
+    (longer after an undershoot, shorter after an overshoot), never past
+    either end of it. Unfinished arcs receive no invented target.
     """
     geometry = [
         stomp_collision_geometry(
@@ -43,8 +50,9 @@ def stomp_coaching_target(
         )
         for r in records
     ]
+    shortest, longest = NES_JUMP_FRAMES[0], NES_JUMP_FRAMES[-1]
     if any(g["stomp"] for g in geometry):
-        return float(min(16, max(1, held))), "success"
+        return float(min(longest, max(shortest, held))), "success"
     candidates = [g for g in geometry if g["contact_window"]]
     if not candidates:
         return None, "no_contact"
@@ -53,8 +61,11 @@ def stomp_coaching_target(
     overshoot = closest["mario_rect"][0] >= closest["enemy_rect"][0] + closest["enemy_rect"][2]
     if direction < 0:
         overshoot = not overshoot
-    correction = -1 if overshoot else 1
-    return float(min(16, max(1, held + correction))), "overshoot" if overshoot else "undershoot"
+    if overshoot:
+        shorter = [n for n in NES_JUMP_FRAMES if n < held]
+        return float(shorter[-1] if shorter else shortest), "overshoot"
+    longer = [n for n in NES_JUMP_FRAMES if n > held]
+    return float(longer[0] if longer else longest), "undershoot"
 
 
 def stomp_completion_metrics(episodes: int, stomps: int, finishes: int) -> dict[str, Any]:

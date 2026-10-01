@@ -8,7 +8,8 @@ from .monte_carlo import block_smb_monte_carlo_metadata
 from .tasks import scenario_family
 
 TALL_PIPE_MIN_TRAINING_STEPS = 160
-ENEMY_STOMP_MIN_TRAINING_STEPS = 160
+# NES enemy_stomp oracles finish in 137-173 frames; 160 cut many short.
+ENEMY_STOMP_MIN_TRAINING_STEPS = 240
 
 
 def is_tall_pipe_scenario(scenario: Mapping[str, Any] | None) -> bool:
@@ -23,15 +24,19 @@ def training_rollout_steps(requested: int, scenario: Mapping[str, Any] | None) -
 
     The tall-pipe oracle needs 82–86 frames. A 60-frame training episode
     cannot reach the finish at any speed. Apply the floor to old replay
-    scenarios too, without depending on newly generated metadata. Composite
-    enemy stomps also need time for the approach, bounce, and finish.
+    scenarios too, without depending on newly generated metadata. Enemy
+    stomps need time for the approach, bounce, and finish: like the bridge
+    families, they get at least 240 frames and half again the oracle's
+    completion time, so a policy slower than the oracle can still finish.
     """
     if scenario is not None and scenario_family(scenario) == "tall_pipe_jump":
         return max(requested, TALL_PIPE_MIN_TRAINING_STEPS)
     if scenario is not None and (
         scenario.get("require_stomp_before_goal") or scenario_family(scenario) == "enemy_stomp"
     ):
-        return max(requested, ENEMY_STOMP_MIN_TRAINING_STEPS)
+        metadata = block_smb_monte_carlo_metadata(scenario)
+        completion = (metadata.get("oracle") or {}).get("expected_completion_steps") or 0
+        return max(requested, ENEMY_STOMP_MIN_TRAINING_STEPS, int(completion * 1.5))
     if scenario is not None and (
         scenario.get("require_bridge_before_goal")
         or scenario_family(scenario) in ("bridge_wait", "wait_timing", "moving_bridge")

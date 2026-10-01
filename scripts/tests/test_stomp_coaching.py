@@ -73,8 +73,9 @@ def test_coach_compares_bodies_at_contact_time_and_not_old_target_positions():
     assert stomp_coaching_target([earlier, geometry()], 16) == (16.0, "success")
     short = geometry(x=90, enemy_x=110)
     later = geometry(x=145, y=204, vy=0, enemy_x=114)
-    assert stomp_coaching_target([short, later], 6) == (7.0, "undershoot")
-    assert stomp_coaching_target([geometry(x=140)], 16) == (15.0, "overshoot")
+    # A miss moves one step along the NES jump menu: 6 -> 8 frames, 16 -> 14.
+    assert stomp_coaching_target([short, later], 6) == (8.0, "undershoot")
+    assert stomp_coaching_target([geometry(x=140)], 16) == (14.0, "overshoot")
     assert stomp_coaching_target([earlier], 8) == (None, "no_contact")
 
 
