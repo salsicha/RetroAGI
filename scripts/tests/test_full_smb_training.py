@@ -65,7 +65,6 @@ def tiny_ram_stage(vision):
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=(16, 20),
         ),
     )
 
@@ -77,7 +76,6 @@ def tiny_stage(vision):
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=(16, 20),
         ),
     )
 
@@ -292,7 +290,6 @@ class TestFullSMBTraining(unittest.TestCase):
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
                     frame_stack=2,
-                    resize_shape=(16, 20),
                 ),
             )
 
@@ -424,7 +421,6 @@ class TestFullSMBTraining(unittest.TestCase):
                         observation_config=FullSMBObservationConfig(
                             frame_skip=1,
                             frame_stack=2,
-                            resize_shape=(16, 20),
                         ),
                     ),
                 )
@@ -498,7 +494,6 @@ class TestFullSMBTraining(unittest.TestCase):
                         observation_config=FullSMBObservationConfig(
                             frame_skip=1,
                             frame_stack=2,
-                            resize_shape=(16, 20),
                         ),
                     ),
                 )
@@ -625,7 +620,6 @@ class TestFullSMBTraining(unittest.TestCase):
                         observation_config=FullSMBObservationConfig(
                             frame_skip=1,
                             frame_stack=2,
-                            resize_shape=(16, 20),
                         ),
                     ),
                 )
@@ -874,7 +868,6 @@ class TestFullSMBTraining(unittest.TestCase):
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
                     frame_stack=2,
-                    resize_shape=(16, 20),
                 ),
             )
 
@@ -942,7 +935,6 @@ class TestFullSMBTraining(unittest.TestCase):
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
                     frame_stack=2,
-                    resize_shape=(16, 20),
                 ),
             )
 
@@ -1585,7 +1577,8 @@ class TestFullSMBTraining(unittest.TestCase):
             artifact_path = Path(artifact["path"])
             self.assertTrue(artifact_path.exists())
             data = np.load(artifact_path)
-            self.assertEqual(data["frames"].shape, (3, 16, 20, 3))
+            # Recordings keep the full 256x240 screen.
+            self.assertEqual(data["frames"].shape, (3, 240, 256, 3))
             self.assertEqual(data["actions"].shape, (2,))
             self.assertEqual(data["action_names"].shape, (2,))
             self.assertEqual(data["rewards"].shape, (2,))
@@ -1650,7 +1643,8 @@ class TestFullSMBTraining(unittest.TestCase):
             artifact_path = Path(result.recording["artifacts"][0]["path"])
             self.assertTrue(artifact_path.exists())
             data = np.load(artifact_path)
-            self.assertEqual(data["frames"].shape, (4, 16, 20, 3))
+            # Recordings keep the full 256x240 screen.
+            self.assertEqual(data["frames"].shape, (4, 240, 256, 3))
             self.assertEqual(data["actions"].shape, (3,))
             self.assertEqual(data["action_names"].shape, (3,))
 
@@ -1727,7 +1721,6 @@ class TestFullSMBTraining(unittest.TestCase):
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
                     frame_stack=2,
-                    resize_shape=(16, 20),
                 ),
             )
 

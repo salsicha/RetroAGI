@@ -7,7 +7,6 @@ from typing import Any, Mapping, Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from retroagi.core import (
     SMB_GAME_SPEC,
@@ -24,7 +23,7 @@ from retroagi.core import (
     coerce_smb_action,
     full_smb_action,
 )
-from retroagi.stages.full_smb.vision import FullSMBSegmentationVision
+from retroagi.stages.full_smb.vision import load_full_vit_checkpoint
 
 FULL_SMB_GAME = "SuperMarioBros-Nes"
 
@@ -247,19 +246,18 @@ class FullSMBSignalConfig:
 
 
 FULL_SMB_COLOR_MODES = ("rgb", "grayscale")
-FULL_SMB_HUD_POLICIES = ("preserve", "crop")
 
 
 @dataclass(frozen=True)
 class FullSMBObservationConfig:
-    """Preprocessing contract for Full SMB policy observations."""
+    """Preprocessing contract for Full SMB policy observations.
+
+    Frames are always the full 256x240 NES screen, the size Block SMB draws;
+    nothing is cropped or stretched.
+    """
 
     frame_skip: int = 1
     frame_stack: int = 4
-    resize_shape: Optional[tuple[int, int]] = (224, 256)
-    crop_margins: tuple[int, int, int, int] = (0, 0, 0, 0)
-    hud_policy: str = "preserve"
-    hud_crop_top: int = 24
     color_mode: str = "rgb"
     normalization_mean: tuple[float, float, float] = (0.0, 0.0, 0.0)
     normalization_std: tuple[float, float, float] = (1.0, 1.0, 1.0)
@@ -271,20 +269,6 @@ class FullSMBObservationConfig:
             raise ValueError("frame_skip must be positive")
         if self.frame_stack <= 0:
             raise ValueError("frame_stack must be positive")
-        if self.resize_shape is not None:
-            if len(self.resize_shape) != 2:
-                raise ValueError("resize_shape must contain (height, width)")
-            height, width = self.resize_shape
-            if height <= 0 or width <= 0:
-                raise ValueError("resize_shape dimensions must be positive")
-        if len(self.crop_margins) != 4:
-            raise ValueError("crop_margins must contain (top, right, bottom, left)")
-        if any(int(value) < 0 for value in self.crop_margins):
-            raise ValueError("crop_margins values must be non-negative")
-        if self.hud_policy not in FULL_SMB_HUD_POLICIES:
-            raise ValueError(f"hud_policy must be one of {', '.join(FULL_SMB_HUD_POLICIES)}")
-        if self.hud_crop_top < 0:
-            raise ValueError("hud_crop_top must be non-negative")
         if self.color_mode not in FULL_SMB_COLOR_MODES:
             raise ValueError(f"color_mode must be one of {', '.join(FULL_SMB_COLOR_MODES)}")
         if len(self.normalization_mean) != 3 or len(self.normalization_std) != 3:
@@ -294,21 +278,10 @@ class FullSMBObservationConfig:
         if not isinstance(self.hold_run_button, bool):
             raise TypeError("hold_run_button must be a bool")
 
-    def effective_crop_margins(self) -> tuple[int, int, int, int]:
-        top, right, bottom, left = (int(value) for value in self.crop_margins)
-        if self.hud_policy == "crop":
-            top += int(self.hud_crop_top)
-        return top, right, bottom, left
-
     def to_manifest(self) -> dict[str, Any]:
         return {
             "frame_skip": self.frame_skip,
             "frame_stack": self.frame_stack,
-            "resize_shape": self.resize_shape,
-            "crop_margins": self.crop_margins,
-            "effective_crop_margins": self.effective_crop_margins(),
-            "hud_policy": self.hud_policy,
-            "hud_crop_top": self.hud_crop_top,
             "color_mode": self.color_mode,
             "normalization_mean": self.normalization_mean,
             "normalization_std": self.normalization_std,
@@ -575,7 +548,9 @@ class FullSMBStage:
             self.env,
             context="Full SMB backend",
         )
-        self.vision = vision or FullSMBSegmentationVision()
+        # Without an explicit model, the trained Full SMB vision transformer,
+        # frozen, on the CPU.
+        self.vision = vision if vision is not None else load_full_vit_checkpoint().model
         if isinstance(self.vision, torch.nn.Module):
             self.vision.eval()
         self.vision_projector = VisionHierarchyProjector(self.spec)
@@ -766,12 +741,7 @@ class FullSMBStage:
             parameter.requires_grad for parameter in self.vision.parameters()
         )
         with torch.set_grad_enabled(torch.is_grad_enabled() and vision_allows_grad):
-            if getattr(self.vision, "physical_frames", False):
-                from retroagi.core.smb_scene import canonical_rgb
-
-                vision = self.vision.encode(canonical_rgb(observation))
-            else:
-                vision = self.vision.encode(processed_observation)
+            vision = self.vision.encode(observation)
         metadata = {
             "raw_observation_shape": observation.shape,
             "observation": self._observation_metadata(vision.position.device, info),
@@ -793,7 +763,7 @@ class FullSMBStage:
             )
         from retroagi.core.smb_scene import canonical_vision, observed_features
 
-        vision = canonical_vision(vision, "full")
+        vision = canonical_vision(vision)
         geometry = self.geometry()
         return self.vision_projector.project(
             vision,
@@ -858,10 +828,20 @@ class FullSMBStage:
 
     @staticmethod
     def _rgb_observation(observation: Any) -> np.ndarray:
+        """The full 256x240 NES screen as uint8 RGB.
+
+        The emulator trims 8 pixels from every edge; padding restores the
+        screen without stretching, so Full SMB frames match Block SMB frames
+        and every pixel sits at its true screen position. Tile rows always
+        fall on 16-pixel boundaries; tile columns do only when the scroll is a
+        multiple of 16.
+        """
+        from retroagi.core.smb_scene import canonical_rgb
+
         array = np.asarray(observation)
         if array.ndim != 3 or array.shape[-1] not in (3, 4):
             raise ValueError(
-                "Full SMB observations must have shape [H, W, C] with RGB or " "RGBA channels"
+                "Full SMB observations must have shape [H, W, C] with RGB or RGBA channels"
             )
         array = array[..., :3]
         if array.dtype != np.uint8:
@@ -870,7 +850,7 @@ class FullSMBStage:
                 array = array * 255.0
             array = np.nan_to_num(array, nan=0.0, posinf=255.0, neginf=0.0)
             array = np.clip(array, 0.0, 255.0).round().astype(np.uint8)
-        return np.ascontiguousarray(array)
+        return np.ascontiguousarray(canonical_rgb(array))
 
     def _reset_frame_stack(self, observation: np.ndarray) -> None:
         self._frame_stack.clear()
@@ -902,7 +882,6 @@ class FullSMBStage:
         if bool(tensor.numel()) and float(tensor.max()) > 1.0:
             tensor = tensor / 255.0
         tensor = tensor.clamp(0.0, 1.0)
-        tensor = self._crop_observation(tensor)
         if self.observation_config.color_mode == "grayscale":
             weights = torch.tensor(
                 [0.299, 0.587, 0.114],
@@ -911,31 +890,7 @@ class FullSMBStage:
             )
             tensor = (tensor * weights.view(1, 1, 3)).sum(dim=-1, keepdim=True)
             tensor = tensor.repeat(1, 1, 3)
-        if self.observation_config.resize_shape is None:
-            return self._normalize_observation(tensor).contiguous()
-        target_shape = self.observation_config.resize_shape
-        if tuple(tensor.shape[:2]) != target_shape:
-            chw = tensor.permute(2, 0, 1).unsqueeze(0)
-            tensor = (
-                F.interpolate(
-                    chw,
-                    size=target_shape,
-                    mode="bilinear",
-                    align_corners=False,
-                )
-                .squeeze(0)
-                .permute(1, 2, 0)
-            )
         return self._normalize_observation(tensor).contiguous()
-
-    def _crop_observation(self, tensor: torch.Tensor) -> torch.Tensor:
-        top, right, bottom, left = self.observation_config.effective_crop_margins()
-        height, width = tensor.shape[:2]
-        if top + bottom >= height or left + right >= width:
-            raise ValueError("Full SMB crop margins must leave at least one pixel in both axes")
-        y_end = height - bottom if bottom else height
-        x_end = width - right if right else width
-        return tensor[top:y_end, left:x_end]
 
     def _normalize_observation(self, tensor: torch.Tensor) -> torch.Tensor:
         mean = torch.tensor(
@@ -962,12 +917,8 @@ class FullSMBStage:
             ).unsqueeze(0),
             "frame_stack_size": self.observation_config.frame_stack,
             "frame_skip": self.observation_config.frame_skip,
-            "resize_shape": self.observation_config.resize_shape,
             "normalized_range": (0.0, 1.0),
             "preprocessing": self.observation_config.to_manifest(),
-            "crop_margins": self.observation_config.crop_margins,
-            "effective_crop_margins": self.observation_config.effective_crop_margins(),
-            "hud_policy": self.observation_config.hud_policy,
             "color_mode": self.observation_config.color_mode,
             "normalization": {
                 "input_range": (0.0, 1.0),

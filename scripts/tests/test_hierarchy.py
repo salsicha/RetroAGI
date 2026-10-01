@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from retroagi.core import StageSpec, VisionHierarchyProjector, VisionOutput
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.core.smb_scene import C_SEMANTIC_LAYOUT_START
 from retroagi.stages.block_smb import BlockSMBObservationConfig, BlockSMBStage
 
@@ -24,10 +25,18 @@ class TestVisionHierarchyProjector(unittest.TestCase):
         self.projector = VisionHierarchyProjector(self.spec)
 
     def make_block_vision(self):
-        """Block stages need the segmenter's three-state support estimate."""
-        vision = self.make_vision()
-        vision.support_logits = torch.tensor([[-4.0, 4.0, -4.0]])
-        return vision
+        """A Block vision output: the nine pixel types and a support estimate."""
+        logits = torch.full((1, len(PIXEL_TYPES), 2, 16), -10.0)
+        for column in range(16):
+            logits[0, column % len(PIXEL_TYPES), :, column] = 10.0
+        return VisionOutput(
+            position=torch.tensor([[0.25, 0.75]], dtype=torch.float32),
+            semantic_logits=logits,
+            semantic_ids=logits.argmax(dim=1),
+            tokens=torch.zeros(1, 240, len(PIXEL_TYPES)),
+            metadata={"semantic_classes": PIXEL_TYPES},
+            support_logits=torch.tensor([[-4.0, 4.0, -4.0]]),
+        )
 
     def make_vision(self, position=None, token_offset=0.0):
         region_classes = torch.tensor([0, 1, 2, 3, 4, 5, 6, 1])

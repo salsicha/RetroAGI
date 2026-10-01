@@ -360,7 +360,6 @@ def _make_stage(spec: FullSMBSaveStateArtifactSpec) -> FullSMBStage:
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=None,
         ),
         vision=_NoopVision(),
     )

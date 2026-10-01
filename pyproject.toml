@@ -80,7 +80,6 @@ target-version = ["py312"]
 force-exclude = '''
 /(
     notebooks
-  | scripts/segmentation/segment_training\.py
 )/
 '''
 
@@ -92,7 +91,6 @@ target-version = "py312"
 force-exclude = true
 extend-exclude = [
     "notebooks",
-    "scripts/segmentation/segment_training.py",
 ]
 
 [tool.ruff.lint]
@@ -113,11 +111,12 @@ ignore = [
 # retroagi, so their imports legitimately follow module-level code.
 "scripts/mario_scenario_env.py" = ["E402"]
 "scripts/run.py" = ["E402"]
-"scripts/segmentation/segment_inference.py" = ["F401", "E402"]
 "scripts/semantic_segmentation.py" = ["E402"]
 "scripts/simple_transformer.py" = ["E402"]
 "scripts/vit/train_block_vit.py" = ["E402"]
-"scripts/vit/train_vit.py" = ["E402"]
+"scripts/vit/train_full_vit.py" = ["E402"]
+"scripts/vision/evaluate_block_vision.py" = ["E402"]
+"scripts/vision/evaluate_full_vision.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["retroagi"]

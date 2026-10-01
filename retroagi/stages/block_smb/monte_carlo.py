@@ -1595,6 +1595,7 @@ def _chained_obstacles(
             [pipe_a_x, 220 - pipe_a_h, 28, pipe_a_h],
             [pipe_b_x, 220 - pipe_b_h, 32, pipe_b_h],
         ],
+        "platform_kinds": ["ground", "pipe", "pipe"],
         "enemies": [
             [enemy_x, 206, enemy_x, enemy_x, 0],
             {
@@ -1648,6 +1649,7 @@ def _chained_enemy_gauntlet(
             [landing_x, 220, 544 - landing_x, 20],
             [pipe_x, 220 - pipe_h, 30, pipe_h],
         ],
+        "platform_kinds": ["ground", "ground", "pipe"],
         "enemies": [
             [96, 206, 96, 96, 0],
             {
@@ -1773,6 +1775,7 @@ def _pipe_mount(
             [0, 220, 256, 20],
             [pipe_x, 220 - pipe_height, pipe_width, pipe_height],
         ],
+        "platform_kinds": ["ground", "pipe"],
         "coins": [],
         "goal": [goal_x, 220 - pipe_height - 20, pipe_width, 20],
         "reward_goal_distance_shaping": 2.0,
@@ -2062,6 +2065,7 @@ def _tall_pipe_jump(
             [0, 220, 320, 20],
             [pipe_x, 220 - pipe_h, pipe_w, pipe_h],
         ],
+        "platform_kinds": ["ground", "pipe"],
         "coins": [[pipe_x + 10, 220 - pipe_h - 20, 10, 10]],
         "goal": [goal_x, 200, 16, 20],
         "reward_goal_distance_shaping": 2.0,

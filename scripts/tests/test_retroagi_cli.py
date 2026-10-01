@@ -631,13 +631,13 @@ class TestRetroAGICLI(unittest.TestCase):
                     "--stage",
                     "full",
                     "--vision-checkpoint",
-                    "data/vit/full_smb_vit.pth",
-                    "--samples",
-                    "4",
-                    "--rollout-steps",
+                    "data/full_vit/full_vit_pixel.pth",
+                    "--plays",
+                    "2",
+                    "--every",
                     "8",
                     "--output",
-                    "artifacts/full_smb/perception_diagnostic.json",
+                    "artifacts/full_smb/vision_diagnostic.json",
                 ]
             )
 
@@ -645,13 +645,13 @@ class TestRetroAGICLI(unittest.TestCase):
         diagnostics_main.assert_called_once_with(
             [
                 "--vision-checkpoint",
-                "data/vit/full_smb_vit.pth",
-                "--samples",
-                "4",
-                "--rollout-steps",
+                "data/full_vit/full_vit_pixel.pth",
+                "--plays",
+                "2",
+                "--every",
                 "8",
                 "--output",
-                "artifacts/full_smb/perception_diagnostic.json",
+                "artifacts/full_smb/vision_diagnostic.json",
             ]
         )
 

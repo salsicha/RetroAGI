@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from retroagi.stages.block_smb.vision import DEFAULT_BLOCK_VIT_CHECKPOINT
+from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT
+
 FULL_SMB_ARTIFACT_LAYOUT_SCHEMA_VERSION = 1
 FULL_SMB_DOCUMENTED_BENCHMARK_SCHEMA_VERSION = 1
 DEFAULT_FULL_SMB_ARTIFACT_ROOT = Path("artifacts/full_smb")
@@ -195,15 +198,15 @@ def full_smb_documented_benchmark_manifest(
             "transfer": (
                 "retroagi transfer --game smb --stage full "
                 "--block-policy-checkpoint data/block_smb/policy.pth "
-                "--block-vision-checkpoint data/block_vit/block_vit.pth "
-                "--full-smb-vision-checkpoint data/vit/full_smb_vit.pth "
+                f"--block-vision-checkpoint {DEFAULT_BLOCK_VIT_CHECKPOINT} "
+                f"--full-smb-vision-checkpoint {DEFAULT_FULL_VIT_CHECKPOINT} "
                 f"--output-checkpoint {files['transferred_policy_checkpoint']}"
             ),
             "train": (
                 "retroagi train --game smb --stage full --mode fine-tune "
                 f"--seed {seed} "
                 f"--init-checkpoint {files['transferred_policy_checkpoint']} "
-                "--full-smb-vision-checkpoint data/vit/full_smb_vit.pth "
+                f"--full-smb-vision-checkpoint {DEFAULT_FULL_VIT_CHECKPOINT} "
                 "--perception-mode freeze --task-set curriculum --epochs 1 "
                 "--updates-per-epoch 1 --rollout-steps 64 --evaluation-episodes 1 "
                 "--evaluation-max-steps 64 --evaluation-interval-epochs 1 "
@@ -257,7 +260,7 @@ def full_smb_documented_benchmark_manifest(
                 f"--transfer-checkpoint {files['transferred_policy_checkpoint']} "
                 f"--fine-tuned-checkpoint {files['policy_checkpoint']} "
                 f"--known-good-checkpoint {files['policy_checkpoint']} "
-                "--full-smb-vision-checkpoint data/vit/full_smb_vit.pth "
+                f"--full-smb-vision-checkpoint {DEFAULT_FULL_VIT_CHECKPOINT} "
                 f"--task-set fixed_benchmark --seed {seed} --seed {seed + 1} "
                 f"--output {files['comparison_report']}"
             ),

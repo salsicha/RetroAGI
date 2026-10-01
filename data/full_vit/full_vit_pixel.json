@@ -1,0 +1,189 @@
+{
+  "architecture": {},
+  "checkpoint_kind": "vision_encoder",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "2296b64",
+    "system": "git"
+  },
+  "config": {
+    "checkpoints": {
+      "best_metric": "mean_type_iou",
+      "best_mode": "max",
+      "metadata": {},
+      "output_path": "/home/amoran/repos/RetroAGI/data/full_vit/full_vit_pixel.pth",
+      "resume_path": null,
+      "save_interval_epochs": 1
+    },
+    "environment": {
+      "deterministic": true,
+      "metadata": {},
+      "num_envs": 1,
+      "rollout_steps": 9000,
+      "scenario": null,
+      "seed": 7,
+      "stage": "full_smb"
+    },
+    "evaluation": {
+      "deterministic": true,
+      "episodes": null,
+      "interval_epochs": 1,
+      "metadata": {},
+      "metrics": [
+        "loss",
+        "pixels_correct",
+        "mean_type_iou"
+      ],
+      "samples": 3000,
+      "seed": 1007
+    },
+    "metadata": {
+      "every": 3,
+      "monitor_every": 16,
+      "monitor_plays_per_level": 2,
+      "train_levels": [
+        "Level1-4",
+        "Level2-1",
+        "Level2-1-clouds",
+        "Level3-1",
+        "Level4-1",
+        "Level6-1",
+        "Level7-1",
+        "Level8-1"
+      ],
+      "warmup_steps": 500,
+      "weight_power": 0.5
+    },
+    "model": {
+      "depth": 4,
+      "dropout": 0.0,
+      "heads": 4,
+      "hidden_dim": 128,
+      "metadata": {
+        "refine_dim": 32
+      },
+      "name": "full_smb_vit",
+      "patch_size": 16
+    },
+    "name": "full_vit_training",
+    "training": {
+      "batch_size": 48,
+      "device": "auto",
+      "epochs": 40,
+      "gradient_clip_norm": 1.0,
+      "learning_rate": 0.001,
+      "metadata": {},
+      "samples_per_epoch": 40000,
+      "seed": 7,
+      "weight_decay": 0.05
+    }
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-138-generic",
+      "system": "Linux",
+      "version": "#138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.1",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.2.0+cu121"
+    }
+  },
+  "epoch": 40,
+  "global_step": 0,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "2296b64",
+      "system": "git"
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-138-generic",
+        "system": "Linux",
+        "version": "#138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.1",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.2.0+cu121"
+      }
+    },
+    "trainer": "scripts.vit.train_full_vit"
+  },
+  "metrics": {
+    "epoch": 40,
+    "frames_seen": 1601280,
+    "learned_numbers": 1220425,
+    "loss": 0.0005074223616781334,
+    "mean_type_iou": 0.9943848796096267,
+    "minutes": 46.547830788294476,
+    "pixels_correct": 0.999838720703125,
+    "train_loss": 0.0004684887036970783,
+    "type_iou": {
+      "background": 0.9998707819875806,
+      "brick": 0.9987699175309928,
+      "coin": 0.9976774722887558,
+      "enemy": 0.969199471001208,
+      "ground": 0.9997034040034315,
+      "mario": 0.989392020566607,
+      "moving_platform": 0.9971942281264315,
+      "pipe": 0.9996799260876218,
+      "question_block": 0.9979766948940121
+    }
+  },
+  "model_name": "full_smb_vit",
+  "specs": {
+    "vision": {
+      "name": "full_smb_vit",
+      "position_dim": 2,
+      "semantic_classes": [
+        "background",
+        "mario",
+        "ground",
+        "brick",
+        "question_block",
+        "pipe",
+        "coin",
+        "enemy",
+        "moving_platform"
+      ],
+      "support_classes": [
+        "air",
+        "ground",
+        "platform"
+      ],
+      "token_dim": 9
+    }
+  },
+  "stage": "full_smb",
+  "state_keys": [
+    "model"
+  ]
+}

@@ -32,14 +32,12 @@ from retroagi.stages.full_smb.train import (
     _policy_action_logits_and_state,
 )
 from retroagi.stages.full_smb.transfer import (
+    full_smb_vision_model,
     load_transferred_full_smb_policy,
     make_full_smb_policy_model,
     policy_architecture_from_checkpoint,
 )
-from retroagi.stages.full_smb.vision import (
-    DEFAULT_FULL_SMB_VIT_CHECKPOINT,
-    FullSMBSegmentationVision,
-)
+from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT
 
 PolicySuiteStageFactory = Callable[[Any, Optional[FullSMBTaskSpec]], FullSMBStage]
 
@@ -137,7 +135,7 @@ def compare_transferred_checkpoint_with_scratch(
     *,
     make_stage: Callable[[Any], FullSMBStage],
     scratch_checkpoint: Optional[Path] = None,
-    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_VIT_CHECKPOINT,
     config: FullSMBPolicyComparisonConfig = FullSMBPolicyComparisonConfig(),
 ) -> FullSMBPolicyComparisonResult:
     """Compare a transferred Full SMB policy with a scratch policy baseline.
@@ -181,7 +179,7 @@ def compare_full_smb_policy_suite(
     fine_tuned_checkpoint: Optional[Path] = None,
     known_good_checkpoint: Optional[Path] = None,
     extra_policy_checkpoints: Optional[Mapping[str, Path]] = None,
-    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_VIT_CHECKPOINT,
     config: FullSMBPolicySuiteComparisonConfig = FullSMBPolicySuiteComparisonConfig(),
     task_names: Iterable[str] = (),
     task_set: Optional[str] = None,
@@ -235,11 +233,7 @@ def compare_full_smb_policy_suite(
             )
         )
 
-    vision = FullSMBSegmentationVision(
-        checkpoint=full_smb_vision_checkpoint,
-        device=config.device,
-        freeze=True,
-    )
+    vision = full_smb_vision_model(full_smb_vision_checkpoint, device=config.device, freeze=True)
     tasks = _comparison_tasks(task_names=tuple(task_names), task_set=task_set)
     policy_accumulators = _empty_policy_accumulators(policies)
     stream_results: list[Mapping[str, Any]] = []
@@ -866,7 +860,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--full-smb-vision-checkpoint",
         type=Path,
-        default=DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+        default=DEFAULT_FULL_VIT_CHECKPOINT,
     )
     parser.add_argument("--steps", type=int, default=128)
     parser.add_argument("--seed", dest="seeds", type=int, action="append")

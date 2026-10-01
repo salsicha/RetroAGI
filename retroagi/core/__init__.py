@@ -211,7 +211,7 @@ from .tracking import (
     flatten_numeric_metrics,
     make_experiment_tracker,
 )
-from .vision import LinearVisionEncoder, PatchVisionTransformer
+from .vision import LinearVisionEncoder, PatchVisionTransformer, PixelVisionTransformer
 
 __all__ = [
     "AdaptiveController",
@@ -301,6 +301,7 @@ __all__ = [
     "PONG_SYNTHETIC_DATA_SPECS",
     "PONG_TASK_SCHEMA",
     "PatchVisionTransformer",
+    "PixelVisionTransformer",
     "PerceptionDatasetSourceSpec",
     "PerceptionPipelineSpec",
     "PositionalEncoding",

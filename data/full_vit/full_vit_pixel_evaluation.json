@@ -1,0 +1,84 @@
+{
+  "checkpoint": "data/full_vit/full_vit_pixel.pth",
+  "levels": [
+    "Level1-1",
+    "Level5-1"
+  ],
+  "seed": 0,
+  "plays": 8,
+  "every": 4,
+  "refused_frames": {},
+  "learned_numbers": 1220425,
+  "seconds": 117.9,
+  "frames": 15208,
+  "pixels_correct": 0.9994588408787042,
+  "types": {
+    "background": {
+      "true_pixels": 785727523,
+      "found": 0.9997081316445116,
+      "correct": 0.999742310258792
+    },
+    "mario": {
+      "true_pixels": 2293004,
+      "found": 0.9844583786159989,
+      "correct": 0.9826011670899102
+    },
+    "ground": {
+      "true_pixels": 124760290,
+      "found": 0.9998529259590532,
+      "correct": 0.9997645131966743
+    },
+    "brick": {
+      "true_pixels": 4683792,
+      "found": 0.9978543026675821,
+      "correct": 0.9959497087954203
+    },
+    "question_block": {
+      "true_pixels": 1097916,
+      "found": 0.9894190448085282,
+      "correct": 0.997345733985806
+    },
+    "pipe": {
+      "true_pixels": 12379633,
+      "found": 0.9925568875910942,
+      "correct": 0.9943093495338253
+    },
+    "coin": {
+      "true_pixels": 6992,
+      "found": 0.8542620137299771,
+      "correct": 0.7594405594405594
+    },
+    "enemy": {
+      "true_pixels": 3430370,
+      "found": 0.9686611065278673,
+      "correct": 0.9596763712546419
+    },
+    "moving_platform": {
+      "true_pixels": 0,
+      "found": null,
+      "correct": 0.0
+    }
+  },
+  "mario_frames": 14689,
+  "mario_found": 1.0,
+  "mario_position_error_px": {
+    "mean": 0.13194733539072206,
+    "median": 0.0,
+    "p95": 0.7372424397242784,
+    "max": 6.2609270092923195
+  },
+  "standing_agreement": 0.9749472394308666,
+  "true_label_standing_agreement": 0.9802573354210634,
+  "enemies": 19070,
+  "enemies_seen": 0.9931830099632931,
+  "families": {
+    "Level1-1": {
+      "frames": 7266,
+      "pixels_correct": 0.9995225761645277
+    },
+    "Level5-1": {
+      "frames": 7942,
+      "pixels_correct": 0.9994005305555118
+    }
+  }
+}

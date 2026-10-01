@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-
-import numpy as np
-import torch
 
 from retroagi.core import (
     BASELINE_ARCHITECTURE_NAME,
@@ -23,7 +19,7 @@ from retroagi.core import (
     to_plain_data,
 )
 
-from .env import BlockSMBRewardConfig, MarioScenarioEnv
+from .env import BlockSMBRewardConfig
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES
 from .train import (
     DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES,
@@ -49,13 +45,10 @@ from .train import (
 )
 from .vision import (
     BlockVisionTransformer,
-    evaluate_block_vit_perception,
     load_block_vit_checkpoint,
 )
 
 DEFAULT_RECORD_DIR = Path("artifacts/block_smb/recordings")
-DEFAULT_VISION_DIAGNOSTIC_SAMPLES = 64
-DEFAULT_VISION_DIAGNOSTIC_ROLLOUT_STEPS = 32
 DEFAULT_ACTION_PROBE_OUTPUT = Path("artifacts/block_smb/action_probe.json")
 
 
@@ -764,20 +757,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     diagnose = subparsers.add_parser(
         "diagnose-vision",
-        help="measure Block ViT semantic and position quality on procedural frames",
+        help="measure the Block ViT's per-pixel types on held-out validation frames",
     )
     diagnose.add_argument("--output", type=Path, help="write the diagnostic JSON")
     diagnose.add_argument("--vision-checkpoint", type=Path)
     diagnose.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
-    diagnose.add_argument("--seed", type=int, default=7)
+    diagnose.add_argument("--seed", type=int, default=0)
     diagnose.add_argument(
-        "--samples", type=_positive_int, default=DEFAULT_VISION_DIAGNOSTIC_SAMPLES
-    )
-    diagnose.add_argument(
-        "--rollout-steps",
+        "--repeats",
         type=_positive_int,
-        default=DEFAULT_VISION_DIAGNOSTIC_ROLLOUT_STEPS,
+        default=1,
+        help="validation layouts per family and difficulty",
     )
+    diagnose.add_argument("--keep", type=float, default=0.2, help="share of frames measured")
     diagnose.add_argument("--batch-size", type=_positive_int, default=32)
 
     diagnose_actions = subparsers.add_parser(
@@ -1161,78 +1153,30 @@ def _make_vision_factory(
     return factory, vision_info
 
 
-def _sample_vision_diagnostic_action(rng: random.Random) -> int:
-    return rng.choices((0, 1, 2, 3, 4, 5), weights=(5, 25, 35, 2, 3, 10), k=1)[0]
-
-
-def _collect_vision_diagnostic_frames(
-    *,
-    samples: int,
-    seed: int,
-    rollout_steps: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if samples <= 0:
-        raise ValueError("samples must be positive")
-    if rollout_steps <= 0:
-        raise ValueError("rollout_steps must be positive")
-    rng = random.Random(seed)
-    env = MarioScenarioEnv()
-    frames = []
-    grounded = []
-    scenario_index = 0
-    try:
-        while len(frames) < samples:
-            scenario_seed = seed + scenario_index
-            scenario = MarioScenarioEnv.generate_scenario(
-                num_screens=rng.randint(1, 3),
-                enemy_density=rng.uniform(0.25, 0.9),
-                moving_platform_chance=rng.uniform(0.1, 0.5),
-                seed=scenario_seed,
-            )
-            observation, _info = env.reset(scenario=scenario, seed=scenario_seed)
-            frames.append(observation.copy())
-            grounded.append(bool(env.mario["on_ground"]))
-            for _ in range(rollout_steps - 1):
-                if len(frames) >= samples:
-                    break
-                action = _sample_vision_diagnostic_action(rng)
-                observation, _reward, terminated, truncated, _info = env.step(action)
-                frames.append(observation.copy())
-                grounded.append(bool(env.mario["on_ground"]))
-                if terminated or truncated:
-                    break
-            scenario_index += 1
-    finally:
-        env.close()
-    return (
-        torch.from_numpy(np.stack(frames[:samples])).to(torch.uint8),
-        torch.tensor(grounded[:samples], dtype=torch.bool),
-    )
-
-
 def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
+    """The shared vision measurements on held-out validation-split frames."""
+    from retroagi.core.pixel_vision import evaluate_pixel_vision
+
+    from .vision_frames import family_layouts, held_out_frames
+
     device = select_device(args.device)
     loaded = load_block_vit_checkpoint(
         args.vision_checkpoint,
         device=device,
         freeze=True,
     )
-    frames, frames_on_ground = _collect_vision_diagnostic_frames(
-        samples=args.samples,
-        seed=args.seed,
-        rollout_steps=args.rollout_steps,
-    )
-    metrics = evaluate_block_vit_perception(
+    layouts = family_layouts("validation", args.seed, args.repeats)
+    metrics = evaluate_pixel_vision(
         loaded.model,
-        frames,
+        held_out_frames(layouts, args.seed, keep=args.keep),
         batch_size=args.batch_size,
-        on_ground=frames_on_ground,
     )
     return {
         "config": {
-            "samples": args.samples,
+            "split": "validation",
             "seed": args.seed,
-            "rollout_steps": args.rollout_steps,
+            "repeats": args.repeats,
+            "keep": args.keep,
             "batch_size": args.batch_size,
             "device": str(device),
         },

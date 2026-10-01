@@ -1,242 +1,123 @@
-"""Tests for Full SMB perception diagnostics."""
+"""Tests for the Full SMB vision measurement behind `retroagi diagnose-vision --stage full`."""
 
+import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
-from retroagi.core import VisionOutput, VisionSpec
+from retroagi.core.pixel_vision import save_pixel_vision_checkpoint
+from retroagi.core.smb_pixel_types import TYPE_ID
 from retroagi.stages.full_smb import (
-    FullSMBPerceptionDiagnosticThresholds,
-    collect_full_smb_perception_diagnostic_frames,
-    evaluate_full_smb_perception,
+    FULL_SMB_SPEC,
+    FullVisionTransformer,
+    diagnostics,
+    run_full_smb_vision_diagnostic,
 )
+from retroagi.stages.full_smb.pixel_labels import LabelledFrame
+from retroagi.stages.full_smb.vision_frames import TEST_LEVELS
 
 
-class StableDiagnosticVision:
-    spec = VisionSpec(
-        name="stable_full_smb_diagnostic",
-        semantic_classes=("sky", "ground", "mario", "coin"),
-        token_dim=4,
+def _frame(level: str) -> LabelledFrame:
+    labels = np.zeros((240, 256), dtype=np.uint8)
+    labels[200:, :] = TYPE_ID["ground"]
+    labels[184:200, 40:52] = TYPE_ID["mario"]
+    return LabelledFrame(
+        image=np.zeros((240, 256, 3), dtype=np.uint8),
+        labels=labels,
+        on_ground=True,
+        enemy_rects=(),
+        family=level,
     )
 
+
+class FakeLabelledFrames:
+    """Stands in for vision_frames.labelled_frames: two frames per play, one refusal."""
+
     def __init__(self):
-        self.training = True
-        self.eval_called = False
-        self.train_called = False
+        self.calls = []
 
-    def eval(self):
-        self.eval_called = True
-        self.training = False
-
-    def train(self):
-        self.train_called = True
-        self.training = True
-
-    def encode(self, observation):
-        frames = torch.as_tensor(observation)
-        if frames.ndim == 3:
-            frames = frames.unsqueeze(0)
-        batch = frames.shape[0]
-        logits = torch.full((batch, self.spec.num_classes, 2, 2), -8.0)
-        logits[:, 0, 0, 0] = 8.0
-        logits[:, 1, 0, 1] = 8.0
-        logits[:, 2, 1, 0] = 8.0
-        logits[:, 3, 1, 1] = 8.0
-        ids = logits.argmax(dim=1)
-        return VisionOutput(
-            position=torch.tensor([[0.25, 0.50]], dtype=torch.float32).repeat(batch, 1),
-            semantic_logits=logits,
-            semantic_ids=ids,
-            tokens=torch.ones(batch, 4, self.spec.token_dim),
-            metadata={"source": "stable"},
-        )
+    def __call__(self, level, *, frames, seed, every, refusals=None):
+        self.calls.append({"level": level, "frames": frames, "seed": seed, "every": every})
+        if refusals is not None:
+            refusals["a drawing memory does not explain"] += 1
+        yield _frame(level)
+        yield _frame(level)
 
 
-class WeakDiagnosticVision(StableDiagnosticVision):
-    def encode(self, observation):
-        frames = torch.as_tensor(observation)
-        if frames.ndim == 3:
-            frames = frames.unsqueeze(0)
-        batch = frames.shape[0]
-        logits = torch.zeros(batch, self.spec.num_classes, 2, 2)
-        return VisionOutput(
-            position=torch.ones(batch, 2, dtype=torch.float32),
-            semantic_logits=logits,
-            semantic_ids=logits.argmax(dim=1),
-            tokens=torch.zeros(batch, 4, self.spec.token_dim),
-            metadata={"source": "weak"},
-        )
+class TestFullSMBVisionDiagnostic(unittest.TestCase):
+    def test_measures_only_the_test_levels_and_counts_refused_frames(self):
+        fake = FakeLabelledFrames()
+        model = FullVisionTransformer(dim=16, depth=1, heads=4)
+        with patch.object(diagnostics, "labelled_frames", fake):
+            result = run_full_smb_vision_diagnostic(
+                model, seed=3, plays=2, every=5, frames=40, batch_size=3
+            )
 
-
-class DiagnosticStage:
-    def __init__(self):
-        self.step_count = 0
-        self.last_info = {}
-
-    def reset(self, seed=None):
-        self.step_count = 0
-        self.last_info = self._info(x=0.0, y=0.5)
-        return np.zeros((8, 8, 3), dtype=np.uint8)
-
-    def step(self, action):
-        self.step_count += 1
-        self.last_info = self._info(x=0.25, y=0.5)
-        observation = np.full((8, 8, 3), self.step_count, dtype=np.uint8)
-        return observation, 0.0, False, False, self.last_info
-
-    @staticmethod
-    def _info(*, x, y):
-        return {
-            "state_vec": np.array([0.0, y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-            "camera_vec": np.array([0.0, 0.0, 0.0, x]),
-        }
-
-
-class TestFullSMBPerceptionDiagnostics(unittest.TestCase):
-    def test_full_smb_perception_diagnostic_accepts_stable_predictions(self):
-        vision = StableDiagnosticVision()
-        frames = torch.zeros(3, 8, 8, 3, dtype=torch.uint8)
-        infos = [DiagnosticStage._info(x=0.25, y=0.50) for _ in range(3)]
-
-        metrics = evaluate_full_smb_perception(
-            vision,
-            frames,
-            infos,
-            thresholds=FullSMBPerceptionDiagnosticThresholds(
-                min_semantic_confidence=0.90,
-                min_class_coverage=1.0,
-                min_temporal_stability=1.0,
-                max_position_rmse=0.0,
-                min_position_within_tolerance=1.0,
-                position_tolerance=0.0,
-            ),
-            batch_size=2,
-        )
-
-        self.assertFalse(metrics["bottleneck"])
-        self.assertFalse(metrics["semantic_bottleneck"])
-        self.assertFalse(metrics["vision_position_bottleneck"])
-        self.assertFalse(metrics["signal_extraction_bottleneck"])
-        self.assertEqual(metrics["bottleneck_reasons"], [])
-        self.assertGreater(metrics["semantic_confidence"], 0.99)
-        self.assertEqual(metrics["class_coverage"], 1.0)
-        self.assertEqual(metrics["temporal_stability"], 1.0)
-        self.assertEqual(metrics["position_rmse"], 0.0)
-        self.assertEqual(metrics["position_within_tolerance"], 1.0)
-        self.assertTrue(vision.eval_called)
-        self.assertTrue(vision.train_called)
-
-    def test_full_smb_perception_diagnostic_flags_bottlenecks(self):
-        vision = WeakDiagnosticVision()
-        frames = torch.zeros(2, 8, 8, 3, dtype=torch.uint8)
-        infos = [DiagnosticStage._info(x=0.0, y=0.0) for _ in range(2)]
-
-        metrics = evaluate_full_smb_perception(
-            vision,
-            frames,
-            infos,
-            thresholds=FullSMBPerceptionDiagnosticThresholds(
-                min_semantic_confidence=0.5,
-                min_class_coverage=0.75,
-                max_position_rmse=0.1,
-                min_position_within_tolerance=1.0,
-                position_tolerance=0.1,
-            ),
-        )
-
-        self.assertTrue(metrics["bottleneck"])
-        self.assertTrue(metrics["semantic_bottleneck"])
-        self.assertTrue(metrics["vision_position_bottleneck"])
-        self.assertFalse(metrics["signal_extraction_bottleneck"])
-        self.assertIn("semantic_confidence", metrics["bottleneck_reasons"])
-        self.assertIn("class_coverage", metrics["bottleneck_reasons"])
-        self.assertIn("position_rmse", metrics["bottleneck_reasons"])
-        self.assertIn("position_consistency", metrics["bottleneck_reasons"])
         self.assertEqual(
-            metrics["semantic_bottleneck_reasons"],
-            ["semantic_confidence", "class_coverage"],
+            [call["level"] for call in fake.calls],
+            [level for level in TEST_LEVELS for _ in range(2)],
         )
+        self.assertTrue(all(call["every"] == 5 and call["frames"] == 40 for call in fake.calls))
+        self.assertEqual(result["levels"], list(TEST_LEVELS))
+        self.assertEqual(result["plays"], 2 * len(TEST_LEVELS))
+        self.assertEqual(result["frames"], 4 * len(TEST_LEVELS))
         self.assertEqual(
-            metrics["vision_position_bottleneck_reasons"],
-            ["position_rmse", "position_consistency"],
+            result["refused_frames"], {"a drawing memory does not explain": 2 * len(TEST_LEVELS)}
         )
-        self.assertEqual(metrics["signal_extraction_bottleneck_reasons"], [])
+        for key in ("pixels_correct", "types", "mario_found", "standing_agreement"):
+            self.assertIn(key, result)
+        self.assertEqual(result["mario_frames"], result["frames"])
+        self.assertTrue(model.training, "the measurement must restore the model's mode")
 
-    def test_missing_position_targets_are_signal_extraction_bottleneck(self):
-        vision = StableDiagnosticVision()
-        frames = torch.zeros(2, 8, 8, 3, dtype=torch.uint8)
-        infos = [{}, {}]
+    def test_play_seeds_depend_only_on_the_seed(self):
+        model = FullVisionTransformer(dim=16, depth=1, heads=4)
+        seeds = []
+        for _ in range(2):
+            fake = FakeLabelledFrames()
+            with patch.object(diagnostics, "labelled_frames", fake):
+                run_full_smb_vision_diagnostic(model, seed=11, plays=1, frames=8)
+            seeds.append([call["seed"] for call in fake.calls])
+        self.assertEqual(seeds[0], seeds[1])
 
-        metrics = evaluate_full_smb_perception(
-            vision,
-            frames,
-            infos,
-            thresholds=FullSMBPerceptionDiagnosticThresholds(
-                min_semantic_confidence=0.90,
-                min_class_coverage=1.0,
-                min_temporal_stability=1.0,
-                max_position_rmse=0.0,
-                min_position_within_tolerance=1.0,
-                position_tolerance=0.0,
-            ),
-        )
+    def test_rejects_zero_plays(self):
+        with self.assertRaisesRegex(ValueError, "plays"):
+            run_full_smb_vision_diagnostic(FullVisionTransformer(dim=16, depth=1, heads=4), plays=0)
 
-        self.assertTrue(metrics["bottleneck"])
-        self.assertFalse(metrics["semantic_bottleneck"])
-        self.assertFalse(metrics["vision_position_bottleneck"])
-        self.assertTrue(metrics["signal_extraction_bottleneck"])
-        self.assertEqual(metrics["position_samples"], 0.0)
-        self.assertEqual(
-            metrics["signal_extraction_bottleneck_reasons"], ["missing_position_targets"]
-        )
-        self.assertIn("missing_position_targets", metrics["bottleneck_reasons"])
+    def test_command_loads_the_checkpoint_frozen_and_writes_the_report(self):
+        source = FullVisionTransformer(dim=16, depth=1, heads=4)
+        with TemporaryDirectory() as tmpdir:
+            checkpoint = Path(tmpdir) / "full_vit_pixel.pth"
+            output = Path(tmpdir) / "reports" / "vision.json"
+            save_pixel_vision_checkpoint(checkpoint, source, stage=FULL_SMB_SPEC.name, metrics={})
+            with (
+                patch.object(diagnostics, "labelled_frames", FakeLabelledFrames()),
+                patch("builtins.print"),
+            ):
+                exit_code = diagnostics.main(
+                    [
+                        "--vision-checkpoint",
+                        str(checkpoint),
+                        "--device",
+                        "cpu",
+                        "--plays",
+                        "1",
+                        "--output",
+                        str(output),
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8"))
 
-    def test_explicit_vision_position_target_overrides_camera_fallback(self):
-        vision = StableDiagnosticVision()
-        frames = torch.zeros(2, 8, 8, 3, dtype=torch.uint8)
-        infos = [
-            {
-                "vision_position_target": np.asarray([0.25, 0.50], dtype=np.float32),
-                "state_vec": np.asarray([0.0, 0.0, 0.0], dtype=np.float32),
-                "camera_vec": np.asarray([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            }
-            for _ in range(2)
-        ]
-
-        metrics = evaluate_full_smb_perception(
-            vision,
-            frames,
-            infos,
-            thresholds=FullSMBPerceptionDiagnosticThresholds(
-                min_semantic_confidence=0.90,
-                min_class_coverage=1.0,
-                min_temporal_stability=1.0,
-                max_position_rmse=0.0,
-                min_position_within_tolerance=1.0,
-                position_tolerance=0.0,
-            ),
-        )
-
-        self.assertFalse(metrics["bottleneck"])
-        self.assertFalse(metrics["vision_position_bottleneck"])
-        self.assertEqual(metrics["position_samples"], 2.0)
-        self.assertEqual(metrics["position_rmse"], 0.0)
-
-    def test_collect_full_smb_perception_diagnostic_frames_uses_stage_rollout(self):
-        stage = DiagnosticStage()
-        trace = collect_full_smb_perception_diagnostic_frames(
-            stage,
-            samples=3,
-            seed=11,
-            rollout_steps=4,
-        )
-
-        self.assertEqual(trace.observations.shape, (3, 8, 8, 3))
-        self.assertEqual(len(trace.infos), 3)
-        self.assertEqual(len(trace.action_ids), 2)
-        self.assertEqual(trace.reset_count, 1)
-        self.assertEqual(trace.summary()["samples"], 3)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["vision"], {"checkpoint_path": str(checkpoint), "frozen": True})
+        self.assertEqual(payload["config"]["plays"], 1)
+        self.assertEqual(payload["levels"], list(TEST_LEVELS))
+        self.assertEqual(payload["frames"], 2 * len(TEST_LEVELS))
+        self.assertIn("refused_frames", payload)
+        self.assertTrue(torch.isfinite(torch.tensor(payload["pixels_correct"])))
 
 
 if __name__ == "__main__":

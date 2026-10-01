@@ -30,15 +30,16 @@ asset requirements, and licensing/provenance rules. The `smb` profile uses
 this ladder:
 
 ```text
-synthetic -> block -> full_asset_mock -> full
+synthetic -> block -> full
 ```
 
 Synthetic validates the architecture, Block SMB trains the simplified game
-models, `full_asset_mock` bootstraps the Full SMB ViT from full-game assets in
-synthetic scenarios, and Full SMB validates inference before continuing
-training in the emulator.
+models, and Full SMB validates inference before continuing training in the
+emulator. The Full SMB vision model is trained within the `full` rung, on real
+emulator frames labelled from game memory, before any policy reads emulator
+screens through it.
 
-The proof-of-concept `pong` profile uses the shorter three-rung ladder:
+The proof-of-concept `pong` profile uses the same three-rung ladder:
 
 ```text
 synthetic -> block -> full
@@ -80,7 +81,7 @@ render availability, and headless reset/step operation.
 Stage ladder names use the game-neutral progressive-resolution convention
 defined by `STANDARD_STAGE_NAMES`. Every game starts with `synthetic`, ends with
 `full`, and may include standard intermediate rungs such as `block`,
-`symbolic`, `tile`, `sprite`, `emulator`, or `full_asset_mock`. Legacy user
+`symbolic`, `tile`, `sprite`, or `emulator`. Legacy user
 tokens such as `synthetic-1d`, `block-smb`, and `full-smb` are normalized to the
 game-neutral names before plugin lookup, so shared code should dispatch on the
 resolved rung name rather than a game-specific stage implementation name.
@@ -120,8 +121,8 @@ assets or generated datasets are committed or referenced by checkpoints. Each
 item targets an asset requirement, a synthetic data spec, or a licensing
 category such as `generated_data`; names the affected stage rungs; lists the
 required evidence; and records the commit/reference policy. SMB currently
-requires checklist entries for sprite source/license evidence, local-only ROM
-handling, and generated-data provenance.
+requires checklist entries for local-only ROM handling and generated-data
+provenance.
 
 `BlockGameSpec` is the game-owned mid-fidelity simulator contract. It declares
 the block-stage adapter, environment implementation, simplified physics model,
@@ -153,8 +154,8 @@ own stage adapters, assets, and thresholds.
 `GamePromotionGateSpec` defines the gates for one game/rung pair. Each gate
 spec can declare a runtime budget key, metric presence or threshold checks,
 artifact fields that must exist, and a failure reason. The SMB plugin owns the
-current gate table for `synthetic-concept`, `block-smb-smoke`,
-`full-smb-asset-mock-perception`, and `full-smb-transfer-smoke`, so adding a
+current gate table for `synthetic-concept`, `block-smb-smoke`, and
+`full-smb-transfer-smoke`, so adding a
 new game requires declaring its promotion expectations in the game profile
 rather than adding game-specific checks to `retroagi promote`.
 
@@ -166,9 +167,13 @@ declares where supervision comes from: `asset_synthetic`, `self_supervised`,
 `emulator_state`, or `manual_labels`. That lets games without reliable assets
 train perception from contrastive/self-supervised rollouts, backend state
 snapshots, or manually labeled frames without pretending they have a sprite
-pipeline. The SMB plugin currently declares a `block` pipeline from exact
-emulator-state labels in the simplified simulator and a `full_asset_mock`
-pipeline for full-game assets composed into synthetic scenes. The Pong plugin
+pipeline. The SMB plugin declares two pipelines with the same nine-type
+vocabulary (`smb_pixel_types.PIXEL_TYPES`) and the same diagnostic thresholds,
+both from `emulator_state` labels: `block`, whose labels the simplified
+simulator draws itself (`MarioScenarioEnv.render_labels()`), checkpoint
+`data/block_vit/block_vit_pixel.pth`; and `full`, whose labels are read from
+game memory (`retroagi/stages/full_smb/pixel_labels.py`), checkpoint
+`data/full_vit/full_vit_pixel.pth`. The Pong plugin
 declares a non-asset block pipeline from simulator state labels plus a planned
 full-frame self-supervised source. Experiment stage manifests include the
 resolved pipeline so model runs record which vocabulary, checkpoint naming
@@ -447,22 +452,29 @@ truncation; `terminated` and `truncated` retain the environment booleans.
 
 `FullSMBStage` uses `FULL_SMB_SPEC` with `seq_len_a=8`, `ratio_ab=2`,
 `ratio_bc=4`, `seq_len_b=16`, `seq_len_c=64`, and `vocab_size=20`. Its
-`StageBatch` is produced by `VisionHierarchyProjector`. With the current
-Full SMB ViT output, the C prefix contains two normalized position values
-followed by thirteen semantic probabilities, then the nine-value Full SMB
-signal vector: normalized x, y, score, coins, lives, completion, death,
-terminated, and truncated. The remaining C slots contain pooled patch-token
-features. When `FullSMBObservationConfig.include_camera_state=True`, four
+`StageBatch` is produced by `VisionHierarchyProjector`. For a policy trained
+in Full SMB alone, the projector reads the Full SMB vision output directly: the
+C prefix contains two normalized position values, nine semantic probabilities
+(each pixel type's average probability over the screen), and three
+standing-state probabilities (air, ground, platform), then the nine-value Full
+SMB signal vector: normalized x, y, score, coins, lives, completion, death,
+terminated, and truncated. The remaining C slots contain pooled summaries of
+the per-square type probabilities (the vision output's `tokens`). A policy
+transferred from Block SMB instead reads the same observation as Block SMB:
+`canonical_vision` (`retroagi/core/smb_scene.py`) maps the nine pixel types
+onto the policy's seven classes by meaning, and the geometry slots come from
+NES RAM (see [full-smb-transfer-contract.md](full-smb-transfer-contract.md)).
+When `FullSMBObservationConfig.include_camera_state=True`, four
 additional camera values are appended after the nine signal values: normalized
 raw scroll x, screen x, screen y, and player x-offset within the camera
 viewport.
 
-Full SMB observation metadata includes normalized resized frame tensors:
-`frame_stack` has shape `[B, S, 3, H, W]`, where `S` is
-`FullSMBObservationConfig.frame_stack` and `(H, W)` is `resize_shape` when set.
-The preprocessing manifest records crop margins, effective HUD crop, RGB or
-grayscale mode, normalization mean/std, and whether camera state is fused into
-the C stream. `camera_vec` has shape `[B, 4]`. `frame_mask` has shape `[B, S]`
+Full SMB observation metadata includes normalized frame tensors of the full
+NES screen: `frame_stack` has shape `[B, S, 3, 240, 256]`, where `S` is
+`FullSMBObservationConfig.frame_stack`, the same size as Block SMB frames. The
+emulator's trimmed 8-pixel border is padded back; frames are never stretched or
+cropped. The preprocessing manifest records RGB or grayscale mode,
+normalization mean/std, and whether camera state is fused into the C stream. `camera_vec` has shape `[B, 4]`. `frame_mask` has shape `[B, S]`
 and marks reset padding as invalid. The episode metadata mask has shape `[1]`
 and is `0.0` after termination or truncation.
 
@@ -481,9 +493,12 @@ and is `0.0` after termination or truncation.
 `semantic_logits` are not probabilities. Consumers apply `softmax` over
 dimension 1. Image encoders accept HWC/BHWC or CHW/BCHW input, convert to
 `float32` BCHW, discard alpha, and divide by 255 only when values exceed 1.
-SMB ViT encoders also emit a learned support-state head. Its logits are combined
-with a semantic-contact prior so legacy checkpoints without the learned head
-still expose useful air/ground/platform state.
+The SMB vision models have no learned support-state head. Their
+air/ground/platform state is computed from the predicted pixel labels by the
+rules in `retroagi/core/smb_pixel_types.py`: Mario stands when a standable
+pixel (ground, brick, question block, pipe or moving platform) lies within two
+pixels below his feet, and stands on a platform when the pixels just below him
+include a moving platform.
 
 ### Synthetic Linear Vision
 
@@ -500,46 +515,36 @@ Defaults are `K=20`, `D=64`, and `P=1`.
 
 ### Block SMB ViT
 
-Input is resized to `240x256` and divided into 16x16 patches, giving
-`G_H=15`, `G_W=16`, and `N=240`.
+The Block ViT is the shared per-pixel vision transformer
+(`retroagi.core.vision.PixelVisionTransformer`) with Block weights
+(`BlockVisionTransformer`, loaded by `load_block_vit_checkpoint` from
+`data/block_vit/block_vit_pixel.pth`). Input must
+already be `240x256` (it is never stretched); it is divided into 16x16 squares
+(`G_H=15`, `G_W=16`, `N=240`). Each square's final description gives scores
+for its own 16x16 pixels and the nine `smb_pixel_types.PIXEL_TYPES`, refined
+per pixel with the pixel's colour: `pixel_logits` has shape `[B,9,240,256]`.
+The output is `smb_pixel_types.vision_output(pixel_logits)`:
 
 | Field | Shape | Range |
 | --- | --- | --- |
-| `position` | `[B,2]` | `[0,1]`, `(x,y)`, probability-weighted Mario patch center. |
-| `semantic_logits` | `[B,7,15,16]` | Unbounded seven-class logits. |
-| `semantic_ids` | `[B,15,16]` | IDs `[0,6]`. |
-| `tokens` | `[B,240,D]` | Transformer tokens; unbounded. Default `D=64`. |
-| `support_logits` | `[B,3]` | Air/ground/platform logits. |
+| `position` | `[B,2]` | `[0,1]`, `(x,y)`, centre of Mario's largest predicted pixel group; `(0,0)` with `metadata["mario_found"]` False when absent. |
+| `semantic_logits` | `[B,9,15,16]` | Log of each square's mean pixel probability per type. |
+| `semantic_ids` | `[B,15,16]` | IDs `[0,8]`. |
+| `tokens` | `[B,240,9]` | Each square's mean pixel probabilities. |
+| `support_logits` | `[B,3]` | Air/ground/platform from the predicted pixels below Mario's feet. |
 | `support_ids` | `[B]` | Air/ground/platform IDs. |
 
-The compatible sprite ViT uses the same grid with `K=13` and default `D=192`.
-Its position is normalized `(x,y)` for the Mario class.
+`metadata["pixel_labels"]` (`[B,240,256]`) holds every pixel's predicted type.
 
 ### Full SMB ViT
 
-`FullSMBSegmentationVision` is backed by `FullSMBVisionTransformer` and accepts
-HWC/BHWC or CHW/BCHW RGB input. Input is resized to `240x256` and divided into
-16x16 patches, giving `G_H=15`, `G_W=16`, and `N=240`.
-
-| Field | Shape | Range |
-| --- | --- | --- |
-| `position` | `[B,2]` | `[0,1]`, `(x,y)`, probability-weighted Mario patch center. |
-| `semantic_logits` | `[B,13,15,16]` | Unbounded thirteen-class logits. |
-| `semantic_ids` | `[B,15,16]` | IDs `[0,12]`. |
-| `tokens` | `[B,240,D]` | Transformer tokens; unbounded. Default `D=192`. |
-| `support_logits` | `[B,3]` | Air/ground/platform logits. |
-| `support_ids` | `[B]` | Air/ground/platform IDs. |
-
-The thirteen semantic classes are exactly
-`sky, ground, brick, question_block, pipe, coin, goomba, koopa, mario,
-mushroom, hill, cloud, bush`.
-
-### Full SMB Legacy DeepLab
-
-The six-class CNN (DeepLab) segmenter is an example only and is not part of the
-`retroagi` package: its training and inference scripts live in
-`scripts/segmentation/`. All supported vision training and evaluation paths use
-the ViT-backed `FullSMBSegmentationVision`.
+The Full SMB ViT is the same class with its own Full SMB weights
+(`retroagi.stages.full_smb.vision.FullVisionTransformer`, loaded frozen by
+default by `load_full_vit_checkpoint` from `data/full_vit/full_vit_pixel.pth`).
+Its input, the nine pixel types, and every output field and shape are exactly
+those of the Block SMB ViT above; only the trained weights differ. Full SMB
+frames are the full `240x256` NES screen, with the emulator's trimmed 8-pixel
+border padded back, so they are never stretched either.
 
 ## Consumer Requirements
 

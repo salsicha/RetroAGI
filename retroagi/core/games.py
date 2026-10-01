@@ -17,6 +17,7 @@ from .actions import (
 )
 from .backends import BackendCapabilitySpec, GameBackendSpec
 from .rewards import RewardConfigSchema, RewardTermSpec
+from .smb_pixel_types import PIXEL_TYPES
 from .stage_resolution import STANDARD_STAGE_NAMES
 from .synthetic import SyntheticDataSpec, SyntheticSplitSpec
 from .tasks import GameTaskSchema, GameTaskSpec, TaskSuccessThreshold
@@ -231,7 +232,7 @@ class GameSpec:
         expected = list(range(len(ids)))
         if ids != expected:
             raise ValueError(
-                f"game {self.name!r} action stable IDs must be contiguous from zero; " f"got {ids}"
+                f"game {self.name!r} action stable IDs must be contiguous from zero; got {ids}"
             )
         names = [action.name for action in self.action_space]
         if len(set(names)) != len(names):
@@ -254,7 +255,7 @@ class GameSpec:
             return
         if self.reward_schema.game_name != self.name:
             raise ValueError(
-                f"game {self.name!r} reward schema is for " f"{self.reward_schema.game_name!r}"
+                f"game {self.name!r} reward schema is for {self.reward_schema.game_name!r}"
             )
         schema_terms = set(self.reward_schema.term_names)
         described_terms = set(self.reward_terms)
@@ -288,7 +289,7 @@ class GameSpec:
         for spec in self.synthetic_data:
             if spec.game_name != self.name:
                 raise ValueError(
-                    f"game {self.name!r} synthetic data {spec.name!r} is for " f"{spec.game_name!r}"
+                    f"game {self.name!r} synthetic data {spec.name!r} is for {spec.game_name!r}"
                 )
             if spec.stage_name not in stage_names:
                 raise ValueError(
@@ -348,8 +349,7 @@ class GameSpec:
         )
         if missing_assets:
             raise ValueError(
-                f"game {self.name!r} asset checklist must cover required "
-                f"assets: {missing_assets}"
+                f"game {self.name!r} asset checklist must cover required assets: {missing_assets}"
             )
         if self.synthetic_data and not (
             "generated_data" in required_targets or required_targets.intersection(synthetic_names)
@@ -514,7 +514,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_episodes=3,
                 max_steps=200,
                 rationale=(
-                    "Flat run: reach the goal reliably without relying on one " "lucky rollout."
+                    "Flat run: reach the goal reliably without relying on one lucky rollout."
                 ),
             ),
             description="Flat fixed Block SMB scenario",
@@ -532,7 +532,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_episodes=3,
                 max_steps=200,
                 rationale=(
-                    "Gap run: cross the gap and reach the goal reliably within " "the time budget."
+                    "Gap run: cross the gap and reach the goal reliably within the time budget."
                 ),
             ),
             description="Gap fixed Block SMB scenario",
@@ -549,9 +549,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_mean_return=55.0,
                 min_episodes=3,
                 max_steps=200,
-                rationale=(
-                    "Stair run: climb the stepped platforms and reach the " "elevated goal."
-                ),
+                rationale=("Stair run: climb the stepped platforms and reach the elevated goal."),
             ),
             description="Stairs fixed Block SMB scenario",
         ),
@@ -567,9 +565,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
                 min_mean_return=55.0,
                 min_episodes=3,
                 max_steps=200,
-                rationale=(
-                    "Platform run: traverse separated platforms and reach the " "final goal."
-                ),
+                rationale=("Platform run: traverse separated platforms and reach the final goal."),
             ),
             description="Separated-platform fixed Block SMB scenario",
         ),
@@ -691,7 +687,7 @@ SMB_TASK_SCHEMA = GameTaskSchema(
             name="level_11_left_jump_recovery.json",
             stage_name="block_smb",
             task_type="fixed",
-            source=("retroagi/stages/block_smb/scenarios/" "level_11_left_jump_recovery.json"),
+            source=("retroagi/stages/block_smb/scenarios/level_11_left_jump_recovery.json"),
             reset_seed=101_011,
             curriculum_stage=11,
             success_threshold=TaskSuccessThreshold(
@@ -877,18 +873,10 @@ SMB_BLOCK_GAME_SPEC = BlockGameSpec(
         "next_platform_delta",
         "ground_ahead",
     ),
-    semantic_classes=(
-        "background",
-        "mario",
-        "platform",
-        "coin",
-        "goal",
-        "enemy",
-        "moving_platform",
-    ),
+    semantic_classes=PIXEL_TYPES,
     exact_label_sources={
-        "semantics": "BlockVisionTransformer.semantic_targets",
-        "position": "BlockVisionTransformer.position_target",
+        "semantics": "MarioScenarioEnv.render_labels",
+        "position": "smb_pixel_types.mario_position",
     },
     fixed_scenarios={
         "level_1_flat.json": "retroagi/stages/block_smb/scenarios/level_1_flat.json",
@@ -949,21 +937,7 @@ SMB_GAME_SPEC = GameSpec(
         "full_smb_emulator_rgb_frames",
         "full_smb_backend_variables",
     ),
-    semantic_classes=(
-        "sky",
-        "ground",
-        "brick",
-        "question_block",
-        "pipe",
-        "coin",
-        "goomba",
-        "koopa",
-        "mario",
-        "mushroom",
-        "hill",
-        "cloud",
-        "bush",
-    ),
+    semantic_classes=PIXEL_TYPES,
     signal_schema={
         "progress": "x position or normalized horizontal progress",
         "score": "game score when available",
@@ -997,22 +971,15 @@ SMB_GAME_SPEC = GameSpec(
             name="block",
             stage_spec_name="block_smb",
             role="simplified synthetic SMB model training",
-            required_artifacts=("data/block_vit/block_vit.pth", "data/block_smb/policy.pth"),
+            required_artifacts=("data/block_vit/block_vit_pixel.pth", "data/block_smb/policy.pth"),
             promotion_gate_summary="fixed-scenario success thresholds",
-        ),
-        StageLadderEntry(
-            name="full_asset_mock",
-            stage_spec_name="full_smb",
-            role="Full SMB ViT bootstrap on full-game assets in synthetic scenes",
-            required_artifacts=("data/vit/full_smb_vit.pth",),
-            promotion_gate_summary="held-out semantic and position metrics",
         ),
         StageLadderEntry(
             name="full",
             stage_spec_name="full_smb",
             role="full emulator inference validation and continued training",
             required_artifacts=(
-                "data/vit/full_smb_vit.pth",
+                "data/full_vit/full_vit_pixel.pth",
                 "data/full_smb/transferred_policy.pth",
             ),
             promotion_gate_summary="inference, transfer, comparison, and training metrics",
@@ -1045,15 +1012,6 @@ SMB_GAME_SPEC = GameSpec(
     ),
     asset_requirements=(
         AssetRequirement(
-            name="smb_sprites",
-            required=True,
-            local_path="assets/sprites/",
-            provenance=(
-                "Extracted by scripts/vit/extract_sprites.py from documented " "SMB sprite sources"
-            ),
-            license_notes="Record upstream source and usage terms before committing assets",
-        ),
-        AssetRequirement(
             name="smb_rom",
             required=True,
             local_path="local stable-retro import",
@@ -1064,23 +1022,6 @@ SMB_GAME_SPEC = GameSpec(
         ),
     ),
     asset_checklist=(
-        AssetChecklistItem(
-            name="smb_sprites_source_license",
-            target="smb_sprites",
-            stage_names=("full_asset_mock",),
-            evidence=(
-                "source_url_or_repository",
-                "license_or_terms_summary",
-                "redistribution_decision",
-                "crop_coordinates_or_extraction_manifest",
-                "local_path_manifest",
-            ),
-            policy=(
-                "Record sprite source, license terms, redistribution decision, "
-                "and extraction details before committing sprites or generated "
-                "asset-mock datasets."
-            ),
-        ),
         AssetChecklistItem(
             name="smb_rom_local_only",
             target="smb_rom",
@@ -1099,7 +1040,7 @@ SMB_GAME_SPEC = GameSpec(
         AssetChecklistItem(
             name="smb_generated_data_provenance",
             target="generated_data",
-            stage_names=("synthetic", "block", "full_asset_mock"),
+            stage_names=("synthetic", "block", "full"),
             evidence=(
                 "generator_entrypoint",
                 "resolved_config",

@@ -77,7 +77,9 @@ def runner_crossing_frame(scenario, plant, *, limit=240):
 
     from .env import MarioScenarioEnv
 
-    flat = copy.deepcopy({k: v for k, v in scenario.items() if k != "enemies"})
+    flat = copy.deepcopy(
+        {k: v for k, v in scenario.items() if k not in ("enemies", "platform_kinds")}
+    )
     flat["platforms"] = [scenario["platforms"][0]]
     env = MarioScenarioEnv()
     try:

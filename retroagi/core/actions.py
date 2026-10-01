@@ -228,7 +228,7 @@ SMB_SUPPORT_AIR = "air"
 SMB_SUPPORT_GROUND = "ground"
 SMB_SUPPORT_PLATFORM = "platform"
 SMB_AGENT_CLASS_NAMES = frozenset(("mario", "player", "agent"))
-SMB_ENEMY_CLASS_NAMES = frozenset(("enemy", "goomba", "koopa"))
+SMB_ENEMY_CLASS_NAMES = frozenset(("enemy",))
 
 
 def is_smb_jump_action(action: SMBAction | int) -> bool:

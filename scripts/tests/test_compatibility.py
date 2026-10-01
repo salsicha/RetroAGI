@@ -41,7 +41,9 @@ class TestCompatibilityValidation(unittest.TestCase):
 
     def test_accepts_block_vit_startup_contract(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        config = ModelConfig(name="block_smb_vit", hidden_dim=16, patch_size=16)
+        # The pixel model's output tokens are each square's nine type shares.
+        self.assertEqual(model.spec.token_dim, 9)
+        config = ModelConfig(name="block_smb_vit", hidden_dim=9, patch_size=16)
 
         validate_stage_spec(BLOCK_SMB_SPEC)
         validate_model_vision_compatibility(config, model.spec)
@@ -147,14 +149,15 @@ class TestCompatibilityValidation(unittest.TestCase):
 
     def test_block_vit_checkpoint_is_compatible_with_startup_contract(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-        config = TrainConfig(model=ModelConfig(name="block_smb_vit", hidden_dim=16, patch_size=16))
+        config = TrainConfig(
+            model=ModelConfig(
+                name="block_smb_vit", hidden_dim=16, patch_size=16, metadata={"refine_dim": 16}
+            )
+        )
 
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit.pth"
-            save_checkpoint(
-                path, model, optimizer, epoch=0, metrics={"mean_iou": 0.1}, config=config
-            )
+            path = Path(tmpdir) / "block_vit_pixel.pth"
+            save_checkpoint(path, model, epoch=0, metrics={"mean_type_iou": 0.1}, config=config)
             checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 
         normalized = validate_checkpoint_compatibility(
@@ -163,7 +166,7 @@ class TestCompatibilityValidation(unittest.TestCase):
             model=config.model,
             vision=model.spec,
             checkpoint_kind="vision_encoder",
-            required_states=("model", "optimizer"),
+            required_states=("model",),
         )
 
         self.assertEqual(normalized["stage"], BLOCK_SMB_SPEC.name)

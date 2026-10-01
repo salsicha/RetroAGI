@@ -1,75 +1,86 @@
-# Super Mario Bros Vision Transformer
+# Super Mario Bros Vision Transformer Training
 
-A self-contained pipeline that trains a Vision Transformer to perform
-**patch-level semantic segmentation** of Super Mario Bros scenes, using
-procedurally generated images built from **accurate, ripped SMB sprites**.
+Both Super Mario Bros games read the screen through one vision model class,
+`retroagi.core.vision.PixelVisionTransformer`. It gives every pixel of the
+256x240 screen one of nine types, listed in
+`retroagi.core.smb_pixel_types.PIXEL_TYPES`:
 
-This is the Full SMB segmenter the policy uses. Its 13 classes are mapped by
-meaning onto the seven shared SMB classes before the policy sees them
-(`retroagi/core/smb_scene.py`, `canonical_vision`); Full SMB geometry comes
-from NES RAM, not from this model.
+`background, mario, ground, brick, question_block, pipe, coin, enemy,
+moving_platform`
 
-## Pipeline
+Each game has its own trained weights for this one class. The model cuts the
+screen into 16x16 squares, describes each square, and lets the squares inform
+each other over a few rounds. Each square's final description gives scores for
+its own 256 pixels and every type, and a small per-pixel step then corrects
+those scores using the pixel's colour.
 
-```
-extract_sprites.py  ->  generate_dataset.py  ->  train_vit.py
-   (assets)               (data/vit/*.npz)         (model + metrics)
-```
+The policy never reads the model's internal values. What it reads is computed
+from the pixel types by shared rules: `canonical_vision` in
+`retroagi/core/smb_scene.py` maps the types onto the policy's classes by
+meaning, and `retroagi/core/smb_pixel_types.py` computes Mario's position and
+whether he is standing from the labelled pixels. Because both games use the
+same types and the same rules, the two models cannot drift apart in meaning.
 
-### 1. `extract_sprites.py`
-Downloads the well-known `justinmeister/Mario-Level-1` sprite sheets (kept in
-`assets/spritesheets/`) and slices 12 individual transparent sprites into
-`assets/sprites/`. Crop coordinates are taken verbatim from that project's own
-component code, so each sprite is pixel-accurate to the original NES art:
+## Trainers (this folder)
 
-`brick, question_block, coin, mushroom, goomba, koopa, mario, ground, pipe,
-hill, cloud, bush`
-
-```bash
-python scripts/vit/extract_sprites.py
-```
-
-### 2. `generate_dataset.py`
-Composes random but plausible SMB scenes (256x240) by stamping sprites on a
-16px tile grid: sky, ground (with gaps), pipes, floating brick/?-block rows,
-coins, enemies, scenery, and Mario. As every sprite is stamped, its class id is
-written to a per-pixel label canvas, then reduced to a **16x15 patch-class grid**
-(one label per ViT patch) via a priority-aware majority vote so small actors
-(coins, Mario) survive.
+| Script | Game | Frames | True labels | Writes |
+| --- | --- | --- | --- | --- |
+| `train_block_vit.py` | Block SMB | Every Monte Carlo family on the train split, at every difficulty, played with teacher, perturbed, delayed and random routes, plus generated levels (`retroagi/stages/block_smb/vision_frames.py`) | `MarioScenarioEnv.render_labels()`: the simulator draws each frame's own shapes with their types instead of their colours, so the labels are exact | `data/block_vit/block_vit_pixel.pth` and `data/block_vit/block_vit_pixel.json` |
+| `train_full_vit.py` | Full SMB | Real emulator frames from the training levels (`retroagi/stages/full_smb/vision_frames.py`, `TRAIN_LEVELS`), each played from its saved start by a random player that mostly runs right, jumps for random lengths, and is rewound a few seconds after each death | `retroagi/stages/full_smb/pixel_labels.py` (`label_frame`) reads each pixel's type from game memory. A frame is accepted only when the picture rebuilt from memory matches the emulator's picture at every visible pixel; any frame memory cannot fully explain is refused and never used | `data/full_vit/full_vit_pixel.pth` and `data/full_vit/full_vit_pixel.json` |
 
 ```bash
-python scripts/vit/generate_dataset.py --train 5000 --val 1000
-# -> data/vit/train.npz, val.npz, preview_*.png
+python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
+python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
 ```
 
-13 classes: `sky, ground, brick, question_block, pipe, coin, goomba, koopa,
-mario, mushroom, hill, cloud, bush`.
+Both trainers use the same training loop (`retroagi/core/pixel_vision.py`):
+per-pixel cross-entropy with rare types (Mario, coins, enemies, question
+blocks) weighted up. Worker processes play fresh episodes throughout training,
+so frames rarely repeat. Progress is printed each epoch on held-out frames from
+the training source: held-out train-split layouts for Block SMB, separate plays
+of the training levels for Full SMB.
 
-### 3. `train_vit.py`
-A 2.87M-parameter ViT:
-`Conv2d patch-embed (16x16) -> 240 tokens + learned positions ->
-6 pre-norm Transformer blocks -> per-token linear head -> class per patch`.
-Trained with class-balanced cross-entropy (sky is ~75% of patches).
+The Full SMB trainer needs the Super Mario Bros ROM imported into
+stable-retro; see [docs/full-smb-content.md](../../docs/full-smb-content.md).
+
+## Evaluators (`scripts/vision/`)
+
+| Script | Frames measured |
+| --- | --- |
+| `evaluate_block_vision.py` | Every Monte Carlo family at every difficulty on the validation split, each layout played with its teacher route and with a perturbed teacher route. |
+| `evaluate_full_vision.py` | The test levels `Level1-1` and `Level5-1` (`vision_frames.TEST_LEVELS`), which the Full SMB model is never trained on, each played several times. Frames memory cannot fully explain are counted by reason and not measured. |
 
 ```bash
-python scripts/vit/train_vit.py --epochs 30 --batch 64 --dim 192 --depth 6
-# -> data/vit/full_smb_vit.pth, data/vit/vit_smb.pth, predictions.png
+python scripts/vision/evaluate_block_vision.py --checkpoint data/block_vit/block_vit_pixel.pth
+python scripts/vision/evaluate_full_vision.py --checkpoint data/full_vit/full_vit_pixel.pth
 ```
 
-`retroagi.stages.full_smb.FullSMBSegmentationVision` loads a versioned
-`data/vit/full_smb_vit.pth` checkpoint by default and can still load the legacy
-raw `data/vit/vit_smb.pth` state dict for migration. The previous DeepLab
-wrapper is available as `FullSMBDeepLabSegmentationVision` only for legacy
-checkpoint inspection.
+Both evaluators take the same measurements
+(`retroagi.core.pixel_vision.evaluate_pixel_vision`) and print the same table:
 
-## Results (1000 held-out scenes, 30 epochs, ~17 min on Apple MPS)
+- pixels correct, and for each type the share of its true pixels the model
+  found and the share of pixels given that type that truly are it;
+- frames where Mario is found, out of the frames whose true labels show him;
+- Mario position error in pixels, between the centres of Mario's pixels in
+  the predicted and true labels;
+- standing/air agreement: whether Mario stands by the predicted labels, against
+  the game's own standing flag;
+- enemies seen: the share of drawn enemies with at least one pixel labelled
+  enemy.
 
-| Metric | Value |
-|---|---|
-| Overall patch accuracy | **99.94%** |
-| Foreground accuracy (non-sky) | **99.89%** |
-| Mean IoU | **99.14%** |
+Each evaluator writes its results beside the checkpoint as
+`<checkpoint name>_evaluation.json`. The same measurement also runs from the
+main command line:
 
-Per-class IoU ranges from 96.0% (mushroom, the rarest class) to 100% (sky,
-ground, pipe). `predictions.png` shows `scene | ground-truth | prediction`
-triplets — the predicted patch grid matches ground truth almost exactly.
+```bash
+retroagi diagnose-vision --game smb --stage block --vision-checkpoint data/block_vit/block_vit_pixel.pth
+retroagi diagnose-vision --game smb --stage full --vision-checkpoint data/full_vit/full_vit_pixel.pth
+```
+
+## Using a trained model
+
+`retroagi.stages.block_smb.load_block_vit_checkpoint` and
+`retroagi.stages.full_smb.load_full_vit_checkpoint` load a checkpoint, check
+that it was saved for that game, and freeze it by default so policy training
+cannot change it. The Full SMB stage adapter loads
+`data/full_vit/full_vit_pixel.pth` when it is not given a vision model.

@@ -13,11 +13,12 @@ from retroagi.core import (
     VisionSpec,
     validate_stage_spec,
 )
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockSMBStage, BlockVisionTransformer
 from retroagi.stages.full_smb import (
     FULL_SMB_SPEC,
-    FullSMBSegmentationVision,
     FullSMBStage,
+    FullVisionTransformer,
 )
 
 
@@ -26,15 +27,7 @@ class StaticVisionEncoder:
 
     spec = VisionSpec(
         name="static_block_contract",
-        semantic_classes=(
-            "background",
-            "mario",
-            "platform",
-            "coin",
-            "goal",
-            "enemy",
-            "moving_platform",
-        ),
+        semantic_classes=PIXEL_TYPES,
         token_dim=4,
     )
 
@@ -48,7 +41,7 @@ class StaticVisionEncoder:
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.linspace(-1, 1, 240 * self.spec.token_dim).view(1, 240, -1),
             support_logits=torch.tensor([[-4.0, 4.0, -4.0]]),
-            metadata={"source": "static"},
+            metadata={"source": "static", "semantic_classes": PIXEL_TYPES},
         )
 
 
@@ -57,7 +50,7 @@ class StaticFullSMBVision:
 
     spec = VisionSpec(
         name="static_full_smb_contract",
-        semantic_classes=("background", "floor", "box", "enemy", "brick", "mario"),
+        semantic_classes=PIXEL_TYPES,
         token_dim=6,
     )
 
@@ -70,7 +63,7 @@ class StaticFullSMBVision:
             semantic_logits=logits,
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.zeros(1, 240, self.spec.token_dim),
-            metadata={"source": "static_full_smb"},
+            metadata={"source": "static_full_smb", "semantic_classes": PIXEL_TYPES},
         )
 
 
@@ -168,10 +161,8 @@ class TestVisionEncoderContracts(unittest.TestCase):
             ),
             (
                 "full_smb_vit",
-                lambda: FullSMBSegmentationVision(
-                    checkpoint=None, dim=16, depth=1, heads=4, drop=0.0
-                ),
-                torch.zeros(1, 3, 64, 64),
+                lambda: FullVisionTransformer(dim=16, depth=1, heads=4, drop=0.0).eval(),
+                np.zeros((240, 256, 3), dtype=np.uint8),
             ),
         )
 

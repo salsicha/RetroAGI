@@ -15,16 +15,17 @@ promoting an architecture toward full Super Mario Bros:
    `chained_enemy_gauntlet`, `mixed_section`, `full_smb_opening_proxy`) and
    then tactics and strategy sequence families; each composed family unlocks
    only after its prerequisite families are mastered on held-out layouts.
-3. **Full SMB vision** trains a separate Full SMB ViT segmenter on synthetic
-   scenes composed from extracted NES sprites (`scripts/vit/extract_sprites.py`,
-   `generate_dataset.py`, `train_vit.py`) and reports held-out patch accuracy
-   and mean IoU. Its classes are mapped by meaning onto the shared scene
-   classes.
-4. **Full SMB** transfers the Block-trained policy (hierarchy, LSTM world
+3. **Full SMB** transfers the Block-trained policy (hierarchy, LSTM world
    model, critic and adaptive-controller settings) to the emulator. Full SMB
    play is RAM-assisted: collision geometry and object boxes come from NES RAM,
-   and the frozen Full SMB segmenter supplies scene semantics. It tests transfer
-   on local approaches, continued Full SMB training, and then full-level play.
+   and the frozen Full SMB vision model supplies scene semantics. That model is
+   the same per-pixel vision transformer class as Block SMB's, with its own
+   weights, trained first on real emulator frames of the training levels
+   (`scripts/vit/train_full_vit.py`); each pixel's true type is read exactly
+   from game memory, and any frame memory cannot fully explain is refused. It
+   is measured on the test levels `Level1-1` and `Level5-1`, which it never
+   trains on. The stage then tests transfer on local approaches, continued Full
+   SMB training, and then full-level play.
 
 The stage code is separated, but all stages share the same core contract:
 
@@ -97,7 +98,15 @@ around it are plain, inspectable code. Top to bottom:
 - **Critic** — learned progress/death judges, value and reward heads, plus
   deterministic gates that read the world model's predicted goal distance and
   death flag directly.
-- **Perception (Block ViT)** — trained and frozen before policy training.
+- **Perception (Block ViT)** — the shared per-pixel vision transformer
+  (`PixelVisionTransformer`) with Block weights: it types every pixel as
+  background, Mario, ground, brick, question block, pipe, coin, enemy or
+  moving platform. Trained and frozen before policy training. Full SMB uses
+  the same class with its own weights. `canonical_vision` maps the nine types
+  onto the policy's seven classes by meaning (ground, brick, question block
+  and pipe all become standable platform), and Mario's position and whether
+  he stands are computed from the labelled pixels by the same rules in both
+  games.
 
 Training is self-supervised from the agent's own play (see the
 [hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)):
@@ -134,10 +143,11 @@ flow.
   of 512 train, 128 validation, and 256 test samples, with failure-focused
   train oversampling biased toward `full_smb_opening_proxy`, unless a
   smoke/sweep override is passed.
-- **Full SMB** has the asset-mock ViT bootstrapping rung, a stable-retro stage
-  adapter, headless smoke evaluation, Block SMB policy transfer, continued Full
-  SMB training, transfer-vs-scratch comparison tooling, and a documented local
-  benchmark run at `artifacts/full_smb/documented_benchmark_seed0/`.
+- **Full SMB** has a per-pixel vision model trained on real emulator frames
+  labelled exactly from game memory, a stable-retro stage adapter, headless
+  smoke evaluation, Block SMB policy transfer, continued Full SMB training,
+  transfer-vs-scratch comparison tooling, and a documented local benchmark run
+  at `artifacts/full_smb/documented_benchmark_seed0/`.
   The [shared transfer contract and emulator audit](docs/full-smb-transfer-contract.md)
   documents the current compatibility fixes and failed full-level qualification.
 - **Operations** are covered by CI, native install instructions, stage
@@ -206,7 +216,7 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    ```bash
    python -m retroagi.stages.synthetic_1d.train
    retroagi train --game smb --stage block --epochs 5 \
-     --vision-checkpoint data/block_vit/block_vit.pth \
+     --vision-checkpoint data/block_vit/block_vit_pixel.pth \
      --checkpoint data/block_smb/policy.pth \
      --output artifacts/block_smb/latest/run_summary.json
    retroagi resume --game smb --stage block \
@@ -218,11 +228,12 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --record-dir artifacts/block_smb/recordings
    retroagi transfer --game smb --stage full \
      --block-policy-checkpoint data/block_smb/policy.pth \
-     --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+     --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
+     --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
      --output-checkpoint data/full_smb/transferred_policy.pth
    retroagi train --game smb --stage full \
      --init-checkpoint data/full_smb/transferred_policy.pth \
-     --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+     --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
      --perception-mode freeze \
      --updates-per-epoch 1 \
      --rollout-steps 64 \
@@ -281,9 +292,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    summaries, logs, recordings, videos, evaluation reports, comparisons,
    tracking output, and checkpoint copies.
    Full SMB policy training records its perception choice in every checkpoint:
-   `--perception-mode freeze` reuses a frozen Full SMB ViT checkpoint,
-   `fine_tune` includes trainable ViT parameters in the optimizer, and `replace`
-   starts from a fresh trainable Full SMB ViT.
+   `--perception-mode freeze` reuses the trained Full SMB vision checkpoint
+   (`data/full_vit/full_vit_pixel.pth` by default) unchanged, `fine_tune`
+   includes its parameters in the optimizer, and `replace` starts from a fresh,
+   untrained, trainable Full SMB vision model.
    Full SMB trainer checkpoints also capture the resolved rollout/update shape,
    vector environment request, reward config, loss weights, recording paths,
    tracking config, deterministic mode, training source provenance, and the
@@ -323,10 +335,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--controller-schedule constant|linear`. The Full SMB random-agent runner is
    headless by default; pass `--render` only for local visual inspection. Full
    SMB policy transfer reuses Block SMB actor/world-model/critic weights.
-   The Full SMB ViT segmenter is trained on synthetic full-game asset
-   compositions with `scripts/vit/train_vit.py` (see
+   The Full SMB vision model is trained on real emulator frames, labelled
+   exactly from game memory, with `scripts/vit/train_full_vit.py` (see
    [Reproduce Full SMB Vision](docs/reproducibility.md#10-reproduce-full-smb-vision));
-   Full SMB collision geometry comes from NES RAM, not from that segmenter.
+   Full SMB collision geometry comes from NES RAM, not from that model.
    Transfer comparisons evaluate the transferred policy and a scratch Full SMB
    baseline on identical seeded observation batches.
    Learned-dynamics imagination is selectable with
@@ -346,23 +358,48 @@ Legacy wrappers still work:
 
 ## Training
 
-Train the Block SMB vision transformer directly from procedural pygame-ce
-rollouts. Semantic masks and Mario positions are generated exactly from the
-renderer palette:
+Train the Block SMB vision transformer on the frames the policy sees: every
+Monte Carlo family on the train split at every difficulty, played with
+teacher, perturbed, delayed and random routes, plus generated levels. Each
+pixel's true type comes from `MarioScenarioEnv.render_labels()`, which draws
+the frame's own shapes with their types instead of their colours:
 
 ```bash
-python scripts/vit/train_block_vit.py \
-  --epochs 20 \
-  --samples-per-epoch 2048 \
-  --val-samples 512
+python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
 ```
 
-The best checkpoint and its JSON metrics are written to `data/block_vit/`.
-Training can be continued with:
+The best checkpoint is written to `data/block_vit/block_vit_pixel.pth`. Measure
+it on held-out validation-split frames with the shared measurements (pixels
+correct, each type found/correct, Mario found and position error, standing
+agreement, enemies seen):
 
 ```bash
-python scripts/vit/train_block_vit.py --epochs 40 --resume data/block_vit/block_vit.pth
+python scripts/vision/evaluate_block_vision.py
 ```
+
+Train the Full SMB vision transformer (the same class with its own weights) on
+real emulator frames of the training levels. It needs the ROM imported into
+stable-retro ([docs/full-smb-content.md](docs/full-smb-content.md)). Each
+pixel's true type is read from game memory; a frame is used only when the
+picture rebuilt from memory matches the emulator's picture at every visible
+pixel:
+
+```bash
+python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
+```
+
+The best checkpoint is written to `data/full_vit/full_vit_pixel.pth`. Measure
+it with the same measurements on the test levels `Level1-1` and `Level5-1`,
+which it never trains on; frames memory cannot fully explain are counted and
+not measured:
+
+```bash
+python scripts/vision/evaluate_full_vision.py
+retroagi diagnose-vision --game smb --stage full
+```
+
+[scripts/vit/README.md](scripts/vit/README.md) describes both models, their
+trainers and their evaluators.
 
 ### Synthetic 1D validation
 

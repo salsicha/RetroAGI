@@ -47,7 +47,6 @@ def _tiny_stage(vision):
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=(16, 20),
         ),
     )
 
@@ -59,7 +58,6 @@ def _tiny_ram_stage(vision):
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=(16, 20),
         ),
     )
 
@@ -225,7 +223,6 @@ class TestFullSMBPolicyContracts(unittest.TestCase):
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
                     frame_stack=2,
-                    resize_shape=(16, 20),
                 ),
             )
 

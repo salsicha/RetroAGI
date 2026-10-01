@@ -6,12 +6,13 @@ import pytest
 import torch
 
 from retroagi.core.interfaces import VisionOutput
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.core.smb_scene import C_SPANS, SMBProjector, canonical_vision
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
 
 
 def test_latent_basis_cannot_change_canonical_policy_inputs():
-    logits = torch.randn(1, 7, 15, 16)
+    logits = torch.randn(1, len(PIXEL_TYPES), 15, 16)
     a = VisionOutput(
         torch.zeros(1, 2),
         logits,
@@ -22,8 +23,8 @@ def test_latent_basis_cannot_change_canonical_policy_inputs():
     b = replace(a, tokens=torch.randn(1, 240, 192) * 100)
     projector = SMBProjector(BLOCK_SMB_SPEC)
     observed = torch.zeros(1, C_SPANS["c_enemy_relative_motion"][1] - C_SPANS["c_state"][0])
-    left = projector.project(canonical_vision(a, "block"), observed)
-    right = projector.project(canonical_vision(b, "block"), observed)
+    left = projector.project(canonical_vision(a), observed)
+    right = projector.project(canonical_vision(b), observed)
     assert torch.equal(left.src_c, right.src_c)
     assert left.src_c.shape == (1, 64)
     assert left.metadata["vision_fusion"]["c_availability"] == C_SPANS["c_availability"]

@@ -123,6 +123,7 @@ def transfer_failure_scenario(family, rng, difficulty):
             "world_width": 352,
             "mario": [rng.randint(24, 40), 204],
             "platforms": [[0, 220, 352, 20], [left, 220 - height, width, height]],
+            "platform_kinds": ["ground", "pipe"],
             "enemies": [
                 {
                     "kind": "piranha_plant",

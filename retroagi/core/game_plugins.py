@@ -18,6 +18,7 @@ from .perception import (
     SemanticVocabularySpec,
 )
 from .rewards import RewardConfigSchema
+from .smb_pixel_types import PIXEL_TYPES
 from .stage_resolution import StageResolution, resolve_game_stage
 from .tasks import TaskSuccessThreshold
 
@@ -42,7 +43,7 @@ class GamePluginSpec:
             raise ValueError("game plugin name must be non-empty")
         if self.name != self.game.name:
             raise ValueError(
-                f"game plugin {self.name!r} must match game profile " f"{self.game.name!r}"
+                f"game plugin {self.name!r} must match game profile {self.game.name!r}"
             )
         if not self.stage_adapters:
             raise ValueError(f"game plugin {self.name!r} must define stage_adapters")
@@ -53,8 +54,7 @@ class GamePluginSpec:
         self._validate_named_components("vision encoder", self.vision_encoders, stage_names)
         if self.reward_schema is not None and self.reward_schema.game_name != self.name:
             raise ValueError(
-                f"game plugin {self.name!r} reward schema is for "
-                f"{self.reward_schema.game_name!r}"
+                f"game plugin {self.name!r} reward schema is for {self.reward_schema.game_name!r}"
             )
         task_names = {task.name for task in self.game.fixed_tasks}
         unknown_thresholds = sorted(set(self.success_thresholds).difference(task_names))
@@ -273,18 +273,11 @@ SMB_GAME_PLUGIN = GamePluginSpec(
     stage_adapters={
         "synthetic": "retroagi.stages.synthetic_1d.train",
         "block": "retroagi.stages.block_smb.adapter.BlockSMBStage",
-        "full_asset_mock": "retroagi.stages.full_smb.vision",
         "full": "retroagi.stages.full_smb.adapter.FullSMBStage",
     },
     vision_encoders={
         "block": "retroagi.stages.block_smb.vision.BlockVisionTransformer",
-        "full_asset_mock": "retroagi.stages.full_smb.vision.FullSMBVisionTransformer",
-        "full": "retroagi.stages.full_smb.vision.FullSMBSegmentationVision",
-    },
-    asset_pipelines={
-        "assets": "scripts.vit.extract_sprites",
-        "perception": "scripts.vit.generate_dataset",
-        "full_asset_mock": "retroagi.stages.full_smb.vision",
+        "full": "retroagi.stages.full_smb.vision.FullVisionTransformer",
     },
     perception_pipelines={
         "block": PerceptionPipelineSpec(
@@ -292,48 +285,36 @@ SMB_GAME_PLUGIN = GamePluginSpec(
             name="block",
             stage_name="block",
             semantic_vocabulary=SemanticVocabularySpec(
-                name="smb_block_synthetic",
-                classes=(
-                    "background",
-                    "mario",
-                    "platform",
-                    "coin",
-                    "goal",
-                    "enemy",
-                    "moving_platform",
-                ),
+                name="smb_pixel_types",
+                classes=PIXEL_TYPES,
                 background_class="background",
                 metadata={
-                    "label_source": "exact simulator palette and symbolic state labels",
+                    "label_source": "MarioScenarioEnv.render_labels: the drawn shapes' types",
                 },
             ),
             vision_encoder="retroagi.stages.block_smb.vision.BlockVisionTransformer",
-            asset_extraction=(
-                "retroagi.stages.block_smb.vision.BlockVisionTransformer." "semantic_targets"
-            ),
+            asset_extraction="retroagi.stages.block_smb.env.MarioScenarioEnv.render_labels",
             synthetic_frame_composition=("retroagi.stages.block_smb.env.MarioScenarioEnv"),
-            checkpoint_path="data/block_vit/block_vit.pth",
+            checkpoint_path="data/block_vit/block_vit_pixel.pth",
             diagnostic_thresholds={
-                "min_accuracy": 0.95,
-                "min_foreground_accuracy": 0.90,
-                "min_mean_iou": 0.70,
-                "max_position_rmse": 0.06,
-                "min_position_within_tolerance": 0.90,
-                "position_tolerance": 0.05,
+                "min_pixels_correct": 0.999,
+                "min_mario_found": 0.99,
+                "max_mario_position_error_px": 1.0,
+                "min_standing_agreement": 0.95,
+                "min_enemies_seen": 0.99,
             },
-            dataset_artifacts=("procedural Block SMB rollouts",),
+            dataset_artifacts=("Monte Carlo family and generated-level Block SMB rollouts",),
             dataset_sources=(
                 PerceptionDatasetSourceSpec(
                     name="block_exact_state_labels",
                     source_kind="emulator_state",
                     stage_names=("block",),
                     observation_source="block_smb_rgb_frames",
-                    label_source=(
-                        "MarioScenarioEnv symbolic state and "
-                        "BlockVisionTransformer palette targets"
-                    ),
+                    label_source="MarioScenarioEnv.render_labels per-pixel types",
                     entrypoint="scripts.vit.train_block_vit",
-                    dataset_artifacts=("procedural Block SMB rollouts",),
+                    dataset_artifacts=(
+                        "Monte Carlo family and generated-level Block SMB rollouts",
+                    ),
                     metadata={"requires_asset_pipeline": False},
                 ),
             ),
@@ -342,56 +323,55 @@ SMB_GAME_PLUGIN = GamePluginSpec(
                 "training_entrypoint": "scripts.vit.train_block_vit",
             },
         ),
-        "full_asset_mock": PerceptionPipelineSpec(
+        "full": PerceptionPipelineSpec(
             game_name="smb",
-            name="full_asset_mock",
-            stage_name="full_asset_mock",
+            name="full",
+            stage_name="full",
             semantic_vocabulary=SemanticVocabularySpec(
-                name="smb_full_asset_mock",
-                classes=SMB_GAME_SPEC.semantic_classes,
-                background_class="sky",
+                name="smb_pixel_types",
+                classes=PIXEL_TYPES,
+                background_class="background",
                 metadata={
-                    "label_source": "synthetic masks composed from full-game assets",
+                    "label_source": (
+                        "pixel_labels.label_frame: each pixel's type read from game memory"
+                    ),
                 },
             ),
-            vision_encoder="retroagi.stages.full_smb.vision.FullSMBVisionTransformer",
-            asset_extraction="scripts.vit.extract_sprites",
-            synthetic_frame_composition="scripts.vit.generate_dataset",
-            checkpoint_path="data/vit/full_smb_vit.pth",
+            vision_encoder="retroagi.stages.full_smb.vision.FullVisionTransformer",
+            asset_extraction="retroagi.stages.full_smb.pixel_labels.label_frame",
+            synthetic_frame_composition=None,
+            checkpoint_path="data/full_vit/full_vit_pixel.pth",
+            # The same measurements and targets as Block SMB
+            # (retroagi.core.pixel_vision.evaluate_pixel_vision).
             diagnostic_thresholds={
-                "semantic_accuracy_threshold": 0.25,
-                "foreground_accuracy_threshold": 0.10,
-                "mean_iou_threshold": 0.05,
-                "position_within_tolerance_threshold": 0.10,
-                "position_tolerance": 0.25,
-                "min_class_coverage": 13.0,
+                "min_pixels_correct": 0.999,
+                "min_mario_found": 0.99,
+                "max_mario_position_error_px": 1.0,
+                "min_standing_agreement": 0.95,
+                "min_enemies_seen": 0.99,
             },
             dataset_artifacts=(
-                "assets/spritesheets/",
-                "assets/sprites/",
-                "data/vit/train.npz",
-                "data/vit/val.npz",
+                "real emulator plays of the training levels (never the test levels, "
+                "retroagi.stages.full_smb.vision_frames.TEST_LEVELS)",
             ),
             dataset_sources=(
                 PerceptionDatasetSourceSpec(
-                    name="full_asset_mock_synthetic_scenes",
-                    source_kind="asset_synthetic",
-                    stage_names=("full_asset_mock",),
-                    observation_source="synthetic full-game asset RGB scenes",
-                    label_source="synthetic masks from scripts.vit.generate_dataset",
-                    entrypoint="scripts.vit.generate_dataset",
-                    dataset_artifacts=(
-                        "assets/spritesheets/",
-                        "assets/sprites/",
-                        "data/vit/train.npz",
-                        "data/vit/val.npz",
+                    name="full_memory_labels",
+                    source_kind="emulator_state",
+                    stage_names=("full",),
+                    observation_source="full_smb_emulator_rgb_frames",
+                    label_source=(
+                        "pixel_labels.label_frame per-pixel types read from game memory; "
+                        "frames memory cannot fully explain are refused"
                     ),
-                    metadata={"requires_asset_pipeline": True},
+                    entrypoint="scripts.vit.train_full_vit",
+                    dataset_artifacts=("real emulator plays of the training levels",),
+                    metadata={"requires_asset_pipeline": False},
                 ),
             ),
             metadata={
                 "checkpoint_kind": "vision_encoder",
-                "training_entrypoint": "scripts.vit.train_vit",
+                "training_entrypoint": "scripts.vit.train_full_vit",
             },
         ),
     },
@@ -436,8 +416,7 @@ SMB_GAME_PLUGIN = GamePluginSpec(
                     operator=">=",
                     threshold_key="success_rate_threshold",
                     reason=(
-                        "Block SMB policy success rate must meet the selected "
-                        "promotion threshold"
+                        "Block SMB policy success rate must meet the selected promotion threshold"
                     ),
                 ),
                 PromotionMetricGateSpec(
@@ -452,56 +431,6 @@ SMB_GAME_PLUGIN = GamePluginSpec(
                 _artifact_gate("log_path"),
             ),
             failure_reason="SMB block smoke gate failed",
-        ),
-        "full-smb-asset-mock-perception": GamePromotionGateSpec(
-            rung_name="full-smb-asset-mock-perception",
-            metric_gates=(
-                PromotionMetricGateSpec(
-                    metric="accuracy",
-                    operator=">=",
-                    threshold_key="semantic_accuracy_threshold",
-                    reason="Full SMB asset-mock semantic accuracy is below threshold",
-                ),
-                PromotionMetricGateSpec(
-                    metric="foreground_accuracy",
-                    operator=">=",
-                    threshold_key="foreground_accuracy_threshold",
-                    reason="Full SMB foreground accuracy is below threshold",
-                ),
-                PromotionMetricGateSpec(
-                    metric="mean_iou",
-                    operator=">=",
-                    threshold_key="mean_iou_threshold",
-                    reason="Full SMB asset-mock mean IoU is below threshold",
-                ),
-                PromotionMetricGateSpec(
-                    metric="position_within_tolerance",
-                    operator=">=",
-                    threshold_key="position_within_tolerance_threshold",
-                    reason="Full SMB position predictions are below threshold",
-                ),
-                PromotionMetricGateSpec(
-                    metric="class_coverage",
-                    operator=">=",
-                    threshold=13.0,
-                    reason="Full SMB asset-mock validation must cover every class",
-                ),
-                PromotionMetricGateSpec(
-                    metric="position_rmse",
-                    operator="finite",
-                    reason="Full SMB position RMSE must be finite",
-                ),
-                PromotionMetricGateSpec(
-                    metric="position_tolerance",
-                    operator="finite",
-                    reason="Full SMB position tolerance must be finite",
-                ),
-            ),
-            artifact_gates=(
-                _artifact_gate("full_smb_vision_checkpoint_path"),
-                _artifact_gate("summary_path"),
-            ),
-            failure_reason="SMB Full SMB asset-mock perception gate failed",
         ),
         "full-smb-transfer-smoke": GamePromotionGateSpec(
             rung_name="full-smb-transfer-smoke",
@@ -694,8 +623,7 @@ PONG_GAME_PLUGIN = GamePluginSpec(
                     operator=">=",
                     threshold_key="success_rate_threshold",
                     reason=(
-                        "Pong block policy return rate must meet the selected "
-                        "promotion threshold"
+                        "Pong block policy return rate must meet the selected promotion threshold"
                     ),
                 ),
             ),

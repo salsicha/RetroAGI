@@ -183,7 +183,7 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     goals.append(goal)
                 if isinstance(vision, BlockVisionTransformer):
                     features = canonical_vision(
-                        vision.encode(np.stack([s.observation for s in active])), "block"
+                        vision.encode(np.stack([s.observation for s in active]))
                     )
                     batch = active[0].stage.vision_projector.project(
                         features, np.stack([s.stage.state_features() for s in active])

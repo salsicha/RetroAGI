@@ -37,8 +37,8 @@ class TestOperationsDocumentation(unittest.TestCase):
 
         for metric in (
             "controller_mse",
-            "mean_iou",
-            "position_rmse",
+            "mean_type_iou",
+            "mario_position_error_px",
             "success_thresholds_met",
             "action_agreement",
         ):
@@ -83,9 +83,11 @@ class TestOperationsDocumentation(unittest.TestCase):
             "FullSMBObservationConfig",
             "camera_vec",
             "retroagi diagnose-vision --game smb --stage full",
-            "semantic_confidence",
-            "class_coverage",
-            "temporal_stability",
+            "pixels_correct",
+            "mario_found",
+            "standing_agreement",
+            "enemies_seen",
+            "refused_frames",
             "retroagi train --game smb --stage full",
             "retroagi resume --game smb --stage full",
             "retroagi record --game smb --stage full",
@@ -99,9 +101,9 @@ class TestOperationsDocumentation(unittest.TestCase):
             self.assertIn(term, text)
 
         for artifact in (
-            "data/block_vit/block_vit.pth",
+            "data/block_vit/block_vit_pixel.pth",
             "data/block_smb/policy.pth",
-            "data/vit/full_smb_vit.pth",
+            "data/full_vit/full_vit_pixel.pth",
             "data/full_smb/transferred_policy.pth",
             "artifacts/block_smb/latest/run_summary.json",
             "artifacts/full_smb/transfer_vs_scratch.json",
@@ -128,6 +130,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "## 4. Run The Baseline Architecture Promotion Fixture",
             "## 5. Run A Traceable Architecture Sweep",
             "## 6. Run A Traceable CPU Smoke Training",
+            "## 10. Reproduce Full SMB Vision",
             "## 11. Set Up Full SMB Local Content",
             "## 13. Preserve The Run",
         ):
@@ -143,6 +146,8 @@ class TestOperationsDocumentation(unittest.TestCase):
             "retroagi experiment \\\n  --game pong",
             "retroagi train --game smb --stage block",
             "retroagi diagnose-vision --game smb --stage block",
+            "python scripts/vit/train_full_vit.py",
+            "retroagi diagnose-vision --game smb --stage full",
             "retroagi evaluate --game smb --stage full",
             "retroagi play --game smb --stage full",
             "retroagi transfer --game smb --stage full",
@@ -166,7 +171,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "artifacts/repro/block_smb_smoke/run_summary.json",
             "artifacts/repro/block_smb_smoke/events.jsonl",
             "data/block_smb/policy.pth",
-            "data/vit/full_smb_vit.pth",
+            "data/full_vit/full_vit_pixel.pth",
             "data/full_smb/transferred_policy.pth",
             "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
             "artifacts/full_smb/documented_benchmark_seed0/RUN.md",

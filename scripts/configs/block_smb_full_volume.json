@@ -147,7 +147,7 @@
   "use_oracle_actions": false,
   "value_loss_weight": 0.25,
   "video_dir": null,
-  "vision_checkpoint_path": "data/block_vit/block_vit.pth",
+  "vision_checkpoint_path": "data/block_vit/block_vit_pixel.pth",
   "walk_duration_primitives": false,
   "world_model_memory_weight": 1.0,
   "world_model_slot_weights": {},

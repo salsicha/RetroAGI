@@ -29,7 +29,6 @@ def _tiny_full_smb_stage(vision):
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=(16, 20),
         ),
     )
 

@@ -172,25 +172,24 @@ class TestCheckpointSchema(unittest.TestCase):
 
     def test_block_vit_trainer_saves_shared_schema(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
         config = TrainConfig()
 
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit.pth"
-            save_checkpoint(
-                path, model, optimizer, epoch=1, metrics={"mean_iou": 0.25}, config=config
-            )
+            path = Path(tmpdir) / "block_vit_pixel.pth"
+            save_checkpoint(path, model, epoch=1, metrics={"mean_type_iou": 0.25}, config=config)
             loaded = load_checkpoint(path)
             summary = json.loads(checkpoint_summary_path(path).read_text(encoding="utf-8"))
 
         self.assertEqual(loaded["stage"], "block_smb")
         self.assertEqual(loaded["model_name"], "block_smb_vit")
         self.assertEqual(loaded["checkpoint_kind"], "vision_encoder")
-        self.assertIn("model", loaded["states"])
-        self.assertIn("optimizer", loaded["states"])
+        self.assertEqual(list(loaded["states"]), ["model"])
         self.assertEqual(loaded["specs"]["vision"]["name"], model.spec.name)
+        # The stored architecture is the model's own, not the config defaults.
+        self.assertEqual(loaded["config"]["model"]["hidden_dim"], 16)
+        self.assertEqual(loaded["config"]["model"]["depth"], 1)
         self.assertEqual(summary["stage"], "block_smb")
-        self.assertEqual(summary["metrics"]["mean_iou"], 0.25)
+        self.assertEqual(summary["metrics"]["mean_type_iou"], 0.25)
         self.assertIn("code_revision", summary)
         self.assertIn("environment", summary)
 

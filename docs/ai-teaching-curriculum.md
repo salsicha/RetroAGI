@@ -27,8 +27,8 @@ By the end, students should be able to:
 - Explain RetroAGI's actor, world-model, critic, and A/B/C timescale structure.
 - Trace how stage-native observations become shared `StageBatch` tensors.
 - Train and evaluate the Synthetic 1D stage reproducibly.
-- Train and audit a ViT segmenter without confusing sprite-appearance labels
-  with collision geometry.
+- Train and audit a per-pixel vision model without confusing what the screen
+  shows with the collision geometry the game uses.
 - Explain how each game's own segmenter and geometry observer feed one
   canonical scene interface, so a Block-trained policy transfers to Full SMB
   with unchanged hierarchy, LSTM and adaptive-controller interfaces.
@@ -133,32 +133,41 @@ Assessment:
 
 ### 4. Segmentation And Perception As A Stage Boundary
 
-Each game has its own frozen ViT segmenter: the Block ViT is trained from
-procedural pygame-ce rollouts (`scripts/vit/train_block_vit.py`) and the Full
-SMB ViT from synthetic scenes composed of extracted NES sprites
-(`scripts/vit/extract_sprites.py`, `generate_dataset.py`, `train_vit.py`; see
+Each game has its own frozen ViT segmenter: the Block ViT (the shared
+per-pixel vision transformer with Block weights) is trained on Monte Carlo
+family rollouts labelled exactly by `MarioScenarioEnv.render_labels()`
+(`scripts/vit/train_block_vit.py`), and the Full SMB ViT (the same class with
+Full weights) is trained on real emulator frames of the training levels, with
+each pixel's type read exactly from game memory
+(`scripts/vit/train_full_vit.py`; see
 [Reproduce Full SMB Vision](reproducibility.md#10-reproduce-full-smb-vision)).
-`canonical_vision` in `retroagi/core/smb_scene.py` maps each segmenter's classes
-onto the shared scene classes by meaning. The segmentation supplies position,
+Both label every pixel with the same nine types
+(`retroagi.core.smb_pixel_types.PIXEL_TYPES`), and `canonical_vision` in
+`retroagi/core/smb_scene.py` maps those types onto the policy's seven classes
+by meaning (ground, brick, question block and pipe all become standable
+platform). The segmentation supplies position,
 semantics and support; state, enemy history and relative motion come from the
 game's geometry observer (simulator truth in Block SMB, NES RAM in Full SMB).
 
 Exercise:
 
-- Train a small Full SMB ViT on a reduced synthetic dataset and report overall
-  accuracy, foreground accuracy and per-class IoU on the held-out split.
-- Compare sprite-appearance labels with collision geometry on one Full SMB
-  frame: which solid tiles does the segmenter label, and which come only from
-  NES RAM?
-- Map the Full SMB classes into the canonical vocabulary and document which
-  source classes collapse together or are dropped.
+- Train a small Full SMB ViT with a reduced `--samples-per-epoch`, then
+  measure it on the test levels with `scripts/vision/evaluate_full_vision.py`:
+  report pixels correct, each type's found/correct share, frames where Mario
+  is found, and standing/air agreement with the game's own flag.
+- Compare the pixel labels with collision geometry on one Full SMB frame:
+  which solid tiles does the segmenter label, and which come only from NES
+  RAM?
+- Read `PIXEL_TYPE_SEMANTICS` in `retroagi/core/smb_scene.py` and document
+  which of the nine pixel types collapse together in the policy's seven
+  classes.
 - Trace pixels through the segmenter, `canonical_vision` and `SMBProjector`
   into A/B/C. Explain why independent learned ViT embeddings cannot simply
   occupy the same policy slots.
-- Optional: compare with the legacy six-class DeepLab CNN under
-  `scripts/segmentation/`. It is an example only, not a supported vision path,
-  and its training script cannot run as-is because its source assets are not
-  checked in.
+- Optional: run `retroagi diagnose-vision --game smb --stage full` and explain
+  the `refused_frames` counts: why is a frame refused when the picture rebuilt
+  from game memory does not match the emulator's picture at every visible
+  pixel, and what would go wrong if such frames were used for training?
 
 Assessment:
 
@@ -293,8 +302,9 @@ Choose one:
 - Add a replay buffer with correct episode-boundary handling.
 - Add a reward-model or value-model objective without changing environment
   reward semantics.
-- Audit the Full SMB ViT segmenter on independently labeled real emulator
-  frames and report where synthetic-sprite training does not carry over.
+- Audit the Full SMB ViT on the test levels `Level1-1` and `Level5-1`, which
+  it never trains on, and report which pixel types and which situations (for
+  example Mario standing on a moving lift) it gets wrong.
 - Measure a Block-trained policy's emulator behavior after transfer, using the
   transfer checkpoint's loaded-weight report and the runtime-contract checks.
 - Prototype a Full SMB adapter acceptance-test suite.

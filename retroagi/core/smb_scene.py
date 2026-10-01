@@ -18,14 +18,14 @@ from retroagi.core.hierarchy import VisionHierarchyProjector
 from retroagi.core.interfaces import StageBatch, VisionOutput
 from retroagi.core.smb_enemy_history import HAZARD_NAMES
 from retroagi.core.smb_geometry import FEATURE_NAMES, GOAL_FEATURES, SEMANTICS
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 
 # Availability has dedicated model-input slots, not only diagnostic metadata.
 AVAILABILITY_NAMES = ("mario", "support", "velocity", "enemy_vx", "platform_vx")
-VOCABULARIES = {
-    "block": tuple(range(7)),
-    "full": (0, 2, 2, 2, 2, 3, 5, 5, 1, 0, 0, 0, 0),
-    "legacy_cnn": (0, 2, 2, 2, 5, 1),
-}
+# For each of smb_pixel_types.PIXEL_TYPES (the types both games' vision models
+# give every pixel), its place in SEMANTICS: ground, brick, question block and
+# pipe are all standable platform.
+PIXEL_TYPE_SEMANTICS = (0, 1, 2, 2, 2, 2, 3, 5, 6)
 # C-stream layout. Positions, semantics and support come from the segmentation;
 # state, enemy history, availability and relative motion from the geometry
 # observer; the class layout is a coarse map of where each class is on screen.
@@ -108,22 +108,25 @@ def platform_relative_motion(geometry):
     return platform["move_speed"] * platform["move_dir"] - scene.mario["vx"] - carry, True, 0
 
 
-def canonical_vision(vision, vocabulary):
-    """Map a segmenter's classes onto SEMANTICS by meaning.
+def canonical_vision(vision):
+    """Map the vision model's pixel types (PIXEL_TYPES) onto SEMANTICS by meaning.
 
-    The policy never reads a ViT's latent tokens: two games' encoders do not
-    share a basis. The tokens become the class map pooled to a 15x16 grid.
+    Both games' vision models output PIXEL_TYPES. The policy never reads a
+    vision model's internal square descriptions: two games' models do not
+    share them. The tokens become the type map pooled to a 15x16 grid.
     """
     if (vision.metadata or {}).get("canonical_semantics"):
         if vision.semantic_logits.shape[1] != len(SEMANTICS):
             raise ValueError("Invalid canonical perception vocabulary")
         return vision
-    mapping = VOCABULARIES[vocabulary]
-    if vision.semantic_logits.shape[1] != len(mapping):
-        raise ValueError("Perception vocabulary does not match declared interface")
+    declared = (vision.metadata or {}).get("semantic_classes")
+    if vision.semantic_logits.shape[1] != len(PIXEL_TYPES) or (
+        declared is not None and tuple(declared) != PIXEL_TYPES
+    ):
+        raise ValueError("Vision output must score smb_pixel_types.PIXEL_TYPES")
     p = vision.semantic_logits.float().softmax(1)
     canonical = p.new_zeros((p.shape[0], len(SEMANTICS), *p.shape[2:]))
-    for source, target in enumerate(mapping):
+    for source, target in enumerate(PIXEL_TYPE_SEMANTICS):
         canonical[:, target] += p[:, source]
     spatial = F.adaptive_avg_pool2d(canonical, (15, 16))
     return VisionOutput(
@@ -133,7 +136,12 @@ def canonical_vision(vision, vocabulary):
         tokens=spatial.flatten(2).transpose(1, 2),
         support_logits=vision.support_logits,
         support_ids=vision.support_ids,
-        metadata={**(vision.metadata or {}), "canonical_semantics": True},
+        metadata={
+            **(vision.metadata or {}),
+            "source_semantic_classes": (vision.metadata or {}).get("semantic_classes"),
+            "semantic_classes": SEMANTICS,
+            "canonical_semantics": True,
+        },
     )
 
 

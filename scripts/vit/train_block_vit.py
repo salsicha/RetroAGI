@@ -1,23 +1,33 @@
-"""Train the block-SMB Vision Transformer on live procedural pygame frames.
+"""Train the Block SMB vision transformer to give every pixel its type.
 
-The environment's deterministic palette provides exact semantic masks and
-Mario positions, so no external annotation dataset is required.
+Frames are what the policy sees: all Monte Carlo families on the train split
+at every difficulty, played with teacher, perturbed, delayed and random
+routes, plus procedurally generated levels (retroagi/stages/block_smb/
+vision_frames.py). Worker processes play fresh episodes throughout training,
+so frames rarely repeat. Labels are MarioScenarioEnv.render_labels(), exact by
+construction. The model and the training loop are the shared ones
+(retroagi.core.vision.PixelVisionTransformer, retroagi.core.pixel_vision):
+per-pixel cross-entropy with rare types weighted up. Progress is monitored on
+held-out train-split layouts; the validation split is kept for
+scripts/vision/evaluate_block_vision.py.
 
 Example:
-    python scripts/vit/train_block_vit.py --epochs 20 --samples-per-epoch 2048
+    python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
 """
 
 import argparse
 import random
 import sys
-from dataclasses import asdict, dataclass, field
+import time
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field, replace
+from itertools import islice
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -30,106 +40,86 @@ from retroagi.core import (
     ExperimentConfig,
     ModelConfig,
     TrainingConfig,
-    build_checkpoint,
-    is_versioned_checkpoint,
     select_device,
-    validate_checkpoint_compatibility,
-    validate_model_vision_compatibility,
     validate_stage_spec,
 )
-from retroagi.core import (
-    save_checkpoint as save_versioned_checkpoint,
+from retroagi.core.pixel_vision import (
+    epoch_line,
+    pixel_type_weights,
+    save_pixel_vision_checkpoint,
+    seeded,
+    train_pixel_vision,
 )
-from retroagi.stages.block_smb import BLOCK_SMB_SPEC, BlockVisionTransformer, MarioScenarioEnv
-from retroagi.stages.block_smb.vision import merge_engine_support_targets
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
+from retroagi.stages.block_smb import BLOCK_SMB_SPEC
+from retroagi.stages.block_smb.vision import DEFAULT_BLOCK_VIT_CHECKPOINT, BlockVisionTransformer
+from retroagi.stages.block_smb.vision_frames import family_layouts, frame_stream, layout_frames
 
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "block_vit" / "block_vit.pth"
-DEFAULT_EPOCHS = 20
-DEFAULT_SAMPLES_PER_EPOCH = 2048
-DEFAULT_VAL_SAMPLES = 512
-DEFAULT_ROLLOUT_STEPS = 32
-DEFAULT_BATCH_SIZE = 32
-DEFAULT_LEARNING_RATE = 3e-4
-DEFAULT_WEIGHT_DECAY = 0.05
-DEFAULT_POSITION_WEIGHT = 2.0
-DEFAULT_SUPPORT_WEIGHT = 1.0
-DEFAULT_DIM = 64
-DEFAULT_DEPTH = 2
-DEFAULT_HEADS = 4
-DEFAULT_PATCH_SIZE = 16
-DEFAULT_DROPOUT = 0.1
+DEFAULT_OUTPUT = PROJECT_ROOT / DEFAULT_BLOCK_VIT_CHECKPOINT
 DEFAULT_SEED = 7
-DEFAULT_GRADIENT_CLIP_NORM = 1.0
 
 
 @dataclass(frozen=True)
 class TrainConfig:
     environment: EnvironmentConfig = field(
         default_factory=lambda: EnvironmentConfig(
-            stage="block_smb",
-            seed=DEFAULT_SEED,
-            rollout_steps=DEFAULT_ROLLOUT_STEPS,
+            stage="block_smb", seed=DEFAULT_SEED, rollout_steps=320
         )
     )
     model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
             name="block_smb_vit",
-            hidden_dim=DEFAULT_DIM,
-            depth=DEFAULT_DEPTH,
-            heads=DEFAULT_HEADS,
-            patch_size=DEFAULT_PATCH_SIZE,
-            dropout=DEFAULT_DROPOUT,
+            hidden_dim=128,
+            depth=4,
+            heads=4,
+            patch_size=16,
+            dropout=0.0,
+            metadata={"refine_dim": 32},
         )
     )
     training: TrainingConfig = field(
         default_factory=lambda: TrainingConfig(
-            epochs=DEFAULT_EPOCHS,
-            samples_per_epoch=DEFAULT_SAMPLES_PER_EPOCH,
-            batch_size=DEFAULT_BATCH_SIZE,
-            learning_rate=DEFAULT_LEARNING_RATE,
-            weight_decay=DEFAULT_WEIGHT_DECAY,
+            epochs=40,
+            samples_per_epoch=40_000,
+            batch_size=48,
+            learning_rate=1e-3,
+            weight_decay=0.05,
             seed=DEFAULT_SEED,
-            gradient_clip_norm=DEFAULT_GRADIENT_CLIP_NORM,
+            gradient_clip_norm=1.0,
         )
     )
     evaluation: EvaluationConfig = field(
         default_factory=lambda: EvaluationConfig(
-            samples=DEFAULT_VAL_SAMPLES,
-            seed=DEFAULT_SEED + 1_000_000,
-            metrics=(
-                "loss",
-                "semantic_loss",
-                "position_loss",
-                "support_loss",
-                "accuracy",
-                "foreground_accuracy",
-                "mean_iou",
-                "support_accuracy",
-            ),
+            samples=3_000,
+            seed=DEFAULT_SEED + 1_000,
+            metrics=("loss", "pixels_correct", "mean_type_iou"),
         )
     )
     checkpoints: CheckpointConfig = field(
         default_factory=lambda: CheckpointConfig(
-            output_path=DEFAULT_OUTPUT,
-            best_metric="mean_iou",
-            best_mode="max",
+            output_path=DEFAULT_OUTPUT, best_metric="mean_type_iou", best_mode="max"
         )
     )
-    position_weight: float = DEFAULT_POSITION_WEIGHT
-    support_weight: float = DEFAULT_SUPPORT_WEIGHT
+    # Train layouts per family and difficulty; held-out monitor layouts likewise.
+    layout_repeats: int = 12
+    monitor_repeats: int = 2
+    # Share of an episode's frames kept, and share of episodes on generated levels.
+    keep: float = 0.25
+    generated_share: float = 0.15
+    workers: int = 10
+    warmup_steps: int = 500
+    weight_power: float = 0.5
 
     def __post_init__(self) -> None:
-        if self.position_weight <= 0:
-            raise ValueError("position_weight must be positive")
-        if self.support_weight <= 0:
-            raise ValueError("support_weight must be positive")
-        if self.training.samples_per_epoch is None:
-            raise ValueError("training.samples_per_epoch must be set for Block ViT training")
-        if self.evaluation.samples is None:
-            raise ValueError("evaluation.samples must be set for Block ViT training")
+        if self.training.samples_per_epoch is None or self.evaluation.samples is None:
+            raise ValueError("samples_per_epoch and evaluation samples must be set")
+        if min(self.layout_repeats, self.monitor_repeats) <= 0:
+            raise ValueError("layout repeats must be positive")
+        if not 0 < self.keep <= 1 or not 0 <= self.generated_share < 1:
+            raise ValueError("keep must be in (0, 1] and generated_share in [0, 1)")
 
     def to_dict(self) -> dict:
-        experiment = ExperimentConfig(
+        return ExperimentConfig(
             environment=self.environment,
             model=self.model,
             training=self.training,
@@ -137,440 +127,191 @@ class TrainConfig:
             checkpoints=self.checkpoints,
             name="block_vit_training",
             metadata={
-                "position_weight": self.position_weight,
-                "support_weight": self.support_weight,
+                "layout_repeats": self.layout_repeats,
+                "monitor_repeats": self.monitor_repeats,
+                "keep": self.keep,
+                "generated_share": self.generated_share,
+                "warmup_steps": self.warmup_steps,
+                "weight_power": self.weight_power,
             },
+        ).to_dict()
+
+
+def build_model(config: TrainConfig) -> BlockVisionTransformer:
+    model = config.model
+    return BlockVisionTransformer(
+        dim=model.hidden_dim,
+        depth=model.depth,
+        heads=model.heads,
+        patch_size=model.patch_size or 16,
+        drop=model.dropout,
+        refine_dim=int(model.metadata["refine_dim"]),
+    )
+
+
+class FrameStreamDataset(IterableDataset):
+    """Each worker plays its own seeded episodes and shuffles them in a buffer."""
+
+    def __init__(self, layouts, seed, *, keep, generated_share, buffer=1024):
+        self.layouts, self.seed = layouts, seed
+        self.keep, self.generated_share, self.buffer = keep, generated_share, buffer
+
+    def __iter__(self):
+        worker = get_worker_info()
+        seed = self.seed * 1_000_003 + (worker.id if worker is not None else 0)
+        rng = random.Random(seed)
+        frames = frame_stream(
+            self.layouts, seed, keep=self.keep, generated_share=self.generated_share
         )
-        return experiment.to_dict()
+        pool = list(islice(frames, self.buffer))
+        for frame in frames:
+            index = rng.randrange(len(pool))
+            out, pool[index] = pool[index], frame
+            yield torch.from_numpy(out.image.copy()), torch.from_numpy(out.labels)
 
 
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
-def _sample_action(rng: random.Random) -> int:
-    # Forward motion and jumps expose scrolling scenery while retaining some
-    # stationary and leftward examples.
-    return rng.choices((0, 1, 2, 3, 4, 5), weights=(5, 25, 35, 2, 3, 10), k=1)[0]
-
-
-def collect_procedural_frames(
-    num_samples: int,
-    seed: int,
-    rollout_steps: int = 32,
-    show_progress: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Run procedural block-SMB episodes.
-
-    Returns uint8 NHWC frames plus the engine's own support truth per frame:
-    a bool tensor of mario.on_ground read straight from the physics that
-    decides when Mario stops falling. This is what the support head trains
-    against — geometric patch inference cannot tell a low arc (Mario a few
-    pixels airborne over ground) from standing, which is exactly where the
-    head used to misfire.
-    """
-    if num_samples <= 0:
-        raise ValueError("num_samples must be positive")
-    if rollout_steps <= 0:
-        raise ValueError("rollout_steps must be positive")
-
+def monitor_frames(layouts, seed: int, count: int) -> tuple[np.ndarray, np.ndarray]:
+    """A fixed held-out set: teacher and perturbed routes on unseen layouts."""
     rng = random.Random(seed)
-    env = MarioScenarioEnv()
-    frames = []
-    grounded = []
-    scenario_index = 0
-    try:
-        while len(frames) < num_samples:
-            scenario_seed = seed + scenario_index
-            scenario = MarioScenarioEnv.generate_scenario(
-                num_screens=rng.randint(1, 3),
-                enemy_density=rng.uniform(0.25, 0.9),
-                moving_platform_chance=rng.uniform(0.1, 0.5),
-                seed=scenario_seed,
-            )
-            observation, _ = env.reset(scenario=scenario, seed=scenario_seed)
-            frames.append(observation.copy())
-            grounded.append(bool(env.mario["on_ground"]))
-
-            for _ in range(rollout_steps - 1):
-                if len(frames) >= num_samples:
-                    break
-                observation, _, terminated, truncated, _ = env.step(_sample_action(rng))
-                frames.append(observation.copy())
-                grounded.append(bool(env.mario["on_ground"]))
-                if terminated or truncated:
-                    break
-
-            scenario_index += 1
-            if show_progress and (len(frames) == num_samples or scenario_index % 10 == 0):
-                print(f"Collected {len(frames):5d}/{num_samples} frames", flush=True)
-    finally:
-        env.close()
-
-    return (
-        torch.from_numpy(np.stack(frames[:num_samples])).to(torch.uint8),
-        torch.tensor(grounded[:num_samples], dtype=torch.bool),
-    )
+    images, labels = [], []
+    for layout in layouts:
+        for route in ("teacher", "perturbed"):
+            for frame in layout_frames(layout, route, rng, keep=0.08):
+                images.append(frame.image.copy())
+                labels.append(frame.labels)
+    order = rng.sample(range(len(images)), min(count, len(images)))
+    return np.stack([images[i] for i in order]), np.stack([labels[i] for i in order])
 
 
-@torch.no_grad()
-def build_ground_truth(
-    model: BlockVisionTransformer,
-    frames: torch.Tensor,
-    on_ground: torch.Tensor,
-    batch_size: int = 64,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Create exact patch labels, support labels, and normalized positions."""
-    if len(on_ground) != len(frames):
-        raise ValueError("on_ground must have one entry per frame")
-    labels = []
-    positions = []
-    supports = []
-    for start in range(0, len(frames), batch_size):
-        batch = frames[start : start + batch_size].to(model.pos_embed.device)
-        batch_labels = model.patch_targets(batch)
-        labels.append(batch_labels.cpu())
-        positions.append(model.position_targets(batch).cpu())
-        support_targets = model.support_targets_from_labels(batch_labels)
-        if support_targets is None:
-            raise ValueError("could not infer Block ViT support targets")
-        supports.append(
-            merge_engine_support_targets(
-                support_targets.cpu(),
-                on_ground[start : start + batch_size],
-            )
-        )
-    return torch.cat(labels), torch.cat(positions), torch.cat(supports)
-
-
-def make_loader(
-    frames: torch.Tensor,
-    labels: torch.Tensor,
-    positions: torch.Tensor,
-    supports: torch.Tensor,
-    batch_size: int,
-    shuffle: bool,
-    seed: int,
-) -> DataLoader:
-    images = frames.permute(0, 3, 1, 2).float().div_(255.0)
-    generator = torch.Generator().manual_seed(seed)
-    return DataLoader(
-        TensorDataset(images, labels, positions, supports),
-        batch_size=batch_size,
-        shuffle=shuffle,
-        generator=generator,
-    )
-
-
-def class_weights(labels: torch.Tensor, num_classes: int, device: torch.device) -> torch.Tensor:
-    counts = torch.bincount(labels.flatten(), minlength=num_classes).float()
-    weights = counts.sum().clamp_min(1) / counts.clamp_min(1)
-    weights = weights.sqrt()
-    return (weights / weights.mean()).to(device)
-
-
-def compute_loss(
-    model: BlockVisionTransformer,
-    images: torch.Tensor,
-    labels: torch.Tensor,
-    positions: torch.Tensor,
-    supports: torch.Tensor,
-    weights: torch.Tensor,
-    position_weight: float,
-    support_weight: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    output = model(images)
-    semantic_loss = F.cross_entropy(output.semantic_logits, labels, weight=weights)
-    position_loss = F.mse_loss(output.position, positions)
-    support_loss = F.cross_entropy(output.support_logits, supports)
-    total = semantic_loss + position_weight * position_loss + support_weight * support_loss
-    return total, semantic_loss, position_loss, support_loss
-
-
-@torch.no_grad()
-def evaluate(
-    model: BlockVisionTransformer,
-    loader: DataLoader,
-    weights: torch.Tensor,
-    position_weight: float,
-    support_weight: float,
-    device: torch.device,
-) -> dict[str, float]:
-    model.eval()
-    total_loss = semantic_loss = position_loss = support_loss = 0.0
-    correct = foreground_correct = foreground_total = samples = patches = 0
-    support_correct = support_total = 0
-    intersections = torch.zeros(model.spec.num_classes, dtype=torch.float64)
-    unions = torch.zeros(model.spec.num_classes, dtype=torch.float64)
-
-    for images, labels, positions, supports in loader:
-        images = images.to(device)
-        labels = labels.to(device)
-        positions = positions.to(device)
-        supports = supports.to(device)
-        output = model(images)
-        semantic = F.cross_entropy(output.semantic_logits, labels, weight=weights)
-        position = F.mse_loss(output.position, positions)
-        support = F.cross_entropy(output.support_logits, supports)
-        total = semantic + position_weight * position + support_weight * support
-        batch_size = images.shape[0]
-        total_loss += total.item() * batch_size
-        semantic_loss += semantic.item() * batch_size
-        position_loss += position.item() * batch_size
-        support_loss += support.item() * batch_size
-        samples += batch_size
-
-        prediction = output.semantic_ids
-        support_prediction = output.support_ids
-        correct += (prediction == labels).sum().item()
-        support_correct += (support_prediction == supports).sum().item()
-        support_total += supports.numel()
-        patches += labels.numel()
-        foreground = labels != 0
-        foreground_correct += (prediction[foreground] == labels[foreground]).sum().item()
-        foreground_total += foreground.sum().item()
-        for class_id in range(model.spec.num_classes):
-            predicted = prediction == class_id
-            target = labels == class_id
-            intersections[class_id] += (predicted & target).sum().cpu()
-            unions[class_id] += (predicted | target).sum().cpu()
-
-    valid = unions > 0
-    mean_iou = (intersections[valid] / unions[valid]).mean().item() if valid.any() else 0.0
-    return {
-        "loss": total_loss / samples,
-        "semantic_loss": semantic_loss / samples,
-        "position_loss": position_loss / samples,
-        "support_loss": support_loss / samples,
-        "accuracy": correct / patches,
-        "foreground_accuracy": foreground_correct / max(foreground_total, 1),
-        "mean_iou": mean_iou,
-        "support_accuracy": support_correct / max(support_total, 1),
-    }
-
-
-def save_checkpoint(
-    path: Path,
-    model: BlockVisionTransformer,
-    optimizer: torch.optim.Optimizer,
-    epoch: int,
-    metrics: dict[str, float],
-    config: TrainConfig,
-) -> None:
-    config_data = config.to_dict()
-    checkpoint = build_checkpoint(
+def save_checkpoint(path, model, epoch: int, metrics: dict, config: TrainConfig) -> None:
+    save_pixel_vision_checkpoint(
+        path,
+        model,
         stage=config.environment.stage,
-        model_name=config.model.name,
-        checkpoint_kind="vision_encoder",
-        epoch=epoch,
         metrics=metrics,
-        config=config_data,
-        specs={"vision": asdict(model.spec)},
-        states={
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-        },
-        metadata={"trainer": "scripts.vit.train_block_vit"},
+        config=config.to_dict(),
+        epoch=epoch,
+        trainer="scripts.vit.train_block_vit",
     )
-    save_versioned_checkpoint(path, checkpoint)
 
 
-def train(
-    config: TrainConfig,
-    output: Optional[Path] = None,
-    device_name: Optional[str] = None,
-    resume: Optional[Path] = None,
-) -> dict[str, float]:
-    seed_everything(config.training.seed)
+def train(config: TrainConfig, device_name: Optional[str] = None) -> dict:
+    seed = config.training.seed
+    seeded(seed)
     device = select_device(device_name or config.training.device)
-    output = output or config.checkpoints.output_path or DEFAULT_OUTPUT
-    resume = resume if resume is not None else config.checkpoints.resume_path
+    output = Path(config.checkpoints.output_path or DEFAULT_OUTPUT)
     validate_stage_spec(BLOCK_SMB_SPEC, context="Block ViT startup stage")
-    if config.environment.stage != BLOCK_SMB_SPEC.name:
-        raise ValueError(
-            f"environment stage {config.environment.stage!r} does not match "
-            f"{BLOCK_SMB_SPEC.name!r}"
-        )
+    model = build_model(config)
+    if config.model.name != model.spec.name:
+        raise ValueError(f"model name {config.model.name!r} is not {model.spec.name!r}")
+    parameters = sum(p.numel() for p in model.parameters())
+    print(f"Device: {device}; learned numbers: {parameters:,}", flush=True)
 
-    model = BlockVisionTransformer(
-        dim=config.model.hidden_dim,
-        depth=config.model.depth,
-        heads=config.model.heads,
-        patch_size=config.model.patch_size or DEFAULT_PATCH_SIZE,
-        drop=config.model.dropout,
-    ).to(device)
-    validate_model_vision_compatibility(config.model, model.spec, context="Block ViT startup model")
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config.training.learning_rate,
+    started = time.time()
+    with ProcessPoolExecutor(config.workers) as pool:
+        train_layouts = family_layouts(
+            "train", config.environment.seed, config.layout_repeats, executor=pool
+        )
+        held_out = family_layouts(
+            "train", config.evaluation.seed, config.monitor_repeats, executor=pool
+        )
+    monitor_images, monitor_labels = monitor_frames(
+        held_out, config.evaluation.seed, config.evaluation.samples
+    )
+    sample = frame_stream(
+        train_layouts, seed + 999, keep=config.keep, generated_share=config.generated_share
+    )
+    weights = pixel_type_weights(
+        np.stack([frame.labels for frame in islice(sample, 4_000)]), power=config.weight_power
+    )
+    print(
+        f"Layouts: {len(train_layouts)} train, {len(held_out)} held out; "
+        f"{len(monitor_images)} monitor frames ({time.time() - started:.0f}s)\n"
+        "Pixel weights: "
+        + ", ".join(f"{name}={w:.2f}" for name, w in zip(PIXEL_TYPES, weights.tolist())),
+        flush=True,
+    )
+
+    batch_size = config.training.batch_size
+    steps_per_epoch = -(-config.training.samples_per_epoch // batch_size)
+    loader = DataLoader(
+        FrameStreamDataset(
+            train_layouts, seed, keep=config.keep, generated_share=config.generated_share
+        ),
+        batch_size=batch_size,
+        num_workers=config.workers,
+        pin_memory=device.type == "cuda",
+        persistent_workers=True,
+        prefetch_factor=4,
+    )
+
+    def on_epoch(epoch: int, metrics: dict, improved: bool) -> None:
+        metrics["frames_seen"] = epoch * steps_per_epoch * batch_size
+        print(epoch_line(metrics), flush=True)
+        if improved:
+            metrics["learned_numbers"] = parameters
+            save_checkpoint(output, model, epoch, metrics, config)
+            print(f"Saved checkpoint: {output}", flush=True)
+
+    return train_pixel_vision(
+        model,
+        loader,
+        epochs=config.training.epochs,
+        steps_per_epoch=steps_per_epoch,
+        held_out_images=monitor_images,
+        held_out_labels=monitor_labels,
+        weights=weights,
+        device=device,
+        learning_rate=config.training.learning_rate,
         weight_decay=config.training.weight_decay,
+        warmup_steps=config.warmup_steps,
+        gradient_clip_norm=config.training.gradient_clip_norm,
+        on_epoch=on_epoch,
     )
-    start_epoch = 0
-    if resume is not None:
-        checkpoint = torch.load(resume, map_location=device, weights_only=False)
-        if is_versioned_checkpoint(checkpoint):
-            checkpoint = validate_checkpoint_compatibility(
-                checkpoint,
-                stage=BLOCK_SMB_SPEC,
-                model=config.model,
-                vision=model.spec,
-                checkpoint_kind="vision_encoder",
-                required_states=("model", "optimizer"),
-                context=f"resume checkpoint {resume}",
-            )
-            states = checkpoint["states"]
-            model.load_compatible_state_dict(states["model"])
-            optimizer.load_state_dict(states["optimizer"])
-        else:
-            model.load_compatible_state_dict(checkpoint["model_state"])
-            optimizer.load_state_dict(checkpoint["optimizer_state"])
-        start_epoch = int(checkpoint["epoch"]) + 1
-
-    print(f"Device: {device}; parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print("Generating fixed validation rollout...")
-    val_frames, val_on_ground = collect_procedural_frames(
-        config.evaluation.samples,
-        config.evaluation.seed,
-        config.environment.rollout_steps,
-        show_progress=True,
-    )
-    val_labels, val_positions, val_supports = build_ground_truth(
-        model, val_frames, val_on_ground
-    )
-    val_loader = make_loader(
-        val_frames,
-        val_labels,
-        val_positions,
-        val_supports,
-        config.training.batch_size,
-        False,
-        config.evaluation.seed,
-    )
-
-    # Namespace train-collection seeds strictly above the validation scenario
-    # seed range [evaluation.seed, evaluation.seed + evaluation.samples) so
-    # train/val scenarios can never collide, for any epoch count.
-    train_seed_base = max(
-        config.environment.seed + 2_000_000,
-        config.evaluation.seed + config.evaluation.samples + 1,
-    )
-
-    best_iou = -1.0
-    final_metrics = {}
-    for epoch in range(start_epoch, config.training.epochs):
-        train_frames, train_on_ground = collect_procedural_frames(
-            config.training.samples_per_epoch,
-            train_seed_base + epoch * 10_000,
-            config.environment.rollout_steps,
-            show_progress=True,
-        )
-        train_labels, train_positions, train_supports = build_ground_truth(
-            model, train_frames, train_on_ground
-        )
-        train_loader = make_loader(
-            train_frames,
-            train_labels,
-            train_positions,
-            train_supports,
-            config.training.batch_size,
-            True,
-            config.training.seed + epoch,
-        )
-        weights = class_weights(train_labels, model.spec.num_classes, device)
-
-        model.train()
-        running = 0.0
-        for images, labels, positions, supports in train_loader:
-            images = images.to(device)
-            labels = labels.to(device)
-            positions = positions.to(device)
-            supports = supports.to(device)
-            optimizer.zero_grad(set_to_none=True)
-            loss, _, _, _ = compute_loss(
-                model,
-                images,
-                labels,
-                positions,
-                supports,
-                weights,
-                config.position_weight,
-                config.support_weight,
-            )
-            loss.backward()
-            if config.training.gradient_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), config.training.gradient_clip_norm
-                )
-            optimizer.step()
-            running += loss.item() * images.shape[0]
-
-        final_metrics = evaluate(
-            model,
-            val_loader,
-            weights,
-            config.position_weight,
-            config.support_weight,
-            device,
-        )
-        train_loss = running / len(train_loader.dataset)
-        print(
-            f"Epoch {epoch + 1:03d}/{config.training.epochs:03d} "
-            f"train={train_loss:.4f} val={final_metrics['loss']:.4f} "
-            f"fg_acc={final_metrics['foreground_accuracy'] * 100:5.1f}% "
-            f"mIoU={final_metrics['mean_iou'] * 100:5.1f}% "
-            f"pos_mse={final_metrics['position_loss']:.5f} "
-            f"support_acc={final_metrics['support_accuracy'] * 100:5.1f}%"
-        )
-        if final_metrics["mean_iou"] >= best_iou:
-            best_iou = final_metrics["mean_iou"]
-            save_checkpoint(output, model, optimizer, epoch, final_metrics, config)
-            print(f"Saved checkpoint: {output}")
-
-    return final_metrics
 
 
 def parse_args() -> argparse.Namespace:
+    defaults = TrainConfig()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
-    parser.add_argument("--samples-per-epoch", type=int, default=DEFAULT_SAMPLES_PER_EPOCH)
-    parser.add_argument("--val-samples", type=int, default=DEFAULT_VAL_SAMPLES)
-    parser.add_argument("--rollout-steps", type=int, default=DEFAULT_ROLLOUT_STEPS)
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
-    parser.add_argument("--weight-decay", type=float, default=DEFAULT_WEIGHT_DECAY)
-    parser.add_argument("--position-weight", type=float, default=DEFAULT_POSITION_WEIGHT)
-    parser.add_argument("--support-weight", type=float, default=DEFAULT_SUPPORT_WEIGHT)
-    parser.add_argument("--dim", type=int, default=DEFAULT_DIM)
-    parser.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
-    parser.add_argument("--heads", type=int, default=DEFAULT_HEADS)
-    parser.add_argument("--patch-size", type=int, default=DEFAULT_PATCH_SIZE)
-    parser.add_argument("--dropout", type=float, default=DEFAULT_DROPOUT)
+    parser.add_argument("--epochs", type=int, default=defaults.training.epochs)
+    parser.add_argument(
+        "--samples-per-epoch", type=int, default=defaults.training.samples_per_epoch
+    )
+    parser.add_argument("--monitor-frames", type=int, default=defaults.evaluation.samples)
+    parser.add_argument("--batch-size", type=int, default=defaults.training.batch_size)
+    parser.add_argument("--learning-rate", type=float, default=defaults.training.learning_rate)
+    parser.add_argument("--weight-decay", type=float, default=defaults.training.weight_decay)
+    parser.add_argument("--weight-power", type=float, default=defaults.weight_power)
+    parser.add_argument("--dim", type=int, default=defaults.model.hidden_dim)
+    parser.add_argument("--depth", type=int, default=defaults.model.depth)
+    parser.add_argument("--heads", type=int, default=defaults.model.heads)
+    parser.add_argument(
+        "--refine-dim", type=int, default=int(defaults.model.metadata["refine_dim"])
+    )
+    parser.add_argument("--layout-repeats", type=int, default=defaults.layout_repeats)
+    parser.add_argument("--monitor-repeats", type=int, default=defaults.monitor_repeats)
+    parser.add_argument("--workers", type=int, default=defaults.workers)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--resume", type=Path)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    config = TrainConfig(
-        environment=EnvironmentConfig(
-            stage="block_smb",
-            seed=args.seed,
-            rollout_steps=args.rollout_steps,
-        ),
-        model=ModelConfig(
-            name="block_smb_vit",
+    defaults = TrainConfig()
+    config = replace(
+        defaults,
+        environment=replace(defaults.environment, seed=args.seed),
+        model=replace(
+            defaults.model,
             hidden_dim=args.dim,
             depth=args.depth,
             heads=args.heads,
-            patch_size=args.patch_size,
-            dropout=args.dropout,
+            metadata={"refine_dim": args.refine_dim},
         ),
-        training=TrainingConfig(
+        training=replace(
+            defaults.training,
             epochs=args.epochs,
             samples_per_epoch=args.samples_per_epoch,
             batch_size=args.batch_size,
@@ -578,30 +319,15 @@ def main() -> None:
             weight_decay=args.weight_decay,
             seed=args.seed,
             device=args.device,
-            gradient_clip_norm=DEFAULT_GRADIENT_CLIP_NORM,
         ),
-        evaluation=EvaluationConfig(
-            samples=args.val_samples,
-            seed=args.seed + 1_000_000,
-            metrics=(
-                "loss",
-                "semantic_loss",
-                "position_loss",
-                "support_loss",
-                "accuracy",
-                "foreground_accuracy",
-                "mean_iou",
-                "support_accuracy",
-            ),
+        evaluation=replace(
+            defaults.evaluation, samples=args.monitor_frames, seed=args.seed + 1_000
         ),
-        checkpoints=CheckpointConfig(
-            output_path=args.output,
-            resume_path=args.resume,
-            best_metric="mean_iou",
-            best_mode="max",
-        ),
-        position_weight=args.position_weight,
-        support_weight=args.support_weight,
+        checkpoints=replace(defaults.checkpoints, output_path=args.output),
+        layout_repeats=args.layout_repeats,
+        monitor_repeats=args.monitor_repeats,
+        weight_power=args.weight_power,
+        workers=args.workers,
     )
     train(config)
 

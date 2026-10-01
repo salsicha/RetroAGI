@@ -1,0 +1,180 @@
+{
+  "architecture": {},
+  "checkpoint_kind": "vision_encoder",
+  "checkpoint_schema_version": 1,
+  "code_revision": {
+    "branch": "main",
+    "dirty": true,
+    "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "2296b64",
+    "system": "git"
+  },
+  "config": {
+    "checkpoints": {
+      "best_metric": "mean_type_iou",
+      "best_mode": "max",
+      "metadata": {},
+      "output_path": "data/block_vit/block_vit_pixel.pth",
+      "resume_path": null,
+      "save_interval_epochs": 1
+    },
+    "environment": {
+      "deterministic": true,
+      "metadata": {},
+      "num_envs": 1,
+      "rollout_steps": 320,
+      "scenario": null,
+      "seed": 7,
+      "stage": "block_smb"
+    },
+    "evaluation": {
+      "deterministic": true,
+      "episodes": null,
+      "interval_epochs": 1,
+      "metadata": {},
+      "metrics": [
+        "loss",
+        "pixels_correct",
+        "mean_type_iou"
+      ],
+      "samples": 3000,
+      "seed": 1007
+    },
+    "metadata": {
+      "generated_share": 0.15,
+      "keep": 0.25,
+      "layout_repeats": 12,
+      "monitor_repeats": 2,
+      "warmup_steps": 500,
+      "weight_power": 0.5
+    },
+    "model": {
+      "depth": 4,
+      "dropout": 0.0,
+      "heads": 4,
+      "hidden_dim": 128,
+      "metadata": {
+        "refine_dim": 32
+      },
+      "name": "block_smb_vit",
+      "patch_size": 16
+    },
+    "name": "block_vit_training",
+    "training": {
+      "batch_size": 48,
+      "device": "auto",
+      "epochs": 40,
+      "gradient_clip_norm": 1.0,
+      "learning_rate": 0.001,
+      "metadata": {},
+      "samples_per_epoch": 40000,
+      "seed": 7,
+      "weight_decay": 0.05
+    }
+  },
+  "environment": {
+    "platform": {
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "release": "6.8.0-138-generic",
+      "system": "Linux",
+      "version": "#138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026"
+    },
+    "python": {
+      "executable": "/home/amoran/venv/bin/python",
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "torch": {
+      "cuda_available": true,
+      "cuda_version": "12.1",
+      "mps_available": false,
+      "mps_built": false,
+      "version": "2.2.0+cu121"
+    }
+  },
+  "epoch": 32,
+  "global_step": 0,
+  "metadata": {
+    "code_revision": {
+      "branch": "main",
+      "dirty": true,
+      "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "2296b64",
+      "system": "git"
+    },
+    "runtime_environment": {
+      "platform": {
+        "machine": "x86_64",
+        "processor": "x86_64",
+        "release": "6.8.0-138-generic",
+        "system": "Linux",
+        "version": "#138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026"
+      },
+      "python": {
+        "executable": "/home/amoran/venv/bin/python",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      },
+      "torch": {
+        "cuda_available": true,
+        "cuda_version": "12.1",
+        "mps_available": false,
+        "mps_built": false,
+        "version": "2.2.0+cu121"
+      }
+    },
+    "trainer": "scripts.vit.train_block_vit"
+  },
+  "metrics": {
+    "epoch": 32,
+    "frames_seen": 1281024,
+    "learned_numbers": 1220425,
+    "loss": 3.7254356469323587e-06,
+    "mean_type_iou": 0.9996775760413636,
+    "minutes": 14.761751019954682,
+    "pixels_correct": 0.9999993055555556,
+    "train_loss": 4.069273450931433e-05,
+    "type_iou": {
+      "background": 0.9999999879042956,
+      "brick": 0.9999261229314421,
+      "coin": 0.9993105887572014,
+      "enemy": 0.9999846203534243,
+      "ground": 0.9999996837352436,
+      "mario": 0.9999412250381338,
+      "moving_platform": 1.0,
+      "pipe": 1.0,
+      "question_block": 0.9979359556525329
+    }
+  },
+  "model_name": "block_smb_vit",
+  "specs": {
+    "vision": {
+      "name": "block_smb_vit",
+      "position_dim": 2,
+      "semantic_classes": [
+        "background",
+        "mario",
+        "ground",
+        "brick",
+        "question_block",
+        "pipe",
+        "coin",
+        "enemy",
+        "moving_platform"
+      ],
+      "support_classes": [
+        "air",
+        "ground",
+        "platform"
+      ],
+      "token_dim": 9
+    }
+  },
+  "stage": "block_smb",
+  "state_keys": [
+    "model"
+  ]
+}

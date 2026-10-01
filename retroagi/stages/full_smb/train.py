@@ -39,6 +39,7 @@ from retroagi.core import (
     smb_jump_release_action,
     to_plain_data,
 )
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.core.smb_runtime import attach_runtime, make_smb_executor
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
 from retroagi.stages.block_smb.train import (
@@ -67,15 +68,16 @@ from retroagi.stages.full_smb.tasks import (
 from retroagi.stages.full_smb.transfer import (
     FULL_SMB_TRANSFER_CHECKPOINT_KIND,
     FULL_SMB_TRANSFER_MODEL_NAME,
+    full_smb_vision_model,
     load_transferred_full_smb_policy,
     make_full_smb_policy_model,
     policy_architecture_from_checkpoint,
     transfer_block_smb_checkpoint_to_full_smb,
 )
 from retroagi.stages.full_smb.vision import (
-    DEFAULT_FULL_SMB_VIT_CHECKPOINT,
-    FULL_SMB_VIT_CLASSES,
-    FullSMBSegmentationVision,
+    DEFAULT_FULL_VIT_CHECKPOINT,
+    FULL_VIT_NAME,
+    FullVisionTransformer,
 )
 
 FULL_SMB_POLICY_MODEL_NAME = "full_smb_policy"
@@ -212,20 +214,17 @@ _FULL_SMB_FIXED_LEVEL_TASK_NAMES = {
     "2-1": "benchmark_2_1_start",
 }
 _FULL_SMB_PLAY_RENDER_MODES = ("human", "semantic-mask", "none")
+# One colour per pixel type, keyed by smb_pixel_types.PIXEL_TYPES.
 _FULL_SMB_SEMANTIC_MASK_PALETTE = {
-    "sky": (92, 174, 255),
+    "background": (92, 174, 255),
+    "mario": (228, 40, 40),
     "ground": (170, 110, 42),
     "brick": (188, 72, 38),
     "question_block": (244, 191, 66),
     "pipe": (44, 156, 72),
     "coin": (255, 226, 64),
-    "goomba": (126, 64, 34),
-    "koopa": (72, 190, 78),
-    "mario": (228, 40, 40),
-    "mushroom": (255, 116, 116),
-    "hill": (92, 174, 78),
-    "cloud": (245, 245, 245),
-    "bush": (34, 132, 56),
+    "enemy": (126, 64, 34),
+    "moving_platform": (200, 200, 200),
 }
 
 
@@ -361,7 +360,7 @@ class FullSMBTrainingConfig:
     checkpoint_path: Optional[Path] = None
     resume_path: Optional[Path] = None
     init_checkpoint: Optional[Path] = None
-    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT
+    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_VIT_CHECKPOINT
     perception_mode: Optional[str] = None
     freeze_vision: bool = True
     game_id: str = DEFAULT_FULL_SMB_CONTENT.game
@@ -508,7 +507,7 @@ class FullSMBTrainingConfig:
             and self.full_smb_vision_checkpoint is None
         ):
             raise ValueError(
-                "full_smb_vision_checkpoint is required unless " "perception_mode='replace'"
+                "full_smb_vision_checkpoint is required unless perception_mode='replace'"
             )
         if self.imitation_warm_start is None:
             warm_start = self.resume_path is None and self.init_checkpoint is not None
@@ -776,7 +775,7 @@ class FullSMBPolicyForwardResult:
         yield self.next_world_model_state
 
 
-StageFactory = Callable[[FullSMBSegmentationVision], FullSMBStage]
+StageFactory = Callable[[FullVisionTransformer], FullSMBStage]
 
 
 def seed_everything(seed: int, deterministic: bool = True) -> None:
@@ -1081,7 +1080,7 @@ def train_full_smb_policy(
 def _run_full_smb_imitation_warm_start_phase(
     config: FullSMBTrainingConfig,
     model: torch.nn.Module,
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     *,
     device: torch.device,
     make_stage: Optional[StageFactory],
@@ -1191,7 +1190,7 @@ def _full_smb_imitation_decision_frame_skip(config: FullSMBTrainingConfig) -> in
 
 def _make_full_smb_imitation_stage(
     make_stage: Optional[StageFactory],
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     config: FullSMBTrainingConfig,
     *,
     decision_frame_skip: int,
@@ -1277,7 +1276,7 @@ def evaluate_full_smb_policy(
     *,
     config: FullSMBTrainingConfig = FullSMBTrainingConfig(),
     make_stage: Optional[StageFactory] = None,
-    vision: Optional[FullSMBSegmentationVision] = None,
+    vision: Optional[FullVisionTransformer] = None,
     device: Optional[torch.device] = None,
     recording_prefix: str = "evaluation",
 ) -> FullSMBEvaluationResult:
@@ -1460,7 +1459,7 @@ def evaluate_full_smb_policy_multi_seed(
     *,
     config: FullSMBTrainingConfig = FullSMBTrainingConfig(),
     make_stage: Optional[StageFactory] = None,
-    vision: Optional[FullSMBSegmentationVision] = None,
+    vision: Optional[FullVisionTransformer] = None,
     device: Optional[torch.device] = None,
     seed_count: int = 3,
 ) -> dict[str, Any]:
@@ -1501,7 +1500,7 @@ def play_full_smb_policy(
     config: FullSMBTrainingConfig = FullSMBTrainingConfig(),
     play_config: FullSMBPlayConfig = FullSMBPlayConfig(),
     make_stage: Optional[StageFactory] = None,
-    vision: Optional[FullSMBSegmentationVision] = None,
+    vision: Optional[FullVisionTransformer] = None,
     device: Optional[torch.device] = None,
 ) -> FullSMBPlayResult:
     """Play a saved Full SMB policy with optional rendering and recording."""
@@ -2192,40 +2191,24 @@ def _full_smb_semantic_mask_rgb(
     if observation is None:
         height, width = frame_shape
         return np.zeros((height, width, 3), dtype=np.uint8)
-    preprocess = getattr(stage, "_preprocess_observation", None)
-    if callable(preprocess):
-        vision_input = preprocess(np.asarray(observation))
-    else:
-        vision_input = torch.as_tensor(observation, dtype=torch.float32)
-        if bool(vision_input.numel()) and float(vision_input.max()) > 1.0:
-            vision_input = vision_input / 255.0
     with torch.no_grad():
-        vision = stage.vision.encode(vision_input)
+        vision = stage.vision.encode(np.asarray(observation))
     semantic_ids = vision.semantic_ids.detach()
     if semantic_ids.ndim == 3:
         semantic_ids = semantic_ids[0]
     semantic_ids = semantic_ids.to(torch.long).cpu()
     palette = _full_smb_semantic_palette_tensor()
-    mask = palette[semantic_ids.clamp(0, palette.shape[0] - 1)]
-    mask = (
-        F.interpolate(
-            mask.permute(2, 0, 1).unsqueeze(0).float(),
-            size=frame_shape,
-            mode="nearest",
-        )
-        .squeeze(0)
-        .permute(1, 2, 0)
-        .byte()
-        .cpu()
-        .numpy()
-    )
-    return np.ascontiguousarray(mask)
+    mask = palette[semantic_ids.clamp(0, palette.shape[0] - 1)].numpy()
+    # Each label colors exactly its own square of the full-size screen.
+    rows, columns = frame_shape[0] // mask.shape[0], frame_shape[1] // mask.shape[1]
+    if (rows * mask.shape[0], columns * mask.shape[1]) != tuple(frame_shape):
+        raise ValueError("Semantic mask squares must tile the full-size frame exactly")
+    return np.ascontiguousarray(mask.repeat(rows, axis=0).repeat(columns, axis=1))
 
 
 def _full_smb_semantic_palette_tensor() -> torch.Tensor:
     colors = [
-        _FULL_SMB_SEMANTIC_MASK_PALETTE.get(class_name, (255, 0, 255))
-        for class_name in FULL_SMB_VIT_CLASSES
+        _FULL_SMB_SEMANTIC_MASK_PALETTE.get(class_name, (255, 0, 255)) for class_name in PIXEL_TYPES
     ]
     return torch.tensor(colors, dtype=torch.uint8)
 
@@ -2363,7 +2346,7 @@ def build_full_smb_policy_checkpoint(
     metrics: Mapping[str, float],
     architecture_name: str,
     architecture_config: Mapping[str, Any],
-    vision: Optional[FullSMBSegmentationVision] = None,
+    vision: Optional[FullVisionTransformer] = None,
     training_source: Optional[Mapping[str, Any]] = None,
     rollouts: Optional[list[FullSMBRolloutStorage] | tuple[FullSMBRolloutStorage, ...]] = None,
     evaluations: Optional[list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]] = None,
@@ -2489,7 +2472,7 @@ def _load_training_state(
     str,
     dict[str, Any],
     Optional[Mapping[str, Any]],
-    Optional[FullSMBSegmentationVision],
+    Optional[FullVisionTransformer],
     dict[str, Any],
 ]:
     if config.resume_path is not None:
@@ -2560,7 +2543,7 @@ def _load_init_training_state(
     str,
     dict[str, Any],
     Optional[Mapping[str, Any]],
-    Optional[FullSMBSegmentationVision],
+    Optional[FullVisionTransformer],
     dict[str, Any],
 ]:
     if config.init_checkpoint is None:
@@ -3445,7 +3428,9 @@ def _smb_forward_kwargs(model, batch, deterministic):
     committed = (
         executor.prepare(batch)
         if hasattr(executor, "prepare")
-        else executor.committed_action if executor is not None else None
+        else executor.committed_action
+        if executor is not None
+        else None
     )
     kwargs = dict(
         skill_goal=geometry["skill_goal"].to(batch.src_c.device) if contract.skill_goals else None,
@@ -3730,7 +3715,7 @@ def _task_start_emulator_state(config: FullSMBTrainingConfig) -> Any:
 
 def _make_stage(
     make_stage: Optional[StageFactory],
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     config: FullSMBTrainingConfig,
 ) -> FullSMBStage:
     if make_stage is not None:
@@ -3760,11 +3745,9 @@ def _perception_checkpoint_path(config: FullSMBTrainingConfig) -> Optional[Path]
 def _build_full_smb_perception(
     config: FullSMBTrainingConfig,
     device: torch.device,
-) -> FullSMBSegmentationVision:
-    return FullSMBSegmentationVision(
-        checkpoint=_perception_checkpoint_path(config),
-        device=device,
-        freeze=config.freeze_vision,
+) -> FullVisionTransformer:
+    return full_smb_vision_model(
+        _perception_checkpoint_path(config), device=device, freeze=config.freeze_vision
     )
 
 
@@ -3777,7 +3760,7 @@ def _perception_optimizer_enabled(config: FullSMBTrainingConfig) -> bool:
 
 def _make_training_optimizer(
     model: torch.nn.Module,
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     config: FullSMBTrainingConfig,
 ) -> optim.Optimizer:
     param_groups: list[dict[str, Any]] = [{"params": list(model.parameters()), "name": "policy"}]
@@ -3790,7 +3773,7 @@ def _make_training_optimizer(
 
 def _gradient_parameters(
     model: torch.nn.Module,
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     config: FullSMBTrainingConfig,
 ) -> tuple[torch.nn.Parameter, ...]:
     parameters = list(model.parameters())
@@ -3800,7 +3783,7 @@ def _gradient_parameters(
 
 
 def _set_perception_training_mode(
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     config: FullSMBTrainingConfig,
 ) -> None:
     if not isinstance(vision, torch.nn.Module):
@@ -3812,7 +3795,7 @@ def _set_perception_training_mode(
 
 
 def _restore_perception_state(
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     checkpoint: Optional[Mapping[str, Any]],
 ) -> None:
     if checkpoint is None:
@@ -3855,17 +3838,13 @@ def _restore_optimizer_state(
 
 def _perception_checkpoint_metadata(
     config: FullSMBTrainingConfig,
-    vision: Optional[FullSMBSegmentationVision] = None,
+    vision: Optional[FullVisionTransformer] = None,
 ) -> dict[str, Any]:
     requested_checkpoint = config.full_smb_vision_checkpoint
-    resolved_checkpoint = None
-    if vision is not None:
-        resolved_checkpoint = vision.checkpoint_path
-    elif config.perception_mode != FULL_SMB_PERCEPTION_REPLACE:
-        resolved_checkpoint = requested_checkpoint
+    resolved_checkpoint = _perception_checkpoint_path(config)
     return {
         "mode": config.perception_mode,
-        "encoder": "full_smb_vit",
+        "encoder": FULL_VIT_NAME,
         "requested_checkpoint_path": (
             str(requested_checkpoint) if requested_checkpoint is not None else None
         ),
@@ -5340,7 +5319,7 @@ def _add_play_args(parser: argparse.ArgumentParser) -> None:
         "--semantic-mask",
         action="store_true",
         dest="semantic_mask",
-        help="render a side-by-side game frame and ViT semantic-mask diagnostic window",
+        help="render the game frame beside the vision model's pixel types",
     )
     parser.add_argument(
         "--no-semantic-mask",
@@ -5521,7 +5500,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--full-smb-vision-checkpoint",
         type=Path,
-        default=DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+        default=DEFAULT_FULL_VIT_CHECKPOINT,
     )
     parser.add_argument(
         "--perception-mode",

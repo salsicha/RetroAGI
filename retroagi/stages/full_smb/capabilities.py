@@ -195,7 +195,6 @@ def _make_full_smb_check_stage(config: FullSMBEnvironmentCheckConfig) -> FullSMB
         observation_config=FullSMBObservationConfig(
             frame_skip=config.frame_skip,
             frame_stack=2,
-            resize_shape=None,
         ),
         vision=_NoopVision(),
     )

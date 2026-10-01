@@ -24,7 +24,7 @@ To clone code without downloading large artifacts immediately:
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 git clone <repository-url>
 cd RetroAGI
-git lfs pull --include="data/**,scripts/segmentation/*.pth"
+git lfs pull --include="data/**"
 ```
 
 Use `git lfs ls-files -s` to inspect tracked artifacts and their sizes.

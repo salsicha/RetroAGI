@@ -1,161 +1,45 @@
-"""Vision Transformer and semantic supervision for block SMB."""
+"""The Block SMB vision model: the shared per-pixel vision transformer, Block weights.
+
+The model is retroagi.core.vision.PixelVisionTransformer; Block SMB only names
+its checkpoints and trains it on the practice game's frames, whose exact
+labels come from MarioScenarioEnv.render_labels() (the frame's own shapes
+drawn with their types instead of their colours). Training lives in
+scripts/vit/train_block_vit.py and measurement in
+scripts/vision/evaluate_block_vision.py, both through retroagi.core.pixel_vision.
+"""
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
 import torch
-import torch.nn.functional as F
 
-from retroagi.core import (
-    ModelConfig,
-    PatchVisionTransformer,
-    VisionOutput,
-    build_checkpoint,
-    load_checkpoint,
-    validate_checkpoint_compatibility,
-)
-from retroagi.core.vision import image_tensor
+from retroagi.core.pixel_vision import load_pixel_vision_checkpoint
+from retroagi.core.vision import PixelVisionTransformer
 
-BLOCK_SEMANTIC_CLASSES = (
-    "background",
-    "mario",
-    "platform",
-    "coin",
-    "goal",
-    "enemy",
-    "moving_platform",
-)
+DEFAULT_BLOCK_VIT_CHECKPOINT = Path("data/block_vit/block_vit_pixel.pth")
+BLOCK_VIT_NAME = "block_smb_vit"
 
-BLOCK_CLASS_COLORS = {
-    "background": ((107, 140, 255),),
-    # White eye pixels are drawn on both Mario and live enemies; exact color
-    # matching cannot tell them apart, so white is assigned to Mario (his eye
-    # is always present, enemy eyes are 2px circles). Without this entry eye
-    # pixels silently fell through to the background class.
-    "mario": ((255, 0, 0), (255, 220, 0), (255, 255, 255)),
-    "platform": ((139, 69, 19),),
-    "coin": ((255, 215, 0),),
-    "goal": ((0, 255, 0),),
-    "enemy": ((160, 32, 240), (100, 0, 160)),
-    "moving_platform": ((80, 160, 40),),
-}
 
-DEFAULT_BLOCK_VIT_CHECKPOINT = Path("data/block_vit/block_vit.pth")
-FALLBACK_BLOCK_VIT_CHECKPOINT = Path("data/block_smb_vit/block_vit.pth")
+class BlockVisionTransformer(PixelVisionTransformer):
+    """The shared per-pixel vision transformer under the Block SMB checkpoint name."""
+
+    def __init__(self, **settings: Any):
+        super().__init__(**{**settings, "name": BLOCK_VIT_NAME})
 
 
 @dataclass(frozen=True)
 class BlockVITLoadResult:
-    model: "BlockVisionTransformer"
+    model: BlockVisionTransformer
     checkpoint: dict[str, Any]
     path: Path
     frozen: bool
 
 
-@dataclass(frozen=True)
-class BlockVITPerceptionThresholds:
-    """Minimum perception quality before policy failures blame the trainer."""
-
-    min_accuracy: float = 0.95
-    min_foreground_accuracy: float = 0.90
-    min_mean_iou: float = 0.70
-    min_support_accuracy: float = 0.90
-    max_position_rmse: float = 0.06
-    min_position_within_tolerance: float = 0.90
-    position_tolerance: float = 0.05
-
-    def __post_init__(self) -> None:
-        for name in (
-            "min_accuracy",
-            "min_foreground_accuracy",
-            "min_mean_iou",
-            "min_support_accuracy",
-            "min_position_within_tolerance",
-            "position_tolerance",
-        ):
-            value = getattr(self, name)
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"{name} must be in [0, 1]")
-        if self.max_position_rmse < 0:
-            raise ValueError("max_position_rmse must be non-negative")
-
-    def to_dict(self) -> dict[str, float]:
-        return {
-            "min_accuracy": self.min_accuracy,
-            "min_foreground_accuracy": self.min_foreground_accuracy,
-            "min_mean_iou": self.min_mean_iou,
-            "min_support_accuracy": self.min_support_accuracy,
-            "max_position_rmse": self.max_position_rmse,
-            "min_position_within_tolerance": self.min_position_within_tolerance,
-            "position_tolerance": self.position_tolerance,
-        }
-
-
-def _resolve_block_vit_checkpoint(path: Optional[Path] = None) -> Path:
-    if path is not None:
-        return Path(path)
-    if DEFAULT_BLOCK_VIT_CHECKPOINT.exists():
-        return DEFAULT_BLOCK_VIT_CHECKPOINT
-    return FALLBACK_BLOCK_VIT_CHECKPOINT
-
-
-def set_block_vit_trainable(model: "BlockVisionTransformer", trainable: bool) -> None:
+def set_block_vit_trainable(model: PixelVisionTransformer, trainable: bool) -> None:
     for parameter in model.parameters():
         parameter.requires_grad_(trainable)
     model.train(trainable)
-
-
-def _legacy_block_vit_checkpoint(
-    checkpoint: Mapping[str, Any],
-    checkpoint_path: Path,
-) -> dict[str, Any]:
-    """Normalize the original Block ViT trainer checkpoint to schema v1."""
-    if "model_state" not in checkpoint:
-        raise ValueError("legacy Block ViT checkpoint is missing model_state")
-    legacy_config = checkpoint.get("config", {})
-    if not isinstance(legacy_config, Mapping):
-        legacy_config = {}
-    vision_spec = checkpoint.get("vision_spec", {})
-    if not isinstance(vision_spec, Mapping):
-        vision_spec = {}
-
-    semantic_classes = tuple(vision_spec.get("semantic_classes", BLOCK_SEMANTIC_CLASSES))
-    model_config = {
-        "name": "block_smb_vit",
-        "hidden_dim": int(legacy_config.get("hidden_dim", legacy_config.get("dim", 64))),
-        "depth": int(legacy_config.get("depth", 2)),
-        "heads": int(legacy_config.get("heads", 4)),
-        "patch_size": int(legacy_config.get("patch_size", 16)),
-        "dropout": float(legacy_config.get("dropout", 0.1)),
-    }
-    return build_checkpoint(
-        stage="block_smb",
-        model_name="block_smb_vit",
-        checkpoint_kind="vision_encoder",
-        epoch=int(checkpoint.get("epoch", 0)),
-        metrics=checkpoint.get("metrics", {}),
-        config={
-            "model": model_config,
-            "legacy_training": dict(legacy_config),
-        },
-        specs={
-            "vision": {
-                "name": str(vision_spec.get("name", "block_smb_vit")),
-                "semantic_classes": semantic_classes,
-                "token_dim": int(vision_spec.get("token_dim", model_config["hidden_dim"])),
-                "position_dim": int(vision_spec.get("position_dim", 2)),
-                "support_classes": tuple(
-                    vision_spec.get("support_classes", ("air", "ground", "platform"))
-                ),
-            }
-        },
-        states={"model": checkpoint["model_state"]},
-        metadata={
-            "legacy_checkpoint": True,
-            "source_path": str(checkpoint_path),
-        },
-    )
 
 
 def load_block_vit_checkpoint(
@@ -164,12 +48,11 @@ def load_block_vit_checkpoint(
     device: str | torch.device = "cpu",
     freeze: bool = True,
 ) -> BlockVITLoadResult:
-    """Load the supported Block SMB ViT checkpoint for policy training.
+    """Load the Block vision transformer for policy training (frozen by default).
 
-    Perception is frozen by default for policy training. Pass ``freeze=False``
-    only for explicit fine-tuning experiments.
+    Pass ``freeze=False`` only for explicit fine-tuning experiments.
     """
-    checkpoint_path = _resolve_block_vit_checkpoint(path)
+    checkpoint_path = Path(path) if path is not None else DEFAULT_BLOCK_VIT_CHECKPOINT
     if not checkpoint_path.exists():
         raise FileNotFoundError(
             f"Block ViT checkpoint not found at {checkpoint_path}; train it with "
@@ -178,319 +61,10 @@ def load_block_vit_checkpoint(
 
     from .adapter import BLOCK_SMB_SPEC
 
-    try:
-        checkpoint = load_checkpoint(checkpoint_path, map_location=device)
-    except ValueError as exc:
-        if "checkpoint_schema_version" not in str(exc):
-            raise
-        legacy_checkpoint = torch.load(
-            checkpoint_path,
-            map_location=device,
-            weights_only=False,
-        )
-        if not isinstance(legacy_checkpoint, Mapping):
-            raise ValueError("legacy Block ViT checkpoint must be a mapping") from exc
-        checkpoint = _legacy_block_vit_checkpoint(legacy_checkpoint, checkpoint_path)
-    config = checkpoint.get("config", {})
-    model_config = config.get("model", {}) if isinstance(config, dict) else {}
-    model = BlockVisionTransformer(
-        dim=int(model_config.get("hidden_dim", 64)),
-        depth=int(model_config.get("depth", 2)),
-        heads=int(model_config.get("heads", 4)),
-        patch_size=int(model_config.get("patch_size", 16)),
-        drop=float(model_config.get("dropout", 0.1)),
-    ).to(device)
-    validate_checkpoint_compatibility(
-        checkpoint,
-        stage=BLOCK_SMB_SPEC,
-        model=ModelConfig(
-            name="block_smb_vit",
-            hidden_dim=model.spec.token_dim,
-            depth=len(model.encoder.layers),
-            heads=int(model.encoder.layers[0].self_attn.num_heads),
-            patch_size=model.patch_size,
-            dropout=float(model.dropout.p),
-        ),
-        vision=model.spec,
-        checkpoint_kind="vision_encoder",
-        required_states=("model",),
-        context=f"Block ViT policy loader {checkpoint_path}",
+    model, checkpoint = load_pixel_vision_checkpoint(
+        checkpoint_path, stage=BLOCK_SMB_SPEC, model_class=BlockVisionTransformer, device=device
     )
-    model.load_compatible_state_dict(checkpoint["states"]["model"])
     set_block_vit_trainable(model, trainable=not freeze)
-    if freeze:
-        model.eval()
     return BlockVITLoadResult(
         model=model, checkpoint=checkpoint, path=checkpoint_path, frozen=freeze
     )
-
-
-@torch.no_grad()
-def merge_engine_support_targets(
-    geometric: torch.Tensor,
-    on_ground: torch.Tensor,
-    *,
-    air_id: int = 0,
-    ground_id: int = 1,
-) -> torch.Tensor:
-    """Engine truth decides air vs supported; geometry names the surface.
-
-    The engine's on_ground flag is authoritative for whether Mario is
-    airborne — geometric patch inference calls a low arc "grounded" because
-    the patch beneath still reads as floor, which is exactly where the
-    support head used to misfire. Where the engine says supported, the
-    geometric label keeps the ground-vs-platform distinction; if geometry
-    disagrees and says air, fall back to plain ground.
-    """
-
-    merged = geometric.clone()
-    grounded = on_ground.to(dtype=torch.bool)
-    merged[~grounded] = air_id
-    merged[grounded & (geometric == air_id)] = ground_id
-    return merged
-
-
-def evaluate_block_vit_perception(
-    model: "BlockVisionTransformer",
-    observations: Any,
-    *,
-    thresholds: BlockVITPerceptionThresholds = BlockVITPerceptionThresholds(),
-    batch_size: int = 32,
-    on_ground: Any = None,
-) -> dict[str, Any]:
-    """Evaluate Block ViT semantics and position against exact palette labels.
-
-    When the caller collected the frames from the engine, pass its per-frame
-    on_ground truth so support accuracy is judged against reality instead of
-    geometric inference (which mislabels low arcs as grounded).
-    """
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
-    frames = torch.as_tensor(observations)
-    if frames.ndim == 3:
-        frames = frames.unsqueeze(0)
-    engine_grounded = None
-    if on_ground is not None:
-        engine_grounded = torch.as_tensor(on_ground).reshape(-1).to(dtype=torch.bool)
-        if len(engine_grounded) != frames.shape[0]:
-            raise ValueError("on_ground must have one entry per frame")
-    if frames.ndim != 4:
-        raise ValueError("observations must have shape [N,H,W,C] or [N,C,H,W]")
-    if frames.shape[0] <= 0:
-        raise ValueError("observations must contain at least one frame")
-
-    device = model.pos_embed.device
-    was_training = model.training
-    model.eval()
-    samples = correct = foreground_correct = foreground_total = patches = 0
-    support_correct = support_total = 0
-    position_squared_error = 0.0
-    position_within_tolerance = 0
-    intersections = torch.zeros(model.spec.num_classes, dtype=torch.float64)
-    unions = torch.zeros(model.spec.num_classes, dtype=torch.float64)
-
-    for start in range(0, frames.shape[0], batch_size):
-        batch = frames[start : start + batch_size].to(device)
-        labels = model.patch_targets(batch)
-        positions = model.position_targets(batch)
-        support_targets = model.support_targets(batch)
-        if engine_grounded is not None:
-            support_targets = merge_engine_support_targets(
-                support_targets,
-                engine_grounded[start : start + batch_size].to(support_targets.device),
-            )
-        output = model.encode(batch)
-        prediction = output.semantic_ids
-        if prediction.shape != labels.shape:
-            raise ValueError(
-                "vision semantic_ids shape must match patch targets "
-                f"{tuple(labels.shape)}, got {tuple(prediction.shape)}"
-            )
-        if output.position.shape != positions.shape:
-            raise ValueError(
-                "vision position shape must match position targets "
-                f"{tuple(positions.shape)}, got {tuple(output.position.shape)}"
-            )
-        if output.support_ids is None or output.support_ids.shape != support_targets.shape:
-            raise ValueError(
-                "vision support_ids shape must match support targets "
-                f"{tuple(support_targets.shape)}, got "
-                f"{None if output.support_ids is None else tuple(output.support_ids.shape)}"
-            )
-
-        batch_size_actual = batch.shape[0]
-        samples += batch_size_actual
-        patches += labels.numel()
-        support_correct += (output.support_ids == support_targets).sum().item()
-        support_total += support_targets.numel()
-        correct += (prediction == labels).sum().item()
-        foreground = labels != 0
-        foreground_correct += (prediction[foreground] == labels[foreground]).sum().item()
-        foreground_total += foreground.sum().item()
-        position_delta = output.position - positions
-        position_squared_error += position_delta.pow(2).sum().item()
-        position_error = torch.linalg.vector_norm(position_delta, dim=1)
-        position_within_tolerance += (position_error <= thresholds.position_tolerance).sum().item()
-        for class_id in range(model.spec.num_classes):
-            predicted = prediction == class_id
-            target = labels == class_id
-            intersections[class_id] += (predicted & target).sum().cpu()
-            unions[class_id] += (predicted | target).sum().cpu()
-
-    if was_training:
-        model.train()
-    valid = unions > 0
-    per_class_iou = {
-        class_name: (
-            float((intersections[index] / unions[index]).item()) if bool(valid[index]) else None
-        )
-        for index, class_name in enumerate(model.spec.semantic_classes)
-    }
-    mean_iou = (
-        float((intersections[valid] / unions[valid]).mean().item()) if bool(valid.any()) else 0.0
-    )
-    accuracy = correct / max(patches, 1)
-    foreground_accuracy = foreground_correct / max(foreground_total, 1)
-    support_accuracy = support_correct / max(support_total, 1)
-    position_mse = position_squared_error / max(samples * model.spec.position_dim, 1)
-    position_rmse = position_mse**0.5
-    position_within_rate = position_within_tolerance / max(samples, 1)
-    bottleneck_reasons = []
-    if accuracy < thresholds.min_accuracy:
-        bottleneck_reasons.append("semantic_accuracy")
-    if foreground_accuracy < thresholds.min_foreground_accuracy:
-        bottleneck_reasons.append("foreground_accuracy")
-    if mean_iou < thresholds.min_mean_iou:
-        bottleneck_reasons.append("mean_iou")
-    if support_accuracy < thresholds.min_support_accuracy:
-        bottleneck_reasons.append("support_accuracy")
-    if position_rmse > thresholds.max_position_rmse:
-        bottleneck_reasons.append("position_rmse")
-    if position_within_rate < thresholds.min_position_within_tolerance:
-        bottleneck_reasons.append("position_within_tolerance")
-    return {
-        "samples": float(samples),
-        "patches": float(patches),
-        "foreground_patches": float(foreground_total),
-        "accuracy": float(accuracy),
-        "foreground_accuracy": float(foreground_accuracy),
-        "mean_iou": float(mean_iou),
-        "support_accuracy": float(support_accuracy),
-        "per_class_iou": per_class_iou,
-        "position_mse": float(position_mse),
-        "position_rmse": float(position_rmse),
-        "position_within_tolerance": float(position_within_rate),
-        "thresholds": thresholds.to_dict(),
-        "bottleneck": bool(bottleneck_reasons),
-        "bottleneck_reasons": bottleneck_reasons,
-    }
-
-
-class BlockVisionTransformer(PatchVisionTransformer):
-    """Mid-level ViT that predicts block-SMB semantics and Mario position."""
-
-    def __init__(
-        self,
-        dim: int = 64,
-        depth: int = 2,
-        heads: int = 4,
-        patch_size: int = 16,
-        drop: float = 0.1,
-    ):
-        super().__init__(
-            semantic_classes=BLOCK_SEMANTIC_CLASSES,
-            image_size=(240, 256),
-            patch_size=patch_size,
-            dim=dim,
-            depth=depth,
-            heads=heads,
-            drop=drop,
-            position_class="mario",
-            support_ground_classes=("platform",),
-            support_platform_classes=("platform", "moving_platform"),
-            name="block_smb_vit",
-        )
-
-    @torch.no_grad()
-    def semantic_targets(self, observation: Any) -> torch.Tensor:
-        """Build exact pixel labels from the simplified renderer's fixed palette."""
-        image = (
-            (image_tensor(observation, device=self.pos_embed.device) * 255).round().to(torch.uint8)
-        )
-        labels = torch.zeros(
-            image.shape[0], image.shape[2], image.shape[3], dtype=torch.long, device=image.device
-        )
-        pixels = image.permute(0, 2, 3, 1)
-        for class_id, class_name in enumerate(self.spec.semantic_classes):
-            for color in BLOCK_CLASS_COLORS[class_name]:
-                rgb = torch.tensor(color, dtype=torch.uint8, device=image.device)
-                labels[(pixels == rgb).all(dim=-1)] = class_id
-        return labels
-
-    @torch.no_grad()
-    def patch_targets(self, observation: Any) -> torch.Tensor:
-        """Reduce exact pixel labels to the ViT patch grid with actor priority."""
-        labels = self.semantic_targets(observation)
-        one_hot = F.one_hot(labels, num_classes=self.spec.num_classes).permute(0, 3, 1, 2).float()
-        present = F.adaptive_max_pool2d(one_hot, self.grid_size)
-        priority = torch.tensor(
-            (0, 7, 2, 5, 6, 5, 3), dtype=present.dtype, device=present.device
-        ).view(1, -1, 1, 1)
-        return (present * priority).argmax(dim=1)
-
-    @torch.no_grad()
-    def position_targets(self, observation: Any) -> torch.Tensor:
-        """Return the normalized center of Mario from exact renderer labels."""
-        mario_pixels = self.semantic_targets(observation) == self.spec.semantic_classes.index(
-            "mario"
-        )
-        mass = mario_pixels.sum(dim=(1, 2)).clamp_min(1)
-        height, width = mario_pixels.shape[-2:]
-        y = torch.linspace(0, 1, height, device=mario_pixels.device)
-        x = torch.linspace(0, 1, width, device=mario_pixels.device)
-        return torch.stack(
-            (
-                (mario_pixels * x.view(1, 1, width)).sum(dim=(1, 2)) / mass,
-                (mario_pixels * y.view(1, height, 1)).sum(dim=(1, 2)) / mass,
-            ),
-            dim=-1,
-        )
-
-    @torch.no_grad()
-    def support_targets(self, observation: Any) -> torch.Tensor:
-        """Return exact air/ground/platform labels from renderer patch targets."""
-
-        targets = self.support_targets_from_labels(self.patch_targets(observation))
-        if targets is None:
-            raise ValueError("Block SMB support targets could not be inferred")
-        return targets
-
-    def training_loss(
-        self,
-        observation: Any,
-        semantic_weight: float = 1.0,
-        position_weight: float = 1.0,
-        support_weight: float = 1.0,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Compute joint patch-segmentation, support, and Mario-position loss."""
-        output = self.forward(observation)
-        targets = self.patch_targets(observation)
-        semantic_loss = F.cross_entropy(output.semantic_logits, targets)
-
-        position_target = self.position_targets(observation)
-        position_loss = F.mse_loss(output.position, position_target)
-        support_target = self.support_targets(observation)
-        support_loss = F.cross_entropy(output.support_logits, support_target)
-        total = (
-            semantic_weight * semantic_loss
-            + position_weight * position_loss
-            + support_weight * support_loss
-        )
-        return total, {
-            "semantic": semantic_loss,
-            "position": position_loss,
-            "support": support_loss,
-        }
-
-    def encode(self, observation: Any) -> VisionOutput:
-        return self.forward(observation)

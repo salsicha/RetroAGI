@@ -22,6 +22,7 @@ from retroagi.core import (
     register_architecture,
     save_checkpoint,
 )
+from retroagi.core.pixel_vision import save_pixel_vision_checkpoint
 from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
@@ -33,8 +34,7 @@ from retroagi.stages.full_smb import (
     FULL_SMB_SPEC,
     FullSMBObservationConfig,
     FullSMBStage,
-    FullSMBVisionTransformer,
-    build_full_smb_vit_checkpoint,
+    FullVisionTransformer,
 )
 from retroagi.stages.full_smb.compare import (
     FullSMBPolicyComparisonConfig,
@@ -190,22 +190,10 @@ def transfer_ready_metrics(**overrides):
 
 
 def write_full_smb_vision_checkpoint(path: Path) -> None:
-    model = FullSMBVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-    checkpoint = build_full_smb_vit_checkpoint(
-        model,
-        epoch=1,
-        metrics={"mean_iou": 1.0},
-        config={
-            "model": {
-                "hidden_dim": 16,
-                "depth": 1,
-                "heads": 4,
-                "patch_size": 16,
-                "dropout": 0.0,
-            }
-        },
+    model = FullVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+    save_pixel_vision_checkpoint(
+        path, model, stage=FULL_SMB_SPEC.name, metrics={"pixels_correct": 1.0}, epoch=1
     )
-    save_checkpoint(path, checkpoint)
 
 
 def write_block_policy_checkpoint(path: Path, **overrides):
@@ -347,7 +335,6 @@ class TestFullSMBTransfer(unittest.TestCase):
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
                     frame_stack=2,
-                    resize_shape=(16, 20),
                 ),
             )
             stage.configure_policy_runtime(result.model.smb_runtime_contract)
@@ -640,7 +627,6 @@ class TestFullSMBTransfer(unittest.TestCase):
                         observation_config=FullSMBObservationConfig(
                             frame_skip=1,
                             frame_stack=2,
-                            resize_shape=(16, 20),
                         ),
                     ),
                     full_smb_vision_checkpoint=full_vision_path,
@@ -683,7 +669,6 @@ class TestFullSMBTransfer(unittest.TestCase):
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
                     frame_stack=2,
-                    resize_shape=(16, 20),
                 ),
             )
 
@@ -760,7 +745,6 @@ class TestFullSMBTransfer(unittest.TestCase):
             return FullSMBObservationConfig(
                 frame_skip=1,
                 frame_stack=2,
-                resize_shape=(16, 20),
             )
 
         comparison_envs = []

@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .interfaces import VISION_SUPPORT_CLASSES, VisionOutput, VisionSpec
+from .smb_pixel_types import PIXEL_TYPES, SCREEN_SHAPE, vision_output
 
 SUPPORT_HEAD_STATE_KEYS = ("support_head.weight", "support_head.bias")
 
@@ -168,7 +169,66 @@ def _contact_scan_depth(grid_h: int) -> int:
     return max(1, int(round(float(grid_h) / 120.0)))
 
 
-class PatchVisionTransformer(nn.Module):
+class SquareTransformer(nn.Module):
+    """Cuts a picture into squares, describes each, and lets squares inform each other.
+
+    Pictures must already be full size: stretching distorts the pixels and the
+    square grid, so callers pad a cropped screen back to full size instead.
+    """
+
+    def __init__(
+        self,
+        image_size: tuple[int, int],
+        patch_size: int,
+        dim: int,
+        depth: int,
+        heads: int,
+        mlp_ratio: float,
+        drop: float,
+    ):
+        super().__init__()
+        height, width = image_size
+        if height % patch_size or width % patch_size:
+            raise ValueError("image dimensions must be divisible by patch_size")
+        if dim % heads:
+            raise ValueError("token dimension must be divisible by attention heads")
+        self.image_size = tuple(image_size)
+        self.patch_size = patch_size
+        self.grid_size = (height // patch_size, width // patch_size)
+        self.patch_embed = nn.Conv2d(3, dim, kernel_size=patch_size, stride=patch_size)
+        self.num_tokens = self.grid_size[0] * self.grid_size[1]
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_tokens, dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        self.dropout = nn.Dropout(drop)
+        layer = nn.TransformerEncoderLayer(
+            d_model=dim,
+            nhead=heads,
+            dim_feedforward=int(dim * mlp_ratio),
+            dropout=drop,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, depth, enable_nested_tensor=False)
+        self.norm = nn.LayerNorm(dim)
+
+    def screen_image(self, observation: Any) -> torch.Tensor:
+        """The observation as a normalized [B, 3, H, W] tensor of the full picture size."""
+        image = image_tensor(observation, device=self.pos_embed.device)
+        if tuple(image.shape[-2:]) != self.image_size:
+            raise ValueError(
+                f"Vision expects {self.image_size[0]}x{self.image_size[1]} pictures, got "
+                f"{tuple(image.shape[-2:])}; pad the screen to full size, never stretch it"
+            )
+        return image
+
+    def square_tokens(self, image: torch.Tensor) -> torch.Tensor:
+        """Each square's final description, [B, squares, dim], row by row."""
+        tokens = self.patch_embed(image).flatten(2).transpose(1, 2)
+        return self.norm(self.encoder(self.dropout(tokens + self.pos_embed)))
+
+
+class PatchVisionTransformer(SquareTransformer):
     """Patch-level semantic ViT with a checkpoint-compatible head."""
 
     def __init__(
@@ -189,41 +249,14 @@ class PatchVisionTransformer(nn.Module):
         support_scan_depth: Optional[int] = None,
         name: str = "patch_vit",
     ):
-        super().__init__()
-        height, width = image_size
-        if height % patch_size or width % patch_size:
-            raise ValueError("image dimensions must be divisible by patch_size")
-        if dim % heads:
-            raise ValueError("token dimension must be divisible by attention heads")
-
+        super().__init__(image_size, patch_size, dim, depth, heads, mlp_ratio, drop)
         self.spec = VisionSpec(name=name, semantic_classes=semantic_classes, token_dim=dim)
-        self.image_size = image_size
-        self.patch_size = patch_size
-        self.grid_size = (height // patch_size, width // patch_size)
         self.position_class = position_class
         self.support_ground_classes = tuple(support_ground_classes)
         self.support_platform_classes = tuple(support_platform_classes)
         self.support_floor_y_threshold = float(support_floor_y_threshold)
         self.support_prior_scale = float(support_prior_scale)
         self.support_scan_depth = support_scan_depth
-
-        self.patch_embed = nn.Conv2d(3, dim, kernel_size=patch_size, stride=patch_size)
-        self.num_tokens = self.grid_size[0] * self.grid_size[1]
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_tokens, dim))
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
-        self.dropout = nn.Dropout(drop)
-
-        layer = nn.TransformerEncoderLayer(
-            d_model=dim,
-            nhead=heads,
-            dim_feedforward=int(dim * mlp_ratio),
-            dropout=drop,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(layer, depth)
-        self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, self.spec.num_classes)
         self.support_head = nn.Linear(dim, self.spec.num_support_classes)
         nn.init.zeros_(self.support_head.weight)
@@ -310,15 +343,9 @@ class PatchVisionTransformer(nn.Module):
         return result
 
     def forward(self, image: torch.Tensor) -> VisionOutput:
-        image = image_tensor(image, device=self.pos_embed.device)
-        if tuple(image.shape[-2:]) != self.image_size:
-            image = F.interpolate(image, size=self.image_size, mode="bilinear", align_corners=False)
-
-        features = self.patch_embed(image)
-        batch, _, grid_h, grid_w = features.shape
-        tokens = features.flatten(2).transpose(1, 2)
-        tokens = self.encoder(self.dropout(tokens + self.pos_embed))
-        tokens = self.norm(tokens)
+        tokens = self.square_tokens(self.screen_image(image))
+        batch = tokens.shape[0]
+        grid_h, grid_w = self.grid_size
         logits = (
             self.head(tokens).transpose(1, 2).reshape(batch, self.spec.num_classes, grid_h, grid_w)
         )
@@ -350,6 +377,85 @@ class PatchVisionTransformer(nn.Module):
 
     def encode(self, observation: Any) -> VisionOutput:
         return self.forward(observation)
+
+
+class PixelVisionTransformer(SquareTransformer):
+    """Vision transformer that gives every pixel of the SMB screen one of PIXEL_TYPES.
+
+    Both SMB games use this one class, each with its own trained weights. It
+    cuts the 256x240 picture into 16x16 squares, describes each square and
+    lets the squares inform each other over ``depth`` rounds. Each square's
+    final description gives scores for its own 16x16 pixels and every type; a
+    small per-pixel refinement then reads those scores with the pixel's colour.
+    The common vision output follows from the scores by the shared rules
+    (smb_pixel_types.vision_output).
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str = "smb_pixel_vit",
+        dim: int = 128,
+        depth: int = 4,
+        heads: int = 4,
+        patch_size: int = 16,
+        drop: float = 0.0,
+        refine_dim: int = 32,
+    ):
+        super().__init__(SCREEN_SHAPE, patch_size, dim, depth, heads, 4.0, drop)
+        # Output tokens are each square's mean type probabilities (vision_output).
+        types = len(PIXEL_TYPES)
+        self.spec = VisionSpec(name=name, semantic_classes=PIXEL_TYPES, token_dim=types)
+        self.hidden_dim = dim
+        self.refine_dim = refine_dim
+        # Each square's description -> scores for its 16x16 pixels x every type.
+        self.pixel_head = nn.Linear(dim, patch_size * patch_size * types)
+        # Per pixel: that pixel's scores and its colour -> a correction.
+        self.refine = nn.Sequential(
+            nn.Conv2d(types + 3, refine_dim, kernel_size=1),
+            nn.GELU(),
+            nn.Conv2d(refine_dim, types, kernel_size=1),
+        )
+
+    def pixel_logits(self, observation: Any) -> torch.Tensor:
+        """Per-pixel type scores [B, types, 240, 256]; what training compares to labels."""
+        image = self.screen_image(observation)
+        tokens = self.square_tokens(image)
+        batch, size, types = image.shape[0], self.patch_size, self.spec.num_classes
+        grid_h, grid_w = self.grid_size
+        logits = self.pixel_head(tokens).view(batch, grid_h, grid_w, types, size, size)
+        logits = logits.permute(0, 3, 1, 4, 2, 5).reshape(batch, types, *self.image_size)
+        return logits + self.refine(torch.cat((logits, image), dim=1))
+
+    def forward(self, observation: Any) -> VisionOutput:
+        return vision_output(self.pixel_logits(observation))
+
+    def encode(self, observation: Any) -> VisionOutput:
+        return self.forward(observation)
+
+    def architecture(self) -> dict[str, Any]:
+        """The settings that rebuild this model (stored in its checkpoints)."""
+        return {
+            "name": self.spec.name,
+            "hidden_dim": self.hidden_dim,
+            "depth": len(self.encoder.layers),
+            "heads": int(self.encoder.layers[0].self_attn.num_heads),
+            "patch_size": self.patch_size,
+            "dropout": float(self.dropout.p),
+            "metadata": {"refine_dim": self.refine_dim},
+        }
+
+    @classmethod
+    def from_architecture(cls, settings: Mapping[str, Any]) -> "PixelVisionTransformer":
+        return cls(
+            name=str(settings["name"]),
+            dim=int(settings["hidden_dim"]),
+            depth=int(settings["depth"]),
+            heads=int(settings["heads"]),
+            patch_size=int(settings["patch_size"]),
+            drop=float(settings["dropout"]),
+            refine_dim=int(settings["metadata"]["refine_dim"]),
+        )
 
 
 class LinearVisionEncoder(nn.Module):

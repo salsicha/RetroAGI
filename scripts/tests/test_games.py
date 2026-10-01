@@ -57,6 +57,7 @@ from retroagi.core import (
     stage_name_choices,
     validate_game_spec,
 )
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.stages.synthetic_1d.train import (
     SyntheticSplitSeeds,
     SyntheticSplitSizes,
@@ -72,25 +73,18 @@ class TestGameSpec(unittest.TestCase):
         self.assertIn("smb", game_names())
         self.assertEqual(spec.family, "super_mario_bros")
         self.assertEqual(spec.action_count, len(SMB_ACTIONS))
-        self.assertEqual(
-            spec.stage_names,
-            ("synthetic", "block", "full_asset_mock", "full"),
-        )
-        assert_stage_ladder(spec, ("synthetic", "block", "full_asset_mock", "full"))
+        self.assertEqual(spec.stage_names, ("synthetic", "block", "full"))
+        assert_stage_ladder(spec, ("synthetic", "block", "full"))
 
         self.assertIn("full_smb_emulator_rgb_frames", spec.observation_sources)
-        self.assertIn("mario", spec.semantic_classes)
+        self.assertEqual(spec.semantic_classes, PIXEL_TYPES)
         self.assertIn("progress", spec.signal_schema)
         self.assertIn("goal", spec.reward_terms)
         self.assertEqual(spec.emulator_backend, "stable-retro")
-        self.assertTrue(any(asset.name == "smb_sprites" for asset in spec.asset_requirements))
+        self.assertEqual(tuple(asset.name for asset in spec.asset_requirements), ("smb_rom",))
         self.assertEqual(
             tuple(item.name for item in spec.asset_checklist),
-            (
-                "smb_sprites_source_license",
-                "smb_rom_local_only",
-                "smb_generated_data_provenance",
-            ),
+            ("smb_rom_local_only", "smb_generated_data_provenance"),
         )
         self.assertEqual(
             spec.asset_checklist_item("smb_generated_data_provenance").target,
@@ -157,14 +151,12 @@ class TestGameSpec(unittest.TestCase):
                 "tile",
                 "sprite",
                 "emulator",
-                "full_asset_mock",
             ),
         )
         self.assertIn("sprite", OPTIONAL_STAGE_NAMES)
         self.assertIn("block-smb", stage_name_choices())
         self.assertEqual(normalize_stage_name("synthetic_1d"), "synthetic")
         self.assertEqual(normalize_stage_name("block-smb"), "block")
-        self.assertEqual(normalize_stage_name("full_asset_mock"), "full_asset_mock")
         self.assertTrue(is_standard_stage_name("emulator"))
         self.assertFalse(is_standard_stage_name("missing"))
 
@@ -212,69 +204,56 @@ class TestGameSpec(unittest.TestCase):
             "retroagi.stages.block_smb.vision.BlockVisionTransformer",
         )
         self.assertEqual(
-            GAME_PLUGIN_REGISTRY.vision_encoder("smb", "full_asset_mock"),
-            "retroagi.stages.full_smb.vision.FullSMBVisionTransformer",
+            GAME_PLUGIN_REGISTRY.vision_encoder("smb", "full"),
+            "retroagi.stages.full_smb.vision.FullVisionTransformer",
         )
-        self.assertEqual(
-            plugin.asset_pipeline("perception"),
-            "scripts.vit.generate_dataset",
-        )
-        self.assertEqual(
-            GAME_PLUGIN_REGISTRY.asset_pipeline("smb", "assets"),
-            "scripts.vit.extract_sprites",
-        )
+        self.assertEqual(plugin.asset_pipelines, {})
         block_perception = plugin.perception_pipeline("block")
-        full_asset_perception = GAME_PLUGIN_REGISTRY.perception_pipeline("smb", "full_asset_mock")
+        full_perception = GAME_PLUGIN_REGISTRY.perception_pipeline("smb", "full")
         self.assertEqual(block_perception.stage_name, "block")
         self.assertEqual(
             block_perception.checkpoint_path,
-            "data/block_vit/block_vit.pth",
+            "data/block_vit/block_vit_pixel.pth",
         )
         self.assertEqual(block_perception.semantic_vocabulary.class_index("mario"), 1)
         self.assertEqual(
             block_perception.asset_extraction,
-            ("retroagi.stages.block_smb.vision.BlockVisionTransformer." "semantic_targets"),
+            "retroagi.stages.block_smb.env.MarioScenarioEnv.render_labels",
         )
+        self.assertEqual(block_perception.semantic_classes, PIXEL_TYPES)
         self.assertEqual(
             block_perception.synthetic_frame_composition,
             "retroagi.stages.block_smb.env.MarioScenarioEnv",
         )
-        self.assertEqual(block_perception.diagnostic_thresholds["min_accuracy"], 0.95)
+        self.assertEqual(block_perception.diagnostic_thresholds["min_pixels_correct"], 0.999)
         self.assertTrue(block_perception.supports_source_kind("emulator_state"))
         self.assertFalse(block_perception.supports_source_kind("asset_synthetic"))
         self.assertEqual(
             block_perception.dataset_sources[0].label_source,
-            ("MarioScenarioEnv symbolic state and " "BlockVisionTransformer palette targets"),
+            "MarioScenarioEnv.render_labels per-pixel types",
         )
-        self.assertEqual(full_asset_perception.stage_name, "full_asset_mock")
+        self.assertEqual(full_perception.stage_name, "full")
+        self.assertEqual(full_perception.semantic_classes, PIXEL_TYPES)
+        self.assertEqual(full_perception.semantic_classes, SMB_GAME_SPEC.semantic_classes)
         self.assertEqual(
-            full_asset_perception.semantic_classes,
-            SMB_GAME_SPEC.semantic_classes,
-        )
-        self.assertEqual(
-            full_asset_perception.asset_extraction,
-            "scripts.vit.extract_sprites",
+            full_perception.vision_encoder,
+            "retroagi.stages.full_smb.vision.FullVisionTransformer",
         )
         self.assertEqual(
-            full_asset_perception.synthetic_frame_composition,
-            "scripts.vit.generate_dataset",
+            full_perception.asset_extraction,
+            "retroagi.stages.full_smb.pixel_labels.label_frame",
         )
+        self.assertIsNone(full_perception.synthetic_frame_composition)
+        self.assertEqual(full_perception.checkpoint_path, "data/full_vit/full_vit_pixel.pth")
         self.assertEqual(
-            full_asset_perception.checkpoint_path,
-            "data/vit/full_smb_vit.pth",
+            full_perception.diagnostic_thresholds,
+            block_perception.diagnostic_thresholds,
         )
+        self.assertTrue(full_perception.supports_source_kind("emulator_state"))
+        self.assertFalse(full_perception.supports_source_kind("asset_synthetic"))
         self.assertEqual(
-            full_asset_perception.diagnostic_thresholds["min_class_coverage"],
-            13.0,
-        )
-        self.assertIn(
-            "data/vit/val.npz",
-            full_asset_perception.to_manifest()["dataset_artifacts"],
-        )
-        self.assertTrue(full_asset_perception.supports_source_kind("asset_synthetic"))
-        self.assertEqual(
-            full_asset_perception.to_manifest()["dataset_sources"][0]["source_kind"],
-            "asset_synthetic",
+            full_perception.to_manifest()["dataset_sources"][0]["entrypoint"],
+            "scripts.vit.train_full_vit",
         )
 
         reward_config = plugin.reward_config({"progress": 0.07})
@@ -502,7 +481,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertIn("moving_platform", spec.semantic_classes)
         self.assertEqual(
             spec.exact_label_source("semantics"),
-            "BlockVisionTransformer.semantic_targets",
+            "MarioScenarioEnv.render_labels",
         )
         self.assertEqual(
             spec.fixed_scenario_names,
@@ -539,22 +518,13 @@ class TestGameSpec(unittest.TestCase):
         spec = SMB_GAME_SPEC
         required_targets = {item.target for item in spec.asset_checklist if item.required}
 
-        self.assertIn("smb_sprites", required_targets)
-        self.assertIn("smb_rom", required_targets)
-        self.assertIn("generated_data", required_targets)
-        sprites = spec.asset_checklist_item("smb_sprites_source_license")
-        self.assertEqual(sprites.stage_names, ("full_asset_mock",))
-        self.assertIn("license_or_terms_summary", sprites.evidence)
-        self.assertIn("redistribution", sprites.policy)
+        self.assertEqual(required_targets, {"smb_rom", "generated_data"})
         rom = spec.asset_checklist_item("smb_rom_local_only")
         self.assertEqual(rom.stage_names, ("full",))
         self.assertIn("gitignore_or_artifact_exclusion", rom.evidence)
         self.assertIn("not be committed", rom.policy)
         generated = spec.asset_checklist_item("smb_generated_data_provenance")
-        self.assertEqual(
-            generated.stage_names,
-            ("synthetic", "block", "full_asset_mock"),
-        )
+        self.assertEqual(generated.stage_names, ("synthetic", "block", "full"))
         self.assertIn("split_seeds", generated.evidence)
         self.assertIn("source asset provenance", generated.policy)
         with self.assertRaisesRegex(KeyError, "unknown asset checklist item"):

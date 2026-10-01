@@ -1,109 +1,91 @@
 """Tests for the unified curriculum vision interface."""
 
 import unittest
-from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+import numpy as np
 import torch
 
-from retroagi.core import (
-    LinearVisionEncoder,
-    VisionOutput,
-    build_checkpoint,
-    save_checkpoint,
+from retroagi.core import LinearVisionEncoder, VisionOutput
+from retroagi.core.pixel_vision import (
+    evaluate_pixel_vision,
+    pixel_type_weights,
+    save_pixel_vision_checkpoint,
+    train_pixel_vision_on_arrays,
 )
+from retroagi.core.smb_pixel_types import PIXEL_TYPES, TYPE_ID
+from retroagi.core.vision import PixelVisionTransformer
 from retroagi.stages.block_smb import (
     BLOCK_SMB_SPEC,
     BlockSMBStage,
     BlockVisionTransformer,
-    BlockVITPerceptionThresholds,
-    evaluate_block_vit_perception,
+    MarioScenarioEnv,
     load_block_vit_checkpoint,
 )
-from retroagi.stages.full_smb import load_full_smb_vit_checkpoint
-from scripts.vit.train_block_vit import (
-    build_ground_truth,
-    class_weights,
-    collect_procedural_frames,
-    compute_loss,
-    make_loader,
-    merge_engine_support_targets,
+from retroagi.stages.block_smb.vision_frames import VisionFrame
+from retroagi.stages.full_smb import (
+    FULL_SMB_SPEC,
+    FullSMBStage,
+    FullVisionTransformer,
+    load_full_vit_checkpoint,
 )
 
-GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
 
-
-def skip_unavailable_checkpoint(testcase: unittest.TestCase, checkpoint: Path, label: str) -> None:
-    if not checkpoint.exists():
-        testcase.skipTest(f"{label} checkpoint is not available")
+def block_frames(steps=40, actions=(1, 1, 2, 2, 2, 1)):
+    """Frames, true labels and simulator flags from a short Block episode."""
+    scenario = {
+        "world_width": 400,
+        "mario": [20, 208],
+        "platforms": [[0, 220, 400, 20], [120, 160, 48, 10]],
+        "coins": [[140, 140, 10, 10]],
+        "enemies": [[200, 206, 180, 260, 0.5]],
+        "goal": [380, 200, 16, 20],
+    }
+    env = MarioScenarioEnv()
+    frames = []
     try:
-        with checkpoint.open("rb") as handle:
-            prefix = handle.read(len(GIT_LFS_POINTER_PREFIX))
-    except OSError as exc:
-        testcase.skipTest(f"{label} checkpoint cannot be read: {exc}")
-    if prefix == GIT_LFS_POINTER_PREFIX:
-        testcase.skipTest(f"{label} checkpoint is a Git LFS pointer without its blob")
+        env.reset(scenario=scenario)
+        for step in range(steps):
+            env.step(actions[step % len(actions)])
+            frames.append(
+                VisionFrame(
+                    image=env.render(),
+                    labels=env.render_labels(),
+                    on_ground=bool(env.mario["on_ground"]),
+                    enemy_rects=tuple(tuple(r) for r in env.enemy_screen_rects()),
+                    family="test",
+                    route="scripted",
+                )
+            )
+    finally:
+        env.close()
+    return frames
 
 
-class OracleBlockVisionTransformer(BlockVisionTransformer):
-    def forward(self, observation):
-        labels = self.patch_targets(observation)
-        logits = torch.full(
-            (labels.shape[0], self.spec.num_classes, *labels.shape[1:]),
-            -12.0,
-            device=labels.device,
-        )
-        logits.scatter_(1, labels.unsqueeze(1), 12.0)
-        support_ids = self.support_targets_from_labels(labels)
-        support_logits = self.support_logits_from_ids(support_ids)
-        return VisionOutput(
-            position=self.position_targets(observation),
-            semantic_logits=logits,
-            semantic_ids=labels,
-            tokens=torch.zeros(
-                labels.shape[0],
-                labels.shape[1] * labels.shape[2],
-                self.spec.token_dim,
-                device=labels.device,
-            ),
-            metadata={},
-            support_logits=support_logits,
-            support_ids=support_ids,
-        )
+class OracleVision(BlockVisionTransformer):
+    """Scores each pixel's true type, looked up by the picture."""
+
+    def __init__(self, frames):
+        super().__init__(dim=16, depth=1, heads=4)
+        self.truth = {frame.image.tobytes(): frame.labels for frame in frames}
+
+    def pixel_logits(self, observation):
+        images = np.asarray(observation).reshape(-1, 240, 256, 3)
+        labels = torch.as_tensor(np.stack([self.truth[image.tobytes()] for image in images])).long()
+        return torch.nn.functional.one_hot(labels, len(PIXEL_TYPES)).permute(0, 3, 1, 2) * 20.0
 
 
-class BackgroundOnlyBlockVisionTransformer(BlockVisionTransformer):
-    def forward(self, observation):
-        image = torch.as_tensor(observation)
-        if image.ndim == 3:
-            batch_size = 1
-        else:
-            batch_size = image.shape[0]
-        height, width = self.grid_size
-        logits = torch.full(
-            (batch_size, self.spec.num_classes, height, width),
-            -12.0,
-            device=self.pos_embed.device,
-        )
-        logits[:, 0] = 12.0
-        labels = logits.argmax(dim=1)
-        support_ids = self.support_targets_from_labels(labels)
-        support_logits = self.support_logits_from_ids(support_ids)
-        return VisionOutput(
-            position=torch.zeros(batch_size, 2, device=self.pos_embed.device),
-            semantic_logits=logits,
-            semantic_ids=labels,
-            tokens=torch.zeros(
-                batch_size,
-                height * width,
-                self.spec.token_dim,
-                device=self.pos_embed.device,
-            ),
-            metadata={},
-            support_logits=support_logits,
-            support_ids=support_ids,
-        )
+class BackgroundOnlyVision(BlockVisionTransformer):
+    def __init__(self):
+        super().__init__(dim=16, depth=1, heads=4)
+
+    def pixel_logits(self, observation):
+        batch = np.asarray(observation).reshape(-1, 240, 256, 3).shape[0]
+        logits = torch.full((batch, len(PIXEL_TYPES), 240, 256), -10.0)
+        logits[:, TYPE_ID["background"]] = 10.0
+        return logits
 
 
 class TestVisionInterface(unittest.TestCase):
@@ -117,175 +99,102 @@ class TestVisionInterface(unittest.TestCase):
         self.assertEqual(output.semantic_ids.shape, (1, 1, 8))
         self.assertEqual(output.tokens.shape, (1, 8, 16))
 
-    def test_block_vit_extracts_position_semantics_and_tokens(self):
-        encoder = BlockVisionTransformer(dim=32, depth=1, heads=4, drop=0.0).eval()
+    def test_block_vit_is_the_shared_pixel_model_and_types_every_pixel(self):
+        encoder = BlockVisionTransformer(dim=32, depth=1, heads=4).eval()
+        self.assertIsInstance(encoder, PixelVisionTransformer)
+        self.assertEqual(encoder.spec.semantic_classes, PIXEL_TYPES)
         stage = BlockSMBStage(vision=encoder)
         try:
             observation = stage.reset(seed=3)
-            output = encoder.encode(observation)
-            loss, losses = encoder.training_loss(observation)
-            targets = encoder.semantic_targets(observation)
-
-            self.assertEqual(output.position.shape, (1, 2))
-            self.assertEqual(output.semantic_logits.shape, (1, 7, 15, 16))
-            self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
-            self.assertEqual(output.tokens.shape, (1, 240, 32))
-            self.assertEqual(output.support_logits.shape, (1, 3))
-            self.assertEqual(output.support_ids.shape, (1,))
-            self.assertEqual(encoder.support_targets(observation).shape, (1,))
-            self.assertEqual(targets.shape, (1, 240, 256))
-            self.assertEqual(encoder.patch_targets(observation).shape, (1, 15, 16))
-            self.assertTrue(torch.isfinite(loss))
-            self.assertEqual(set(losses), {"semantic", "position", "support"})
-            self.assertTrue(torch.all((output.position >= 0) & (output.position <= 1)))
+            with torch.no_grad():
+                output = encoder.encode(observation)
+                scores = encoder.pixel_logits(observation)
         finally:
             stage.env.close()
 
-    def test_block_vit_support_targets_distinguish_air_ground_and_platform(self):
-        encoder = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0).eval()
-        labels = torch.zeros(3, 15, 16, dtype=torch.long)
-        mario = encoder.spec.semantic_classes.index("mario")
-        platform = encoder.spec.semantic_classes.index("platform")
-        moving_platform = encoder.spec.semantic_classes.index("moving_platform")
-        labels[0, 12, 5] = mario
-        labels[0, 13, 5] = platform
-        labels[1, 5, 5] = mario
-        labels[1, 6, 5] = moving_platform
-        labels[2, 5, 5] = mario
-
-        support_targets = encoder.support_targets_from_labels(labels)
-
-        self.assertEqual(support_targets.tolist(), [1, 2, 0])
-
-    def test_load_compatible_state_dict_strict_flag_controls_key_tolerance(self):
-        encoder = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        state = {key: value.clone() for key, value in encoder.state_dict().items()}
-        del state["head.weight"]
-        state["bogus.weight"] = torch.zeros(1)
-
-        with self.assertRaisesRegex(RuntimeError, "head.weight"):
-            encoder.load_compatible_state_dict(state)
-
-        result = encoder.load_compatible_state_dict(state, strict=False)
-        self.assertIn("head.weight", result.missing_keys)
-        self.assertIn("bogus.weight", result.unexpected_keys)
-
-    def test_block_vit_perception_diagnostic_accepts_oracle_predictions(self):
-        encoder = OracleBlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        stage = BlockSMBStage(vision=encoder)
-        try:
-            frames = []
-            observation = stage.reset(seed=5)
-            frames.append(torch.as_tensor(observation))
-            observation, _reward, _terminated, _truncated, _info = stage.step(1)
-            frames.append(torch.as_tensor(observation))
-            metrics = evaluate_block_vit_perception(
-                encoder,
-                torch.stack(frames),
-                thresholds=BlockVITPerceptionThresholds(
-                    min_accuracy=1.0,
-                    min_foreground_accuracy=1.0,
-                    min_mean_iou=1.0,
-                    max_position_rmse=0.0,
-                    min_position_within_tolerance=1.0,
-                    position_tolerance=0.0,
-                ),
-                batch_size=1,
-            )
-        finally:
-            stage.env.close()
-
-        self.assertFalse(metrics["bottleneck"])
-        self.assertEqual(metrics["bottleneck_reasons"], [])
-        self.assertEqual(metrics["accuracy"], 1.0)
-        self.assertEqual(metrics["foreground_accuracy"], 1.0)
-        self.assertEqual(metrics["mean_iou"], 1.0)
-        self.assertEqual(metrics["support_accuracy"], 1.0)
-        self.assertEqual(metrics["position_rmse"], 0.0)
-
-    def test_block_vit_perception_diagnostic_flags_bad_predictions(self):
-        encoder = BackgroundOnlyBlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        stage = BlockSMBStage(vision=encoder)
-        try:
-            observation = stage.reset(seed=6)
-            while not stage.env.mario["on_ground"]:  # a grounded frame has a support label
-                observation = stage.step(0)[0]
-            metrics = evaluate_block_vit_perception(
-                encoder,
-                torch.as_tensor(observation),
-                thresholds=BlockVITPerceptionThresholds(
-                    min_accuracy=0.99,
-                    min_foreground_accuracy=0.99,
-                    min_mean_iou=0.99,
-                    max_position_rmse=0.001,
-                    min_position_within_tolerance=0.99,
-                    position_tolerance=0.001,
-                ),
-            )
-        finally:
-            stage.env.close()
-
-        self.assertTrue(metrics["bottleneck"])
-        self.assertIn("foreground_accuracy", metrics["bottleneck_reasons"])
-        self.assertIn("mean_iou", metrics["bottleneck_reasons"])
-        self.assertIn("support_accuracy", metrics["bottleneck_reasons"])
-        self.assertIn("position_rmse", metrics["bottleneck_reasons"])
-
-    def test_engine_truth_overrides_geometric_support_labels(self):
-        # air=0, ground=1, platform=2. The engine's airborne verdict wins
-        # over geometric patch inference (which calls a low arc "grounded");
-        # where the engine says supported, geometry keeps naming the surface,
-        # falling back to ground when geometry disagreed entirely.
-        geometric = torch.tensor([1, 2, 1, 0, 0])
-        on_ground = torch.tensor([False, True, True, True, False])
-        merged = merge_engine_support_targets(geometric, on_ground)
-        self.assertEqual(merged.tolist(), [0, 2, 1, 1, 0])
-
-    def test_procedural_trainer_executes_an_optimizer_step(self):
-        frames, on_ground = collect_procedural_frames(8, seed=12, rollout_steps=4)
-        model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        labels, positions, supports = build_ground_truth(
-            model, frames, on_ground, batch_size=4
+        self.assertEqual(scores.shape, (1, 9, 240, 256))
+        self.assertEqual(output.semantic_logits.shape, (1, 9, 15, 16))
+        self.assertEqual(output.metadata["semantic_classes"], PIXEL_TYPES)
+        self.assertEqual(output.metadata["pixel_labels"].shape, (1, 240, 256))
+        self.assertTrue(
+            torch.equal(output.metadata["pixel_labels"], scores.argmax(1).to(torch.uint8))
         )
-        loader = make_loader(
-            frames,
-            labels,
-            positions,
-            supports,
-            batch_size=4,
-            shuffle=False,
-            seed=12,
-        )
-        weights = class_weights(labels, model.spec.num_classes, torch.device("cpu"))
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        self.assertEqual(output.position.shape, (1, 2))
+        self.assertTrue(torch.all((output.position >= 0) & (output.position <= 1)))
+        self.assertEqual(output.support_logits.shape, (1, 3))
+        self.assertEqual(output.support_ids.shape, (1,))
 
-        images, batch_labels, batch_positions, batch_supports = next(iter(loader))
-        before = model.patch_embed.weight.detach().clone()
-        loss, semantic_loss, position_loss, support_loss = compute_loss(
+    def test_block_vit_refuses_pictures_that_are_not_256x240(self):
+        encoder = BlockVisionTransformer(dim=16, depth=1, heads=4).eval()
+        with self.assertRaisesRegex(ValueError, "never stretch"):
+            encoder.encode(torch.zeros(1, 3, 120, 128))
+
+    def test_shared_trainer_learns_from_screen_and_label_arrays(self):
+        frames = block_frames(steps=4)
+        images = np.stack([frame.image for frame in frames])
+        labels = np.stack([frame.labels for frame in frames])
+        model = BlockVisionTransformer(dim=16, depth=1, heads=4)
+        before = model.pixel_head.weight.detach().clone()
+        seen = []
+
+        best = train_pixel_vision_on_arrays(
             model,
             images,
-            batch_labels,
-            batch_positions,
-            batch_supports,
-            weights,
-            position_weight=2.0,
-            support_weight=1.0,
+            labels,
+            held_out_images=images[:2],
+            held_out_labels=labels[:2],
+            epochs=2,
+            batch_size=2,
+            device=torch.device("cpu"),
+            warmup_steps=1,
+            on_epoch=lambda epoch, metrics, improved: seen.append((epoch, improved)),
         )
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
 
-        self.assertEqual(frames.shape, (8, 240, 256, 3))
-        self.assertEqual(labels.shape, (8, 15, 16))
-        self.assertEqual(positions.shape, (8, 2))
-        self.assertEqual(supports.shape, (8,))
-        self.assertTrue(torch.isfinite(semantic_loss))
-        self.assertTrue(torch.isfinite(position_loss))
-        self.assertTrue(torch.isfinite(support_loss))
-        self.assertFalse(torch.equal(before, model.patch_embed.weight))
+        self.assertEqual([epoch for epoch, _ in seen], [1, 2])
+        self.assertTrue(seen[0][1])
+        self.assertTrue(0.0 <= best["pixels_correct"] <= 1.0)
+        self.assertEqual(set(best["type_iou"]), set(PIXEL_TYPES))
+        self.assertFalse(torch.equal(before, model.pixel_head.weight))
+
+    def test_pixel_type_weights_lift_rare_types(self):
+        labels = np.zeros((1, 240, 256), dtype=np.uint8)
+        labels[0, :20] = TYPE_ID["ground"]
+        labels[0, 100:110, 100:110] = TYPE_ID["mario"]
+        weights = pixel_type_weights(labels)
+
+        self.assertGreater(weights[TYPE_ID["mario"]], weights[TYPE_ID["ground"]])
+        self.assertGreater(weights[TYPE_ID["ground"]], weights[TYPE_ID["background"]])
+        shares = np.bincount(labels.ravel(), minlength=9) / labels.size
+        self.assertAlmostEqual(float((weights.numpy() * shares).sum()), 1.0, places=5)
+
+    def test_shared_measurements_score_true_labels_as_perfect(self):
+        frames = block_frames()
+        metrics = evaluate_pixel_vision(OracleVision(frames), frames, batch_size=7)
+
+        self.assertEqual(metrics["frames"], len(frames))
+        self.assertEqual(metrics["pixels_correct"], 1.0)
+        self.assertEqual(metrics["mario_found"], 1.0)
+        self.assertEqual(metrics["mario_position_error_px"]["max"], 0.0)
+        self.assertEqual(metrics["enemies_seen"], 1.0)
+        self.assertGreater(metrics["enemies"], 0)
+        self.assertEqual(metrics["types"]["mario"]["found"], 1.0)
+        self.assertEqual(metrics["types"]["mario"]["correct"], 1.0)
+        self.assertEqual(metrics["standing_agreement"], metrics["true_label_standing_agreement"])
+        self.assertGreater(metrics["standing_agreement"], 0.9)
+
+    def test_shared_measurements_flag_a_model_that_sees_only_sky(self):
+        frames = block_frames()
+        metrics = evaluate_pixel_vision(BackgroundOnlyVision(), frames)
+
+        self.assertLess(metrics["pixels_correct"], 1.0)
+        self.assertEqual(metrics["mario_found"], 0.0)
+        self.assertIsNone(metrics["mario_position_error_px"])
+        self.assertEqual(metrics["enemies_seen"], 0.0)
+        self.assertEqual(metrics["types"]["mario"]["found"], 0.0)
+        self.assertIsNone(metrics["types"]["mario"]["correct"])
 
     def test_block_stage_populates_hierarchical_streams_from_vision(self):
-        encoder = BlockVisionTransformer(dim=32, depth=1, heads=4, drop=0.0).eval()
+        encoder = BlockVisionTransformer(dim=32, depth=1, heads=4).eval()
         stage = BlockSMBStage(vision=encoder)
         try:
             observation = stage.reset(seed=4)
@@ -299,107 +208,27 @@ class TestVisionInterface(unittest.TestCase):
         finally:
             stage.env.close()
 
-    def make_block_vit_checkpoint(self, path: Path, model: BlockVisionTransformer) -> None:
-        checkpoint = build_checkpoint(
-            stage=BLOCK_SMB_SPEC.name,
-            model_name=model.spec.name,
-            checkpoint_kind="vision_encoder",
-            states={"model": model.state_dict()},
-            config={
-                "model": {
-                    "name": model.spec.name,
-                    "hidden_dim": model.spec.token_dim,
-                    "depth": len(model.encoder.layers),
-                    "heads": int(model.encoder.layers[0].self_attn.num_heads),
-                    "patch_size": model.patch_size,
-                    "dropout": float(model.dropout.p),
-                }
-            },
-            specs={"vision": asdict(model.spec)},
-        )
-        save_checkpoint(path, checkpoint)
-
     def test_block_vit_policy_loader_freezes_checkpoint_by_default(self):
-        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        source = BlockVisionTransformer(dim=16, depth=1, heads=4, refine_dim=8)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit.pth"
-            self.make_block_vit_checkpoint(path, source)
+            path = Path(tmpdir) / "block_vit_pixel.pth"
+            save_pixel_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
 
             result = load_block_vit_checkpoint(path, freeze=True)
 
         self.assertTrue(result.frozen)
         self.assertEqual(result.checkpoint["checkpoint_kind"], "vision_encoder")
+        self.assertEqual(result.model.refine_dim, 8)
         self.assertFalse(any(parameter.requires_grad for parameter in result.model.parameters()))
         self.assertFalse(result.model.training)
         for name, value in result.model.state_dict().items():
             torch.testing.assert_close(value, source.state_dict()[name])
 
-    def test_block_vit_policy_loader_normalizes_legacy_checkpoint(self):
-        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "legacy_block_vit.pth"
-            torch.save(
-                {
-                    "model_state": source.state_dict(),
-                    "epoch": 3,
-                    "metrics": {"mean_iou": 0.5},
-                    "config": {
-                        "dim": 16,
-                        "depth": 1,
-                        "heads": 4,
-                        "patch_size": 16,
-                        "dropout": 0.0,
-                    },
-                    "vision_spec": asdict(source.spec),
-                },
-                path,
-            )
-
-            result = load_block_vit_checkpoint(path, freeze=True)
-
-        self.assertEqual(result.checkpoint["checkpoint_schema_version"], 1)
-        self.assertTrue(result.checkpoint["metadata"]["legacy_checkpoint"])
-        self.assertEqual(result.checkpoint["metadata"]["source_path"], str(path))
-        self.assertEqual(result.checkpoint["metrics"]["mean_iou"], 0.5)
-        for name, value in result.model.state_dict().items():
-            torch.testing.assert_close(value, source.state_dict()[name])
-
-    def test_block_vit_loader_initializes_support_head_for_old_checkpoints(self):
-        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        legacy_state = {
-            name: value
-            for name, value in source.state_dict().items()
-            if not name.startswith("support_head.")
-        }
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "old_block_vit.pth"
-            torch.save(
-                {
-                    "model_state": legacy_state,
-                    "epoch": 1,
-                    "config": {
-                        "dim": 16,
-                        "depth": 1,
-                        "heads": 4,
-                        "patch_size": 16,
-                        "dropout": 0.0,
-                    },
-                    "vision_spec": asdict(source.spec),
-                },
-                path,
-            )
-
-            result = load_block_vit_checkpoint(path, freeze=True)
-
-        self.assertIn("support_head.weight", result.model.state_dict())
-        output = result.model.encode(torch.zeros(1, 3, 240, 256))
-        self.assertEqual(output.support_logits.shape, (1, 3))
-
     def test_block_vit_policy_loader_can_enable_fine_tuning(self):
-        source = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        source = BlockVisionTransformer(dim=16, depth=1, heads=4)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit.pth"
-            self.make_block_vit_checkpoint(path, source)
+            path = Path(tmpdir) / "block_vit_pixel.pth"
+            save_pixel_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
 
             result = load_block_vit_checkpoint(path, freeze=False)
 
@@ -407,92 +236,112 @@ class TestVisionInterface(unittest.TestCase):
         self.assertTrue(all(parameter.requires_grad for parameter in result.model.parameters()))
         self.assertTrue(result.model.training)
 
-    def test_existing_vit_checkpoint_loads_into_shared_architecture(self):
-        checkpoint = Path("data/vit/vit_smb.pth")
-        skip_unavailable_checkpoint(self, checkpoint, "trained ViT")
-
-        result = load_full_smb_vit_checkpoint(checkpoint)
-
-        self.assertTrue(result.checkpoint["metadata"]["legacy_checkpoint"])
-        self.assertEqual(result.path, checkpoint)
-
-        output = result.model.encode(torch.zeros(1, 3, 240, 256))
-        self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
-        self.assertEqual(output.position.shape, (1, 2))
-        self.assertEqual(output.support_logits.shape, (1, 3))
-
-    def test_full_smb_vit_loader_reports_git_lfs_pointer_without_blob(self):
+    def test_block_vit_loader_rejects_another_games_weights(self):
+        source = PixelVisionTransformer(name="full_smb_vit", dim=16, depth=1, heads=4)
         with TemporaryDirectory() as tmpdir:
-            checkpoint = Path(tmpdir) / "full_smb_vit.pth"
-            checkpoint.write_text(
-                "\n".join(
-                    (
-                        "version https://git-lfs.github.com/spec/v1",
-                        "oid sha256:0123456789abcdef",
-                        "size 12345",
-                    )
-                )
-                + "\n",
-                encoding="utf-8",
-            )
+            path = Path(tmpdir) / "full_smb_pixel.pth"
+            save_pixel_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
 
-            with self.assertRaisesRegex(FileNotFoundError, "Git LFS pointer"):
-                load_full_smb_vit_checkpoint(checkpoint)
+            with self.assertRaisesRegex(Exception, "full_smb_vit"):
+                load_block_vit_checkpoint(path)
+
+
+class FakeRetroEnv:
+    """A stand-in emulator for building a Full SMB stage without the ROM."""
+
+    buttons = ("B", "A", "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT")
+
+    def reset(self, seed=None):
+        return np.zeros((224, 240, 3), dtype=np.uint8), {}
+
+    def step(self, action):
+        return np.zeros((224, 240, 3), dtype=np.uint8), 0.0, False, False, {}
+
+    def close(self):
+        pass
 
 
 class TestFullSMBVision(unittest.TestCase):
-    def test_full_smb_segmentation_defaults_to_vit_contract(self):
-        from retroagi.stages.full_smb import FullSMBSegmentationVision
+    def test_full_vit_is_the_shared_pixel_model_under_the_full_name(self):
+        encoder = FullVisionTransformer(dim=16, depth=1, heads=4).eval()
+        self.assertIsInstance(encoder, PixelVisionTransformer)
+        self.assertEqual(encoder.spec.name, "full_smb_vit")
+        self.assertEqual(encoder.spec.semantic_classes, PIXEL_TYPES)
+        with self.assertRaisesRegex(ValueError, "never stretch"):
+            encoder.encode(torch.zeros(1, 3, 224, 240))
+        with torch.no_grad():
+            output = encoder.encode(np.zeros((240, 256, 3), dtype=np.uint8))
 
-        model = FullSMBSegmentationVision(
-            checkpoint=None,
-            dim=16,
-            depth=1,
-            heads=4,
-            drop=0.0,
+        self.assertEqual(output.semantic_logits.shape, (1, 9, 15, 16))
+        self.assertEqual(output.metadata["semantic_classes"], PIXEL_TYPES)
+        self.assertEqual(output.metadata["pixel_labels"].shape, (1, 240, 256))
+        self.assertEqual(output.position.shape, (1, 2))
+        self.assertEqual(output.support_logits.shape, (1, 3))
+
+    def test_full_vit_policy_loader_freezes_checkpoint_by_default(self):
+        source = FullVisionTransformer(dim=16, depth=1, heads=4, refine_dim=8)
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "full_vit_pixel.pth"
+            save_pixel_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
+
+            result = load_full_vit_checkpoint(path, freeze=True)
+
+        self.assertTrue(result.frozen)
+        self.assertEqual(result.path, path)
+        self.assertEqual(result.checkpoint["checkpoint_kind"], "vision_encoder")
+        self.assertIsInstance(result.model, FullVisionTransformer)
+        self.assertEqual(result.model.refine_dim, 8)
+        self.assertFalse(any(parameter.requires_grad for parameter in result.model.parameters()))
+        self.assertFalse(result.model.training)
+        for name, value in result.model.state_dict().items():
+            torch.testing.assert_close(value, source.state_dict()[name])
+
+    def test_full_vit_policy_loader_can_enable_fine_tuning(self):
+        source = FullVisionTransformer(dim=16, depth=1, heads=4)
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "full_vit_pixel.pth"
+            save_pixel_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
+
+            result = load_full_vit_checkpoint(path, freeze=False)
+
+        self.assertFalse(result.frozen)
+        self.assertTrue(all(parameter.requires_grad for parameter in result.model.parameters()))
+        self.assertTrue(result.model.training)
+
+    def test_full_vit_loader_rejects_another_games_weights(self):
+        source = BlockVisionTransformer(dim=16, depth=1, heads=4)
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "block_vit_pixel.pth"
+            save_pixel_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
+
+            with self.assertRaisesRegex(Exception, "block_smb_vit"):
+                load_full_vit_checkpoint(path)
+
+    def test_full_vit_loader_names_the_trainer_when_the_checkpoint_is_missing(self):
+        with TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(FileNotFoundError, "train_full_vit.py"):
+                load_full_vit_checkpoint(Path(tmpdir) / "missing.pth")
+
+    def test_full_stage_defaults_to_the_trained_full_vit_on_the_cpu(self):
+        trained = FullVisionTransformer(dim=16, depth=1, heads=4)
+        with patch("retroagi.stages.full_smb.adapter.load_full_vit_checkpoint") as load:
+            load.return_value.model = trained
+            stage = FullSMBStage(env=FakeRetroEnv())
+
+        load.assert_called_once_with()
+        self.assertIs(stage.vision, trained)
+        self.assertFalse(stage.vision.training)
+
+    def test_full_stage_reads_screens_through_the_shared_pixel_types(self):
+        stage = FullSMBStage(
+            env=FakeRetroEnv(), vision=FullVisionTransformer(dim=16, depth=1, heads=4)
         )
-        output = model.encode(torch.zeros(1, 3, 64, 64))
+        observation = stage.reset(seed=0)
+        with torch.no_grad():
+            batch = stage.encode_observation(observation)
 
-        self.assertEqual(model.spec.name, "full_smb_vit")
-        self.assertEqual(model.spec.num_classes, 13)
-        self.assertEqual(model.spec.semantic_classes[8], "mario")
-        self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
-        self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
-        self.assertEqual(output.position.shape, (1, 2))
-        self.assertEqual(output.tokens.shape, (1, 240, 16))
-        self.assertEqual(output.support_logits.shape, (1, 3))
-        self.assertEqual(output.support_ids.shape, (1,))
-
-    def test_existing_full_smb_vit_checkpoint_loads(self):
-        from retroagi.stages.full_smb import FullSMBSegmentationVision
-
-        checkpoint = Path("data/vit/full_smb_vit.pth")
-        skip_unavailable_checkpoint(self, checkpoint, "trained Full SMB ViT")
-
-        model = FullSMBSegmentationVision(checkpoint=checkpoint)
-        output = model.encode(torch.zeros(1, 3, 240, 256))
-
-        self.assertTrue(model.frozen)
-        self.assertEqual(model.checkpoint_path, checkpoint)
-        self.assertEqual(model.checkpoint["checkpoint_schema_version"], 1)
-        self.assertEqual(model.spec.name, "full_smb_vit")
-        self.assertEqual(output.semantic_logits.shape, (1, 13, 15, 16))
-        self.assertEqual(output.position.shape, (1, 2))
-        self.assertEqual(output.support_logits.shape, (1, 3))
-
-    def test_legacy_full_smb_vit_state_dict_loads(self):
-        from retroagi.stages.full_smb import FullSMBSegmentationVision
-
-        checkpoint = Path("data/vit/vit_smb.pth")
-        skip_unavailable_checkpoint(self, checkpoint, "legacy Full SMB ViT")
-
-        model = FullSMBSegmentationVision(checkpoint=checkpoint)
-        output = model.encode(torch.zeros(1, 3, 240, 256))
-
-        self.assertTrue(model.checkpoint["metadata"]["legacy_checkpoint"])
-        self.assertEqual(model.spec.name, "full_smb_vit")
-        self.assertEqual(output.semantic_ids.shape, (1, 15, 16))
-        self.assertEqual(output.support_logits.shape, (1, 3))
+        self.assertEqual(observation.shape, (240, 256, 3))
+        self.assertEqual(batch.metadata["vision"].metadata["semantic_classes"], PIXEL_TYPES)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import numpy as np
 import pygame
 
 from retroagi.core.smb_physics import NESPlayerMotion
+from retroagi.core.smb_pixel_types import TYPE_ID
 
 from .stomp import stomp_collision_geometry
 
@@ -47,6 +48,54 @@ class _BoxSpace:
 # holding jump through a landing does not jump again. The NES small body is
 # 10x12 pixels and the Goomba damage body 10x6.
 ENEMY_GRAVITY = 0.5
+
+# ── Drawing ───────────────────────────────────────────────────────────────────
+#
+# The picture is purely visual: nothing below changes layouts, physics or
+# rewards. Solid platforms are drawn as one of four kinds, as in real SMB
+# (floor and stairs are ground, floating rows are bricks with question blocks,
+# pipes are green). A scenario may name each platform's kind in
+# "platform_kinds", aligned with "platforms"; an untagged (None) platform is a
+# brick row when open space lies directly beneath it and ground otherwise.
+# Moving platforms are always lifts. render_labels() repeats render()'s shapes
+# with each shape's pixel type in place of its colour, so labels are exact.
+PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe")
+TILE = 16
+SKY = (107, 140, 255)
+GROUND, GROUND_EDGE = (139, 69, 19), (84, 38, 8)
+BRICK, BRICK_MORTAR = (200, 76, 12), (64, 24, 0)
+QUESTION, QUESTION_EDGE, QUESTION_MARK = (252, 160, 68), (136, 72, 0), (96, 40, 0)
+PIPE, PIPE_LIGHT, PIPE_DARK = (0, 168, 0), (128, 208, 16), (0, 80, 0)
+LIFT, LIFT_EDGE = (216, 216, 216), (120, 120, 120)
+COIN, COIN_DARK = (255, 215, 0), (204, 140, 0)
+GOOMBA, GOOMBA_FEET, GOOMBA_SQUISHED = (160, 32, 240), (72, 0, 112), (100, 0, 160)
+PLANT_HEAD, PLANT_SPOT, PLANT_STEM = (216, 40, 96), (255, 200, 220), (0, 112, 72)
+MARIO, MARIO_SKIDDING, EYE = (255, 0, 0), (255, 220, 0), (255, 255, 255)
+
+
+def question_cell(world_x):
+    """Whether the 16-pixel brick cell starting at world x is a question block."""
+    return (int(world_x) // TILE) % 3 == 1
+
+
+class _Canvas:
+    """Draws each shape in its colour, or filled with its pixel type id."""
+
+    def __init__(self, surface, labels):
+        self.surface = surface
+        self.labels = labels
+
+    def _color(self, color, kind):
+        return (TYPE_ID[kind],) * 3 if self.labels else color
+
+    def fill(self, color, kind):
+        self.surface.fill(self._color(color, kind))
+
+    def rect(self, color, kind, rect, width=0):
+        pygame.draw.rect(self.surface, self._color(color, kind), rect, width)
+
+    def ellipse(self, color, kind, rect):
+        pygame.draw.ellipse(self.surface, self._color(color, kind), rect)
 
 
 @dataclass(frozen=True)
@@ -124,6 +173,8 @@ class MarioScenarioEnv:
     world_width   : int  (default = viewport width)
     mario         : [x, y]
     platforms     : list of [x, y, w, h] or {'x','y','w','h', 'moving':[min_x,max_x,speed]}
+    platform_kinds: optional list aligned with platforms: "ground", "brick",
+                    "question_block", "pipe" or None (drawing only)
     coins         : list of [x, y, w, h]
     enemies       : list of [x, y, patrol_min, patrol_max] or
                     [x, y, patrol_min, patrol_max, speed] or
@@ -157,6 +208,7 @@ class MarioScenarioEnv:
         # Offscreen observations only need software surfaces; the interactive
         # demo initializes the display subsystem when it opens a window.
         self.screen = pygame.Surface((self.width, self.height))
+        self._label_screen = pygame.Surface((self.width, self.height))
 
         # RNG (seeded via self.seed())
         self._rng = random.Random()
@@ -164,6 +216,7 @@ class MarioScenarioEnv:
         # State (populated by reset)
         self.mario = None
         self.platforms = []  # list of platform dicts
+        self.platform_kinds = []  # drawn kind of each platform
         self.coins = []
         self.enemies = []
         self.goal = None
@@ -257,6 +310,7 @@ class MarioScenarioEnv:
         self.platforms = []
         for p in scenario.get("platforms", []):
             self.platforms.append(self._parse_platform(p))
+        self.platform_kinds = self._platform_kinds(scenario.get("platform_kinds"))
 
         # Settle the spawn: scenarios place Mario a few pixels above his
         # surface, which used to leave him airborne for the first frames.
@@ -745,56 +799,157 @@ class MarioScenarioEnv:
     # ── Render ────────────────────────────────────────────────────────────────
 
     def render(self) -> np.ndarray:
-        """Returns an (H, W, 3) uint8 RGB array of the current viewport."""
+        """Returns an (H, W, 3) uint8 RGB array of the current viewport.
+
+        The finish marker is simulator truth and is never drawn.
+        """
+        self._draw(_Canvas(self.screen, labels=False))
+        return np.transpose(pygame.surfarray.array3d(self.screen), (1, 0, 2))
+
+    def render_labels(self) -> np.ndarray:
+        """Each pixel's type (smb_pixel_types.TYPE_ID) as an (H, W) uint8 array.
+
+        The same shapes as render(), in the same order, so every pixel carries
+        the type of the shape drawn on top of it. Eyes belong to their owner.
+        """
+        self._draw(_Canvas(self._label_screen, labels=True))
+        return np.ascontiguousarray(pygame.surfarray.array_red(self._label_screen).T)
+
+    def enemy_screen_rects(self) -> list[pygame.Rect]:
+        """The screen rectangle each drawn enemy is painted inside, in draw order."""
         cam = int(self.camera_x)
-        self.screen.fill((107, 140, 255))  # sky blue
-
-        # Platforms — green tint for moving, brown for static
-        for plat in self.platforms:
-            r = plat["rect"]
-            sr = pygame.Rect(r.x - cam, r.y, r.w, r.h)
-            color = (80, 160, 40) if plat["moving"] else (139, 69, 19)
-            pygame.draw.rect(self.screen, color, sr)
-
-        # Coins (gold)
-        for coin in self.coins:
-            if not coin["collected"]:
-                r = coin["rect"]
-                sr = pygame.Rect(r.x - cam, r.y, r.w, r.h)
-                pygame.draw.ellipse(self.screen, (255, 215, 0), sr)
-
-        # Goal (bright green)
-        if self.goal and getattr(self, "render_goal", True):
-            sr = pygame.Rect(self.goal.x - cam, self.goal.y, self.goal.w, self.goal.h)
-            pygame.draw.rect(self.screen, (0, 255, 0), sr)
-
-        # Enemies
+        rects = []
         for enemy in self.enemies:
             if enemy["h"] <= 0:
                 continue
-            sx = int(enemy["x"]) - cam
-            sy = int(enemy["y"])
-            if enemy["dead"]:
-                squish = pygame.Rect(sx, sy + enemy["h"] - 4, enemy["w"], 4)
-                pygame.draw.rect(self.screen, (100, 0, 160), squish)
+            foot = enemy.get("foot_offset", 0)
+            rects.append(
+                pygame.Rect(int(enemy["x"]) - cam, int(enemy["y"]), enemy["w"], enemy["h"] + foot)
+            )
+        return rects
+
+    def _draw(self, canvas: _Canvas) -> None:
+        cam = int(self.camera_x)
+        canvas.fill(SKY, "background")
+        if len(self.platform_kinds) != len(self.platforms):
+            raise ValueError("platform kinds are out of step with the platforms")
+        for plat, kind in zip(self.platforms, self.platform_kinds):
+            r = plat["rect"]
+            screen_rect = pygame.Rect(r.x - cam, r.y, r.w, r.h)
+            if screen_rect.right <= 0 or screen_rect.left >= self.width:
+                continue
+            if kind == "moving_platform":
+                self._draw_lift(canvas, screen_rect)
+            elif kind == "pipe":
+                self._draw_pipe(canvas, screen_rect)
+            elif kind == "question_block":
+                for cell in self._cells(screen_rect):
+                    self._draw_question_block(canvas, cell)
+            elif kind in ("brick", "brick_row"):
+                self._draw_bricks(canvas, screen_rect)
+                if kind == "brick_row":
+                    for cell in self._cells(screen_rect):
+                        if question_cell(cell.x + cam):
+                            self._draw_question_block(canvas, cell)
             else:
-                pygame.draw.rect(
-                    self.screen, (160, 32, 240), pygame.Rect(sx, sy, enemy["w"], enemy["h"])
-                )
-                eye_x = sx + (8 if enemy["direction"] > 0 else 2)
-                pygame.draw.circle(self.screen, (255, 255, 255), (eye_x, sy + 4), 2)
+                self._draw_ground(canvas, screen_rect)
 
-        # Mario — yellow when skidding, red otherwise; eye shows facing
-        msx = int(self.mario["x"]) - cam
-        msy = int(self.mario["y"])
-        color = (255, 220, 0) if self.mario["skidding"] else (255, 0, 0)
-        pygame.draw.rect(
-            self.screen, color, pygame.Rect(msx, msy, self.mario["w"], self.mario["h"])
-        )
-        eye_x = msx + (10 if self.mario["facing"] > 0 else 2)
-        pygame.draw.circle(self.screen, (255, 255, 255), (eye_x, msy + 4), 2)
+        for coin in self.coins:
+            if not coin["collected"]:
+                screen_rect = coin["rect"].move(-cam, 0)
+                canvas.ellipse(COIN, "coin", screen_rect)
+                inner = screen_rect.inflate(-6, -4)
+                if inner.w > 0 and inner.h > 0:
+                    canvas.ellipse(COIN_DARK, "coin", inner)
 
-        return np.transpose(pygame.surfarray.array3d(self.screen), (1, 0, 2))
+        for enemy, rect in zip(
+            (e for e in self.enemies if e["h"] > 0), self.enemy_screen_rects()
+        ):
+            if enemy.get("kind") == "piranha_plant":
+                self._draw_plant(canvas, rect)
+            else:
+                self._draw_goomba(canvas, enemy, rect)
+
+        # Mario: yellow while skidding, red otherwise; the eye shows facing.
+        m = self.mario
+        body = pygame.Rect(int(m["x"]) - cam, int(m["y"]), m["w"], m["h"])
+        canvas.rect(MARIO_SKIDDING if m["skidding"] else MARIO, "mario", body)
+        eye_x = body.right - 4 if m["facing"] > 0 else body.left + 2
+        canvas.rect(EYE, "mario", pygame.Rect(eye_x, body.top + 2, 2, 2))
+
+    def _cells(self, rect):
+        """16-pixel-wide cells from the platform's left edge, visible ones only."""
+        start = rect.left + max(0, -rect.left) // TILE * TILE
+        for x in range(start, min(rect.right, self.width), TILE):
+            yield pygame.Rect(x, rect.top, min(TILE, rect.right - x), rect.h)
+
+    def _draw_ground(self, canvas, rect):
+        canvas.rect(GROUND, "ground", rect)
+        for cell in self._cells(rect):
+            canvas.rect(GROUND_EDGE, "ground", pygame.Rect(cell.left, rect.top, 1, rect.h))
+        for y in range(rect.top, rect.bottom, TILE):
+            canvas.rect(GROUND_EDGE, "ground", pygame.Rect(rect.left, y, rect.w, 1))
+
+    def _draw_bricks(self, canvas, rect):
+        canvas.rect(BRICK, "brick", rect)
+        for course, y in enumerate(range(rect.top, rect.bottom, TILE // 2)):
+            height = min(TILE // 2, rect.bottom - y)
+            canvas.rect(BRICK_MORTAR, "brick", pygame.Rect(rect.left, y, rect.w, 1))
+            for cell in self._cells(rect):
+                x = cell.left + (TILE // 2 if course % 2 else 0)
+                if x < cell.right:
+                    canvas.rect(BRICK_MORTAR, "brick", pygame.Rect(x, y, 1, height))
+
+    def _draw_question_block(self, canvas, cell):
+        canvas.rect(QUESTION, "question_block", cell)
+        canvas.rect(QUESTION_EDGE, "question_block", cell, 1)
+        if cell.w >= 8 and cell.h >= 8:
+            mark = pygame.Rect(0, 0, 4, 4)
+            mark.center = cell.center
+            canvas.rect(QUESTION_MARK, "question_block", mark)
+
+    def _draw_pipe(self, canvas, rect):
+        canvas.rect(PIPE, "pipe", rect)
+        lip = pygame.Rect(rect.left, rect.top, rect.w, min(8, rect.h))
+        body = pygame.Rect(rect.left, lip.bottom, rect.w, rect.bottom - lip.bottom)
+        canvas.rect(PIPE_LIGHT, "pipe", pygame.Rect(rect.left + 3, rect.top, 3, rect.h))
+        canvas.rect(PIPE_DARK, "pipe", lip, 1)
+        if body.h:
+            canvas.rect(PIPE_DARK, "pipe", pygame.Rect(body.left, body.top, 1, body.h))
+            canvas.rect(PIPE_DARK, "pipe", pygame.Rect(body.right - 1, body.top, 1, body.h))
+
+    def _draw_lift(self, canvas, rect):
+        canvas.rect(LIFT, "moving_platform", rect)
+        canvas.rect(LIFT_EDGE, "moving_platform", rect, 1)
+        for x in range(rect.left + 4, rect.right - 3, 8):
+            canvas.rect(LIFT_EDGE, "moving_platform", pygame.Rect(x, rect.centery - 1, 2, 2))
+
+    def _draw_goomba(self, canvas, enemy, rect):
+        body_h = enemy["h"]
+        if enemy["dead"]:
+            # Flattened where it was stomped, resting on its feet line.
+            canvas.rect(
+                GOOMBA_SQUISHED, "enemy", pygame.Rect(rect.left, rect.bottom - 4, rect.w, 4)
+            )
+            return
+        canvas.rect(GOOMBA, "enemy", pygame.Rect(rect.left, rect.top, rect.w, body_h))
+        feet = rect.h - body_h
+        if feet > 0:
+            for x in (rect.left, rect.right - 4):
+                canvas.rect(GOOMBA_FEET, "enemy", pygame.Rect(x, rect.top + body_h, 4, feet))
+        eye_x = rect.right - 4 if enemy["direction"] > 0 else rect.left + 2
+        canvas.rect(EYE, "enemy", pygame.Rect(eye_x, rect.top + 1, 2, 2))
+
+    def _draw_plant(self, canvas, rect):
+        head = pygame.Rect(rect.left, rect.top, rect.w, min(8, rect.h))
+        if rect.h > head.h:
+            stem = pygame.Rect(0, head.bottom, 4, rect.bottom - head.bottom)
+            stem.centerx = rect.centerx
+            canvas.rect(PLANT_STEM, "enemy", stem)
+        canvas.rect(PLANT_HEAD, "enemy", head)
+        if head.h >= 4:
+            for x in (head.left + 2, head.right - 4):
+                canvas.rect(PLANT_SPOT, "enemy", pygame.Rect(x, head.top + 1, 2, 2))
 
     # ── Structured state / info ───────────────────────────────────────────────
 
@@ -938,6 +1093,42 @@ class MarioScenarioEnv:
                 enemy["vy"] = 0
 
     # ── Parsing helpers ───────────────────────────────────────────────────────
+
+    def _platform_kinds(self, kinds) -> list[str]:
+        """How each platform is drawn; never consulted by physics or rewards.
+
+        Lifts are "moving_platform". A tagged platform keeps its tag. An
+        untagged one is a "brick_row" (bricks with question blocks at fixed
+        cells) when open space lies directly beneath any part of it, and
+        ground otherwise (floor, stairs, raised ground).
+        """
+        if kinds is None:
+            kinds = [None] * len(self.platforms)
+        if len(kinds) != len(self.platforms):
+            raise ValueError("platform_kinds must name one kind per platform")
+        resolved = []
+        for plat, kind in zip(self.platforms, kinds):
+            if kind is not None and kind not in PLATFORM_KINDS:
+                raise ValueError(f"platform kind must be one of {PLATFORM_KINDS} or None")
+            if plat["moving"]:
+                resolved.append("moving_platform")
+            elif kind is not None:
+                resolved.append(kind)
+            else:
+                resolved.append("brick_row" if self._floating(plat) else "ground")
+        return resolved
+
+    def _floating(self, plat) -> bool:
+        rect = plat["rect"]
+        if rect.bottom >= self.height:
+            return False
+        covered = np.zeros(rect.w, dtype=bool)
+        for other in self.platforms:
+            r = other["rect"]
+            if other is plat or other["moving"] or not r.top <= rect.bottom < r.bottom:
+                continue
+            covered[max(r.left - rect.left, 0) : max(r.right - rect.left, 0)] = True
+        return not covered.all()
 
     @staticmethod
     def _parse_platform(p) -> dict:

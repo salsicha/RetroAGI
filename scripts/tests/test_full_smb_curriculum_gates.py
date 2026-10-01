@@ -61,7 +61,6 @@ def tiny_stage():
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=(16, 20),
         ),
     )
 

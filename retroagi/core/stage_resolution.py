@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CANONICAL_STAGE_NAMES = ("synthetic", "block", "full")
-OPTIONAL_STAGE_NAMES = ("symbolic", "tile", "sprite", "emulator", "full_asset_mock")
+OPTIONAL_STAGE_NAMES = ("symbolic", "tile", "sprite", "emulator")
 STANDARD_STAGE_NAMES = CANONICAL_STAGE_NAMES + OPTIONAL_STAGE_NAMES
 
 STAGE_NAME_ALIASES = {
@@ -19,8 +19,6 @@ STAGE_NAME_ALIASES = {
     "tile": "tile",
     "sprite": "sprite",
     "emulator": "emulator",
-    "full-asset-mock": "full_asset_mock",
-    "asset-mock": "full_asset_mock",
 }
 
 

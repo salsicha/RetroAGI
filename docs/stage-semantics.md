@@ -303,30 +303,26 @@ overridden:
 | Critic feedback | `--disable-critic-feedback` | Still computes critic output for metrics, but does not inject it into the actor's second pass. |
 | Hierarchy levels | `--disable-hierarchy` | Replaces A/B semantic streams with background tokens while preserving C-stream inputs. |
 | Recurrent state | `--disable-recurrent-state` | Starts the world model from zero recurrent memory at each rollout step instead of carrying state between steps. |
-| Checkpoint transfer | `--disable-checkpoint-transfer` | Uses a fresh frozen Block ViT for policy observations instead of loading `data/block_vit/block_vit.pth` or a supplied vision checkpoint. |
+| Checkpoint transfer | `--disable-checkpoint-transfer` | Uses a fresh frozen Block ViT for policy observations instead of loading `data/block_vit/block_vit_pixel.pth` or a supplied vision checkpoint. |
 
-If deterministic policy training stalls, run the Block ViT perception
-diagnostic before changing policy losses:
+If deterministic policy training stalls, measure the Block ViT before
+changing policy losses:
 
 ```bash
 retroagi-block-smb diagnose-vision \
-  --vision-checkpoint data/block_vit/block_vit.pth \
-  --samples 64 \
-  --rollout-steps 32
+  --vision-checkpoint data/block_vit/block_vit_pixel.pth
 ```
 
-The diagnostic compares semantic patch IDs, air/ground/platform support state,
-and normalized Mario position against exact palette-derived labels from
-procedural Block SMB frames. It reports accuracy, foreground accuracy, mean IoU,
-per-class IoU, support accuracy, position RMSE, and `bottleneck_reasons`. If
-`perception.bottleneck` is true, improve or retrain the Block ViT checkpoint
-before interpreting low policy success as an actor/world-model/critic failure.
-
-The tracked `data/block_vit/block_vit.pth` checkpoint was retrained through
-epoch 20 with `position_weight=16.0`. On the standard 64-frame diagnostic sample
-it now reports `perception.bottleneck=false`, `mean_iou=0.9802`,
-`foreground_accuracy=0.9955`, `position_rmse=0.0185`, and
-`position_within_tolerance=0.9844`.
+The Block ViT is the shared per-pixel vision transformer with Block weights.
+The measurement plays every Monte Carlo family on the validation split with
+teacher and perturbed routes and compares the model's type for every pixel
+with the exact labels from `MarioScenarioEnv.render_labels()`, using the
+shared definitions in `retroagi.core.pixel_vision.evaluate_pixel_vision`:
+pixels correct, each type's found/correct, frames where Mario is found, Mario
+position error in pixels, standing/air agreement with the simulator, and
+enemies seen. `scripts/vision/evaluate_block_vision.py` prints the same
+measurements as a table. Retrain the Block ViT before interpreting low policy
+success as an actor/world-model/critic failure if these fall short.
 
 The trainer applies finite-loss and finite-gradient checks before each optimizer
 step and clips gradients with `BlockSMBTrainingConfig.gradient_clip_norm`.
@@ -389,13 +385,16 @@ wraps `stable-retro` lazily through the shared `GymnasiumBackendAdapter`, maps
 the shared SMB action vocabulary to backend-specific button vectors, and
 normalizes both Gym-style four-value and Gymnasium-style five-value `step`
 results into the shared stage contract. Backend game-variable extraction is
-normalized into `full_smb_signals` and `state_vec`. Frame skipping, resizing,
+normalized into `full_smb_signals` and `state_vec`. Frame skipping,
 normalization, stacking, and episode masks are implemented. Emulator state
 snapshots are implemented for repeatable evaluation through the backend
-adapter's `env` or `env.em` save/load state API. `FullSMBSegmentationVision`
-defaults to the versioned 13-class patch-level Vision Transformer checkpoint
-and is the only supported vision path; the six-class DeepLab CNN exists solely
-as an example under `scripts/segmentation/` and is not part of the package.
+adapter's `env` or `env.em` save/load state API. Screens are read by the Full
+SMB vision model: the shared per-pixel vision transformer class
+(`retroagi.core.vision.PixelVisionTransformer`) with Full SMB weights
+(`retroagi.stages.full_smb.vision.FullVisionTransformer`), which labels every
+pixel with one of the nine types in `retroagi.core.smb_pixel_types.PIXEL_TYPES`.
+`FullSMBStage` loads `data/full_vit/full_vit_pixel.pth` frozen on the CPU when
+it is not given a vision model. It is the only vision path.
 
 Backend-specific values must be normalized at this boundary rather than leaking
 into shared training code.
@@ -403,9 +402,12 @@ into shared training code.
 ### Observation
 
 The stage-native observation is the RGB frame returned by `stable-retro` for
-`SuperMarioBros-Nes`. The adapter exposes a contiguous `uint8` HWC RGB array
-and places backend metadata in `info`. RGBA inputs are truncated to RGB, and
-floating point RGB inputs in `[0,1]` are converted to `uint8`.
+`SuperMarioBros-Nes`. The emulator trims 8 pixels from every edge; the adapter
+pads that border back, so every frame is the full 256x240 NES screen, the same
+size Block SMB draws, and is never cropped or stretched. The adapter exposes a
+contiguous `uint8` HWC RGB array and places backend metadata in `info`. RGBA
+inputs are truncated to RGB, and floating point RGB inputs in `[0,1]` are
+converted to `uint8`.
 
 Policy observations are controlled by `FullSMBObservationConfig`:
 
@@ -413,28 +415,29 @@ Policy observations are controlled by `FullSMBObservationConfig`:
 | --- | ---: | --- |
 | `frame_skip` | `1` | Number of backend frames to advance for one shared action. Rewards are summed across executed frames. |
 | `frame_stack` | `4` | Number of normalized frames retained in observation metadata. Reset padding is marked invalid in `frame_mask`. |
-| `resize_shape` | `(224, 256)` | Height/width used for normalized frame tensors and vision input. `None` preserves the backend frame size. |
-| `crop_margins` | `(0, 0, 0, 0)` | Top/right/bottom/left pixels cropped before resizing. |
-| `hud_policy` | `preserve` | `preserve` keeps the SMB HUD; `crop` adds `hud_crop_top` to the top crop margin. |
-| `hud_crop_top` | `24` | Extra top pixels removed only when `hud_policy="crop"`. |
 | `color_mode` | `rgb` | `rgb` preserves color; `grayscale` converts luminance and repeats it across three channels for ViT compatibility. |
-| `normalization_mean` | `(0.0, 0.0, 0.0)` | Per-channel mean subtracted after conversion to `[0,1]`, crop, optional grayscale, and resize. |
+| `normalization_mean` | `(0.0, 0.0, 0.0)` | Per-channel mean subtracted after conversion to `[0,1]` and optional grayscale. |
 | `normalization_std` | `(1.0, 1.0, 1.0)` | Per-channel positive scale applied after mean subtraction. |
 | `include_camera_state` | `False` | When true, appends the four-value `camera_vec` to the C-stream state after the stable nine-value `state_vec`. |
+| `hold_run_button` | `True` | When true, `RIGHT` and `RIGHT_JUMP` also press the NES run button (`B`). |
 
-`encode_observation` sends the preprocessed HWC frame to the Full SMB vision
-encoder. It records `frame_stack` as `[1, frame_stack, 3, H, W]`,
-`frame_mask`, `frame_skip`, `resize_shape`, `effective_crop_margins`,
-`hud_policy`, `color_mode`, normalization settings, `camera_vec`, and
-`camera_state_enabled` in `batch.metadata["observation"]`.
+`encode_observation` sends the 256x240 RGB frame to the Full SMB vision
+model. It records `frame_stack` as `[1, frame_stack, 3, 240, 256]`,
+`frame_mask`, `frame_skip`, `color_mode`, normalization settings, the
+`preprocessing` manifest, `camera_vec`, and `camera_state_enabled` in
+`batch.metadata["observation"]`.
 
-`retroagi diagnose-vision --game smb --stage full` runs the Full SMB ViT on
-real emulator frames and reports unlabeled perception diagnostics:
-`semantic_confidence`, `class_coverage`, `covered_classes`,
-`temporal_stability`, position consistency against `camera_vec`/`state_vec`,
-and `bottleneck_reasons`. These metrics do not replace synthetic asset-mock
-IoU; they catch real-frame confidence, coverage, temporal, and localization
-failures before policy-training issues are blamed on the controller.
+`retroagi diagnose-vision --game smb --stage full` measures the Full SMB vision
+model on the test levels `Level1-1` and `Level5-1`, which it never trains on.
+Each pixel's true type is read from game memory
+(`retroagi/stages/full_smb/pixel_labels.py`); a frame memory cannot fully
+explain is counted under `refused_frames` by reason and not measured. It
+reports the same measurements as the Block SMB diagnostic
+(`retroagi.core.pixel_vision.evaluate_pixel_vision`): `pixels_correct`, each
+type's found/correct, `mario_found`, `mario_position_error_px`,
+`standing_agreement` with the game's own standing flag, and `enemies_seen`.
+Check it before blaming policy-training problems on the controller; see
+[operations.md](operations.md#full-smb-vision) for its options.
 
 ### Action
 
@@ -565,19 +568,26 @@ actor/world-model/critic weights, and writes a Full SMB transfer checkpoint
 with source provenance.
 
 Block ViT perception weights are validated and recorded as source provenance,
-but they are not loaded into Full SMB directly because the semantic vocabularies
-differ. Before a transferred policy is used for Full SMB inference or continued
-training, the Full SMB ViT must be bootstrapped on full-game assets composed
-into synthetic scenarios and validated on held-out semantic and position
-metrics. Full SMB policy execution then uses that versioned Full SMB ViT
-checkpoint through `FullSMBSegmentationVision`.
+but they are not loaded into Full SMB. Both games use the same per-pixel vision
+transformer class and the same nine pixel types, but each game has its own
+trained weights. Before a transferred policy is used for Full SMB inference or
+continued training, the Full SMB vision model must be trained on real emulator
+frames of the training levels, with each pixel's type read exactly from game
+memory, and measured on the test levels `Level1-1` and `Level5-1`, which it
+never trains on (`retroagi diagnose-vision --game smb --stage full`; see
+[operations.md](operations.md#full-smb-vision)). Full SMB policy execution then
+reads screens through that checkpoint
+(`retroagi.stages.full_smb.vision.FullVisionTransformer`, loaded frozen by
+`load_full_vit_checkpoint`). `FullSMBStage` loads
+`data/full_vit/full_vit_pixel.pth` frozen on the CPU when it is not given a
+vision model.
 
 ```bash
 python -m retroagi.stages.full_smb.transfer \
   --block-policy-checkpoint data/block_smb/policy.pth \
   --output-checkpoint data/full_smb/transferred_policy.pth \
-  --block-vision-checkpoint data/block_vit/block_vit.pth \
-  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth
+  --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth
 ```
 
 `load_transferred_full_smb_policy(...)` restores a saved transfer checkpoint,
@@ -590,9 +600,9 @@ valid inference against emulator observations, shared actions, and Full SMB
 signals. After that contract is validated, direct Full SMB training resumes from
 the transferred checkpoint rather than treating transfer as the final result.
 That continuation step must declare its perception mode: `freeze` keeps the
-asset-mock Full SMB ViT fixed, `fine_tune` loads that checkpoint and includes
-trainable ViT parameters in the optimizer, and `replace` starts from a fresh
-trainable Full SMB ViT. The selected mode, checkpoint path, trainable/frozen
+trained Full SMB vision model fixed, `fine_tune` loads that checkpoint and
+includes its parameters in the optimizer, and `replace` starts from a fresh,
+untrained, trainable Full SMB vision model. The selected mode, checkpoint path, trainable/frozen
 status, optimizer participation, and saved perception state are written into the
 Full SMB policy checkpoint config and metadata.
 

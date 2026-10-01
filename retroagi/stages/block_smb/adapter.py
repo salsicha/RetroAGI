@@ -65,8 +65,6 @@ class BlockSMBStage:
         self.scenario = scenario
         self.vision = vision or BlockVisionTransformer()
         self.observation_config = observation_config
-        # The finish marker is simulator truth, not part of the visible game.
-        self.env.render_goal = False
         if isinstance(self.vision, torch.nn.Module):
             self.vision.eval()
         self.vision_projector = SMBProjector(self.spec)
@@ -131,7 +129,7 @@ class BlockSMBStage:
             with torch.no_grad():
                 self._cached_vision = self.vision.encode(normalized_observation)
             self._cached_vision_frame = normalized_observation.clone()
-        vision = canonical_vision(self._cached_vision, "block")
+        vision = canonical_vision(self._cached_vision)
         geometry = self.geometry(info)
         return self.vision_projector.project(
             vision,

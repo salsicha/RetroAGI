@@ -1,103 +1,167 @@
-"""Contract tests pinning vision class semantics against their sources of truth.
+"""Contract tests pinning vision labels against their source of truth.
 
-The Full SMB DeepLab class permutation (bricks/boxes/enemies swapped between
-the shipped checkpoint and the package tuple) survived because nothing tied
-class order to an artifact. These tests pin:
-
-- the dataset generator, ViT trainer, and package class lists to each other,
-- the Block SMB renderer's palette to the package color table, and
-- the shipped Full SMB ViT checkpoint's per-class behavior on labeled frames.
+The Block SMB simulator's drawing must type exactly the pixels it draws
+(MarioScenarioEnv.render_labels against MarioScenarioEnv.render). The Full SMB
+labels read from game memory are pinned in test_full_smb_pixel_labels.py.
 """
 
 import unittest
-from pathlib import Path
 
 import numpy as np
-import torch
 
+from retroagi.core.smb_pixel_types import TYPE_ID
+from retroagi.stages.block_smb import env as block_env
 from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.vision import BLOCK_CLASS_COLORS, BLOCK_SEMANTIC_CLASSES
-from retroagi.stages.full_smb.vision import (
-    FULL_SMB_VIT_CLASSES,
-    load_full_smb_vit_checkpoint,
-)
-
-FULL_SMB_VIT_CHECKPOINT = Path("data/vit/full_smb_vit.pth")
-FULL_SMB_VAL_DATASET = Path("data/vit/val.npz")
-GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 
 
-def _artifact_available(path: Path) -> bool:
-    if not path.exists():
-        return False
-    with path.open("rb") as handle:
-        return not handle.read(len(GIT_LFS_POINTER_PREFIX)).startswith(GIT_LFS_POINTER_PREFIX)
+def _block_scenario(**extra):
+    scenario = {
+        "world_width": 512,
+        "mario": [20, 208],
+        "platforms": [
+            [0, 220, 512, 20],
+            [100, 150, 64, 10],
+            [200, 180, 30, 40],
+            {"x": 240, "y": 150, "w": 40, "h": 10, "moving": [240, 320, 1.0]},
+            [340, 196, 32, 24],
+        ],
+        "coins": [[120, 120, 10, 10]],
+        "enemies": [
+            [150, 206, 140, 190, 0.8],
+            {"kind": "piranha_plant", "x": 209, "pipe_top": 180, "phase": 30},
+        ],
+        "goal": [480, 200, 16, 20],
+    }
+    scenario.update(extra)
+    return scenario
 
 
-class TestFullSMBVITClassContracts(unittest.TestCase):
-    def test_dataset_generator_trainer_and_package_class_lists_are_identical(self):
-        from scripts.vit.generate_dataset import CLASSES as generator_classes
-        from scripts.vit.train_vit import CLASSES as trainer_classes
-
-        self.assertEqual(tuple(generator_classes), FULL_SMB_VIT_CLASSES)
-        self.assertEqual(tuple(trainer_classes), FULL_SMB_VIT_CLASSES)
-
-    def test_shipped_checkpoint_predicts_each_class_at_its_package_index(self):
-        if not (
-            _artifact_available(FULL_SMB_VIT_CHECKPOINT)
-            and _artifact_available(FULL_SMB_VAL_DATASET)
-        ):
-            self.skipTest("shipped Full SMB ViT checkpoint or val dataset not available")
-
-        data = np.load(FULL_SMB_VAL_DATASET)
-        images = torch.tensor(data["images"][:8], dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
-        labels = torch.tensor(data["labels"][:8], dtype=torch.long)
-        loaded = load_full_smb_vit_checkpoint(FULL_SMB_VIT_CHECKPOINT)
-        with torch.no_grad():
-            predictions = loaded.model.encode(images).semantic_logits.argmax(1)
-
-        overall = (predictions == labels).float().mean().item()
-        self.assertGreaterEqual(overall, 0.9)
-        # Per-class recall at the package index catches class-order
-        # permutations: a shuffled class list scores ~0 for swapped classes.
-        for class_id, class_name in enumerate(FULL_SMB_VIT_CLASSES):
-            mask = labels == class_id
-            if int(mask.sum()) < 5:
-                continue
-            recall = (predictions[mask] == class_id).float().mean().item()
-            self.assertGreaterEqual(
-                recall,
-                0.7,
-                f"class {class_name!r} recall {recall:.3f} at package index "
-                f"{class_id}; the checkpoint and package class order disagree",
-            )
+def _frames(scenario, actions=(1, 1, 2, 2, 1, 4, 0), steps=60):
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        yield env, env.render(), env.render_labels()
+        for step in range(steps):
+            _obs, _reward, terminated, truncated, _info = env.step(actions[step % len(actions)])
+            yield env, env.render(), env.render_labels()
+            if terminated or truncated:
+                return
+    finally:
+        env.close()
 
 
-class TestBlockSMBPaletteContract(unittest.TestCase):
-    def test_renderer_emits_only_package_palette_colors(self):
+class TestBlockSMBDrawingContract(unittest.TestCase):
+    """render_labels() types exactly the pixels render() draws."""
+
+    def test_labels_are_the_drawn_shapes_types(self):
+        sky = np.array(block_env.SKY)
+        mario_colours = {block_env.MARIO, block_env.MARIO_SKIDDING, block_env.EYE}
+        types_seen = set()
+        for env, frame, labels in _frames(_block_scenario(platform_kinds=None)):
+            self.assertEqual(labels.shape, (240, 256))
+            self.assertEqual(labels.dtype, np.uint8)
+            types_seen.update(np.unique(labels).tolist())
+            is_sky = (frame == sky).all(-1)
+            np.testing.assert_array_equal(is_sky, labels == TYPE_ID["background"])
+            mario = {tuple(c) for c in frame[labels == TYPE_ID["mario"]].tolist()}
+            self.assertLessEqual(mario, mario_colours)
+            # Mario's eye is drawn inside his 10-pixel body.
+            m = env.mario
+            left, top = int(m["x"]) - int(env.camera_x), int(m["y"])
+            rows, columns = np.nonzero(labels == TYPE_ID["mario"])
+            if rows.size:
+                self.assertGreaterEqual(columns.min(), max(left, 0))
+                self.assertLess(columns.max(), left + m["w"])
+                self.assertLess(rows.max(), top + m["h"])
+        for name in ("background", "mario", "ground", "brick", "coin", "enemy"):
+            self.assertIn(TYPE_ID[name], types_seen, name)
+        self.assertIn(TYPE_ID["moving_platform"], types_seen)
+
+    def test_eyes_belong_to_their_owner(self):
+        white = np.array(block_env.EYE)
+        for env, frame, labels in _frames(_block_scenario()):
+            eyes = labels[(frame == white).all(-1)]
+            self.assertTrue(np.isin(eyes, (TYPE_ID["mario"], TYPE_ID["enemy"])).all())
         env = MarioScenarioEnv()
         try:
-            env.reset(seed=7)
-            frame = env.render()
-            for _ in range(30):
-                _observation, _reward, terminated, truncated, _info = env.step(1)
-                frame = env.render()
-                if terminated or truncated:
-                    break
+            env.reset(scenario=_block_scenario())
+            frame, labels = env.render(), env.render_labels()
+            goomba = env.enemy_screen_rects()[0]
+            window = (slice(goomba.top, goomba.bottom), slice(goomba.left, goomba.right))
+            eye = (frame[window] == white).all(-1)
+            self.assertTrue(eye.any())
+            self.assertTrue((labels[window][eye] == TYPE_ID["enemy"]).all())
         finally:
             env.close()
 
-        palette = {color for colors in BLOCK_CLASS_COLORS.values() for color in colors}
-        rendered = {tuple(color) for color in frame.reshape(-1, 3).tolist()}
-        unknown = rendered - palette
-        self.assertFalse(
-            unknown,
-            "renderer produced colors missing from BLOCK_CLASS_COLORS: "
-            f"{sorted(unknown)[:8]} — the palette and renderer have drifted",
-        )
+    def test_the_finish_marker_is_never_drawn(self):
+        with_goal = list(_frames(_block_scenario(), steps=10))
+        without = _block_scenario()
+        del without["goal"]
+        without_goal = list(_frames(without, steps=10))
+        for (_, frame_a, labels_a), (_, frame_b, labels_b) in zip(with_goal, without_goal):
+            np.testing.assert_array_equal(frame_a, frame_b)
+            np.testing.assert_array_equal(labels_a, labels_b)
+        self.assertFalse(hasattr(MarioScenarioEnv(), "render_goal"))
 
-    def test_package_palette_names_match_semantic_classes(self):
-        self.assertEqual(tuple(BLOCK_CLASS_COLORS), BLOCK_SEMANTIC_CLASSES)
+    def test_untagged_platforms_follow_the_default_rule(self):
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=_block_scenario())
+            # floor; floating row; raised block on the floor; lift; step on the floor
+            self.assertEqual(
+                env.platform_kinds,
+                ["ground", "brick_row", "ground", "moving_platform", "ground"],
+            )
+            labels = env.render_labels()
+            row = labels[150:160, 100:164]
+            self.assertTrue(np.isin(row, (TYPE_ID["brick"], TYPE_ID["question_block"])).all())
+            # Question cells sit at fixed world positions: the cell at x=112.
+            self.assertTrue((labels[150:160, 116:128] == TYPE_ID["question_block"]).all())
+            self.assertTrue((labels[150:160, 100:112] == TYPE_ID["brick"]).all())
+        finally:
+            env.close()
+
+    def test_tagged_platform_kinds_are_drawn_and_never_change_play(self):
+        tagged = _block_scenario(platform_kinds=["ground", "question_block", "pipe", None, "brick"])
+        positions = {}
+        for name, scenario in (("plain", _block_scenario()), ("tagged", tagged)):
+            positions[name] = [
+                (env.mario["x"], env.mario["y"], tuple(e["x"] for e in env.enemies))
+                for env, _frame, _labels in _frames(scenario)
+            ]
+        self.assertEqual(positions["plain"], positions["tagged"])
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=tagged)
+            labels = env.render_labels()
+            self.assertTrue((labels[150:160, 100:164] == TYPE_ID["question_block"]).all())
+            self.assertTrue((labels[184:220, 200:209] == TYPE_ID["pipe"]).all())
+            self.assertTrue((labels[196:220, 340:372] == TYPE_ID["brick"]).all())
+            with self.assertRaisesRegex(ValueError, "one kind per platform"):
+                env.reset(scenario=_block_scenario(platform_kinds=["pipe"]))
+            with self.assertRaisesRegex(ValueError, "platform kind"):
+                env.reset(scenario=_block_scenario(platform_kinds=["lava"] * 5))
+        finally:
+            env.close()
+
+    def test_pipe_families_tag_their_pipes(self):
+        expected = {
+            "tall_pipe_jump": ["ground", "pipe"],
+            "pipe_mount": ["ground", "pipe"],
+            "piranha_avoidance": ["ground", "pipe"],
+            "chained_obstacles": ["ground", "pipe", "pipe"],
+            "chained_enemy_gauntlet": ["ground", "ground", "pipe"],
+            "full_smb_opening_proxy": ["ground", "pipe", "pipe"],
+            "tactics_obstacle_sequence": ["ground", "pipe", "pipe"],
+        }
+        for family, kinds in expected.items():
+            sample = sample_block_smb_monte_carlo_scenario(
+                split="train", seed=3, sample_index=0, family=family, difficulty="easy"
+            )
+            self.assertEqual(sample.scenario["platform_kinds"], kinds, family)
+            self.assertEqual(len(sample.scenario["platforms"]), len(kinds), family)
 
 
 if __name__ == "__main__":

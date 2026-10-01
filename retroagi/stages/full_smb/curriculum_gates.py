@@ -25,7 +25,7 @@ from retroagi.stages.full_smb.adapter import (
     FullSMBObservationConfig,
     FullSMBStage,
 )
-from retroagi.stages.full_smb.vision import DEFAULT_FULL_SMB_VIT_CHECKPOINT
+from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT
 
 FULL_SMB_CURRICULUM_GATE_SCHEMA_VERSION = 1
 DEFAULT_FULL_SMB_CURRICULUM_GATE_PASS_RATE = 1.0
@@ -451,7 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--full-smb-vision-checkpoint",
         "--vision-checkpoint",
         type=Path,
-        default=DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+        default=DEFAULT_FULL_VIT_CHECKPOINT,
     )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--seed", type=int, default=0)

@@ -17,6 +17,7 @@ from retroagi.core import (
     VisionOutput,
     VisionSpec,
 )
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.stages.block_smb import distill as distill_module
 from retroagi.stages.block_smb.distill import (
     DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
@@ -33,15 +34,7 @@ from retroagi.stages.block_smb.distill import (
 class StaticBlockVision:
     spec = VisionSpec(
         name="static_block_distill",
-        semantic_classes=(
-            "background",
-            "mario",
-            "platform",
-            "coin",
-            "goal",
-            "enemy",
-            "moving_platform",
-        ),
+        semantic_classes=PIXEL_TYPES,
         token_dim=4,
     )
 
@@ -55,7 +48,7 @@ class StaticBlockVision:
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.zeros(1, 240, self.spec.token_dim),
             support_logits=torch.tensor([[-4.0, 4.0, -4.0]]),
-            metadata={},
+            metadata={"semantic_classes": PIXEL_TYPES},
         )
 
 

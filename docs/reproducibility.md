@@ -145,13 +145,13 @@ interchangeable training targets:
    deterministic success thresholds. Fixed scenarios are regression sentinels;
    the next Block SMB training target is the versioned Monte Carlo distribution
    described in [block-smb-monte-carlo-curriculum.md](block-smb-monte-carlo-curriculum.md).
-3. **Full SMB asset-mock perception bootstraps the ViT.** Before any transferred
-   policy uses emulator observations, train or fine-tune the Full SMB ViT on
-   synthetic scenarios built from full-game assets and gate that checkpoint on
-   held-out semantic and position metrics.
-4. **Full SMB verifies inference and continues training.** First validate that
-   transferred checkpoints run against the full emulator contract, then continue
-   training the transferred models at full fidelity.
+3. **Full SMB verifies inference and continues training.** Before any
+   transferred policy uses emulator observations, train the Full SMB vision
+   model on real emulator frames of the training levels, labelled exactly from
+   game memory, and measure it on the test levels it never trains on (see
+   [section 10](#10-reproduce-full-smb-vision)). Then validate that transferred
+   checkpoints run against the full emulator contract, and continue training
+   the transferred models at full fidelity.
 
 ## 5. Run A Traceable Architecture Sweep
 
@@ -205,7 +205,7 @@ assert manifest["device"] == "cpu"
 assert manifest["game"]["name"] == "smb"
 assert manifest["game"]["backend"]["name"] == "stable-retro"
 assert any(item["name"] == "smb_rom" for item in manifest["game"]["content_identifiers"])
-assert any(item["name"] == "smb_sprites" for item in manifest["game"]["asset_provenance"])
+assert any(item["name"] == "smb_rom" for item in manifest["game"]["asset_provenance"])
 assert manifest["passed"] is True
 assert {stage["stage"] for stage in manifest["stages"]} == {
     "synthetic-1d",
@@ -391,33 +391,38 @@ Expected evidence:
 
 ## 8. Reproduce Block SMB Perception
 
-First verify the tracked or supplied Block ViT checkpoint:
-
-```bash
-retroagi diagnose-vision --game smb --stage block \
-  --vision-checkpoint data/block_vit/block_vit.pth \
-  --samples 64 \
-  --rollout-steps 32 \
-  --output artifacts/repro/block_smb_vision_diagnostic.json
-```
-
-The diagnostic output must include `perception.bottleneck`. A known-good
-perception checkpoint should keep `bottleneck` false under the default
-thresholds from `BlockVITPerceptionThresholds`.
-
-To retrain perception from procedural labels:
+Retrain the Block vision transformer (the shared per-pixel model with Block
+weights) from exact per-pixel labels (`MarioScenarioEnv.render_labels()`):
 
 ```bash
 python scripts/vit/train_block_vit.py \
-  --epochs 20 \
-  --samples-per-epoch 2048 \
-  --val-samples 512 \
+  --epochs 40 \
+  --samples-per-epoch 40000 \
   --device auto \
-  --output data/block_vit/block_vit.pth
+  --output data/block_vit/block_vit_pixel.pth
 ```
 
-Preserve `data/block_vit/block_vit.pth`,
-`data/block_vit/block_vit.json`, and the diagnostic JSON.
+Then measure it on held-out validation-split frames with the shared
+measurements:
+
+```bash
+python scripts/vision/evaluate_block_vision.py \
+  --checkpoint data/block_vit/block_vit_pixel.pth \
+  --output artifacts/repro/block_smb_vision_evaluation.json
+```
+
+The JSON reports pixels correct, each type's found/correct, frames where
+Mario is found, Mario position error in pixels, standing/air agreement with
+the simulator and enemies seen. The CLI runs the same measurement:
+
+```bash
+retroagi diagnose-vision --game smb --stage block \
+  --vision-checkpoint data/block_vit/block_vit_pixel.pth \
+  --output artifacts/repro/block_smb_vision_diagnostic.json
+```
+
+Preserve `data/block_vit/block_vit_pixel.pth`,
+`data/block_vit/block_vit_pixel.json`, and the measurement JSON.
 
 ## 9. Reproduce Block SMB Policy
 
@@ -430,7 +435,7 @@ retroagi train --game smb --stage block \
   --epochs 5 \
   --episodes-per-epoch 2 \
   --rollout-steps 32 \
-  --vision-checkpoint data/block_vit/block_vit.pth \
+  --vision-checkpoint data/block_vit/block_vit_pixel.pth \
   --checkpoint data/block_smb/policy.pth \
   --output artifacts/block_smb/latest/run_summary.json \
   --log-path artifacts/block_smb/latest/events.jsonl
@@ -495,34 +500,71 @@ learned policy checkpoint.
 
 ## 10. Reproduce Full SMB Vision
 
-Generate full-game assets and synthetic scenarios, then train the Full SMB ViT
-segmenter. This is the required perception bootstrap between Block SMB training
-and Full SMB policy inference/training:
+Train the Full SMB vision transformer: the same per-pixel model class as Block
+SMB (`retroagi.core.vision.PixelVisionTransformer`) with its own Full SMB
+weights. It gives every pixel of the emulator screen one of the nine shared
+types in `retroagi.core.smb_pixel_types.PIXEL_TYPES`. Every Full SMB policy
+command reads screens through it, so train it before Full SMB policy inference
+or training.
+
+Training plays real emulator frames, so it needs the ROM imported into
+stable-retro first (the first commands of
+[section 11](#11-set-up-full-smb-local-content); see also
+[full-smb-content.md](full-smb-content.md)). Worker processes play the
+training levels (`retroagi/stages/full_smb/vision_frames.py`), each from its
+saved start, with a random player that is rewound after each death. Each
+pixel's true type is read from game memory by
+`retroagi/stages/full_smb/pixel_labels.py` (`label_frame`). A frame is accepted
+only when the picture rebuilt from memory matches the emulator's picture at
+every visible pixel; any frame memory cannot fully explain is refused and never
+used. The test levels `Level1-1` and `Level5-1` (`vision_frames.TEST_LEVELS`)
+are never trained on.
 
 ```bash
-python scripts/vit/extract_sprites.py
-python scripts/vit/generate_dataset.py --train 5000 --val 1000
-python scripts/vit/train_vit.py \
-  --epochs 30 \
-  --batch 64 \
-  --dim 192 \
-  --depth 6 \
-  --device auto
+python scripts/vit/train_full_vit.py \
+  --epochs 40 \
+  --samples-per-epoch 40000 \
+  --device auto \
+  --output data/full_vit/full_vit_pixel.pth
 ```
+
+Then measure it on the test levels with the shared measurements:
+
+```bash
+python scripts/vision/evaluate_full_vision.py \
+  --checkpoint data/full_vit/full_vit_pixel.pth \
+  --output artifacts/repro/full_smb_vision_evaluation.json
+```
+
+The JSON reports the same measurements as Block SMB
+(`retroagi.core.pixel_vision.evaluate_pixel_vision`): `pixels_correct`, each
+type's found/correct, `mario_found` (the share of frames showing Mario where the
+model finds him), `mario_position_error_px`, `standing_agreement` (standing or
+in the air according to the predicted labels, compared with the game's own
+standing flag), and `enemies_seen`, plus the count of refused frames by reason.
+The CLI runs the same measurement in one process:
+
+```bash
+retroagi diagnose-vision --game smb --stage full \
+  --vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --plays 1 \
+  --every 4 \
+  --output artifacts/repro/full_smb_vision_diagnostic.json
+```
+
+Its JSON adds `levels`, `plays`, and `refused_frames` (frames memory could not
+fully explain, counted by reason).
 
 Expected artifacts:
 
-- `assets/spritesheets/` and `assets/sprites/`,
-- `data/vit/train.npz` and `data/vit/val.npz`,
-- `data/vit/full_smb_vit.pth` and `data/vit/full_smb_vit.json`,
-- `data/vit/vit_smb.pth`,
-- `data/vit/predictions.png`.
+- `data/full_vit/full_vit_pixel.pth` and `data/full_vit/full_vit_pixel.json`,
+- the measurement JSON files above.
 
-The reference target is about 99.94 percent overall accuracy, 99.89 percent
-foreground accuracy, and 99.14 percent mean IoU on 1,000 held-out synthetic
-scenes. Do not promote a Block SMB policy to Full SMB inference or continued
-training until the Full SMB ViT checkpoint has passed the selected held-out
-semantic and position gates.
+Do not move a Block SMB policy to Full SMB inference or continued training
+until this checkpoint's test-level measurements meet the targets the SMB game
+plugin declares for both games: at least 0.999 pixels correct, 0.99 Mario
+found, 0.95 standing agreement and 0.99 enemies seen, and at most 1 pixel of
+Mario position error.
 
 ## 11. Set Up Full SMB Local Content
 
@@ -722,13 +764,14 @@ retroagi evaluate --game smb --stage full \
 ```
 
 Transfer the Block SMB policy into the Full SMB contract only after the Full SMB
-ViT asset-synthetic checkpoint exists:
+vision checkpoint from [section 10](#10-reproduce-full-smb-vision) exists and
+meets its test-level targets:
 
 ```bash
 retroagi transfer --game smb --stage full \
   --block-policy-checkpoint data/block_smb/policy.pth \
-  --block-vision-checkpoint data/block_vit/block_vit.pth \
-  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
   --output-checkpoint data/full_smb/transferred_policy.pth
 ```
 
@@ -743,7 +786,7 @@ retroagi compare --game smb --stage full \
   --scratch-trained-checkpoint data/full_smb/scratch_policy.pth \
   --fine-tuned-checkpoint data/full_smb/fine_tuned_policy.pth \
   --known-good-checkpoint data/full_smb/known_good_policy.pth \
-  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
   --task-set fixed_benchmark \
   --steps 128 \
   --seed 0 \
@@ -780,13 +823,13 @@ The preserved layout is rooted at `artifacts/full_smb/baseline_seed0/` with
 `comparisons/`, `tracking/`, and `checkpoints/` subdirectories.
 
 Continue training with an explicit perception mode so the checkpoint records
-whether the Full SMB ViT was frozen, fine-tuned, or replaced:
+whether the Full SMB vision model was frozen, fine-tuned, or replaced:
 
 ```bash
 retroagi train --game smb --stage full \
   --mode fine-tune \
   --init-checkpoint data/full_smb/transferred_policy.pth \
-  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
   --perception-mode freeze \
   --epochs 1 \
   --updates-per-epoch 1 \

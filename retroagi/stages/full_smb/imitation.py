@@ -36,7 +36,7 @@ from retroagi.stages.full_smb.train import (
     load_full_smb_policy_checkpoint,
 )
 from retroagi.stages.full_smb.transfer import policy_architecture_from_checkpoint
-from retroagi.stages.full_smb.vision import DEFAULT_FULL_SMB_VIT_CHECKPOINT
+from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT
 
 DEFAULT_FULL_SMB_IMITATION_STEPS = 600
 DEFAULT_FULL_SMB_IMITATION_BATCH_SIZE = 32
@@ -945,7 +945,7 @@ def run_full_smb_imitation_warm_start(
     *,
     policy_checkpoint: Path,
     output_checkpoint: Path,
-    full_smb_vision_checkpoint: Path = DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+    full_smb_vision_checkpoint: Path = DEFAULT_FULL_VIT_CHECKPOINT,
     output_summary: Optional[Path] = None,
     device: str | torch.device = "auto",
     seed: int = 0,
@@ -1140,7 +1140,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--full-smb-vision-checkpoint",
         "--vision-checkpoint",
         type=Path,
-        default=DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+        default=DEFAULT_FULL_VIT_CHECKPOINT,
     )
     parser.add_argument("--output-summary", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")

@@ -20,10 +20,8 @@ from retroagi.stages.full_smb.adapter import (
     FullSMBObservationConfig,
     FullSMBStage,
 )
-from retroagi.stages.full_smb.vision import (
-    DEFAULT_FULL_SMB_VIT_CHECKPOINT,
-    FullSMBSegmentationVision,
-)
+from retroagi.stages.full_smb.transfer import full_smb_vision_model
+from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, FullVisionTransformer
 
 
 @dataclass(frozen=True)
@@ -40,7 +38,7 @@ class FullSMBThroughputBenchmarkConfig:
     output: Optional[Path] = None
     env_config: FullSMBEnvConfig = field(default_factory=FullSMBEnvConfig)
     content_spec: FullSMBContentSpec = DEFAULT_FULL_SMB_CONTENT
-    vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT
+    vision_checkpoint: Optional[Path] = DEFAULT_FULL_VIT_CHECKPOINT
 
     def __post_init__(self) -> None:
         for name in ("steps", "warmup_steps"):
@@ -182,7 +180,6 @@ def run_full_smb_throughput_benchmark(
             observation_config=FullSMBObservationConfig(
                 frame_skip=config.frame_skip,
                 frame_stack=2,
-                resize_shape=None,
             ),
             vision=vision,
         )
@@ -251,8 +248,8 @@ def recommended_full_smb_runtime_settings() -> dict[str, Any]:
             "device_flag": "--device mps",
             "training": (
                 "Use on Apple Silicon for ViT and policy compute after comparing "
-                "against CPU on the same benchmark. Keep perception frozen for "
-                "short policy fine-tunes unless the asset-mock gate requires updates."
+                "against CPU on the same benchmark. Keep the trained vision model "
+                "frozen for short policy fine-tunes."
             ),
             "play": (
                 "Good default for macOS rendered policy playback when the policy or "
@@ -302,14 +299,10 @@ def _maybe_render(stage: FullSMBStage, enabled: bool) -> None:
 def _benchmark_vision(
     config: FullSMBThroughputBenchmarkConfig,
     device: torch.device,
-) -> FullSMBSegmentationVision | "_NoopVision":
+) -> FullVisionTransformer | "_NoopVision":
     if not config.encode_observations:
         return _NoopVision()
-    return FullSMBSegmentationVision(
-        checkpoint=config.vision_checkpoint,
-        device=device,
-        freeze=True,
-    )
+    return full_smb_vision_model(config.vision_checkpoint, device=device, freeze=True)
 
 
 class _NoopVision:
@@ -334,12 +327,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vision-checkpoint",
         type=Path,
-        default=DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+        default=DEFAULT_FULL_VIT_CHECKPOINT,
     )
     parser.add_argument(
         "--no-vision-checkpoint",
         action="store_true",
-        help="use an untrained Full SMB ViT when --encode-observations is set",
+        help="use an untrained Full SMB vision transformer when --encode-observations is set",
     )
     parser.add_argument("--output", type=Path)
     return parser

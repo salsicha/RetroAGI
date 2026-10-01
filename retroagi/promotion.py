@@ -15,7 +15,6 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from retroagi import experiments
 from retroagi.core import (
@@ -32,7 +31,6 @@ from retroagi.core import (
     get_game_plugin,
     load_checkpoint,
     parse_architecture_ablation_item,
-    save_checkpoint,
     select_device,
     to_plain_data,
 )
@@ -49,10 +47,7 @@ from retroagi.stages.full_smb.transfer import (
     select_transferred_full_smb_action,
     transfer_block_smb_checkpoint_to_full_smb,
 )
-from retroagi.stages.full_smb.vision import (
-    FullSMBVisionTransformer,
-    build_full_smb_vit_checkpoint,
-)
+from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT
 from retroagi.stages.synthetic_1d.train import SYNTHETIC_1D_SPEC
 
 SUPPORTED_RUNG_STATUS = "supported"
@@ -100,14 +95,6 @@ PROMOTION_RUNGS: tuple[PromotionRung, ...] = (
         description="Report fixed-vs-generated Block SMB scenario generalization.",
         status=UNSUPPORTED_RUNG_STATUS,
         reason="generated-scenario promotion gates are not defined yet",
-    ),
-    PromotionRung(
-        name="full-smb-asset-mock-perception",
-        description=(
-            "Train the Full SMB ViT on deterministic mock scenes using the Full SMB "
-            "asset vocabulary and gate policy transfer on held-out perception metrics."
-        ),
-        status=SUPPORTED_RUNG_STATUS,
     ),
     PromotionRung(
         name="full-smb-transfer-smoke",
@@ -176,17 +163,6 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "evaluation_max_steps": 200,
             "runtime_seconds": 600.0,
         },
-        "full-smb-asset-mock-perception": {
-            "train_scenes": 8,
-            "validation_scenes": 4,
-            "epochs": 8,
-            "semantic_accuracy_threshold": 0.05,
-            "foreground_accuracy_threshold": 0.01,
-            "mean_iou_threshold": 0.01,
-            "position_within_tolerance_threshold": 0.0,
-            "position_tolerance": 0.35,
-            "runtime_seconds": 120.0,
-        },
         "full-smb-transfer-smoke": {"steps": 32, "seeds": 1, "runtime_seconds": 120.0},
         "full-smb-transfer-vs-scratch": {"steps": 128, "seeds": 2, "runtime_seconds": 300.0},
         "full-smb-fine-tuning": {
@@ -239,17 +215,6 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "evaluation_episodes": 5,
             "evaluation_max_steps": 200,
             "runtime_seconds": 2400.0,
-        },
-        "full-smb-asset-mock-perception": {
-            "train_scenes": 16,
-            "validation_scenes": 8,
-            "epochs": 12,
-            "semantic_accuracy_threshold": 0.10,
-            "foreground_accuracy_threshold": 0.05,
-            "mean_iou_threshold": 0.02,
-            "position_within_tolerance_threshold": 0.0,
-            "position_tolerance": 0.30,
-            "runtime_seconds": 300.0,
         },
         "full-smb-transfer-smoke": {"steps": 128, "seeds": 2, "runtime_seconds": 300.0},
         "full-smb-transfer-vs-scratch": {"steps": 512, "seeds": 3, "runtime_seconds": 900.0},
@@ -304,17 +269,6 @@ PROMOTION_BUDGETS: dict[str, dict[str, dict[str, int | float]]] = {
             "evaluation_max_steps": 200,
             "runtime_seconds": 14400.0,
         },
-        "full-smb-asset-mock-perception": {
-            "train_scenes": 64,
-            "validation_scenes": 16,
-            "epochs": 20,
-            "semantic_accuracy_threshold": 0.25,
-            "foreground_accuracy_threshold": 0.10,
-            "mean_iou_threshold": 0.05,
-            "position_within_tolerance_threshold": 0.10,
-            "position_tolerance": 0.25,
-            "runtime_seconds": 900.0,
-        },
         "full-smb-transfer-smoke": {"steps": 512, "seeds": 3, "runtime_seconds": 900.0},
         "full-smb-transfer-vs-scratch": {"steps": 2048, "seeds": 5, "runtime_seconds": 3600.0},
         "full-smb-fine-tuning": {
@@ -332,10 +286,7 @@ RUNG_ALIASES.update(
         "architecture-smoke": ("interface-smoke",),
         "game-synthetic": ("synthetic-concept",),
         "game-block": ("block-smb-smoke",),
-        "game-full-smoke": (
-            "full-smb-asset-mock-perception",
-            "full-smb-transfer-smoke",
-        ),
+        "game-full-smoke": ("full-smb-transfer-smoke",),
         "game-transfer": ("full-smb-transfer-smoke",),
         "game-full-comparison": ("full-smb-transfer-vs-scratch",),
         "game-full-training": ("full-smb-fine-tuning",),
@@ -434,6 +385,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument(
+        "--full-smb-vision-checkpoint",
+        type=Path,
+        default=DEFAULT_FULL_VIT_CHECKPOINT,
+        help=(
+            "trained Full SMB vision transformer the Full SMB transfer rung reads screens "
+            "through (scripts/vit/train_full_vit.py writes it)"
+        ),
+    )
+    parser.add_argument(
         "--budget",
         choices=tuple(PROMOTION_BUDGETS),
         default="small",
@@ -517,12 +477,6 @@ def run_promotion(args: argparse.Namespace) -> dict[str, Any]:
                     result = _run_block_smb_smoke(
                         args,
                         variant,
-                        budgets[rung.name],
-                        game_plugin.promotion_gate(rung.name),
-                    )
-                elif rung.name == "full-smb-asset-mock-perception":
-                    result = _run_full_smb_asset_mock_perception(
-                        args,
                         budgets[rung.name],
                         game_plugin.promotion_gate(rung.name),
                     )
@@ -889,355 +843,6 @@ def _run_block_smb_smoke(
     )
 
 
-def _run_full_smb_asset_mock_perception(
-    args: argparse.Namespace,
-    budget: Mapping[str, int | float],
-    gate_spec: GamePromotionGateSpec | None,
-) -> dict[str, Any]:
-    start_time = time.perf_counter()
-    device = select_device(args.device)
-    rung_dir = args.artifacts_dir / "full_smb_asset_mock_perception"
-    checkpoint_path = rung_dir / "full_smb_vit.pth"
-    summary_path = rung_dir / "asset_mock_summary.json"
-    rung_dir.mkdir(parents=True, exist_ok=True)
-
-    result = _train_full_smb_asset_mock_vit(
-        train_scenes=int(budget["train_scenes"]),
-        validation_scenes=int(budget["validation_scenes"]),
-        epochs=int(budget["epochs"]),
-        seed=args.seed,
-        device=device,
-        checkpoint_path=checkpoint_path,
-        position_tolerance=float(budget["position_tolerance"]),
-    )
-    elapsed_seconds = time.perf_counter() - start_time
-    artifacts = {
-        "full_smb_vision_checkpoint_path": str(checkpoint_path),
-        "summary_path": str(summary_path),
-    }
-    summary = {
-        "stage": "full-smb",
-        "source_stage": "asset-mock",
-        "seed": args.seed,
-        "device": str(device),
-        "budget": dict(budget),
-        "metrics": result["metrics"],
-        "training": result["training"],
-        "mock_assets": result["mock_assets"],
-        "artifacts": artifacts,
-    }
-    summary_path.write_text(
-        json.dumps(to_plain_data(summary), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    automatic_gates = _asset_mock_automatic_gates(
-        metrics=result["metrics"],
-        artifacts=artifacts,
-        budget=budget,
-        elapsed_seconds=elapsed_seconds,
-        gate_spec=gate_spec,
-    )
-    passed = all(gate["passed"] for gate in automatic_gates)
-    _asset_mock_gate_status_path(checkpoint_path).write_text(
-        json.dumps(
-            {"passed": passed, "automatic_gates": to_plain_data(automatic_gates)},
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return {
-        "name": "full-smb-asset-mock-perception",
-        "description": (
-            "Train Full SMB ViT on deterministic asset-mock scenes and gate "
-            "policy transfer on held-out perception metrics."
-        ),
-        "status": "passed" if passed else "failed",
-        "passed": passed,
-        "budget": dict(budget),
-        "runtime_seconds": elapsed_seconds,
-        "automatic_gates": automatic_gates,
-        "device": str(device),
-        "metrics": result["metrics"],
-        "artifacts": artifacts,
-        "summary_path": str(summary_path),
-    }
-
-
-def _train_full_smb_asset_mock_vit(
-    *,
-    train_scenes: int,
-    validation_scenes: int,
-    epochs: int,
-    seed: int,
-    device: torch.device,
-    checkpoint_path: Path,
-    position_tolerance: float,
-) -> dict[str, Any]:
-    torch.manual_seed(seed)
-    train_images, train_labels, _train_positions, train_coverage = (
-        _compose_full_smb_asset_mock_batch(train_scenes, seed=seed)
-    )
-    val_images, val_labels, val_positions, val_coverage = _compose_full_smb_asset_mock_batch(
-        validation_scenes,
-        seed=seed + 10_000,
-    )
-    model = FullSMBVisionTransformer(dim=16, depth=1, heads=4, drop=0.0).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-3, weight_decay=0.0)
-    train_images = train_images.to(device)
-    train_labels = train_labels.to(device)
-    losses: list[float] = []
-    model.train()
-    weights = _asset_mock_class_weights(train_labels).to(device)
-    for _epoch in range(max(1, epochs)):
-        output = model(train_images).semantic_logits
-        loss = F.cross_entropy(output, train_labels, weight=weights)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
-        losses.append(float(loss.detach().cpu().item()))
-
-    metrics = _evaluate_full_smb_asset_mock_vit(
-        model,
-        val_images.to(device),
-        val_labels.to(device),
-        val_positions.to(device),
-        position_tolerance=position_tolerance,
-    )
-    checkpoint = build_full_smb_vit_checkpoint(
-        model,
-        epoch=max(1, epochs),
-        metrics=metrics,
-        config={
-            "model": {
-                "hidden_dim": 16,
-                "depth": 1,
-                "heads": 4,
-                "patch_size": 16,
-                "dropout": 0.0,
-            },
-            "training": {
-                "source": "promotion_full_smb_asset_mock_perception",
-                "train_scenes": train_scenes,
-                "validation_scenes": validation_scenes,
-                "epochs": max(1, epochs),
-                "learning_rate": 5e-3,
-            },
-            "data": {
-                "semantic_classes": list(FULL_SMB_ASSET_MOCK_CLASSES),
-                "mock_asset_kind": "deterministic_colored_rectangles",
-                "mock_scene_size": [240, 256],
-                "patch_size": 16,
-            },
-        },
-        metadata={
-            "promotion_rung": "full-smb-asset-mock-perception",
-            "asset_mock_note": (
-                "Fast promotion fixture using deterministic Full SMB class-colored "
-                "mock assets; high-fidelity reproduction still uses scripts/vit."
-            ),
-        },
-    )
-    save_checkpoint(checkpoint_path, checkpoint)
-    return {
-        "metrics": metrics,
-        "training": {
-            "losses": losses,
-            "final_loss": losses[-1] if losses else 0.0,
-        },
-        "mock_assets": {
-            "classes": list(FULL_SMB_ASSET_MOCK_CLASSES),
-            "train_class_coverage": train_coverage,
-            "validation_class_coverage": val_coverage,
-        },
-    }
-
-
-FULL_SMB_ASSET_MOCK_CLASSES = (
-    "sky",
-    "ground",
-    "brick",
-    "question_block",
-    "pipe",
-    "coin",
-    "goomba",
-    "koopa",
-    "mario",
-    "mushroom",
-    "hill",
-    "cloud",
-    "bush",
-)
-FULL_SMB_ASSET_MOCK_COLORS = {
-    "sky": (107, 140, 255),
-    "ground": (141, 83, 29),
-    "brick": (188, 74, 32),
-    "question_block": (230, 166, 40),
-    "pipe": (34, 166, 62),
-    "coin": (248, 220, 69),
-    "goomba": (119, 72, 40),
-    "koopa": (88, 186, 77),
-    "mario": (214, 34, 34),
-    "mushroom": (245, 72, 72),
-    "hill": (91, 184, 80),
-    "cloud": (242, 242, 255),
-    "bush": (45, 148, 63),
-}
-
-
-def _asset_mock_class_weights(labels: torch.Tensor) -> torch.Tensor:
-    counts = torch.bincount(
-        labels.reshape(-1),
-        minlength=len(FULL_SMB_ASSET_MOCK_CLASSES),
-    ).float()
-    weights = 1.0 / torch.sqrt(counts + 1.0)
-    return weights / weights.mean().clamp_min(1e-6)
-
-
-def _compose_full_smb_asset_mock_batch(
-    count: int,
-    *,
-    seed: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, int]]:
-    rng = np.random.default_rng(seed)
-    height, width, patch = 240, 256, 16
-    grid_h, grid_w = height // patch, width // patch
-    images = np.zeros((count, height, width, 3), dtype=np.uint8)
-    labels = np.zeros((count, grid_h, grid_w), dtype=np.int64)
-    positions = np.zeros((count, 2), dtype=np.float32)
-    coverage = {name: 0 for name in FULL_SMB_ASSET_MOCK_CLASSES}
-    for index in range(count):
-        image, label, mario_position = _compose_full_smb_asset_mock_scene(rng)
-        images[index] = image
-        labels[index] = label
-        positions[index] = mario_position
-        present = np.unique(label)
-        for class_id in present:
-            coverage[FULL_SMB_ASSET_MOCK_CLASSES[int(class_id)]] += 1
-    return (
-        torch.as_tensor(images),
-        torch.as_tensor(labels, dtype=torch.long),
-        torch.as_tensor(positions, dtype=torch.float32),
-        coverage,
-    )
-
-
-def _compose_full_smb_asset_mock_scene(
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    height, width, patch = 240, 256, 16
-    grid_h, grid_w = height // patch, width // patch
-    image = np.zeros((height, width, 3), dtype=np.uint8)
-    image[...] = FULL_SMB_ASSET_MOCK_COLORS["sky"]
-    label = np.zeros((grid_h, grid_w), dtype=np.int64)
-
-    def paint(name: str, x0: int, y0: int, w: int = 1, h: int = 1) -> None:
-        class_id = FULL_SMB_ASSET_MOCK_CLASSES.index(name)
-        x1 = min(grid_w, max(0, x0) + w)
-        y1 = min(grid_h, max(0, y0) + h)
-        x0_clamped = max(0, x0)
-        y0_clamped = max(0, y0)
-        if x0_clamped >= x1 or y0_clamped >= y1:
-            return
-        label[y0_clamped:y1, x0_clamped:x1] = class_id
-        image[
-            y0_clamped * patch : y1 * patch,
-            x0_clamped * patch : x1 * patch,
-        ] = FULL_SMB_ASSET_MOCK_COLORS[name]
-
-    for gx in range(grid_w):
-        paint("ground", gx, grid_h - 2, 1, 2)
-    paint("hill", int(rng.integers(0, 4)), grid_h - 5, 3, 3)
-    paint("bush", int(rng.integers(8, 13)), grid_h - 3, 2, 1)
-    paint("cloud", int(rng.integers(1, 10)), int(rng.integers(1, 4)), 2, 1)
-    paint("pipe", int(rng.integers(9, 14)), grid_h - 4, 2, 2)
-    row = int(rng.integers(4, 8))
-    start = int(rng.integers(2, 6))
-    for offset, name in enumerate(("brick", "question_block", "brick")):
-        paint(name, start + offset, row)
-    paint("coin", start + 1, max(1, row - 2))
-    paint("goomba", int(rng.integers(5, 9)), grid_h - 3)
-    paint("koopa", int(rng.integers(11, 15)), grid_h - 3)
-    paint("mushroom", int(rng.integers(1, 6)), grid_h - 3)
-
-    # Tiny promotion batches need balanced foreground coverage; this atlas
-    # stands in for cropped full-game assets before the larger scripts/vit run.
-    atlas_positions = {
-        "ground": (0, 0),
-        "brick": (2, 0),
-        "question_block": (4, 0),
-        "pipe": (6, 0),
-        "coin": (8, 0),
-        "goomba": (10, 0),
-        "koopa": (12, 0),
-        "mushroom": (14, 0),
-        "hill": (0, 2),
-        "cloud": (2, 2),
-        "bush": (4, 2),
-    }
-    for name, (x0, y0) in atlas_positions.items():
-        paint(name, x0, y0)
-    mario_x = int(rng.integers(1, 7))
-    mario_y = grid_h - 3
-    paint("mario", mario_x, mario_y)
-    paint("mario", 6, 2)
-    return (
-        image,
-        label,
-        np.asarray(
-            [
-                mario_x / max(grid_w - 1, 1),
-                mario_y / max(grid_h - 1, 1),
-            ],
-            dtype=np.float32,
-        ),
-    )
-
-
-@torch.no_grad()
-def _evaluate_full_smb_asset_mock_vit(
-    model: FullSMBVisionTransformer,
-    images: torch.Tensor,
-    labels: torch.Tensor,
-    positions: torch.Tensor,
-    *,
-    position_tolerance: float,
-) -> dict[str, float]:
-    model.eval()
-    output = model(images)
-    predictions = output.semantic_ids
-    accuracy = (predictions == labels).float().mean().item()
-    foreground = labels != 0
-    foreground_accuracy = (
-        (predictions[foreground] == labels[foreground]).float().mean().item()
-        if foreground.any()
-        else 0.0
-    )
-    ious = []
-    for class_id in range(len(FULL_SMB_ASSET_MOCK_CLASSES)):
-        pred_class = predictions == class_id
-        true_class = labels == class_id
-        union = torch.logical_or(pred_class, true_class).sum()
-        if int(union.item()) == 0:
-            continue
-        intersection = torch.logical_and(pred_class, true_class).sum()
-        ious.append((intersection.float() / union.float()).item())
-    position_error = torch.linalg.vector_norm(output.position - positions, dim=-1)
-    return {
-        "accuracy": float(accuracy),
-        "foreground_accuracy": float(foreground_accuracy),
-        "mean_iou": float(sum(ious) / len(ious)) if ious else 0.0,
-        "position_rmse": float(torch.sqrt((position_error**2).mean()).item()),
-        "position_within_tolerance": float(
-            (position_error <= position_tolerance).float().mean().item()
-        ),
-        "position_tolerance": float(position_tolerance),
-        "class_coverage": float(len(torch.unique(labels))),
-    }
-
-
 def _run_full_smb_transfer_smoke(
     args: argparse.Namespace,
     variant: Any,
@@ -1253,7 +858,7 @@ def _run_full_smb_transfer_smoke(
     rung_dir.mkdir(parents=True, exist_ok=True)
 
     source_checkpoint_path = _ensure_handoff_source_checkpoint(args, variant, rung_dir)
-    full_smb_vision_path = _ensure_asset_mock_perception_checkpoint(args)
+    full_smb_vision_path = Path(args.full_smb_vision_checkpoint)
     transfer_result = transfer_block_smb_checkpoint_to_full_smb(
         source_checkpoint_path,
         output_checkpoint=transfer_path,
@@ -1454,40 +1059,9 @@ def _ensure_handoff_source_checkpoint(
     source_checkpoint = experiment_args.artifacts_dir / "block_smb" / "checkpoint.pth"
     if not source_checkpoint.exists():
         raise FileNotFoundError(
-            "Full SMB handoff source Block SMB checkpoint was not created at "
-            f"{source_checkpoint}"
+            f"Full SMB handoff source Block SMB checkpoint was not created at {source_checkpoint}"
         )
     return source_checkpoint
-
-
-def _asset_mock_gate_status_path(checkpoint_path: Path) -> Path:
-    return checkpoint_path.with_suffix(".gates.json")
-
-
-def _asset_mock_checkpoint_gates_passed(checkpoint_path: Path) -> bool:
-    status_path = _asset_mock_gate_status_path(checkpoint_path)
-    if not status_path.exists():
-        return False
-    try:
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    return isinstance(status, Mapping) and bool(status.get("passed"))
-
-
-def _ensure_asset_mock_perception_checkpoint(args: argparse.Namespace) -> Path:
-    checkpoint_path = args.artifacts_dir / "full_smb_asset_mock_perception" / "full_smb_vit.pth"
-    if checkpoint_path.exists() and _asset_mock_checkpoint_gates_passed(checkpoint_path):
-        return checkpoint_path
-    budget = PROMOTION_BUDGETS[args.budget]["full-smb-asset-mock-perception"]
-    gate_spec = get_game_plugin(args.game).promotion_gate("full-smb-asset-mock-perception")
-    rung = _run_full_smb_asset_mock_perception(args, budget, gate_spec)
-    if not rung["passed"]:
-        raise RuntimeError(
-            "Full SMB transfer requires a passing asset-mock perception rung: "
-            f"{rung['automatic_gates']}"
-        )
-    return checkpoint_path
 
 
 def _run_deterministic_full_smb_inference(
@@ -1626,7 +1200,6 @@ def _make_promotion_full_smb_stage(vision: Any) -> FullSMBStage:
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
             frame_stack=2,
-            resize_shape=(16, 20),
         ),
     )
 
@@ -1784,20 +1357,6 @@ def _experiment_automatic_gates(
     )
     gates.extend(_finite_metric_gates(stages))
     gates.extend(_game_artifact_gates(gate_spec, _collect_stage_artifacts(stages)))
-    return gates
-
-
-def _asset_mock_automatic_gates(
-    *,
-    metrics: Mapping[str, float],
-    artifacts: Mapping[str, str],
-    budget: Mapping[str, int | float],
-    elapsed_seconds: float,
-    gate_spec: GamePromotionGateSpec | None,
-) -> list[dict[str, Any]]:
-    gates = _runtime_gates(gate_spec, budget, elapsed_seconds)
-    gates.extend(_game_metric_gates(gate_spec, metrics, budget))
-    gates.extend(_game_artifact_gates(gate_spec, artifacts))
     return gates
 
 

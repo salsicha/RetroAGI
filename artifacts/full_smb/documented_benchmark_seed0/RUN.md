@@ -66,8 +66,8 @@ Transfer the Block SMB policy into the Full SMB contract:
 ```bash
 retroagi transfer --game smb --stage full \
   --block-policy-checkpoint data/block_smb/policy.pth \
-  --block-vision-checkpoint data/block_vit/block_vit.pth \
-  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
   --output-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/transferred_policy.pth
 ```
 
@@ -78,7 +78,7 @@ retroagi train --game smb --stage full \
   --mode fine-tune \
   --seed 0 \
   --init-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/transferred_policy.pth \
-  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
   --perception-mode freeze \
   --task-set curriculum \
   --epochs 1 \
@@ -168,7 +168,7 @@ retroagi compare --game smb --stage full \
   --transfer-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/transferred_policy.pth \
   --fine-tuned-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/policy.pth \
   --known-good-checkpoint artifacts/full_smb/documented_benchmark_seed0/checkpoints/policy.pth \
-  --full-smb-vision-checkpoint data/vit/full_smb_vit.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
   --task-set fixed_benchmark \
   --seed 0 \
   --seed 1 \

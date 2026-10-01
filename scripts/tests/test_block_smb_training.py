@@ -21,6 +21,7 @@ from retroagi.core import (
     save_checkpoint,
 )
 from retroagi.core.smb_geometry import FEATURE_NAMES
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.core.smb_scene import observation_spec
 from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
@@ -77,15 +78,7 @@ from retroagi.stages.block_smb.train import (
 class StaticBlockVision:
     spec = VisionSpec(
         name="static_block_trainer",
-        semantic_classes=(
-            "background",
-            "mario",
-            "platform",
-            "coin",
-            "goal",
-            "enemy",
-            "moving_platform",
-        ),
+        semantic_classes=PIXEL_TYPES,
         token_dim=4,
     )
 
@@ -99,7 +92,7 @@ class StaticBlockVision:
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.zeros(1, 240, self.spec.token_dim),
             support_logits=torch.tensor([[-4.0, 4.0, -4.0]]),
-            metadata={},
+            metadata={"semantic_classes": PIXEL_TYPES},
         )
 
 
@@ -1413,7 +1406,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 [
                     "train",
                     "--vision-checkpoint",
-                    "data/block_vit/block_vit.pth",
+                    "data/block_vit/block_vit_pixel.pth",
                     *extra,
                 ]
             )
@@ -1444,7 +1437,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 [
                     "train",
                     "--vision-checkpoint",
-                    "data/block_vit/block_vit.pth",
+                    "data/block_vit/block_vit_pixel.pth",
                     *extra,
                 ]
             )
@@ -1503,7 +1496,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 [
                     "train",
                     "--vision-checkpoint",
-                    "data/block_vit/block_vit.pth",
+                    "data/block_vit/block_vit_pixel.pth",
                     *extra,
                 ]
             )

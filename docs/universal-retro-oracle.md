@@ -3,7 +3,7 @@
 RetroAGI should not rely on a bespoke heuristic oracle forever. The long-term
 teacher for Block-level learning should be a general purpose AI oracle trained
 across many retro-style games, then adapted to each game's synthetic, block,
-asset-mock, and full-fidelity stages.
+and full-fidelity stages.
 
 The current scripted Block SMB oracle remains useful as bootstrap data and a
 regression sentinel. It should not become the permanent source of truth. The

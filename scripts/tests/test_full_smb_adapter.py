@@ -16,6 +16,7 @@ from retroagi.core import (
     VisionSpec,
     full_smb_action,
 )
+from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.stages.full_smb import (
     DEFAULT_FULL_SMB_CONTENT,
     DEFAULT_FULL_SMB_REWARD_CONFIG,
@@ -37,7 +38,7 @@ from retroagi.stages.full_smb import (
 class StaticFullSMBVision:
     spec = VisionSpec(
         name="static_full_smb",
-        semantic_classes=("background", "floor", "box", "enemy", "brick", "mario"),
+        semantic_classes=PIXEL_TYPES,
         token_dim=6,
     )
 
@@ -54,7 +55,7 @@ class StaticFullSMBVision:
             semantic_logits=logits,
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.ones(1, 240, self.spec.token_dim),
-            metadata={"source": "static"},
+            metadata={"source": "static", "semantic_classes": PIXEL_TYPES},
         )
 
 
@@ -393,7 +394,6 @@ class TestFullSMBStage(unittest.TestCase):
             observation_config=FullSMBObservationConfig(
                 frame_skip=1,
                 frame_stack=2,
-                resize_shape=(8, 8),
             ),
         )
 
@@ -839,7 +839,7 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(signals.progress, 248.0)
         self.assertEqual(signals.screen, (180, 176))
 
-    def test_frame_skip_resize_stack_and_continuing_episode_mask(self):
+    def test_frame_skip_stack_and_continuing_episode_mask(self):
         env = FrameSkipRetroEnv()
         vision = StaticFullSMBVision()
         stage = FullSMBStage(
@@ -848,7 +848,6 @@ class TestFullSMBStage(unittest.TestCase):
             observation_config=FullSMBObservationConfig(
                 frame_skip=3,
                 frame_stack=3,
-                resize_shape=(12, 16),
             ),
         )
         try:
@@ -867,18 +866,34 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertEqual(batch.metadata["episode"]["mask"].item(), 1.0)
 
         observation_metadata = batch.metadata["observation"]
-        self.assertEqual(
-            observation_metadata["frame_stack"].shape,
-            (1, 3, 3, 12, 16),
-        )
+        # Every frame is the full 256x240 screen Block SMB draws.
+        self.assertEqual(observation.shape, (240, 256, 3))
+        self.assertEqual(observation_metadata["frame_stack"].shape, (1, 3, 3, 240, 256))
         self.assertTrue(observation_metadata["frame_mask"].all().item())
         self.assertEqual(observation_metadata["frame_stack_size"], 3)
         self.assertEqual(observation_metadata["frame_skip"], 3)
-        self.assertEqual(observation_metadata["resize_shape"], (12, 16))
-        self.assertEqual(tuple(vision.observations[-1].shape), (12, 16, 3))
-        self.assertLessEqual(float(vision.observations[-1].max()), 1.0)
+        self.assertEqual(tuple(vision.observations[-1].shape), (240, 256, 3))
 
-    def test_preprocessing_contract_crops_hud_grayscales_and_encodes_camera(self):
+    def test_trimmed_frames_are_padded_to_the_full_screen_not_stretched(self):
+        env = PreprocessingRetroEnv()
+        vision = StaticFullSMBVision()
+        stage = FullSMBStage(env=env, vision=vision)
+        try:
+            stage.reset(seed=3)
+            observation, _reward, _terminated, _truncated, info = stage.step(SMBAction.RIGHT)
+            stage.encode_observation(observation, info)
+        finally:
+            stage.close()
+        raw = PreprocessingRetroEnv._observation(17)
+        top, left = (240 - raw.shape[0]) // 2, (256 - raw.shape[1]) // 2
+        for frame in (observation, vision.observations[-1].numpy()):
+            self.assertEqual(frame.shape, (240, 256, 3))
+            # The game's pixels are unchanged and centred; only the trimmed border is added.
+            np.testing.assert_array_equal(
+                frame[top : top + raw.shape[0], left : left + raw.shape[1]], raw
+            )
+
+    def test_preprocessing_contract_grayscales_history_and_encodes_camera(self):
         env = PreprocessingRetroEnv()
         vision = StaticFullSMBVision()
         stage = FullSMBStage(
@@ -887,10 +902,6 @@ class TestFullSMBStage(unittest.TestCase):
             observation_config=FullSMBObservationConfig(
                 frame_skip=1,
                 frame_stack=2,
-                resize_shape=(4, 5),
-                crop_margins=(1, 2, 1, 1),
-                hud_policy="crop",
-                hud_crop_top=1,
                 color_mode="grayscale",
                 normalization_mean=(0.5, 0.5, 0.5),
                 normalization_std=(0.5, 0.5, 0.5),
@@ -904,18 +915,15 @@ class TestFullSMBStage(unittest.TestCase):
         finally:
             stage.close()
 
-        vision_frame = vision.observations[-1]
-        self.assertEqual(tuple(vision_frame.shape), (4, 5, 3))
-        torch.testing.assert_close(vision_frame[..., 0], vision_frame[..., 1])
-        torch.testing.assert_close(vision_frame[..., 0], vision_frame[..., 2])
-        self.assertGreaterEqual(float(vision_frame.min()), -1.0)
-        self.assertLessEqual(float(vision_frame.max()), 1.0)
+        # Vision always reads the colour screen; colour options shape the stored history.
+        self.assertEqual(tuple(vision.observations[-1].shape), (240, 256, 3))
+        history = batch.metadata["observation"]["frame_stack"][0, -1]
+        torch.testing.assert_close(history[0], history[1])
+        torch.testing.assert_close(history[0], history[2])
+        self.assertGreaterEqual(float(history.min()), -1.0)
+        self.assertLessEqual(float(history.max()), 1.0)
 
         observation_metadata = batch.metadata["observation"]
-        self.assertEqual(observation_metadata["resize_shape"], (4, 5))
-        self.assertEqual(observation_metadata["crop_margins"], (1, 2, 1, 1))
-        self.assertEqual(observation_metadata["effective_crop_margins"], (2, 2, 1, 1))
-        self.assertEqual(observation_metadata["hud_policy"], "crop")
         self.assertEqual(observation_metadata["color_mode"], "grayscale")
         self.assertEqual(
             observation_metadata["normalization"],
@@ -928,7 +936,7 @@ class TestFullSMBStage(unittest.TestCase):
         self.assertTrue(observation_metadata["camera_state_enabled"])
         self.assertEqual(
             observation_metadata["frame_stack"].shape,
-            (1, 2, 3, 4, 5),
+            (1, 2, 3, 240, 256),
         )
         self.assertTrue(observation_metadata["frame_mask"].all().item())
 
@@ -941,14 +949,11 @@ class TestFullSMBStage(unittest.TestCase):
             expected_camera,
         )
         np.testing.assert_allclose(info["camera_vec"], expected_camera.numpy()[0])
-        self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (8, 21))
-        torch.testing.assert_close(batch.src_c[:, 17:21], expected_camera)
+        # Position (2) and one mean probability per pixel type (9) precede the state.
+        self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (11, 24))
+        torch.testing.assert_close(batch.src_c[:, 20:24], expected_camera)
 
     def test_observation_config_rejects_invalid_preprocessing_values(self):
-        with self.assertRaisesRegex(ValueError, "crop_margins"):
-            FullSMBObservationConfig(crop_margins=(0, 0, 0))
-        with self.assertRaisesRegex(ValueError, "hud_policy"):
-            FullSMBObservationConfig(hud_policy="mask")
         with self.assertRaisesRegex(ValueError, "color_mode"):
             FullSMBObservationConfig(color_mode="hsv")
         with self.assertRaisesRegex(ValueError, "normalization_std"):
@@ -962,7 +967,6 @@ class TestFullSMBStage(unittest.TestCase):
             observation_config=FullSMBObservationConfig(
                 frame_skip=1,
                 frame_stack=2,
-                resize_shape=(8, 8),
             ),
         )
         try:
@@ -1024,7 +1028,8 @@ class TestFullSMBStage(unittest.TestCase):
             observation = stage.reset(seed=123)
             self.assertEqual(env.reset_seed, 123)
             self.assertEqual(observation.dtype, np.uint8)
-            self.assertEqual(observation.shape, (224, 256, 3))
+            # A trimmed capture is padded back to the full 256x240 screen.
+            self.assertEqual(observation.shape, (240, 256, 3))
 
             next_observation, reward, terminated, truncated, info = stage.step(SMBAction.RIGHT_JUMP)
             expected_action = full_smb_action(SMBAction.RIGHT_JUMP, env.buttons)
@@ -1094,7 +1099,7 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertEqual(batch.src_b.shape, (1, FULL_SMB_SPEC.seq_len_b))
             self.assertEqual(batch.src_c.shape, (1, FULL_SMB_SPEC.seq_len_c))
             self.assertEqual(batch.metadata["episode"]["mask"].item(), 0.0)
-            self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (8, 17))
+            self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (11, 20))
         finally:
             stage.close()
 
@@ -1106,7 +1111,6 @@ class TestFullSMBStage(unittest.TestCase):
             observation_config=FullSMBObservationConfig(
                 frame_skip=1,
                 frame_stack=2,
-                resize_shape=(16, 20),
             ),
             reward_config=FullSMBRewardConfig(death=-7.0),
         )

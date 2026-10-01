@@ -10,6 +10,7 @@ import torch
 from retroagi.core.interfaces import VisionOutput
 from retroagi.core.smb_geometry import FEATURE_NAMES, geometry_features
 from retroagi.core.smb_physics import NES_JUMP_FRAMES
+from retroagi.core.smb_pixel_types import PIXEL_TYPES, TYPE_ID
 from retroagi.core.smb_runtime import SMBRuntimeContract, attach_runtime, make_smb_executor
 from retroagi.core.smb_scene import C_SPANS, c_feature_index, canonical_vision
 from retroagi.stages.block_smb.env import MarioScenarioEnv
@@ -31,14 +32,16 @@ def ram_scene():
 
 
 def test_visual_categories_are_mapped_by_meaning():
-    logits = torch.full((1, 13, 1, 3), -20.0)
-    logits[0, 8, 0, 0] = 20  # mario
-    logits[0, 1, 0, 1] = 20  # ground
-    logits[0, 6, 0, 2] = 20  # goomba
+    logits = torch.full((1, len(PIXEL_TYPES), 1, 4), -20.0)
+    logits[0, TYPE_ID["mario"], 0, 0] = 20
+    logits[0, TYPE_ID["ground"], 0, 1] = 20
+    logits[0, TYPE_ID["enemy"], 0, 2] = 20
+    logits[0, TYPE_ID["pipe"], 0, 3] = 20
     original = VisionOutput(torch.zeros(1, 2), logits, logits.argmax(1), torch.ones(1, 2, 4))
-    mapped = canonical_vision(original, "full")
-    assert mapped.semantic_ids.tolist() == [[[1, 2, 5]]]
-    assert torch.allclose(mapped.semantic_logits.softmax(1).sum(1), torch.ones(1, 1, 3))
+    mapped = canonical_vision(original)
+    # mario, platform, enemy, platform: ground and pipe are both standable platform.
+    assert mapped.semantic_ids.tolist() == [[[1, 2, 5, 2]]]
+    assert torch.allclose(mapped.semantic_logits.softmax(1).sum(1), torch.ones(1, 1, 4))
     # The encoder's latent tokens never reach the policy; a class layout does.
     assert mapped.tokens.shape == (1, 15 * 16, 7)
 
@@ -197,7 +200,7 @@ class RAMEnv:
 
 class ContractVision:
     def encode(self, observation):
-        logits = torch.zeros(1, 13, 2, 2)
+        logits = torch.zeros(1, len(PIXEL_TYPES), 2, 2)
         support = torch.tensor([[-10.0, 10.0, -10.0]])
         return VisionOutput(
             torch.zeros(1, 2),
@@ -337,11 +340,9 @@ def test_dynamic_platform_motion_and_unknown_bounds_are_explicit():
 
 
 def test_capture_shape_change_discards_incompatible_frame_history():
-    from dataclasses import replace
 
     stage = shared_stage()
     try:
-        stage.observation_config = replace(stage.observation_config, resize_shape=None)
         stage._reset_frame_stack(np.zeros((224, 256, 3), dtype=np.uint8))
         stage._append_frame(np.zeros((224, 240, 3), dtype=np.uint8), valid=True)
         assert len({tuple(f.shape) for f in stage._frame_stack}) == 1

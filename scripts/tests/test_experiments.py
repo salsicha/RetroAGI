@@ -108,7 +108,7 @@ class TestExperimentRunner(unittest.TestCase):
             any(content["name"] == "smb_rom" for content in manifest["game"]["content_identifiers"])
         )
         self.assertTrue(
-            any(asset["name"] == "smb_sprites" for asset in manifest["game"]["asset_provenance"])
+            any(asset["name"] == "smb_rom" for asset in manifest["game"]["asset_provenance"])
         )
         checklist = manifest["game"]["asset_checklist"]
         self.assertTrue(any(item["target"] == "smb_rom" for item in checklist))
@@ -125,14 +125,14 @@ class TestExperimentRunner(unittest.TestCase):
         )
         self.assertEqual(
             block["game_stage"]["perception_pipeline"]["checkpoint_path"],
-            "data/block_vit/block_vit.pth",
+            "data/block_vit/block_vit_pixel.pth",
         )
         self.assertEqual(
             block["game_stage"]["perception_pipeline"]["semantic_vocabulary"]["classes"][1],
             "mario",
         )
         self.assertIn(
-            "min_accuracy",
+            "min_pixels_correct",
             block["game_stage"]["perception_pipeline"]["diagnostic_thresholds"],
         )
         self.assertEqual(

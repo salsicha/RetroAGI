@@ -21,7 +21,7 @@ class TestExperimentConfig(unittest.TestCase):
             model=ModelConfig(name="block_smb_vit", hidden_dim=64, patch_size=16),
             training=TrainingConfig(epochs=2, batch_size=4, samples_per_epoch=8),
             evaluation=EvaluationConfig(samples=4, metrics=("loss", "mean_iou")),
-            checkpoints=CheckpointConfig(output_path=Path("data/block_vit/block_vit.pth")),
+            checkpoints=CheckpointConfig(output_path=Path("data/block_vit/block_vit_pixel.pth")),
             name="smoke",
         )
 
@@ -30,7 +30,7 @@ class TestExperimentConfig(unittest.TestCase):
         self.assertEqual(data["environment"]["stage"], "block_smb")
         self.assertEqual(data["model"]["patch_size"], 16)
         self.assertEqual(data["evaluation"]["metrics"], ["loss", "mean_iou"])
-        self.assertEqual(data["checkpoints"]["output_path"], "data/block_vit/block_vit.pth")
+        self.assertEqual(data["checkpoints"]["output_path"], "data/block_vit/block_vit_pixel.pth")
 
     def test_rejects_invalid_values_early(self):
         with self.assertRaisesRegex(ValueError, "rollout_steps"):
@@ -49,10 +49,14 @@ class TestExperimentConfig(unittest.TestCase):
 
         self.assertEqual(config.environment.stage, "block_smb")
         self.assertEqual(config.model.name, "block_smb_vit")
-        self.assertEqual(config.training.samples_per_epoch, 2048)
-        self.assertEqual(config.evaluation.samples, 512)
-        self.assertEqual(config.checkpoints.best_metric, "mean_iou")
-        self.assertEqual(config.to_dict()["metadata"]["position_weight"], 2.0)
+        self.assertEqual(config.training.samples_per_epoch, 40_000)
+        self.assertEqual(config.evaluation.samples, 3_000)
+        self.assertEqual(config.checkpoints.best_metric, "mean_type_iou")
+        self.assertEqual(
+            str(config.checkpoints.output_path).rsplit("/", 2)[-2:],
+            ["block_vit", "block_vit_pixel.pth"],
+        )
+        self.assertEqual(config.to_dict()["metadata"]["weight_power"], 0.5)
 
 
 if __name__ == "__main__":

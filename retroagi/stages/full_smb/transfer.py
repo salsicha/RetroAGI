@@ -36,8 +36,10 @@ from retroagi.stages.block_smb.vision import (
 )
 from retroagi.stages.full_smb.adapter import FULL_SMB_SPEC
 from retroagi.stages.full_smb.vision import (
-    DEFAULT_FULL_SMB_VIT_CHECKPOINT,
-    FullSMBSegmentationVision,
+    DEFAULT_FULL_VIT_CHECKPOINT,
+    FullVisionTransformer,
+    load_full_vit_checkpoint,
+    set_full_vit_trainable,
 )
 
 FULL_SMB_TRANSFER_MODEL_NAME = "full_smb_transferred_block_policy"
@@ -50,7 +52,7 @@ class FullSMBTransferConfig:
 
     block_policy_checkpoint: Path
     output_checkpoint: Optional[Path] = None
-    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT
+    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_VIT_CHECKPOINT
     block_vision_checkpoint: Optional[Path] = DEFAULT_BLOCK_VIT_CHECKPOINT
     device: str = "cpu"
     freeze_vision: bool = True
@@ -62,7 +64,7 @@ class FullSMBTransferResult:
     """Loaded Full SMB policy, perception, and transfer checkpoint metadata."""
 
     model: torch.nn.Module
-    vision: FullSMBSegmentationVision
+    vision: FullVisionTransformer
     checkpoint: dict[str, Any]
     source_checkpoint: dict[str, Any]
     source_policy_path: Path
@@ -78,6 +80,25 @@ class FullSMBActionSelection:
     action: int
     action_name: str
     logits: torch.Tensor
+
+
+def full_smb_vision_model(
+    checkpoint: Optional[Path],
+    *,
+    device: str | torch.device = "cpu",
+    freeze: bool = True,
+) -> FullVisionTransformer:
+    """The Full SMB vision transformer a policy reads its screens through.
+
+    It carries the trained weights saved at ``checkpoint``; with no checkpoint
+    it starts untrained, for runs that train perception from scratch.
+    ``freeze`` stops its weights from changing during policy training.
+    """
+    if checkpoint is None:
+        model = FullVisionTransformer().to(device)
+        set_full_vit_trainable(model, trainable=not freeze)
+        return model
+    return load_full_vit_checkpoint(checkpoint, device=device, freeze=freeze).model
 
 
 def make_full_smb_policy_model(
@@ -112,7 +133,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
     block_policy_checkpoint: Path,
     *,
     output_checkpoint: Optional[Path] = None,
-    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_VIT_CHECKPOINT,
     block_vision_checkpoint: Optional[Path] = DEFAULT_BLOCK_VIT_CHECKPOINT,
     device: str | torch.device = "cpu",
     freeze_vision: bool = True,
@@ -165,10 +186,9 @@ def transfer_block_smb_checkpoint_to_full_smb(
         )
         source_vision_path = source_vision.path
 
-    vision = FullSMBSegmentationVision(
-        checkpoint=full_smb_vision_checkpoint,
-        device=device,
-        freeze=freeze_vision,
+    vision = full_smb_vision_model(full_smb_vision_checkpoint, device=device, freeze=freeze_vision)
+    full_smb_vision_path = (
+        Path(full_smb_vision_checkpoint) if full_smb_vision_checkpoint is not None else None
     )
     checkpoint = _build_transfer_checkpoint(
         model,
@@ -176,7 +196,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
         source_checkpoint=source_checkpoint,
         source_policy_path=source_path,
         source_vision_path=source_vision_path,
-        full_smb_vision_path=vision.checkpoint_path,
+        full_smb_vision_path=full_smb_vision_path,
         architecture_name=architecture_name,
         architecture_config=architecture_config,
         missing_keys=missing_keys,
@@ -194,7 +214,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
         source_checkpoint=source_checkpoint,
         source_policy_path=source_path,
         source_vision_path=source_vision_path,
-        full_smb_vision_path=vision.checkpoint_path,
+        full_smb_vision_path=full_smb_vision_path,
         output_path=output_path,
         missing_model_keys=missing_keys,
         source_transfer_gate=source_transfer_gate,
@@ -204,7 +224,7 @@ def transfer_block_smb_checkpoint_to_full_smb(
 def load_transferred_full_smb_policy(
     checkpoint_path: Path,
     *,
-    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+    full_smb_vision_checkpoint: Optional[Path] = DEFAULT_FULL_VIT_CHECKPOINT,
     device: str | torch.device = "cpu",
     freeze_vision: bool = True,
 ) -> FullSMBTransferResult:
@@ -227,10 +247,9 @@ def load_transferred_full_smb_policy(
     if skipped_world_model_keys:
         missing_keys = tuple((*missing_keys, *skipped_world_model_keys))
     model.eval()
-    vision = FullSMBSegmentationVision(
-        checkpoint=full_smb_vision_checkpoint,
-        device=device,
-        freeze=freeze_vision,
+    vision = full_smb_vision_model(full_smb_vision_checkpoint, device=device, freeze=freeze_vision)
+    full_smb_vision_path = (
+        Path(full_smb_vision_checkpoint) if full_smb_vision_checkpoint is not None else None
     )
     attach_runtime(model, checkpoint.get("config", {}).get("smb_runtime_contract"))
     metadata = checkpoint.get("metadata", {})
@@ -242,7 +261,7 @@ def load_transferred_full_smb_policy(
         source_checkpoint={},
         source_policy_path=Path(source.get("policy_checkpoint", "")),
         source_vision_path=_optional_path(source.get("block_vision_checkpoint")),
-        full_smb_vision_path=vision.checkpoint_path,
+        full_smb_vision_path=full_smb_vision_path,
         output_path=path,
         missing_model_keys=missing_keys,
         source_transfer_gate=dict(metadata.get("source_transfer_gate", {})),
@@ -622,7 +641,7 @@ def _validate_policy_load_result(load_result: Any) -> tuple[str, ...]:
 
 def _build_transfer_checkpoint(
     model: torch.nn.Module,
-    vision: FullSMBSegmentationVision,
+    vision: FullVisionTransformer,
     *,
     source_checkpoint: Mapping[str, Any],
     source_policy_path: Path,
@@ -700,8 +719,9 @@ def _build_transfer_checkpoint(
             "missing_model_keys": missing_keys,
             "transfer_note": (
                 "Actor/world-model/critic weights are reused because the Full SMB "
-                "and Block SMB hierarchy specs match. Block ViT perception weights "
-                "are not reused directly; Full SMB uses the Full SMB ViT classes."
+                "and Block SMB hierarchy specs match. Block SMB vision weights are "
+                "not reused: Full SMB has its own weights for the same per-pixel "
+                "vision transformer, which gives every pixel the same types."
             ),
         },
     )
@@ -745,7 +765,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--full-smb-vision-checkpoint",
         type=Path,
-        default=DEFAULT_FULL_SMB_VIT_CHECKPOINT,
+        default=DEFAULT_FULL_VIT_CHECKPOINT,
     )
     parser.add_argument(
         "--block-vision-checkpoint",

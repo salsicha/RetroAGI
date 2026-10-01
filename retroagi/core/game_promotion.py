@@ -48,7 +48,7 @@ class PromotionMetricGateSpec:
             raise ValueError("metric gate metric must be non-empty")
         if self.operator not in METRIC_GATE_OPERATORS:
             raise ValueError(
-                f"metric gate {self.metric!r} operator must be one of " f"{METRIC_GATE_OPERATORS}"
+                f"metric gate {self.metric!r} operator must be one of {METRIC_GATE_OPERATORS}"
             )
         if not self.reason:
             raise ValueError(f"metric gate {self.metric!r} reason must be non-empty")
@@ -242,11 +242,11 @@ GAME_PROMOTION_PHASES = (
     GamePromotionPhase(
         name="game-full-smoke",
         stage_name="full",
-        architecture_rungs=(
-            "full-smb-asset-mock-perception",
-            "full-smb-transfer-smoke",
+        architecture_rungs=("full-smb-transfer-smoke",),
+        description=(
+            "Verify full-fidelity observations and actions through the trained "
+            "full-fidelity vision model."
         ),
-        description="Verify full-fidelity observations and actions after perception bootstrap.",
     ),
     GamePromotionPhase(
         name="game-transfer",

@@ -486,9 +486,7 @@ def encode_demonstration_episode(family_index, sample, config, vision, vision_ba
         with torch.no_grad():
             for start in range(0, len(observations), size):
                 images = np.stack(observations[start : start + size])
-                vision = canonical_vision(
-                    stage.vision.encode(images if size > 1 else images[0]), "block"
-                )
+                vision = canonical_vision(stage.vision.encode(images if size > 1 else images[0]))
                 batch = stage.vision_projector.project(
                     vision, np.stack(states[start : start + size])
                 )

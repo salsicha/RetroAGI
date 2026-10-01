@@ -9,14 +9,15 @@ from retroagi.stages.full_smb import (
     FullSMBEnvironmentCheckConfig,
     FullSMBObservationConfig,
     FullSMBPlayConfig,
-    FullSMBSegmentationVision,
     FullSMBSmokeConfig,
     FullSMBStage,
     FullSMBTrainingConfig,
+    FullVisionTransformer,
     evaluate_full_smb_policy,
     play_full_smb_policy,
     run_full_smb_environment_check,
     run_headless_random_agent_smoke,
+    set_full_vit_trainable,
 )
 from retroagi.stages.full_smb.transfer import make_full_smb_policy_model
 
@@ -33,7 +34,6 @@ class TestFullSMBLocalIntegration(unittest.TestCase):
     observation_config = FullSMBObservationConfig(
         frame_skip=1,
         frame_stack=2,
-        resize_shape=(16, 20),
     )
 
     @classmethod
@@ -75,14 +75,8 @@ class TestFullSMBLocalIntegration(unittest.TestCase):
         model = make_full_smb_policy_model(
             architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
         )
-        vision = FullSMBSegmentationVision(
-            checkpoint=None,
-            dim=16,
-            depth=1,
-            heads=4,
-            drop=0.0,
-            freeze=True,
-        )
+        vision = FullVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
+        set_full_vit_trainable(vision, trainable=False)
         runtime_config = FullSMBTrainingConfig(
             seed=37,
             architecture_config={"hidden_dim": 8, "controller_schedule": "linear"},
