@@ -1,4 +1,4 @@
-"""Observable enemy history v1 shared by Block and NES geometry adapters.
+"""Observable enemy history shared by Block and NES geometry adapters.
 
 No simulator cycle, hidden patrol bounds, or future observations enter these
 features. Missing velocity is distinct from a measured zero velocity.
@@ -18,7 +18,7 @@ HAZARD_NAMES = (
     "enemy_visibility_age",
     "enemy_last_seen_age",
 )
-# Separate from HAZARD_NAMES so six-feature checkpoints keep their exact layout.
+# A world-model memory target, kept apart from the observed HAZARD_NAMES.
 HAZARD_MEMORY_NAMES = ("enemy_peak_exposure",)
 PEAK_EXPOSURE_SCALE = 64.0
 

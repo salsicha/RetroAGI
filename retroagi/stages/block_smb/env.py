@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pygame
 
-from retroagi.core.smb_physics import LEGACY_PHYSICS_PROFILE, NES_PHYSICS_PROFILE, NESPlayerMotion
+from retroagi.core.smb_physics import NESPlayerMotion
 
 from .stomp import stomp_collision_geometry
 
@@ -38,51 +38,15 @@ class _BoxSpace:
         self.dtype = dtype
 
 
-# ── Tuning constants ──────────────────────────────────────────────────────────
-
-COYOTE_FRAMES = 5  # frames after leaving a ledge where jumping is still allowed
-JUMP_BUFFER_FRAMES = 6  # frames before landing where a queued jump fires on contact
-JUMP_CUT_FACTOR = 0.45  # vy multiplier when jump is released early (variable height)
-
-# ── Known divergences from real Super Mario Bros control semantics ────────────
+# ── Player motion ─────────────────────────────────────────────────────────────
 #
-# Block SMB is the transfer source for the real-emulator Full SMB stage, so
-# every intentional difference in how actions map to motion is recorded here
-# and pinned by scripts/tests/test_block_smb_action_semantics.py. Changing any
-# of these behaviors requires updating this registry AND re-tuning the scripted
-# teacher curriculum and Monte Carlo oracles that were calibrated against it.
-KNOWN_REAL_SMB_DIVERGENCES = (
-    {
-        "name": "held_jump_rebounds_on_landing",
-        "block_behavior": (
-            "while the jump button stays held the jump buffer does not decay, "
-            "so landing with the button held immediately launches another jump"
-        ),
-        "real_behavior": "holding A does not re-jump on landing; A must be released first",
-        "reason": (
-            "the scripted teacher curriculum and Monte Carlo oracles hold "
-            "RIGHT_JUMP through landings and are tuned to the rebound"
-        ),
-    },
-    {
-        "name": "coyote_time",
-        "block_behavior": (
-            f"jumping is allowed up to {COYOTE_FRAMES} frames after walking off a ledge"
-        ),
-        "real_behavior": "no coyote time; jumps require ground contact on the press frame",
-        "reason": "quality-of-life forgiveness that eases early policy learning",
-    },
-    {
-        "name": "jump_buffer",
-        "block_behavior": (
-            f"a press up to {JUMP_BUFFER_FRAMES} frames before landing fires on contact; "
-            "if the button is no longer held at liftoff the fired jump is cut "
-            "to a short hop, keeping hold duration -> jump height monotone"
-        ),
-        "real_behavior": "no jump buffering; presses before landing are dropped",
-        "reason": "quality-of-life forgiveness that eases early policy learning",
-    },
-)
+# Block SMB is the transfer source for the real-emulator Full SMB stage, so the
+# player moves with the NES's own motion rules (retroagi.core.smb_physics):
+# fixed-point acceleration, run/walk limits, braking, air steering, variable
+# jump forces and button edges. There is no coyote time and no jump buffer;
+# holding jump through a landing does not jump again. The NES small body is
+# 10x12 pixels and the Goomba damage body 10x6.
+ENEMY_GRAVITY = 0.5
 
 
 @dataclass(frozen=True)
@@ -176,26 +140,14 @@ class MarioScenarioEnv:
         height: int = 240,
         world_width: int = None,
         reward_config: BlockSMBRewardConfig = BlockSMBRewardConfig(),
-        physics_profile: str = LEGACY_PHYSICS_PROFILE,
     ):
         self.width = width
         self.height = height
         self.world_width = world_width if world_width is not None else width
         self.reward_config = reward_config
-        self._default_physics_profile = physics_profile
-        self.physics_profile = physics_profile
-        self.motion = None
-
-        # Physics
-        self.gravity = 0.5
-        self.max_fall_speed = 8.0
-        self.jump_power = -8.5
-
-        # Horizontal momentum
-        self.max_walk_speed = 3.0
-        self.accel = 0.3
-        self.decel = 0.2
-        self.skid_decel = 0.5
+        self.motion = NESPlayerMotion()
+        self.max_walk_speed = 2.5
+        self.max_fall_speed = 4.5
 
         # Spaces (Gym-compatible stubs)
         self.action_space = _DiscreteSpace(6)
@@ -274,10 +226,7 @@ class MarioScenarioEnv:
             }
 
         self.world_width = scenario.get("world_width", self.width)
-        self.physics_profile = scenario.get("physics_profile", self._default_physics_profile)
-        if self.physics_profile not in (LEGACY_PHYSICS_PROFILE, NES_PHYSICS_PROFILE):
-            raise ValueError("Unsupported Block SMB physics profile")
-        self.motion = NESPlayerMotion() if self.physics_profile == NES_PHYSICS_PROFILE else None
+        self.motion = NESPlayerMotion()
 
         # Mario state
         self.mario = {
@@ -285,28 +234,20 @@ class MarioScenarioEnv:
             "y": float(scenario["mario"][1]),
             "vx": 0.0,
             "vy": 0.0,
-            "w": 14,
-            "h": 16,
+            "w": 10,
+            "h": 12,
             "on_ground": False,
             "facing": 1,  # 1 = right, -1 = left
             "skidding": False,
-            # Jump feel
-            "coyote_frames": 0,  # counts down after leaving ground
-            "jump_buffer": 0,  # counts down after jump pressed in air
             "jump_held": False,  # was jump action present last frame?
         }
-        if self.motion is not None:
-            self.mario["w"], self.mario["h"] = 10, 12
-            self.max_walk_speed, self.max_fall_speed = 2.5, 4.5
-            if "mario_velocity" in scenario:
-                vx, vy = scenario["mario_velocity"]
-                self.motion.x_speed = int(round(float(vx) * 16))
-                self.motion.y_speed = int(float(vy))
-                self.motion.y_force = int((float(vy) % 1) * 256)
-                self.mario["vx"], self.mario["vy"] = float(vx), float(vy)
-                self.motion.moving = 1 if vx > 0 else -1 if vx < 0 else 0
-        else:
-            self.max_walk_speed, self.max_fall_speed = 3.0, 8.0
+        if "mario_velocity" in scenario:
+            vx, vy = scenario["mario_velocity"]
+            self.motion.x_speed = int(round(float(vx) * 16))
+            self.motion.y_speed = int(float(vy))
+            self.motion.y_force = int((float(vy) % 1) * 256)
+            self.mario["vx"], self.mario["vy"] = float(vx), float(vy)
+            self.motion.moving = 1 if vx > 0 else -1 if vx < 0 else 0
         self._max_x_reached = self.mario["x"]
         self._progress_per_pixel = float(
             scenario.get("reward_progress_per_pixel", self.reward_config.progress_per_pixel)
@@ -346,7 +287,7 @@ class MarioScenarioEnv:
         self.enemies = []
         for e in scenario.get("enemies", []):
             enemy = self._parse_enemy(e)
-            if self.motion is not None and enemy.get("kind") != "piranha_plant":
+            if enemy.get("kind") != "piranha_plant":
                 # NES Goomba damage body is 10x6, four pixels above its
                 # physical feet. Background support is a separate probe.
                 enemy.update(w=10, h=6, foot_offset=4, y=enemy["y"] + 4)
@@ -490,92 +431,25 @@ class MarioScenarioEnv:
             reward_terms["energy"] += self._energy_jump
             self._episode_energy += self._energy_jump
 
-        if self.motion is not None:
-            dx, dy, jumped = self.motion.advance(
-                direction=move_x,
-                jump=jump_pressed,
-                grounded=self.mario["on_ground"],
-                y=self.mario["y"],
-                run=move_x > 0,
-            )
-            self.mario["vx"] = self.motion.x_speed / 16
-            self.mario["vy"] = self.motion.y_speed + self.motion.y_force / 256
-            self.mario["facing"] = self.motion.facing
-            self.mario["skidding"] = bool(move_x and move_x * self.motion.x_speed < 0)
-            self.mario["coyote_frames"] = self.mario["jump_buffer"] = 0
-            self.mario["jump_held"] = jump_pressed
-            if jumped:
-                self.mario["on_ground"] = False
-                self._airborne_started_with_jump = True
-            # Inclusive foot contact preserves support at zero displacement;
-            # a fractional position probe would alter the next ledge departure.
-            if self.mario["on_ground"]:
-                dy = 0.0
-        else:
-            # ── 1. Horizontal momentum ────────────────────────────────────────────
-            vx = self.mario["vx"]
-            self.mario["skidding"] = False
-
-            if move_x != 0:
-                self.mario["facing"] = move_x
-                if (move_x > 0 and vx < 0) or (move_x < 0 and vx > 0):
-                    self.mario["skidding"] = True
-                    vx += move_x * self.skid_decel
-                else:
-                    vx += move_x * self.accel
-                vx = max(-self.max_walk_speed, min(self.max_walk_speed, vx))
-            else:
-                if vx > 0:
-                    vx = max(0.0, vx - self.decel)
-                elif vx < 0:
-                    vx = min(0.0, vx + self.decel)
-
-            self.mario["vx"] = vx
-
-            # ── 2. Variable jump height (cut on release) ──────────────────────────
-            was_jump_held = self.mario["jump_held"]
-            self.mario["jump_held"] = jump_pressed
-
-            if was_jump_held and not jump_pressed and self.mario["vy"] < 0:
-                # Jump released early — cut upward velocity
-                self.mario["vy"] *= JUMP_CUT_FACTOR
-
-            # ── 3. Jump with coyote time + jump buffer ────────────────────────────
-            if jump_pressed:
-                if not was_jump_held:
-                    # Fresh press — register in buffer regardless of ground state
-                    self.mario["jump_buffer"] = JUMP_BUFFER_FRAMES
-                # NOTE: while the button stays held the buffer deliberately does not
-                # decay, so a held jump re-fires on landing. This diverges from real
-                # SMB (holding A does not re-jump) but the scripted teacher
-                # curriculum and Monte Carlo oracles are tuned to this behavior —
-                # see KNOWN_REAL_SMB_DIVERGENCES and the action-semantics tests.
-            else:
-                self.mario["jump_buffer"] = max(0, self.mario["jump_buffer"] - 1)
-
-            can_jump = self.mario["on_ground"] or self.mario["coyote_frames"] > 0
-            wants_jump = self.mario["jump_buffer"] > 0
-
-            if can_jump and wants_jump:
-                self.mario["vy"] = self.jump_power
-                if not jump_pressed:
-                    # Buffered liftoff after the button was already released: apply
-                    # the variable-height cut at launch so a short tap yields a
-                    # short hop. Without this, the release transition happens
-                    # before liftoff, the cut never fires, and a 4-frame tap
-                    # produced a full-height jump -- breaking the monotone
-                    # hold-duration -> jump-height mapping the B-level primitive
-                    # curriculum relies on.
-                    self.mario["vy"] *= JUMP_CUT_FACTOR
-                self.mario["on_ground"] = False
-                self.mario["coyote_frames"] = 0
-                self.mario["jump_buffer"] = 0
-                self._airborne_started_with_jump = True
-
-            # ── 4. Gravity ────────────────────────────────────────────────────────
-            self.mario["vy"] += self.gravity
-            if self.mario["vy"] > self.max_fall_speed:
-                self.mario["vy"] = self.max_fall_speed
+        dx, dy, jumped = self.motion.advance(
+            direction=move_x,
+            jump=jump_pressed,
+            grounded=self.mario["on_ground"],
+            y=self.mario["y"],
+            run=move_x > 0,
+        )
+        self.mario["vx"] = self.motion.x_speed / 16
+        self.mario["vy"] = self.motion.y_speed + self.motion.y_force / 256
+        self.mario["facing"] = self.motion.facing
+        self.mario["skidding"] = bool(move_x and move_x * self.motion.x_speed < 0)
+        self.mario["jump_held"] = jump_pressed
+        if jumped:
+            self.mario["on_ground"] = False
+            self._airborne_started_with_jump = True
+        # Inclusive foot contact preserves support at zero displacement;
+        # a fractional position probe would alter the next ledge departure.
+        if self.mario["on_ground"]:
+            dy = 0.0
 
         # ── 5. Update moving platforms ────────────────────────────────────────
         for plat in self.platforms:
@@ -595,7 +469,7 @@ class MarioScenarioEnv:
             plat["delta_x"] = plat["rect"].x - old_px
 
         # ── 6. Resolve X collisions ───────────────────────────────────────────
-        self.mario["x"] += dx if self.motion is not None else self.mario["vx"]
+        self.mario["x"] += dx
         mario_rect = pygame.Rect(self.mario["x"], self.mario["y"], self.mario["w"], self.mario["h"])
 
         for plat in self.platforms:
@@ -614,13 +488,12 @@ class MarioScenarioEnv:
                     mario_rect.right = r.left
                 self.mario["x"] = mario_rect.x
                 self.mario["vx"] = 0
-                if self.motion is not None:
-                    self.motion.wall_contact()
+                self.motion.wall_contact()
 
         # ── 7. Resolve Y collisions ───────────────────────────────────────────
         previous_y = self.mario["y"]
         previous_bottom = previous_y + self.mario["h"]
-        self.mario["y"] += dy if self.motion is not None else self.mario["vy"]
+        self.mario["y"] += dy
         mario_rect.y = self.mario["y"]
         prev_on_ground = self.mario["on_ground"]
         self.mario["on_ground"] = False
@@ -649,8 +522,7 @@ class MarioScenarioEnv:
                     mario_rect.top = r.bottom
                 self.mario["y"] = mario_rect.y
                 self.mario["vy"] = 0
-                if self.motion is not None:
-                    self.motion.vertical_contact()
+                self.motion.vertical_contact()
 
         if (
             self._bridge_jump_task
@@ -673,17 +545,8 @@ class MarioScenarioEnv:
             self.mario["x"] += carry_dx
             mario_rect.x = self.mario["x"]
 
-        # ── 9. Coyote time bookkeeping ────────────────────────────────────────
         if self.mario["on_ground"]:
-            self.mario["coyote_frames"] = 0 if self.motion is not None else COYOTE_FRAMES
             self._airborne_started_with_jump = False
-        else:
-            self.mario["coyote_frames"] = max(0, self.mario["coyote_frames"] - 1)
-
-        # Jump buffer ticks down every frame (already done above but also here for landing)
-        if not prev_on_ground and self.mario["on_ground"] and self.mario["jump_buffer"] > 0:
-            # Landed with a buffered jump — fire it next frame naturally (buffer still > 0)
-            pass
 
         # ── 10. Camera (right-only scroll, clamped) ───────────────────────────
         target_cam = self.mario["x"] - self.width // 3
@@ -746,10 +609,8 @@ class MarioScenarioEnv:
                 self._stomp_credited = True
                 reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
                 self.score += 5
-                self.mario["vy"] = self.jump_power * 0.55
-                if self.motion is not None:
-                    self.motion.bounce()
-                    self.mario["vy"] = self.motion.y_speed
+                self.motion.bounce()
+                self.mario["vy"] = self.motion.y_speed
                 self.mario["on_ground"] = False
                 if self._goal_on_stomp:
                     # Landing on the enemy IS the goal: grant goal credit so
@@ -968,7 +829,7 @@ class MarioScenarioEnv:
         - camera_x, max_x_reached
         - nearest_coin, nearest_enemy : {dx, dy, dist}  (normalised 0-1)
         - platform_below_dist          : normalised 0-1
-        - state_vec                    : flat float32 array ready for RL (27 dims)
+        - state_vec                    : geometry features in world coordinates (FEATURE_NAMES)
         - reward_terms                 : transition reward breakdown
         - reward_total                 : scalar transition reward
         - reward_config                : resolved reward configuration
@@ -989,8 +850,6 @@ class MarioScenarioEnv:
             death=death,
             terminated=terminated,
             truncated=truncated,
-            coyote_frames=COYOTE_FRAMES,
-            jump_buffer_frames=JUMP_BUFFER_FRAMES,
         )
         m = self.mario
 
@@ -1005,12 +864,12 @@ class MarioScenarioEnv:
                     "on_ground",
                     "facing",
                     "skidding",
-                    "coyote_frames",
-                    "jump_buffer",
                 )
             },
             "camera_x": self.camera_x,
             "max_x_reached": self._max_x_reached,
+            # The stage-wide symbolic state; the policy's observation is smb_scene's.
+            "state_vec": features.pop("state"),
             **features,
             "stomp_completed": self._stomp_credited,
             "bridge_boarded": self._bridge_boarded,
@@ -1035,7 +894,7 @@ class MarioScenarioEnv:
             position_plant(enemy)
             return
         # Gravity
-        enemy["vy"] += self.gravity
+        enemy["vy"] += ENEMY_GRAVITY
         if enemy["vy"] > self.max_fall_speed:
             enemy["vy"] = self.max_fall_speed
 
@@ -1218,7 +1077,7 @@ class MarioScenarioEnv:
 
         return {
             "world_width": world_width,
-            "mario": [20, floor_y - 16],
+            "mario": [20, floor_y - 12],  # Standing on the floor (Mario is 12 px tall).
             "platforms": platforms,
             "coins": coins,
             "enemies": enemies,

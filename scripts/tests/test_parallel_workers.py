@@ -26,7 +26,7 @@ def pool():
 
 
 def test_pooled_evaluation_matches_in_process_and_keeps_its_layouts(pool):
-    config = tiny_config(evaluation_max_steps=12, monte_carlo_validate_reachability=False)
+    config = tiny_config(evaluation_max_steps=12)
     model = make_block_smb_model(config).eval()
     kwargs = dict(
         split="validation",
@@ -102,7 +102,6 @@ def test_test_split_runs_every_interval_and_after_the_last_epoch():
         fixed_scenarios=(),
         monte_carlo_test_samples=1,
         monte_carlo_validation_repeats_per_difficulty=0,
-        monte_carlo_validate_reachability=False,
     )
     model = make_block_smb_model(config)
     kwargs = dict(device=torch.device("cpu"), vision_factory=StaticBlockVision)
@@ -125,7 +124,6 @@ def test_training_run_shares_one_pool_with_demonstrations_and_evaluation(monkeyp
         mastery_gated_schedule=True,
         monte_carlo_validation_samples=2,
         monte_carlo_validation_repeats_per_difficulty=0,
-        monte_carlo_validate_reachability=False,
         parallel_workers=2,
         online_training_device="cpu",
     )
@@ -148,8 +146,8 @@ def test_training_run_shares_one_pool_with_demonstrations_and_evaluation(monkeyp
 def _rollout(model, config, sample, *, seed, demonstration_actions=None):
     import copy
 
+    from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig
     from retroagi.stages.block_smb.train import (
-        BlockSMBObservationConfig,
         BlockSMBStage,
         MarioScenarioEnv,
         block_smb_policy_scenario,
@@ -162,11 +160,7 @@ def _rollout(model, config, sample, *, seed, demonstration_actions=None):
             copy.deepcopy(sample.scenario), config.autonomous_policy
         ),
         vision=StaticBlockVision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=config.motion_observations,
-            hazard_observations=config.hazard_observations,
-            hazard_memory_observations=config.hazard_memory_observations,
-        ),
+        observation_config=BlockSMBObservationConfig(),
     )
     torch.manual_seed(seed)
     try:

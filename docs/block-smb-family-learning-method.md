@@ -60,12 +60,12 @@ volume run on a passing physics preflight alone.
   Additional successful routes and fresh training layouts broaden coverage.
   Alternative routes preserve the immediate-jump contract of single-jump tasks.
   Only routes that physically complete the requested goal enter the dataset.
-- Enemy distance alone is a weak input for moving interception. Optional motion
-  observations add enemy velocity, patrol limits, vertical displacement, and
-  moving-platform position, velocity, and limits. They are measurements from the
-  environment, not oracle actions or success labels. Legacy observations retain
-  their original 27 state slots; checkpoints with the extended layout are
-  explicitly distinguished when restoring production training.
+- Enemy distance alone is a weak input for moving interception. The
+  observation adds enemy and platform motion relative to Mario and the enemy's
+  observed history. These are measurements from the visible scene, not oracle
+  actions or success labels. Patrol and lift travel limits are not observable
+  in Full SMB and are not policy inputs. Checkpoints record the observation, and
+  restoring one recorded with a different observation is refused.
 - Batched independent frames cannot train recurrent world-state feedback.
   Demonstration qualification disables that feedback rather than evaluating
   an untrained recurrent path. This is recorded as an ablation in checkpoints.
@@ -199,7 +199,7 @@ Validation also includes 292 passing regression tests, Ruff, and Black checks.
 The local shared checkpoint is
 `artifacts/block_smb/joint_learning_20260906_retention_grace/policy.pth`.
 Large training artifacts remain local; compact test outcomes and configurations
-are included in the versioned learning report.
+are included in the checked-in learning report.
 
 Full-volume training remains stopped. This establishes demonstration-assisted
 learnability on the Block SMB family generator with its normal goal, support,

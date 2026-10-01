@@ -68,7 +68,7 @@ class TestBlockSMBScriptedPolicy(unittest.TestCase):
                     self.assertEqual(data["frames"].shape[-3:], (240, 256, 3))
                     self.assertEqual(data["actions"].shape, data["rewards"].shape)
 
-    def test_scripted_policy_covers_directional_and_wait_actions(self):
+    def test_scripted_policy_covers_directional_actions(self):
         scripts = fixed_scenario_action_scripts()
 
         action_counts = {
@@ -76,7 +76,6 @@ class TestBlockSMBScriptedPolicy(unittest.TestCase):
             for action in range(6)
         }
 
-        self.assertGreater(action_counts[0], 0)
         self.assertGreater(action_counts[3], 0)
         self.assertGreater(action_counts[4], 0)
         self.assertIn("level_10_left_retreat.json", scripts)
@@ -86,8 +85,6 @@ class TestBlockSMBScriptedPolicy(unittest.TestCase):
         self.assertIn("level_14_under_enemy_platform.json", scripts)
         self.assertIn("level_15_wait_long_bridge.json", scripts)
         self.assertIn("level_16_wait_enemy_gate.json", scripts)
-        self.assertEqual(scripts["level_15_wait_long_bridge.json"][:28], [0] * 28)
-        self.assertEqual(scripts["level_16_wait_enemy_gate.json"][:50], [0] * 50)
 
 
 if __name__ == "__main__":

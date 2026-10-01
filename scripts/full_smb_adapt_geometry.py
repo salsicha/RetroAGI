@@ -8,12 +8,12 @@ are present in training exactly as they are in policy inference.
 
 import argparse
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import torch
 
 from retroagi.core import save_checkpoint
+from retroagi.core.smb_physics import NES_JUMP_FRAMES
 from retroagi.stages.block_smb.demonstrations import DemonstrationBatch, fit_demonstrations
 from retroagi.stages.block_smb.local_traversal import local_target_distance, support_edge_distance
 from retroagi.stages.full_smb.adapter import FullSMBEnvConfig, FullSMBStage
@@ -191,10 +191,8 @@ def main():
         data, runs = saved["data"], saved["runs"]
         from retroagi.core.smb_runtime import SMBRuntimeContract
 
-        recorded = SMBRuntimeContract(**saved["contract"])
-        for name in ("schema", "motion_observations", "jump_hold_frames", "geometry_source"):
-            if getattr(recorded, name) != getattr(model.smb_runtime_contract, name):
-                raise ValueError(f"Cached demonstration contract mismatch: {name}")
+        if SMBRuntimeContract.from_manifest(saved["contract"]) != model.smb_runtime_contract:
+            raise ValueError("Cached demonstration contract mismatch")
     else:
         stage = FullSMBStage(env_config=FullSMBEnvConfig(state="Level1-1"), vision=policy.vision)
         stage.configure_policy_runtime(model.smb_runtime_contract)
@@ -203,7 +201,7 @@ def main():
                 stage,
                 episodes=args.episodes,
                 limit=args.steps,
-                durations=model.smb_runtime_contract.jump_hold_frames,
+                durations=NES_JUMP_FRAMES,
             )
         finally:
             stage.close()
@@ -211,8 +209,8 @@ def main():
             {"data": data, "runs": runs, "contract": model.smb_runtime_contract.manifest()},
             args.output / "demonstrations.pth",
         )
-    # Adapt the numeric action/duration paths to NES physics, real perception,
-    # and unavailable patrol/coyote features; retain the transferred hierarchy.
+    # Adapt the numeric action/duration paths to real perception; retain the
+    # transferred hierarchy.
     for name, param in model.named_parameters():
         param.requires_grad_(
             name.startswith(("agent.action_state_head.", "agent.duration_state_head."))
@@ -229,9 +227,7 @@ def main():
         prioritized=True,
     )
     checkpoint = policy.checkpoint
-    checkpoint["config"]["smb_runtime_contract"] = replace(
-        model.smb_runtime_contract, visual_tokens="native_adapted"
-    ).manifest()
+    checkpoint["config"]["smb_runtime_contract"] = model.smb_runtime_contract.manifest()
     checkpoint["states"]["model"] = model.state_dict()
     checkpoint.setdefault("metadata", {})["emulator_adaptation"] = {
         "training_level": "Level1-1",

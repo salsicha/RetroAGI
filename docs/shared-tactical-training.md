@@ -1,6 +1,6 @@
 # Shared tactical training
 
-## Joint hierarchy training and prerequisite stages (contract 15)
+## Joint hierarchy training and prerequisite stages
 
 All basic skill families now supervise tactical and strategic intent alongside
 the action and duration losses. Clearing a gap teaches `advance`; waiting for
@@ -102,12 +102,12 @@ bridge departures into successful wait/ride/exit sequences. Evaluation exposes
 the predicted stance and executed action. `piranha_tactics` remains specific to
 piranha. These diagnostics do not replace family success rates.
 
-Demonstration contract version 12 rebuilds cached supervision with tactical
-action sets and explicit duration-consumption masks. No model architecture or
-checkpoint shape changes are needed. An already running trainer must be
+Demonstrations carry tactical action sets and explicit duration-consumption
+masks; the joint-learning tool rejects caches built by other teacher code. No
+model architecture or checkpoint shape changes are needed. An already running trainer must be
 restarted to load this implementation.
 
-## Repositioning families and enemy wait routes (contract 14)
+## Repositioning families and enemy wait routes
 
 `stomp_recovery` and `platform_chain` now receive tactical targets. Their
 demonstrations head straight for the goal, so demonstration labels are all

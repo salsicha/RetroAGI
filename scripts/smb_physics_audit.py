@@ -1,10 +1,10 @@
-"""Differential NES/Block physics audit; never promotes a partial physics profile."""
+"""Differential audit of Block SMB's NES motion model against the emulator."""
 
 import argparse
 import json
 from pathlib import Path
 
-from retroagi.core.smb_physics import NES_PHYSICS_PROFILE, NESPlayerMotion
+from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.full_smb.adapter import FullSMBEnvConfig, FullSMBStage
 
@@ -28,7 +28,7 @@ def audit():
         for name, actions in scripts.items():
             stage.reset(seed=901)
             ram = stage.env.get_ram()
-            block = MarioScenarioEnv(physics_profile=NES_PHYSICS_PROFILE)
+            block = MarioScenarioEnv()
             block.reset(
                 scenario={
                     "world_width": 1024,
@@ -72,7 +72,6 @@ def audit():
     finally:
         stage.close()
     return dict(
-        profile=NES_PHYSICS_PROFILE,
         exact_motion_gate=all(
             r["max_error"] == 0 and r["contact_mismatches"] == 0 for r in reports
         ),

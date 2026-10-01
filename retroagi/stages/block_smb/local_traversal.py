@@ -340,9 +340,9 @@ def safe_jump_holds(
     env.render = lambda: None
     valid = []
     try:
-        from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+        from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
-        menu = NES_JUMP_FRAMES if env.physics_profile == NES_PHYSICS_PROFILE else range(1, 17)
+        menu = NES_JUMP_FRAMES
         for hold in menu:
             restore_env_state(env, snapshot)
             freeze_plant_envelopes(env)
@@ -552,7 +552,7 @@ def normalize_oracle_jumps(scenario: dict, actions: list[int]) -> list[int]:
                 held += 1
             action = (
                 {2: 1, 4: 3, 5: 0}.get(requested, requested)
-                if recovering or held > (32 if env.motion is not None else 16)
+                if recovering or held > 32
                 else requested
             )
             _, _, done, truncated, info = env.step(action)

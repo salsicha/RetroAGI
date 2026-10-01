@@ -21,9 +21,7 @@ from .geometry_expert import (
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
-    BLOCK_SMB_MC_SCHEMA_VERSION,
     BLOCK_SMB_MC_SPLITS,
-    DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     DEFAULT_BLOCK_SMB_MC_MAX_STEPS,
     BlockSMBMonteCarloSampleSet,
     BlockSMBScenarioFamilySpec,
@@ -167,7 +165,6 @@ __all__ = [
     "BlockVITPerceptionThresholds",
     "BlockVisionTransformer",
     "DEFAULT_BLOCK_VIT_CHECKPOINT",
-    "DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID",
     "DEFAULT_BLOCK_SMB_MC_MAX_STEPS",
     "DEFAULT_BLOCK_SMB_ACTION_PROBE_MAX_STEPS",
     "DEFAULT_BLOCK_SMB_ACTION_PROBE_POINTS_PER_SCENARIO",

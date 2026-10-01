@@ -34,6 +34,11 @@ def single_thread():
     torch.set_num_threads(previous)
 
 
+# PhaseIntentPolicy hops from the spawn with the longest NES hold (32 frames);
+# each hop lasts ~53 frames, so mounting and finishing take ~193 frames.
+TRAVERSAL_STEPS = 240
+
+
 def pipe_sample(difficulty="easy", split="train"):
     return sample_block_smb_monte_carlo_scenario(
         split=split, seed=3, sample_index=0, family="tall_pipe_jump", difficulty=difficulty
@@ -62,6 +67,18 @@ class PhaseIntentPolicy(torch.nn.Module):
         return a.float(), c.clone(), torch.zeros_like(c), a.float(), logits, b, b, None
 
 
+class MountThenWaitPolicy(PhaseIntentPolicy):
+    """Requests the mount like PhaseIntentPolicy, then only NOOP waits."""
+
+    def forward(self, a, b, c, **kwargs):
+        outputs = super().forward(a, b, c, **kwargs)
+        goal = kwargs.get("skill_goal")
+        if goal is not None and not goal.any():
+            outputs[4].fill_(-30.0)
+            outputs[4][..., 0] = 30.0
+        return outputs
+
+
 def rollout(sample, model, steps=120, **kwargs):
     stage = BlockSMBStage(scenario=sample.scenario, vision=StaticBlockVision())
     try:
@@ -84,7 +101,7 @@ def rollout(sample, model, steps=120, **kwargs):
 def test_mount_target_survives_phase_change_and_finish_remains_learned(difficulty):
     sample = pipe_sample(difficulty)
     policy = PhaseIntentPolicy()
-    trajectory = rollout(sample, policy)
+    trajectory = rollout(sample, policy, steps=TRAVERSAL_STEPS)
     assert trajectory.success
     assert len(trajectory.transitions) > 60
     mount_jumps = [
@@ -106,10 +123,17 @@ def test_mount_target_survives_phase_change_and_finish_remains_learned(difficult
     assert any(t.info["pipe_mounted"] for t in trajectory.transitions)
     assert trajectory.transitions[-1].info["skill_phase"] == "finish"
 
-    # The rollout does not force RIGHT after mounting: a policy that keeps
-    # requesting jumps still overshoots and fails to touch the real goal.
-    repeating = rollout(sample, PhaseIntentPolicy(finish=False))
-    assert not repeating.success
+    # The rollout does not force RIGHT after mounting: a policy that only
+    # waits once mounted stays on the pipe and never touches the real goal.
+    waiting = rollout(sample, MountThenWaitPolicy(), steps=TRAVERSAL_STEPS)
+    assert not waiting.success
+    assert any(t.info["pipe_mounted"] for t in waiting.transitions)
+
+    # Jumps requested after mounting target the goal, not the pipe. A
+    # full-hold NES jump from the pipe top lands on the goal, so its
+    # coaching keeps the hold that was actually executed.
+    repeating = rollout(sample, PhaseIntentPolicy(finish=False), steps=TRAVERSAL_STEPS)
+    assert repeating.success
     assert any(t.info["pipe_mounted"] for t in repeating.transitions)
     finish_jumps = [
         t for t in repeating.transitions if t.info.get("primitive_target_phase") == "finish"
@@ -118,7 +142,16 @@ def test_mount_target_survives_phase_change_and_finish_remains_learned(difficult
     assert all(
         t.info["primitive_target_x"] == sample.parameters["goal_x"] + 8 for t in finish_jumps
     )
-    assert any(t.info["primitive_target_hold"] < 16 for t in finish_jumps)
+    finish_spans = [
+        span
+        for span in repeating.spans
+        if span.command.get("primitive") == "jump"
+        and repeating.transitions[span.start_frame].info.get("primitive_target_phase") == "finish"
+    ]
+    assert finish_spans
+    for span in finish_spans:
+        start = repeating.transitions[span.start_frame]
+        assert start.info["primitive_target_hold"] == span.command["held_frames"]
 
 
 def test_mount_requires_actual_pipe_support_and_rearms_after_retreat():
@@ -147,15 +180,22 @@ def test_training_floor_does_not_extend_evaluation_or_other_families():
     assert training_rollout_steps(60, sample.scenario) == 160
     assert training_rollout_steps(200, sample.scenario) == 200
     assert training_rollout_steps(60, {}) == 60
+    # Sixty frames cannot finish at any speed: even the 118-frame NES oracle
+    # is cut off, while the training floor leaves it room to finish.
     assert not rollout(sample, PhaseIntentPolicy(), steps=60).success
+    assert not rollout(sample, PhaseIntentPolicy(), steps=60, use_oracle_actions=True).success
     assert rollout(
-        sample, PhaseIntentPolicy(), steps=training_rollout_steps(60, sample.scenario)
+        sample,
+        PhaseIntentPolicy(),
+        steps=training_rollout_steps(60, sample.scenario),
+        use_oracle_actions=True,
     ).success
 
 
 def test_training_and_rehearsal_both_receive_full_budget():
     sample = pipe_sample()
-    successful = rollout(sample, PhaseIntentPolicy())
+    successful = rollout(sample, PhaseIntentPolicy(), steps=TRAVERSAL_STEPS)
+    assert successful.success
     replay = BlockSMBSuccessReplay()
     replay.add(successful, sample.family, sample.scenario_id, sample.scenario)
     config = tiny_config(rollout_steps=60, success_replay_rehearsals_per_epoch=1)
@@ -192,14 +232,14 @@ def test_evaluation_distinguishes_mounting_from_finishing():
         sample_block_smb_monte_carlo_split(split="validation", seed=3, sample_count=0),
         samples=(pipe_sample(split="validation"),),
     )
-    config = tiny_config(evaluation_max_steps=120, evaluation_episodes=2)
+    config = tiny_config(evaluation_max_steps=TRAVERSAL_STEPS, evaluation_episodes=2)
     for finish in (False, True):
         with patch(
             "retroagi.stages.block_smb.train.sample_block_smb_monte_carlo_parameter_sweep",
             return_value=samples,
         ):
             result = evaluate_block_smb_monte_carlo(
-                PhaseIntentPolicy(finish=finish),
+                PhaseIntentPolicy() if finish else MountThenWaitPolicy(),
                 config,
                 split="validation",
                 sample_count=1,

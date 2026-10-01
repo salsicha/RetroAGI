@@ -17,7 +17,8 @@ from retroagi.core.actions import (
 )
 from retroagi.core.models import WorldModelState, skill_goal_objective
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
-from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
+from retroagi.core.smb_scene import canonical_vision
+from retroagi.stages.block_smb.adapter import BlockSMBStage
 from retroagi.stages.block_smb.bridge_traversal import bridge_phase, bridge_safe_wait_frames
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.hierarchy import bridge_training_active
@@ -88,11 +89,6 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                 env=MarioScenarioEnv(reward_config=config.reward_config),
                 scenario=block_smb_policy_scenario(sample.scenario, True),
                 vision=vision,
-                observation_config=BlockSMBObservationConfig(
-                    motion_observations=config.motion_observations,
-                    hazard_observations=config.hazard_observations,
-                    hazard_memory_observations=config.hazard_memory_observations,
-                ),
             )
             observation = stage.reset(seed=sample.sample_seed % (2**31))
             pipe = TallPipeTraversal.from_stage(stage.scenario, stage.env)
@@ -186,13 +182,11 @@ def evaluate_batched(model, cases, config, vision_factory, *, return_actions=Fal
                     s.wait_event = 1 in safe if s.bridge else False
                     goals.append(goal)
                 if isinstance(vision, BlockVisionTransformer):
-                    features = vision.encode(np.stack([s.observation for s in active]))
+                    features = canonical_vision(
+                        vision.encode(np.stack([s.observation for s in active])), "block"
+                    )
                     batch = active[0].stage.vision_projector.project(
-                        features,
-                        state=torch.as_tensor(
-                            np.stack([s.stage.state_features(s.stage.last_info) for s in active]),
-                            device=features.position.device,
-                        ),
+                        features, np.stack([s.stage.state_features() for s in active])
                     )
                     a, b, c = (t.to(device) for t in (batch.src_a, batch.src_b, batch.src_c))
                 else:

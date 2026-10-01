@@ -6,7 +6,7 @@ from functools import lru_cache
 import pytest
 import torch
 
-from retroagi.core.smb_geometry import geometry_features
+from retroagi.core.smb_geometry import FEATURE_NAMES, geometry_features
 from retroagi.stages.block_smb.demonstrations import (
     collect_demonstrations,
     demonstration_rows,
@@ -76,9 +76,13 @@ def test_waiting_past_the_robust_window_is_repaired():
     assert first["actions"][first["supervision_start_frame"]] == 2
 
 
+# Stomps the first enemy, lands, then walks into the first pipe until timeout.
+POST_STOMP_STALL = [1] * 25 + [2] * 20 + [1] * 196
+
+
 def test_post_stomp_pipe_stall_is_repaired_and_only_suffix_is_supervised():
     case = sample("chained_obstacles", "easy", 333)
-    actions = [1] * 10 + [2] * 7 + [1] * 150
+    actions = POST_STOMP_STALL
     repairs = repair_policy_actions(case.scenario, actions)
     assert_completed(case.scenario, repairs)
     assert any(r["recovery_reason"] == "stall" for r in repairs)
@@ -96,17 +100,18 @@ def test_post_stomp_pipe_stall_is_repaired_and_only_suffix_is_supervised():
     assert len(data.action) == len(repair["actions"]) - start
     assert data.recovery.all()
     assert int(data.action[0]) == 2 and data.actor_mask[0]
-    assert float(data.c[0, 23]) == pytest.approx(min(start / 200, 1))
     assert data.valid_durations[0].any()
 
 
 def test_short_second_pipe_jump_gets_certified_longer_hold_and_complete_recovery():
     case = sample("chained_obstacles", "hard", 351)
-    actions = [1] * 10 + [2] * 9 + [1] * 21 + [2] * 9 + [1] * 32 + [2] * 11 + [1] * 160
+    # Stomp, mount and leave the first pipe, then a 6-frame jump at the taller second pipe.
+    runs = [(1, 26), (2, 20), (1, 46), (2, 20), (1, 46), (2, 6), (1, 160)]
+    actions = [action for action, count in runs for _ in range(count)]
     repairs = repair_policy_actions(case.scenario, actions)
     assert_completed(case.scenario, repairs)
     assert any(
-        r["recovery_reason"] == "duration" and r["supervision_start_frame"] == 81 for r in repairs
+        r["recovery_reason"] == "duration" and r["supervision_start_frame"] == 158 for r in repairs
     )
 
 
@@ -161,16 +166,16 @@ def test_next_platform_retains_blocking_pipe_at_wall_contact(left):
         env.reset(
             scenario=dict(
                 world_width=400,
-                mario=[86 if not left else 130, 204],
+                mario=[90 if not left else 130, 204],
                 platforms=[[0, 220, 400, 20], [100, 170, 30, 50], [260, 160, 30, 60]],
                 goal=[20 if left else 360, 200, 16, 20],
                 task_direction=-1 if left else 1,
             )
         )
         env._terrain_left = left
-        features = geometry_features(env)["state_vec"]
-        assert features[19] == 0
-        assert features[20] == pytest.approx(-50 / 240)
+        features = geometry_features(env)["state"]
+        assert features[FEATURE_NAMES.index("next_platform_dx")] == 0
+        assert features[FEATURE_NAMES.index("next_platform_dy")] == pytest.approx(-50 / 240)
     finally:
         env.close()
 
@@ -302,7 +307,7 @@ def test_suffix_walk_targets_do_not_cross_into_the_next_recovery_episode():
             return replace(super().encode(observation), support_logits=torch.zeros(1, 3))
 
     case = sample("chained_obstacles", "easy", 333)
-    repairs = repair_policy_actions(case.scenario, [1] * 10 + [2] * 7 + [1] * 150)
+    repairs = repair_policy_actions(case.scenario, POST_STOMP_STALL)
     case = replace(case, oracle=next(r for r in repairs if r["recovery_reason"] == "stall"))
     config = tiny_config(walk_duration_primitives=False)
     single = collect_demonstrations([(11, case)], config, SupportVision)
@@ -313,9 +318,23 @@ def test_suffix_walk_targets_do_not_cross_into_the_next_recovery_episode():
     assert not torch.equal(paired.next_c[n - 1], paired.c[n])
 
 
-# Epoch-25 easy stair failure: two successful jumps, followed by a final-riser
-# arrival at frame 45. The policy then walked against the wall until timeout.
-STAIR_ARRIVAL = [2] * 10 + [1] * 17 + [2] * 5 + [1] * 13
+# Easy stair failure: two successful jumps, landing on the second step at frame
+# 80, ready for the final riser. The policy then walks against the wall or waits.
+STAIR_ARRIVAL = [2] * 28 + [1] * 16 + [2] * 18 + [1] * 19
+ARRIVAL = len(STAIR_ARRIVAL)
+# A 10-frame hop released in flight lands back on the floor at frame 33; the
+# teacher then walks seven frames before climbing the stairs.
+HOP_LANDING = 33
+STAIR_AFTER_HOP = (
+    [2] * 10
+    + [1] * (HOP_LANDING + 7 - 10)
+    + [2] * 26
+    + [1] * 16
+    + [2] * 18
+    + [1] * 19
+    + [2] * 16
+    + [1] * 60
+)
 
 
 @pytest.mark.parametrize(
@@ -324,7 +343,8 @@ STAIR_ARRIVAL = [2] * 10 + [1] * 17 + [2] * 5 + [1] * 13
         ([1], "landing_recovery"),
         ([1] * 120, "pause_recovery"),
         ([0] * 120, "pause_recovery"),
-        ([1] * 8 + [2] + [1] * 120, "retry_recovery"),
+        # A one-frame hop against the wall fails to mount the last step.
+        ([1] * 12 + [2] + [1] * 120, "retry_recovery"),
     ],
 )
 def test_stair_final_arrival_pause_and_failed_retry_get_successful_suffixes(tail, reason):
@@ -336,10 +356,12 @@ def test_stair_final_arrival_pause_and_failed_retry_get_successful_suffixes(tail
     assert_completed(case.scenario, repairs)
     assert len(repairs) <= 3
     repair = next(
-        r for r in repairs if r["recovery_reason"] == reason and r["supervision_start_frame"] >= 45
+        r
+        for r in repairs
+        if r["recovery_reason"] == reason and r["supervision_start_frame"] >= ARRIVAL
     )
     start = repair["supervision_start_frame"]
-    assert start >= 45
+    assert start >= ARRIVAL
     assert repair["actions"][:start] == actions[:start]
     env = MarioScenarioEnv()
     try:
@@ -367,8 +389,8 @@ def test_stair_final_arrival_pause_and_failed_retry_get_successful_suffixes(tail
             "stall",
             "pause_recovery",
         }
-        assert all(r["supervision_start_frame"] >= 45 for r in repairs)
-        assert start >= 62
+        assert all(r["supervision_start_frame"] >= ARRIVAL for r in repairs)
+        assert start >= ARRIVAL + 17
     if reason == "retry_recovery":
         pause = next(r for r in repairs if r["recovery_reason"] == "pause_recovery")
         assert pause["supervision_start_frame"] >= start + 16
@@ -380,7 +402,7 @@ def test_stair_repairs_respect_a_smaller_budget_and_zero_budget():
     repairs = repair_policy_actions(case.scenario, actions, max_repairs=1)
     assert_completed(case.scenario, repairs)
     assert len(repairs) == 1
-    assert repairs[0]["supervision_start_frame"] == 45
+    assert repairs[0]["supervision_start_frame"] == ARRIVAL
     assert repair_policy_actions(case.scenario, actions, max_repairs=0) == []
 
 
@@ -424,8 +446,7 @@ def test_stair_landing_after_air_release_is_a_fresh_actor_decision():
     from retroagi.stages.block_smb.primitive_execution import BlockSMBPrimitiveExecutor
 
     case = sample("stair_climb", "easy", 60)
-    actions = [2] * 10 + [1] * 17 + [2] * 7 + [1] * 16 + [2] * 9 + [1] * 27
-    case = replace(case, oracle={**case.oracle, "actions": actions})
+    case = replace(case, oracle={**case.oracle, "actions": STAIR_AFTER_HOP})
     data = collect_demonstrations(
         [(BLOCK_SMB_MC_FAMILIES.index("stair_climb"), case)],
         tiny_config(walk_duration_primitives=False),
@@ -447,7 +468,7 @@ def test_stair_landing_after_air_release_is_a_fresh_actor_decision():
             env.step(execution.action)
         else:
             pytest.fail("The first stair jump did not land")
-        assert frame == 25
+        assert frame == HOP_LANDING
         restarted = executor.execute(2, support_override="ground", enemy_contact_override=False)
         assert restarted.action == 2 and restarted.started
         # The teacher chose to walk here after releasing in flight. Those
@@ -455,7 +476,9 @@ def test_stair_landing_after_air_release_is_a_fresh_actor_decision():
         assert data.action[frame : frame + 2].tolist() == [1, 1]
         assert data.actor_mask[frame : frame + 2].all()
         assert not data.forced_release[frame : frame + 2].any()
-        assert data.action[frame + 2] == 2 and data.actor_mask[frame + 2]
+        jump = frame + 7
+        assert data.action[frame:jump].tolist() == [1] * 7
+        assert data.action[jump] == 2 and data.actor_mask[jump]
     finally:
         env.close()
 
@@ -467,7 +490,7 @@ def test_stair_release_mask_migrates_caches_without_crossing_episode_boundaries(
     from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
 
     case = sample("stair_climb", "easy", 60)
-    actions = [2] * 10 + [1] * 17 + [2] * 7 + [1] * 16 + [2] * 9 + [1] * 27
+    actions = STAIR_AFTER_HOP
     data = collect_demonstrations(
         [(BLOCK_SMB_MC_FAMILIES.index("stair_climb"), replace(case, oracle={"actions": actions}))],
         tiny_config(walk_duration_primitives=False),
@@ -484,7 +507,8 @@ def test_stair_release_mask_migrates_caches_without_crossing_episode_boundaries(
     assert torch.equal(without_walk_commitments(migrated, [0]).actor_mask, data.actor_mask)
     # A new recovery episode may start after frame zero; its walking choices
     # must not inherit a jump commitment from the preceding episode.
-    separated = replace(legacy, **{f.name: getattr(legacy, f.name)[24:27] for f in fields(legacy)})
+    hop = slice(HOP_LANDING - 1, HOP_LANDING + 2)
+    separated = replace(legacy, **{f.name: getattr(legacy, f.name)[hop] for f in fields(legacy)})
     assert separated.motor_action.tolist() == [2, 1, 1]
     assert without_walk_commitments(separated, [0, 1]).actor_mask[1:].all()
 
@@ -527,7 +551,8 @@ def test_successful_rollouts_do_not_use_failure_recovery_budget(monkeypatch):
 
 def test_plant_recovery_retains_later_attempt_with_small_budget():
     case = sample("piranha_avoidance", "easy", 810)
-    actions = [0] * 8 + [2] + [1] * 65
+    # A wasted early hop, then a walk into the plant's pipe until timeout.
+    actions = [0] * 8 + [2] + [1] * 90
     repairs = repair_policy_actions(case.scenario, actions, max_repairs=1)
     assert len(repairs) == 1
     assert repairs[0]["supervision_start_frame"] > 20

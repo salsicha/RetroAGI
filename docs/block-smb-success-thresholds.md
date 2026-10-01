@@ -86,7 +86,7 @@ true only when every fixed scenario passes its threshold.
 Fixed-scenario success remains required but is no longer sufficient for
 promotion into Full SMB. A transfer-source checkpoint must also report a passing
 held-out Monte Carlo validation gate: validation pass rate, per-family pass
-rate, coverage histograms, and failure bins for the versioned Block SMB
+rate, coverage histograms, and failure bins for the Block SMB Monte Carlo
 distribution it trained on. Full SMB transfer rejects sources missing fixed pass
 rate `1.0` or held-out Monte Carlo validation evidence unless the transfer is
 explicitly run with the debug bypass flag.

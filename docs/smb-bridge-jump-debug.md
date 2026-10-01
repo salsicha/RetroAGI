@@ -1,14 +1,14 @@
 # Bridge jump family debugging — 2026-09-11
 
 The latest `block_smb` family runs exposed execution and supervision mismatches,
-not a failure of the collision-credit rules. The canonical composable path's
-oracle already completed these tasks, but the older Block training path could
-not execute the same labels.
+not a failure of the collision-credit rules. The bridge jump oracle already
+completed these tasks, but the Block training path could not execute the same
+labels.
 
 ## Reproduced causes
 
 1. **Different meanings for the same duration bin.** Bridge scenarios use
-   `nes_land_v1`. Their demonstrations encode the 16-entry `NES_JUMP_FRAMES`
+   NES physics. Their demonstrations encode the 16-entry `NES_JUMP_FRAMES`
    menu, ending at 32 frames. `collect_trajectory` and batched qualification
    instead instantiated the legacy executor with 1–16-frame durations. For
    example, the demonstrated 28-frame hold (index 14) executed as 15 frames.
@@ -53,16 +53,16 @@ unexecutable jump label.
   physical profile, with enough executor capacity for the NES menu. Walk/wait
   bins retain their existing mapping; mapping does not mutate shared model
   weights or other batch rows.
-- Bridge prerequisite waits reconsider the policy every frame, as canonical
-  bridge playback does. There is no hidden track-end action cue or wait-duration
+- Bridge prerequisite waits reconsider the policy every frame, as the bridge
+  jump oracle does. There is no hidden track-end action cue or wait-duration
   hindsight label for these tasks.
 - Jump-family goals remain present in demonstrations and both evaluation paths.
   Alternative routes use the jump oracle and must pass physical validation.
 - Training carries physical duration values through release and uses certified
   landing holds for the bridge jump's duration loss.
 - Replay keeps bridge wait decisions and their immediate next-state targets.
-  Demonstration contract version 3 requires cached bridge jump families to be
-  refreshed rather than silently reusing the old goals and masks.
+  Cached bridge jump families must be refreshed rather than silently reusing
+  the old goals and masks.
 
 ## Verification and limits
 

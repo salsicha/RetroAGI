@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from retroagi.core import StageSpec, VisionHierarchyProjector, VisionOutput
+from retroagi.core.smb_scene import C_SEMANTIC_LAYOUT_START
 from retroagi.stages.block_smb import BlockSMBObservationConfig, BlockSMBStage
 
 
@@ -21,6 +22,12 @@ class TestVisionHierarchyProjector(unittest.TestCase):
             vocab_size=20,
         )
         self.projector = VisionHierarchyProjector(self.spec)
+
+    def make_block_vision(self):
+        """Block stages need the segmenter's three-state support estimate."""
+        vision = self.make_vision()
+        vision.support_logits = torch.tensor([[-4.0, 4.0, -4.0]])
+        return vision
 
     def make_vision(self, position=None, token_offset=0.0):
         region_classes = torch.tensor([0, 1, 2, 3, 4, 5, 6, 1])
@@ -102,7 +109,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
         self.assertGreater(float(support[0, 1]), 0.99)
 
     def test_block_stage_normalizes_stacks_and_masks_observations(self):
-        vision = self.make_vision()
+        vision = self.make_block_vision()
 
         class CaptureVision:
             def __init__(self):
@@ -118,29 +125,11 @@ class TestVisionHierarchyProjector(unittest.TestCase):
             observation_config=BlockSMBObservationConfig(frame_stack=3),
         )
         try:
+            stage.reset(seed=3)
             observation = np.full((240, 256, 3), 255, dtype=np.uint8)
-            state_vec = np.array(
-                [
-                    2.0,
-                    -2.0,
-                    np.nan,
-                    np.inf,
-                    -np.inf,
-                    0.5,
-                    0.0,
-                    1.0,
-                    -1.0,
-                    0.25,
-                    -0.25,
-                    0.75,
-                    -0.75,
-                    0.0,
-                ],
-                dtype=np.float32,
-            )
-            info = {"state_vec": state_vec}
 
-            batch = stage.encode_observation(observation, info)
+            stage._reset_frame_stack(observation)  # This test's frame starts the stack.
+            batch = stage.encode_observation(observation)
             observation_meta = batch.metadata["observation"]
 
             self.assertEqual(observation_meta["frame_stack"].shape, (1, 3, 3, 240, 256))
@@ -158,7 +147,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
             self.assertTrue(torch.all(c_state <= 1.0))
 
             next_observation = np.zeros((240, 256, 3), dtype=np.uint8)
-            batch = stage.encode_observation(next_observation, info)
+            batch = stage.encode_observation(next_observation)
             self.assertEqual(
                 batch.metadata["observation"]["frame_mask"].tolist(),
                 [[False, True, True]],
@@ -168,7 +157,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
             stage.env.close()
 
     def test_block_stage_episode_mask_drops_on_truncation(self):
-        vision = self.make_vision()
+        vision = self.make_block_vision()
 
         class StaticVision:
             def encode(self, observation):
@@ -205,7 +194,7 @@ class TestVisionHierarchyProjector(unittest.TestCase):
             self.projector.project(vision)
 
     def test_block_stage_uses_shared_projector_contract(self):
-        vision = self.make_vision()
+        vision = self.make_block_vision()
 
         class StaticVision:
             def encode(self, observation):
@@ -213,14 +202,15 @@ class TestVisionHierarchyProjector(unittest.TestCase):
 
         stage = BlockSMBStage(vision=StaticVision())
         try:
-            observation = np.zeros((240, 256, 3), dtype=np.uint8)
-            info = {"state_vec": np.zeros(14, dtype=np.float32)}
-            batch = stage.encode_observation(observation, info)
+            stage.reset(seed=3)
+            batch = stage.encode_observation(np.zeros((240, 256, 3), dtype=np.uint8))
 
             self.assertEqual(batch.src_a.shape, (1, 8))
             self.assertEqual(batch.src_b.shape, (1, 16))
             self.assertEqual(batch.src_c.shape, (1, 64))
-            self.assertEqual(batch.metadata["vision_fusion"]["c_patch_tokens"], (23, 64))
+            self.assertEqual(
+                batch.metadata["vision_fusion"]["c_semantic_layout"], (C_SEMANTIC_LAYOUT_START, 64)
+            )
         finally:
             stage.env.close()
 

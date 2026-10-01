@@ -30,16 +30,23 @@ def test_committed_gap_keeps_its_takeoff_goal():
 
 
 def test_stomp_duration_labels_require_actual_stomp_credit():
+    from retroagi.core.smb_physics import NES_JUMP_FRAMES
+
     case = samples("stomp_mount", 13, "train", 1)[0]
     data = collect_demonstrations([(0, case)], tiny_config(), StaticBlockVision)
-    allowed = data.valid_durations[0].nonzero().flatten() + 1
+    # Duration labels index the NES jump-hold menu at the takeoff decision.
+    takeoff = int((data.actor_mask & (data.motor_action == 2)).nonzero()[0])
+    allowed = [NES_JUMP_FRAMES[i] for i in data.valid_durations[takeoff].nonzero().flatten()]
     assert len(allowed) > 0
+    prefix = list(case.oracle["actions"][:takeoff])
     env = MarioScenarioEnv()
     try:
-        for hold in allowed.tolist():
+        for hold in allowed:
             env.reset(scenario=case.scenario)
-            for frame in range(80):
-                _, _, done, truncated, info = env.step(2 if frame < hold else 1)
+            actions = prefix + [2] * hold
+            for frame in range(80 + takeoff):
+                action = actions[frame] if frame < len(actions) else 1
+                _, _, done, truncated, info = env.step(action)
                 if done or truncated:
                     break
             assert env._stomp_credited and env._goal_credited
@@ -132,43 +139,38 @@ def test_production_training_runs_bootstrap_and_balanced_rehearsal(monkeypatch):
     assert result["history"][0]["demonstration_rehearsal_loss"] >= 0
 
 
-def test_motion_observations_expose_patrol_direction_and_keep_legacy_layout():
+def test_observation_exposes_patrol_direction():
     import copy
 
-    import numpy as np
-
-    from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
+    from retroagi.core.smb_geometry import FEATURE_NAMES
+    from retroagi.core.smb_scene import C_SPANS, c_feature_index
+    from retroagi.stages.block_smb.adapter import BlockSMBStage
 
     sample = samples("stomp_mount", 101, "train", 3)[2]
-    values = []
+    velocities = []
     for direction in (-1, 1):
         scenario = copy.deepcopy(sample.scenario)
         scenario["enemies"][0][-1] = direction
-        stage = BlockSMBStage(
-            scenario=scenario,
-            vision=StaticBlockVision(),
-            observation_config=BlockSMBObservationConfig(motion_observations=True),
-        )
+        stage = BlockSMBStage(scenario=scenario, vision=StaticBlockVision())
         try:
             obs = stage.reset()
             batch = stage.encode_observation(obs)
             start, end = batch.metadata["vision_fusion"]["c_state"]
-            assert end - start == 35
-            values.append(
-                (stage.last_info["state_vec"].copy(), stage.state_features(stage.last_info))
+            assert (start, end) == C_SPANS["c_state"]
+            assert end - start == len(FEATURE_NAMES)
+            observed = stage.state_features(stage.last_info)
+            torch.testing.assert_close(
+                batch.src_c[0, start:end], torch.as_tensor(observed[: end - start])
             )
-            stage.observation_config = BlockSMBObservationConfig()
-            legacy = stage.encode_observation(obs)
-            lo, hi = legacy.metadata["vision_fusion"]["c_state"]
-            assert hi - lo == 27
-            torch.testing.assert_close(legacy.src_c[:, :hi], batch.src_c[:, :hi])
+            velocities.append(float(batch.src_c[0, c_feature_index("enemy_vx")]))
         finally:
             stage.env.close()
-    np.testing.assert_array_equal(values[0][0], values[1][0])
-    assert values[0][1][27] < 0 < values[1][1][27]
+    assert velocities[0] < 0 < velocities[1]
 
 
 def test_checkpoint_rejects_a_different_observation_layout(tmp_path):
+    from retroagi.core.checkpoint import load_checkpoint, save_checkpoint
+    from retroagi.core.smb_scene import observation_spec
     from retroagi.stages.block_smb.train import (
         make_block_smb_model,
         make_block_smb_optimizer,
@@ -183,19 +185,29 @@ def test_checkpoint_rejects_a_different_observation_layout(tmp_path):
     save_block_smb_checkpoint(
         path, model, optimizer, epoch=0, global_step=0, config=config, metrics={}
     )
-    with pytest.raises(ValueError, match="motion-observation layout"):
-        restore_block_smb_checkpoint(path, model, motion_observations=True)
+    checkpoint = load_checkpoint(path)
+    assert checkpoint["specs"]["smb_observation"] == observation_spec()
+    restore_block_smb_checkpoint(path, model)
+    # A checkpoint whose recorded C-stream meaning differs cannot be loaded.
+    features = checkpoint["specs"]["smb_observation"]["features"]
+    checkpoint["specs"]["smb_observation"]["features"] = features[:-1]
+    save_checkpoint(path, checkpoint)
+    with pytest.raises(ValueError, match="shared SMB observation"):
+        restore_block_smb_checkpoint(path, model)
 
 
 def test_local_stomp_bounce_clears_goal_and_receives_no_actor_credit():
     from dataclasses import replace
+
+    from retroagi.core.smb_scene import c_feature_index
 
     case = samples("enemy_stomp", 101, "train", 1)[0]
     # Use a local traversal family with identical physics to exercise the
     # collision reward path (ordinary hops need not emit stomp geometry).
     case = replace(case, family="enemy_hop")
     data = collect_demonstrations([(0, case)], tiny_config(), StaticBlockVision)
-    recovery = (~data.actor_mask) & (data.motor_action == 1) & (data.c[:, 13] == 0)
+    airborne = data.c[:, c_feature_index("grounded")] == 0
+    recovery = (~data.actor_mask) & (data.motor_action == 1) & airborne
     assert recovery.any()
     assert torch.all(data.goal[recovery] == 0)
 
@@ -210,18 +222,20 @@ def test_frozen_vision_cache_preserves_fresh_symbolic_state():
             self.calls += 1
             return super().encode(observation)
 
+    from retroagi.core.smb_scene import c_feature_index
+
     vision = CountingVision()
     stage = BlockSMBStage(scenario=samples("flat_run", 7, "train", 1)[0].scenario, vision=vision)
     try:
         obs = stage.reset()
         before = stage.encode_observation(obs)
-        info = dict(stage.last_info)
-        info["state_vec"] = info["state_vec"].copy()
-        info["state_vec"][0] += 0.1
-        after = stage.encode_observation(obs, info)
+        # Same pixels, moved simulator state: the geometry observer is
+        # recomputed even though the frozen encoder is not rerun.
+        stage.env.mario["x"] += 10.0
+        after = stage.encode_observation(obs)
         assert vision.calls == 1
-        start, _ = after.metadata["vision_fusion"]["c_state"]
-        assert after.src_c[0, start] != before.src_c[0, start]
+        x = c_feature_index("x")
+        assert after.src_c[0, x] > before.src_c[0, x]
         stage.reset()
         stage.encode_observation(obs)
         assert vision.calls == 2
@@ -464,16 +478,26 @@ def test_frame_walk_cache_migration_matches_fresh_collection(family):
 
 
 @pytest.mark.parametrize(
-    "version, family, message",
+    "families, manifest, refresh, stale",
     [
-        (15, "flat_run", "contract-16 landing handoff"),
-        (16, "piranha_avoidance", "contract-17 plant clearance"),
-        (17, "bridge_mount", "contract-18 robust departures"),
-        (18, "bridge_dismount", "contract-19 longest holds"),
+        (["flat_run"], {}, [], "flat_run"),
+        (["piranha_avoidance"], {"teacher_digest": "stale"}, [], "piranha_avoidance"),
+        (
+            ["bridge_mount", "bridge_dismount"],
+            {"teacher_digest": "stale"},
+            [],
+            "bridge_dismount bridge_mount",
+        ),
+        (
+            ["bridge_mount", "bridge_dismount"],
+            {"teacher_digest": "stale"},
+            ["bridge_mount"],
+            "bridge_dismount",
+        ),
     ],
 )
 def test_joint_learning_rejects_stale_cached_labels(
-    tmp_path, monkeypatch, version, family, message
+    tmp_path, monkeypatch, families, manifest, refresh, stale
 ):
     import json
     import sys
@@ -487,22 +511,25 @@ def test_joint_learning_rejects_stale_cached_labels(
     dataset = source / "demonstrations.pth"
     torch.save(
         SimpleNamespace(
-            family=torch.tensor([BLOCK_SMB_MC_FAMILIES.index(family)]),
-            forced_release=torch.tensor([False]),
+            family=torch.tensor([BLOCK_SMB_MC_FAMILIES.index(f) for f in families]),
+            forced_release=torch.zeros(len(families), dtype=torch.bool),
         ),
         dataset,
     )
     (source / "config.json").write_text("{}")
-    (source / "demonstration_manifest.json").write_text(json.dumps({"contract_version": version}))
+    (source / "demonstration_manifest.json").write_text(json.dumps(manifest))
     monkeypatch.setattr(
         block_smb_joint_learning, "_make_vision_factory", lambda *args: (None, None)
     )
     monkeypatch.setattr(
         sys,
         "argv",
-        ["joint_learning", "--output-dir", str(tmp_path / "run"), "--dataset", str(dataset)],
+        ["joint_learning", "--output-dir", str(tmp_path / "run"), "--dataset", str(dataset)]
+        + (["--refresh-families", *refresh] if refresh else []),
     )
-    with pytest.raises(ValueError, match=message):
+    # Labels built by any other teacher code are stale; every cached family
+    # that is not being refreshed must be regenerated.
+    with pytest.raises(ValueError, match=f"different teacher code.*--refresh-families {stale}$"):
         block_smb_joint_learning.main()
 
 
@@ -620,13 +647,15 @@ def test_jump_labels_reject_an_unrecoverable_next_enemy_landing():
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=sample.scenario)
-        for _ in range(15):
+        for _ in range(32):
             env.step(1)
         objective = local_objective(env)
         before = (env.mario["x"], env.mario["y"], env.steps)
-        assert 13 in safe_jump_holds(env, objective, 1, verify_recovery=False)
+        # A 24-frame hold clears the first enemy but lands beside the second,
+        # which then leaves no safe takeoff.
+        assert 24 in safe_jump_holds(env, objective, 1, verify_recovery=False)
         safe = safe_jump_holds(env, objective, 1)
-        assert safe and 13 not in safe
+        assert safe and 24 not in safe
         assert before == (env.mario["x"], env.mario["y"], env.steps)
     finally:
         env.close()

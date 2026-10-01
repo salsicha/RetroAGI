@@ -37,10 +37,9 @@ following frame. Stair demonstrations walked on these two forced frames, but
 frame-walk conversion exposed them as free walking decisions. In the audited
 12-layout-per-family cache, this produced 96 mount-phase walking labels alongside
 72 jump labels. The migration preserves all 72 jumps and leaves non-stair actor
-masks unchanged. Contract version 7 excludes these release/suppression frames
-from stair actor supervision while retaining their other training targets.
-Existing frame-walk caches migrate these masks without rerendering; bridge
-contract version 6 refresh requirements remain unchanged. Episode boundaries
+masks unchanged. Demonstrations exclude these release/suppression frames from
+stair actor supervision while retaining their other training targets. Existing
+frame-walk caches migrate these masks without rerendering. Episode boundaries
 prevent a preceding trajectory's jump from masking a new trajectory's walk.
 
 Regression coverage replays the actual final-riser approach, checks arrival,

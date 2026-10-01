@@ -44,7 +44,7 @@ replacing per-game heuristics with a reusable learned teacher.
 
 ## Oracle Output Contract
 
-The oracle should emit a versioned `UniversalOracleTrace` for each scenario or
+The oracle should emit a `UniversalOracleTrace` for each scenario or
 trajectory segment:
 
 - game ID, stage name, task ID, seed, distribution ID, and source provenance;

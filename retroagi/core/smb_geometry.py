@@ -1,9 +1,9 @@
-"""Versioned SMB geometry features shared by simulator and emulator adapters.
+"""SMB geometry features shared by the simulator, NES RAM and pixel observers.
 
-Coordinates are pixels in a local world frame, y grows downward. Width/height
-and velocity scales belong to the scene. The feature order preserves the
-qualified Block SMB policy; missing physical observations must be declared in
-metadata, never confused with measured zero velocity or a known patrol bound.
+Coordinates are pixels in the visible 256x240 screen, y grows downward; widths,
+heights and velocity scales belong to the scene. Every feature is one Full SMB
+can also supply. Block SMB's ground truth (patrol limits, lift travel limits)
+feeds teachers and labels, never the policy.
 """
 
 import math
@@ -11,9 +11,8 @@ import math
 import numpy as np
 import pygame
 
-SCHEMA = "smb_geometry_v1"
 SEMANTICS = ("background", "mario", "platform", "coin", "goal", "enemy", "moving_platform")
-STATE_NAMES = (
+FEATURE_NAMES = (
     "x",
     "y",
     "vx",
@@ -21,14 +20,11 @@ STATE_NAMES = (
     "grounded",
     "facing",
     "skidding",
-    "coyote",
-    "jump_buffer",
     "coin_dx",
     "coin_dy",
     "coin_distance",
     "enemy_dx",
     "enemy_distance",
-    "elapsed",
     "goal_dx",
     "goal_dy",
     "goal_distance",
@@ -38,25 +34,21 @@ STATE_NAMES = (
     "ground_24",
     "ground_48",
     "ground_72",
+    "enemy_vx",
+    "enemy_dy",
+    "bridge_dx",
+    "bridge_vx",
     "death",
     "terminated",
     "truncated",
 )
-MOTION_NAMES = (
-    "enemy_vx",
-    "enemy_patrol_min",
-    "enemy_patrol_max",
-    "enemy_dy",
-    "bridge_dx",
-    "bridge_vx",
-    "bridge_min",
-    "bridge_max",
-)
+GOAL_FEATURES = slice(FEATURE_NAMES.index("goal_dx"), FEATURE_NAMES.index("goal_distance") + 1)
+# The episode-outcome flags close the vector; world-model losses read them as a span.
+TERMINAL_FEATURES = ("death", "terminated", "truncated")
 
 
-def geometry_features(
-    scene, *, death=False, terminated=False, truncated=False, coyote_frames=5, jump_buffer_frames=6
-):
+def geometry_features(scene, *, death=False, terminated=False, truncated=False):
+    """The policy feature vector (``state``, ordered as FEATURE_NAMES) plus diagnostics."""
     m = scene.mario
     ww = scene.world_width
     wh = scene.height
@@ -166,30 +158,9 @@ def geometry_features(
                     best = dy
         return 1.0 if best is None else best
 
-    # Dynamic objects need direction and reversal geometry, not only
-    # their distance in a single rendered frame. Kept separate so legacy
-    # 27-slot checkpoints retain their exact observation layout.
     nearest_enemy = min(active_enemies, key=lambda e: abs(e["x"] - m["x"]), default=None)
     bridge = next((p for p in scene.platforms if p.get("moving")), None)
-    motion_vec = np.array(
-        [
-            (
-                nearest_enemy["speed"] * nearest_enemy["direction"] / scene.max_walk_speed
-                if nearest_enemy
-                else 0.0
-            ),
-            (nearest_enemy["patrol_min"] - nearest_enemy["x"]) / ww if nearest_enemy else 0.0,
-            (nearest_enemy["patrol_max"] - nearest_enemy["x"]) / ww if nearest_enemy else 0.0,
-            (nearest_enemy["y"] - m["y"]) / wh if nearest_enemy else 0.0,
-            (bridge["move_x"] - m["x"]) / ww if bridge else 0.0,
-            bridge["move_speed"] * bridge["move_dir"] / scene.max_walk_speed if bridge else 0.0,
-            (bridge["move_min"] - bridge["move_x"]) / ww if bridge else 0.0,
-            (bridge["move_max"] - bridge["move_x"]) / ww if bridge else 0.0,
-        ],
-        dtype=np.float32,
-    )
-
-    state_vec = np.array(
+    state = np.array(
         [
             m["x"] / ww,
             m["y"] / wh,
@@ -198,14 +169,11 @@ def geometry_features(
             float(m["on_ground"]),
             float(m["facing"]),
             float(m["skidding"]),
-            float(m["coyote_frames"]) / coyote_frames,
-            float(m["jump_buffer"]) / jump_buffer_frames,
             nc["dx"],
             nc["dy"],
             nc["dist"],
             ne["dx"],
             ne["dist"],
-            min(float(scene.steps) / 200.0, 1.0),
             goal_dx,
             goal_dy,
             goal_dist,
@@ -215,6 +183,14 @@ def geometry_features(
             _ground_ahead(24.0),
             _ground_ahead(48.0),
             _ground_ahead(72.0),
+            (
+                nearest_enemy["speed"] * nearest_enemy["direction"] / scene.max_walk_speed
+                if nearest_enemy
+                else 0.0
+            ),
+            (nearest_enemy["y"] - m["y"]) / wh if nearest_enemy else 0.0,
+            (bridge["move_x"] - m["x"]) / ww if bridge else 0.0,
+            bridge["move_speed"] * bridge["move_dir"] / scene.max_walk_speed if bridge else 0.0,
             float(death),
             float(terminated),
             float(truncated),
@@ -222,8 +198,7 @@ def geometry_features(
         dtype=np.float32,
     )
     return {
-        "state_vec": state_vec,
-        "motion_vec": motion_vec,
+        "state": state,
         "nearest_coin": nc,
         "nearest_enemy": ne,
         "platform_below_dist": plat_below,

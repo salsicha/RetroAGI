@@ -198,18 +198,23 @@ def test_boarding_jump_targets_bridge_support_and_keeps_success_credit():
 
 def test_budget_extension_and_component_metrics_keep_timeouts_visible():
     item = sample()
-    assert training_rollout_steps(60, item.scenario) == 240
+    # Bridge layouts train with at least 240 frames, and with 1.5x the oracle
+    # when it is longer: the hard layout's 54-frame wait makes it 179 frames.
+    assert training_rollout_steps(60, sample("easy").scenario) == 240
+    assert training_rollout_steps(60, item.scenario) == 268
     samples = replace(
         sample_block_smb_monte_carlo_split(split="validation", seed=2, sample_count=0),
         samples=(item,),
     )
+    # Evaluation keeps its explicit budget. 120 frames cover the wait and the
+    # boarding (frame 83) but not the finish (frame 181), so the timeout shows.
     with patch(
         "retroagi.stages.block_smb.train.sample_block_smb_monte_carlo_parameter_sweep",
         return_value=samples,
     ):
         result = evaluate_block_smb_monte_carlo(
             PhasePolicy(),
-            tiny_config(evaluation_episodes=2, evaluation_max_steps=60),
+            tiny_config(evaluation_episodes=2, evaluation_max_steps=120),
             split="validation",
             sample_count=1,
             stratified_repeats_per_difficulty=3,
@@ -243,7 +248,7 @@ def test_oracle_waits_have_complete_spans_and_real_training_updates_are_finite()
         device=torch.device("cpu"),
         vision_factory=StaticBlockVision,
     )
-    assert metrics["training_rollout_steps_max"] == 240
+    assert metrics["training_rollout_steps_max"] == 268
     assert metrics["train_total_actions"] > 60
     assert metrics["loss_primitive_outcome"] > 0
     assert all(torch.isfinite(p).all() for p in model.parameters())

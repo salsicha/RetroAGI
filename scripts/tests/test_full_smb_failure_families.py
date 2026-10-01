@@ -50,7 +50,7 @@ def test_new_families_append_without_renumbering_cached_family_labels():
     assert BLOCK_SMB_MC_FAMILIES[24:28] == TRANSFER_FAILURE_FAMILIES
     assert BLOCK_SMB_MC_FAMILIES[28:] == HIERARCHY_FAMILIES
     assert set(TRANSFER_FAILURE_FAMILIES) <= LOCAL_TRAVERSAL_FAMILIES & RECOVERY_FAMILIES
-    config = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    config = json.loads(Path("scripts/configs/block_smb_full_volume.json").read_text())
     assert all(config["monte_carlo_family_weights"][f] > 0 for f in TRANSFER_FAILURE_FAMILIES)
 
 
@@ -58,7 +58,6 @@ def test_new_families_append_without_renumbering_cached_family_labels():
 @pytest.mark.parametrize("difficulty", ("easy", "medium", "hard"))
 def test_new_family_routes_complete_in_training_collector(family, difficulty):
     item = sample(family, difficulty)
-    assert item.parameters["family_revision"] == (4 if family == "piranha_avoidance" else 1)
     assert item.reachability["reachable"]
     trajectory = rollout(item, PhaseIntentPolicy(), steps=320, use_oracle_actions=True)
     assert trajectory.success

@@ -26,7 +26,6 @@ from retroagi.core import (
 )
 from retroagi.core.smb_runtime import SMBRuntimeContract, attach_runtime
 from retroagi.stages.block_smb.adapter import BLOCK_SMB_SPEC
-from retroagi.stages.block_smb.monte_carlo import DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
 from retroagi.stages.block_smb.train import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
@@ -122,11 +121,10 @@ def transfer_block_smb_checkpoint_to_full_smb(
     """Load Block SMB policy weights and save a Full SMB transfer checkpoint.
 
     Weight shapes and source performance are checked separately from runtime
-    semantics. Motion-aware Block policies carry a shared geometry/control
-    contract into Full SMB; legacy policies retain their old runtime. Native
-    Full SMB vision is mapped by semantic meaning in the shared adapter. Its
-    learned token features still require real-emulator qualification/adaptation;
-    loading weights successfully does not qualify a policy for full-level play.
+    semantics. The policy carries the shared SMB observation and control
+    contract into Full SMB; Full SMB vision is mapped onto the shared semantic
+    classes by meaning. Loading weights successfully does not qualify a policy
+    for full-level play.
     """
 
     source_path = Path(block_policy_checkpoint)
@@ -136,22 +134,10 @@ def transfer_block_smb_checkpoint_to_full_smb(
         require_transfer_source_gate=require_transfer_source_gate,
     )
     source_transfer_gate = block_smb_checkpoint_transfer_source_gate(source_checkpoint)
-    from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, HAZARD_NAMES
-    from retroagi.core.smb_geometry import MOTION_NAMES, SCHEMA, STATE_NAMES
+    from retroagi.core.smb_scene import observation_spec
 
-    declared = source_checkpoint.get("specs", {}).get("smb_observation")
-    if declared is not None:
-        expected = list(STATE_NAMES) + (
-            list(MOTION_NAMES)
-            if source_checkpoint.get("config", {}).get("motion_observations")
-            else []
-        )
-        if source_checkpoint.get("config", {}).get("hazard_observations", False):
-            expected += list(HAZARD_NAMES)
-        if source_checkpoint.get("config", {}).get("hazard_memory_observations", False):
-            expected += list(HAZARD_MEMORY_NAMES)
-        if declared.get("schema") != SCHEMA or declared.get("features") != expected:
-            raise ValueError("Block checkpoint observation schema or feature order is incompatible")
+    if source_checkpoint.get("specs", {}).get("smb_observation") != observation_spec():
+        raise ValueError("Block checkpoint predates the shared SMB observation; retrain it")
     architecture_name, architecture_config = policy_architecture_from_checkpoint(source_checkpoint)
     model = make_full_smb_policy_model(
         architecture_name=architecture_name,
@@ -166,12 +152,9 @@ def transfer_block_smb_checkpoint_to_full_smb(
     if skipped_world_model_keys:
         missing_keys = tuple((*missing_keys, *skipped_world_model_keys))
     model.eval()
-    # The qualified motion-aware policies require the shared observation and
-    # control contract. Legacy checkpoints retain an explicit legacy path.
-    if source_checkpoint.get("config", {}).get("motion_observations", False):
-        attach_runtime(
-            model, SMBRuntimeContract.from_block_config(source_checkpoint["config"]).manifest()
-        )
+    attach_runtime(
+        model, SMBRuntimeContract.from_block_config(source_checkpoint["config"]).manifest()
+    )
 
     source_vision_path = None
     if block_vision_checkpoint is not None:
@@ -228,29 +211,6 @@ def load_transferred_full_smb_policy(
     """Load a checkpoint produced by `transfer_block_smb_checkpoint_to_full_smb`."""
 
     path = Path(checkpoint_path)
-    if path.is_dir() and (path / "bundle.json").exists():
-        from retroagi.core.smb_components import load_bundle
-
-        model, vision, manifest = load_bundle(path, device=device)
-        if vision is None or model.smb_runtime_contract.observation_provider != "perceived":
-            raise ValueError(
-                "Full pixel playback requires a perceived bundle with a canonical ViT; use the curriculum tool for oracle diagnostics"
-            )
-        return FullSMBTransferResult(
-            model=model,
-            vision=vision,
-            checkpoint={
-                "config": {"smb_runtime_contract": model.smb_runtime_contract.manifest()},
-                "metadata": manifest,
-            },
-            source_checkpoint={},
-            source_policy_path=path,
-            source_vision_path=None,
-            full_smb_vision_path=path / "perception.pth",
-            output_path=path,
-            missing_model_keys=(),
-            source_transfer_gate={"full_level_qualified": False, "component_compatible": True},
-        )
     checkpoint = load_checkpoint(path, map_location=device)
     _validate_transfer_checkpoint(checkpoint, path)
     architecture_name, architecture_config = policy_architecture_from_checkpoint(checkpoint)
@@ -436,9 +396,6 @@ def block_smb_checkpoint_transfer_source_gate(
         "fixed_all_noop_action_collapse": fixed_action_collapse,
         "fixed_action_collapse_gate_met": bool(fixed_action_gate_met),
         "semantic_prediction_gate_met": bool(semantic_gate_met),
-        "monte_carlo_distribution_id": str(
-            config.get("monte_carlo_distribution_id", DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID)
-        ),
         "monte_carlo_validation_samples": monte_carlo_validation_samples,
         "monte_carlo_validation_success_rate": _optional_float(
             metrics.get("eval_monte_carlo_validation_success_rate")

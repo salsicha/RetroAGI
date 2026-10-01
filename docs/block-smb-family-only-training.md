@@ -1,6 +1,6 @@
 # Family-only Block SMB training — September 8, 2026
 
-Production training now uses generated families exclusively and runs for 30
+Production training now uses generated families exclusively and runs for 20
 full-volume epochs. The previous production process was stopped at the user's
 request; its latest completed checkpoint is epoch 36.
 
@@ -24,8 +24,8 @@ safe floor no longer force an unnecessary mount/clear request.
 
 ## Expanded families and controller repairs
 
-`retreat_recovery` revision 3 includes flat leftward travel, leftward gaps of
-36–56 pixels, and leftward elevated landings with 28–52 pixels of rise. Every
+`retreat_recovery` includes flat leftward travel, leftward gaps of 36–56
+pixels, and leftward elevated landings with 28–52 pixels of rise. Every
 variant retains direction-appropriate reward shaping and a physically verified
 route. Local target selection, landing credit, duration probes, and route
 augmentation handle both directions. The support edge, next platform, and
@@ -37,8 +37,8 @@ The diagnostic `support_right_dx` keeps its historical right-edge meaning;
 Checkpoint dimensions are unchanged, but leftward behavior requires rechecking
 and training under the revised observations.
 
-`bridge_wait`, `moving_bridge`, and `wait_timing` revision 3 retain the wide
-100-pixel bridge cases and add 48–60-pixel bridges moving at 0.5–1.1 pixels/frame.
+`bridge_wait`, `moving_bridge`, and `wait_timing` retain the wide 100-pixel
+bridge cases and add 48–60-pixel bridges moving at 0.5–1.1 pixels/frame.
 Moving-bridge approach spawns range from x=20 to x=60. The controller recognizes
 approach separately and rechecks physical boarding availability at the shore;
 one walking action no longer irrevocably ends waiting. Live collection,
@@ -67,14 +67,14 @@ separate from demonstration training layouts.
 
 ## Full-volume recipe
 
-`scripts/configs/block_smb_full_volume_revision2.json` retains its path for
-existing tooling but now resolves to the family-only recipe: 30 epochs, 512
-base generated layouts per epoch, 64 failure-replay samples when applicable,
-42 success-replay rehearsals, and 1,000 balanced demonstration updates per epoch.
-It measures all 21 families at three difficulties, ten cases per difficulty,
-after every epoch. The frozen ViT, motion observations, fixed jump/wait
-commitments, per-frame walking, and feedforward carried-state configuration
-match the demonstrated learning path.
+`scripts/configs/block_smb_full_volume.json` is the family-only recipe: 20
+epochs, 512 base generated layouts per epoch, 64 failure-replay samples when
+applicable, 42 success-replay rehearsals, and 1,000 balanced demonstration
+updates per epoch.
+It measures all 32 families at three difficulties, ten cases per difficulty,
+after every epoch. The frozen ViT, the shared observation, fixed jump/wait
+commitments, per-frame walking, and carried recurrent state match the
+demonstrated learning path.
 
 Evaluation episodes, evaluation layouts, training layouts, teacher routes and
 demonstration replays are independent, so the recipe runs them on
@@ -96,6 +96,43 @@ these many small per-step losses; demonstration fitting stays on the GPU.
 Validation, which steers the curriculum, runs after every epoch; the reported
 test split runs every `monte_carlo_test_interval_epochs` (5) epochs and after
 the last.
+
+## One observation, one physics (October 1, 2026)
+
+A Full SMB probe of the September 30 checkpoint found the strategy layer
+choosing "mount" on ~85% of grounded 1-1 frames, partly because Block SMB fed
+the policy inputs the NES cannot supply. Block SMB's purpose is ground truth
+for teachers and small composable scenarios, not a richer observation, so Block
+and Full SMB now share a single observation and a single physics:
+
+- **Physics.** `MarioScenarioEnv` moves Mario only with the NES motion model
+  (`retroagi/core/smb_physics.py`): no coyote time, no jump buffering, no
+  rebound on a held jump, a 10×12 body, and jump bins in NES frames
+  (`NES_JUMP_FRAMES`). A transferred policy needs no height calibration.
+- **Layouts.** Every family is generated once and finished for the NES body
+  (`monte_carlo._finish_layout`: feet kept for the shorter body, running
+  takeoffs for `pit_leap`/`platform_hop`, floor-span enemy patrols for
+  `enemy_stomp`, an explicit stomp task for stomp families). Its route is then
+  verified under NES physics (`_verified_route`: the authored route, then a
+  terrain search, then a bridge search). `bridge_wait` places the bridge so the
+  opening wait under NES walking falls in each difficulty's band.
+- **Observation** (`retroagi/core/smb_scene.py`). Each game's geometry observer
+  (Block simulator truth or NES RAM) reports the visible scene in screen
+  coordinates, and `SMBProjector` lays out the C stream by `C_SPANS`:
+  position, semantic class probabilities, support, the 28 `FEATURE_NAMES`,
+  enemy history, availability, relative enemy/platform motion, and a coarse
+  class layout. Positions and distances are over the 256-pixel screen,
+  velocities on the NES scales, and the goal slots hold the visible local
+  objective, kept from takeoff while airborne. Features Full SMB cannot supply
+  do not exist: coyote time, jump buffer, the episode clock, enemy patrol
+  limits and lift travel limits. The scene handed to the policy carries no
+  patrol or travel limits (`HIDDEN_FIELDS`), the finish flag is not rendered,
+  and segmentations are mapped to the shared classes by meaning; an encoder's
+  latent tokens never reach the policy.
+
+Checkpoints record `observation_spec()`; loading or transferring a checkpoint
+whose recorded observation differs is refused, so older checkpoints must be
+retrained. The runtime contract carries only control settings.
 
 A random initialization receives 10,000 demonstration bootstrap updates. An
 explicit `--init-checkpoint` uses weights only, skips bootstrap, and starts a new

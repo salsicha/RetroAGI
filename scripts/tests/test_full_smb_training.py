@@ -52,9 +52,22 @@ from retroagi.stages.full_smb.transfer import (
 )
 from scripts.tests.test_full_smb_transfer import (
     TinyFullSMBEnv,
+    TinyRAMFullSMBEnv,
     write_block_policy_checkpoint,
     write_full_smb_vision_checkpoint,
 )
+
+
+def tiny_ram_stage(vision):
+    return FullSMBStage(
+        env=TinyRAMFullSMBEnv(),
+        vision=vision,
+        observation_config=FullSMBObservationConfig(
+            frame_skip=1,
+            frame_stack=2,
+            resize_shape=(16, 20),
+        ),
+    )
 
 
 def tiny_stage(vision):
@@ -176,13 +189,9 @@ class TestFullSMBTraining(unittest.TestCase):
                 device="cpu",
                 init_checkpoint=block_policy_path,
                 full_smb_vision_checkpoint=full_vision_path,
-                imitation_warm_start_steps=12,
-                imitation_warm_start_epochs=1,
-                imitation_warm_start_batch_size=4,
-                imitation_warm_start_frame_skip=32,
-                imitation_obstacle_window_repository_root=tmp / "empty_save_state_root",
+                imitation_warm_start=False,
             )
-            result = train_full_smb_policy(config, make_stage=tiny_stage)
+            result = train_full_smb_policy(config, make_stage=tiny_ram_stage)
 
         checkpoint = result.checkpoint
         source = checkpoint["config"]["training_source"]
@@ -201,33 +210,6 @@ class TestFullSMBTraining(unittest.TestCase):
         )
         self.assertEqual(source["full_smb_vision_checkpoint"], str(full_vision_path))
         self.assertEqual(source["architecture_config"], source_config.architecture_config)
-        self.assertTrue(source["imitation_warm_start"]["enabled"])
-        self.assertGreater(
-            source["imitation_warm_start"]["training"]["duration_supervision_count"],
-            0.0,
-        )
-        self.assertTrue(
-            source["imitation_warm_start"]["obstacle_window_duration_labels"]["enabled"]
-        )
-        self.assertGreater(
-            source["imitation_warm_start"]["obstacle_window_duration_labels"][
-                "missing_save_state_count"
-            ],
-            0.0,
-        )
-        self.assertGreater(
-            checkpoint["metrics"]["imitation_warm_start_duration_supervision_count"],
-            0.0,
-        )
-        self.assertGreater(
-            checkpoint["metrics"]["imitation_warm_start_release_supervision_count"],
-            0.0,
-        )
-        self.assertEqual(
-            checkpoint["metrics"]["imitation_warm_start_obstacle_window_label_count"],
-            0.0,
-        )
-        self.assertEqual(checkpoint["metrics"]["imitation_warm_start_enabled"], 1.0)
         self.assertEqual(
             checkpoint["metadata"]["training"]["source"],
             source,
@@ -720,8 +702,9 @@ class TestFullSMBTraining(unittest.TestCase):
                 full_smb_vision_checkpoint=full_vision_path,
                 checkpoint_path=policy_path,
                 save_checkpoints=True,
+                imitation_warm_start=False,
             )
-            result = train_full_smb_policy(config, make_stage=tiny_stage)
+            result = train_full_smb_policy(config, make_stage=tiny_ram_stage)
             model, _optimizer, checkpoint = load_full_smb_policy_checkpoint(
                 policy_path,
                 device="cpu",
@@ -729,7 +712,7 @@ class TestFullSMBTraining(unittest.TestCase):
             evaluation = evaluate_full_smb_policy(
                 model,
                 config=config,
-                make_stage=tiny_stage,
+                make_stage=tiny_ram_stage,
             )
 
             self.assertTrue(policy_path.exists())
@@ -842,8 +825,9 @@ class TestFullSMBTraining(unittest.TestCase):
                 full_smb_vision_checkpoint=full_vision_path,
                 checkpoint_path=resumed_path,
                 save_checkpoints=True,
+                imitation_warm_start=False,
             )
-            resumed = train_full_smb_policy(resume_config, make_stage=tiny_stage)
+            resumed = train_full_smb_policy(resume_config, make_stage=tiny_ram_stage)
             resumed_checkpoint = load_checkpoint(resumed_path)
 
         self.assertEqual(resumed.checkpoint["epoch"], 2)

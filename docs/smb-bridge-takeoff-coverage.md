@@ -32,8 +32,8 @@ interpolation toward the shorter hold before it becomes safe. Every route still 
 physics through the required collision landing. Runtime action selection,
 physical geometry, rewards, and completion rules are unchanged.
 
-Demonstration contract version 4 requires refreshing bridge data in old caches.
-The full-volume restart builds its demonstrations afresh.
+Old caches need refreshed bridge data. The full-volume restart builds its
+demonstrations afresh.
 
 Regression checks cover successful 32-frame onset jumps for both tasks at every
 difficulty, preservation of existing execution contracts, and alternatives for a

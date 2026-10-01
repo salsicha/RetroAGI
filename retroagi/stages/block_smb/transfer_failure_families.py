@@ -1,15 +1,14 @@
 """Generated practice for situations exposed by frozen Full SMB evaluation.
 
 These are independently sampled Block layouts, not copies of emulator levels or
-held-out action traces. They keep Block physics and the existing observation
-contract; NES duration calibration remains a separate transfer requirement.
+held-out action traces. Like every family, they run on the NES motion model and
+the shared SMB observation.
 """
 
 TRANSFER_FAILURE_FAMILIES = ("stair_gap", "landing_enemy", "enemy_on_platform", "piranha_avoidance")
 
 TRANSFER_FAILURE_SCHEMAS = {
     "piranha_avoidance": {
-        "family_revision": [4, 4],
         "pipe_height": [22, 36],
         "pipe_width": [32, 52],
         "plant_height": [16, 80],
@@ -20,7 +19,6 @@ TRANSFER_FAILURE_SCHEMAS = {
         "goal": "choose whether to advance or wait for observed retraction, clear the pipe, and finish alive",
     },
     "stair_gap": {
-        "family_revision": [1, 1],
         "step_height": [24, 24],
         "gap_width": [26, 46],
         "takeoff_width": [36, 52],
@@ -28,14 +26,12 @@ TRANSFER_FAILURE_SCHEMAS = {
         "goal": "climb, jump from the top across a gap, descend, and finish",
     },
     "landing_enemy": {
-        "family_revision": [1, 1],
         "spawn_drop": [12, 28],
         "enemy_distance": [54, 90],
         "enemy_speed": [0.2, 0.6],
         "goal": "finish a descent, clear an approaching enemy, and reach the exit",
     },
     "enemy_on_platform": {
-        "family_revision": [1, 1],
         "platform_height": [28, 50],
         "platform_width": [80, 104],
         "enemy_offset": [29, 55],
@@ -48,7 +44,7 @@ TRANSFER_FAILURE_SCHEMAS = {
 def transfer_failure_scenario(family, rng, difficulty):
     """Build the geometry; certify the complete route in the normal sampler."""
     tier = ("easy", "medium", "hard").index(difficulty)
-    params = {"family_revision": 1, "difficulty_bin": difficulty}
+    params = {"difficulty_bin": difficulty}
     if family == "stair_gap":
         takeoff_width = (48, 40, 36)[tier] + rng.randint(0, 4)
         gap = (28, 36, 44)[tier] + rng.randint(-2, 2)
@@ -112,7 +108,6 @@ def transfer_failure_scenario(family, rng, difficulty):
             platform_height=height, platform_width=width, enemy_offset=offset, enemy_speed=speed
         )
     elif family == "piranha_avoidance":
-        params["family_revision"] = 4
         # Hard clearance keeps at least ~5 px of vertical margin over a fully
         # raised plant (a 62-66 px obstacle top against a ~68 px jump left
         # 0-3 of 720 running takeoffs and needed a 3 px pipe-lip landing).

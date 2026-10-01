@@ -14,36 +14,35 @@ full-volume training has been restarted.
 
 | Transfer problem | Implemented change | What this establishes / does not establish |
 | --- | --- | --- |
-| Same tensor shape, different physical meanings | `smb_geometry_v1` defines the same ordered 27 physical features and 8 motion features for both stages. Block feature extraction is shared without changing its order. Full SMB no longer inserts score/lives into those slots. | Structural compatibility is checked before inference. Actual NES dynamics still differ. |
-| Different semantic class IDs | Full SMB's 13 classes are mapped by meaning into Block's 7 classes by summing probabilities. | Fixes categorical meaning; it does not align independently learned ViT token spaces. |
+| Same tensor shape, different physical meanings | One SMB observation (`retroagi/core/smb_scene.py`) for both stages: the same ordered features, computed from each observer's screen-frame scene. Full SMB no longer inserts score/lives into those slots. | Structural compatibility is checked before inference. |
+| Different semantic class IDs | Full SMB's 13 classes are mapped by meaning into Block's 7 classes by summing probabilities. The policy reads a class layout, never an encoder's latent tokens. | Fixes categorical meaning; independently learned ViT token spaces never reach the policy. |
 | Missing local skill instruction | Current visible geometry supplies the same local objective and goal encoding. Airborne targets remain in world coordinates as the camera scrolls. | Reuses the source local skill interface; this is not a full-game route planner. |
-| Different action execution | Checkpoints carry fixed/adaptive duration mode, walking commitments, steady primitives, frame units, run button, recurrent-state policy, critic settings, and engine-support policy. Shared train/eval/play/direct selection use those settings; the extra Full SMB jump bias is removed for this contract. | Corrects execution mismatches. Legacy checkpoints retain their legacy behavior. |
+| Different action execution | Checkpoints carry fixed/adaptive duration mode, walking commitments, steady primitives, frame units, run button, recurrent-state policy, critic settings, and engine-support policy. Shared train/eval/play/direct selection use those settings; the extra Full SMB jump bias is removed for this contract. | Corrects execution mismatches. Checkpoints that predate the shared observation are refused. |
 | Incorrect training credit | Sample the action once, execute the same primitive, and suppress repeated actor credit during commitments or engine overrides. Auxiliary dynamics slots use the shared physical layout and actual terminal slots. | Fixes the identified action/feature credit mismatches; it is not evidence of stable long-horizon reinforcement learning. |
-| Jump-duration units and physics | Measure both engines, then store an explicit 16-bin mapping to actual emulator frames in a new checkpoint. | Matches stationary jump apex approximately. Horizontal travel, momentum, and flight time remain different and require adaptation. |
-| Privileged simulator observations | Read current NES collision buffers, live object boxes and engine support. Compute motion in world coordinates. Declare unavailable patrol/platform reversal bounds and absent simulator mechanics. | This is an explicit RAM-assisted agent, not a pixels-only agent. No future emulator rollouts are used by inference. |
+| Jump-duration units and physics | Block SMB moves Mario with the NES motion model; jump bins are NES frames in both games. | Physics parity covers ground and jump motion; water, climbing, power states and some platform contacts remain outside it. |
+| Privileged simulator observations | Read current NES collision buffers, live object boxes and engine support. Compute motion in world coordinates. Patrol and lift travel limits are observable in neither game and are not policy inputs. | This is an explicit RAM-assisted agent, not a pixels-only agent. No future emulator rollouts are used by inference. |
 | Incorrect geometry | Merge solid tile bodies vertically as well as horizontally; use the live collision-box control instead of sprite artwork. Handle observed moving-platform motion and stomp recovery. | Fixes observed pipe/body, camera, and bounce errors. Moving platforms and later-game hazards are not broadly qualified. |
 | Misleading episode endings | Detect individual death and castle-entry completion from the engine; the backend's default `done` waits for game-over. | A death cannot silently continue into a retry. Reaching the flag base alone is no longer called level completion. |
 | Saved-state inconsistencies | Restore observer history with snapshots, discard incompatible frame shapes, repair the opening enemy and pipe fixture recipes, and reject recipes that die before finishing. | Makes the repaired diagnostic starts usable. Other old scripted fixtures are not certified routes and can now fail generation instead of silently saving a dead/respawned scene. |
 | Evaluation bypasses | Shared-runtime comparison loads the contract, uses the common forward path, clears old commitments, and rejects comparisons between incompatible contracts. | Comparison remains a logit diagnostic on an externally driven stream, not a completion test. |
 | Incompatible legacy warm-start | Reject the old scripted warm-start for shared checkpoints; provide actual-emulator demonstration adaptation with goals, valid duration sets, and decision masks. | Prevents silently training against the old feature and duration meanings. Use `imitation_warm_start=False` for subsequent online training. |
 
-Native Full SMB visual features remain in the adaptation observations. The bounded
-experiment updated only the numeric action and duration heads, preserving the
-transferred hierarchy and source checkpoint. The `native_adapted` tag records
-that training exposure; it does **not** certify visual alignment or successful
-transfer. The zero-token ablation also failed, so zeroing features is not a
-supported shortcut.
+The bounded emulator adaptation updates only the numeric action and duration
+heads, preserving the transferred hierarchy and source checkpoint; it does
+**not** certify successful transfer.
 
-NES has no simulator coyote-time or jump-buffer mechanic, so those features are
-zero. Patrol/platform reversal bounds are not inferred from one position: their
-neutral encoding is accompanied by explicit availability diagnostics. The current
-model does not consume a separate learned availability mask; training with these
-missing features is an adaptation attempt, not proof that the mismatch is solved.
-Object IDs outside the implemented geometry scope are reported in probe traces.
+The policy observes only what both games supply (see
+[block-smb-family-only-training.md](block-smb-family-only-training.md)): there are
+no coyote-time, jump-buffer, episode-clock, patrol-limit or lift-travel features,
+and the goal slots hold the visible local objective in both games. Availability
+slots mark quantities an observer could not measure on a frame. Object IDs outside
+the implemented geometry scope are reported in probe traces.
 
-## Measured physics
+## Measured physics (before Block SMB adopted NES physics)
 
-The learned Block duration bins 1–16 map to these NES button-hold frames:
+These measurements motivated moving Block SMB onto the NES motion model. Under
+the earlier Block physics, the learned duration bins 1–16 mapped to these NES
+button-hold frames:
 
 ```text
 1, 2, 4, 6, 8, 10, 12, 15, 17, 19, 22, 24, 26, 28, 28, 28
@@ -79,7 +78,7 @@ flag-base completion criterion; they are not official policy completion results.
 
 The 1,000-update fit had mean loss 1.693; the 5,000-update fit on the same data had
 mean loss 1.019. Earlier 1,000-update policy probes also finished 0/3. The runs use
-different start timings and some earlier runtime revisions, so they do not support
+different start timings and some earlier runtime code, so they do not support
 a controlled claim that the longer fit improves or regresses the policy. They do
 establish that lower demonstration loss has not produced reliable play.
 
@@ -103,7 +102,7 @@ results. No adapted checkpoint is promoted by this change.
 
 Run from the repository root using the project Python environment and existing
 local emulator/vision assets. Use fresh output paths; scripts refuse to overwrite
-adaptation/calibration checkpoints. The source gate remains enabled.
+adaptation checkpoints. The source gate remains enabled.
 
 ```bash
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
@@ -112,13 +111,11 @@ export MKL_NUM_THREADS=1
 python -m retroagi.stages.full_smb.transfer \
   --block-policy-checkpoint /path/to/qualified-block-policy.pth \
   --output-checkpoint /path/to/transferred.pth --device cuda
-python -m scripts.full_smb_calibrate_physics \
-  --checkpoint /path/to/transferred.pth --output /path/to/calibrated.pth
 python -m scripts.full_smb_transfer_probe \
-  --checkpoint /path/to/calibrated.pth --output /path/to/frozen-probe \
+  --checkpoint /path/to/transferred.pth --output /path/to/frozen-probe \
   --episodes 3 --steps 2400
 python -m scripts.full_smb_adapt_geometry \
-  --checkpoint /path/to/calibrated.pth --output /path/to/adaptation \
+  --checkpoint /path/to/transferred.pth --output /path/to/adaptation \
   --episodes 3 --steps 1800 --updates 1000
 python -m scripts.full_smb_transfer_probe \
   --checkpoint /path/to/adaptation/policy.pth --output /path/to/held-out-probe \

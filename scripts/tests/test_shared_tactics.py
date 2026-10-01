@@ -46,8 +46,6 @@ def sample(family, difficulty="medium"):
 
 def config():
     return tiny_config(
-        motion_observations=True,
-        hazard_observations=True,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
     )
@@ -123,7 +121,8 @@ def test_blocked_pipe_requests_retreat_only_when_fallback_is_supported():
             env.reset(
                 scenario=dict(
                     world_width=256,
-                    mario=[66, 204],
+                    # Mario (10 px wide) stands against the pipe's side.
+                    mario=[70, 204],
                     platforms=[[floor_left, 220, 256 - floor_left, 20], [80, 130, 32, 90]],
                     goal=[230, 204, 16, 16],
                 )
@@ -230,7 +229,7 @@ def test_bad_bridge_departures_produce_successful_tactical_recoveries(family):
 
 @pytest.mark.parametrize("family", ["wait_timing", "enemy_stomp"])
 def test_online_losses_train_tactics_and_skill_for_added_families(family):
-    from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
+    from retroagi.stages.block_smb.adapter import BlockSMBStage
     from retroagi.stages.block_smb.train import collect_trajectory, compute_block_smb_losses
 
     torch.manual_seed(5)
@@ -239,9 +238,6 @@ def test_online_losses_train_tactics_and_skill_for_added_families(family):
     stage = BlockSMBStage(
         scenario=case.scenario,
         vision=StaticBlockVision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=True, hazard_observations=True
-        ),
     )
     try:
         trajectory = collect_trajectory(
@@ -292,8 +288,6 @@ def test_evaluation_separates_family_tactics_from_piranha(monkeypatch):
         for family in ("wait_timing", "enemy_stomp")
     ]
     sample_set = BlockSMBMonteCarloSampleSet(
-        schema_version=cases[0].schema_version,
-        distribution_id=cases[0].distribution_id,
         split="validation",
         seed=0,
         samples=tuple(cases),

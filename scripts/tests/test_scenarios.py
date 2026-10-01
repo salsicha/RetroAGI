@@ -202,14 +202,16 @@ class TestMarioScenarios(unittest.TestCase):
             expected_enemies=6,
         )
         overhead_platform = self.env.platforms[1]["rect"]
-        enemy_positions = [
-            (enemy["x"], enemy["y"]) for enemy in self.env.enemies if not enemy["dead"]
+        enemy_feet = [
+            enemy["y"] + enemy["h"] + enemy.get("foot_offset", 0)
+            for enemy in self.env.enemies
+            if not enemy["dead"]
         ]
 
         self.assertLess(overhead_platform.top, self.env.mario["y"])
-        self.assertGreaterEqual(len(enemy_positions), 6)
-        for _, enemy_y in enemy_positions:
-            self.assertLessEqual(enemy_y + 14, overhead_platform.top + 1)
+        self.assertGreaterEqual(len(enemy_feet), 6)
+        for feet in enemy_feet:
+            self.assertLessEqual(feet, overhead_platform.top + 1)
 
     def test_level_15_wait_long_bridge(self):
         self._test_scenario(

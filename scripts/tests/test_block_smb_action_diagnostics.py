@@ -66,13 +66,15 @@ class StaticBlockSMBPolicy(torch.nn.Module):
 
 class TestBlockSMBActionDiagnostics(unittest.TestCase):
     def test_probe_reports_logits_margins_motion_and_critic_norm(self):
+        # NES Mario builds run speed for ~40 frames before the geometry
+        # teacher's level_2_gap jump, so the probe window must reach it.
         result = run_block_smb_action_probe(
             StaticBlockSMBPolicy(),
             device=torch.device("cpu"),
             vision_factory=static_vision_factory,
             scenarios=("level_2_gap.json", "level_3_stairs.json"),
             seed=5,
-            max_steps=16,
+            max_steps=48,
             points_per_scenario=1,
         )
 

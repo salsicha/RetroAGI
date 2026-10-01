@@ -47,6 +47,7 @@ class StaticVisionEncoder:
             semantic_logits=logits,
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.linspace(-1, 1, 240 * self.spec.token_dim).view(1, 240, -1),
+            support_logits=torch.tensor([[-4.0, 4.0, -4.0]]),
             metadata={"source": "static"},
         )
 

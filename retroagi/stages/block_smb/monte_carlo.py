@@ -11,6 +11,8 @@ from typing import Any, Iterable, Mapping, Optional
 
 import pygame
 
+from retroagi.core.smb_physics import NES_JUMP_FRAMES
+
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
 from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES, hierarchy_scenario
@@ -20,8 +22,8 @@ from .transfer_failure_families import (
     transfer_failure_scenario,
 )
 
-BLOCK_SMB_MC_SCHEMA_VERSION = "block_smb_monte_carlo.v1"
-DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID = "block_smb_mc_v1"
+# Names the generated layouts in scenario ids and replay seeds.
+BLOCK_SMB_MC_ID = "block_smb_monte_carlo"
 BLOCK_SMB_MC_SPLITS = ("train", "validation", "test", "stress")
 BLOCK_SMB_MC_DIFFICULTY_BINS = ("easy", "medium", "hard")
 BLOCK_SMB_MC_FAMILIES = (
@@ -59,18 +61,12 @@ DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 class BlockSMBScenarioFamilySpec:
     """Schema entry describing one parameterized Block SMB family."""
 
-    schema_version: str
-    distribution_id: str
     family: str
     parameter_schema: Mapping[str, Any]
     constraints: Mapping[str, Any]
     oracle: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        if self.schema_version != BLOCK_SMB_MC_SCHEMA_VERSION:
-            raise ValueError("unsupported Block SMB Monte Carlo schema_version")
-        if not self.distribution_id:
-            raise ValueError("distribution_id must be non-empty")
         if self.family not in BLOCK_SMB_MC_FAMILIES:
             raise ValueError(f"unknown Block SMB Monte Carlo family {self.family!r}")
         if not isinstance(self.parameter_schema, Mapping):
@@ -88,8 +84,6 @@ class BlockSMBScenarioFamilySpec:
 class BlockSMBScenarioSample:
     """One deterministic sampled scenario plus replay metadata."""
 
-    schema_version: str
-    distribution_id: str
     family: str
     split: str
     seed: int
@@ -103,8 +97,6 @@ class BlockSMBScenarioSample:
     scenario: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        if self.schema_version != BLOCK_SMB_MC_SCHEMA_VERSION:
-            raise ValueError("unsupported Block SMB Monte Carlo schema_version")
         if self.family not in BLOCK_SMB_MC_FAMILIES:
             raise ValueError(f"unknown Block SMB Monte Carlo family {self.family!r}")
         if self.split not in BLOCK_SMB_MC_SPLITS:
@@ -120,8 +112,6 @@ class BlockSMBScenarioSample:
 
     def metadata(self) -> dict[str, Any]:
         return {
-            "schema_version": self.schema_version,
-            "distribution_id": self.distribution_id,
             "family": self.family,
             "split": self.split,
             "seed": self.seed,
@@ -142,16 +132,12 @@ class BlockSMBScenarioSample:
 class BlockSMBMonteCarloSampleSet:
     """A deterministic split manifest and its sampled scenarios."""
 
-    schema_version: str
-    distribution_id: str
     split: str
     seed: int
     samples: tuple[BlockSMBScenarioSample, ...] = field(default_factory=tuple)
     rejected_counts: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.schema_version != BLOCK_SMB_MC_SCHEMA_VERSION:
-            raise ValueError("unsupported Block SMB Monte Carlo schema_version")
         if self.split not in BLOCK_SMB_MC_SPLITS:
             raise ValueError(f"split must be one of {BLOCK_SMB_MC_SPLITS}")
         if any(sample.split != self.split for sample in self.samples):
@@ -171,8 +157,6 @@ class BlockSMBMonteCarloSampleSet:
             sample.to_dict() if include_scenarios else sample.metadata() for sample in self.samples
         ]
         return {
-            "schema_version": self.schema_version,
-            "distribution_id": self.distribution_id,
             "split": self.split,
             "seed": self.seed,
             "sample_count": self.sample_count,
@@ -184,13 +168,9 @@ class BlockSMBMonteCarloSampleSet:
         }
 
 
-def block_smb_monte_carlo_family_specs(
-    distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
-) -> dict[str, BlockSMBScenarioFamilySpec]:
-    """Return the supported family schema for a distribution version."""
+def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec]:
+    """Return the supported family schema."""
 
-    if distribution_id != DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID:
-        raise ValueError(f"unsupported Block SMB Monte Carlo distribution {distribution_id!r}")
     base_constraints = {
         "spawn_safe": True,
         "minimum_landing_width": 40,
@@ -245,7 +225,6 @@ def block_smb_monte_carlo_family_specs(
             "spawn_x": [16, 40],
             "enemy_distance": [52, 164],
             "enemy_speed": [0.0, 0.6],
-            "family_revision": [2, 2],
             "goal": "stomp the enemy, recover, then reach the finish",
         },
         "retreat_recovery": {
@@ -313,7 +292,6 @@ def block_smb_monte_carlo_family_specs(
             "enemy_speed": [0.0, 0.9],
             "enemy_initial_direction": [-1, 1],
             "frames_to_first_turn": [0, 12],
-            "family_revision": [2, 2],
             "patrol_halfwidth": [0, 14],
             "goal": "land on the enemy itself; the goal rides the patrolling target",
             "a_level_action": [2, 2],
@@ -324,7 +302,6 @@ def block_smb_monte_carlo_family_specs(
             "enemy_speed": [0.0, 0.7],
             "enemy_initial_direction": [-1, 1],
             "patrol_halfwidth": [0, 12],
-            "family_revision": [1, 1],
             "goal": (
                 "the episode starts beside the monster a missed stomp left "
                 "behind; recover by re-approaching (usually turning around), "
@@ -342,43 +319,37 @@ def block_smb_monte_carlo_family_specs(
             "initial_phase_frames": [12, 60],
             "platform_speed": [1.6, 2.4],
             "gap_width": [200, 200],
-            "family_revision": [2, 2],
             "goal": "wait, board the bridge, and reach the far shore and finish",
             "a_level_action": [0, 0],
         },
     }
     schemas.update(
         {
-            "single_gap": {"gap_x": [94, 108], "gap_width": [38, 57], "family_revision": [2, 2]},
+            "single_gap": {"gap_x": [94, 108], "gap_width": [38, 57]},
             "stair_climb": {
                 "step_count": [3, 3],
                 "step_width": [36, 42],
                 "step_height": [26, 35],
-                "family_revision": [2, 2],
             },
             "platform_chain": {
                 "platform_count": [4, 4],
                 "gap_spacing": [22, 38],
                 "platform_tops": [116, 220],
-                "family_revision": [2, 2],
             },
-            "enemy_hop": {"enemy_x": [94, 130], "enemy_count": [1, 1], "family_revision": [2, 2]},
+            "enemy_hop": {"enemy_x": [94, 130], "enemy_count": [1, 1]},
             "enemy_patrol": {
                 "enemy_count": [2, 2],
                 "patrol_offset": [-8, 8],
                 "initial_direction": [-1, 1],
                 "enemy_speed": [0.45, 0.75],
-                "family_revision": [2, 2],
             },
             "enemy_gap": {
                 "gap_width": [44, 51],
                 "enemy_gap_offset": [22, 42],
-                "family_revision": [2, 2],
             },
             "retreat_recovery": {
                 "start_x": [188, 208],
                 "goal_x": [35, 35],
-                "family_revision": [2, 2],
             },
         }
     )
@@ -390,7 +361,6 @@ def block_smb_monte_carlo_family_specs(
             required_jump=True,
             single_jump=True,
             a_level_action=[0, 0],
-            family_revision=[2, 2],
             goal=(
                 "stable moving-platform landing"
                 if family == "bridge_mount"
@@ -400,15 +370,6 @@ def block_smb_monte_carlo_family_specs(
     for family in ("wait_timing", "moving_bridge"):
         schemas[family] = {k: v for k, v in schemas["bridge_wait"].items() if k != "a_level_action"}
     schemas["moving_bridge"]["spawn_x"] = [20, 60]
-    for family in (
-        "chained_obstacles",
-        "chained_enemy_gauntlet",
-        "full_smb_opening_proxy",
-        "mixed_section",
-        "pipe_mount",
-        "pit_leap",
-    ):
-        schemas[family]["family_revision"] = [2, 2]
     schemas["chained_obstacles"].update(
         section_count=[4, 4], world_width=[512, 512], enemy_count=[2, 2], pipe_height=[32, 60]
     )
@@ -421,7 +382,6 @@ def block_smb_monte_carlo_family_specs(
     schemas["mixed_section"]["composition"] = ["enemy_gap_pipe", "enemy_two_pipes"]
     for family in ("bridge_wait", "moving_bridge", "wait_timing"):
         schemas[family].update(
-            family_revision=[3, 3],
             platform_speed=[0.5, 2.4],
             platform_width=[48, 100],
             gap_width=[95, 200],
@@ -429,7 +389,6 @@ def block_smb_monte_carlo_family_specs(
             initial_phase_frames=[0, 240],
         )
     schemas["retreat_recovery"].update(
-        family_revision=[3, 3],
         variant=["flat", "gap", "mount"],
         gap_width=[36, 56],
         mount_rise=[28, 52],
@@ -437,14 +396,11 @@ def block_smb_monte_carlo_family_specs(
     )
     for family in HIERARCHY_FAMILIES:
         schemas[family] = {
-            "family_revision": [1, 1],
             "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
             "prerequisites": list(FAMILY_PREREQUISITES[family]),
         }
     return {
         family: BlockSMBScenarioFamilySpec(
-            schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
-            distribution_id=distribution_id,
             family=family,
             parameter_schema=schema,
             constraints={
@@ -479,7 +435,6 @@ def block_smb_monte_carlo_family_specs(
 
 
 def stable_block_smb_monte_carlo_seed(
-    distribution_id: str,
     split: str,
     seed: int,
     sample_index: int,
@@ -490,25 +445,23 @@ def stable_block_smb_monte_carlo_seed(
 
     if split not in BLOCK_SMB_MC_SPLITS:
         raise ValueError(f"split must be one of {BLOCK_SMB_MC_SPLITS}")
-    key = f"{distribution_id}|{split}|{int(seed)}|{int(sample_index)}|{int(attempt)}"
+    key = f"{BLOCK_SMB_MC_ID}|{split}|{int(seed)}|{int(sample_index)}|{int(attempt)}"
     digest = hashlib.sha256(key.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
 def sample_block_smb_monte_carlo_scenario(
     *,
-    distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     split: str,
     seed: int,
     sample_index: int,
     family: Optional[str] = None,
     difficulty: Optional[str] = None,
     family_weights: Optional[Mapping[str, float]] = None,
-    validate_reachability: bool = True,
     max_rejections: int = 32,
     rejection_counter: Optional[Counter[str]] = None,
 ) -> BlockSMBScenarioSample:
-    """Sample one replayable scenario from the versioned distribution.
+    """Sample one replayable layout whose route completes it.
 
     When ``rejection_counter`` is provided, every rejected attempt (including
     attempts preceding an eventual success) is tallied into it by reason.
@@ -522,12 +475,11 @@ def sample_block_smb_monte_carlo_scenario(
         raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
     if max_rejections < 0:
         raise ValueError("max_rejections must be non-negative")
-    specs = block_smb_monte_carlo_family_specs(distribution_id)
+    specs = block_smb_monte_carlo_family_specs()
     rejected: Counter[str] = Counter()
     rejected_fingerprints: set[str] = set()
     for attempt in range(max_rejections + 1):
         sample_seed = stable_block_smb_monte_carlo_seed(
-            distribution_id,
             split,
             seed,
             sample_index,
@@ -550,32 +502,20 @@ def sample_block_smb_monte_carlo_scenario(
             rejected["duplicate_regeneration"] += 1
             break
         constraints = specs[selected_family].constraints
-        scenario_id = _scenario_id(
-            distribution_id,
-            split,
-            seed,
-            sample_index,
-            selected_family,
-        )
-        reachability = (
-            validate_block_smb_monte_carlo_oracle(
-                scenario,
-                actions,
-                max_steps=DEFAULT_BLOCK_SMB_MC_MAX_STEPS,
-            )
-            if validate_reachability
-            else {"reachable": True, "validation_skipped": True}
-        )
+        scenario_id = _scenario_id(split, seed, sample_index, selected_family)
+        route, action_source, reachability = _verified_route(selected_family, scenario, actions)
+        if route is None:
+            reachability = {"reachable": False, "rejection_reason": action_source}
+        else:
+            actions = route
         oracle = {
             "kind": "scripted_action_sequence",
             "actions": list(actions[:DEFAULT_BLOCK_SMB_MC_MAX_STEPS]),
-            "action_source": f"{distribution_id}:{selected_family}:oracle_v{parameters.get('family_revision', 1)}",
+            "action_source": f"{selected_family}:{action_source}",
             "expected_completion_steps": reachability.get("completion_steps"),
             "expected_min_progress": reachability.get("max_progress"),
         }
         sample = BlockSMBScenarioSample(
-            schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
-            distribution_id=distribution_id,
             family=selected_family,
             split=split,
             seed=int(seed),
@@ -588,8 +528,6 @@ def sample_block_smb_monte_carlo_scenario(
             reachability=reachability,
             scenario=_with_sample_metadata(
                 scenario,
-                schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
-                distribution_id=distribution_id,
                 family=selected_family,
                 split=split,
                 seed=seed,
@@ -613,18 +551,16 @@ def sample_block_smb_monte_carlo_scenario(
     reasons = ", ".join(f"{key}={value}" for key, value in sorted(rejected.items()))
     raise ValueError(
         "failed to sample a reachable Block SMB Monte Carlo scenario "
-        f"for {distribution_id}/{split}/{seed}/{sample_index}; rejected {reasons}"
+        f"for {split}/{seed}/{sample_index}; rejected {reasons}"
     )
 
 
 def sample_block_smb_monte_carlo_split(
     *,
-    distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     split: str,
     seed: int,
     sample_count: int,
     family_weights: Optional[Mapping[str, float]] = None,
-    validate_reachability: bool = True,
     max_rejections: int = 32,
 ) -> BlockSMBMonteCarloSampleSet:
     """Sample a deterministic split manifest."""
@@ -635,19 +571,15 @@ def sample_block_smb_monte_carlo_split(
     rejected_counts: Counter[str] = Counter()
     for sample_index in range(sample_count):
         sample = sample_block_smb_monte_carlo_scenario(
-            distribution_id=distribution_id,
             split=split,
             seed=seed,
             sample_index=sample_index,
             family_weights=family_weights,
-            validate_reachability=validate_reachability,
             max_rejections=max_rejections,
             rejection_counter=rejected_counts,
         )
         samples.append(sample)
     return BlockSMBMonteCarloSampleSet(
-        schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
-        distribution_id=distribution_id,
         split=split,
         seed=int(seed),
         samples=tuple(samples),
@@ -657,12 +589,10 @@ def sample_block_smb_monte_carlo_split(
 
 def sample_block_smb_monte_carlo_parameter_sweep(
     *,
-    distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     split: str,
     seed: int,
     repeats_per_difficulty: int = 1,
     families: Optional[Iterable[str]] = None,
-    validate_reachability: bool = True,
     max_rejections: int = 32,
     executor: Any = None,
 ) -> BlockSMBMonteCarloSampleSet:
@@ -676,7 +606,7 @@ def sample_block_smb_monte_carlo_parameter_sweep(
         raise ValueError(f"split must be one of {BLOCK_SMB_MC_SPLITS}")
     if repeats_per_difficulty <= 0:
         raise ValueError("repeats_per_difficulty must be positive")
-    specs = block_smb_monte_carlo_family_specs(distribution_id)
+    specs = block_smb_monte_carlo_family_specs()
     selected_families = tuple(str(family) for family in (families or BLOCK_SMB_MC_FAMILIES))
     if not selected_families:
         raise ValueError("families must be non-empty")
@@ -686,16 +616,7 @@ def sample_block_smb_monte_carlo_parameter_sweep(
         raise ValueError(f"unknown Block SMB Monte Carlo family {unknown!r}; expected {choices}")
 
     specs = [
-        (
-            distribution_id,
-            split,
-            seed,
-            family,
-            difficulty,
-            repeat,
-            validate_reachability,
-            max_rejections,
-        )
+        (split, seed, family, difficulty, repeat, max_rejections)
         for family in selected_families
         for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS
         for repeat in range(int(repeats_per_difficulty))
@@ -712,8 +633,6 @@ def sample_block_smb_monte_carlo_parameter_sweep(
         samples.append(sample)
         rejected_counts.update(rejected)
     return BlockSMBMonteCarloSampleSet(
-        schema_version=BLOCK_SMB_MC_SCHEMA_VERSION,
-        distribution_id=distribution_id,
         split=split,
         seed=int(seed),
         samples=tuple(samples),
@@ -722,26 +641,14 @@ def sample_block_smb_monte_carlo_parameter_sweep(
 
 
 def _sweep_sample(spec):
-    (
-        sample_index,
-        distribution_id,
-        split,
-        seed,
-        family,
-        difficulty,
-        repeat,
-        validate_reachability,
-        max_rejections,
-    ) = spec
+    sample_index, split, seed, family, difficulty, repeat, max_rejections = spec
     rejected: Counter[str] = Counter()
     candidate = sample_block_smb_monte_carlo_scenario(
-        distribution_id=distribution_id,
         split=split,
         seed=seed,
         sample_index=sample_index,
         family=family,
         difficulty=difficulty,
-        validate_reachability=validate_reachability,
         max_rejections=max_rejections,
         rejection_counter=rejected,
     )
@@ -968,14 +875,8 @@ def block_smb_transfer_gate_metrics_from_evaluation(
     }
 
 
-def _scenario_id(
-    distribution_id: str,
-    split: str,
-    seed: int,
-    sample_index: int,
-    family: str,
-) -> str:
-    return f"{distribution_id}.{split}.{int(seed)}.{int(sample_index):06d}.{family}"
+def _scenario_id(split: str, seed: int, sample_index: int, family: str) -> str:
+    return f"{BLOCK_SMB_MC_ID}.{split}.{int(seed)}.{int(sample_index):06d}.{family}"
 
 
 def _select_family(
@@ -1026,13 +927,11 @@ def _with_sweep_metadata(
     constraints = {**dict(sample.constraints), "parameter_sweep": True}
     oracle = {
         **dict(sample.oracle),
-        "action_source": f"{sample.distribution_id}:{sample.family}:sweep_oracle_v1",
+        "action_source": f"{sample.family}:sweep_oracle",
     }
     reachability = dict(sample.reachability)
     scenario = _with_sample_metadata(
         sample.scenario,
-        schema_version=sample.schema_version,
-        distribution_id=sample.distribution_id,
         family=sample.family,
         split=sample.split,
         seed=sample.seed,
@@ -1045,8 +944,6 @@ def _with_sweep_metadata(
         reachability=reachability,
     )
     return BlockSMBScenarioSample(
-        schema_version=sample.schema_version,
-        distribution_id=sample.distribution_id,
         family=sample.family,
         split=sample.split,
         seed=sample.seed,
@@ -1103,23 +1000,81 @@ def _oracle_rejection_reason(
 
 
 def _generate_family_scenario(family, rng, *, split, difficulty=None):
-    from .local_traversal import LOCAL_TRAVERSAL_FAMILIES, normalize_oracle_jumps, terrain_oracle
+    from .local_traversal import LOCAL_TRAVERSAL_FAMILIES, normalize_oracle_jumps
 
     scenario, params, actions = _generate_family_scenario_raw(
         family, rng, split=split, difficulty=difficulty
     )
     if family in LOCAL_TRAVERSAL_FAMILIES:
-        params.setdefault("family_revision", 2)
         scenario.setdefault("reward_goal_distance_shaping", 2.0)
         scenario.setdefault("goal_requires_support", True)
-        if family not in ("pipe_mount", "pit_leap", "retreat_recovery"):
-            actions = _pad(normalize_oracle_jumps(scenario, actions))
-            # Preserve a cheap verified script when it works; repair timing
-            # against the actual varied layout instead of rejecting its geometry.
-            if not validate_block_smb_monte_carlo_oracle(scenario, actions)["reachable"]:
-                actions = _pad(terrain_oracle(scenario))
-                params["oracle_calibrated"] = True
+    _finish_layout(family, scenario, params)
+    if family in LOCAL_TRAVERSAL_FAMILIES and family not in (
+        "pipe_mount",
+        "pit_leap",
+        "retreat_recovery",
+    ):
+        actions = _pad(normalize_oracle_jumps(scenario, actions))
     return scenario, params, actions
+
+
+def _finish_layout(family, scenario, params):
+    """Fit an authored layout to the NES player and its task.
+
+    Generators place Mario's spawn for a 16-pixel-tall body; the NES small
+    body is 12 tall, so its feet stay where they were authored.
+    """
+    scenario["mario"][1] += 4
+    if family == "enemy_stomp":
+        # Patrol limits are not observable. Short, invisible limits made
+        # identical observed motion require incompatible jump holds; use the
+        # visible floor span, so no turnaround happens mid-approach.
+        for enemy in scenario["enemies"]:
+            enemy[2], enemy[3] = 0, scenario["world_width"]
+        params.update(patrol_halfwidth=None, enemy_motion="floor_span")
+    if family in ("pit_leap", "platform_hop"):
+        # The duration-isolation task begins at a real running takeoff: the
+        # NES caps a jump initiated from rest at walking horizontal speed.
+        scenario["mario_velocity"] = [2.5, 0.0]
+    if family in ("enemy_stomp", "stomp_mount"):
+        scenario["task_objective"] = "stomp"
+    if family == "retreat_recovery":
+        scenario["task_direction"] = -1
+
+
+def _verified_route(family, scenario, authored_actions):
+    """The first route that completes the layout: (actions, source, reachability).
+
+    Tries the authored route, then a local terrain search, then (for moving
+    bridges) a bridge search. Returns (None, reason, None) when none completes.
+    """
+    from .local_traversal import terrain_oracle
+
+    max_steps = DEFAULT_BLOCK_SMB_MC_MAX_STEPS
+
+    def reachable(actions):
+        return validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=max_steps)
+
+    candidates = [list(authored_actions)]
+    if family == "platform_hop":
+        # This family isolates duration selection at the initial state.
+        # Never accept a fallback route that silently adds a run-up.
+        routes = [[2] * hold + [1] * (max_steps - hold) for hold in NES_JUMP_FRAMES]
+        routes = [route for route in routes if reachable(route)["reachable"]]
+        if not routes:
+            return None, "no_immediate_jump", None
+        candidates = [routes[len(routes) // 2]]
+    for source in ("authored", "local_search", "bridge_search"):
+        if source == "local_search":
+            candidates.append(terrain_oracle(scenario, max_steps=max_steps))
+        elif source == "bridge_search":
+            if family not in ("bridge_wait", "moving_bridge", "wait_timing"):
+                continue
+            candidates.append(bridge_oracle(scenario, max_steps=max_steps)[0])
+        result = reachable(candidates[-1])
+        if result["reachable"]:
+            return candidates[-1], source, result
+    return None, "no_verified_route", None
 
 
 def _generate_family_scenario_raw(
@@ -1455,27 +1410,10 @@ def _enemy_stomp(
         "require_stomp_before_goal": True,
         "reward_goal_distance_shaping": 2.0,
     }
-    # Search approach and hold in actual physics. Reaching the finish alone
-    # cannot validate a demonstration because the engine requires the stomp.
-    preferred_walk = max(0, round((distance - 70) / 3))
-    walks = sorted(
-        range(max(0, preferred_walk - 12), preferred_walk + 13),
-        key=lambda n: (abs(n - preferred_walk), n),
-    )
-    actions = _pad([1] * preferred_walk + [2] * 12 + [1])
-    oracle_walk, oracle_hold = preferred_walk, 12
-    found = False
-    for walk in walks:
-        for hold in sorted(range(1, 17), key=lambda n: (abs(n - 12), n)):
-            candidate = _pad([1] * walk + [2] * hold + [1])
-            if validate_block_smb_monte_carlo_oracle(scenario, candidate, max_steps=160)[
-                "reachable"
-            ]:
-                actions, oracle_walk, oracle_hold = candidate, walk, hold
-                found = True
-                break
-        if found:
-            break
+    # A walk-then-jump guess; the sampler verifies it in the finished layout
+    # and otherwise takes the local search's route. The engine requires the
+    # stomp, so reaching the finish alone never verifies a route.
+    actions = _pad([1] * max(0, round((distance - 70) / 3)) + [2] * 12 + [1])
     return (
         scenario,
         {
@@ -1485,9 +1423,6 @@ def _enemy_stomp(
             "enemy_speed": speed,
             "enemy_initial_direction": direction,
             "patrol_halfwidth": patrol,
-            "family_revision": 2,
-            "oracle_approach_frames": oracle_walk,
-            "oracle_hold_frames": oracle_hold,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -1524,7 +1459,6 @@ def _retreat_recovery(
     return (
         scenario,
         {
-            "family_revision": 3,
             "variant": variant,
             "start_x": start_x,
             "goal_x": scenario["goal"][0],
@@ -1544,6 +1478,19 @@ def _wait_timing(
     return scenario, params, actions
 
 
+def _opening_wait(scenario: Mapping[str, Any]) -> Optional[int]:
+    """Frames Mario must stand on the shore before walking boards the bridge."""
+    from .bridge_traversal import bridge_safe_wait_frames
+
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        waits = bridge_safe_wait_frames(env, horizon=96)
+        return waits[0] if waits else None
+    finally:
+        env.close()
+
+
 def _bridge_wait(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
@@ -1552,16 +1499,15 @@ def _bridge_wait(
         "medium": (30, 42, 1.8, 2.2),
         "hard": (48, 60, 1.6, 2.0),
     }[difficulty]
-    phase_frames = rng.randint(low, high)
+    target_wait = rng.randint(low, high)
     speed = round(rng.uniform(min_speed, max_speed), 3)
-    initial_x = round(75 + phase_frames * speed)
     scenario = {
         "world_width": 380,
         "mario": [60, 204],
         "platforms": [
             [0, 220, 85, 20],
             {
-                "x": initial_x,
+                "x": 245,
                 "y": 220,
                 "w": 100,
                 "h": 20,
@@ -1577,15 +1523,26 @@ def _bridge_wait(
         "reward_goal_distance_shaping": 2.0,
     }
     variant = "wide"
+    travel_high = 245
     if rng.random() < 0.4:
         variant = "narrow"
         width = rng.randint(48, 60)
         right_start = rng.randint(180, 216)
         speed = round(rng.uniform(0.5, 1.1), 3)
-        high = right_start - width + 10
-        initial_x = rng.randint(high - 12, high)
-        scenario["platforms"][1].update(x=initial_x, w=width, moving=[75, high, speed])
+        travel_high = right_start - width + 10
+        scenario["platforms"][1].update(w=width, moving=[75, travel_high, speed])
         scenario["platforms"][2] = [right_start, 220, 380 - right_start, 20]
+    # Place the approaching bridge where Mario's opening wait under NES
+    # walking is nearest the sampled wait for this difficulty.
+    best = None
+    for direction in (-1, 1):
+        for x in range(75, travel_high + 1, 3):
+            scenario["platforms"][1].update(x=x, direction=direction)
+            wait = _opening_wait(scenario)
+            if wait is not None and (best is None or abs(wait - target_wait) < best[0]):
+                best = (abs(wait - target_wait), x, direction)
+    _, initial_x, direction = best if best else (0, travel_high, -1)
+    scenario["platforms"][1].update(x=initial_x, direction=direction)
     actions, wait = bridge_oracle(scenario)
     return (
         scenario,
@@ -1597,7 +1554,6 @@ def _bridge_wait(
             "gap_width": scenario["platforms"][2][0] - 85,
             "platform_width": scenario["platforms"][1]["w"],
             "variant": variant,
-            "family_revision": 3,
             "a_level_action": 0,
             "a_level_action_scope": "first_primitive",
             "difficulty_bin": difficulty,
@@ -1834,7 +1790,6 @@ def _pipe_mount(
             # mounting the pipe (goal on its top) is credited on landing and
             # anything else is an immediate failure.
             "single_jump": True,
-            "family_revision": 2,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -1883,7 +1838,6 @@ def _pit_leap(
             "edge_x": edge_x,
             "a_level_action": 2,
             "single_jump": True,
-            "family_revision": 2,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -1941,7 +1895,6 @@ def _stomp_mount(
             "patrol_halfwidth": patrol_halfwidth,
             "enemy_initial_direction": direction,
             "frames_to_first_turn": turn_frames,
-            "family_revision": 2,
             "a_level_action": 2,
             "single_jump": True,
             "difficulty_bin": difficulty,
@@ -2020,7 +1973,6 @@ def _stomp_recovery(
             "patrol_halfwidth": patrol_halfwidth,
             "oracle_walk": oracle_walk,
             "oracle_hold": oracle_hold,
-            "family_revision": 1,
             "difficulty_bin": difficulty,
         },
         actions,
@@ -2075,7 +2027,6 @@ def _platform_hop(
             "platform_x": platform_x,
             "a_level_action": 2,
             "single_jump": True,
-            "family_revision": 3,
             "difficulty_bin": difficulty,
         },
         actions,

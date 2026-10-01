@@ -33,7 +33,6 @@ from .geometry_expert import BlockSMBGeometryExpert
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
-    DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     BlockSMBMonteCarloSampleSet,
     BlockSMBScenarioSample,
     block_smb_monte_carlo_oracle_actions,
@@ -104,7 +103,6 @@ class BlockSMBDistillationConfig:
     episodes_per_scenario: int = 3
     evaluation_episodes: int = 3
     evaluation_max_steps: int = 200
-    monte_carlo_distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
     monte_carlo_samples: int = DEFAULT_BLOCK_SMB_MC_TRAIN_SAMPLES
     monte_carlo_seed: int = 50_000
     monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
@@ -178,8 +176,6 @@ class BlockSMBDistillationConfig:
             raise ValueError("monte_carlo_validation_samples must be non-negative")
         if self.monte_carlo_test_samples < 0:
             raise ValueError("monte_carlo_test_samples must be non-negative")
-        if not self.monte_carlo_distribution_id:
-            raise ValueError("monte_carlo_distribution_id must be non-empty")
         object.__setattr__(
             self,
             "monte_carlo_family_weights",
@@ -839,7 +835,6 @@ def _distillation_monte_carlo_samples(
     required_sample_count = 0
     if config.required_monte_carlo_families:
         required_sample_set = sample_block_smb_monte_carlo_parameter_sweep(
-            distribution_id=config.monte_carlo_distribution_id,
             split="train",
             seed=config.monte_carlo_seed,
             repeats_per_difficulty=(config.required_monte_carlo_repeats_per_difficulty),
@@ -853,7 +848,6 @@ def _distillation_monte_carlo_samples(
     )
     if config.monte_carlo_parameter_sweep:
         parameter_sweep_set = sample_block_smb_monte_carlo_parameter_sweep(
-            distribution_id=config.monte_carlo_distribution_id,
             split="train",
             seed=config.monte_carlo_seed,
             repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
@@ -864,7 +858,6 @@ def _distillation_monte_carlo_samples(
             (
                 "sampled",
                 sample_block_smb_monte_carlo_split(
-                    distribution_id=config.monte_carlo_distribution_id,
                     split="train",
                     seed=config.monte_carlo_seed,
                     sample_count=remaining_sample_count,
@@ -892,8 +885,6 @@ def _distillation_monte_carlo_samples(
             source_selected_counts[source_name] += 1
 
     manifest = {
-        "schema_version": selected_samples[0].schema_version if selected_samples else None,
-        "distribution_id": config.monte_carlo_distribution_id,
         "split": "train",
         "seed": int(config.monte_carlo_seed),
         "sample_count": len(selected_samples),
@@ -2214,7 +2205,6 @@ def _training_config_from_distillation(
         world_model_slot_weights=config.world_model_slot_weights,
         fixed_scenarios=config.fixed_scenarios,
         generated_scenarios=0,
-        monte_carlo_distribution_id=config.monte_carlo_distribution_id,
         monte_carlo_train_samples_per_epoch=monte_carlo_count,
         monte_carlo_seed=config.monte_carlo_seed,
         monte_carlo_family_weights=config.monte_carlo_family_weights,
@@ -2474,10 +2464,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evaluation-max-steps", type=int, default=200)
     parser.add_argument("--fixed-scenario", action="append", dest="fixed_scenarios")
     parser.add_argument(
-        "--monte-carlo-distribution",
-        default=BlockSMBDistillationConfig.monte_carlo_distribution_id,
-    )
-    parser.add_argument(
         "--monte-carlo-samples",
         type=int,
         default=BlockSMBDistillationConfig.monte_carlo_samples,
@@ -2609,7 +2595,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         episodes_per_scenario=args.episodes_per_scenario,
         evaluation_episodes=args.evaluation_episodes,
         evaluation_max_steps=args.evaluation_max_steps,
-        monte_carlo_distribution_id=args.monte_carlo_distribution,
         monte_carlo_samples=args.monte_carlo_samples,
         monte_carlo_seed=args.monte_carlo_seed,
         monte_carlo_family_weights=monte_carlo_family_weights,

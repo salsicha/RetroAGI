@@ -19,6 +19,12 @@ from scripts.tests import test_core_models as model_test_helpers
 from scripts.tests.test_block_smb_training import StaticBlockVision, tiny_config
 from scripts.tests.test_tall_pipe_traversal import PhaseIntentPolicy, pipe_sample, rollout
 
+# PhaseIntentPolicy hops from the spawn with the longest hold. Each NES hop
+# lasts 53 frames, so mounting the pipe and dropping into the goal takes ~193
+# frames. Sixty frames cannot even reach the pipe (the oracle needs 118).
+TRAVERSAL_STEPS = 240
+UNFINISHED_STEPS = 60
+
 
 @pytest.fixture(autouse=True)
 def one_thread():
@@ -81,7 +87,7 @@ def test_committed_frames_have_no_action_choice_credit():
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_tall_pipe_coaching_certifies_successful_collision_holds(difficulty):
     sample = pipe_sample(difficulty)
-    trajectory = rollout(sample, PhaseIntentPolicy())
+    trajectory = rollout(sample, PhaseIntentPolicy(), steps=TRAVERSAL_STEPS)
     assert trajectory.success
     certified = [t for t in trajectory.transitions if t.info.get("primitive_valid_hold_frames")]
     assert certified
@@ -91,7 +97,7 @@ def test_tall_pipe_coaching_certifies_successful_collision_holds(difficulty):
 
 def test_saved_success_can_be_reexecuted_with_a_different_model():
     sample = pipe_sample()
-    solved = rollout(sample, PhaseIntentPolicy())
+    solved = rollout(sample, PhaseIntentPolicy(), steps=TRAVERSAL_STEPS)
     buffer = BlockSMBSuccessReplay()
     buffer.add(solved, sample.family, sample.scenario_id, sample.scenario)
     record = buffer.sample_scenarios(1)[0]
@@ -103,7 +109,7 @@ def test_saved_success_can_be_reexecuted_with_a_different_model():
             model,
             stage,
             sample.scenario_id,
-            rollout_steps=160,
+            rollout_steps=TRAVERSAL_STEPS,
             seed=0,
             deterministic=True,
             device=torch.device("cpu"),
@@ -119,8 +125,9 @@ def test_saved_success_can_be_reexecuted_with_a_different_model():
 @pytest.mark.parametrize("demo_succeeds", [True, False])
 def test_failed_practice_only_admits_revalidated_success(demo_succeeds):
     sample = pipe_sample()
-    solved = rollout(sample, PhaseIntentPolicy())
-    failed = rollout(sample, PhaseIntentPolicy(finish=False))
+    solved = rollout(sample, PhaseIntentPolicy(), steps=TRAVERSAL_STEPS)
+    failed = rollout(sample, PhaseIntentPolicy(), steps=UNFINISHED_STEPS)
+    assert solved.success and not failed.success
     buffer = BlockSMBSuccessReplay()
     buffer.add(solved, sample.family, sample.scenario_id, sample.scenario)
     config = tiny_config(episodes_per_epoch=1, success_replay_rehearsals_per_epoch=1)

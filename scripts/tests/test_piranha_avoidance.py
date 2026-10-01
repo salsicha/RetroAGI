@@ -21,12 +21,13 @@ def contact_scenario(*, phase=20, mario=(120, 181)):
     )
 
 
-@pytest.mark.parametrize("mario", [(120, 181), (112, 204)])
+# Mario's feet start 1 px above the plant's top, or beside its stem.
+@pytest.mark.parametrize("mario", [(120, 185), (112, 204)])
 def test_plant_contact_is_fatal_even_from_above(mario):
     env = MarioScenarioEnv()
     try:
-        env.reset(scenario=contact_scenario(mario=mario))
-        env.mario["vy"] = 2
+        # Velocity lives in the NES motion state, so it is set by the scenario.
+        env.reset(scenario={**contact_scenario(mario=mario), "mario_velocity": [0, 2]})
         _, _, done, _, info = env.step(0)
         assert done and info["death"]
         assert info["reward_terms"]["enemy_hit"] < 0
@@ -39,10 +40,11 @@ def test_plant_contact_is_fatal_even_from_above(mario):
 def test_ordinary_enemy_remains_stompable():
     env = MarioScenarioEnv()
     try:
-        scenario = contact_scenario(mario=(120, 191))
+        # Feet 1 px above the Goomba's damage body (4 px above its feet).
+        scenario = contact_scenario(mario=(120, 197))
         scenario["enemies"] = [[120, 206, 120, 120, 0]]
+        scenario["mario_velocity"] = [0, 2]
         env.reset(scenario=scenario)
-        env.mario["vy"] = 2
         _, _, _, _, info = env.step(0)
         assert not info["death"] and env.enemies[0]["dead"]
         assert info["reward_terms"]["enemy_stomp"] > 0

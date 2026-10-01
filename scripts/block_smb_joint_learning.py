@@ -13,8 +13,6 @@ import torch
 
 from retroagi.stages.block_smb.cli import _make_vision_factory, _normalize_config_values
 from retroagi.stages.block_smb.demonstrations import (
-    DEMONSTRATION_CONTRACT_VERSION,
-    align_steady_demonstrations,
     collect_demonstrations,
     demonstration_rows,
     fit_demonstrations,
@@ -25,7 +23,6 @@ from retroagi.stages.block_smb.demonstrations import (
 )
 from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
 from retroagi.stages.block_smb.policy_recovery import combine_demonstrations
-from retroagi.stages.block_smb.tactics import REPOSITIONING_FAMILIES
 from retroagi.stages.block_smb.train import (
     BlockSMBTrainingConfig,
     load_block_smb_model_state,
@@ -83,7 +80,11 @@ def evaluate_family_set(model, config, vision, *, seed, split, count, batched):
     if not batched:
         return {
             family: evaluate(
-                model, evaluation_cases(family, seed, split, count), config, vision, autonomous=True
+                model,
+                evaluation_cases(family, seed, split, count),
+                config,
+                vision,
+                autonomous=True,
             )
             for family in BLOCK_SMB_MC_FAMILIES
         }
@@ -104,6 +105,17 @@ def evaluate_family_set(model, config, vision, *, seed, split, count, batched):
     return results
 
 
+def teacher_digest():
+    """Digest of the code that builds demonstrations; a cache is reused only if it matches."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for path in sorted(Path("retroagi").rglob("*.py")):
+        h.update(str(path).encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output-dir", type=Path, required=True)
@@ -122,9 +134,6 @@ def main():
     p.add_argument("--varied-demonstrations", action="store_true")
     p.add_argument("--robust-demonstrations", action="store_true")
     p.add_argument("--prioritized-demonstrations", action="store_true")
-    p.add_argument("--motion-observations", action="store_true")
-    p.add_argument("--hazard-observations", action="store_true")
-    p.add_argument("--hazard-memory-observations", action="store_true")
     p.add_argument(
         "--feedforward",
         action="store_true",
@@ -150,16 +159,13 @@ def main():
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     torch.use_deterministic_algorithms(True)
-    values = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    values = json.loads(Path("scripts/configs/block_smb_full_volume.json").read_text())
     if args.feedforward:
         values = feedforward_recipe(values)
     values.update(
         demonstration_bootstrap_updates=0,
         demonstration_rehearsal_updates=0,
         device="cuda",
-        motion_observations=args.motion_observations,
-        hazard_observations=args.hazard_observations,
-        hazard_memory_observations=args.hazard_memory_observations,
         walk_duration_primitives=not args.frame_walk,
         adaptive_duration_control=not args.fixed_duration,
         autonomous_policy=True,
@@ -188,119 +194,26 @@ def main():
         json.dumps({str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}, indent=2)
     )
     dataset = args.dataset or (args.output_dir / "demonstrations.pth")
-    if args.dataset:
-        source_config = json.loads((dataset.parent / "config.json").read_text())
-        if bool(source_config.get("motion_observations", False)) != config.motion_observations:
-            raise ValueError("Cached demonstration observation layout does not match this run")
-    if (
-        args.dataset
-        and bool(source_config.get("hazard_observations", False)) != config.hazard_observations
-    ):
-        raise ValueError("Cached enemy-history observation layout does not match this run")
-    if (
-        args.dataset
-        and bool(source_config.get("hazard_memory_observations", False))
-        != config.hazard_memory_observations
-    ):
-        raise ValueError("Cached enemy peak-exposure layout does not match this run")
+    digest = teacher_digest()
     if dataset.exists():
         data = torch.load(dataset, weights_only=False)
-        # Old pickles predate the explicit splice mask. Contract validation
-        # below requires their rows to be regenerated before training.
-        if getattr(data, "forced_release", None) is None:
-            data.forced_release = torch.zeros_like(data.family, dtype=torch.bool)
         metadata_path = dataset.parent / "demonstration_manifest.json"
         metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
-        if bool(metadata.get("hazard_observations", False)) != config.hazard_observations:
-            raise ValueError("Cached enemy-history observation manifest does not match this run")
-        if (
-            bool(metadata.get("hazard_memory_observations", False))
-            != config.hazard_memory_observations
-        ):
-            raise ValueError("Cached enemy peak-exposure manifest does not match this run")
-        if metadata.get("contract_version", 1) < 9:
+        if metadata.get("teacher_digest") != digest:
             present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            if "piranha_avoidance" in present - set(args.refresh_families):
-                raise ValueError("Cached plant labels need regeneration for phase-robust teaching")
-        if config.hazard_observations and metadata.get("contract_version", 1) < 10:
-            raise ValueError(
-                "Cached enemy-history observations were frozen at reset; regenerate all demonstrations"
-            )
-        if metadata.get("contract_version", 1) < 13:
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            if "piranha_avoidance" in present - set(args.refresh_families):
-                raise ValueError("Cached plant routes predate the contract-13 teacher")
-        if metadata.get("contract_version", 1) < 14:
-            if config.memory_refresh_interval:
-                raise ValueError(
-                    "Cached demonstrations predate episodic memory rows; regenerate them or "
-                    "pass --feedforward"
-                )
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            if present & REPOSITIONING_FAMILIES - set(args.refresh_families):
-                raise ValueError("Cached repositioning routes predate their tactical labels")
-        if metadata.get("contract_version", 1) < 16:
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            if present - set(args.refresh_families):
-                raise ValueError(
-                    "Cached demonstrations need regeneration for contract-16 landing "
-                    "handoff and arrival teaching"
-                )
-        if metadata.get("contract_version", 1) < 17:
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            if "piranha_avoidance" in present - set(args.refresh_families):
-                raise ValueError(
-                    "Cached piranha routes predate contract-17 plant clearance targets; "
-                    "pass --refresh-families piranha_avoidance"
-                )
-        if metadata.get("contract_version", 1) < 18:
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            stale = present & {"bridge_mount", "bridge_dismount"} - set(args.refresh_families)
+            stale = present - set(args.refresh_families)
             if stale:
                 raise ValueError(
-                    "Cached bridge jump routes predate contract-18 robust departures; "
-                    f"pass --refresh-families {' '.join(sorted(stale))}"
+                    "Cached demonstrations were built by different teacher code; regenerate "
+                    f"them or pass --refresh-families {' '.join(sorted(stale))}"
                 )
-        if metadata.get("contract_version", 1) < 19:
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            stale = present & {"bridge_mount", "bridge_dismount"} - set(args.refresh_families)
-            if stale:
-                raise ValueError(
-                    "Cached bridge jump routes predate contract-19 longest holds; "
-                    f"pass --refresh-families {' '.join(sorted(stale))}"
-                )
-        if metadata.get("contract_version", 1) < 8:
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            missing = present - set(args.refresh_families)
-            if missing:
-                raise ValueError(
-                    "Cached jump transitions need regeneration for the landing-release contract: "
-                    f"{sorted(missing)}"
-                )
-        if metadata.get("contract_version", 1) < 2:
-            data = align_steady_demonstrations(data)
-        if metadata.get("contract_version", 1) < 6:
-            present = {BLOCK_SMB_MC_FAMILIES[int(index)] for index in data.family.unique().tolist()}
-            missing = (present & {"bridge_mount", "bridge_dismount"}) - set(args.refresh_families)
-            if missing:
-                raise ValueError(
-                    f"Cached bridge jump goals, waits, and takeoff coverage need refreshing: {sorted(missing)}"
-                )
-        if metadata.get("bridge_goal_contract_version", 1) < 2:
-            missing = {"bridge_wait", "wait_timing", "moving_bridge"} - set(args.refresh_families)
-            if missing:
-                raise ValueError(f"Cached bridge goals need refreshing: {sorted(missing)}")
         source_walk = json.loads((dataset.parent / "config.json").read_text()).get(
             "walk_duration_primitives", True
         )
-        if not config.walk_duration_primitives and (
-            source_walk or metadata.get("contract_version", 1) < 7
-        ):
+        if not config.walk_duration_primitives and source_walk:
             data = without_walk_commitments(data)
         elif not source_walk and config.walk_duration_primitives:
             raise ValueError("Cannot restore walk commitments from frame-walk demonstration data")
-        # Older pickles also lack the episodic-memory rows; fill the defaults.
-        data.__post_init__()
     else:
         datasets = []
         for index, family in enumerate(BLOCK_SMB_MC_FAMILIES):
@@ -349,36 +262,16 @@ def main():
         torch.save(data, args.output_dir / "demonstrations.pth")
     torch.save(data, args.output_dir / "demonstrations.pth")
     (args.output_dir / "demonstration_manifest.json").write_text(
-        json.dumps(
-            dict(
-                contract_version=DEMONSTRATION_CONTRACT_VERSION,
-                bridge_goal_contract_version=2,
-                motion_observations=config.motion_observations,
-                hazard_observations=config.hazard_observations,
-                hazard_memory_observations=config.hazard_memory_observations,
-            ),
-            indent=2,
-        )
+        json.dumps(dict(teacher_digest=digest), indent=2)
     )
     torch.manual_seed(args.seed)
     model = make_block_smb_model(config).cuda()
     if args.init_checkpoint:
         checkpoint = torch.load(args.init_checkpoint, map_location="cuda", weights_only=False)
-        if (
-            bool(checkpoint["config"].get("motion_observations", False))
-            != config.motion_observations
-        ):
-            raise ValueError("Checkpoint observation layout does not match this run")
-        if (
-            bool(checkpoint["config"].get("hazard_observations", False))
-            != config.hazard_observations
-        ):
-            raise ValueError("Checkpoint enemy-history observation layout does not match this run")
-        if (
-            bool(checkpoint["config"].get("hazard_memory_observations", False))
-            != config.hazard_memory_observations
-        ):
-            raise ValueError("Checkpoint enemy peak-exposure layout does not match this run")
+        from retroagi.core.smb_scene import observation_spec
+
+        if checkpoint.get("specs", {}).get("smb_observation") != observation_spec():
+            raise ValueError("Checkpoint predates the shared SMB observation; retrain it")
         load_block_smb_model_state(model, checkpoint["states"]["model"])
     optimizer = make_block_smb_optimizer(model, config)
     passes = 0

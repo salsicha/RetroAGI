@@ -45,12 +45,10 @@ from retroagi.core import (
 from retroagi.core.actions import SMB_SUPPORT_AIR, SMB_SUPPORT_GROUND
 from retroagi.core.models import clip_policy_and_objective_gradients, skill_goal_objective
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
-from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, HAZARD_NAMES
 
 from .adapter import (
     BLOCK_SMB_SPEC,
     SCENARIOS_DIR,
-    BlockSMBObservationConfig,
     BlockSMBStage,
     block_smb_deterministic_critic_slots,
 )
@@ -68,7 +66,6 @@ from .local_traversal import (
 from .monte_carlo import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
     BLOCK_SMB_MC_FAMILIES,
-    DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID,
     block_smb_monte_carlo_metadata,
     block_smb_monte_carlo_oracle_actions,
     evaluate_block_smb_monte_carlo_gates,
@@ -250,9 +247,6 @@ class BlockSMBTrainingConfig:
     episodes_per_epoch: int = 2
     rollout_steps: int = 32
     autonomous_policy: bool = False
-    motion_observations: bool = False
-    hazard_observations: bool = False
-    hazard_memory_observations: bool = False
     learning_rate: float = 3e-4
     numeric_policy_learning_rate: float | None = None
     demonstration_layouts_per_family: int = 36
@@ -298,13 +292,11 @@ class BlockSMBTrainingConfig:
     fixed_scenarios: tuple[str, ...] = ()
     generated_scenarios: int = 0
     generated_seed: int = 50_000
-    monte_carlo_distribution_id: str = DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
     monte_carlo_train_samples_per_epoch: int = 0
     monte_carlo_seed: int = 50_000
     monte_carlo_family_weights: Mapping[str, float] = field(default_factory=dict)
     monte_carlo_parameter_sweep: bool = False
     monte_carlo_sweep_repeats_per_difficulty: int = 1
-    monte_carlo_validate_reachability: bool = True
     monte_carlo_max_rejections: int = 32
     monte_carlo_validation_samples: int = 0
     # Per-family measurement base for held-out evaluations. When positive and
@@ -523,10 +515,6 @@ class BlockSMBTrainingConfig:
                 raise ValueError(f"{name} must be positive")
         if self.parallel_workers < 0:
             raise ValueError("parallel_workers must be non-negative")
-        if self.hazard_observations and not self.motion_observations:
-            raise ValueError("hazard_observations requires motion_observations")
-        if self.hazard_memory_observations and not self.hazard_observations:
-            raise ValueError("hazard_memory_observations requires hazard_observations")
         if any(
             isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0
             for epoch in self.retain_checkpoint_epochs
@@ -598,15 +586,11 @@ class BlockSMBTrainingConfig:
             raise ValueError("policy_recovery_samples_per_bin must be non-negative")
         if self.monte_carlo_failure_replay_samples_per_epoch < 0:
             raise ValueError("monte_carlo_failure_replay_samples_per_epoch must be non-negative")
-        if not self.monte_carlo_distribution_id:
-            raise ValueError("monte_carlo_distribution_id must be non-empty")
         object.__setattr__(
             self,
             "monte_carlo_family_weights",
             normalize_block_smb_monte_carlo_family_weights(self.monte_carlo_family_weights),
         )
-        if not isinstance(self.monte_carlo_validate_reachability, bool):
-            raise TypeError("monte_carlo_validate_reachability must be a bool")
         if not 0.0 <= self.monte_carlo_pass_rate_gate <= 1.0:
             raise ValueError("monte_carlo_pass_rate_gate must be between 0 and 1")
         if not 0.0 <= self.monte_carlo_family_pass_rate_gate <= 1.0:
@@ -1032,25 +1016,21 @@ def build_monte_carlo_curriculum(
     )
     if config.monte_carlo_parameter_sweep and family_weights is None:
         sample_set = sample_block_smb_monte_carlo_parameter_sweep(
-            distribution_id=config.monte_carlo_distribution_id,
             split=split,
             seed=int(config.monte_carlo_seed if seed is None else seed),
             repeats_per_difficulty=config.monte_carlo_sweep_repeats_per_difficulty,
-            validate_reachability=config.monte_carlo_validate_reachability,
             max_rejections=config.monte_carlo_max_rejections,
         )
         return sample_set.scenarios()
     if resolved_count <= 0:
         return []
     sample_set = sample_block_smb_monte_carlo_split(
-        distribution_id=config.monte_carlo_distribution_id,
         split=split,
         seed=int(config.monte_carlo_seed if seed is None else seed),
         sample_count=resolved_count,
         family_weights=(
             config.monte_carlo_family_weights if family_weights is None else family_weights
         ),
-        validate_reachability=config.monte_carlo_validate_reachability,
         max_rejections=config.monte_carlo_max_rejections,
     )
     return sample_set.scenarios()
@@ -1160,15 +1140,7 @@ def build_adaptive_monte_carlo_replay_curriculum(
 def _train_layouts(config, seed, choices, pool=None):
     """Train layouts for (family, difficulty) choices; each is independent of the others."""
     specs = [
-        (
-            config.monte_carlo_distribution_id,
-            seed,
-            sample_index,
-            family,
-            difficulty,
-            config.monte_carlo_validate_reachability,
-            config.monte_carlo_max_rejections,
-        )
+        (seed, sample_index, family, difficulty, config.monte_carlo_max_rejections)
         for sample_index, (family, difficulty) in enumerate(choices)
     ]
     if pool is None:
@@ -1177,15 +1149,13 @@ def _train_layouts(config, seed, choices, pool=None):
 
 
 def _train_layout_task(spec):
-    distribution_id, seed, sample_index, family, difficulty, validate, max_rejections = spec
+    seed, sample_index, family, difficulty, max_rejections = spec
     sample = sample_block_smb_monte_carlo_scenario(
-        distribution_id=distribution_id,
         split="train",
         seed=seed,
         sample_index=sample_index,
         family=family,
         difficulty=difficulty,
-        validate_reachability=validate,
         max_rejections=max_rejections,
     )
     return sample.scenario_id, copy.deepcopy(dict(sample.scenario))
@@ -1646,7 +1616,7 @@ def apply_block_smb_ablations(
                     "c_position",
                     "c_semantic_probabilities",
                     "c_support_state",
-                    "c_patch_tokens",
+                    "c_semantic_layout",
                 ),
             )
         else:
@@ -2469,7 +2439,11 @@ def _smb_primitive_auxiliary_loss(
 
 
 def block_smb_evaluation_target(env, objective=None, phase=None, bridge=False, enemy=False):
-    """Local collision region for optional model-based action evaluation."""
+    """Local collision region for optional model-based action evaluation.
+
+    Normalized like the policy's position features: relative to the camera,
+    over the visible screen. A Full SMB scene is already in screen coordinates.
+    """
     m = env.mario
     left, right, top = env.goal.left, env.goal.right, env.goal.bottom
     tolerance_y = (env.goal.h + m["h"]) / 2 - 1
@@ -2493,12 +2467,14 @@ def block_smb_evaluation_target(env, objective=None, phase=None, bridge=False, e
         )
         left, right, top = target.left, target.right, target.top
         center_y, tolerance_y = top - m["h"], 1.0
+    origin = int(getattr(env, "camera_x", 0))
+    width = getattr(env, "width", env.world_width)
     return torch.tensor(
         [
             [
-                ((left + right) / 2 - m["w"] / 2) / env.world_width,
+                ((left + right) / 2 - m["w"] / 2 - origin) / width,
                 center_y / env.height,
-                ((right - left + m["w"]) / 2 - 1) / env.world_width,
+                ((right - left + m["w"]) / 2 - 1) / width,
                 tolerance_y / env.height,
             ]
         ],
@@ -4248,11 +4224,6 @@ def train_block_smb_epoch(
                     config.autonomous_policy,
                 ),
                 vision=vision_factory(),
-                observation_config=BlockSMBObservationConfig(
-                    motion_observations=config.motion_observations,
-                    hazard_observations=config.hazard_observations,
-                    hazard_memory_observations=config.hazard_memory_observations,
-                ),
             )
             try:
                 trajectory = collect_trajectory(
@@ -4515,34 +4486,28 @@ def _evaluation_sample_set(
     else:
         repeats = max(0, int(stratified_repeats_per_difficulty))
     key = (
-        config.monte_carlo_distribution_id,
         split,
         int(config.monte_carlo_seed),
         repeats,
         int(sample_count),
-        config.monte_carlo_validate_reachability,
         config.monte_carlo_max_rejections,
     )
     if pool is not None and key in pool.sample_sets:
         return pool.sample_sets[key]
     if repeats > 0:
         sample_set = sample_block_smb_monte_carlo_parameter_sweep(
-            distribution_id=config.monte_carlo_distribution_id,
             split=split,
             seed=int(config.monte_carlo_seed),
             repeats_per_difficulty=repeats,
-            validate_reachability=config.monte_carlo_validate_reachability,
             max_rejections=config.monte_carlo_max_rejections,
             executor=pool,
         )
     else:
         sample_set = sample_block_smb_monte_carlo_split(
-            distribution_id=config.monte_carlo_distribution_id,
             split=split,
             seed=int(config.monte_carlo_seed),
             sample_count=int(sample_count),
             family_weights=None,
-            validate_reachability=config.monte_carlo_validate_reachability,
             max_rejections=config.monte_carlo_max_rejections,
         )
     if pool is not None:
@@ -4688,8 +4653,6 @@ def evaluate_block_smb_monte_carlo(
         if int(rollup["failure_count"]) > 0
     }
     evaluation: dict[str, Any] = {
-        "schema_version": sample_set.schema_version,
-        "distribution_id": sample_set.distribution_id,
         "split": sample_set.split,
         "seed": sample_set.seed,
         "sample_count": sample_set.sample_count,
@@ -4813,11 +4776,6 @@ def _monte_carlo_sample_outcome(
                 copy.deepcopy(dict(sample.scenario)), config.autonomous_policy
             ),
             vision=vision_factory(),
-            observation_config=BlockSMBObservationConfig(
-                motion_observations=config.motion_observations,
-                hazard_observations=config.hazard_observations,
-                hazard_memory_observations=config.hazard_memory_observations,
-            ),
         )
         try:
             trajectory = collect_trajectory(
@@ -5221,11 +5179,6 @@ def evaluate_block_smb(
                     env=MarioScenarioEnv(reward_config=config.reward_config),
                     scenario=block_smb_policy_scenario(scenario, config.autonomous_policy),
                     vision=vision_factory(),
-                    observation_config=BlockSMBObservationConfig(
-                        motion_observations=config.motion_observations,
-                        hazard_observations=config.hazard_observations,
-                        hazard_memory_observations=config.hazard_memory_observations,
-                    ),
                 )
                 try:
                     trajectory = collect_trajectory(
@@ -5423,7 +5376,7 @@ def save_block_smb_checkpoint(
         states["target_model"] = target_model.state_dict()
     if mastery_state is not None:
         states["mastery"] = copy.deepcopy(dict(mastery_state))
-    from retroagi.core.smb_geometry import MOTION_NAMES, SCHEMA, STATE_NAMES
+    from retroagi.core.smb_scene import observation_spec
 
     checkpoint = build_checkpoint(
         stage=BLOCK_SMB_SPEC.name,
@@ -5434,13 +5387,7 @@ def save_block_smb_checkpoint(
         metrics=metrics,
         config=to_plain_data(config),
         specs={
-            "smb_observation": {
-                "schema": SCHEMA,
-                "features": list(STATE_NAMES)
-                + (list(MOTION_NAMES) if config.motion_observations else [])
-                + (list(HAZARD_NAMES) if config.hazard_observations else [])
-                + (list(HAZARD_MEMORY_NAMES) if config.hazard_memory_observations else []),
-            },
+            "smb_observation": observation_spec(),
             "stage": {
                 "name": BLOCK_SMB_SPEC.name,
                 "seq_len_a": BLOCK_SMB_SPEC.seq_len_a,
@@ -5526,9 +5473,6 @@ def restore_block_smb_checkpoint(
     architecture_name: Optional[str] = None,
     architecture_config: Optional[Mapping[str, Any]] = None,
     restore_rng: bool = True,
-    motion_observations: bool | None = None,
-    hazard_observations: bool | None = None,
-    hazard_memory_observations: bool | None = None,
     migrate_world_model_memory: bool = False,
 ) -> dict[str, Any]:
     """Restore a Block SMB checkpoint into `model`.
@@ -5545,24 +5489,10 @@ def restore_block_smb_checkpoint(
     if checkpoint["checkpoint_kind"] != BLOCK_SMB_CHECKPOINT_KIND:
         raise ValueError("checkpoint kind does not match Block SMB trainer")
     checkpoint_config = checkpoint.get("config", {})
-    if (
-        hazard_observations is not None
-        and bool(checkpoint_config.get("hazard_observations", False)) != hazard_observations
-    ):
-        raise ValueError(
-            "Checkpoint enemy-history observation contract does not match requested config"
-        )
-    if (
-        hazard_memory_observations is not None
-        and bool(checkpoint_config.get("hazard_memory_observations", False))
-        != hazard_memory_observations
-    ):
-        raise ValueError("Checkpoint enemy peak-exposure memory does not match requested config")
-    if (
-        motion_observations is not None
-        and bool(checkpoint_config.get("motion_observations", False)) != motion_observations
-    ):
-        raise ValueError("Checkpoint motion-observation layout does not match this run")
+    from retroagi.core.smb_scene import observation_spec
+
+    if checkpoint.get("specs", {}).get("smb_observation") != observation_spec():
+        raise ValueError("Checkpoint predates the shared SMB observation; retrain it")
     checkpoint_architecture_name = checkpoint_config.get("architecture_name")
     if architecture_name is not None and checkpoint_architecture_name is not None:
         if str(checkpoint_architecture_name) != architecture_name:
@@ -5721,9 +5651,6 @@ def _train_and_evaluate_block_smb(
             target_model=target_model,
             architecture_name=config.architecture_name,
             architecture_config=config.architecture_config,
-            motion_observations=config.motion_observations,
-            hazard_observations=config.hazard_observations,
-            hazard_memory_observations=config.hazard_memory_observations,
         )
         start_epoch = int(checkpoint["epoch"])
         global_step = int(checkpoint["global_step"])
@@ -5741,9 +5668,6 @@ def _train_and_evaluate_block_smb(
             map_location=device,
             architecture_name=config.architecture_name,
             architecture_config=config.architecture_config,
-            motion_observations=config.motion_observations,
-            hazard_observations=config.hazard_observations,
-            hazard_memory_observations=config.hazard_memory_observations,
             restore_rng=False,
             migrate_world_model_memory=True,
         )

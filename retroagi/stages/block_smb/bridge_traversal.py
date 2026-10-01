@@ -1,18 +1,21 @@
 """Collision-footprint walking windows for flat moving-bridge crossings.
 
-The predictor uses the engine's acceleration, platform reversal, integer
+The predictor uses the engine's NES motion model, platform reversal, integer
 rectangles, and carry rules. It certifies continuous support for walking;
 actual boarding/landing remains authoritative for policy jumps.
 """
 
+import copy
 from dataclasses import dataclass, replace
 from typing import Any
+
+from retroagi.core.smb_physics import NESPlayerMotion
 
 
 @dataclass
 class BridgeWalkState:
     x: float
-    vx: float
+    motion: NESPlayerMotion
     width: int
     bridge_x: float
     bridge_width: int
@@ -22,10 +25,6 @@ class BridgeWalkState:
     high: float
     left_end: int
     right_start: int
-    accel: float
-    decel: float
-    skid_decel: float
-    max_speed: float
 
     def support(self) -> str | None:
         left = int(self.x)
@@ -45,28 +44,26 @@ class BridgeWalkState:
         )
 
     def advance(self, walking: bool) -> str | None:
-        if walking:
-            self.vx = min(
-                self.max_speed, self.vx + (self.skid_decel if self.vx < 0 else self.accel)
-            )
-        else:
-            self.vx = (
-                max(0.0, self.vx - self.decel) if self.vx > 0 else min(0.0, self.vx + self.decel)
-            )
+        dx, _, _ = self.motion.advance(
+            direction=1 if walking else 0, jump=False, grounded=True, y=0, run=walking
+        )
         old = round(self.bridge_x)
         self.bridge_x += self.speed * self.direction
         if self.bridge_x <= self.low:
             self.bridge_x, self.direction = self.low, 1
         elif self.bridge_x >= self.high:
             self.bridge_x, self.direction = self.high, -1
-        self.x += self.vx
+        self.x += dx
         support = self.support()
         if support == "bridge":
             self.x += round(self.bridge_x) - old
         return support
 
+    def copy(self) -> "BridgeWalkState":
+        return replace(self, motion=copy.deepcopy(self.motion))
+
     def can_walk_to(self, target: str) -> bool:
-        probe = replace(self)
+        probe = self.copy()
         for _ in range(48):
             support = probe.advance(True)
             if support is None:
@@ -92,7 +89,7 @@ def bridge_walk_state(env) -> BridgeWalkState | None:
         return None
     return BridgeWalkState(
         env.mario["x"],
-        env.mario["vx"],
+        copy.deepcopy(env.motion),
         env.mario["w"],
         bridge["move_x"],
         bridge["rect"].w,
@@ -102,10 +99,6 @@ def bridge_walk_state(env) -> BridgeWalkState | None:
         bridge["move_max"],
         max(r.right for r in left),
         min(r.left for r in right),
-        env.accel,
-        env.decel,
-        env.skid_decel,
-        env.max_walk_speed,
     )
 
 

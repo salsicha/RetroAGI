@@ -1,11 +1,12 @@
-"""Training-only temporal plant teacher using observed disappearance history.
+"""Training-only temporal plant teacher using observed plant motion.
 
 No live cycle phase or remaining timer is used to choose a departure. The
-teacher certifies against the shortest hidden interval and fastest emergence
-in the timed family, after actually observing the plant disappear. Certified
-departures are taken from any grounded approach near the pipe, including a
-running one; otherwise the teacher stops in the staging window without
-overshooting it.
+teacher certifies against forecasts built from what has been seen: a descent
+continues at its measured speed, and a retraction is followed by the shortest
+hidden interval and fastest emergence in the timed family. A standing NES jump
+cannot clear the timed pipe, so a certified departure may be a run-up that
+starts while the plant is still descending. Otherwise the teacher stops in the
+staging window without overshooting it.
 """
 
 from dataclasses import replace
@@ -16,12 +17,20 @@ from retroagi.core.smb_enemy_history import EnemyObservationHistory
 MIN_HIDDEN_FRAMES = 48
 # Certified departures are searched within this distance of the pipe.
 DEPARTURE_REACH = 65
+# The timed family's plant height and rise/retraction durations.
+TIMED_PLANT_HEIGHT = 80
+TIMED_RISE_FRAMES = range(12, 21)
+# A run-up needs only one safe continuation; long holds cross the pipe.
+RUN_ON_FRAMES = range(2, 42, 2)
+RUN_ON_HOLDS = (32, 26, 20, 14)
+# Faster than NES running, so pruning by it never drops a feasible crossing.
+RUNNER_TOP_SPEED = 3.0
 
 
 def hold_menu(env):
-    from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+    from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
-    return NES_JUMP_FRAMES if env.physics_profile == NES_PHYSICS_PROFILE else tuple(range(1, 17))
+    return NES_JUMP_FRAMES
 
 
 def timed_plant(env):
@@ -78,53 +87,109 @@ def approach_choice(env, target):
     return "hold_area", 0
 
 
-def timed_safe_holds(env, history, direction=1):
+def plant_forecasts(env, history):
+    """(rise, tick) cycle models consistent with the observed timed plant.
+
+    A raised plant that is not descending has no bounded retraction, so
+    nothing can be certified against it.
+    """
+    plant = timed_plant(env)
+    if plant is None or history is None:
+        return []
+    if fresh_retraction(history):
+        rise = min(TIMED_RISE_FRAMES)
+        # One extra frame covers rounding at disappearance.
+        return [(rise, 2 * rise + 64 + int(round(history[5] * 64)) + 1)]
+    if not (history[0] == 1 and history[2] == 1 and history[1] > 0):
+        return []
+    drop = float(history[1]) * 8
+    fraction = min(1.0, plant["h"] / TIMED_PLANT_HEIGHT)
+    return [
+        (rise, round(2 * rise + 64 - fraction * rise))
+        for rise in TIMED_RISE_FRAMES
+        if abs(TIMED_PLANT_HEIGHT / rise - drop) <= 1
+    ]
+
+
+def _crosses_alive(env, model, run, hold):
+    """Run, jump for `hold` frames, and land past the plant under one forecast."""
+    rise, tick = model
+    probe = timed_plant(env)
+    probe.pop("conservative_envelope", None)
+    probe.update(
+        rise_frames=rise,
+        exposed_frames=64,
+        hidden_frames=MIN_HIDDEN_FRAMES,
+        plant_height=TIMED_PLANT_HEIGHT,
+        plant_tick=tick,
+    )
+    airborne = False
+    for frame in range(run + 96):
+        action = 2 if run <= frame < run + hold else 1
+        _, _, done, truncated, info = env.step(action)
+        airborne |= frame >= run and not env.mario["on_ground"]
+        if info["death"] or truncated:
+            return False
+        if airborne and env.mario["on_ground"]:
+            if env.mario["x"] < probe["x"] + probe["w"]:
+                return False
+            return not any(env.step(1)[4]["death"] for _ in range(2))
+        if done:
+            return False
+    return False
+
+
+def _certified_departures(env, history, candidates):
+    """Candidate (run, hold) departures that are safe under every forecast."""
     from .geometry_expert import restore_env_state, snapshot_env_state
 
     plant = timed_plant(env)
-    if plant is None or direction != 1 or not env.mario["on_ground"]:
-        return []
+    if plant is None or not env.mario["on_ground"]:
+        return
     if env.mario["x"] >= plant["x"] + plant["w"]:
-        return []
-    if not fresh_retraction(history):
-        return []
+        return
+    models = plant_forecasts(env, history)
+    if not models:
+        return
     saved = snapshot_env_state(env)
     original_render = env.render
     env.render = lambda: None
-    valid = []
     try:
-        for hold in hold_menu(env):
-            restore_env_state(env, saved)
-            probe = timed_plant(env)
-            # Bounds are part of the generated family contract, not a peek
-            # at this episode's sampled hidden duration or phase. One extra
-            # frame covers rounding at disappearance.
-            probe.pop("conservative_envelope", None)
-            probe.update(
-                rise_frames=12, exposed_frames=64, hidden_frames=MIN_HIDDEN_FRAMES, plant_height=80
-            )
-            probe["plant_tick"] = 2 * 12 + 64 + int(round(history[5] * 64)) + 1
-            airborne = False
-            for frame in range(96):
-                _, _, done, truncated, info = env.step(2 if frame < hold else 1)
-                airborne |= not env.mario["on_ground"]
-                if info["death"] or truncated:
+        for run, hold in candidates:
+            safe = True
+            for model in models:
+                restore_env_state(env, saved)
+                if not _crosses_alive(env, model, run, hold):
+                    safe = False
                     break
-                if airborne and env.mario["on_ground"]:
-                    if env.mario["x"] >= probe["x"] + probe["w"]:
-                        safe = True
-                        for _ in range(2):
-                            _, _, _, _, landing = env.step(1)
-                            safe &= not landing["death"]
-                        if safe:
-                            valid.append(hold)
-                    break
-                if done:
-                    break
-        return valid
+            if safe:
+                yield run, hold
     finally:
         restore_env_state(env, saved)
         env.render = original_render
+
+
+def timed_safe_holds(env, history, direction=1):
+    """Holds that cross safely when the jump starts now."""
+    if direction != 1:
+        return []
+    candidates = [(0, hold) for hold in hold_menu(env)]
+    return [hold for _, hold in _certified_departures(env, history, candidates)]
+
+
+def timed_run_on(env, history):
+    """Whether running on and jumping later crosses safely under every forecast."""
+    plant = timed_plant(env)
+    models = plant_forecasts(env, history)
+    if plant is None or not models:
+        return False
+    # Even at top speed Mario must pass the plant before it is fully raised.
+    passing = (plant["x"] + plant["w"] - env.mario["x"]) / RUNNER_TOP_SPEED
+    raised = min(2 * rise + 64 + MIN_HIDDEN_FRAMES + rise - tick for rise, tick in models)
+    if passing > raised:
+        return False
+    candidates = ((run, hold) for run in RUN_ON_FRAMES for hold in RUN_ON_HOLDS)
+    return next(_certified_departures(env, history, candidates), None) is not None
 
 
 def tactical_choice(env, history):
@@ -136,6 +201,8 @@ def tactical_choice(env, history):
         valid = timed_safe_holds(env, history)
         if valid:
             return "advance", 2, valid
+        if timed_run_on(env, history):
+            return "advance", 1, []
     stance, action = approach_choice(env, staging_x(env, plant))
     return stance, action, []
 
@@ -223,11 +290,13 @@ def _overrun_prefix(margin):
 def _wall_prefix(env):
     """Run into the pipe's side, as a learner that never stops does."""
     pipe = plant_pipe(env, _plant(env))
-    while env.mario["x"] + env.mario["w"] < pipe.left - 1:
+    # Positions are whole pixels, so NES walking from rest leaves x unchanged
+    # for several frames; only a sustained stop means something blocks Mario.
+    stalled = 0
+    while env.mario["x"] + env.mario["w"] < pipe.left - 1 and stalled < 8:
         before = env.mario["x"]
         yield 1
-        if env.mario["x"] <= before:
-            return
+        stalled = stalled + 1 if env.mario["x"] <= before else 0
 
 
 def _spawn_hop_prefix(hold):
@@ -307,9 +376,11 @@ def overshoot_demonstration(sample, *, margin=12):
     return _arrival_route(sample, _overrun_prefix(margin))
 
 
-# The pipe wall stops a runner 18 px past the staging window (_wall_prefix).
+# The pipe wall stops a runner 21 px past the staging window (_wall_prefix).
 ARRIVAL_OVERRUN_MARGINS = (0, 8, 16)
-ARRIVAL_HOP_HOLDS = (7, 11, 16)
+# Short, medium and full spawn hops from the NES hold menu; route replay maps
+# a hold to its nearest menu entry, so off-menu holds would not replay.
+ARRIVAL_HOP_HOLDS = (14, 22, 32)
 
 
 def arrival_demonstrations(sample, index=0):

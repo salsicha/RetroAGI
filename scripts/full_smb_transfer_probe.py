@@ -7,7 +7,6 @@ claim. These diagnostics do not update weights or use future emulator states.
 import argparse
 import hashlib
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -32,7 +31,6 @@ def main():
     )
     p.add_argument("--state", default="Level1-1")
     p.add_argument("--save-state", type=Path)
-    p.add_argument("--zero-visual-tokens", action="store_true")
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
     torch.set_num_threads(1)
@@ -45,10 +43,6 @@ def main():
     model = policy.model
     if not hasattr(model, "smb_runtime_contract"):
         raise ValueError("Probe requires a checkpoint with an explicit shared runtime contract")
-    if args.zero_visual_tokens:
-        model.smb_runtime_contract = replace(
-            model.smb_runtime_contract, visual_tokens="zero_ablation"
-        )
     start = None
     if args.save_state:
         from retroagi.stages.full_smb.save_states import load_full_smb_save_state_payload
@@ -139,7 +133,7 @@ def main():
                                         if model.last_memory_prediction is None
                                         else model.last_memory_prediction.reshape(-1).tolist()
                                     ),
-                                    memory_target=g["features"]["hazard_memory_vec"].tolist(),
+                                    memory_target=g["enemy_memory"].tolist(),
                                     strategy_objective=(
                                         None
                                         if model.last_objective_logits is None

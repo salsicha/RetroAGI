@@ -1,4 +1,4 @@
-"""Plant timing must be observable, shared with NES, and checkpoint-versioned."""
+"""Plant timing must be observable, shared with NES, and recorded in checkpoints."""
 
 from types import SimpleNamespace
 
@@ -7,13 +7,11 @@ import pygame
 import pytest
 import torch
 
-from retroagi.core.smb_enemy_history import (
-    HAZARD_MEMORY_NAMES,
-    HAZARD_NAMES,
-    EnemyObservationHistory,
-)
+from retroagi.core.smb_enemy_history import HAZARD_NAMES, EnemyObservationHistory
+from retroagi.core.smb_geometry import FEATURE_NAMES
 from retroagi.core.smb_runtime import SMBRuntimeContract
-from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
+from retroagi.core.smb_scene import C_SPANS
+from retroagi.stages.block_smb.adapter import BlockSMBStage
 from retroagi.stages.block_smb.train import (
     make_block_smb_model,
     restore_block_smb_checkpoint,
@@ -31,23 +29,24 @@ def test_identical_plant_pixels_have_distinct_observed_motion_inputs():
         stage = BlockSMBStage(
             scenario=contact_scenario(phase=phase, mario=(40, 204)),
             vision=StaticBlockVision(),
-            observation_config=BlockSMBObservationConfig(
-                motion_observations=True,
-                hazard_observations=True,
-            ),
         )
         try:
             stage.reset()
             frame, _, _, _, info = stage.step(0)
             frames.append(frame)
             states.append(stage.state_features(info))
-            assert states[-1].shape == (35 + len(HAZARD_NAMES),)
-            assert states[-1][-4] == 1  # Measured velocity, not a guessed phase.
+            assert history(states[-1])[2] == 1  # Measured velocity, not a guessed phase.
         finally:
             stage.env.close()
     np.testing.assert_array_equal(frames[0], frames[1])
-    np.testing.assert_array_equal(states[0][:-6], states[1][:-6])
-    assert states[0][-5] < 0 < states[1][-5]
+    geometry = len(FEATURE_NAMES)
+    np.testing.assert_array_equal(states[0][:geometry], states[1][:geometry])
+    assert history(states[0])[1] < 0 < history(states[1])[1]
+
+
+def history(observed):
+    start = len(FEATURE_NAMES)
+    return observed[start : start + len(HAZARD_NAMES)]
 
 
 def test_history_tracks_visibility_and_missing_velocity_without_hidden_timers():
@@ -99,28 +98,18 @@ def test_peak_exposure_memory_remembers_what_disappeared():
     assert seen(0, 30)[1] == pytest.approx(20 / 64)
 
 
-def test_block_state_appends_memory_only_when_enabled():
-    sizes = {}
-    for memory in (False, True):
-        stage = BlockSMBStage(
-            scenario=contact_scenario(phase=20, mario=(40, 204)),
-            vision=StaticBlockVision(),
-            observation_config=BlockSMBObservationConfig(
-                motion_observations=True,
-                hazard_observations=True,
-                hazard_memory_observations=memory,
-            ),
-        )
-        try:
-            stage.reset()
-            _, _, _, _, info = stage.step(0)
-            state = stage.state_features(info)
-            sizes[memory] = state.shape[0]
-            if memory:
-                assert state[-1] == stage.enemy_history.memory_features()[0] > 0
-        finally:
-            stage.env.close()
-    assert sizes == {False: 35 + len(HAZARD_NAMES), True: 35 + len(HAZARD_NAMES) + 1}
+def test_peak_exposure_is_a_memory_target_not_a_policy_input():
+    stage = BlockSMBStage(
+        scenario=contact_scenario(phase=20, mario=(40, 204)), vision=StaticBlockVision()
+    )
+    try:
+        stage.reset()
+        stage.step(0)
+        assert stage._hazard_memory[0] > 0
+        observed = stage.state_features()
+        assert observed.shape == (C_SPANS["c_enemy_relative_motion"][1] - C_SPANS["c_state"][0],)
+    finally:
+        stage.env.close()
 
 
 def test_nes_and_block_use_the_same_vertical_motion_history():
@@ -128,20 +117,19 @@ def test_nes_and_block_use_the_same_vertical_motion_history():
     ram[0x0F], ram[0x16] = 1, 0x0D  # Piranha slot.
     ram[0x87], ram[0xCF], ram[0xB6], ram[0x49A] = 150, 164, 1, 9
     observer = NESGeometry()
-    assert observer.observe(ram, frame=0)["features"]["hazard_vec"][2] == 0
+    assert observer.observe(ram, frame=0)["enemy_history"][2] == 0
     ram[0xCF] -= 2
-    rising = observer.observe(ram, frame=1)["features"]["hazard_vec"]
+    rising = observer.observe(ram, frame=1)["enemy_history"]
     assert rising[1] == -0.25 and rising[2] == 1
     ram[0xCF] += 2
-    falling = observer.observe(ram, frame=2)["features"]["hazard_vec"]
+    falling = observer.observe(ram, frame=2)["enemy_history"]
     assert falling[1] == 0.25 and falling[2] == 1
     observer.reset()
-    assert observer.observe(ram, frame=0)["features"]["hazard_vec"][2] == 0
+    assert observer.observe(ram, frame=0)["enemy_history"][2] == 0
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-def test_history_checkpoint_declares_layout_and_rejects_semantic_mismatch(tmp_path, enabled):
-    config = tiny_config(motion_observations=True, hazard_observations=enabled)
+def test_checkpoint_records_the_observation_and_rejects_another(tmp_path):
+    config = tiny_config()
     model = make_block_smb_model(config)
     path = tmp_path / "policy.pth"
     save_block_smb_checkpoint(
@@ -153,70 +141,17 @@ def test_history_checkpoint_declares_layout_and_rejects_semantic_mismatch(tmp_pa
         global_step=1,
         metrics={},
     )
-    checkpoint = restore_block_smb_checkpoint(path, model, hazard_observations=enabled)
-    names = checkpoint["specs"]["smb_observation"]["features"]
-    assert (names[-6:] == list(HAZARD_NAMES)) == enabled
-    with pytest.raises(ValueError, match="enemy-history"):
-        restore_block_smb_checkpoint(path, model, hazard_observations=not enabled)
-    assert SMBRuntimeContract.from_block_config(checkpoint["config"]).hazard_observations == enabled
+    checkpoint = restore_block_smb_checkpoint(path, model)
+    spec = checkpoint["specs"]["smb_observation"]
+    assert spec["enemy_history"] == list(HAZARD_NAMES)
+    assert spec["features"] == list(FEATURE_NAMES)
+    checkpoint["specs"]["smb_observation"] = {**spec, "features": spec["features"][:-1]}
+    torch.save(checkpoint, path)
+    with pytest.raises(ValueError, match="retrain"):
+        restore_block_smb_checkpoint(path, model)
 
 
-@pytest.mark.parametrize("memory", [False, True])
-def test_memory_checkpoint_declares_layout_and_rejects_mismatch(tmp_path, memory):
-    config = tiny_config(
-        motion_observations=True, hazard_observations=True, hazard_memory_observations=memory
-    )
-    model = make_block_smb_model(config)
-    path = tmp_path / "policy.pth"
-    save_block_smb_checkpoint(
-        path,
-        model,
-        torch.optim.Adam(model.parameters()),
-        config=config,
-        epoch=1,
-        global_step=1,
-        metrics={},
-    )
-    checkpoint = restore_block_smb_checkpoint(
-        path, model, hazard_observations=True, hazard_memory_observations=memory
-    )
-    names = checkpoint["specs"]["smb_observation"]["features"]
-    assert (names[-1:] == list(HAZARD_MEMORY_NAMES)) == memory
-    with pytest.raises(ValueError, match="peak-exposure"):
-        restore_block_smb_checkpoint(path, model, hazard_memory_observations=not memory)
-    contract = SMBRuntimeContract.from_block_config(checkpoint["config"])
-    assert contract.hazard_memory_observations == memory
-
-
-def test_history_contract_requires_motion_and_supported_projection():
-    with pytest.raises(ValueError):
-        BlockSMBObservationConfig(hazard_observations=True)
-    with pytest.raises(ValueError, match="peak-exposure"):
-        BlockSMBObservationConfig(motion_observations=True, hazard_memory_observations=True)
-    with pytest.raises(ValueError, match="peak-exposure"):
-        SMBRuntimeContract(hazard_memory_observations=True)
-    with pytest.raises(ValueError, match="hazard_memory_observations"):
-        tiny_config(motion_observations=True, hazard_memory_observations=True)
-    with pytest.raises(ValueError):
-        SMBRuntimeContract(hazard_observations=True, motion_observations=False)
-    with pytest.raises(ValueError):
-        BlockSMBObservationConfig(
-            hazard_observations=True, motion_observations=True, scene_schema="smb_scene_v2"
-        )
-
-
-@pytest.mark.parametrize(
-    "contract,history,message",
-    [
-        (8, True, "plant labels"),
-        (9, False, "enemy-history"),
-        (9, True, "frozen at reset"),
-        (13, True, "episodic memory"),
-    ],
-)
-def test_cached_demonstrations_require_new_labels_and_matching_history(
-    tmp_path, monkeypatch, contract, history, message
-):
+def test_cached_demonstrations_from_other_teacher_code_are_rejected(tmp_path, monkeypatch):
     import json
     import sys
 
@@ -224,12 +159,8 @@ def test_cached_demonstrations_require_new_labels_and_matching_history(
 
     source = tmp_path / "source"
     source.mkdir()
-    (source / "config.json").write_text(
-        json.dumps(dict(motion_observations=True, hazard_observations=True))
-    )
-    (source / "demonstration_manifest.json").write_text(
-        json.dumps(dict(contract_version=contract, hazard_observations=history))
-    )
+    (source / "config.json").write_text(json.dumps({}))
+    (source / "demonstration_manifest.json").write_text(json.dumps(dict(teacher_digest="old")))
     dataset = source / "demonstrations.pth"
     torch.save(
         SimpleNamespace(family=torch.tensor([27]), forced_release=torch.tensor([False])), dataset
@@ -238,20 +169,12 @@ def test_cached_demonstrations_require_new_labels_and_matching_history(
     monkeypatch.setattr(
         sys,
         "argv",
-        [
-            "joint",
-            "--output-dir",
-            str(tmp_path / "output"),
-            "--dataset",
-            str(dataset),
-            "--motion-observations",
-            "--hazard-observations",
-        ],
+        ["joint", "--output-dir", str(tmp_path / "output"), "--dataset", str(dataset)],
     )
     threads = torch.get_num_threads()
     deterministic = torch.are_deterministic_algorithms_enabled()
     try:
-        with pytest.raises(ValueError, match=message):
+        with pytest.raises(ValueError, match="different teacher code"):
             learning.main()
     finally:
         torch.set_num_threads(threads)
@@ -264,7 +187,7 @@ def test_full_smb_history_projection_forward_and_snapshot_restore():
     from retroagi.stages.full_smb.train import _policy_action_logits_and_state
     from scripts.tests.test_smb_transfer_contract import ContractVision, RAMEnv
 
-    contract = SMBRuntimeContract(hazard_observations=True)
+    contract = SMBRuntimeContract()
     stage = FullSMBStage(env=RAMEnv(), vision=ContractVision())
     stage.configure_policy_runtime(contract)
     try:
@@ -273,15 +196,13 @@ def test_full_smb_history_projection_forward_and_snapshot_restore():
         ram[0x0F], ram[0x16] = 1, 0x0D
         ram[0x87], ram[0xCF], ram[0xB6], ram[0x49A] = 150, 164, 1, 9
         first = stage.encode_observation(stage._last_observation)
-        assert tuple(first.metadata["vision_fusion"]["c_state"]) == (12, 53)
+        assert first.metadata["vision_fusion"]["c_enemy_history"] == C_SPANS["c_enemy_history"]
         saved = stage.save_emulator_state()
         ram[0xCF] -= 2
         stage.step(1)
         second = stage.encode_observation(stage._last_observation)
-        assert second.src_c[0, 48] == -0.25
-        model = make_block_smb_model(
-            tiny_config(motion_observations=True, hazard_observations=True)
-        )
+        assert second.src_c[0, C_SPANS["c_enemy_history"][0] + 1] == -0.25
+        model = make_block_smb_model(tiny_config())
         attach_runtime(model, contract.manifest())
         output = _policy_action_logits_and_state(model, second, device=torch.device("cpu"))
         assert torch.isfinite(output.logits).all()
@@ -291,31 +212,25 @@ def test_full_smb_history_projection_forward_and_snapshot_restore():
         stage.close()
 
 
-def test_full_smb_projects_peak_exposure_memory_after_history():
+def test_full_smb_reports_peak_exposure_as_a_memory_target():
     from retroagi.stages.full_smb.adapter import FullSMBStage
     from scripts.tests.test_smb_transfer_contract import ContractVision, RAMEnv
 
-    contract = SMBRuntimeContract(hazard_observations=True, hazard_memory_observations=True)
     stage = FullSMBStage(env=RAMEnv(), vision=ContractVision())
-    stage.configure_policy_runtime(contract)
+    stage.configure_policy_runtime(SMBRuntimeContract())
     try:
         stage.reset()
         ram = stage.env.ram
         ram[0x0F], ram[0x16] = 1, 0x0D
         ram[0x87], ram[0xCF], ram[0xB6], ram[0x49A] = 150, 164, 1, 9
         batch = stage.encode_observation(stage._last_observation)
-        assert tuple(batch.metadata["vision_fusion"]["c_state"]) == (12, 54)
-        memory = batch.metadata["smb_geometry"]["features"]["hazard_memory_vec"]
-        assert batch.src_c[0, 53] == memory[0] > 0
+        assert batch.metadata["smb_geometry"]["enemy_memory"][0] > 0
     finally:
         stage.close()
 
 
-@pytest.mark.parametrize("history,memory", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("supervision_start", [0, 12])
-def test_demonstrations_and_recovery_match_live_history_on_every_frame(
-    supervision_start, history, memory
-):
+def test_demonstrations_and_recovery_match_live_history_on_every_frame(supervision_start):
     from dataclasses import replace
 
     from retroagi.stages.block_smb.demonstrations import collect_demonstrations
@@ -337,21 +252,10 @@ def test_demonstrations_and_recovery_match_live_history_on_every_frame(
         },
     )
     config = tiny_config(
-        motion_observations=True,
-        hazard_observations=history,
-        hazard_memory_observations=memory,
         walk_duration_primitives=False,
     )
     data = collect_demonstrations([(27, sample)], config, StaticBlockVision)
-    stage = BlockSMBStage(
-        scenario=sample.scenario,
-        vision=StaticBlockVision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=True,
-            hazard_observations=history,
-            hazard_memory_observations=memory,
-        ),
-    )
+    stage = BlockSMBStage(scenario=sample.scenario, vision=StaticBlockVision())
     expected = []
     try:
         frame = stage.reset(seed=sample.sample_seed % (2**31))
@@ -360,14 +264,10 @@ def test_demonstrations_and_recovery_match_live_history_on_every_frame(
             frame, _, done, truncated, _ = stage.step(action)
             if done or truncated:
                 break
-        lo, hi = stage.encode_observation(frame).metadata["vision_fusion"]["c_state"]
+        lo, _ = C_SPANS["c_enemy_history"]
         expected = torch.cat(expected)[supervision_start:]
-        if history:
-            offset = int(memory)
-            assert expected[:, hi - 4 - offset].any()  # Velocity is available after observation.
-            assert expected[:, hi - 5 - offset].abs().max() > 0  # Rising/retracting motion.
-        if memory:
-            assert expected[:, hi - 1].max() > 0  # The plant's exposed height is remembered.
+        assert expected[:, lo + 2].any()  # Velocity is available after observation.
+        assert expected[:, lo + 1].abs().max() > 0  # Rising/retracting motion.
         # Replayed recovery prefixes remain as unsupervised context rows.
         assert int(data.context.sum()) == supervision_start
         torch.testing.assert_close(data.c[data.context.logical_not()], expected)

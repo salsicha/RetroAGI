@@ -24,11 +24,13 @@ def test_duration_gradients_follow_executor_decision_times(adaptive):
     )
     stage = BlockSMBStage(scenario=sample.scenario, vision=StaticBlockVision())
     try:
+        # Outcome targets attach when the jump span lands; under NES motion the
+        # oracle's stomp-and-mount lands around frame 51, so 40 frames is short.
         trajectory = collect_trajectory(
             model,
             stage,
             sample.scenario_id,
-            rollout_steps=40,
+            rollout_steps=64,
             seed=0,
             deterministic=True,
             use_oracle_actions=True,

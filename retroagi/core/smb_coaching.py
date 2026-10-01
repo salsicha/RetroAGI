@@ -13,10 +13,7 @@ from retroagi.stages.block_smb.local_traversal import (
     local_objective,
     local_target_distance,
     plant_clearance_target,
-    stomp_probe_distance,
 )
-
-COACHING_CONTRACT = "canonical_collision_coaching_v6"
 
 
 @contextmanager
@@ -77,10 +74,35 @@ def physical_batch(env, *, bouncing=False):
     )
 
 
+def primitive(index):
+    """A motor output that selects one NES hold with certainty."""
+    import torch
+
+    logits = torch.full((1, 1, 16), -20.0)
+    logits[..., index] = 20.0
+    return SimpleNamespace(
+        hold_duration_logits=logits, duration_bin_values=torch.tensor(NES_JUMP_FRAMES)
+    )
+
+
+def teacher_runtime():
+    """Fixed-duration execution for teachers that replay one primitive at a time."""
+    from retroagi.core.smb_runtime import SMBRuntimeContract
+
+    return SMBRuntimeContract(
+        recurrent_state=False,
+        adaptive_duration=False,
+        walk_primitives=False,
+        steady_primitives=True,
+        critic_feedback=False,
+        wait_duration_scale=1.0,
+        min_wait_frames=1,
+        max_wait_frames=32,
+    )
+
+
 def safe_jump_indices(model, env, action, *, verify_recovery=True):
     """Certify each physical hold using the same executor as greedy playback."""
-    from retroagi.core.smb_learning import primitive
-
     if not env.mario["on_ground"] or action not in (2, 4, 5):
         return []
     target = training_target(env)
@@ -125,153 +147,3 @@ def safe_jump_indices(model, env, action, *, verify_recovery=True):
                 if done or truncated or landed:
                     break
     return valid
-
-
-def bridge_target(env):
-    bridge = next((p for p in env.platforms if p.get("moving")), None)
-    if bridge is None or env._bridge_crossed:
-        return "finish"
-    m, b = env.mario, bridge["rect"]
-    if m.get("_platform") is bridge and m["x"] >= b.left + 4:
-        return "exit"
-    return "board"
-
-
-def bridge_walk_reached(env, target):
-    if target == "exit":
-        return bool(env._bridge_crossed)
-    bridge = next(p for p in env.platforms if p.get("moving"))
-    m, b = env.mario, bridge["rect"]
-    return m.get("_platform") is bridge and m["x"] >= b.left + 4 and m["x"] + m["w"] <= b.right - 4
-
-
-def safe_bridge_wait_indices(env):
-    """Actual NES collision/carry/reversal windows, not the legacy predictor.
-
-    Returns whether walking now works, safe departure bins, and safe waiting
-    bins for re-observation when the next departure lies beyond this menu.
-    """
-    target = bridge_target(env)
-    if target == "finish":
-        return True, [], []
-    departures, continuations = [], []
-    with probe_state(env) as saved:
-        for delay in range(max(NES_JUMP_FRAMES) + 1):
-            restore_env_state(env, saved)
-            safe = True
-            for _ in range(delay):
-                _, _, done, truncated, info = env.step(0)
-                if done or truncated or info["death"] or not env.mario["on_ground"]:
-                    safe = False
-                    break
-            if not safe:
-                continue
-            if delay in NES_JUMP_FRAMES:
-                continuations.append(NES_JUMP_FRAMES.index(delay))
-            for _ in range(48):
-                _, _, done, truncated, info = env.step(1)
-                if info["death"] or not env.mario["on_ground"]:
-                    break
-                if bridge_walk_reached(env, target) or env._goal_credited:
-                    if delay == 0:
-                        return True, [], []
-                    departures.append(delay)
-                    break
-                if done or truncated:
-                    break
-    # Recheck before a narrow departure falling between two menu values.
-    if departures:
-        continuations = [i for i in continuations if NES_JUMP_FRAMES[i] <= min(departures)]
-    return (
-        False,
-        [NES_JUMP_FRAMES.index(n) for n in departures if n in NES_JUMP_FRAMES],
-        continuations,
-    )
-
-
-def interior_index(indices):
-    """Choose the middle of the longest safe run; never cross an unsafe hole."""
-    runs = []
-    for index in sorted(indices):
-        if not runs or index != runs[-1][-1] + 1:
-            runs.append([])
-        runs[-1].append(index)
-    run = max(runs, key=len)
-    return run[len(run) // 2]
-
-
-def coach_choice(model, env, *, takeoff_distance=50, variant=0):
-    from retroagi.stages.block_smb.hierarchy import bridge_training_active
-
-    if getattr(env, "_bridge_jump_task", None):
-        from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_choice
-
-        return bridge_jump_choice(model, env, variant=variant)
-    if bridge_training_active(env):
-        # Runtime reobserves after one frame. Probe walking now, not obsolete
-        # long wait commitments; all later opportunities are reconsidered.
-        target = bridge_target(env)
-        if target == "finish":
-            return 1, 0, list(range(16))
-        with probe_state(env):
-            for _ in range(48):
-                _, _, done, truncated, info = env.step(1)
-                if info["death"] or not env.mario["on_ground"]:
-                    break
-                if bridge_walk_reached(env, target) or env._goal_credited:
-                    return 1, 0, list(range(16))
-                if done or truncated:
-                    break
-        # Releasing direction retains NES momentum. On a narrow platform a
-        # nominal wait can slide off before friction stops Mario. Teach an
-        # observed braking decision instead of calling that drift safe waiting.
-        if abs(env.mario["vx"]) > 1 / 16:
-            brake = 3 if env.mario["vx"] > 0 else 1
-            with probe_state(env):
-                _, _, done, truncated, info = env.step(brake)
-                if not (info["death"] or done or truncated) and env.mario["on_ground"]:
-                    return brake, 0, list(range(16))
-        return 0, 0, [0]
-    target = training_target(env)
-    direction = target.direction
-    action = 2 if direction > 0 else 4
-    if (
-        env.mario["on_ground"]
-        and target.kind not in ("finish", "retreat")
-        and (
-            local_target_distance(env, target) < stomp_probe_distance(env, target, takeoff_distance)
-            or env._single_jump_attempt
-        )
-    ):
-        valid = safe_jump_indices(model, env, action)
-        if valid:
-            index = valid[variant % len(valid)] if variant else interior_index(valid)
-            return action, index, valid
-    return (1 if direction > 0 else 3), 0, list(range(16))
-
-
-def stomp_takeoff_choice(model, env, choice, *, proposal=None, delay=False):
-    """Train at policy/nearby takeoffs using physical labels, never playback guards.
-
-    Let a walk proposal approach one frame farther only when a collision probe
-    still finds a safe stomp there. Correct a proposed jump's hold at the actual
-    decision state. Keep complete, executor-verified routes in the collector.
-    """
-    target = training_target(env)
-    if target.kind != "stomp" or not env.mario["on_ground"]:
-        return (*choice, False)
-    jump = 2 if target.direction > 0 else 4
-    walk = 1 if target.direction > 0 else 3
-    if proposal == jump:
-        valid = choice[2] if choice[0] == jump else safe_jump_indices(model, env, jump)
-        if valid:
-            return jump, interior_index(valid), valid, False
-    if choice[0] == jump and (delay or proposal == walk):
-        with probe_state(env):
-            _, _, done, truncated, info = env.step(walk)
-            can_delay = not (done or truncated or info["death"]) and bool(
-                safe_jump_indices(model, env, jump)
-            )
-        if can_delay:
-            return walk, 0, list(range(16)), True
-    return (*choice, False)

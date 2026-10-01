@@ -30,8 +30,8 @@ robot.
    primitive executor, teacher tooling, curriculum and exams, logging, and the
    fidelity ladder with its promotion gates.
 3. **Contracts** connect the two. Every observation, action, primitive, and
-   unit is declared, versioned, saved inside checkpoints, and checked before a
-   checkpoint is used anywhere.
+   unit is declared, saved inside checkpoints, and checked before a checkpoint
+   is used anywhere.
 4. A policy is trained at the cheapest fidelity that can teach a skill, then
    promoted one rung at a time. Each promotion needs calibration, a bounded
    adaptation phase, and a held-out exam run in a fresh process.
@@ -63,7 +63,7 @@ robot.
 | Controller logic about button presses, releases, and landings | `core/actions.py` (`resolve_landing`, re-jump suppression) | A generic committed-primitive executor with domain-declared termination events and handoff rules. |
 | Fixed tactic stances and skill types | `core/models.py` (`TACTIC_STANCES`), `core/skills.py` (`SKILL_GOAL_TYPES`) | Vocabularies declared by the domain. |
 | Feature positions with physical meaning baked in (e.g., "slots 9-12 are support") | `core/models.py` (`_MOTOR_PRIMITIVE_SUPPORT_SPANS`, `_TERMINAL_SPANS`, `_PROGRESS_SLOTS`) | Roles declared by the scene contract and looked up by name. |
-| Twelve Mario modules inside the shared core | `core/smb_*.py` | Moved into a Mario domain package. |
+| Seven Mario modules inside the shared core | `core/smb_*.py` | Moved into a Mario domain package. |
 | Teachers that freeze the simulator, try every parameter, and restore | `stages/block_smb/local_traversal.py` (`safe_jump_holds`), `policy_recovery.py`, `piranha_tactics.py` | A teacher toolkit whose teachers declare the backend capabilities they need. |
 
 ## Design Rules Learned From This Project
@@ -74,7 +74,7 @@ Each rule below comes from a failure that cost real training time.
    found tensors of the same shape carrying different physical meanings, and
    jump durations in different units (a 16-frame Block jump flies about 33
    frames; the same NES hold flies about 53). Every observation and action
-   layout carries a version, names, and units, and is checked at load time.
+   layout carries names and units, and is checked at load time.
 2. **One executor for everyone.** The two-frame landing lockout lived in the
    controller and was separately mirrored in teacher code. It blocked the
    only survivable frame in enemy_on_platform. Teachers, training, evaluation,
@@ -131,7 +131,6 @@ refuses to load where it does not match.
 @dataclass(frozen=True)
 class EmbodimentContract:           # proposal
     name: str
-    version: int
     control_rate_hz: float          # rate of the lowest (controller) level
     decision_rates_hz: Mapping[str, float]   # e.g. {"strategy": 1, "skill": 10}
     action_space: tuple[ActionSpec, ...]     # discrete and continuous axes
@@ -161,8 +160,8 @@ backend without `save_load_state`, instead of failing silently.
 
 ### 4. Scene and sensor contract
 
-The universal replacement for Mario's fixed feature layout (`smb_geometry_v1`,
-`smb_scene_v2`):
+The universal replacement for Mario's fixed feature layout (the shared SMB
+observation in `retroagi/core/smb_scene.py`):
 
 - **Entities**: class, pose, size, velocity, and declared attributes (e.g.,
   `stompable`, `graspable`, `moving`), each with units and a reference frame.
@@ -171,10 +170,13 @@ The universal replacement for Mario's fixed feature layout (`smb_geometry_v1`,
   `hazard`, `progress`, `goal`, and `terminal`. The world model and critic look
   up these roles by name instead of reading fixed positions.
 - **Providers**: `oracle` (from simulator truth) or `perceived` (from sensors).
-  This already exists as `observation_provider` in `SMBRuntimeContract`.
-- **Availability masks**: a feature missing at a rung (e.g., enemy patrol
-  bounds on the NES, true contact forces on a real robot) is explicitly marked
-  unavailable rather than silently zeroed.
+  The SMB implementation currently has one geometry observer per game: Block
+  SMB reads simulator truth (`block_oracle_scene`) and Full SMB reads NES RAM
+  (`NESGeometry`). A pixel-based observer is not implemented.
+- **Availability masks**: a measurement missing at a rung or on a frame (e.g.,
+  a moving platform's velocity on the first Full SMB frame it is seen, true
+  contact forces on a real robot) is explicitly marked unavailable rather than
+  silently zeroed.
 
 Model input layers are built from the schema, so a new domain changes the
 schema, not the model code.
@@ -302,7 +304,7 @@ cross-rung comparisons possible.
 
 - **Examples**: Block SMB; MuJoCo or Brax with simple rendering for robots.
 - **Available**: snapshots, true state, deterministic replay, cheap resets.
-- **Trained here**: the full hierarchy on the oracle scene provider, with
+- **Trained here**: the full hierarchy on simulator-truth scene geometry, with
   physics-probe teachers and the full coaching toolkit, at high volume.
 - **Robustness**: physics parameters (masses, friction, latency, actuator
   gains) vary around measured ranges so the policy never depends on one value.
@@ -319,12 +321,14 @@ cross-rung comparisons possible.
     teachers (which still see true state), corrected on the student's own
     states;
   - primitive calibration: measure how declared parameters map to physical
-    outcomes and store the mapping in the checkpoint (as the NES jump table
-    does today);
+    outcomes and store the mapping in the checkpoint;
   - bounded adaptation: only the heads listed for this rung may change.
 - **Visual robustness**: lighting, textures, camera pose, and distractors vary.
-- **Promotion gate**: the same family exams, now with the perceived provider,
-  plus perception gates and a check that the adaptation stayed in bounds.
+- **Promotion gate**: the same family exams, now with a scene derived from
+  sensors, plus perception gates and a check that the adaptation stayed in
+  bounds. The current Full SMB rung does not do this yet: it is an explicit
+  RAM-assisted player whose geometry comes from NES RAM, with only scene
+  semantics coming from its frozen ViT segmenter.
 
 ### Rung 3: Real robot
 

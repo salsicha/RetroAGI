@@ -24,7 +24,7 @@ from retroagi.core import (
 )
 
 from .env import BlockSMBRewardConfig, MarioScenarioEnv
-from .monte_carlo import BLOCK_SMB_MC_FAMILIES, DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID
+from .monte_carlo import BLOCK_SMB_MC_FAMILIES
 from .train import (
     DEFAULT_BLOCK_SMB_MC_FAILURE_REPLAY_SAMPLES,
     DEFAULT_BLOCK_SMB_MC_FAMILY_PASS_RATE_GATE,
@@ -289,15 +289,6 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fixed-scenario", action="append", dest="fixed_scenarios")
     parser.add_argument("--generated-scenarios", type=_non_negative_int)
     parser.add_argument("--generated-seed", type=int)
-    parser.add_argument(
-        "--monte-carlo-distribution",
-        dest="monte_carlo_distribution_id",
-        default=None,
-        help=(
-            "Block SMB Monte Carlo distribution ID; defaults to "
-            f"{DEFAULT_BLOCK_SMB_MC_DISTRIBUTION_ID}"
-        ),
-    )
     parser.add_argument(
         "--monte-carlo-train-samples-per-epoch",
         type=_non_negative_int,
@@ -572,17 +563,6 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         dest="emit_temporal_spans",
         help="skip temporal span emission",
-    )
-    parser.set_defaults(monte_carlo_validate_reachability=None)
-    parser.add_argument(
-        "--validate-monte-carlo-reachability",
-        action="store_true",
-        dest="monte_carlo_validate_reachability",
-    )
-    parser.add_argument(
-        "--skip-monte-carlo-reachability-validation",
-        action="store_false",
-        dest="monte_carlo_validate_reachability",
     )
     parser.add_argument("--evaluation-episodes", type=_positive_int)
     parser.add_argument("--evaluation-max-steps", type=_positive_int)
@@ -874,13 +854,11 @@ def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "fixed_scenarios",
         "generated_scenarios",
         "generated_seed",
-        "monte_carlo_distribution_id",
         "monte_carlo_train_samples_per_epoch",
         "monte_carlo_seed",
         "monte_carlo_family_weight",
         "monte_carlo_parameter_sweep",
         "monte_carlo_sweep_repeats_per_difficulty",
-        "monte_carlo_validate_reachability",
         "monte_carlo_max_rejections",
         "monte_carlo_validation_samples",
         "monte_carlo_validation_repeats_per_difficulty",

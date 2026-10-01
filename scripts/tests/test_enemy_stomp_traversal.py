@@ -44,7 +44,11 @@ def legacy_sample():
     )
     scenario = dict(sample.scenario)
     scenario.pop("require_stomp_before_goal")
-    scenario.update(mario=[20, 200], enemies=[[109, 206, 109, 109, 0]], goal=[230, 200, 16, 20])
+    # The longest hold (32 frames) from a standstill at x=20 comes down on a
+    # static enemy at x=58..77; 66 sits mid-window. Contact is on frame 50 and
+    # the run after the bounce touches the goal on frame 112, so a 60-frame
+    # budget sees only the stomp and a 120-frame budget also sees the finish.
+    scenario.update(mario=[20, 200], enemies=[[66, 206, 66, 66, 0]], goal=[200, 200, 16, 20])
     return replace(sample, scenario=scenario)
 
 
@@ -53,7 +57,9 @@ def test_saved_family_requires_stomp_before_finish_and_oracle_cannot_bypass_it()
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=sample.scenario)
-        bypass = [1] * 15 + [2] * 16 + [1] * 39
+        # Clears the enemy from any run-up of 15..35 frames; Mario's right edge
+        # passes goal.left on frame 106.
+        bypass = [1] * 25 + [2] * 16 + [1] * 70
         for action in bypass:
             _, _, done, _, info = env.step(action)
         assert not done and not info["death"] and not info["stomp_completed"]
@@ -62,7 +68,7 @@ def test_saved_family_requires_stomp_before_finish_and_oracle_cannot_bypass_it()
         assert not validate_block_smb_monte_carlo_oracle(sample.scenario, bypass)["reachable"]
         env.reset(scenario=sample.scenario)
         contact = None
-        for frame, action in enumerate([2] * 16 + [1] * 104):
+        for frame, action in enumerate([2] * 32 + [1] * 88):
             _, _, done, _, info = env.step(action)
             if (info.get("stomp_geometry") or {}).get("stomp"):
                 contact = frame
@@ -89,9 +95,10 @@ def test_successful_stomp_is_coached_to_contact_then_bounce_and_finish_are_separ
     contact = contacts[0]
     coached = [t for t in trajectory.transitions if t.info.get("primitive_target_phase") == "stomp"]
     assert len(coached) == contact + 1
-    assert {t.info["primitive_target_hold"] for t in coached} == {16.0}
-    assert all(16 in t.info["primitive_valid_hold_frames"] for t in coached)
-    assert {t.info["primitive_target_x"] for t in coached} == {115.0}
+    # The policy's top duration bin is the 32-frame NES hold, and it is valid.
+    assert {t.info["primitive_target_hold"] for t in coached} == {32.0}
+    assert all(32 in t.info["primitive_valid_hold_frames"] for t in coached)
+    assert {t.info["primitive_target_x"] for t in coached} == {71.0}  # Enemy center.
     assert not any(t.info.get("jump_overreach") for t in coached)
     jump = next(s for s in trajectory.spans if s.command.get("primitive") == "jump")
     assert jump.termination_reason == "success" and jump.end_frame == contact
@@ -133,7 +140,15 @@ def test_training_budget_includes_old_replay_scenarios_but_evaluation_honors_its
     assert trajectory.transitions[-1].info["stomp_completed"]
 
 
-def test_revision_two_oracles_stomp_and_finish_and_fixed_spawn_jump_does_not_solve_all_tiers():
+def first_jump(actions):
+    """Approach frames and hold frames of a route's first jump."""
+    walk = actions.index(2)
+    hold = next(i for i in range(walk, len(actions)) if actions[i] != 2) - walk
+    return walk, hold
+
+
+@pytest.mark.timeout(300)  # Twelve NES layouts take 3-9 s each to generate.
+def test_oracles_stomp_and_finish_and_fixed_spawn_jump_does_not_solve_all_tiers():
     starts, walks, holds, directions = set(), set(), set(), set()
     fixed_results = []
     for difficulty in ("easy", "medium", "hard"):
@@ -145,20 +160,24 @@ def test_revision_two_oracles_stomp_and_finish_and_fixed_spawn_jump_does_not_sol
                 family="enemy_stomp",
                 difficulty=difficulty,
             )
-            assert sample.parameters["family_revision"] == 2
             assert sample.reachability["reachable"] and sample.reachability["stomp_completed"]
-            assert sample.reachability["completion_steps"] <= 160
+            # NES oracles stomp and run to x=334 in 137-173 frames across seeds
+            # 0-39 of every tier and split; these twelve take 137-170.
+            assert sample.reachability["completion_steps"] <= 180
             assert "stomp_window" not in sample.parameters
             actions = block_smb_monte_carlo_oracle_actions(sample.scenario)
             assert validate_block_smb_monte_carlo_oracle(sample.scenario, actions)[
                 "stomp_completed"
             ]
             starts.add(sample.parameters["spawn_x"])
-            walks.add(sample.parameters["oracle_approach_frames"])
-            holds.add(sample.parameters["oracle_hold_frames"])
+            # Read the stored route itself: most layouts keep the local-search
+            # fallback, which the generator's approach/hold parameters miss.
+            walk, hold = first_jump(actions)
+            walks.add(walk)
+            holds.add(hold)
             directions.add(sample.parameters["enemy_initial_direction"])
             fixed_results.append(
-                validate_block_smb_monte_carlo_oracle(sample.scenario, [2] * 16 + [1] * 144)[
+                validate_block_smb_monte_carlo_oracle(sample.scenario, [2] * 32 + [1] * 288)[
                     "reachable"
                 ]
             )
@@ -253,35 +272,40 @@ def test_recovery_policy_credit_combines_jump_and_release_intents():
         stage.env.close()
 
 
-def medium_audit_sample(index):
-    """The two production failures: short-but-reachable and impossible takeoff."""
+def audit_sample(index, difficulty):
+    """Spawn takeoffs: short-but-reachable (easy 250) and impossible (medium 251).
+
+    Medium enemies start 92-116 px away; no hold from a standstill reaches one.
+    """
     return sample_block_smb_monte_carlo_scenario(
         split="validation",
         seed=50000,
         sample_index=index,
         family="enemy_stomp",
-        difficulty="medium",
+        difficulty=difficulty,
     )
 
 
 @pytest.mark.parametrize("steps", [1, 40])
-def test_medium_stomp_uses_certified_holds_even_before_contact_window(steps):
+def test_short_stomp_takeoff_uses_certified_holds_even_before_contact_window(steps):
     from retroagi.core.smb_coaching import training_target
     from retroagi.stages.block_smb.local_traversal import safe_jump_holds
     from scripts.tests.test_stomp_coaching import held_policy
 
-    sample = medium_audit_sample(250)
+    sample = audit_sample(250, "easy")
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=sample.scenario)
         safe = safe_jump_holds(env, training_target(env), 1)
-        assert safe == [14, 15, 16]
+        # Only the two longest NES holds reach the enemy 53 px away.
+        assert safe == [28, 32]
     finally:
         env.close()
+    # The seventh bin is a 12-frame hold, which lands short on frame 34.
     trajectory = rollout(sample, held_policy(7), steps=steps)
     start = trajectory.transitions[0]
     assert start.info["primitive_valid_hold_frames"] == safe
-    assert start.info["primitive_target_hold"] == 14
+    assert start.info["primitive_target_hold"] == 28
     assert not start.info.get("jump_overreach")
     assert not start.info.get("primitive_unreachable")
 
@@ -293,7 +317,7 @@ def test_impossible_medium_stomp_penalizes_takeoff_without_duration_label(steps,
     from retroagi.stages.block_smb.local_traversal import safe_jump_holds
     from scripts.tests.test_stomp_coaching import held_policy
 
-    sample = medium_audit_sample(251)
+    sample = audit_sample(251, "medium")
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=sample.scenario)
@@ -323,14 +347,15 @@ def test_certified_stomp_duration_loss_moves_mass_into_successful_holds():
     from retroagi.stages.block_smb.train import block_smb_duration_coaching_loss
     from scripts.tests.test_stomp_coaching import held_policy
 
-    trajectory = rollout(medium_audit_sample(250), held_policy(7), steps=1)
+    trajectory = rollout(audit_sample(250, "easy"), held_policy(7), steps=1)
     step = trajectory.transitions[0]
     logits = torch.zeros(1, 1, 16, requires_grad=True)
     step.hold_duration_logits = logits
     loss = block_smb_duration_coaching_loss(step, device=torch.device("cpu"))
     loss.backward()
-    assert (logits.grad[..., :13] > 0).all()  # Suppress every invalid hold, including 7 and 8.
-    assert (logits.grad[..., 13:] < 0).all()  # Increase all three certified choices.
+    # Bins 14 and 15 are the certified 28- and 32-frame holds.
+    assert (logits.grad[..., :14] > 0).all()  # Suppress every invalid hold, including 12.
+    assert (logits.grad[..., 14:] < 0).all()  # Increase both certified choices.
 
 
 def test_stomp_certification_tracks_enemy_behind_mario_during_leftward_recovery():

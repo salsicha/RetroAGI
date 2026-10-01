@@ -6,14 +6,12 @@ from dataclasses import dataclass, is_dataclass, replace
 import torch
 
 from retroagi.core.actions import SMBParameterizedPrimitiveExecutor, SMBPrimitiveExecution
-from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
 
 class BlockSMBPrimitiveExecutor(SMBParameterizedPrimitiveExecutor):
     def __init__(self, env, **kwargs):
-        self.jump_frames = (
-            NES_JUMP_FRAMES if env.physics_profile == NES_PHYSICS_PROFILE else tuple(range(1, 17))
-        )
+        self.jump_frames = NES_JUMP_FRAMES
         # Every plant layout re-decides waits each frame. Keying this on the
         # private timed_crossing flag gave observationally identical clearance
         # layouts 4-64 frame committed waits that could not react to retraction.

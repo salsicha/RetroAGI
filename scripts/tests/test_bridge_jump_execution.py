@@ -31,7 +31,6 @@ def bridge_case(request):
         seed=101,
         sample_index=0,
         difficulty="easy",
-        validate_reachability=False,
     )
 
 
@@ -49,7 +48,6 @@ def test_oracle_duration_labels_reproduce_landings_through_policy_executor(bridg
         seed=101,
         sample_index=0,
         difficulty=difficulty,
-        validate_reachability=False,
     )
     actions = case.oracle["actions"]
     departure = actions.index(2)
@@ -190,7 +188,6 @@ def test_teacher_departs_from_the_robust_window(bridge_case, difficulty):
         seed=101,
         sample_index=1,
         difficulty=difficulty,
-        validate_reachability=False,
     )
     env = MarioScenarioEnv()
 
@@ -232,7 +229,6 @@ def test_hard_dismount_alternatives_do_not_require_five_safe_holds():
         seed=50000,
         sample_index=710,
         difficulty="hard",
-        validate_reachability=False,
     )
     env = MarioScenarioEnv()
     try:

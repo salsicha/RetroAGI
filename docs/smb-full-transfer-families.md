@@ -21,8 +21,7 @@ The three names append to the existing 24-family registry, preserving old
 family indices in cached demonstrations. Existing families retain their
 explicit-family replay seeds and generators. New cases use the standard stable
 split/seed/index machinery, full-route reachability validation, local skill
-goals, duration labels, and generated demonstration collection. Family revision
-1 describes their initial geometry distributions.
+goals, duration labels, and generated demonstration collection.
 
 All three participate in bounded policy-state recovery. The stair-gap
 collector keeps searching beyond early-step repairs and favors the later gap;
@@ -40,11 +39,9 @@ them or explicitly refresh all three when using the cached joint-learning tool.
 The model architecture and observation dimensions are unchanged.
 
 These are parameterized Block analogues, not exact NES failure-state copies.
-They use the same Block physics as the existing curriculum. The NES jump-hold
-mapping remains necessary and separate: mixing unmarked physics profiles into
-a shared family curriculum would introduce ambiguous training targets. Full
-SMB still has different flight dynamics, visual features, and unavailable
-motion information. New-family reachability or Block accuracy does not prove
+They use the same physics as the rest of the curriculum. Full SMB still has
+different visual features, and water, climbing and power states remain outside
+the shared physics. New-family reachability or Block accuracy does not prove
 that a policy will complete NES levels.
 
 The previous NES trials are now development evidence for choosing these
@@ -104,9 +101,9 @@ suffixes through the fixed jump executor, and retains late enemy arrivals when
 selecting its limited repair set. Stomp bounces remain exempt from normal jump
 release because they reset the executor.
 
-Demonstration contract 8 records forced-release masks explicitly, including at
-recovery suffix boundaries. Earlier cached labels require regeneration; changing
-only the cache version or applying the old walking-mask migration is insufficient.
+Demonstrations record forced-release masks explicitly, including at recovery
+suffix boundaries. Earlier cached labels require regeneration; applying the old
+walking-mask migration is insufficient.
 The separate canonical NES executor has different landing/press-edge semantics;
 this change does not impose the Block release delay on that runtime.
 
@@ -135,8 +132,8 @@ The September 15 comparison recipe ran ten epochs and set `retain_checkpoint_epo
 checkpoint, it preserves `checkpoints/policy.epoch5.pth` with its JSON sidecar.
 That snapshot includes model, optimizer, RNG state, configuration, and metrics;
 later epochs do not overwrite it. A `checkpoint_retained` event identifies it
-in the run log. Fresh runs regenerate contract-8 demonstrations so the landing
-and recovery fixes enter both bootstrap training and later rehearsal.
+in the run log. Fresh runs regenerate demonstrations so the landing and
+recovery fixes enter both bootstrap training and later rehearsal.
 
 
 ## Piranha Plant avoidance (2026-09-16)
@@ -187,8 +184,7 @@ routes must also replay successfully against the original cycling environment
 through the normal primitive executor. Probe snapshots restore all live state.
 The simulation still cycles normally and all plant contacts remain lethal.
 
-The full-volume recipe enables `hazard_observations`, a versioned extension to
-the existing motion-aware geometry contract. Six shared Block/NES features add
+The shared observation includes enemy history. Six shared Block/NES features add
 visible-enemy presence, observed vertical velocity, velocity availability,
 visibility transitions, time since a visibility transition, and time since last
 sighting. Velocity comes from consecutive observed positions; occluded/offscreen
@@ -202,14 +198,10 @@ continues through later arrivals and attempts, retaining later valid suffixes
 within the existing per-trajectory budget. Successful episodes still enter the
 normal success-replay machinery.
 
-Plant family revision 2 and demonstration contract 9 identify the new teaching
-rules. Old plant labels must be regenerated; the new history input layout also
-requires fresh demonstrations. Checkpoint restore rejects a history-layout
-mismatch even though the model tensor dimensions happen to match. Checkpoints
-without the flag retain their prior inputs, including Full SMB transfer. New
-full-volume training remains 15 epochs with retained checkpoints at 5 and 10.
-The history extension currently supports `smb_geometry_v1`; it is not enabled for
-the separate canonical `smb_scene_v2` projection.
+Old plant labels must be regenerated; the history inputs also require fresh
+demonstrations. Checkpoint restore rejects an observation mismatch even though
+the model tensor dimensions happen to match. New full-volume training remains
+15 epochs with retained checkpoints at 5 and 10.
 
 Validation passed 201 distinct regression tests across the main and additional
 history/cache checks. All 34 previously failed audit trajectories still have
@@ -238,13 +230,13 @@ layout compatibility but did not compare collected demonstrations with playback.
 Collection now advances the adapter before saving each next observation. This
 also reconstructs history throughout unsupervised recovery prefixes. New tests
 compare every collected C input and the terminal next-C target against normal
-playback, both with history enabled and with the legacy layout, including a
-recovery splice after frame 12. They fail on the old collector and pass with the
-correction. No policy-time action rule or hazard physics changed.
+playback, including a recovery splice after frame 12. They fail on the old
+collector and pass with the correction. No policy-time action rule or hazard
+physics changed.
 
-Demonstration contract 10 invalidates all history-enabled caches from earlier
-contracts, including non-plant families and recovery rows. Regenerate their
-observations from the original routes; relabeling the manifest is insufficient.
+Caches collected before this correction are invalid, including non-plant
+families and recovery rows. Regenerate their observations from the original
+routes; relabeling the manifest is insufficient.
 Checkpoint input dimensions and feature meanings are unchanged. An already
 running trainer continues to use its loaded collector and stale in-memory data;
 it needs a restart with regenerated demonstrations to use this correction.
@@ -275,4 +267,4 @@ The full-volume recipe now runs 20 epochs and natively retains snapshots at
 5, 10, 15, and 20. Each `policy.epochN.pth` has a matching JSON sidecar and
 contains model, optimizer, RNG state, configuration, and metrics. The rolling
 checkpoint continues to update independently. Fresh training regenerates
-contract-10 demonstrations, including the enemy-history collection correction.
+demonstrations, including the enemy-history collection correction.

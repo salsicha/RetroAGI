@@ -208,6 +208,8 @@ class TestVisionInterface(unittest.TestCase):
         stage = BlockSMBStage(vision=encoder)
         try:
             observation = stage.reset(seed=6)
+            while not stage.env.mario["on_ground"]:  # a grounded frame has a support label
+                observation = stage.step(0)[0]
             metrics = evaluate_block_vit_perception(
                 encoder,
                 torch.as_tensor(observation),

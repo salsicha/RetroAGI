@@ -8,7 +8,7 @@ import torch
 
 from retroagi.core.models import TACTIC_STANCES
 from retroagi.core.smb_enemy_history import EnemyObservationHistory
-from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
+from retroagi.stages.block_smb.adapter import BlockSMBStage
 from retroagi.stages.block_smb.demonstrations import collect_demonstrations, fit_demonstrations
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
@@ -19,6 +19,7 @@ from retroagi.stages.block_smb.monte_carlo import (
 from retroagi.stages.block_smb.piranha import plant_oracle
 from retroagi.stages.block_smb.piranha_tactics import (
     fresh_retraction,
+    plant_forecasts,
     tactical_choice,
     timed_safe_holds,
 )
@@ -79,7 +80,8 @@ def test_wait_then_cross_uses_observed_retraction_and_real_executor(difficulty):
             for action in actions:
                 features = history.observe(env, env.steps)
                 if action == 2 and env.mario["on_ground"]:
-                    assert fresh_retraction(features)
+                    # Departures follow an observed descent or retraction.
+                    assert plant_forecasts(env, features)
                     assert timed_safe_holds(env, features)
                 _, _, done, _, info = env.step(action)
                 assert not info["death"] and info["reward_terms"]["enemy_stomp"] == 0
@@ -146,8 +148,6 @@ def test_clearance_waits_are_frame_decisions_without_duration_labels():
     from retroagi.stages.block_smb.piranha import conservative_suffix
 
     config = tiny_config(
-        motion_observations=True,
-        hazard_observations=True,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
     )
@@ -176,8 +176,6 @@ def test_clearance_waits_are_frame_decisions_without_duration_labels():
 def test_demonstrations_jointly_train_tactics_skill_and_primitive():
     torch.manual_seed(4)
     config = tiny_config(
-        motion_observations=True,
-        hazard_observations=True,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
     )
@@ -244,8 +242,6 @@ def test_demonstrations_jointly_train_tactics_skill_and_primitive():
 def test_online_intent_spans_flight_while_action_coaching_is_decision_masked():
     torch.manual_seed(5)
     config = tiny_config(
-        motion_observations=True,
-        hazard_observations=True,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
     )
@@ -254,9 +250,6 @@ def test_online_intent_spans_flight_while_action_coaching_is_decision_masked():
     stage = BlockSMBStage(
         scenario=sample.scenario,
         vision=StaticBlockVision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=True, hazard_observations=True
-        ),
     )
     try:
         trajectory = collect_trajectory(
@@ -328,16 +321,12 @@ def test_evaluation_reports_temporal_and_clearance_crossings_separately(monkeypa
             break
     assert len(samples) == 2
     cases = BlockSMBMonteCarloSampleSet(
-        schema_version=sample.schema_version,
-        distribution_id=sample.distribution_id,
         split="validation",
         seed=0,
         samples=tuple(samples.values()),
     )
     monkeypatch.setattr(train, "sample_block_smb_monte_carlo_split", lambda **kwargs: cases)
     config = tiny_config(
-        motion_observations=True,
-        hazard_observations=True,
         evaluation_max_steps=12,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
@@ -405,10 +394,15 @@ def test_timed_teacher_stops_in_the_staging_window_without_overshoot():
         env.close()
 
 
-def test_certified_departure_window_spans_the_minimum_hidden_interval():
+def test_certified_departure_window_opens_on_observed_descent():
     import numpy as np
 
-    from retroagi.stages.block_smb.piranha_tactics import MIN_HIDDEN_FRAMES
+    from retroagi.stages.block_smb.piranha_tactics import (
+        MIN_HIDDEN_FRAMES,
+        TIMED_PLANT_HEIGHT,
+        TIMED_RISE_FRAMES,
+        timed_run_on,
+    )
 
     sample = next(s for s in _timed_samples() if s.oracle["actions"].count(0) > 20)
     env = MarioScenarioEnv()
@@ -418,18 +412,31 @@ def test_certified_departure_window_spans_the_minimum_hidden_interval():
             if action == 0 and env.mario["vx"] == 0 and env.mario["on_ground"]:
                 break
             env.step(action)
+        saved = snapshot_env_state(env)
 
-        def history(age):
+        def hidden(age):
             return np.array([0, 0, 0, -float(age == 1), age / 64, age / 64], dtype=np.float32)
 
-        assert not fresh_retraction(history(MIN_HIDDEN_FRAMES))
-        assert not fresh_retraction(np.array([1, 0, 1, 0, 0, 0], dtype=np.float32))
-        holds = [set(timed_safe_holds(env, history(age))) for age in range(1, MIN_HIDDEN_FRAMES)]
-        assert all(fresh_retraction(history(age)) for age in range(1, MIN_HIDDEN_FRAMES))
-        assert holds[0]
-        # Less remaining hidden time can only remove certified holds.
-        assert all(later <= earlier for earlier, later in zip(holds, holds[1:]))
-        assert any(holds[age - 1] for age in range(9, MIN_HIDDEN_FRAMES))
+        def seen(height, drop):
+            restore_env_state(env, saved)
+            plant = env.enemies[0]
+            plant.update(h=height, y=plant["pipe_top"] - height)
+            return np.array([1, drop / 8, 1, 0, 0, 0], dtype=np.float32)
+
+        assert not fresh_retraction(hidden(MIN_HIDDEN_FRAMES))
+        # A standing NES jump cannot clear the timed pipe, even just after it empties.
+        assert not any(timed_safe_holds(env, hidden(age)) for age in range(1, MIN_HIDDEN_FRAMES))
+        # A raised plant that is still or rising bounds no retraction.
+        assert not timed_run_on(env, seen(TIMED_PLANT_HEIGHT, 0))
+        assert not timed_run_on(env, seen(TIMED_PLANT_HEIGHT, -TIMED_PLANT_HEIGHT / 12))
+        # An observed descent certifies a run-up for every rise duration in the family.
+        for rise in TIMED_RISE_FRAMES:
+            for height in range(TIMED_PLANT_HEIGHT, 0, -20):
+                assert timed_run_on(env, seen(height, TIMED_PLANT_HEIGHT / rise))
+        # Less remaining hidden time can only remove certified run-ups.
+        restore_env_state(env, saved)
+        run_on = [timed_run_on(env, hidden(age)) for age in range(1, MIN_HIDDEN_FRAMES, 2)]
+        assert run_on == sorted(run_on, reverse=True) and not run_on[-1]
     finally:
         env.close()
 
@@ -477,9 +484,6 @@ def test_timed_training_budget_leaves_room_for_the_next_window():
 
 def test_uncertified_clearance_takeoffs_receive_no_hindsight_duration_target():
     config = tiny_config(
-        motion_observations=True,
-        hazard_observations=True,
-        hazard_memory_observations=True,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
     )
@@ -493,9 +497,6 @@ def test_uncertified_clearance_takeoffs_receive_no_hindsight_duration_target():
     stage = BlockSMBStage(
         scenario=scenario,
         vision=StaticBlockVision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=True, hazard_observations=True, hazard_memory_observations=True
-        ),
     )
     try:
         # A full jump from the spawn cannot clear a clearance pipe and plant.
@@ -537,8 +538,6 @@ def test_overshoot_demonstration_supervises_only_the_correction():
     finally:
         env.close()
     config = tiny_config(
-        motion_observations=True,
-        hazard_observations=True,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
     )

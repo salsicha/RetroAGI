@@ -45,7 +45,8 @@ class TestBlockSMBPhysics(unittest.TestCase):
     def test_vertical_and_horizontal_platform_collisions_resolve(self):
         env = self.make_env(
             {
-                "mario": [27, 204],
+                # NES Mario is 10 px wide: x=31 overlaps the wall at x=40 by 1 px.
+                "mario": [31, 204],
                 "platforms": [[0, 220, 256, 20], [40, 180, 10, 40]],
             }
         )
@@ -55,7 +56,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
 
             self.assertFalse(terminated)
             self.assertFalse(truncated)
-            self.assertEqual(env.mario["x"], 26)
+            self.assertEqual(env.mario["x"], 40 - env.mario["w"])
             self.assertEqual(env.mario["vx"], 0)
             self.assertEqual(env.mario["y"] + env.mario["h"], 220)
             self.assertTrue(env.mario["on_ground"])
@@ -90,7 +91,10 @@ class TestBlockSMBPhysics(unittest.TestCase):
     def test_jump_started_gap_fall_adds_gap_jump_penalty(self):
         env = self.make_env(
             {
-                "mario": [82, 204],
+                # NES Mario accelerates slowly from rest, so a tapped hop only
+                # drifts ~6 px; start close enough that the hop itself carries
+                # him past the ledge at x=92 (from x=82 he lands, then walks off).
+                "mario": [88, 204],
                 "platforms": [[0, 220, 92, 20]],
                 "world_width": 256,
             }
@@ -204,15 +208,17 @@ class TestBlockSMBPhysics(unittest.TestCase):
         finally:
             side_env.close()
 
+        # Velocity lives in the NES motion state, so it is seeded through the
+        # scenario; 4 px/frame is the NES terminal fall speed.
         stomp_env = self.make_env(
             {
-                "mario": [20, 190],
+                "mario": [20, 196],
+                "mario_velocity": [0, 4],
                 "platforms": [[0, 220, 256, 20]],
                 "enemies": [[22, 206, 22, 22, 0]],
             }
         )
         try:
-            stomp_env.mario["vy"] = 8.0
             _, reward, terminated, truncated, info = stomp_env.step(0)
             self.assertFalse(terminated)
             self.assertFalse(truncated)
@@ -231,7 +237,8 @@ class TestBlockSMBPhysics(unittest.TestCase):
     def test_goal_on_stomp_grants_goal_credit_on_stomp(self):
         env = self.make_env(
             {
-                "mario": [20, 190],
+                "mario": [20, 196],
+                "mario_velocity": [0, 4],
                 "platforms": [[0, 220, 256, 20]],
                 "enemies": [[22, 206, 22, 22, 0]],
                 "goal": [20, 186, 16, 20],
@@ -239,7 +246,6 @@ class TestBlockSMBPhysics(unittest.TestCase):
             }
         )
         try:
-            env.mario["vy"] = 8.0
             _, reward, terminated, truncated, info = env.step(0)
             # The stomp itself is the goal: terminated with goal credit,
             # no death, through the same channel as rect goals.
@@ -260,10 +266,12 @@ class TestBlockSMBPhysics(unittest.TestCase):
         # Mario hangs in the air overlapping the goal proxy rect above the
         # enemy without stomping. The old rect-goal path would score this;
         # under goal_on_stomp it must not, and the rect must follow the
-        # patrolling enemy each frame.
+        # patrolling enemy each frame. NES Mario (12 px tall) falls from rest
+        # at under 1 px/frame, so y=180 keeps his feet inside the proxy rect
+        # (top 190) and well above the enemy's damage body (top 210).
         env = self.make_env(
             {
-                "mario": [118, 170],
+                "mario": [118, 180],
                 "platforms": [[0, 220, 256, 20]],
                 "enemies": [[120, 206, 100, 140, 1.0]],
                 "goal": [118, 186, 16, 20],
@@ -323,16 +331,20 @@ class TestBlockSMBPhysics(unittest.TestCase):
         scenario = MarioScenarioEnv.generate_scenario(seed=77)
         env = self.make_env(scenario)
         try:
+            # Reset settles a spawn hovering a few pixels above the floor onto
+            # it, so the restored state is the settled spawn, not the raw y.
+            spawn = dict(env.mario)
             env.step(1)
             env.step(1)
             self.assertNotEqual(env.steps, 0)
+            self.assertNotEqual(env.mario, spawn)
 
             _, info = env.reset(scenario=scenario, seed=77)
             self.assertEqual(env.steps, 0)
             self.assertEqual(env.score, 0)
             self.assertEqual(env.camera_x, 0.0)
             self.assertEqual(env.mario["x"], scenario["mario"][0])
-            self.assertEqual(env.mario["y"], scenario["mario"][1])
+            self.assertEqual(env.mario, spawn)
             self.assertEqual(info["max_x_reached"], float(scenario["mario"][0]))
 
             regenerated = MarioScenarioEnv.generate_scenario(seed=77)

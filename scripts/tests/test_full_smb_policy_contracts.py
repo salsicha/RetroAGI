@@ -34,6 +34,7 @@ from retroagi.stages.full_smb import (
 from retroagi.stages.full_smb.transfer import FULL_SMB_TRANSFER_CHECKPOINT_KIND
 from scripts.tests.test_full_smb_transfer import (
     TinyFullSMBEnv,
+    TinyRAMFullSMBEnv,
     write_block_policy_checkpoint,
     write_full_smb_vision_checkpoint,
 )
@@ -42,6 +43,18 @@ from scripts.tests.test_full_smb_transfer import (
 def _tiny_stage(vision):
     return FullSMBStage(
         env=TinyFullSMBEnv(),
+        vision=vision,
+        observation_config=FullSMBObservationConfig(
+            frame_skip=1,
+            frame_stack=2,
+            resize_shape=(16, 20),
+        ),
+    )
+
+
+def _tiny_ram_stage(vision):
+    return FullSMBStage(
+        env=TinyRAMFullSMBEnv(),
         vision=vision,
         observation_config=FullSMBObservationConfig(
             frame_skip=1,
@@ -155,8 +168,9 @@ class TestFullSMBPolicyContracts(unittest.TestCase):
                 _tiny_train_config(
                     full_vision_path,
                     init_checkpoint=block_policy_path,
+                    imitation_warm_start=False,
                 ),
-                make_stage=_tiny_stage,
+                make_stage=_tiny_ram_stage,
             )
 
         source = result.checkpoint["config"]["training_source"]

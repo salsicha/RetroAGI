@@ -14,7 +14,6 @@ from retroagi.core import (
     StageBatch,
     StageSpec,
     VisionEncoder,
-    VisionHierarchyProjector,
     block_smb_action,
 )
 from retroagi.stages.block_smb.env import MarioScenarioEnv
@@ -22,7 +21,7 @@ from retroagi.stages.block_smb.vision import BlockVisionTransformer
 
 BLOCK_SMB_SPEC = StageSpec(
     name="block_smb",
-    observation_kind="low-resolution pygame RGB plus symbolic state_vec",
+    observation_kind="low-resolution pygame RGB plus observed screen geometry",
     action_kind="shared SMBAction vocabulary",
     seq_len_a=8,
     ratio_ab=2,
@@ -41,33 +40,10 @@ class BlockSMBObservationConfig:
     """Preprocessing contract for Block SMB policy observations."""
 
     frame_stack: int = 4
-    state_min: float = -1.0
-    state_max: float = 1.0
-    motion_observations: bool = False
-    hazard_observations: bool = False
-    hazard_memory_observations: bool = False
-    scene_schema: str = "smb_geometry_v1"
-    observation_provider: str = "oracle"
 
     def __post_init__(self) -> None:
-        if self.hazard_observations and (
-            not self.motion_observations or self.scene_schema != "smb_geometry_v1"
-        ):
-            raise ValueError("Enemy history v1 requires the motion-aware legacy geometry contract")
-        if self.hazard_memory_observations and not self.hazard_observations:
-            raise ValueError("Enemy peak-exposure memory extends enemy history v1")
-        if self.observation_provider not in ("oracle", "perceived"):
-            raise ValueError("Unsupported observation provider")
-        if self.observation_provider == "perceived" and self.scene_schema != "smb_scene_v2":
-            raise ValueError("Perceived geometry requires canonical scene interfaces")
-        if self.scene_schema not in ("smb_geometry_v1", "smb_scene_v2"):
-            raise ValueError("Unsupported SMB scene schema")
-        if self.scene_schema == "smb_scene_v2" and not self.motion_observations:
-            raise ValueError("Canonical scenes require motion observations")
         if self.frame_stack <= 0:
             raise ValueError("frame_stack must be positive")
-        if self.state_min >= self.state_max:
-            raise ValueError("state_min must be smaller than state_max")
 
 
 class BlockSMBStage:
@@ -82,19 +58,18 @@ class BlockSMBStage:
         vision: Optional[VisionEncoder] = None,
         observation_config: BlockSMBObservationConfig = BlockSMBObservationConfig(),
     ):
+        from retroagi.core.smb_enemy_history import EnemyObservationHistory
+        from retroagi.core.smb_scene import ObjectiveMemory, SMBProjector
+
         self.env = env or MarioScenarioEnv()
         self.scenario = scenario
         self.vision = vision or BlockVisionTransformer()
         self.observation_config = observation_config
-        self.env.render_goal = observation_config.scene_schema != "smb_scene_v2"
+        # The finish marker is simulator truth, not part of the visible game.
+        self.env.render_goal = False
         if isinstance(self.vision, torch.nn.Module):
             self.vision.eval()
-        if observation_config.scene_schema == "smb_scene_v2":
-            from retroagi.core.smb_scene import CanonicalSMBProjector
-
-            self.vision_projector = CanonicalSMBProjector(self.spec)
-        else:
-            self.vision_projector = VisionHierarchyProjector(self.spec)
+        self.vision_projector = SMBProjector(self.spec)
         self.last_info: Mapping[str, Any] = {}
         self._frame_stack: deque[torch.Tensor] = deque(maxlen=self.observation_config.frame_stack)
         self._frame_mask: deque[bool] = deque(maxlen=self.observation_config.frame_stack)
@@ -103,16 +78,11 @@ class BlockSMBStage:
         self._last_truncated = False
         self._cached_vision_frame = None
         self._cached_vision = None
-        from retroagi.core.smb_tracking import PerceivedSMBScene
-
-        self.scene_tracker = PerceivedSMBScene()
-        from retroagi.core.smb_enemy_history import EnemyObservationHistory
-
+        self.objective_memory = ObjectiveMemory()
         self.enemy_history = EnemyObservationHistory()
         self._hazard_features = self.enemy_history.cached.copy()
+        # Peak exposure is a world-model memory target, never a policy input.
         self._hazard_memory = self.enemy_history.memory_features()
-        self._scene_frame = None
-        self._scene_cache = None
 
     def reset(self, seed: Optional[int] = None):
         obs, info = self.env.reset(scenario=self.scenario, seed=seed)
@@ -125,9 +95,7 @@ class BlockSMBStage:
         self._last_truncated = False
         self._cached_vision_frame = None
         self._cached_vision = None
-        self.scene_tracker.reset()
-        self._scene_frame = None
-        self._scene_cache = None
+        self.objective_memory.reset()
         self._reset_frame_stack(obs)
         return obs
 
@@ -145,77 +113,31 @@ class BlockSMBStage:
     def encode_observation(
         self, observation: np.ndarray, info: Optional[Mapping[str, Any]] = None
     ) -> StageBatch:
-        """Convert block-SMB vision and symbolic state into the hierarchy."""
+        """Convert block-SMB vision and observed geometry into the hierarchy."""
+        from retroagi.core.smb_scene import canonical_vision
+
         info = info or self.last_info
         if not self._frame_stack:
             self._reset_frame_stack(observation)
         normalized_observation = self._normalize_observation(observation)
         if not torch.equal(self._frame_stack[-1], normalized_observation):
             self._append_frame(observation, valid=True)
-        state_vec = self.state_features(info)
         # A transition's next frame is the next decision's current frame.
         # The frozen encoder need only process those identical pixels once;
-        # symbolic state and episode metadata are still projected on every call.
+        # geometry and episode metadata are still projected on every call.
         if self._cached_vision_frame is None or not torch.equal(
             normalized_observation, self._cached_vision_frame
         ):
             with torch.no_grad():
                 self._cached_vision = self.vision.encode(normalized_observation)
             self._cached_vision_frame = normalized_observation.clone()
-        vision = self._cached_vision
-        projection_kwargs = {}
-        geometry_metadata = {}
-        if self.observation_config.scene_schema == "smb_scene_v2":
-            from retroagi.core.smb_scene import block_oracle_scene, canonical_vision
-
-            vision = canonical_vision(vision, "block")
-            if self._scene_frame != self.env.steps:
-                self._scene_cache = (
-                    self.scene_tracker.observe(
-                        vision,
-                        terminated=self._last_terminal,
-                        truncated=self._last_truncated,
-                        goal_direction=(self.scenario or {}).get("task_direction", 1),
-                        objective_kind=(self.scenario or {}).get("task_objective"),
-                    )
-                    if self.observation_config.observation_provider == "perceived"
-                    else block_oracle_scene(
-                        self.env,
-                        terminated=self._last_terminal,
-                        truncated=self._last_truncated,
-                        objective_kind=(self.scenario or {}).get("task_objective"),
-                    )
-                )
-                if self.observation_config.observation_provider == "oracle":
-                    from retroagi.core.smb_scene import preserve_objective
-
-                    if self.env.mario["on_ground"]:
-                        self.scene_tracker.bouncing = False
-                    elif info.get("reward_terms", {}).get("enemy_stomp", 0) > 0:
-                        self.scene_tracker.bouncing = True
-                    self._scene_cache["bouncing"] = getattr(self.scene_tracker, "bouncing", False)
-                    self._scene_cache = preserve_objective(self._scene_cache, self.scene_tracker)
-                self._scene_frame = self.env.steps
-            from retroagi.core.smb_scene import apply_local_target
-
-            geometry = apply_local_target(self._scene_cache)
-            state_vec = np.clip(
-                np.concatenate(
-                    (geometry["features"]["state_vec"], geometry["features"]["motion_vec"])
-                ),
-                -1.0,
-                1.0,
-            )
-            projection_kwargs["availability"] = geometry["availability"]
-            geometry_metadata["smb_geometry"] = geometry
-
+        vision = canonical_vision(self._cached_vision, "block")
+        geometry = self.geometry(info)
         return self.vision_projector.project(
             vision,
-            state=torch.as_tensor(state_vec, device=vision.position.device),
-            **projection_kwargs,
+            self._observed(geometry),
             metadata={
-                **geometry_metadata,
-                "smb_observation_schema": self.observation_config.scene_schema,
+                "smb_geometry": geometry,
                 "raw_observation_shape": observation.shape,
                 "observation": self._observation_metadata(vision.position.device),
                 "episode": {
@@ -230,6 +152,39 @@ class BlockSMBStage:
                 "info": info,
             },
         )
+
+    def geometry(self, info=None):
+        """The current frame's geometry record, with the visible local objective."""
+        from retroagi.core.smb_scene import (
+            apply_local_target,
+            block_oracle_scene,
+            preserve_objective,
+        )
+
+        info = info or self.last_info
+        geometry = block_oracle_scene(
+            self.env,
+            terminated=self._last_terminal,
+            truncated=self._last_truncated,
+            objective_kind=(self.scenario or {}).get("task_objective"),
+        )
+        if self.env.mario["on_ground"]:
+            self.objective_memory.bouncing = False
+        elif info.get("reward_terms", {}).get("enemy_stomp", 0) > 0:
+            self.objective_memory.bouncing = True
+        geometry["bouncing"] = self.objective_memory.bouncing
+        geometry["enemy_history"] = self._hazard_features
+        return apply_local_target(preserve_objective(geometry, self.objective_memory))
+
+    def state_features(self, info=None):
+        """The geometry observer's C-stream slots for the env's current frame."""
+        return self._observed(self.geometry(info))
+
+    @staticmethod
+    def _observed(geometry):
+        from retroagi.core.smb_scene import observed_features
+
+        return observed_features(geometry, geometry["enemy_history"])
 
     def _reset_frame_stack(self, observation: np.ndarray) -> None:
         self._frame_stack.clear()
@@ -258,30 +213,6 @@ class BlockSMBStage:
             tensor = tensor / 255.0
         return tensor.clamp(0.0, 1.0)
 
-    def state_features(self, info):
-        state = self._normalize_state_vec(info["state_vec"])
-        if self.observation_config.motion_observations:
-            state = np.concatenate((state, self._normalize_state_vec(info["motion_vec"])))
-        if self.observation_config.hazard_observations:
-            state = np.concatenate((state, self._hazard_features))
-        if self.observation_config.hazard_memory_observations:
-            state = np.concatenate((state, self._hazard_memory))
-        return state
-
-    def _normalize_state_vec(self, state_vec: Any) -> np.ndarray:
-        state = np.asarray(state_vec, dtype=np.float32)
-        state = np.nan_to_num(
-            state,
-            nan=0.0,
-            posinf=self.observation_config.state_max,
-            neginf=self.observation_config.state_min,
-        )
-        return np.clip(
-            state,
-            self.observation_config.state_min,
-            self.observation_config.state_max,
-        )
-
     def _observation_metadata(self, device: torch.device) -> dict[str, Any]:
         frame_stack = torch.stack(tuple(self._frame_stack), dim=0).permute(0, 3, 1, 2)
         return {
@@ -291,43 +222,26 @@ class BlockSMBStage:
             ).unsqueeze(0),
             "frame_stack_size": self.observation_config.frame_stack,
             "normalized_range": (0.0, 1.0),
-            "state_range": (
-                self.observation_config.state_min,
-                self.observation_config.state_max,
-            ),
+            "state_range": (-1.0, 1.0),
         }
-
-
-# Static C-stream layout for Block SMB, matching VisionHierarchyProjector's
-# fusion of the Block ViT output: position (mario x, y), semantic class
-# probabilities, support-state softmax (air/ground/platform), then the 27-dim
-# env state_vec. The drift guard in scripts/tests/test_block_smb_training.py
-# asserts these spans equal the projector's runtime fusion metadata.
-BLOCK_SMB_C_POSITION_DIMS = 2
-BLOCK_SMB_C_SEMANTIC_DIMS = 7
-BLOCK_SMB_C_SUPPORT_DIMS = 3
-BLOCK_SMB_C_STATE_DIMS = 27
-# state_vec indices (see MarioScenarioEnv state_vec construction).
-BLOCK_SMB_STATE_GOAL_DISTANCE_INDEX = 17
-BLOCK_SMB_STATE_DEATH_INDEX = 24
 
 
 def block_smb_deterministic_critic_slots() -> dict[str, float]:
     """Absolute C-stream indices for deterministic critic gates.
 
-    Progress is the mechanistic decrease of the predicted normalized goal
-    distance; death is read directly from the LSTM world model's predicted
-    death flag (state_vec dim 24, trained by the terminal_outcome dynamics
-    slot). The terminated flag (dim 25) is deliberately NOT used for the
-    death gate because it also fires on goal completion.
+    Progress is the mechanistic decrease of the predicted distance to the local
+    objective; death is read directly from the LSTM world model's predicted
+    death flag (trained by the terminal_outcome dynamics slot). The terminated
+    flag is deliberately NOT used for the death gate because it also fires on
+    goal completion.
     """
+    from retroagi.core.smb_scene import c_feature_index
 
-    state_start = BLOCK_SMB_C_POSITION_DIMS + BLOCK_SMB_C_SEMANTIC_DIMS + BLOCK_SMB_C_SUPPORT_DIMS
     return {
-        "goal_distance": state_start + BLOCK_SMB_STATE_GOAL_DISTANCE_INDEX,
-        "position_x": state_start,
-        "position_y": state_start + 1,
-        "death": state_start + BLOCK_SMB_STATE_DEATH_INDEX,
+        "goal_distance": c_feature_index("goal_distance"),
+        "position_x": c_feature_index("x"),
+        "position_y": c_feature_index("y"),
+        "death": c_feature_index("death"),
         "progress_epsilon": 0.002,
         "death_threshold": 0.5,
     }

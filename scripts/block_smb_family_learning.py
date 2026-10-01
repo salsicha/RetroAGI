@@ -17,7 +17,7 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import numpy as np
 import torch
 
-from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
+from retroagi.stages.block_smb.adapter import BlockSMBStage
 from retroagi.stages.block_smb.cli import _make_vision_factory, _normalize_config_values
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.monte_carlo import (
@@ -90,11 +90,6 @@ def evaluate(model, cases, config, vision_factory, *, autonomous=False, batched=
                 env=MarioScenarioEnv(reward_config=config.reward_config),
                 scenario=scenario,
                 vision=vision_factory(),
-                observation_config=BlockSMBObservationConfig(
-                    motion_observations=config.motion_observations,
-                    hazard_observations=config.hazard_observations,
-                    hazard_memory_observations=config.hazard_memory_observations,
-                ),
             )
             try:
                 trajectory = collect_trajectory(
@@ -160,9 +155,6 @@ def main():
     parser.add_argument("--init-checkpoint", type=Path)
     parser.add_argument("--fixed-duration", action="store_true")
     parser.add_argument("--frame-walk", action="store_true")
-    parser.add_argument("--motion-observations", action="store_true")
-    parser.add_argument("--hazard-observations", action="store_true")
-    parser.add_argument("--hazard-memory-observations", action="store_true")
     parser.add_argument(
         "--feedforward",
         action="store_true",
@@ -188,15 +180,12 @@ def main():
         parser.error("Unknown family")
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
-    values = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    values = json.loads(Path("scripts/configs/block_smb_full_volume.json").read_text())
     if args.feedforward:
         values = feedforward_recipe(values)
     values.update(
         demonstration_bootstrap_updates=0,
         demonstration_rehearsal_updates=0,
-        motion_observations=args.motion_observations,
-        hazard_observations=args.hazard_observations,
-        hazard_memory_observations=args.hazard_memory_observations,
         walk_duration_primitives=not args.frame_walk,
         autonomous_policy=args.autonomous,
         demonstration_varied_routes=args.varied_demonstrations,
@@ -257,25 +246,10 @@ def main():
                 checkpoint = torch.load(
                     args.init_checkpoint, map_location=config.device, weights_only=False
                 )
-                if (
-                    bool(checkpoint["config"].get("motion_observations", False))
-                    != config.motion_observations
-                ):
-                    raise ValueError("Checkpoint motion-observation layout does not match this run")
-                if (
-                    bool(checkpoint["config"].get("hazard_observations", False))
-                    != config.hazard_observations
-                ):
-                    raise ValueError(
-                        "Checkpoint enemy-history observation layout does not match this run"
-                    )
-                if (
-                    bool(checkpoint["config"].get("hazard_memory_observations", False))
-                    != config.hazard_memory_observations
-                ):
-                    raise ValueError(
-                        "Checkpoint enemy peak-exposure layout does not match this run"
-                    )
+                from retroagi.core.smb_scene import observation_spec
+
+                if checkpoint.get("specs", {}).get("smb_observation") != observation_spec():
+                    raise ValueError("Checkpoint predates the shared SMB observation; retrain it")
                 load_block_smb_model_state(model, checkpoint["states"]["model"])
             optimizer = make_block_smb_optimizer(model, config)
             replay = BlockSMBSuccessReplay(seed=seed)

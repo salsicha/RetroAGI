@@ -1289,6 +1289,8 @@ def _run_full_smb_transfer_smoke(
             full_smb_vision_checkpoint=full_smb_vision_path,
             checkpoint_path=continued_checkpoint_path,
             save_checkpoints=True,
+            # Scripted warm-start labels do not use the shared observation.
+            imitation_warm_start=False,
         ),
         make_stage=_make_promotion_full_smb_stage,
     )
@@ -1499,6 +1501,9 @@ def _run_deterministic_full_smb_inference(
     # "deterministic" metrics are only reproducible if torch RNG is pinned here.
     torch.manual_seed(seed)
     stage = _make_promotion_full_smb_stage(vision)
+    contract = getattr(model, "smb_runtime_contract", None)
+    if contract is not None:
+        stage.configure_policy_runtime(contract)
     try:
         observation = stage.reset(seed=seed)
         batch = stage.encode_observation(observation)
@@ -1666,6 +1671,19 @@ class _PromotionTinyFullSMBEnv:
 
     def close(self) -> None:
         pass
+
+    def get_ram(self) -> np.ndarray:
+        # A flat NES screen: transferred policies read the shared SMB
+        # observation from collision RAM.
+        ram = np.zeros(0x800, dtype=np.uint8)
+        ram[0x86] = 40 + self.step_count
+        ram[0xCE] = 176
+        ram[0xB5] = 1
+        ram[0x499] = 1
+        ram[0x33] = 1
+        ram[0x500 + 11 * 16 : 0x500 + 13 * 16] = 0x54
+        ram[0x5D0 + 11 * 16 : 0x5D0 + 13 * 16] = 0x54
+        return ram
 
     def _observation(self, action_value: int) -> np.ndarray:
         base = np.arange(16 * 20, dtype=np.uint16).reshape(16, 20)

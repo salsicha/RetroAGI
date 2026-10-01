@@ -1,9 +1,8 @@
 # Joint piranha tactics, skills, and primitive training
 
-Piranha family revision 3 adds a real departure-timing problem and explicit
-tactical supervision. Family IDs are unchanged; demonstration contract 11
-requires freshly collected data. Old revision-2 scores are not directly
-comparable with revision-3 scores.
+The piranha family poses a real departure-timing problem with explicit
+tactical supervision. Demonstrations must be collected with the current teacher
+code; the joint-learning tool rejects caches built by other teacher code.
 
 ## Practice tasks
 
@@ -12,26 +11,30 @@ Every difficulty samples two types of crossing, independently of difficulty:
 - **Clearance:** the original short plant and conservative route. Mario can
   clear the obstacle while the plant is fully exposed.
 - **Timed:** an 80-pixel plant makes full-exposure clearance impossible from
-  the ground. Mario approaches a staging point 32 pixels before the pipe,
-  brakes early enough to stop inside it, observes retraction, and jumps during
-  a certified hidden interval. A certified departure found earlier on the
-  approach, including a running one, is taken instead of stopping.
+  the ground. Mario approaches a staging point 32 pixels before the pipe and
+  brakes early enough to stop inside it. A standing NES jump cannot clear the
+  timed pipe, so once the plant is seen descending he runs on and jumps when
+  the crossing is certified. A certified departure found earlier on the
+  approach is taken instead of stopping.
 
 Timed pipe widths are 36/44/52 pixels, versus 32/40/48 for clearance pipes.
 The policy's state features do not encode pipe width, so while a plant is
-hidden the two classes look identical until the plant has been seen. The
-peak-exposure memory input carries that sighting forward. A private scenario
+hidden the two classes look identical until the plant has been seen. The world
+model's peak-exposure memory carries that sighting forward. A private scenario
 flag never enters the policy input or the executor. Pipe heights remain
 22–26/30–34/38–42 pixels. Timed plants remain hidden for 48–64 frames;
 rise/retraction lasts 12–20 frames and full exposure lasts 40–64. Initial phase
 is sampled over the entire cycle.
 
 The timed teacher uses the same visible-enemy history as the policy adapter.
-An initially empty pipe has unknown phase and is not a departure cue. The
-teacher requires an observed disappearance and certifies candidate holds
-against the shortest allowed hidden interval and fastest emergence, with a
-rounding margin, so any disappearance younger than 48 frames may be probed.
-It never uses the episode's hidden phase or actual remaining timer to choose a
+An initially empty pipe has unknown phase and is not a departure cue, and
+neither is a raised plant that is not descending. The teacher forecasts the
+plant only from what it has seen: a descent continues at its measured speed
+(every rise duration consistent with that speed is checked), and an observed
+disappearance is followed by the shortest allowed hidden interval and fastest
+emergence, with a rounding margin. A departure (jump now, or run on and jump
+later) is certified only if it crosses alive under every forecast. It never
+uses the episode's hidden phase or actual remaining timer to choose a
 departure. Physics probes restore the full environment state. Timed routes are
 regenerated after a phase change; replaying a stale time-indexed action list is
 intentionally not guaranteed safe.
@@ -65,9 +68,9 @@ scene's scalar fields. Positional gain and the stance-to-context projection
 start at zero to preserve old checkpoint inference before new training.
 
 The default `tactic_loss_weight` is 0.5, applied both online and during
-demonstration bootstrap/rehearsal. The full-volume recipe enables motion and
-hazard observations. Joint batches update tactics, A, and B; no oracle stance
-or action is injected during autonomous evaluation.
+demonstration bootstrap/rehearsal. Relative motion and enemy history are part
+of the observation. Joint batches update tactics, A, and B; no oracle stance or
+action is injected during autonomous evaluation.
 
 Plant waits reobserve every physics frame in both crossing modes. Their duration
 head is not trained, because the executor does not consume a duration for those
@@ -93,11 +96,12 @@ policy above 90% success. A new training run and held-out evaluation are needed
 to measure learned performance.
 
 Use the existing full-volume launcher with its updated default recipe and a
-fresh output directory. Recollect demonstrations rather than loading contract-10
-caches. Existing running processes do not acquire these changes automatically.
+fresh output directory. Recollect demonstrations rather than loading caches
+built by other teacher code. Existing running processes do not acquire these
+changes automatically.
 
 
-## Robust teachers and peak-exposure memory (contract 13)
+## Robust teachers and peak-exposure memory
 
 A piranha-only diagnosis traced most failures to clearance pipes. While a plant
 was hidden, a timed pipe and its clearance twin produced identical state
@@ -105,23 +109,19 @@ features, so the policy paused at clearance pipes, and the executor committed
 those waits for 4–64 frames. Every timed route overshot its staging window and
 backed up; timed routes ran up to about 250 of the 320 evaluation frames.
 
-`hazard_memory_observations` appends `enemy_peak_exposure`: the tallest exposed
-height of the most recently seen enemy this episode, divided by 64 and capped at
-1, and zero before any sighting. The shared Block/NES history computes it; it is
-versioned separately from the six v1 hazard features, and checkpoints, runtime
-contracts and cached demonstrations must match. It occupies one C-stream slot
-taken from the pooled vision summary, so no model shape changes, but earlier
-checkpoints are rejected. The full-volume recipe now obtains this memory from
-the world-model LSTM instead (next section); the joint and family learning
-tools still offer the input through `--hazard-memory-observations`.
+`enemy_peak_exposure` is the tallest exposed height of the most recently seen
+enemy this episode, divided by 64 and capped at 1, and zero before any
+sighting. The shared Block/NES history computes it. It is not a policy input:
+the world-model LSTM learns to hold it (next section). The probes below also
+measured it as an explicit input.
 
 Timed-plant training rollouts now last at least the teacher's completion time
 plus one plant cycle and 32 frames, so a missed window can be retried within
 the episode. Evaluation budgets are unchanged.
 
-Demonstration contract 13 requires regenerated plant demonstrations; the
-joint-learning tool rejects older cached plant routes. Start a fresh
-full-volume run; running processes do not acquire these changes.
+The joint-learning tool rejects cached plant routes built by other teacher
+code. Start a fresh full-volume run; running processes do not acquire these
+changes.
 
 Clearance demonstrations take off at the first feasible frame, with one
 certified hold in 84% of routes. A revised clearance teacher also credited
@@ -142,9 +142,9 @@ A piranha-only probe fitted 4,000 demonstration updates on 90 training layouts
 and evaluated 60 held-out validation layouts greedily with the normal executor,
 counting successes within 320 steps. The previous code scored 41/60, with 15 of
 22 clearance layouts timing out. With the same weights, the executor fix alone
-scored 53/60. This revision scored 58/60 and 52/60 on two seeds, and 51/60 on one
-seed with overshoot corrections. Seed-to-seed differences that large mean the
-probe does not separate the memory and teacher changes from the executor fix;
+scored 53/60. These changes scored 58/60 and 52/60 on two seeds, and 51/60 on
+one seed with overshoot corrections. Seed-to-seed differences that large mean
+the probe does not separate the memory and teacher changes from the executor fix;
 the probe also has no online learning or recovery, which the overshoot
 corrections target. A full-volume run and held-out evaluation are required.
 
@@ -184,17 +184,16 @@ state equals the stored one.
 
 The replayed prefixes of recovery and correction routes stay as context rows:
 never sampled or supervised, but replayed, so the memory entering a repaired
-suffix includes what the failed prefix saw. Earlier revisions dropped the
-prefix and started memory at the suffix, which taught the head that a plant seen
-before a stall had not been seen. Demonstration contract 14 adds these rows.
+suffix includes what the failed prefix saw. Dropping the prefix and starting
+memory at the suffix would teach the head that a plant seen before a stall had
+not been seen.
 
 Rollouts, batched evaluation, Full SMB playback and demonstration refreshes all
 start an episode from the same empty state; a missing state would also drop the
 actor's recurrent context on the first frame. The batched evaluator carries
 each level's state, so the joint and family learning tools train and evaluate
-the recipe's memory model. `--feedforward` restores their previous feedforward
-setup, and their cached datasets must be regenerated at contract 14 unless it
-is set.
+the recipe's memory model. `--feedforward` selects their feedforward setup,
+without carried state or LSTM memory.
 
 A weights-only warm start (`--init-checkpoint`, including checkpoints from the
 joint and family tools) can add the memory to a checkpoint trained without it.
@@ -211,11 +210,10 @@ including pooled vision features that differ on the NES.
 
 The full-volume recipe enables recurrent state, `world_model_memory_dim: 1`,
 `world_model_memory_weight: 1.0`, `memory_refresh_interval: 250` and
-`memory_unroll_steps: 8`, and turns `hazard_memory_observations` off. A refresh
-replays every stored row once: 49,000 piranha rows took 2.2 seconds on the
-development GPU, about the time of 50 updates. Its cost grows linearly with the
-dataset, and it runs 40 times during a 10,000-update bootstrap and four times
-per 1,000-update rehearsal.
+`memory_unroll_steps: 8`. A refresh replays every stored row once: 49,000
+piranha rows took 2.2 seconds on the development GPU, about the time of 50
+updates. Its cost grows linearly with the dataset, and it runs 40 times during a
+10,000-update bootstrap and four times per 1,000-update rehearsal.
 
 Training writes collection progress to `events.jsonl` and the console, including
 route generation, trajectory encoding, and frame counts. Bootstrap and rehearsal
@@ -260,7 +258,7 @@ evaluation remain the deciding test.
 
 ### Training through the carried state
 
-The second revision added the unroll (`memory_unroll_steps: 8`), context rows,
+A follow-up added the unroll (`memory_unroll_steps: 8`), context rows,
 the carried stance history, and a strategy objective head. The same piranha
 probe was run on the same four seeds:
 
@@ -271,12 +269,13 @@ probe was run on the same four seeds:
 | 11 | 53 | 52 | 58 |
 | 13 | 55 | 51 | 53 |
 
-The final revision averages 53.5 of 60, against 52.0 before it and 49.5 for the
-explicit peak-exposure input. In the middle column the objective's prediction
-also fed the tactics network, and its loss trained the LSTM through the unroll.
-Detaching the objective's memory input still gave 43 on the default seed, while
-the unroll with no strategy loss gave 52 on both the default seed and seed 7.
+The final configuration averages 53.5 of 60, against 52.0 before it and 49.5
+for the explicit peak-exposure input. In the middle column the objective's
+prediction also fed the tactics network, and its loss trained the LSTM through
+the unroll. Detaching the objective's memory input still gave 43 on the default
+seed, while the unroll with no strategy loss gave 52 on both the default seed
+and seed 7.
 The loss therefore hurt through the objective's influence on tactics. In the
-final revision the objective head only reads its inputs, and a unit test checks
-that its loss changes no other weight. Evaluation memory error ranged from 0.17
-to 0.23 in the final runs.
+final configuration the objective head only reads its inputs, and a unit test
+checks that its loss changes no other weight. Evaluation memory error ranged
+from 0.17 to 0.23 in the final runs.

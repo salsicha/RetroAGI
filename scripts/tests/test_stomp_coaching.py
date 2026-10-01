@@ -44,11 +44,14 @@ def legacy_sample():
         split="validation", seed=2, sample_index=0, family="stomp_mount", difficulty="easy"
     )
     scenario = dict(sample.scenario)
-    scenario["enemies"] = [[94, 206, 94, 94, 0.0]]
+    # From a standstill at x=40, NES holds of 4-16 frames land on a static
+    # enemy at x=58; 1-2 frame hops run into its side and 18+ frames clear it.
+    scenario["enemies"] = [[58, 206, 58, 58, 0.0]]
     return replace(sample, scenario=scenario)
 
 
 def held_policy(hold):
+    """Always request the jump with duration bin ``hold`` (1-based NES_JUMP_FRAMES)."""
     policy = PhaseIntentPolicy(finish=False)
     policy.last_motor_primitives.hold_duration_logits.fill_(-30.0)
     policy.last_motor_primitives.hold_duration_logits[..., hold - 1] = 30.0
@@ -97,14 +100,14 @@ def test_categorical_coaching_changes_the_executed_mode_not_just_its_mean():
 
 def test_actual_success_and_safe_miss_have_consistent_labels_rewards_and_spans():
     sample = legacy_sample()
-    success = rollout(sample, held_policy(8))
+    success = rollout(sample, held_policy(8))  # 14 frames.
     assert success.success
     assert all(
-        t.info["primitive_target_hold"] == 8
+        t.info["primitive_target_hold"] == 14
         for t in success.transitions
         if "primitive_target_hold" in t.info
     )
-    miss = rollout(sample, held_policy(16))
+    miss = rollout(sample, held_policy(16))  # 32 frames.
     last = miss.transitions[-1]
     assert last.done and not miss.success and not last.info["death"]
     assert last.info["stomp_outcome"] == "overshoot"
@@ -168,7 +171,6 @@ def test_new_motion_phases_reverse_before_the_release_window_closes_and_stay_rea
                 difficulty=difficulty,
             )
             assert sample.reachability["reachable"]
-            assert sample.parameters["family_revision"] == 2
             env = MarioScenarioEnv()
             try:
                 env.reset(scenario=sample.scenario)

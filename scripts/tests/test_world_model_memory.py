@@ -7,7 +7,7 @@ import torch
 
 from retroagi.core.architectures import make_agent_world_model_critic
 from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES
-from retroagi.stages.block_smb.adapter import BlockSMBObservationConfig, BlockSMBStage
+from retroagi.stages.block_smb.adapter import BlockSMBStage
 from retroagi.stages.block_smb.demonstrations import (
     collect_demonstrations,
     fit_demonstrations,
@@ -35,8 +35,6 @@ def single_thread():
 
 def memory_config(**overrides):
     values = dict(
-        motion_observations=True,
-        hazard_observations=True,
         adaptive_duration_control=False,
         walk_duration_primitives=False,
         architecture_config={"world_model_memory_dim": len(HAZARD_MEMORY_NAMES)},
@@ -199,9 +197,6 @@ def test_rollouts_supervise_the_carried_memory():
     stage = BlockSMBStage(
         scenario=sample.scenario,
         vision=StaticBlockVision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=True, hazard_observations=True
-        ),
     )
     try:
         trajectory = collect_trajectory(
@@ -245,7 +240,7 @@ def test_recipe_is_valid_and_learning_tools_stay_feedforward(tmp_path):
     from retroagi.stages.block_smb.train import BlockSMBTrainingConfig
     from scripts.block_smb_family_learning import feedforward_recipe
 
-    recipe = json.loads(Path("scripts/configs/block_smb_full_volume_revision2.json").read_text())
+    recipe = json.loads(Path("scripts/configs/block_smb_full_volume.json").read_text())
     BlockSMBTrainingConfig(
         **_normalize_config_values(
             {
@@ -447,7 +442,7 @@ def test_warm_start_adds_memory_to_a_feedforward_checkpoint(tmp_path):
         save_block_smb_checkpoint,
     )
 
-    plain_config = tiny_config(motion_observations=True, hazard_observations=True)
+    plain_config = tiny_config()
     torch.manual_seed(12)
     plain = make_block_smb_model(plain_config).eval()
     path = tmp_path / "plain.pth"
@@ -485,9 +480,6 @@ def test_warm_start_adds_memory_to_a_feedforward_checkpoint(tmp_path):
     stage = BlockSMBStage(
         scenario=timed_sample().scenario,
         vision=StaticBlockVision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=True, hazard_observations=True
-        ),
     )
     try:
         batch = stage.encode_observation(stage.reset(seed=0))
@@ -518,9 +510,6 @@ def test_batched_evaluation_carries_each_levels_state():
         stage = BlockSMBStage(
             scenario=block_smb_policy_scenario(sample.scenario, True),
             vision=StaticBlockVision(),
-            observation_config=BlockSMBObservationConfig(
-                motion_observations=True, hazard_observations=True
-            ),
         )
         try:
             with torch.no_grad():

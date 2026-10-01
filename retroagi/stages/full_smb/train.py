@@ -3308,17 +3308,17 @@ def _full_smb_c_stream_slot_spans(batch: StageBatch) -> dict[str, tuple[int, int
         bool(observation.get("camera_state_enabled")) if isinstance(observation, Mapping) else False
     )
     state_start, state_end = state
-    if metadata.get("smb_observation_schema") in ("smb_geometry_v1", "smb_scene_v2"):
-        # Shared geometry has 27 physical slots plus optional motion. Neither
-        # score/lives nor camera slots are embedded in this checkpoint layout.
+    if "smb_geometry" in metadata:
+        # The shared SMB observation ends its geometry features with the
+        # episode-outcome flags; everything after them is observed context.
         return {
             "position": position,
             "semantic_probabilities": semantics,
             "support_state": support,
             "emulator_state": state,
             "camera_state": (state_end, state_end),
-            "terminal_outcome": (state_start + 24, state_start + 27),
-            "patch_tokens": patch_tokens,
+            "terminal_outcome": (state_end - 3, state_end),
+            "patch_tokens": (state_end, feature_length),
         }
     emulator_end = min(state_end, state_start + _FULL_SMB_SIGNAL_STATE_SLOT_COUNT)
     terminal_start = min(emulator_end, state_start + 6)
@@ -3430,32 +3430,17 @@ def _configure_smb_stage(stage, model):
 
 
 def _smb_forward_kwargs(model, batch, deterministic):
+    from retroagi.core.smb_scene import C_SPANS
     from retroagi.stages.block_smb.train import block_smb_evaluation_target
 
     contract = model.smb_runtime_contract
     metadata = batch.metadata or {}
-    if metadata.get("smb_observation_schema") != contract.schema:
-        raise ValueError("Batch observation semantics do not match checkpoint contract")
-    if contract.objective_contract == "observable_traversal_v4":
-        from retroagi.core.smb_scene import SCENE_ENCODER
-
-        if metadata.get("smb_scene_encoder") != SCENE_ENCODER:
-            raise ValueError("Batch scene encoder does not match checkpoint feature meanings")
+    if "smb_geometry" not in metadata:
+        raise ValueError("Batch lacks the shared SMB observation the checkpoint requires")
     geometry = metadata["smb_geometry"]
-    if (
-        contract.schema == "smb_scene_v2"
-        and geometry.get("observation_provider") != contract.observation_provider
-    ):
-        raise ValueError("Policy and batch observation providers differ")
-    from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, HAZARD_NAMES
-
-    expected_state_size = (
-        (35 if contract.motion_observations else 27)
-        + (len(HAZARD_NAMES) if contract.hazard_observations else 0)
-        + (len(HAZARD_MEMORY_NAMES) if contract.hazard_memory_observations else 0)
-    )
-    if tuple(metadata["vision_fusion"]["c_state"]) != (12, 12 + expected_state_size):
-        raise ValueError("Shared SMB state feature offsets are incompatible")
+    fusion = metadata["vision_fusion"]
+    if any(tuple(fusion.get(name, ())) != span for name, span in C_SPANS.items()):
+        raise ValueError("Shared SMB observation layout is incompatible")
     executor = getattr(model, "smb_executor", None)
     committed = (
         executor.prepare(batch)

@@ -116,8 +116,6 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "level_1_flat.json",
                     "--generated-scenarios",
                     "2",
-                    "--monte-carlo-distribution",
-                    "block_smb_mc_v1",
                     "--monte-carlo-train-samples-per-epoch",
                     "12",
                     "--monte-carlo-seed",
@@ -130,7 +128,6 @@ class TestBlockSMBCLI(unittest.TestCase):
                     "5",
                     "--monte-carlo-failure-replay-samples-per-epoch",
                     "3",
-                    "--skip-monte-carlo-reachability-validation",
                     "--policy-loss-weight",
                     "0.8",
                     "--action-aux-weight",
@@ -190,13 +187,11 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertEqual(config.video_dir, Path("artifacts/block_smb/videos"))
         self.assertEqual(config.fixed_scenarios, ("level_1_flat.json",))
         self.assertEqual(config.generated_scenarios, 2)
-        self.assertEqual(config.monte_carlo_distribution_id, "block_smb_mc_v1")
         self.assertEqual(config.monte_carlo_train_samples_per_epoch, 12)
         self.assertEqual(config.monte_carlo_seed, 60001)
         self.assertEqual(config.monte_carlo_family_weights, {"flat_run": 2.0, "single_gap": 1.0})
         self.assertEqual(config.monte_carlo_max_rejections, 5)
         self.assertEqual(config.monte_carlo_failure_replay_samples_per_epoch, 3)
-        self.assertFalse(config.monte_carlo_validate_reachability)
         self.assertEqual(config.policy_loss_weight, 0.8)
         self.assertEqual(config.action_aux_weight, 0.12)
         self.assertEqual(config.noop_loss_weight, 0.35)
@@ -242,7 +237,6 @@ class TestBlockSMBCLI(unittest.TestCase):
             {"flat_run": 2.0, "single_gap": 1.0},
         )
         self.assertEqual(payload["config"]["monte_carlo_failure_replay_samples_per_epoch"], 3)
-        self.assertFalse(payload["config"]["monte_carlo_validate_reachability"])
         self.assertEqual(payload["config"]["reward_config"]["goal"], 75.0)
         self.assertEqual(payload["config"]["reward_config"]["gap_jump"], -7.0)
         self.assertFalse(payload["config"]["ablation"]["vision_enabled"])

@@ -54,6 +54,7 @@ class StaticBlockVision:
             semantic_logits=logits,
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.zeros(1, 240, self.spec.token_dim),
+            support_logits=torch.tensor([[-4.0, 4.0, -4.0]]),
             metadata={},
         )
 
@@ -92,14 +93,16 @@ class _ScriptReplayDaggerModel(torch.nn.Module):
 
 
 def _gap_dagger_config(**overrides) -> BlockSMBDistillationConfig:
+    # The geometry teacher's level_2_gap route builds NES run speed for ~40
+    # frames before its jump; 64 steps cover the whole jump and its release.
     values = dict(
         fixed_scenarios=("level_2_gap.json",),
         monte_carlo_samples=0,
         required_monte_carlo_families=(),
-        rollout_steps=40,
+        rollout_steps=64,
         episodes_per_scenario=1,
         evaluation_episodes=1,
-        evaluation_max_steps=40,
+        evaluation_max_steps=64,
         dagger_iterations=1,
         device="cpu",
     )
@@ -154,14 +157,16 @@ def _primitive_outcome_batch(
 
 class TestBlockSMBDistillation(unittest.TestCase):
     def test_monte_carlo_oracle_examples_are_collected(self):
+        # NES Mario needs ~45 frames of run-up before the single_gap oracle's
+        # jump, so the rollout must outlast it for jump labels to appear.
         config = BlockSMBDistillationConfig(
             fixed_scenarios=(),
             monte_carlo_samples=2,
             required_monte_carlo_families=(),
-            rollout_steps=24,
+            rollout_steps=64,
             episodes_per_scenario=1,
             evaluation_episodes=1,
-            evaluation_max_steps=24,
+            evaluation_max_steps=64,
             device="cpu",
         )
 
@@ -177,17 +182,40 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertTrue(any(action == 2 for actions in scripts.values() for action in actions))
         self.assertGreater(len(examples), 0)
         self.assertTrue(
-            all(example.scenario_name.startswith("block_smb_mc_v1.train.") for example in examples)
+            all(
+                example.scenario_name.startswith("block_smb_monte_carlo.train.")
+                for example in examples
+            )
         )
         self.assertIn(2, {example.action for example in examples})
 
     def test_default_warm_start_covers_fixed_chained_and_full_smb_proxy(self):
+        from retroagi.stages.block_smb import BLOCK_SMB_MC_FAMILIES
+
+        # The default warm start requires every Monte Carlo family, the
+        # chained and Full SMB proxy families included.
+        self.assertEqual(
+            BlockSMBDistillationConfig().required_monte_carlo_families,
+            DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
+        )
+        self.assertEqual(set(DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES), set(BLOCK_SMB_MC_FAMILIES))
+        # Every sample certifies its own reachability, which puts the full
+        # default sweep (~100 layouts) far past the test timeout. The sweep is
+        # family-agnostic, so build it for the chained and proxy families.
+        families = tuple(
+            family
+            for family in DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES
+            if family.startswith("chained_") or family == "full_smb_opening_proxy"
+        )
+        self.assertIn("full_smb_opening_proxy", families)
+        self.assertGreaterEqual(len(families), 2)
         config = BlockSMBDistillationConfig(
             monte_carlo_samples=0,
-            rollout_steps=24,
+            required_monte_carlo_families=families,
+            rollout_steps=64,
             episodes_per_scenario=1,
             evaluation_episodes=1,
-            evaluation_max_steps=24,
+            evaluation_max_steps=64,
             device="cpu",
         )
 
@@ -195,15 +223,12 @@ class TestBlockSMBDistillation(unittest.TestCase):
         family_counts = summary["monte_carlo"]["coverage"]["family_counts"]
 
         self.assertEqual(summary["fixed_scenario_count"], len(config.fixed_scenarios))
-        self.assertEqual(
-            tuple(summary["monte_carlo"]["required_families"]),
-            DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
-        )
-        for family in DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES:
+        self.assertEqual(tuple(summary["monte_carlo"]["required_families"]), families)
+        for family in families:
             self.assertEqual(family_counts[family], 3)
         self.assertEqual(
             summary["scenario_count"],
-            len(config.fixed_scenarios) + 3 * len(DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES),
+            len(config.fixed_scenarios) + 3 * len(families),
         )
         self.assertTrue(any(".full_smb_opening_proxy." in name for name, _scenario in scenarios))
         self.assertTrue(all(name in scripts for name, _scenario in scenarios))
@@ -243,6 +268,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
 
     def test_dagger_diverged_student_gets_no_time_indexed_jump_labels(self):
         config = _gap_dagger_config(dagger_labeler="script")
+        _scenarios, scripts, _summary = build_block_smb_distillation_scenarios(config)
         model = _FixedActionDaggerModel(int(SMBAction.NOOP))
 
         examples = collect_dagger_distillation_examples(
@@ -260,7 +286,7 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertTrue(
             all(example.primitive_button_combo != int(SMBAction.RIGHT_JUMP) for example in examples)
         )
-        jump_start = 10
+        jump_start = scripts["level_2_gap.json"].index(int(SMBAction.RIGHT_JUMP))
         self.assertLess(max(example.step_index for example in examples), jump_start)
 
     def test_dagger_aligned_student_keeps_time_indexed_jump_labels(self):
@@ -279,7 +305,8 @@ class TestBlockSMBDistillation(unittest.TestCase):
         # A student that tracks the teacher's timeline stays aligned, so the
         # rejection filter must not discard its jump-window labels.
         self.assertTrue(any(example.action == int(SMBAction.RIGHT_JUMP) for example in examples))
-        self.assertGreaterEqual(max(example.step_index for example in examples), 10)
+        jump_start = scripts["level_2_gap.json"].index(int(SMBAction.RIGHT_JUMP))
+        self.assertGreaterEqual(max(example.step_index for example in examples), jump_start)
 
     def test_dagger_expert_labeler_covers_diverged_states_with_state_labels(self):
         config = _gap_dagger_config(dagger_labeler="geometry_expert", rollout_steps=15)
@@ -304,16 +331,27 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertTrue(all(example.primitive_button_combo_mask == 0.0 for example in examples))
 
     def test_scripted_examples_carry_primitive_duration_release_labels(self):
+        # The rollout covers the geometry teacher's whole hop (run-up, held
+        # jump, release) so the hold is not truncated by the episode cap.
         config = BlockSMBDistillationConfig(
             fixed_scenarios=("level_5_enemy_hop.json",),
             monte_carlo_samples=0,
             required_monte_carlo_families=(),
-            rollout_steps=45,
+            rollout_steps=60,
             episodes_per_scenario=1,
             evaluation_episodes=1,
-            evaluation_max_steps=45,
+            evaluation_max_steps=60,
             primitive_hazard_weight_multiplier=3.0,
             device="cpu",
+        )
+        _scenarios, scripts, _summary = build_block_smb_distillation_scenarios(config)
+        script = scripts["level_5_enemy_hop.json"]
+        jump_start = script.index(int(SMBAction.RIGHT_JUMP))
+        hold = script.count(int(SMBAction.RIGHT_JUMP))
+        # One contiguous certified hold, released inside the rollout.
+        self.assertEqual(
+            script[jump_start : jump_start + hold + 1],
+            [int(SMBAction.RIGHT_JUMP)] * hold + [int(SMBAction.RIGHT)],
         )
 
         examples = collect_scripted_distillation_examples(
@@ -341,23 +379,25 @@ class TestBlockSMBDistillation(unittest.TestCase):
             example for example in examples if example.primitive_replan > 0.0
         ]
 
-        self.assertEqual(len(jump_examples), 18)
+        self.assertEqual(len(jump_examples), hold)
         self.assertTrue(
             all(example.primitive_button_combo == example.action for example in examples)
         )
         self.assertTrue(all(example.primitive_button_combo_mask == 1.0 for example in examples))
         self.assertEqual(len(duration_examples), 1)
+        self.assertEqual(duration_examples[0].step_index, jump_start)
         self.assertEqual(
             duration_examples[0].primitive_duration_bin,
             int(
                 torch.abs(
-                    torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32) - 18.0
+                    torch.as_tensor(DEFAULT_PRIMITIVE_DURATION_BINS, dtype=torch.float32)
+                    - float(hold)
                 )
                 .argmin()
                 .item()
             ),
         )
-        self.assertEqual(len(release_examples), 18)
+        self.assertEqual(len(release_examples), hold)
         self.assertEqual(len(positive_release_examples), 1)
         self.assertEqual(
             {example.primitive_post_release for example in jump_examples},
@@ -659,20 +699,23 @@ class TestBlockSMBDistillation(unittest.TestCase):
 
     def test_monte_carlo_samples_are_total_distillation_volume(self):
         # The requested sample count is the total distillation volume as long
-        # as it covers the required warm-start sweep (every family at every
-        # difficulty). Derive the request from the live family/difficulty
-        # constants so the invariant survives curriculum growth — a
-        # hard-coded 50 broke when the family set reached 20 (sweep = 60).
+        # as it covers the required warm-start sweep (every required family at
+        # every difficulty); sampled scenarios fill the remainder. Derive the
+        # request from the live difficulty constants so the invariant survives
+        # curriculum growth. Every sample certifies its own reachability, so
+        # the sweep requires two families rather than all of them (~100
+        # layouts, far past the test timeout); the accounting is
+        # family-agnostic.
         from retroagi.stages.block_smb import BLOCK_SMB_MC_DIFFICULTY_BINS
 
-        required_sweep = len(DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES) * len(
-            BLOCK_SMB_MC_DIFFICULTY_BINS
-        )
-        requested = max(50, required_sweep)
+        required_families = ("flat_run", "single_gap")
+        required_sweep = len(required_families) * len(BLOCK_SMB_MC_DIFFICULTY_BINS)
+        sampled = 4
+        requested = required_sweep + sampled
         config = BlockSMBDistillationConfig(
             fixed_scenarios=(),
             monte_carlo_samples=requested,
-            required_monte_carlo_families=DEFAULT_BLOCK_SMB_WARM_START_MC_FAMILIES,
+            required_monte_carlo_families=required_families,
             required_monte_carlo_repeats_per_difficulty=1,
             rollout_steps=2,
             episodes_per_scenario=1,
@@ -687,6 +730,10 @@ class TestBlockSMBDistillation(unittest.TestCase):
         self.assertEqual(len(scenarios), requested)
         self.assertEqual(summary["monte_carlo"]["requested_sample_count"], requested)
         self.assertEqual(summary["monte_carlo"]["sample_count"], requested)
+        self.assertEqual(
+            summary["monte_carlo"]["source_selected_counts"],
+            {"required_warm_start": required_sweep, "sampled": sampled},
+        )
         self.assertEqual(
             training_config.monte_carlo_train_samples_per_epoch, requested
         )

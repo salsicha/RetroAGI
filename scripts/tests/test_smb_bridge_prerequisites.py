@@ -1,57 +1,18 @@
-"""Moving-bridge prerequisite tasks, progress credit, and curriculum ordering."""
-
-from types import SimpleNamespace
+"""Moving-bridge prerequisite tasks, progress credit, and replay allocation."""
 
 import pytest
 import torch
 
-from retroagi.core.smb_learning import block_stage
-from retroagi.core.smb_physics import NES_PHYSICS_PROFILE
 from retroagi.stages.block_smb.demonstrations import (
     DemonstrationBatch,
     demonstration_sample_weights,
 )
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
-from retroagi.stages.block_smb.nes_curriculum import sample_nes_case
-from scripts import smb_composable_training as training
-
-
-@pytest.mark.parametrize("family", ["bridge_mount", "bridge_dismount"])
-@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
-def test_prerequisites_wait_jump_and_land_on_required_collision_surface(family, difficulty):
-    sample = sample_nes_case(
-        family=family,
-        split="train",
-        seed=20260910,
-        index=100,
-        difficulty=difficulty,
-        max_rejections=0,
-    )
-    actions = sample.oracle["actions"]
-    jump = actions.index(2)
-    assert jump > 0 and set(actions[:jump]) == {0}
-    stage = block_stage(sample)
-    try:
-        obs = stage.reset()
-        geometry = stage.encode_observation(obs).metadata["smb_geometry"]
-        assert geometry["objective"].kind == (
-            "bridge_jump_mount" if family == "bridge_mount" else "bridge_jump_exit"
-        )
-        for action in actions:
-            obs, _, done, truncated, info = stage.step(action)
-            if done or truncated:
-                break
-        assert stage.env._goal_credited and not info["death"]
-        assert stage.env.mario["on_ground"]
-        assert bool(stage.env.mario["_platform"]["moving"]) == (family == "bridge_mount")
-    finally:
-        stage.env.close()
 
 
 def touching_bridge(task):
     return dict(
-        physics_profile=NES_PHYSICS_PROFILE,
         world_width=380,
         mario=[74 if task == "mount" else 175, 208],
         platforms=[
@@ -126,91 +87,6 @@ def test_passive_progress_changes_replay_allocation_without_dropping_other_famil
     assert weights[:2].sum() == pytest.approx(weights[2:].sum())
 
 
-def test_bridge_dependencies_unlock_only_after_both_prerequisites_learned():
-    cfg = dict(
-        families=["flat_run", "bridge_mount", "bridge_dismount", "moving_bridge", "bridge_wait"],
-        bridge_prerequisites=["bridge_mount", "bridge_dismount"],
-        family_gate=0.99,
-    )
-    assert training.curriculum_families(cfg, False) == cfg["families"][:3]
-    assert training.curriculum_families(cfg, True) == cfg["families"]
-    result = dict(
-        rates={
-            "bridge_mount": dict(easy=1.0, medium=1.0, hard=1.0),
-            "bridge_dismount": dict(easy=1.0, medium=1.0, hard=0.9),
-        }
-    )
-    assert not training.bridge_prerequisites_learned(cfg, result)
-    result["rates"]["bridge_dismount"]["hard"] = 1.0
-    assert training.bridge_prerequisites_learned(cfg, result)
-
-
-def test_duplicate_bridge_routes_removed_and_offsets_preserved():
-    row = (torch.tensor([[1.0]]), 1, 0)
-    episodes = [
-        dict(id="a", family="bridge_wait", start=0, length=1, success=True),
-        dict(id="a", family="bridge_wait", start=1, length=1, success=True, route_variant=True),
-        dict(id="b", family="flat_run", start=2, length=1, success=True),
-    ]
-    rows, eps, count = training.deduplicate_bridge_routes([row, row, row], episodes)
-    assert len(rows) == 2 and count == 1
-    assert eps[1]["length"] == 0 and eps[1]["duplicate_of"] == "a"
-    assert eps[2]["start"] == 1
-
-
-def test_duplicate_physical_bridge_layouts_resampled_across_collection_calls(monkeypatch):
-    def sample(**kwargs):
-        index = kwargs["index"]
-        return SimpleNamespace(
-            scenario={
-                "platforms": [index if index >= 1_000_000 else 0],
-                "metadata": {"index": index},
-            }
-        )
-
-    monkeypatch.setattr(training, "sample_nes_case", sample)
-    seen = set()
-    cfg = dict(families=["bridge_wait"], seed=42)
-    a = training.samples(cfg, "train", 1, scenario_keys=seen)
-    b = training.samples(cfg, "train", 1, offset=1, scenario_keys=seen)
-    assert a[0].scenario["platforms"] != b[0].scenario["platforms"]
-    assert len(seen) == 2
-
-
-@pytest.mark.parametrize("objective", ["bridge_mount", "bridge_dismount"])
-def test_full_pixel_adapter_accepts_matching_bridge_task_without_ram(objective):
-    import numpy as np
-
-    from retroagi.core.smb_learning import runtime
-    from retroagi.core.smb_supervision import labels_to_vision
-    from retroagi.stages.full_smb.adapter import FullSMBStage
-    from scripts.tests.test_smb_transfer_contract import RAMEnv
-
-    class Vision:
-        def encode(self, observation):
-            labels = np.zeros((240, 256), dtype=np.int64)
-            labels[220:, :85] = 2
-            labels[220:, 200:] = 2
-            labels[220:, 110:180] = 6
-            labels[208:220, 72:82] = 1
-            return labels_to_vision(labels)
-
-    stage = FullSMBStage(env=RAMEnv(), vision=Vision(), task_objective=objective)
-    stage.configure_policy_runtime(runtime("perceived"))
-    try:
-        observation = stage.reset()
-
-        def forbidden():
-            raise AssertionError("Pixel bridge goals must not read RAM")
-
-        stage.env.get_ram = forbidden
-        batch = stage.encode_observation(observation)
-        kind = batch.metadata["smb_geometry"]["objective"].kind
-        assert kind == ("bridge_jump_mount" if objective == "bridge_mount" else "bridge_jump_exit")
-    finally:
-        stage.env.close()
-
-
 @pytest.mark.parametrize("task", ["mount", "dismount"])
 def test_jump_must_start_on_the_correct_surface(task):
     env = MarioScenarioEnv()
@@ -246,93 +122,3 @@ def test_mount_credits_actual_edge_landing_without_full_body_containment():
         assert env._goal_credited and not info["death"]
     finally:
         env.close()
-
-
-class TestBridgeJumpTrainingCoaching:
-    """The trainer coaches the jump families as jump teachers, not walkers."""
-
-    @staticmethod
-    def _collect(family, *, seed):
-        import copy
-
-        from retroagi.stages.block_smb.monte_carlo import (
-            sample_block_smb_monte_carlo_scenario,
-        )
-        from retroagi.stages.block_smb.train import (
-            BlockSMBObservationConfig,
-            BlockSMBStage,
-            BlockSMBTrainingConfig,
-            collect_trajectory,
-            make_block_smb_model,
-        )
-        from retroagi.stages.block_smb.vision import BlockVisionTransformer
-
-        config = BlockSMBTrainingConfig(
-            epochs=1, save_checkpoints=False, log_path="/dev/null"
-        )
-        torch.manual_seed(0)
-        model = make_block_smb_model(config)
-        model.eval()
-        sample = sample_block_smb_monte_carlo_scenario(
-            split="train",
-            seed=20260910,
-            sample_index=0,
-            family=family,
-            difficulty="easy",
-            validate_reachability=False,
-        )
-        stage = BlockSMBStage(
-            env=MarioScenarioEnv(reward_config=config.reward_config),
-            scenario=copy.deepcopy(dict(sample.scenario)),
-            vision=BlockVisionTransformer(),
-            observation_config=BlockSMBObservationConfig(),
-        )
-        try:
-            with torch.no_grad():
-                return collect_trajectory(
-                    model,
-                    stage,
-                    sample.scenario_id,
-                    rollout_steps=320,
-                    seed=seed,
-                    deterministic=False,
-                    device=torch.device("cpu"),
-                    skill_goal_conditioning=True,
-                    engine_support=True,
-                )
-        finally:
-            stage.env.close()
-
-    def test_single_jump_scenario_flag_and_env_attempt_termination(self):
-        from retroagi.stages.block_smb.bridge_curriculum import bridge_jump_scenario
-        from retroagi.stages.block_smb.train import block_smb_single_jump_scenario
-        import random
-
-        scenario, params, _ = bridge_jump_scenario(random.Random(0), "easy", "bridge_mount")
-        assert params["single_jump"] is True
-        assert scenario["single_jump_attempt"] is True
-        env = MarioScenarioEnv()
-        try:
-            env.reset(scenario=scenario)
-            assert env._single_jump_attempt
-        finally:
-            env.close()
-
-    @pytest.mark.parametrize("family", ["bridge_mount", "bridge_dismount"])
-    def test_no_walking_bridge_machinery_and_jump_phase_labels(self, family):
-        trajectory = self._collect(family, seed=1004)
-        expected_phase = "board" if family == "bridge_mount" else "exit"
-        phases = {
-            t.info.get("skill_phase")
-            for t in trajectory.transitions
-            if t.info.get("skill_phase")
-        }
-        assert phases <= {expected_phase, "finish"}
-        # The walking-crossing bookkeeping must not label jump-family steps.
-        assert not any(t.info.get("bridge_departure") for t in trajectory.transitions)
-        # Any coached horizontal jump span targets the collision surface,
-        # never the distant goal rect at x=420.
-        for t in trajectory.transitions:
-            if t.action in (2, 4) and t.info.get("primitive_target_x") is not None:
-                assert t.info["primitive_target_phase"] == expected_phase
-                assert t.info["primitive_target_x"] < 400.0

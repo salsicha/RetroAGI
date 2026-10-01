@@ -19,8 +19,7 @@ def bridge_jump_scenario(rng, difficulty, family):
     spawn = rng.randint(72, 75) if mount else initial + width - rng.randint(20, 28)
     scenario = dict(
         world_width=440,
-        mario=[spawn, 208],
-        physics_profile="nes_land_v1",
+        mario=[spawn, 204],
         platforms=[
             [0, 220, 85, 20],
             dict(
@@ -58,7 +57,6 @@ def bridge_jump_scenario(rng, difficulty, family):
         a_level_action=0,
         a_level_action_scope="first_primitive",
         difficulty_bin=difficulty,
-        family_revision=2,
     )
     return scenario, params, bridge_jump_oracle(scenario)
 
@@ -134,14 +132,13 @@ def bridge_jump_choice(model, env, *, variant=0):
 
 
 def bridge_jump_oracle(scenario, *, variant=0):
-    from retroagi.core.smb_coaching import physical_batch
-    from retroagi.core.smb_learning import primitive, runtime
+    from retroagi.core.smb_coaching import physical_batch, primitive, teacher_runtime
     from retroagi.core.smb_runtime import make_smb_executor
 
     from .env import MarioScenarioEnv
 
     env = MarioScenarioEnv()
-    model = SimpleNamespace(smb_runtime_contract=runtime())
+    model = SimpleNamespace(smb_runtime_contract=teacher_runtime())
     executor = make_smb_executor(model)
     actions = []
     try:
@@ -149,7 +146,7 @@ def bridge_jump_oracle(scenario, *, variant=0):
         env.render = lambda: None
         for _ in range(320):
             batch = physical_batch(env)
-            # All bridge waits are reconsidered every frame, as in pixel playback.
+            # All bridge waits are reconsidered every frame.
             batch.metadata["smb_geometry"]["scene"] = env
             committed = executor.prepare(batch)
             if committed is None and env.mario["on_ground"]:

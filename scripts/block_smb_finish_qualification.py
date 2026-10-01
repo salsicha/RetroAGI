@@ -45,7 +45,12 @@ def main():
     vision, _ = _make_vision_factory(config, None)
     test = evaluate(
         model,
-        samples(last["family"], 817219, "test", max(10, arguments["eval_per_difficulty"]) * 3),
+        samples(
+            last["family"],
+            817219,
+            "test",
+            max(10, arguments["eval_per_difficulty"]) * 3,
+        ),
         config,
         vision,
         autonomous=True,

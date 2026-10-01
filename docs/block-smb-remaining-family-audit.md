@@ -12,7 +12,7 @@ nine layouts per family, 160-frame training, and 200-frame evaluation.
 These are observations from that run, not estimates of universal task difficulty.
 In particular, enemy_hop trained well on its narrow original distribution.
 
-| Family | Old validation | Problem found | Revision 2 repair |
+| Family | Old validation | Problem found | Repair |
 | --- | ---: | --- | --- |
 | wait_timing | 8/9 | All three probed tiers could finish with the bridge removed. Fixed scripts and closest-endpoint coaching did not certify departure. | Wide bridge-dependent crossing and collision-based departure windows; the policy chooses whether to wait, with no forced opening action. |
 | pit_leap | 8/9 | Coaching toward the center of the wide goal demanded extra distance after clearing the gap. Goal contact could precede landing. | Targets the near part of the far ledge, requires real support, and coaches the set of successful holds. First missed landing ends the attempt in validation and training. |
@@ -61,8 +61,8 @@ Otherwise imagined successes could leak into real credit and rewards.
 
 Generation normalizes demonstrations to the 16-frame menu and bounce contract.
 If the script fails the varied layout, a local physics teacher builds a
-replacement. The stored sequence is validated again. Samples and oracle
-provenance identify family revision 2; schemas reflect actual generated ranges.
+replacement. The stored sequence is validated again. Schemas reflect actual
+generated ranges.
 
 Composite live training and rehearsal get at least 120 frames and 1.5 times
 validated completion length. Existing stomp/tall-pipe and bridge floors remain.
@@ -92,7 +92,7 @@ using about 2.2 GB peak allocated memory. Generation preflight validated
 1,024 Monte Carlo samples across the regular and mastery schedules; the
 mastery sample covered all 21 families.
 
-The [checked-in recipe](../scripts/configs/block_smb_full_volume_revision2.json)
+The [checked-in recipe](../scripts/configs/block_smb_full_volume.json)
 starts a fresh policy using the existing frozen Block ViT:
 
     OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m scripts.block_smb_full_volume       --output-dir artifacts/block_smb/full_volume_20260905_family_revision2_seed20260905_retry1

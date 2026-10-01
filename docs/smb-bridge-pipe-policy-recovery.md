@@ -50,8 +50,8 @@ remain active. The pool is bounded to three nonempty collections.
 
 Demonstrations now populate their objective-phase groups: enemy approach,
 gap/wait, pipe mount/bridge boarding, riding, and exit. Finish walking therefore
-does not dilute the jump group for a blocking pipe. The demonstration contract
-advances to version 6; fresh demonstrations are built for the restart.
+does not dilute the jump group for a blocking pipe. Fresh demonstrations are
+built for the restart.
 
 ## Observation and supervision corrections
 

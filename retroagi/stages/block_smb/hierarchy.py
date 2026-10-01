@@ -88,6 +88,5 @@ def hierarchy_scenario(family, rng, difficulty):
         hierarchy_level="tactics" if family in TACTICS_SEQUENCE_FAMILIES else "strategy",
         skill_sequence=sequence,
         prerequisites=list(FAMILY_PREREQUISITES[family]),
-        family_revision=1,
     )
     return scenario, params, actions

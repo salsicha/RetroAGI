@@ -65,7 +65,12 @@ def main():
             vision, _ = _make_vision_factory(config, None)
             result = evaluate(
                 model,
-                samples(family, args.test_seed, "test", args.count),
+                samples(
+                    family,
+                    args.test_seed,
+                    "test",
+                    args.count,
+                ),
                 config,
                 vision,
                 autonomous=True,

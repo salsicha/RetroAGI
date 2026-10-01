@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import torch
 
 from retroagi.core.smb_coaching import training_target
+from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
 from .env import MarioScenarioEnv
 from .geometry_expert import restore_env_state, snapshot_env_state
@@ -32,7 +33,7 @@ RECOVERY_FAMILIES = (
 )
 
 
-def interior_hold(valid, menu=tuple(range(1, 17))):
+def interior_hold(valid, menu=NES_JUMP_FRAMES):
     runs = []
     for hold in valid:
         if not runs or menu.index(hold) != menu.index(runs[-1][-1]) + 1:
@@ -120,13 +121,9 @@ def _coached_suffix(
                 if not bridge_jump_allowed(now, later):
                     valid = []
             if valid:
-                from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+                from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
-                menu = (
-                    NES_JUMP_FRAMES
-                    if env.physics_profile == NES_PHYSICS_PROFILE
-                    else tuple(range(1, 17))
-                )
+                menu = NES_JUMP_FRAMES
                 # Bridge departures take the longest certified hold, which
                 # tolerates departure-timing drift across the window.
                 chosen = max(valid) if bridge else interior_hold(valid, menu)
@@ -141,9 +138,10 @@ def _coached_suffix(
             elif retreat or (wall is not None and wall <= 1):
                 # Some mounts and plant pipes require a run-up. Recheck
                 # certification while backing away instead of permanently
-                # pushing into the wall.
+                # pushing into the wall. NES walking needs 16 frames to back
+                # off about 7 px; 8 frames moved Mario only about 2 px.
                 if not retreat:
-                    retreat = 8
+                    retreat = 16
                 retreat -= 1
                 action = 3 if direction > 0 else 1
             else:
@@ -279,9 +277,16 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                     if candidate not in captured and not safe_jump_holds(
                         env, target, target.direction
                     ):
-                        reason = None
+                        wall = blocking_wall_distance(env, target)
+                        # A standing NES jump cannot clear a tall wall; the
+                        # coached suffix backs off for a run-up. Each wall
+                        # stall is captured once.
+                        at_wall = stalled >= 3 and wall is not None and wall <= 1
+                        reason = "wall_stall" if at_wall else None
                 key = (reason, target.kind, target.platform_index, target.enemy_index)
-                if plants:
+                if reason == "wall_stall":
+                    pass
+                elif plants:
                     key += (
                         plant_attempt,
                         int(env.mario["x"] // 8),
@@ -329,6 +334,7 @@ def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
                                             "landing_recovery": 3,
                                             "pause_recovery": 2,
                                             "stall": 1,
+                                            "wall_stall": 1,
                                         }.get(reason, 0),
                                     )
                                 )

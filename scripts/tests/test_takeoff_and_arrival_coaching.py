@@ -61,13 +61,17 @@ def stomp_states(index, difficulty):
         for action in actions[:takeoff]:
             env.step(action)
         at_teacher = takeoff_timing_actions(env)
-        # Keep running through the rest of the window.
+        # Keep running through the rest of the window, up to its last frame
+        # where only the jump is allowed. NES acceleration can briefly narrow
+        # the certified set below robust, so a frame may be run-only.
         closing = []
-        while True:
+        for _ in range(80):
             label = takeoff_timing_actions(env)
-            if label is None or not label[2]:
+            if label is None:
                 break
             closing.append(label)
+            if not label[1]:
+                break
             _, _, done, _, info = env.step(1)
             if done or info["death"]:
                 break
@@ -86,13 +90,14 @@ def test_stomp_takeoff_labels_forbid_the_thin_spawn_hop_and_allow_the_teacher_ta
     assert not any(at_teacher[i] for i in (0, 3, 4, 5))
     # The jump stays allowed while the window closes, and its last frame
     # requires it.
-    assert len(closing) > 5
+    assert sum(label[2] for label in closing) > 5
     assert closing[-1] == [False, False, True, False, False, False]
 
-    # Easy: the stationary enemy is in a wide window from spawn, as the
-    # teacher's own spawn takeoff shows.
-    at_spawn, at_teacher, _ = stomp_states(0, "easy")
-    assert at_spawn[2] and at_teacher[2]
+    # Easy: a standing NES hop from spawn cannot reach even the stationary
+    # enemy; the teacher's takeoff after a short run is inside the window.
+    at_spawn, at_teacher, closing = stomp_states(0, "easy")
+    assert at_spawn == run_only and at_teacher[2]
+    assert closing[-1] == [False, False, True, False, False, False]
 
 
 def test_timed_plants_are_fully_raised_whenever_a_runner_would_cross():
@@ -145,7 +150,8 @@ def test_arrival_demonstrations_supervise_corrections_from_learner_arrivals():
             env.render = lambda: None
             for action in actions[:start]:
                 env.step(action)
-            if actions[0] == 1 and env.mario["vx"] > 2.5 and env.mario["x"] > staging_x(env) - 1:
+            # 2.5 px/frame is NES running top speed.
+            if actions[0] == 1 and env.mario["vx"] >= 2.5 and env.mario["x"] > staging_x(env) - 1:
                 fast_overruns += 1
             for action in actions[start:]:
                 _, _, done, truncated, info = env.step(action)
@@ -302,12 +308,13 @@ def test_wall_retreat_rule_sees_the_pipe_under_a_plant_target():
         mount = local_objective(env)
         # Unchanged for ordinary mounts: the wall is the target's near edge.
         assert blocking_wall_distance(env, mount) == local_target_distance(env, mount)
-        before = env.mario["x"]
-        while True:
-            env.step(1)
-            if env.mario["x"] <= before:
-                break
+        # Whole-pixel positions stay put for a few frames of NES walking from
+        # rest; a sustained stop is the wall.
+        stalled = 0
+        while stalled < 8:
             before = env.mario["x"]
+            env.step(1)
+            stalled = stalled + 1 if env.mario["x"] <= before else 0
         assert blocking_wall_distance(env, training_target(env)) <= 1
     finally:
         env.close()

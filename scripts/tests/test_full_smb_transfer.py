@@ -112,7 +112,23 @@ class TinyFullSMBEnv:
         ).astype(np.uint8)
 
 
-class StatefulTinyFullSMBEnv(TinyFullSMBEnv):
+class TinyRAMFullSMBEnv(TinyFullSMBEnv):
+    """The tiny emulator with flat-ground collision RAM for shared-observation policies."""
+
+    def get_ram(self):
+        # A flat NES screen: shared-observation policies read collision RAM.
+        ram = np.zeros(0x800, dtype=np.uint8)
+        ram[0x86] = 40 + self.step_count
+        ram[0xCE] = 176
+        ram[0xB5] = 1
+        ram[0x499] = 1
+        ram[0x33] = 1
+        ram[0x500 + 11 * 16 : 0x500 + 13 * 16] = 0x54
+        ram[0x5D0 + 11 * 16 : 0x5D0 + 13 * 16] = 0x54
+        return ram
+
+
+class StatefulTinyFullSMBEnv(TinyRAMFullSMBEnv):
     def __init__(self):
         super().__init__()
         self.set_state_calls = 0
@@ -192,8 +208,8 @@ def write_full_smb_vision_checkpoint(path: Path) -> None:
     save_checkpoint(path, checkpoint)
 
 
-def write_block_policy_checkpoint(path: Path):
-    config = tiny_block_config()
+def write_block_policy_checkpoint(path: Path, **overrides):
+    config = tiny_block_config(**overrides)
     model = make_block_smb_model(config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     with torch.no_grad():
@@ -326,7 +342,7 @@ class TestFullSMBTransfer(unittest.TestCase):
                 torch.testing.assert_close(transferred_state[key], source_value)
 
             stage = FullSMBStage(
-                env=TinyFullSMBEnv(),
+                env=TinyRAMFullSMBEnv(),
                 vision=result.vision,
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,
@@ -334,6 +350,7 @@ class TestFullSMBTransfer(unittest.TestCase):
                     resize_shape=(16, 20),
                 ),
             )
+            stage.configure_policy_runtime(result.model.smb_runtime_contract)
             try:
                 observation = stage.reset(seed=4)
                 batch = stage.encode_observation(observation)
@@ -350,6 +367,31 @@ class TestFullSMBTransfer(unittest.TestCase):
             self.assertLess(selection.action, 6)
             self.assertEqual(selection.logits.shape, (1, 6))
             self.assertTrue(stage.env.closed)
+
+    def test_transfer_refuses_a_checkpoint_with_another_observation(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_policy_path = tmp / "block_policy.pth"
+            full_vision_path = tmp / "full_smb_vit.pth"
+            write_block_policy_checkpoint(source_policy_path, learned_skill_goals=True)
+            write_full_smb_vision_checkpoint(full_vision_path)
+
+            def transfer(name):
+                return transfer_block_smb_checkpoint_to_full_smb(
+                    source_policy_path,
+                    output_checkpoint=tmp / name,
+                    full_smb_vision_checkpoint=full_vision_path,
+                    block_vision_checkpoint=None,
+                    device="cpu",
+                )
+
+            self.assertTrue(transfer("transfer.pth").model.smb_runtime_contract.learned_skill_goals)
+            checkpoint = load_checkpoint(source_policy_path, map_location="cpu")
+            spec = checkpoint["specs"]["smb_observation"]
+            checkpoint["specs"]["smb_observation"] = {**spec, "features": spec["features"][:-1]}
+            save_checkpoint(source_policy_path, checkpoint)
+            with self.assertRaisesRegex(ValueError, "retrain"):
+                transfer("other.pth")
 
     def test_transfer_rejects_non_block_policy_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
@@ -593,7 +635,7 @@ class TestFullSMBTransfer(unittest.TestCase):
                 result = compare_transferred_checkpoint_with_scratch(
                     transfer_path,
                     make_stage=lambda vision: FullSMBStage(
-                        env=TinyFullSMBEnv(),
+                        env=TinyRAMFullSMBEnv(),
                         vision=vision,
                         observation_config=FullSMBObservationConfig(
                             frame_skip=1,
@@ -636,7 +678,7 @@ class TestFullSMBTransfer(unittest.TestCase):
         def task_stage(vision, task):
             observed_tasks.append(task.name if task is not None else None)
             return FullSMBStage(
-                env=TinyFullSMBEnv(),
+                env=TinyRAMFullSMBEnv(),
                 vision=vision,
                 observation_config=FullSMBObservationConfig(
                     frame_skip=1,

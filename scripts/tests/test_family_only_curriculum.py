@@ -105,7 +105,10 @@ def test_approach_does_not_commit_to_unsafe_bridge_boarding():
         assert training_rollout_steps(60, scene) >= 240
         assert env._require_bridge_before_goal
         assert bridge_phase(env, False) == "approach"
-        for _ in range(20):
+        # NES walking accelerates slowly: 32 frames bring Mario within 32 px
+        # of the shore's end, where boarding is not yet safe.
+        for _ in range(32):
+            assert bridge_phase(env, False) == "approach"
             env.step(1)
         assert bridge_phase(env, False) == "wait"
         assert not env._bridge_boarded

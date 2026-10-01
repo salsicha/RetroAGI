@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import numpy as np
-import pygame
 
 from retroagi.core import build_checkpoint, load_checkpoint, save_checkpoint
 
@@ -22,40 +22,63 @@ SCRIPTED_BLOCK_SMB_EVALUATION_EPISODES = 3
 SCRIPTED_BLOCK_SMB_EVALUATION_MAX_STEPS = 200
 
 
+FIXED_SCENARIO_NAMES = (
+    "level_1_flat.json",
+    "level_2_gap.json",
+    "level_3_stairs.json",
+    "level_4_platforms.json",
+    "level_5_enemy_hop.json",
+    "level_6_enemy_patrol.json",
+    "level_7_moving_bridge.json",
+    "level_8_enemy_gap.json",
+    "level_9_enemy_stomp.json",
+    "level_10_left_retreat.json",
+    "level_11_left_jump_recovery.json",
+    "level_12_wait_bridge.json",
+    "level_13_variable_pits.json",
+    "level_14_under_enemy_platform.json",
+    "level_15_wait_long_bridge.json",
+    "level_16_wait_enemy_gate.json",
+)
+FIXED_ROUTE_MAX_FRAMES = 600
+
+
 def fixed_scenario_action_scripts(
     max_steps: int = SCRIPTED_BLOCK_SMB_EVALUATION_MAX_STEPS,
 ) -> dict[str, list[int]]:
     """Return deterministic action scripts for the fixed scenarios.
 
+    Each script is the geometry teacher's certified route, so it stays valid
+    for the simulator's motion model instead of encoding hand-tuned timings.
+
     Actions use the shared Block SMB IDs:
     0 = NOOP, 1 = RIGHT, 2 = RIGHT_JUMP, 3 = LEFT, 4 = LEFT_JUMP.
     """
-    right = [1] * max_steps
-    scripts = {
-        "level_1_flat.json": list(right),
-        "level_2_gap.json": [1] * 10 + [2] * 17 + [1] * max_steps,
-        "level_3_stairs.json": (
-            # One jump per stair, retimed for the grounded spawn (liftoff on
-            # frame 1 instead of after the old settle-fall).
-            [2] * 8 + [1] * 4 + [2] * 14 + [1] * 2 + [2] * 12 + [1] * max_steps
-        ),
-        "level_4_platforms.json": [1] * 8 + [2] * 16 + [1] * max_steps,
-        "level_5_enemy_hop.json": [1] * 20 + [2] * 18 + [1] * max_steps,
-        "level_6_enemy_patrol.json": ([1] * 12 + [2] * 18 + [1] * 18 + [2] * 18 + [1] * max_steps),
-        "level_7_moving_bridge.json": ([1] * 10 + [2] * 14 + [1] * 8 + [2] * 14 + [1] * max_steps),
-        "level_8_enemy_gap.json": ([1] * 10 + [2] * 17 + [1] * 8 + [2] * 18 + [1] * max_steps),
-        "level_9_enemy_stomp.json": [1] * 8 + [2] * 14 + [1] * max_steps,
-        "level_10_left_retreat.json": [3] * max_steps,
-        "level_11_left_jump_recovery.json": [4] * 22 + [3] * max_steps,
-        "level_12_wait_bridge.json": [0] * 20 + [1] * 20 + [2] * 16 + [1] * max_steps,
-        "level_13_variable_pits.json": (
-            [1] * 8 + [2] * 18 + [1] * 24 + [2] * 18 + [1] * 28 + [2] * 20 + [1] * max_steps
-        ),
-        "level_14_under_enemy_platform.json": [1] * max_steps,
-        "level_15_wait_long_bridge.json": [0] * 28 + [1] * 32 + [2] * 16 + [1] * max_steps,
-        "level_16_wait_enemy_gate.json": [0] * 50 + [2] * 18 + [1] * max_steps,
+    return {
+        scenario_name: list(actions[:max_steps])
+        for scenario_name, actions in _fixed_scenario_routes().items()
     }
-    return {scenario_name: actions[:max_steps] for scenario_name, actions in scripts.items()}
+
+
+@lru_cache(maxsize=1)
+def _fixed_scenario_routes() -> dict[str, tuple[int, ...]]:
+    from .policy_recovery import _coached_suffix
+
+    routes = {}
+    for scenario_name, scenario in load_fixed_scenarios(FIXED_SCENARIO_NAMES):
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=scenario)
+            env.render = lambda: None
+            route = _coached_suffix(env, max_frames=FIXED_ROUTE_MAX_FRAMES)
+        finally:
+            env.close()
+        if route is None:
+            raise ValueError(f"The geometry teacher cannot complete {scenario_name}")
+        # Keep walking toward the goal if a replay outlasts the route.
+        walk = 3 if route[-1] in (3, 4) else 1
+        routes[scenario_name] = tuple(route) + (walk,) * FIXED_ROUTE_MAX_FRAMES
+    return routes
 
 
 class BlockSMBScriptedPolicy:

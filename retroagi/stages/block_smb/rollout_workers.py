@@ -173,7 +173,7 @@ def unpack_trajectory(payload):
 
 def rollout_task(task):
     """Play one training episode on a worker, recording its policy calls."""
-    from .adapter import BlockSMBObservationConfig, BlockSMBStage
+    from .adapter import BlockSMBStage
     from .env import MarioScenarioEnv
     from .parallel import worker_policy, worker_vision
     from .train import block_smb_policy_scenario, collect_trajectory
@@ -187,11 +187,6 @@ def rollout_task(task):
             copy.deepcopy(job["scenario"]), config.autonomous_policy
         ),
         vision=worker_vision(),
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=config.motion_observations,
-            hazard_observations=config.hazard_observations,
-            hazard_memory_observations=config.hazard_memory_observations,
-        ),
     )
     try:
         with torch.no_grad():

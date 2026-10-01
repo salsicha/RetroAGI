@@ -1,4 +1,4 @@
-"""Observable NES collision geometry for the shared SMB policy contract.
+"""Observable NES collision geometry for the shared SMB observation.
 
 Addresses and metatile layout are documented in SMB's disassembly:
 https://github.com/MitchellSternke/SuperMarioBros-C/blob/master/docs/smbdis.asm
@@ -10,12 +10,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pygame
-import torch
 
-from retroagi.core.interfaces import VisionOutput
-from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.core.smb_geometry import geometry_features
-from retroagi.stages.block_smb.local_traversal import local_objective
 
 # Offsets relative to each object's sprite anchor, read through live box control.
 # Derived from BoundBoxCtrlData; right/bottom represent collision boundaries.
@@ -34,29 +30,6 @@ BOXES = (
     (4, 4, 12, 28),
 )
 NON_SOLID = {0, 0x26, 0x5F, 0x60, 0xC2, 0xC3}
-SEMANTIC_MAP = (0, 2, 2, 2, 2, 3, 5, 5, 1, 0, 0, 0, 0)
-
-
-def remap_full_vision(vision, *, visual_tokens="native_unaligned"):
-    """Sum probabilities by meaning; never reinterpret native class IDs."""
-    if vision.semantic_logits.shape[1] != len(SEMANTIC_MAP):
-        raise ValueError("Expected the 13-class Full SMB vision vocabulary")
-    probabilities = vision.semantic_logits.float().softmax(1)
-    mapped = probabilities.new_zeros((probabilities.shape[0], 7, *probabilities.shape[2:]))
-    for original, canonical in enumerate(SEMANTIC_MAP):
-        mapped[:, canonical] += probabilities[:, original]
-    logits = mapped.clamp_min(1e-12).log()
-    return VisionOutput(
-        position=vision.position,
-        semantic_logits=logits,
-        semantic_ids=logits.argmax(1),
-        tokens=(
-            torch.zeros_like(vision.tokens) if visual_tokens == "zero_ablation" else vision.tokens
-        ),
-        support_logits=vision.support_logits,
-        support_ids=vision.support_ids,
-        metadata={**(vision.metadata or {}), "semantic_mapping": SEMANTIC_MAP},
-    )
 
 
 def _signed(value):
@@ -136,7 +109,6 @@ class NESGeometry:
         self.previous_states = {}
         self.last_frame = None
         self.cached = None
-        self.target = None
         self.frames = 0
 
     def observe(self, ram, *, frame, terminated=False, truncated=False):
@@ -164,8 +136,6 @@ class NESGeometry:
             on_ground=grounded,
             facing=1 if ram[0x33] == 1 else -1,
             skidding=bool(vx and (vx > 0) != (ram[0x33] == 1)),
-            coyote_frames=0,
-            jump_buffer=0,
             _platform=None,
         )
         support = [
@@ -178,7 +148,7 @@ class NESGeometry:
         if grounded and support:
             mario["_platform"] = min(support, key=lambda p: abs(p["rect"].top - box.bottom))
         enemies = []
-        unavailable = ["coyote", "jump_buffer"]  # NES has neither simulator mechanic.
+        unavailable = []
         unsupported_objects = []
         next_enemies = {}
         active_enemy_kinds = {}
@@ -213,11 +183,8 @@ class NESGeometry:
                         move_x=float(rect.left),
                         move_speed=abs(pvx),
                         move_dir=1 if pvx >= 0 else -1,
-                        move_min=float(rect.left),
-                        move_max=float(rect.left),
                     )
                 )
-                unavailable.extend(("bridge_min", "bridge_max"))
                 if previous is None:
                     unavailable.append("bridge_vx")
                 continue
@@ -241,9 +208,6 @@ class NESGeometry:
             if abs(evx) > 8:
                 evx = _signed(ram[0x58 + slot]) / 16.0
             next_enemies[slot] = (kind, absolute)
-            # Bounds are unavailable, not inferred from a single position.
-            # Use the documented neutral value plus availability diagnostics;
-            # this domain difference must be qualified by emulator adaptation.
             enemies.append(
                 dict(
                     x=enemy.x,
@@ -253,15 +217,11 @@ class NESGeometry:
                     dead=False,
                     speed=abs(evx),
                     direction=1 if evx >= 0 else -1,
-                    patrol_min=enemy.x,
-                    patrol_max=enemy.x,
                     slot=slot,
                     kind=kind,
                     generation=self.enemy_generations[slot],
                 )
             )
-        if enemies:
-            unavailable.extend(("enemy_patrol_min", "enemy_patrol_max"))
         coins = [{"rect": r, "collected": False} for r, v in tiles if v in (0xC2, 0xC3)]
         scene = SimpleNamespace(
             mario=mario,
@@ -289,64 +249,32 @@ class NESGeometry:
                 ),
                 None,
             )
-        objective = local_objective(scene)
-        moving = [p["rect"] for p in platforms if p.get("moving") and p["rect"].right > box.left]
-        if objective.kind == "gap" and moving:
-            from retroagi.stages.block_smb.local_traversal import LocalObjective
-
-            platform = min(moving, key=lambda r: abs(r.left - box.right))
-            if platform.left < objective.left:
-                objective = LocalObjective("gap", platform.left, platform.right, platform.top)
-        if not grounded and self.target is not None:
-            kind, left, right, top = self.target
-            from retroagi.stages.block_smb.local_traversal import LocalObjective
-
-            objective = LocalObjective(kind, left - scroll, right - scroll, top)
-        elif grounded:
-            self.target = (
-                objective.kind,
-                objective.left + scroll,
-                objective.right + scroll,
-                objective.top,
-            )
-        skill = {
-            "gap": "clear_gap",
-            "mount": "mount_platform",
-            "enemy": "enemy_clear",
-            "retreat": "retreat_recover",
-        }.get(objective.kind)
         if grounded:
             self.bouncing = False
         elif stomped:
             self.bouncing = True
-        if self.bouncing:
-            skill = None
         features = geometry_features(
             scene,
             death=bool(ram[0x0E] in (6, 11) or (ram[0xB5] >= 2 and ram[0x0E] == 8)),
             terminated=terminated,
             truncated=truncated,
         )
-        features["hazard_vec"] = self.enemy_history.observe(scene, frame)
-        features["hazard_memory_vec"] = self.enemy_history.memory_features()
+        # The adapter selects the objective, as for every geometry observer.
         result = dict(
             scene=scene,
             features=features,
-            skill_goal=(
-                skill_goal_encoding(skill) if skill else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
-            ),
-            objective=objective,
+            enemy_history=self.enemy_history.observe(scene, frame),
+            enemy_memory=self.enemy_history.memory_features(),
             support="ground" if grounded else "air",
             enemy_contact=stomped,
             bouncing=self.bouncing,
+            availability=[1, 1, 1, 1, int("bridge_vx" not in unavailable)],
             unavailable_features=unavailable,
             unsupported_objects=unsupported_objects,
             world_x=world_x,
             scroll=scroll,
             player_box=list(box),
             frame=frame,
-            physics_profile="nes_smb",
-            requires_domain_qualification=True,
         )
         self.previous = (world_x, box.y)
         self.previous_enemies = next_enemies

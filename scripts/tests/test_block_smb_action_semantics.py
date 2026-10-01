@@ -1,29 +1,19 @@
-"""Action-semantics parity tests between Block SMB and real SMB.
+"""Action semantics of Block SMB, which moves Mario with the NES's motion rules.
 
 Block SMB is the transfer source for the real-emulator Full SMB stage, so its
-action-to-motion contract matters beyond the toy env itself. These tests pin
-two things:
-
-1. Parity behaviors that DO match real SMB (tap-jump fires once, variable jump
-   height, air control, direction mapping) so they cannot silently drift.
-2. Every KNOWN divergence from real SMB, empirically. If a divergence test
-   fails, the physics changed: update KNOWN_REAL_SMB_DIVERGENCES and re-tune
-   the scripted curriculum before shipping — the teachers are calibrated
-   against these exact behaviors.
+action-to-motion contract must match the NES: tap-jump fires once, variable
+jump height, air control, direction mapping, and none of the forgiveness
+mechanics (coyote time, jump buffering, rebound on a held jump).
 """
 
 import unittest
 
 from retroagi.core import SMBAction
-from retroagi.stages.block_smb.env import (
-    JUMP_BUFFER_FRAMES,
-    KNOWN_REAL_SMB_DIVERGENCES,
-    MarioScenarioEnv,
-)
+from retroagi.stages.block_smb.env import MarioScenarioEnv
 
 FLAT_SCENARIO = {
     "world_width": 256,
-    "mario": [40, 200],
+    "mario": [40, 204],
     "platforms": [[0, 220, 256, 20]],
 }
 
@@ -45,7 +35,7 @@ def settle(env: MarioScenarioEnv, frames: int = 30) -> None:
         env.step(0)
 
 
-class TestRealSMBParityBehaviors(unittest.TestCase):
+class TestNESActionSemantics(unittest.TestCase):
     def test_action_ids_match_shared_smb_action_vocabulary(self):
         self.assertEqual(int(SMBAction.NOOP), 0)
         self.assertEqual(int(SMBAction.RIGHT), 1)
@@ -63,32 +53,26 @@ class TestRealSMBParityBehaviors(unittest.TestCase):
                 env.step(int(SMBAction.RIGHT))
             self.assertGreater(env.mario["x"], x0)
             x1 = env.mario["x"]
-            for _ in range(20):
+            for _ in range(30):
                 env.step(int(SMBAction.LEFT))
             self.assertLess(env.mario["x"], x1)
         finally:
             env.close()
 
-    def test_tap_jump_fires_once_and_does_not_rejump(self):
-        # Parity with real SMB: press A, release well before landing — one
-        # jump only. The release lets the jump buffer decay, so no rebound.
+    def test_tap_jump_fires_once(self):
         env = make_env(FLAT_SCENARIO)
         try:
             settle(env)
             env.step(int(SMBAction.JUMP))
-            self.assertLess(env.mario["vy"], 0.0)
-            airborne_frames = 0
+            self.assertFalse(env.mario["on_ground"])
             landings = 0
             for _ in range(80):
                 was_on_ground = env.mario["on_ground"]
                 env.step(int(SMBAction.NOOP))
-                if not env.mario["on_ground"]:
-                    airborne_frames += 1
                 if not was_on_ground and env.mario["on_ground"]:
                     landings += 1
             self.assertEqual(landings, 1)
             self.assertTrue(env.mario["on_ground"])
-            self.assertEqual(env.mario["vy"], 0.0)
         finally:
             env.close()
 
@@ -101,7 +85,7 @@ class TestRealSMBParityBehaviors(unittest.TestCase):
                 for _ in range(hold_frames):
                     env.step(int(SMBAction.JUMP))
                 min_y = env.mario["y"]
-                for _ in range(60):
+                for _ in range(80):
                     env.step(int(SMBAction.NOOP))
                     min_y = min(min_y, env.mario["y"])
                     if env.mario["on_ground"]:
@@ -110,105 +94,43 @@ class TestRealSMBParityBehaviors(unittest.TestCase):
             finally:
                 env.close()
 
-        self.assertLess(apex_height(2), apex_height(14))
+        self.assertLess(apex_height(2), apex_height(20))
 
-    def test_no_new_jump_while_airborne(self):
-        env = make_env(FLAT_SCENARIO)
-        try:
-            settle(env)
-            env.step(int(SMBAction.JUMP))
-            for _ in range(3):
-                env.step(int(SMBAction.NOOP))
-            self.assertFalse(env.mario["on_ground"])
-            vy_before = env.mario["vy"]
-            env.step(int(SMBAction.JUMP))  # fresh mid-air press
-            # Gravity keeps integrating; the press must not restart the jump.
-            self.assertGreater(env.mario["vy"], vy_before - 1.0)
-            self.assertGreater(env.mario["vy"], MarioScenarioEnv().jump_power)
-        finally:
-            env.close()
-
-
-class TestKnownDivergencesFromRealSMB(unittest.TestCase):
-    def registry(self, name: str) -> dict:
-        for entry in KNOWN_REAL_SMB_DIVERGENCES:
-            if entry["name"] == name:
-                return entry
-        self.fail(
-            f"divergence {name!r} is exercised by the env but missing from "
-            "KNOWN_REAL_SMB_DIVERGENCES — document it or remove the behavior"
-        )
-
-    def test_registry_entries_are_complete(self):
-        for entry in KNOWN_REAL_SMB_DIVERGENCES:
-            for key in ("name", "block_behavior", "real_behavior", "reason"):
-                self.assertIn(key, entry)
-                self.assertTrue(str(entry[key]).strip())
-
-    def test_held_jump_rebounds_on_landing(self):
-        # DIVERGES from real SMB (holding A does not re-jump). If this test
-        # fails, the jump buffer semantics changed: re-tune every scripted
-        # teacher and Monte Carlo oracle before shipping.
-        self.registry("held_jump_rebounds_on_landing")
+    def test_held_jump_does_not_jump_again_on_landing(self):
         env = make_env(AIRBORNE_SCENARIO)
         try:
-            rebounded = False
-            for _ in range(120):
-                was_on_ground = env.mario["on_ground"]
+            landed = False
+            for _ in range(160):
                 env.step(int(SMBAction.JUMP))  # hold jump the whole time
-                if was_on_ground is False and env.mario["vy"] < 0 and env.mario["y"] < 200:
-                    if env.steps > 10:
-                        rebounded = True
-                        break
-            self.assertTrue(
-                rebounded,
-                "held jump no longer rebounds on landing — update "
-                "KNOWN_REAL_SMB_DIVERGENCES and re-tune the curriculum",
-            )
+                landed = landed or env.mario["on_ground"]
+                if landed:
+                    self.assertTrue(env.mario["on_ground"])
+            self.assertTrue(landed)
         finally:
             env.close()
 
-    def test_coyote_time_allows_late_jump(self):
-        self.registry("coyote_time")
-        scenario = {
-            "world_width": 256,
-            "mario": [40, 200],
-            "platforms": [[0, 220, 80, 20]],  # ledge ends at x=80
-        }
-        env = make_env(scenario)
+    def test_no_jump_after_walking_off_a_ledge(self):
+        env = make_env({**FLAT_SCENARIO, "platforms": [[0, 220, 80, 20]]})
         try:
             settle(env, 20)
-            # Walk off the ledge.
             while env.mario["on_ground"]:
                 env.step(int(SMBAction.RIGHT))
-            # Press jump within the coyote window: it must still fire.
+            y = env.mario["y"]
             env.step(int(SMBAction.RIGHT_JUMP))
-            self.assertLess(env.mario["vy"], -5.0)
+            self.assertGreaterEqual(env.mario["y"], y)
         finally:
             env.close()
 
-    def test_jump_buffer_fires_recent_press_on_landing(self):
-        self.registry("jump_buffer")
+    def test_press_before_landing_is_not_buffered(self):
         env = make_env(AIRBORNE_SCENARIO)
         try:
-            # Fall until close to the ground, then tap jump before contact.
-            for _ in range(200):
+            while env.mario["y"] < 190:
                 env.step(int(SMBAction.NOOP))
-                if env.mario["y"] >= 190:
-                    break
             self.assertFalse(env.mario["on_ground"])
-            env.step(int(SMBAction.JUMP))  # buffered press
-            launched = False
-            for _ in range(JUMP_BUFFER_FRAMES + 2):
+            env.step(int(SMBAction.JUMP))
+            for _ in range(10):
                 env.step(int(SMBAction.NOOP))
-                if env.mario["vy"] < -1.0:
-                    launched = True
-                    # The button is no longer held at liftoff, so the buffered
-                    # jump fires as a CUT hop: hold duration -> jump height
-                    # stays monotone and a tap can never out-jump a hold.
-                    self.assertGreater(env.mario["vy"], -5.0)
-                    break
-            self.assertTrue(launched, "buffered jump press no longer fires on landing")
+            self.assertTrue(env.mario["on_ground"])
         finally:
             env.close()
 

@@ -20,8 +20,9 @@ from retroagi.core.models import (
 )
 from retroagi.core.skills import SKILL_GOAL_ENCODING_DIM, skill_goal_encoding
 from retroagi.core.smb_enemy_history import HAZARD_MEMORY_NAMES, EnemyObservationHistory
+from retroagi.core.smb_scene import canonical_vision
 
-from .adapter import BlockSMBObservationConfig, BlockSMBStage
+from .adapter import BlockSMBStage
 from .bridge_traversal import bridge_phase, bridge_safe_wait_frames
 from .env import MarioScenarioEnv
 from .hierarchy import bridge_training_active
@@ -191,6 +192,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     tactic_rows = []
     tactic_action_rows = []
     duration_consumed_rows = []
+    carry_rows = []
     memory_rows = []
     context_rows = []
     episode_starts = []
@@ -207,6 +209,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
         recovery_rows.extend(episode["recovery"])
         tactic_action_rows.extend(episode["tactic_actions"])
         duration_consumed_rows.extend(episode["duration_consumed"])
+        carry_rows.extend(episode["carry_progress"])
         tactic_rows.extend(episode["tactic"])
         memory_rows.extend(episode["memory"])
         frames += len(episode["action"])
@@ -226,6 +229,7 @@ def collect_demonstrations(cases, config, vision_factory, *, vision_batch_size=3
     data.tactic = torch.tensor(tactic_rows, dtype=torch.long)
     data.tactic_actions = torch.tensor(tactic_action_rows, dtype=torch.bool)
     data.duration_consumed = torch.tensor(duration_consumed_rows, dtype=torch.bool)
+    data.carry_progress = torch.tensor(carry_rows, dtype=torch.float32)
     data.memory_target = torch.as_tensor(np.stack(memory_rows), dtype=torch.float32)
     data.context = torch.tensor(context_rows, dtype=torch.bool)
     frame_index = torch.arange(frames)
@@ -260,17 +264,13 @@ def encode_demonstration_episode(family_index, sample, config, vision, vision_ba
         env=MarioScenarioEnv(reward_config=config.reward_config),
         scenario=sample.scenario,
         vision=vision,
-        observation_config=BlockSMBObservationConfig(
-            motion_observations=config.motion_observations,
-            hazard_observations=config.hazard_observations,
-            hazard_memory_observations=config.hazard_memory_observations,
-        ),
     )
     episode = []
     episode_release = []
     episode_tactics = []
     episode_tactic_actions = []
     episode_duration_consumed = []
+    episode_carry = []
     episode_memory = []
     from .primitive_execution import JumpReleaseState
 
@@ -285,17 +285,11 @@ def encode_demonstration_episode(family_index, sample, config, vision, vision_ba
         pipe = TallPipeTraversal.from_stage(stage.scenario, stage.env)
         request = requested_block_smb_skill_goal(stage.scenario)
         request = request if request is not None else torch.zeros(1, SKILL_GOAL_ENCODING_DIM)
-        from retroagi.core.smb_physics import NES_JUMP_FRAMES, NES_PHYSICS_PROFILE
+        from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
-        # The hold-duration menu depends on the physics profile: legacy
-        # bins are the values 1..16, NES bins are NES_JUMP_FRAMES (up
-        # to 32 frames). Both have 16 entries; the demonstration tensors
-        # store menu INDICES, so value-1 is only correct for legacy.
-        duration_menu = (
-            NES_JUMP_FRAMES
-            if stage.env.physics_profile == NES_PHYSICS_PROFILE
-            else tuple(range(1, 17))
-        )
+        # Jump bins are NES_JUMP_FRAMES (up to 32 frames); the demonstration
+        # tensors store menu INDICES.
+        duration_menu = NES_JUMP_FRAMES
 
         def menu_index(frames: int) -> int:
             index = 0
@@ -431,6 +425,7 @@ def encode_demonstration_episode(family_index, sample, config, vision, vision_ba
             # Direct env.step leaves all temporal features frozen at reset.
             observation, reward, done, truncated, info = stage.step(action)
             release.observe(env, action, info)
+            episode_carry.append(float(info.get("bridge_carry_progress", 0.0)))
             observations.append(observation)
             states.append(stage.state_features(info))
             valid = [False] * 16
@@ -491,12 +486,11 @@ def encode_demonstration_episode(family_index, sample, config, vision, vision_ba
         with torch.no_grad():
             for start in range(0, len(observations), size):
                 images = np.stack(observations[start : start + size])
-                vision = stage.vision.encode(images if size > 1 else images[0])
+                vision = canonical_vision(
+                    stage.vision.encode(images if size > 1 else images[0]), "block"
+                )
                 batch = stage.vision_projector.project(
-                    vision,
-                    state=torch.as_tensor(
-                        np.stack(states[start : start + size]), device=vision.position.device
-                    ),
+                    vision, np.stack(states[start : start + size])
                 )
                 for stream, value in zip(streams, (batch.src_a, batch.src_b, batch.src_c)):
                     stream.append(value.detach().cpu())
@@ -527,6 +521,7 @@ def encode_demonstration_episode(family_index, sample, config, vision, vision_ba
             "recovery": [bool(sample.oracle.get("recovery"))] * count,
             "tactic_actions": episode_tactic_actions[:count],
             "duration_consumed": episode_duration_consumed[:count],
+            "carry_progress": episode_carry[:count],
             "tactic": [
                 -1 if frame < supervision_start else tactic
                 for frame, tactic in enumerate(episode_tactics[:count])
@@ -582,9 +577,6 @@ def align_steady_demonstrations(data, episode_starts=None, *, frame_wait_episode
                 data.next_c[start:finish] = data.next_c[finish - 1].clone()
             frame = stop
     return data
-
-
-DEMONSTRATION_CONTRACT_VERSION = 19
 
 
 def without_walk_commitments(data, episode_starts=None):

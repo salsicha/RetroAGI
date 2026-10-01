@@ -38,8 +38,8 @@ supplied all variants and therefore did not exercise this defect.
 When bridge augmentation is enabled, the production builder now retains the
 canonical route and all three physically successful alternatives on every
 layout. Selection is independent of difficulty and training seed. Other family
-augmentation is unchanged. Demonstration contract version 5 invalidates old
-bridge caches.
+augmentation is unchanged. Bridge caches built before this change must be
+regenerated.
 
 ## Verification
 
@@ -73,8 +73,8 @@ one medium dismount still failed in this small-data probe. Intermediate
 on-policy updates reduced mount performance before rehearsal restored it.
 These results verify the repaired learning paths and recovery of the affected
 bins, not universal mastery or retention at the full 180-layout training scale.
-The restart therefore builds fresh version-5 demonstrations and keeps the
-full-volume evaluation gates active.
+The restart therefore builds fresh demonstrations and keeps the full-volume
+evaluation gates active.
 
 The final model also passed 111/120 additional unseen bridge layouts
 (seeds 202 and 303): easy mount 19/20 and hard dismount 20/20. Remaining

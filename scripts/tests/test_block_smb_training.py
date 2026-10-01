@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import pytest
 import torch
 
 from retroagi.core import (
@@ -19,6 +20,8 @@ from retroagi.core import (
     load_checkpoint,
     save_checkpoint,
 )
+from retroagi.core.smb_geometry import FEATURE_NAMES
+from retroagi.core.smb_scene import observation_spec
 from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MC_DIFFICULTY_BINS,
@@ -95,6 +98,7 @@ class StaticBlockVision:
             semantic_logits=logits,
             semantic_ids=logits.argmax(dim=1),
             tokens=torch.zeros(1, 240, self.spec.token_dim),
+            support_logits=torch.tensor([[-4.0, 4.0, -4.0]]),
             metadata={},
         )
 
@@ -127,8 +131,8 @@ class TestBlockSMBTraining(unittest.TestCase):
         names = [name for name, _scenario in curriculum]
         self.assertEqual(names[0], "level_1_flat.json")
         self.assertEqual(len(names), 3)
-        self.assertTrue(names[1].startswith("block_smb_mc_v1.train.50000.000000."))
-        self.assertTrue(names[2].startswith("block_smb_mc_v1.train.50000.000001."))
+        self.assertTrue(names[1].startswith("block_smb_monte_carlo.train.50000.000000."))
+        self.assertTrue(names[2].startswith("block_smb_monte_carlo.train.50000.000001."))
         summary = summarize_block_smb_curriculum(curriculum)
         self.assertEqual(summary["fixed_scenario_count"], 1)
         self.assertEqual(summary["monte_carlo_sample_count"], 2)
@@ -149,7 +153,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                 self.assertIsInstance(terminated, bool)
                 self.assertIsInstance(truncated, bool)
                 self.assertIn("state_vec", info)
-                self.assertEqual(info["state_vec"].shape, (27,))
+                self.assertEqual(info["state_vec"].shape, (len(FEATURE_NAMES),))
         finally:
             vector_env.close()
 
@@ -617,7 +621,7 @@ class TestBlockSMBTraining(unittest.TestCase):
             "c_position",
             "c_semantic_probabilities",
             "c_support_state",
-            "c_patch_tokens",
+            "c_semantic_layout",
         ):
             start, end = fusion[slot]
             torch.testing.assert_close(
@@ -628,6 +632,19 @@ class TestBlockSMBTraining(unittest.TestCase):
             visual.src_c[:, state_start:state_end],
             batch.src_c[:, state_start:state_end],
         )
+        # The geometry observer's slots are not vision; ablating vision keeps them.
+        for slot in (
+            "c_enemy_history",
+            "c_availability",
+            "c_enemy_motion_age",
+            "c_platform_relative_motion",
+            "c_enemy_relative_motion",
+        ):
+            start, end = fusion[slot]
+            torch.testing.assert_close(
+                visual.src_c[:, start:end],
+                batch.src_c[:, start:end],
+            )
         self.assertTrue(torch.equal(hierarchy.src_a, torch.zeros_like(batch.src_a)))
         self.assertTrue(torch.equal(hierarchy.src_b, torch.zeros_like(batch.src_b)))
         torch.testing.assert_close(hierarchy.src_c, batch.src_c)
@@ -783,6 +800,9 @@ class TestBlockSMBTraining(unittest.TestCase):
             restored = restore_block_smb_checkpoint(checkpoint, model, optimizer)
             self.assertEqual(restored["epoch"], 2)
 
+    # Both evaluations generate a layout per family with a physics-verified
+    # route; NES-length arcs make that take about a minute on one CPU.
+    @pytest.mark.timeout(300)
     def test_monte_carlo_evaluation_reports_coverage_bins_and_gates(self):
         config = tiny_config(
             generated_scenarios=0,
@@ -829,6 +849,9 @@ class TestBlockSMBTraining(unittest.TestCase):
             len(BLOCK_SMB_MC_FAMILIES),
         )
 
+    # Every family x difficulty layout is generated with a physics-verified
+    # route; NES-length arcs make that take over a minute on one CPU.
+    @pytest.mark.timeout(300)
     def test_monte_carlo_evaluation_can_use_full_parameter_sweep(self):
         config = tiny_config(
             generated_scenarios=0,
@@ -855,6 +878,9 @@ class TestBlockSMBTraining(unittest.TestCase):
         self.assertEqual(set(evaluation["families"]), set(BLOCK_SMB_MC_FAMILIES))
         self.assertFalse(evaluation["coverage"]["missing_families"])
 
+    # Every family x difficulty layout is generated with a physics-verified
+    # route; NES-length arcs make that take over a minute on one CPU.
+    @pytest.mark.timeout(300)
     def test_validation_measures_every_family_on_a_fixed_layout_base(self):
         # The joint draw spread ~40 validation layouts over 21 families
         # (~2 each), so per-family curves and the mastery gate steered on
@@ -1058,6 +1084,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                     "optimizer": source_optimizer.state_dict(),
                 },
                 config={"legacy": True},
+                specs={"smb_observation": observation_spec()},
             )
             save_checkpoint(checkpoint_path, checkpoint)
 
@@ -1070,6 +1097,27 @@ class TestBlockSMBTraining(unittest.TestCase):
             )
 
         self.assertEqual(restored["model_name"], BLOCK_SMB_MODEL_NAME)
+
+    def test_restore_refuses_checkpoint_without_the_shared_observation(self):
+        # The C stream has one meaning; a policy trained on any other layout
+        # must be retrained, not silently loaded.
+        with TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "other_observation_block_smb.pth"
+            config = tiny_config()
+            model = make_block_smb_model(config)
+            spec = observation_spec()
+            for specs in ({}, {"smb_observation": {**spec, "features": spec["features"][:-1]}}):
+                checkpoint = build_checkpoint(
+                    stage=BLOCK_SMB_SPEC.name,
+                    model_name=BLOCK_SMB_MODEL_NAME,
+                    checkpoint_kind=BLOCK_SMB_CHECKPOINT_KIND,
+                    states={"model": model.state_dict()},
+                    specs=specs,
+                )
+                save_checkpoint(checkpoint_path, checkpoint)
+
+                with self.assertRaisesRegex(ValueError, "retrain"):
+                    restore_block_smb_checkpoint(checkpoint_path, model)
 
     def test_restore_rejects_incompatible_architecture_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
@@ -1089,6 +1137,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
                 },
+                specs={"smb_observation": observation_spec()},
             )
             save_checkpoint(checkpoint_path, checkpoint)
 
@@ -1122,6 +1171,7 @@ class TestBlockSMBTraining(unittest.TestCase):
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
                 },
+                specs={"smb_observation": observation_spec()},
             )
             save_checkpoint(checkpoint_path, checkpoint)
 
@@ -1417,9 +1467,8 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         slots = block_smb_deterministic_critic_slots()
         # Drift guard: the static indices must land inside the projector's
         # runtime c_state span at the goal-distance and death state dims. Use
-        # the real Block ViT (fresh weights; only output shapes matter) because
-        # the production fusion includes its support-state softmax, which
-        # simplified test stubs omit.
+        # the real Block ViT (fresh weights; only output shapes matter) so the
+        # spans come from the production fusion, not a test stub's.
         stage = BlockSMBStage(
             scenario={
                 "mario": [20, 200],
@@ -1436,8 +1485,8 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             stage.env.close()
         spans = block_smb_c_stream_slot_spans(batch)
         state_start, state_end = spans["state"]
-        self.assertEqual(slots["goal_distance"], state_start + 17)
-        self.assertEqual(slots["death"], state_start + 24)
+        self.assertEqual(slots["goal_distance"], state_start + FEATURE_NAMES.index("goal_distance"))
+        self.assertEqual(slots["death"], state_start + FEATURE_NAMES.index("death"))
         self.assertLess(slots["death"], state_end)
         terminal_start, terminal_end = spans["terminal_outcome"]
         self.assertEqual(slots["death"], terminal_start)
@@ -1492,13 +1541,14 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             self.assertFalse(_goal_reached(env))
         finally:
             env.close()
-        # A genuine stomp credits the goal and flips the label.
+        # A genuine stomp credits the goal and flips the label. Mario falls at
+        # the NES terminal speed (4 px/frame) from 2 px above the Goomba's
+        # 10x6 damage body (top y=210), so this frame's descent lands on it.
         env = MarioScenarioEnv()
         try:
             env.reset(scenario=dict(scenario), seed=0)
-            env.mario["x"] = 30.0
-            env.mario["y"] = 186.0
-            env.mario["vy"] = 8.0
+            env.mario.update(x=30.0, y=196.0, on_ground=False)
+            env.motion.y_speed = 4
             _obs, _reward, terminated, _truncated, info = env.step(0)
             self.assertTrue(terminated)
             self.assertFalse(info["death"])
@@ -1516,11 +1566,13 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             "goal": [127, 148, 16, 20],
             "reward_goal_distance_shaping": 2.0,
         }
+        # A standing NES jump needs a hold of at least 22 frames to clear the
+        # 52 px block while drifting the 20 px to its edge; 24 is on the menu.
         env = MarioScenarioEnv()
         try:
             env.reset(scenario=dict(scenario), seed=0)
             total = 0.0
-            for action in [2] * 12 + [1] * 20:
+            for action in [2] * 24 + [1] * 20:
                 _obs, _reward, terminated, truncated, info = env.step(action)
                 total += info["reward_terms"]["goal_distance"]
                 if terminated or truncated:
@@ -1535,7 +1587,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         try:
             env.reset(scenario=control, seed=0)
             total = 0.0
-            for action in [2] * 12 + [1] * 10:
+            for action in [2] * 24 + [1] * 20:
                 _obs, _reward, terminated, truncated, info = env.step(action)
                 total += info["reward_terms"]["goal_distance"]
                 if terminated or truncated:
@@ -1828,11 +1880,13 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
             vision=BlockVisionTransformer(),
         )
         try:
+            # The longest NES jump (32-frame hold) lands 53 frames after
+            # takeoff; the arc must complete for its span to be backfilled.
             trajectory = collect_trajectory(
                 model,
                 stage,
                 "stomp_outcome",
-                rollout_steps=40,
+                rollout_steps=60,
                 seed=0,
                 deterministic=False,
                 device=torch.device("cpu"),
@@ -2300,7 +2354,7 @@ class TestJumpFoundationSequencing(unittest.TestCase):
         )
         curriculum = build_curriculum(config, family_weights=jump_foundation_family_weights())
         monte_carlo_names = [
-            name for name, _scenario in curriculum if name.startswith("block_smb_mc")
+            name for name, _scenario in curriculum if name.startswith("block_smb_monte_carlo.")
         ]
         self.assertEqual(len(monte_carlo_names), 15)
         for name in monte_carlo_names:
@@ -2382,7 +2436,7 @@ class TestSingleJumpScenarios(unittest.TestCase):
         # failure right there — no second jump, no hop chains.
         trajectory = self._run(goal=[1900, 200, 16, 20])
         self.assertFalse(trajectory.success)
-        # A full arc is under ~40 frames; the 120-step budget was not used.
+        # A full arc is at most 53 frames; the 120-step budget was not used.
         self.assertLess(len(trajectory.transitions), 60)
         jumps = sum(
             1

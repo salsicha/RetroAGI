@@ -10,16 +10,21 @@ promoting an architecture toward full Super Mario Bros:
    deterministic metrics.
 2. **Block SMB** trains all trainable game-facing models on a simplified
    synthetic version of SMB: Block ViT perception plus the hierarchical
-   actor/world-model/critic policy in fast scenario-driven tasks.
-3. **Full SMB segmentation curriculum** creates or recovers a CNN annotation
-   teacher, trains and audits it, and qualifies a separate Full SMB ViT with its
-   convolutional collision decoder. The implemented pipeline audits the recovered
-   CNN and trains the ViT from instrumented real-frame labels; reviewed CNN
-   proposals are a documented extension, and sprite compositions can bootstrap
-   appearance learning.
-4. **Full SMB** assembles the Full perception component with the shared Block
-   hierarchy, LSTM and adaptive controller. It tests frozen-core transfer,
-   optional world-model adaptation, local approaches and then full-level play.
+   actor/world-model/critic policy in fast scenario-driven tasks. Basic skill
+   families compose into chained scenarios (`chained_obstacles`,
+   `chained_enemy_gauntlet`, `mixed_section`, `full_smb_opening_proxy`) and
+   then tactics and strategy sequence families; each composed family unlocks
+   only after its prerequisite families are mastered on held-out layouts.
+3. **Full SMB vision** trains a separate Full SMB ViT segmenter on synthetic
+   scenes composed from extracted NES sprites (`scripts/vit/extract_sprites.py`,
+   `generate_dataset.py`, `train_vit.py`) and reports held-out patch accuracy
+   and mean IoU. Its classes are mapped by meaning onto the shared scene
+   classes.
+4. **Full SMB** transfers the Block-trained policy (hierarchy, LSTM world
+   model, critic and adaptive-controller settings) to the emulator. Full SMB
+   play is RAM-assisted: collision geometry and object boxes come from NES RAM,
+   and the frozen Full SMB segmenter supplies scene semantics. It tests transfer
+   on local approaches, continued Full SMB training, and then full-level play.
 
 The stage code is separated, but all stages share the same core contract:
 
@@ -36,14 +41,15 @@ Shared components live in `retroagi/core`. Stage adapters live in
 `retroagi/stages/*` and convert stage-native observations into the common
 A/B/C timescale tensors.
 
-The [segmentation and composability guide](docs/smb-segmentation-curriculum.md)
-explains CNN creation/training, its teacher role, the ViT's separate CNN decoder,
-and component swaps. Block and Full perception have different weights but emit
-one canonical scene interface; shared-core architecture and timing stay compatible.
-Critic feedback and carried recurrent memory are enabled only under the qualified
-common runtime. See the [current transfer plan](docs/composable-smb-transfer-plan.md)
-for the staged training order and [implementation report](docs/composable-smb-implementation.md)
-for measured results.
+Each game has one geometry observer: Block SMB reads simulator ground truth and
+Full SMB reads NES RAM; there is no pixels-only Full SMB player. Block and Full
+perception have different weights but emit one canonical scene interface;
+shared-core architecture and timing stay compatible. Critic feedback and carried
+recurrent memory are enabled only under the qualified common runtime. Block SMB
+production training runs through `scripts/block_smb_full_volume.py` with
+`scripts/configs/block_smb_full_volume.json`; the
+[shared transfer contract](docs/full-smb-transfer-contract.md) documents the
+Block-to-Full transfer and its measured results.
 
 ## Project Layout
 
@@ -120,9 +126,10 @@ flow.
 - **Block SMB** is the simplified synthetic game-training stage. It has a
   pygame-ce environment, fixed success thresholds, Block ViT perception, policy
   training, evaluation, resume, recording, ablations, structured logs, and
-  optional TensorBoard or W&B tracking. Generated scenarios now use the
-  versioned `block_smb_mc_v1` Monte Carlo distribution so policy training can
-  cover parameterized ground-truth tasks rather than only a small fixed set.
+  optional TensorBoard or W&B tracking. Generated scenarios come from the
+  Block SMB Monte Carlo families, laid out and route-verified under NES physics,
+  so policy training can cover parameterized ground-truth tasks rather than
+  only a small fixed set.
   Fresh Block SMB train/distill CLI runs use the initial real-volume MC target
   of 512 train, 128 validation, and 256 test samples, with failure-focused
   train oversampling biased toward `full_smb_opening_proxy`, unless a
@@ -316,11 +323,10 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    `--controller-schedule constant|linear`. The Full SMB random-agent runner is
    headless by default; pass `--render` only for local visual inspection. Full
    SMB policy transfer reuses Block SMB actor/world-model/critic weights.
-   The historical patch-ViT workflow below uses synthetic full-game asset
-   bootstrapping. The current composable curriculum instead qualifies dense
-   collision perception on instrumented real frames; CNN teacher proposals are
-   audited independently. These perception checkpoint formats are distinct; see
-   [the segmentation guide](docs/smb-segmentation-curriculum.md).
+   The Full SMB ViT segmenter is trained on synthetic full-game asset
+   compositions with `scripts/vit/train_vit.py` (see
+   [Reproduce Full SMB Vision](docs/reproducibility.md#10-reproduce-full-smb-vision));
+   Full SMB collision geometry comes from NES RAM, not from that segmenter.
    Transfer comparisons evaluate the transferred policy and a scratch Full SMB
    baseline on identical seeded observation batches.
    Learned-dynamics imagination is selectable with

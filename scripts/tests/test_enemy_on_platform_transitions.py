@@ -43,14 +43,16 @@ def test_mount_certificate_hands_the_first_grounded_frame_to_the_next_enemy_jump
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=platform_scenario(hard=True))
-        for _ in range(8):
+        # NES walking accelerates slowly; the 47 px mount needs a run-up.
+        for _ in range(35):
             env.step(1)
         saved = snapshot_env_state(env)
         valid = safe_jump_holds(env, local_objective(env), 1)
         assert 14 in valid and 16 in valid
         assert snapshot_env_state(env) == saved
-        # The 16-frame hold is released mid-air and lands beside the enemy.
-        for action in [2] * 16 + [1] * 10:
+        # The 16-frame hold is released mid-air and lands beside the enemy on
+        # the 14th frame after release.
+        for action in [2] * 16 + [1] * 14:
             _, _, _, _, info = env.step(action)
         assert env.mario["on_ground"] and not info["death"]
         landed = snapshot_env_state(env)
@@ -119,9 +121,9 @@ def test_completed_enemy_goal_does_not_return_when_walking_off_platform(batched)
 
 def test_recovery_after_a_released_landing_supervises_the_first_grounded_frame():
     case = replace(sample("enemy_on_platform", "easy", split="train"), scenario=platform_scenario())
-    # Landing on the platform with the next enemy still ahead; the 7-frame
-    # hold is released long before the landing.
-    actions = [1] * 10 + [2] * 7 + [1] * 120
+    # Landing on the platform with the next enemy still ahead; the 6-frame
+    # hold is released 15 frames before the landing.
+    actions = [1] * 34 + [2] * 6 + [1] * 120
     # Preserve dataset provenance independently of the explicit task identity.
     case.scenario["metadata"] = {
         "block_smb_monte_carlo": {"family": "enemy_on_platform", "split": "train"}
@@ -172,12 +174,13 @@ def test_previous_hard_fallback_routes_obey_executor_timing(index):
 def test_dangerous_mount_duration_gets_an_executor_valid_repair():
     case = platform_scenario(hard=True)
     case["metadata"] = {"block_smb_monte_carlo": {"family": "enemy_on_platform"}}
-    # Only 9-16 frame holds from this takeoff reach the platform alive.
-    repairs = repair_policy_actions(case, [1] * 8 + [2] * 6 + [1] * 12)
+    # Only 24-32 frame holds from this takeoff reach the platform; a 6-frame
+    # hop falls short against its wall.
+    repairs = repair_policy_actions(case, [1] * 20 + [2] * 6 + [1] * 12)
     repair = next(
         r
         for r in repairs
-        if r["supervision_start_frame"] == 8 and r["recovery_reason"] == "duration"
+        if r["supervision_start_frame"] == 20 and r["recovery_reason"] == "duration"
     )
     env = MarioScenarioEnv()
     try:

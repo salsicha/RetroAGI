@@ -8,16 +8,13 @@ import pytest
 import torch
 
 from retroagi.core.interfaces import VisionOutput
-from retroagi.core.smb_geometry import geometry_features
+from retroagi.core.smb_geometry import FEATURE_NAMES, geometry_features
+from retroagi.core.smb_physics import NES_JUMP_FRAMES
 from retroagi.core.smb_runtime import SMBRuntimeContract, attach_runtime, make_smb_executor
+from retroagi.core.smb_scene import C_SPANS, c_feature_index, canonical_vision
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.local_traversal import local_objective
-from retroagi.stages.full_smb.geometry import (
-    NESGeometry,
-    _platforms,
-    remap_full_vision,
-    visible_tiles,
-)
+from retroagi.stages.full_smb.geometry import NESGeometry, _platforms, visible_tiles
 from retroagi.stages.full_smb.train import _smb_forward_kwargs
 
 
@@ -39,11 +36,11 @@ def test_visual_categories_are_mapped_by_meaning():
     logits[0, 1, 0, 1] = 20  # ground
     logits[0, 6, 0, 2] = 20  # goomba
     original = VisionOutput(torch.zeros(1, 2), logits, logits.argmax(1), torch.ones(1, 2, 4))
-    mapped = remap_full_vision(original)
+    mapped = canonical_vision(original, "full")
     assert mapped.semantic_ids.tolist() == [[[1, 2, 5]]]
     assert torch.allclose(mapped.semantic_logits.softmax(1).sum(1), torch.ones(1, 1, 3))
-    assert mapped.tokens.equal(original.tokens)
-    assert remap_full_vision(original, visual_tokens="zero_ablation").tokens.count_nonzero() == 0
+    # The encoder's latent tokens never reach the policy; a class layout does.
+    assert mapped.tokens.shape == (1, 15 * 16, 7)
 
 
 def test_pipe_tiles_remain_a_solid_body_not_an_overhead_platform():
@@ -82,23 +79,32 @@ def test_motion_does_not_mistake_camera_scroll_for_velocity():
     ram[0x71C] = 10
     ram[0x87] = 151
     second = observer.observe(ram, frame=1)
-    assert second["features"]["motion_vec"][0] == pytest.approx(1 / 3)
-    assert "enemy_patrol_min" in second["unavailable_features"]
+    assert second["features"]["state"][FEATURE_NAMES.index("enemy_vx")] == pytest.approx(1 / 3)
     assert first["world_x"] == second["world_x"]
     assert first["player_box"][0] - second["player_box"][0] == 10
     assert observer.observe(ram, frame=1) is second  # re-encoding must not advance tracking
 
 
 def test_objective_stays_in_world_coordinates_during_jump():
+    from retroagi.core.smb_objectives import observable_objective
+    from retroagi.core.smb_scene import preserve_objective
+
     ram = ram_scene()
     ram[0x500 + 9 * 16 + 9] = 0x10
     ram[0x500 + 10 * 16 + 9] = 0x10
     observer = NESGeometry()
-    first = observer.observe(ram, frame=0)
+    tracker = SimpleNamespace(target=None)
+
+    def observe(frame):
+        geometry = dict(observer.observe(ram, frame=frame))
+        geometry["objective"] = observable_objective(geometry["scene"])
+        return preserve_objective(geometry, tracker)
+
+    first = observe(0)
     assert first["objective"].kind == "mount"
     ram[0x1D] = 1
     ram[0x71C] = 7
-    second = observer.observe(ram, frame=1)
+    second = observe(1)
     assert second["objective"].left + 7 == first["objective"].left
 
 
@@ -114,29 +120,26 @@ def test_shared_feature_encoder_preserves_block_geometry():
             }
         )
         features = geometry_features(env)
-        np.testing.assert_array_equal(features["state_vec"], info["state_vec"])
-        assert features["state_vec"][0] == pytest.approx(40 / 256)
-        assert features["state_vec"][18] == pytest.approx((256 - 40 - env.mario["w"]) / 256)
-        assert len(features["state_vec"]) == 27 and len(features["motion_vec"]) == 8
+        np.testing.assert_array_equal(features["state"], info["state_vec"])
+        assert features["state"][0] == pytest.approx(40 / 256)
+        support_edge = features["state"][FEATURE_NAMES.index("support_edge")]
+        assert support_edge == pytest.approx((256 - 40 - env.mario["w"]) / 256)
+        assert len(features["state"]) == len(FEATURE_NAMES)
     finally:
         env.close()
 
 
-def test_runtime_validates_duration_units_and_schema():
-    with pytest.raises(ValueError, match="schema"):
-        SMBRuntimeContract(schema="wrong")
+def test_runtime_validates_cadence_and_refuses_old_manifests():
     with pytest.raises(ValueError, match="frame"):
         SMBRuntimeContract(frame_skip=4)
-    with pytest.raises(ValueError, match="16 duration"):
-        SMBRuntimeContract(jump_hold_frames=(1, 2))
-    with pytest.raises(ValueError, match="fixed commitments"):
-        SMBRuntimeContract(adaptive_duration=True, jump_hold_frames=tuple(range(2, 34, 2)))
+    # Manifests with settings that no longer exist predate the shared observation.
+    manifest = {**SMBRuntimeContract().manifest(), "observation_provider": "oracle"}
+    with pytest.raises(ValueError, match="retrain"):
+        SMBRuntimeContract.from_manifest(manifest)
 
 
-def test_executor_uses_checkpoint_settings_and_calibrated_jump_units():
-    model = SimpleNamespace(
-        smb_runtime_contract=SMBRuntimeContract(jump_hold_frames=tuple(range(2, 34, 2)))
-    )
+def test_executor_uses_checkpoint_settings_and_nes_jump_units():
+    model = SimpleNamespace(smb_runtime_contract=SMBRuntimeContract())
     executor = make_smb_executor(model)
     assert not executor.adaptive_duration and not executor.walk_primitives
     logits = torch.full((1, 1, 16), -20.0)
@@ -144,7 +147,7 @@ def test_executor_uses_checkpoint_settings_and_calibrated_jump_units():
     motor = SimpleNamespace(hold_duration_logits=logits, duration_bins=torch.arange(1, 17).float())
     started = executor.execute(2, motor_primitives=motor, support_override="ground")
     assert started.duration_bin_index == 10
-    assert started.hold_frames == 22
+    assert started.hold_frames == NES_JUMP_FRAMES[10]
     executor.reset()
     assert (
         executor.execute(1, motor_primitives=motor, support_override="ground").hold_frames is None
@@ -153,7 +156,7 @@ def test_executor_uses_checkpoint_settings_and_calibrated_jump_units():
 
 def test_missing_semantic_contract_is_rejected_before_inference():
     model = SimpleNamespace(smb_runtime_contract=SMBRuntimeContract())
-    with pytest.raises(ValueError, match="semantics"):
+    with pytest.raises(ValueError, match="shared SMB observation"):
         _smb_forward_kwargs(model, SimpleNamespace(metadata={}), True)
 
 
@@ -161,7 +164,7 @@ def test_model_runtime_restores_deterministic_critic_and_memory_policy():
     model = SimpleNamespace(ranked_candidate_search=True, deterministic_critic_slots=None)
     attach_runtime(model, SMBRuntimeContract().manifest())
     assert not model.ranked_candidate_search
-    assert model.deterministic_critic_slots["death"] == 36
+    assert model.deterministic_critic_slots["death"] == c_feature_index("death")
     assert not model.smb_runtime_contract.recurrent_state
 
 
@@ -205,13 +208,34 @@ class ContractVision:
         )
 
 
-def shared_stage():
+def shared_stage(contract=None):
     from retroagi.stages.full_smb.adapter import FullSMBStage
 
     stage = FullSMBStage(env=RAMEnv(), vision=ContractVision())
-    stage.configure_policy_runtime(SMBRuntimeContract())
+    stage.configure_policy_runtime(contract or SMBRuntimeContract())
     stage.reset()
     return stage
+
+
+def test_full_smb_observation_uses_the_shared_layout_and_local_goal():
+    stage = shared_stage()
+    try:
+        for _ in range(3):
+            stage.encode_observation(stage._last_observation)
+            stage.step(1)
+        batch = stage.encode_observation(stage._last_observation)
+        geometry = batch.metadata["smb_geometry"]
+        assert all(batch.metadata["vision_fusion"][name] == span for name, span in C_SPANS.items())
+        target, m = geometry["objective"], geometry["scene"].mario
+        dx = ((target.left + target.right) / 2 - m["x"] - m["w"] / 2) / 256
+        assert batch.src_c[0, c_feature_index("goal_dx")].item() == pytest.approx(dx, abs=1e-6)
+        # The observer's cached features keep the screen-edge goal for other readers.
+        cached = stage.smb_geometry.cached["features"]["state"]
+        placeholder = geometry_features(geometry["scene"])["state"]
+        goal = FEATURE_NAMES.index("goal_dx")
+        assert cached[goal] == pytest.approx(placeholder[goal])
+    finally:
+        stage.close()
 
 
 def test_snapshot_restores_observation_history_and_objective():
@@ -307,8 +331,8 @@ def test_dynamic_platform_motion_and_unknown_bounds_are_explicit():
     ram[0x87] = 162
     ram[0x71C] = 7
     second = observer.observe(ram, frame=1)
-    assert second["features"]["motion_vec"][5] == pytest.approx(2 / 3)
-    assert "bridge_min" in second["unavailable_features"]
+    assert second["features"]["state"][FEATURE_NAMES.index("bridge_vx")] == pytest.approx(2 / 3)
+    assert first["availability"][-1] == 0 and second["availability"][-1] == 1
     assert second["unsupported_objects"] == []
 
 
@@ -334,9 +358,10 @@ def test_shared_dynamics_slots_cover_geometry_and_real_terminal_features():
     try:
         batch = stage.encode_observation(stage._last_observation)
         spans = _full_smb_c_stream_slot_spans(batch)
-        assert spans["emulator_state"] == (12, 47)
-        assert spans["terminal_outcome"] == (36, 39)
-        assert spans["camera_state"] == (47, 47)
+        state_start, state_end = C_SPANS["c_state"]
+        assert spans["emulator_state"] == (state_start, state_end)
+        assert spans["terminal_outcome"] == (state_end - 3, state_end)
+        assert spans["camera_state"] == (state_end, state_end)
     finally:
         stage.close()
 

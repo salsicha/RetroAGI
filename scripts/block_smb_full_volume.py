@@ -31,7 +31,7 @@ from retroagi.stages.block_smb.train import (
     train_block_smb_epoch,
 )
 
-CONFIG = Path(__file__).parent / "configs/block_smb_full_volume_revision2.json"
+CONFIG = Path(__file__).parent / "configs/block_smb_full_volume.json"
 
 
 def main():
@@ -74,16 +74,17 @@ def main():
                 map_location=device,
                 architecture_name=config.architecture_name,
                 architecture_config=config.architecture_config,
-                motion_observations=config.motion_observations,
-                hazard_observations=config.hazard_observations,
-                hazard_memory_observations=config.hazard_memory_observations,
                 restore_rng=False,
                 migrate_world_model_memory=True,
             )
         optimizer = make_block_smb_optimizer(model, probe)
         samples = [
             sample_block_smb_monte_carlo_scenario(
-                split="validation", seed=2, sample_index=0, family=family, difficulty="hard"
+                split="validation",
+                seed=2,
+                sample_index=0,
+                family=family,
+                difficulty="hard",
             )
             for family in (
                 "retreat_recovery",
@@ -105,7 +106,11 @@ def main():
         # action-selection/likelihood mismatches in autonomous traversal.
         on_policy_samples = [
             sample_block_smb_monte_carlo_scenario(
-                split="validation", seed=2, sample_index=0, family=family, difficulty="easy"
+                split="validation",
+                seed=2,
+                sample_index=0,
+                family=family,
+                difficulty="easy",
             )
             for family in ("tall_pipe_jump", "flat_run", "bridge_wait", "piranha_avoidance")
         ]

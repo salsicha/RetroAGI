@@ -7,19 +7,19 @@ not enough training data for transfer: a policy can memorize nine or twelve
 layouts and still fail as soon as Full SMB asks for slightly different timing,
 spacing, enemy approach, or recovery behavior.
 
-The target Block SMB curriculum is therefore a versioned parameterized scenario
+The target Block SMB curriculum is therefore a parameterized scenario
 distribution. Training should draw Monte Carlo samples from that distribution;
 promotion requires held-out family and difficulty coverage and success. The
 September 8, 2026 recipe retires fixed scenes from production training and
 evaluation; see [family-only training](block-smb-family-only-training.md).
 
 The September 2026 [remaining-family audit](block-smb-remaining-family-audit.md)
-documents revision 2 geometry, landing credit, local duration coaching, and
-the reproducible fresh full-volume recipe.
+documents family geometry repairs, landing credit, local duration coaching,
+and the reproducible fresh full-volume recipe.
 
 ## Implementation Status
 
-P3A is implemented for `block_smb_mc_v1`.
+P3A is implemented for the Block SMB Monte Carlo families.
 
 - checked-in fixed JSON files are legacy test fixtures, excluded from production;
 - generated Block SMB scenarios now come from
@@ -34,7 +34,7 @@ P3A is implemented for `block_smb_mc_v1`.
 
 The legacy `MarioScenarioEnv.generate_scenario(...)` helper remains available
 for low-level environment tests, but trainer-facing generated scenarios should
-use the versioned sampler so checkpoints carry distribution evidence.
+use the Monte Carlo sampler so checkpoints carry distribution evidence.
 
 ## Design Goals
 
@@ -45,9 +45,8 @@ use the versioned sampler so checkpoints carry distribution evidence.
   recovery situations, and timing hazards.
 - Use Monte Carlo sampling to cover many combinations of geometry and dynamics
   without committing every generated level.
-- Record enough metadata that a checkpoint can be traced to a distribution
-  version, seed policy, split, sample count, coverage histogram, and failure
-  bins.
+- Record enough metadata that a checkpoint can be traced to a seed policy,
+  split, sample count, coverage histogram, and failure bins.
 - Promote to Full SMB only with passing held-out Monte Carlo evidence covering every family and difficulty.
 
 ## Scenario Families
@@ -104,14 +103,12 @@ original goal rectangle. Existing checkpoints load unchanged, but these training
 changes require further training before improved learned accuracy can be claimed.
 
 
-`bridge_wait` revision 3 retains the revision-2 200px gap and 100px bridge,
-and adds 48–60px bridges moving at 0.5–1.1px/frame over narrower gaps.
-The following paragraph describes the retained wide variant.
-Mario starts near the left edge; a full held jump cannot bypass the gap.
-Success requires actual engine support on the bridge, then the far shore,
-then contact with the final goal. Saved scenarios identified as this family
-also receive the stricter goal gate; previous scores and bypassing oracles
-are not comparable to this revision.
+`bridge_wait` has a wide variant with a 200px gap and 100px bridge, and
+48–60px bridges moving at 0.5–1.1px/frame over narrower gaps. The following
+paragraph describes the wide variant. Mario starts near the left edge; a full
+held jump cannot bypass the gap. Success requires actual engine support on the
+bridge, then the far shore, then contact with the final goal. Saved scenarios
+identified as this family receive the same goal gate.
 
 Initial bridge phase varies across easy (12–22), medium (30–42), and hard
 (48–60) phase frames; speeds vary across 2.0–2.4, 1.8–2.2, and 1.6–2.0px/frame,
@@ -151,22 +148,20 @@ establish learned timing accuracy. Checkpoint dimensions remain compatible;
 learned accuracy needs a fresh training and evaluation run.
 
 
-`enemy_stomp` revision 2 requires an engine-credited stomp followed by contact
-with the final goal. Passing over a live enemy and touching the finish earns
-no goal credit. This requirement also applies to saved scenarios identified
-as the `enemy_stomp` family; older bypassing oracles no longer validate as
-successful demonstrations. Explicit scenarios can opt in with
+`enemy_stomp` requires an engine-credited stomp followed by contact with the
+final goal. Passing over a live enemy and touching the finish earns no goal
+credit. This requirement also applies to saved scenarios identified as the
+`enemy_stomp` family; bypassing oracles do not validate as successful
+demonstrations. Explicit scenarios can opt in with
 `require_stomp_before_goal: true`.
 
 The generator varies spawn x from 16–40px and enemy distance across disjoint
 52–72 / 92–116 / 140–164px bands. Easy enemies stand still; medium and hard
 patrol at 0.3 / 0.6px per frame over 16 / 24px travel, starting in either
 direction. The finish is at x=334. The oracle searches both walking approach
-and 1–16-frame jump hold against the exact physics, requiring a stomp and
-finish within 160 frames. The sample records `family_revision: 2`, approach
-frames, and hold frames. The obsolete constant `stomp_window` field is removed.
-Results from the old geometry and completion-only metric are not directly
-comparable to this revision.
+and every NES jump hold (1–32 frames) against the exact physics, requiring a stomp and
+finish within 160 frames. The sample records the oracle's approach frames and
+hold frames.
 
 Training and success rehearsal give the composite at least 160 frames, including
 old replay scenarios; evaluation continues to honor its explicit frame limit.
@@ -188,17 +183,15 @@ with episode/stomp/finish counts, `stomp_success_rate`, and
 learned performance must be evaluated after retraining.
 
 
-`stomp_mount` samples now carry `parameters.family_revision: 2`. Distance bands
-remain 52–60 / 62–68 / 70–76px. Medium and hard patrols move at 0.6 / 0.9px per
-frame with 20 / 28px total travel, start in either direction, and first reverse
-about 6–12 frames after takeoff, while release can still affect the jump. The
-sample records initial direction and nominal frames to the first turn. Each
-sample's scripted oracle is calibrated against the engine's 1–16-frame hold
-menu and checked for reachability. Evaluation still uses the learned policy.
-Saved older scenarios remain replayable; compare revision 2 results separately
-from the previous patrol distribution, whose reversals came after the jump.
-Variation exercises interception across motion phases; reachability alone does
-not establish that every sample requires mid-flight adaptation.
+`stomp_mount` distance bands are 52–60 / 62–68 / 70–76px. Medium and hard
+patrols move at 0.6 / 0.9px per frame with 20 / 28px total travel, start in
+either direction, and first reverse about 6–12 frames after takeoff, while
+release can still affect the jump. The sample records initial direction and
+nominal frames to the first turn. Each sample's scripted oracle is calibrated
+against the engine's NES jump-hold menu and checked for reachability.
+Evaluation still uses the learned policy. Variation exercises interception
+across motion phases; reachability alone does not establish that every sample
+requires mid-flight adaptation.
 
 The engine and coaching share the stomp predicate: integer collision rectangles
 must overlap while Mario descends, with his inferred previous bottom at or above
@@ -228,9 +221,7 @@ compatible, but improved learned accuracy requires retraining and evaluation.
 
 
 The first implementation should keep geometry ranges conservative enough that a
-scripted bootstrap oracle can solve every sampled scenario. Harder ranges
-should be added as named distribution versions instead of silently changing the
-old one.
+scripted bootstrap oracle can solve every sampled scenario.
 
 The scripted oracle is a bootstrap teacher, not the long-term architecture.
 Future Block-level learning should be guided by the learned cross-game oracle
@@ -243,8 +234,6 @@ data for the universal oracle and later be replaced by learned labels.
 
 `BlockSMBScenarioFamilySpec` and `BlockSMBScenarioSample` provide:
 
-- `schema_version`;
-- `distribution_id`, for example `block_smb_mc_v1`;
 - `family`;
 - `split`: `train`, `validation`, `test`, or `stress`;
 - `seed`;
@@ -265,8 +254,7 @@ records them.
 
 ## Sampler And Splits
 
-Sampling should be deterministic from `(distribution_id, split, seed,
-sample_index)`.
+Sampling should be deterministic from `(split, seed, sample_index)`.
 
 - `train`: large Monte Carlo stream, reshuffled every epoch by seed.
 - `validation`: stable held-out seeds for frequent evaluation and early stopping.
@@ -362,12 +350,12 @@ Block SMB promotion to Full SMB should require:
 - held-out Monte Carlo validation pass rate above the configured gate;
 - held-out Monte Carlo test pass rate reported in the promotion artifact;
 - per-family pass rates above minimum family gates;
-- no missing coverage bins for the selected distribution version;
+- no missing family or difficulty coverage bins;
 - world-model dynamics metrics reported by C-stream slot on Monte Carlo samples;
 - action distribution diagnostics for required actions such as `LEFT`,
   `RIGHT_JUMP`, wait/release behavior, and recovery primitives.
 
-Suggested initial gates for `block_smb_mc_v1`:
+Suggested initial gates:
 
 - train samples per epoch: at least `512`;
 - validation samples: at least `128`;
@@ -394,7 +382,7 @@ for the tiny coverage sweep. Expect a fresh run to take hours on a single GPU.
 
 ## Commands
 
-Train with versioned Monte Carlo samples:
+Train with Monte Carlo samples:
 
 ```bash
 retroagi-block-smb train \
@@ -453,7 +441,7 @@ coverage sweep plus 512 more samples.
 
 ## Implementation Steps
 
-1. Add a versioned scenario-family schema and distribution config.
+1. Add a scenario-family schema and distribution config.
 2. Replace the loose `generated_scenarios` path with a sampler that emits
    scenario IDs, family names, parameters, split names, and seeds.
 3. Add reachability/oracle checks so invalid generated levels are rejected
@@ -474,7 +462,6 @@ coverage sweep plus 512 more samples.
 
 Every Monte Carlo Block SMB run should record:
 
-- distribution ID and schema version;
 - train/validation/test split names;
 - base seed and sample-count policy;
 - family weights and curriculum schedule;

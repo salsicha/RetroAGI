@@ -8,8 +8,6 @@ outside this profile and must not be advertised as supported.
 
 from dataclasses import dataclass
 
-NES_PHYSICS_PROFILE = "nes_land_v1"
-LEGACY_PHYSICS_PROFILE = "block_legacy_v1"
 NES_JUMP_FRAMES = (1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 32)
 
 
