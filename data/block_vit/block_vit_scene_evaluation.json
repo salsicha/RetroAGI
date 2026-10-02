@@ -1,0 +1,359 @@
+{
+  "checkpoint": "data/block_vit/block_vit_scene.pth",
+  "split": "validation",
+  "seed": 0,
+  "layouts": 192,
+  "routes": [
+    "teacher",
+    "perturbed"
+  ],
+  "keep": 0.2,
+  "learned_numbers": 1259551,
+  "seconds": 143.9,
+  "frames": 12398,
+  "pixels_correct": 0.9999961606350679,
+  "mario": {
+    "frames": 12337,
+    "found": 0.9997568290508227,
+    "false_in_frames_without_mario": 0,
+    "edge_error_px": {
+      "mean": 0.002189070861034539,
+      "p95": 0.0,
+      "max": 5.0
+    },
+    "facing": 0.9959471508470454,
+    "support": 0.997244062575991,
+    "support_confusion": {
+      "air": {
+        "air": 6530,
+        "ground": 14,
+        "moving_platform": 0
+      },
+      "ground": {
+        "air": 17,
+        "ground": 4970,
+        "moving_platform": 2
+      },
+      "moving_platform": {
+        "air": 0,
+        "ground": 1,
+        "moving_platform": 803
+      }
+    }
+  },
+  "enemy_kind_accuracy": 0.9998432601880878,
+  "enemies": {
+    "true": 6383,
+    "found": 6380,
+    "recall": 0.9995300015666615,
+    "precision": 1.0,
+    "edge_error_px": {
+      "mean": 0.0014106583072100312,
+      "p95": 0.0,
+      "max": 1.0
+    }
+  },
+  "coins": {
+    "true": 9332,
+    "found": 9334,
+    "recall": 0.9981783111873125,
+    "precision": 0.9979644311120635,
+    "edge_error_px": {
+      "mean": 0.00042941492216854533,
+      "p95": 0.0,
+      "max": 1.0
+    }
+  },
+  "power_ups": {
+    "true": 3505,
+    "found": 3516,
+    "recall": 0.9917261055634807,
+    "precision": 0.9886234357224118,
+    "edge_error_px": {
+      "mean": 0.019562715765247412,
+      "p95": 0.0,
+      "max": 8.0
+    }
+  },
+  "moving_platforms": {
+    "true": 2573,
+    "found": 2573,
+    "recall": 1.0,
+    "precision": 1.0,
+    "edge_error_px": {
+      "mean": 0.005441119315973571,
+      "p95": 0.0,
+      "max": 3.0
+    }
+  },
+  "pipes": {
+    "true": 4165,
+    "found": 4167,
+    "recall": 1.0,
+    "precision": 0.9995200383969283,
+    "edge_error_px": {
+      "mean": 0.0004801920768307323,
+      "p95": 0.0,
+      "max": 1.0
+    }
+  },
+  "blocks": {
+    "true": 3298,
+    "found": 3303,
+    "recall": 1.0,
+    "precision": 0.9984862246442628,
+    "edge_error_px": {
+      "mean": 0.0036385688295936932,
+      "p95": 0.0,
+      "max": 2.0
+    }
+  },
+  "surfaces": {
+    "true": 31509,
+    "found": 31509,
+    "recall": 1.0,
+    "precision": 1.0,
+    "edge_error_px": {
+      "mean": 0.0011425307055127106,
+      "p95": 0.0,
+      "max": 3.0
+    }
+  },
+  "gaps": {
+    "true": 6719,
+    "found": 6719,
+    "recall": 1.0,
+    "precision": 1.0,
+    "edge_error_px": {
+      "mean": 0.0,
+      "p95": 0.0,
+      "max": 0.0
+    }
+  },
+  "families": {
+    "bridge_dismount": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "bridge_mount": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "bridge_wait": {
+      "mario_found": 1.0,
+      "support": 0.9978354978354979,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "chained_enemy_gauntlet": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "chained_obstacles": {
+      "mario_found": 1.0,
+      "support": 0.99822695035461,
+      "enemy_recall": 0.9961904761904762,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "enemy_gap": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "enemy_hop": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "enemy_on_platform": {
+      "mario_found": 1.0,
+      "support": 0.9957173447537473,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "enemy_patrol": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "enemy_stomp": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "flat_run": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "full_smb_opening_proxy": {
+      "mario_found": 1.0,
+      "support": 0.99812382739212,
+      "enemy_recall": 0.9979838709677419,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "landing_enemy": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "mixed_section": {
+      "mario_found": 1.0,
+      "support": 0.9983606557377049,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "moving_bridge": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "pipe_mount": {
+      "mario_found": 1.0,
+      "support": 0.9887640449438202,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "piranha_avoidance": {
+      "mario_found": 0.9978448275862069,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "pit_leap": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "platform_chain": {
+      "mario_found": 1.0,
+      "support": 0.9827586206896551,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "platform_hop": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "retreat_recovery": {
+      "mario_found": 0.9935275080906149,
+      "support": 1.0,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "single_gap": {
+      "mario_found": 1.0,
+      "support": 0.9970238095238095,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "stair_climb": {
+      "mario_found": 1.0,
+      "support": 0.9894291754756871,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "stair_gap": {
+      "mario_found": 1.0,
+      "support": 0.9964221824686941,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "stomp_mount": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "stomp_recovery": {
+      "mario_found": 1.0,
+      "support": 1.0,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "strategy_bridge_then_gap": {
+      "mario_found": 1.0,
+      "support": 0.9916247906197655,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "strategy_mixed_sequence": {
+      "mario_found": 1.0,
+      "support": 0.9935622317596566,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "tactics_bridge_sequence": {
+      "mario_found": 1.0,
+      "support": 0.9977628635346756,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    },
+    "tactics_obstacle_sequence": {
+      "mario_found": 1.0,
+      "support": 0.9982425307557118,
+      "enemy_recall": 1.0,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "tall_pipe_jump": {
+      "mario_found": 1.0,
+      "support": 0.998211091234347,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": null
+    },
+    "wait_timing": {
+      "mario_found": 1.0,
+      "support": 0.9970238095238095,
+      "enemy_recall": null,
+      "surface_recall": 1.0,
+      "gap_recall": 1.0
+    }
+  }
+}

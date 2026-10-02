@@ -1,12 +1,13 @@
 """Measure the Full SMB vision transformer on held-out real frames.
 
 This is `retroagi diagnose-vision --game smb --stage full`. Frames come from
-the test levels (vision_frames.TEST_LEVELS), which vision training never sees,
-each played from its saved start by the random player in vision_frames. Every
-frame's true pixel types are read from game memory (pixel_labels.label_frame);
+fresh plays of every level start (vision_frames.LEVELS), each played from its
+saved start by the random player in vision_frames, with seeds training does
+not use. Every
+frame's true scene is read from game memory (pixel_labels.label_frame);
 a frame memory cannot fully explain is counted by its reason and never
 measured. The measurements are the shared ones
-(retroagi.core.pixel_vision.evaluate_pixel_vision), so they mean exactly what
+(retroagi.core.scene_vision.evaluate_scene_vision), so they mean exactly what
 the Block SMB diagnostic reports. scripts/vision/evaluate_full_vision.py takes
 the same measurement with several worker processes.
 """
@@ -21,9 +22,9 @@ from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
 from retroagi.core import select_device, to_plain_data
-from retroagi.core.pixel_vision import evaluate_pixel_vision
+from retroagi.core.scene_vision import evaluate_scene_vision
 from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, load_full_vit_checkpoint
-from retroagi.stages.full_smb.vision_frames import TEST_LEVELS, labelled_frames
+from retroagi.stages.full_smb.vision_frames import LEVELS, labelled_frames
 
 # Frames per play before the level is restarted; most plays finish sooner.
 PLAY_FRAMES = 9_000
@@ -47,7 +48,7 @@ def run_full_smb_vision_diagnostic(
     if plays <= 0:
         raise ValueError("plays must be positive")
     rng = random.Random(seed)
-    play_seeds = [(level, rng.randrange(2**31)) for level in TEST_LEVELS for _ in range(plays)]
+    play_seeds = [(level, rng.randrange(2**31)) for level in LEVELS for _ in range(plays)]
     refusals: Counter = Counter()
 
     def frame_stream() -> Iterator[Any]:
@@ -56,9 +57,9 @@ def run_full_smb_vision_diagnostic(
                 level, frames=frames, seed=play_seed, every=every, refusals=refusals
             )
 
-    metrics = evaluate_pixel_vision(model, frame_stream(), batch_size=batch_size)
+    metrics = evaluate_scene_vision(model, frame_stream(), batch_size=batch_size)
     return {
-        "levels": list(TEST_LEVELS),
+        "levels": list(LEVELS),
         "plays": len(play_seeds),
         **metrics,
         "refused_frames": dict(refusals),

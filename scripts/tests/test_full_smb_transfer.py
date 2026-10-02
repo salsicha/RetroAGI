@@ -22,7 +22,7 @@ from retroagi.core import (
     register_architecture,
     save_checkpoint,
 )
-from retroagi.core.pixel_vision import save_pixel_vision_checkpoint
+from retroagi.core.scene_vision import save_scene_vision_checkpoint
 from retroagi.stages.block_smb import (
     BLOCK_SMB_CHECKPOINT_KIND,
     BLOCK_SMB_MODEL_NAME,
@@ -191,7 +191,7 @@ def transfer_ready_metrics(**overrides):
 
 def write_full_smb_vision_checkpoint(path: Path) -> None:
     model = FullVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-    save_pixel_vision_checkpoint(
+    save_scene_vision_checkpoint(
         path, model, stage=FULL_SMB_SPEC.name, metrics={"pixels_correct": 1.0}, epoch=1
     )
 

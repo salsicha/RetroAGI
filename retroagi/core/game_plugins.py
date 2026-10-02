@@ -295,7 +295,7 @@ SMB_GAME_PLUGIN = GamePluginSpec(
             vision_encoder="retroagi.stages.block_smb.vision.BlockVisionTransformer",
             asset_extraction="retroagi.stages.block_smb.env.MarioScenarioEnv.render_labels",
             synthetic_frame_composition=("retroagi.stages.block_smb.env.MarioScenarioEnv"),
-            checkpoint_path="data/block_vit/block_vit_pixel.pth",
+            checkpoint_path="data/block_vit/block_vit_scene.pth",
             diagnostic_thresholds={
                 "min_pixels_correct": 0.999,
                 "min_mario_found": 0.99,
@@ -340,9 +340,9 @@ SMB_GAME_PLUGIN = GamePluginSpec(
             vision_encoder="retroagi.stages.full_smb.vision.FullVisionTransformer",
             asset_extraction="retroagi.stages.full_smb.pixel_labels.label_frame",
             synthetic_frame_composition=None,
-            checkpoint_path="data/full_vit/full_vit_pixel.pth",
+            checkpoint_path="data/full_vit/full_vit_scene.pth",
             # The same measurements and targets as Block SMB
-            # (retroagi.core.pixel_vision.evaluate_pixel_vision).
+            # (retroagi.core.scene_vision.evaluate_scene_vision).
             diagnostic_thresholds={
                 "min_pixels_correct": 0.999,
                 "min_mario_found": 0.99,
@@ -351,8 +351,8 @@ SMB_GAME_PLUGIN = GamePluginSpec(
                 "min_enemies_seen": 0.99,
             },
             dataset_artifacts=(
-                "real emulator plays of the training levels (never the test levels, "
-                "retroagi.stages.full_smb.vision_frames.TEST_LEVELS)",
+                "real emulator plays of every level start "
+                "(retroagi.stages.full_smb.vision_frames.LEVELS)",
             ),
             dataset_sources=(
                 PerceptionDatasetSourceSpec(

@@ -303,14 +303,14 @@ overridden:
 | Critic feedback | `--disable-critic-feedback` | Still computes critic output for metrics, but does not inject it into the actor's second pass. |
 | Hierarchy levels | `--disable-hierarchy` | Replaces A/B semantic streams with background tokens while preserving C-stream inputs. |
 | Recurrent state | `--disable-recurrent-state` | Starts the world model from zero recurrent memory at each rollout step instead of carrying state between steps. |
-| Checkpoint transfer | `--disable-checkpoint-transfer` | Uses a fresh frozen Block ViT for policy observations instead of loading `data/block_vit/block_vit_pixel.pth` or a supplied vision checkpoint. |
+| Checkpoint transfer | `--disable-checkpoint-transfer` | Uses a fresh frozen Block ViT for policy observations instead of loading `data/block_vit/block_vit_scene.pth` or a supplied vision checkpoint. |
 
 If deterministic policy training stalls, measure the Block ViT before
 changing policy losses:
 
 ```bash
 retroagi-block-smb diagnose-vision \
-  --vision-checkpoint data/block_vit/block_vit_pixel.pth
+  --vision-checkpoint data/block_vit/block_vit_scene.pth
 ```
 
 The Block ViT is the shared per-pixel vision transformer with Block weights.
@@ -390,10 +390,10 @@ normalization, stacking, and episode masks are implemented. Emulator state
 snapshots are implemented for repeatable evaluation through the backend
 adapter's `env` or `env.em` save/load state API. Screens are read by the Full
 SMB vision model: the shared per-pixel vision transformer class
-(`retroagi.core.vision.PixelVisionTransformer`) with Full SMB weights
+(`retroagi.core.vision.SceneVisionTransformer`) with Full SMB weights
 (`retroagi.stages.full_smb.vision.FullVisionTransformer`), which labels every
 pixel with one of the nine types in `retroagi.core.smb_pixel_types.PIXEL_TYPES`.
-`FullSMBStage` loads `data/full_vit/full_vit_pixel.pth` frozen on the CPU when
+`FullSMBStage` loads `data/full_vit/full_vit_scene.pth` frozen on the CPU when
 it is not given a vision model. It is the only vision path.
 
 Backend-specific values must be normalized at this boundary rather than leaking
@@ -579,15 +579,15 @@ never trains on (`retroagi diagnose-vision --game smb --stage full`; see
 reads screens through that checkpoint
 (`retroagi.stages.full_smb.vision.FullVisionTransformer`, loaded frozen by
 `load_full_vit_checkpoint`). `FullSMBStage` loads
-`data/full_vit/full_vit_pixel.pth` frozen on the CPU when it is not given a
+`data/full_vit/full_vit_scene.pth` frozen on the CPU when it is not given a
 vision model.
 
 ```bash
 python -m retroagi.stages.full_smb.transfer \
   --block-policy-checkpoint data/block_smb/policy.pth \
   --output-checkpoint data/full_smb/transferred_policy.pth \
-  --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
-  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth
+  --block-vision-checkpoint data/block_vit/block_vit_scene.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth
 ```
 
 `load_transferred_full_smb_policy(...)` restores a saved transfer checkpoint,

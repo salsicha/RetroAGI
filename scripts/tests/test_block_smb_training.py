@@ -1406,7 +1406,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 [
                     "train",
                     "--vision-checkpoint",
-                    "data/block_vit/block_vit_pixel.pth",
+                    "data/block_vit/block_vit_scene.pth",
                     *extra,
                 ]
             )
@@ -1437,7 +1437,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 [
                     "train",
                     "--vision-checkpoint",
-                    "data/block_vit/block_vit_pixel.pth",
+                    "data/block_vit/block_vit_scene.pth",
                     *extra,
                 ]
             )
@@ -1496,7 +1496,7 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
                 [
                     "train",
                     "--vision-checkpoint",
-                    "data/block_vit/block_vit_pixel.pth",
+                    "data/block_vit/block_vit_scene.pth",
                     *extra,
                 ]
             )

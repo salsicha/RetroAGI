@@ -99,7 +99,7 @@ around it are plain, inspectable code. Top to bottom:
   deterministic gates that read the world model's predicted goal distance and
   death flag directly.
 - **Perception (Block ViT)** — the shared per-pixel vision transformer
-  (`PixelVisionTransformer`) with Block weights: it types every pixel as
+  (`SceneVisionTransformer`) with Block weights: it types every pixel as
   background, Mario, ground, brick, question block, pipe, coin, enemy or
   moving platform. Trained and frozen before policy training. Full SMB uses
   the same class with its own weights. `canonical_vision` maps the nine types
@@ -216,7 +216,7 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    ```bash
    python -m retroagi.stages.synthetic_1d.train
    retroagi train --game smb --stage block --epochs 5 \
-     --vision-checkpoint data/block_vit/block_vit_pixel.pth \
+     --vision-checkpoint data/block_vit/block_vit_scene.pth \
      --checkpoint data/block_smb/policy.pth \
      --output artifacts/block_smb/latest/run_summary.json
    retroagi resume --game smb --stage block \
@@ -228,12 +228,12 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
      --record-dir artifacts/block_smb/recordings
    retroagi transfer --game smb --stage full \
      --block-policy-checkpoint data/block_smb/policy.pth \
-     --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
-     --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+     --block-vision-checkpoint data/block_vit/block_vit_scene.pth \
+     --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
      --output-checkpoint data/full_smb/transferred_policy.pth
    retroagi train --game smb --stage full \
      --init-checkpoint data/full_smb/transferred_policy.pth \
-     --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+     --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
      --perception-mode freeze \
      --updates-per-epoch 1 \
      --rollout-steps 64 \
@@ -293,7 +293,7 @@ The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
    tracking output, and checkpoint copies.
    Full SMB policy training records its perception choice in every checkpoint:
    `--perception-mode freeze` reuses the trained Full SMB vision checkpoint
-   (`data/full_vit/full_vit_pixel.pth` by default) unchanged, `fine_tune`
+   (`data/full_vit/full_vit_scene.pth` by default) unchanged, `fine_tune`
    includes its parameters in the optimizer, and `replace` starts from a fresh,
    untrained, trainable Full SMB vision model.
    Full SMB trainer checkpoints also capture the resolved rollout/update shape,
@@ -368,7 +368,7 @@ the frame's own shapes with their types instead of their colours:
 python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
 ```
 
-The best checkpoint is written to `data/block_vit/block_vit_pixel.pth`. Measure
+The best checkpoint is written to `data/block_vit/block_vit_scene.pth`. Measure
 it on held-out validation-split frames with the shared measurements (pixels
 correct, each type found/correct, Mario found and position error, standing
 agreement, enemies seen):
@@ -388,7 +388,7 @@ pixel:
 python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
 ```
 
-The best checkpoint is written to `data/full_vit/full_vit_pixel.pth`. Measure
+The best checkpoint is written to `data/full_vit/full_vit_scene.pth`. Measure
 it with the same measurements on the test levels `Level1-1` and `Level5-1`,
 which it never trains on; frames memory cannot fully explain are counted and
 not measured:

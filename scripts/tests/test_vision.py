@@ -9,14 +9,23 @@ import numpy as np
 import torch
 
 from retroagi.core import LinearVisionEncoder, VisionOutput
-from retroagi.core.pixel_vision import (
-    evaluate_pixel_vision,
+from retroagi.core.scene_vision import (
+    array_batches,
+    evaluate_scene_vision,
+    frame_targets,
     pixel_type_weights,
-    save_pixel_vision_checkpoint,
-    train_pixel_vision_on_arrays,
+    save_scene_vision_checkpoint,
+    stack_targets,
+    train_scene_vision,
 )
-from retroagi.core.smb_pixel_types import PIXEL_TYPES, TYPE_ID
-from retroagi.core.vision import PixelVisionTransformer
+from retroagi.core.smb_pixel_types import PIXEL_TYPES, TYPE_ID, visible_window
+from retroagi.core.smb_scene_labels import (
+    ENEMY_KINDS,
+    SUPPORTS,
+    SceneObservation,
+    scene_targets,
+)
+from retroagi.core.vision import SceneVisionTransformer
 from retroagi.stages.block_smb import (
     BLOCK_SMB_SPEC,
     BlockSMBStage,
@@ -49,14 +58,16 @@ def block_frames(steps=40, actions=(1, 1, 2, 2, 2, 1)):
         env.reset(scenario=scenario)
         for step in range(steps):
             env.step(actions[step % len(actions)])
+            scene = env.scene_labels()
             frames.append(
                 VisionFrame(
-                    image=env.render(),
-                    labels=env.render_labels(),
-                    on_ground=bool(env.mario["on_ground"]),
+                    image=visible_window(env.render()),
+                    labels=scene.types,
+                    on_ground=scene.standing,
                     enemy_rects=tuple(tuple(r) for r in env.enemy_screen_rects()),
                     family="test",
                     route="scripted",
+                    scene=scene,
                 )
             )
     finally:
@@ -64,28 +75,50 @@ def block_frames(steps=40, actions=(1, 1, 2, 2, 2, 1)):
     return frames
 
 
+def perfect_heads(targets: dict) -> dict:
+    """Raw heads that decode to exactly the scene the targets describe."""
+    one = torch.nn.functional.one_hot
+
+    def batch(name):
+        return torch.as_tensor(np.stack([t[name] for t in targets]))
+
+    types = batch("types").long()
+    kinds = batch("kind").clamp_min(0)
+    return {
+        "pixel_logits": one(types, len(PIXEL_TYPES)).permute(0, 3, 1, 2).float() * 20,
+        "kind_logits": one(kinds, len(ENEMY_KINDS)).permute(0, 3, 1, 2).float() * 20,
+        "facing_logits": one(batch("facing"), 2).float() * 20,
+        "support_logits": one(batch("support"), len(SUPPORTS)).float() * 20,
+    }
+
+
 class OracleVision(BlockVisionTransformer):
-    """Scores each pixel's true type, looked up by the picture."""
+    """Reports each frame's true scene, looked up by the picture."""
 
     def __init__(self, frames):
         super().__init__(dim=16, depth=1, heads=4)
-        self.truth = {frame.image.tobytes(): frame.labels for frame in frames}
+        self.truth = {frame.image.tobytes(): scene_targets(frame.scene) for frame in frames}
 
-    def pixel_logits(self, observation):
+    def heads(self, observation):
         images = np.asarray(observation).reshape(-1, 240, 256, 3)
-        labels = torch.as_tensor(np.stack([self.truth[image.tobytes()] for image in images])).long()
-        return torch.nn.functional.one_hot(labels, len(PIXEL_TYPES)).permute(0, 3, 1, 2) * 20.0
+        return perfect_heads([self.truth[image.tobytes()] for image in images])
 
 
 class BackgroundOnlyVision(BlockVisionTransformer):
+    """Sees nothing but sky: no objects, no terrain."""
+
     def __init__(self):
         super().__init__(dim=16, depth=1, heads=4)
 
-    def pixel_logits(self, observation):
-        batch = np.asarray(observation).reshape(-1, 240, 256, 3).shape[0]
-        logits = torch.full((batch, len(PIXEL_TYPES), 240, 256), -10.0)
-        logits[:, TYPE_ID["background"]] = 10.0
-        return logits
+    def heads(self, observation):
+        images = np.asarray(observation).reshape(-1, 240, 256, 3)
+        empty = {
+            "types": np.zeros((240, 256), np.uint8),
+            "kind": np.zeros((30, 32), np.int64),
+            "facing": np.int64(1),
+            "support": np.int64(0),
+        }
+        return perfect_heads([empty] * len(images))
 
 
 class TestVisionInterface(unittest.TestCase):
@@ -99,52 +132,46 @@ class TestVisionInterface(unittest.TestCase):
         self.assertEqual(output.semantic_ids.shape, (1, 1, 8))
         self.assertEqual(output.tokens.shape, (1, 8, 16))
 
-    def test_block_vit_is_the_shared_pixel_model_and_types_every_pixel(self):
+    def test_block_vit_is_the_shared_scene_model_and_reports_a_scene(self):
         encoder = BlockVisionTransformer(dim=32, depth=1, heads=4).eval()
-        self.assertIsInstance(encoder, PixelVisionTransformer)
+        self.assertIsInstance(encoder, SceneVisionTransformer)
         self.assertEqual(encoder.spec.semantic_classes, PIXEL_TYPES)
-        stage = BlockSMBStage(vision=encoder)
-        try:
-            observation = stage.reset(seed=3)
-            with torch.no_grad():
-                output = encoder.encode(observation)
-                scores = encoder.pixel_logits(observation)
-        finally:
-            stage.env.close()
+        frames = block_frames(steps=2)
+        with torch.no_grad():
+            out = encoder.heads(np.stack([frame.image for frame in frames]))
+            scenes = encoder.scene(np.stack([frame.image for frame in frames]))
 
-        self.assertEqual(scores.shape, (1, 9, 240, 256))
-        self.assertEqual(output.semantic_logits.shape, (1, 9, 15, 16))
-        self.assertEqual(output.metadata["semantic_classes"], PIXEL_TYPES)
-        self.assertEqual(output.metadata["pixel_labels"].shape, (1, 240, 256))
-        self.assertTrue(
-            torch.equal(output.metadata["pixel_labels"], scores.argmax(1).to(torch.uint8))
+        self.assertEqual(
+            set(out), {"pixel_logits", "kind_logits", "facing_logits", "support_logits"}
         )
-        self.assertEqual(output.position.shape, (1, 2))
-        self.assertTrue(torch.all((output.position >= 0) & (output.position <= 1)))
-        self.assertEqual(output.support_logits.shape, (1, 3))
-        self.assertEqual(output.support_ids.shape, (1,))
+        self.assertEqual(out["pixel_logits"].shape, (2, len(PIXEL_TYPES), 240, 256))
+        self.assertEqual(out["kind_logits"].shape, (2, len(ENEMY_KINDS), 30, 32))
+        self.assertEqual(out["facing_logits"].shape, (2, 2))
+        self.assertEqual(out["support_logits"].shape, (2, len(SUPPORTS)))
+        self.assertEqual(len(scenes), 2)
+        self.assertTrue(all(isinstance(scene, SceneObservation) for scene in scenes))
 
     def test_block_vit_refuses_pictures_that_are_not_256x240(self):
         encoder = BlockVisionTransformer(dim=16, depth=1, heads=4).eval()
         with self.assertRaisesRegex(ValueError, "never stretch"):
-            encoder.encode(torch.zeros(1, 3, 120, 128))
+            encoder.heads(torch.zeros(1, 3, 120, 128))
 
-    def test_shared_trainer_learns_from_screen_and_label_arrays(self):
+    def test_shared_trainer_learns_from_screens_and_scene_targets(self):
         frames = block_frames(steps=4)
         images = np.stack([frame.image for frame in frames])
-        labels = np.stack([frame.labels for frame in frames])
+        targets = stack_targets([frame_targets(frame.scene) for frame in frames])
         model = BlockVisionTransformer(dim=16, depth=1, heads=4)
-        before = model.pixel_head.weight.detach().clone()
+        before = model.kind_head.weight.detach().clone()
         seen = []
 
-        best = train_pixel_vision_on_arrays(
+        best = train_scene_vision(
             model,
-            images,
-            labels,
-            held_out_images=images[:2],
-            held_out_labels=labels[:2],
+            array_batches(images, targets, batch_size=2, seed=0),
             epochs=2,
-            batch_size=2,
+            steps_per_epoch=2,
+            held_out_images=images[:2],
+            held_out_targets={name: value[:2] for name, value in targets.items()},
+            pixel_weights=pixel_type_weights(targets["types"]),
             device=torch.device("cpu"),
             warmup_steps=1,
             on_epoch=lambda epoch, metrics, improved: seen.append((epoch, improved)),
@@ -152,9 +179,11 @@ class TestVisionInterface(unittest.TestCase):
 
         self.assertEqual([epoch for epoch, _ in seen], [1, 2])
         self.assertTrue(seen[0][1])
-        self.assertTrue(0.0 <= best["pixels_correct"] <= 1.0)
-        self.assertEqual(set(best["type_iou"]), set(PIXEL_TYPES))
-        self.assertFalse(torch.equal(before, model.pixel_head.weight))
+        self.assertEqual(
+            set(best["held_out"]),
+            {"pixels", "kind", "facing", "support", "total"},
+        )
+        self.assertFalse(torch.equal(before, model.kind_head.weight))
 
     def test_pixel_type_weights_lift_rare_types(self):
         labels = np.zeros((1, 240, 256), dtype=np.uint8)
@@ -164,34 +193,34 @@ class TestVisionInterface(unittest.TestCase):
 
         self.assertGreater(weights[TYPE_ID["mario"]], weights[TYPE_ID["ground"]])
         self.assertGreater(weights[TYPE_ID["ground"]], weights[TYPE_ID["background"]])
-        shares = np.bincount(labels.ravel(), minlength=9) / labels.size
+        shares = np.bincount(labels.ravel(), minlength=len(PIXEL_TYPES)) / labels.size
         self.assertAlmostEqual(float((weights.numpy() * shares).sum()), 1.0, places=5)
 
-    def test_shared_measurements_score_true_labels_as_perfect(self):
+    def test_shared_measurements_score_the_true_scene_as_perfect(self):
         frames = block_frames()
-        metrics = evaluate_pixel_vision(OracleVision(frames), frames, batch_size=7)
+        metrics = evaluate_scene_vision(OracleVision(frames), frames, batch_size=7)
 
         self.assertEqual(metrics["frames"], len(frames))
         self.assertEqual(metrics["pixels_correct"], 1.0)
-        self.assertEqual(metrics["mario_found"], 1.0)
-        self.assertEqual(metrics["mario_position_error_px"]["max"], 0.0)
-        self.assertEqual(metrics["enemies_seen"], 1.0)
-        self.assertGreater(metrics["enemies"], 0)
-        self.assertEqual(metrics["types"]["mario"]["found"], 1.0)
-        self.assertEqual(metrics["types"]["mario"]["correct"], 1.0)
-        self.assertEqual(metrics["standing_agreement"], metrics["true_label_standing_agreement"])
-        self.assertGreater(metrics["standing_agreement"], 0.9)
+        self.assertEqual(metrics["mario"]["found"], 1.0)
+        self.assertEqual(metrics["mario"]["edge_error_px"]["max"], 0.0)
+        self.assertEqual(metrics["mario"]["support"], 1.0)
+        self.assertEqual(metrics["mario"]["facing"], 1.0)
+        for name in ("enemies", "coins", "surfaces"):
+            self.assertGreater(metrics[name]["true"], 0, name)
+            self.assertEqual(metrics[name]["recall"], 1.0, name)
+            self.assertEqual(metrics[name]["precision"], 1.0, name)
+        self.assertEqual(metrics["enemy_kind_accuracy"], 1.0)
 
     def test_shared_measurements_flag_a_model_that_sees_only_sky(self):
         frames = block_frames()
-        metrics = evaluate_pixel_vision(BackgroundOnlyVision(), frames)
+        metrics = evaluate_scene_vision(BackgroundOnlyVision(), frames)
 
         self.assertLess(metrics["pixels_correct"], 1.0)
-        self.assertEqual(metrics["mario_found"], 0.0)
-        self.assertIsNone(metrics["mario_position_error_px"])
-        self.assertEqual(metrics["enemies_seen"], 0.0)
-        self.assertEqual(metrics["types"]["mario"]["found"], 0.0)
-        self.assertIsNone(metrics["types"]["mario"]["correct"])
+        self.assertEqual(metrics["mario"]["found"], 0.0)
+        self.assertIsNone(metrics["mario"]["edge_error_px"])
+        self.assertEqual(metrics["enemies"]["recall"], 0.0)
+        self.assertEqual(metrics["surfaces"]["recall"], 0.0)
 
     def test_block_stage_populates_hierarchical_streams_from_vision(self):
         encoder = BlockVisionTransformer(dim=32, depth=1, heads=4).eval()
@@ -211,8 +240,8 @@ class TestVisionInterface(unittest.TestCase):
     def test_block_vit_policy_loader_freezes_checkpoint_by_default(self):
         source = BlockVisionTransformer(dim=16, depth=1, heads=4, refine_dim=8)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit_pixel.pth"
-            save_pixel_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
+            path = Path(tmpdir) / "block_vit_scene.pth"
+            save_scene_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
 
             result = load_block_vit_checkpoint(path, freeze=True)
 
@@ -227,8 +256,8 @@ class TestVisionInterface(unittest.TestCase):
     def test_block_vit_policy_loader_can_enable_fine_tuning(self):
         source = BlockVisionTransformer(dim=16, depth=1, heads=4)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit_pixel.pth"
-            save_pixel_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
+            path = Path(tmpdir) / "block_vit_scene.pth"
+            save_scene_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
 
             result = load_block_vit_checkpoint(path, freeze=False)
 
@@ -237,10 +266,10 @@ class TestVisionInterface(unittest.TestCase):
         self.assertTrue(result.model.training)
 
     def test_block_vit_loader_rejects_another_games_weights(self):
-        source = PixelVisionTransformer(name="full_smb_vit", dim=16, depth=1, heads=4)
+        source = SceneVisionTransformer(name="full_smb_vit", dim=16, depth=1, heads=4)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "full_smb_pixel.pth"
-            save_pixel_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
+            path = Path(tmpdir) / "full_smb_scene.pth"
+            save_scene_vision_checkpoint(path, source, stage=BLOCK_SMB_SPEC.name, metrics={})
 
             with self.assertRaisesRegex(Exception, "full_smb_vit"):
                 load_block_vit_checkpoint(path)
@@ -262,27 +291,28 @@ class FakeRetroEnv:
 
 
 class TestFullSMBVision(unittest.TestCase):
-    def test_full_vit_is_the_shared_pixel_model_under_the_full_name(self):
+    def test_full_vit_is_the_shared_scene_model_under_the_full_name(self):
         encoder = FullVisionTransformer(dim=16, depth=1, heads=4).eval()
-        self.assertIsInstance(encoder, PixelVisionTransformer)
+        block = BlockVisionTransformer(dim=16, depth=1, heads=4).eval()
+        self.assertIsInstance(encoder, SceneVisionTransformer)
         self.assertEqual(encoder.spec.name, "full_smb_vit")
         self.assertEqual(encoder.spec.semantic_classes, PIXEL_TYPES)
         with self.assertRaisesRegex(ValueError, "never stretch"):
-            encoder.encode(torch.zeros(1, 3, 224, 240))
+            encoder.heads(torch.zeros(1, 3, 224, 240))
+        picture = np.zeros((1, 240, 256, 3), dtype=np.uint8)
         with torch.no_grad():
-            output = encoder.encode(np.zeros((240, 256, 3), dtype=np.uint8))
-
-        self.assertEqual(output.semantic_logits.shape, (1, 9, 15, 16))
-        self.assertEqual(output.metadata["semantic_classes"], PIXEL_TYPES)
-        self.assertEqual(output.metadata["pixel_labels"].shape, (1, 240, 256))
-        self.assertEqual(output.position.shape, (1, 2))
-        self.assertEqual(output.support_logits.shape, (1, 3))
+            full, practice = encoder.heads(picture), block.heads(picture)
+        # Same class, same outputs: only the learned numbers differ.
+        self.assertEqual(set(full), set(practice))
+        for name in full:
+            self.assertEqual(full[name].shape, practice[name].shape, name)
+        self.assertEqual(encoder.architecture()["metadata"], block.architecture()["metadata"])
 
     def test_full_vit_policy_loader_freezes_checkpoint_by_default(self):
         source = FullVisionTransformer(dim=16, depth=1, heads=4, refine_dim=8)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "full_vit_pixel.pth"
-            save_pixel_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
+            path = Path(tmpdir) / "full_vit_scene.pth"
+            save_scene_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
 
             result = load_full_vit_checkpoint(path, freeze=True)
 
@@ -299,8 +329,8 @@ class TestFullSMBVision(unittest.TestCase):
     def test_full_vit_policy_loader_can_enable_fine_tuning(self):
         source = FullVisionTransformer(dim=16, depth=1, heads=4)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "full_vit_pixel.pth"
-            save_pixel_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
+            path = Path(tmpdir) / "full_vit_scene.pth"
+            save_scene_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
 
             result = load_full_vit_checkpoint(path, freeze=False)
 
@@ -311,8 +341,8 @@ class TestFullSMBVision(unittest.TestCase):
     def test_full_vit_loader_rejects_another_games_weights(self):
         source = BlockVisionTransformer(dim=16, depth=1, heads=4)
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit_pixel.pth"
-            save_pixel_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
+            path = Path(tmpdir) / "block_vit_scene.pth"
+            save_scene_vision_checkpoint(path, source, stage=FULL_SMB_SPEC.name, metrics={})
 
             with self.assertRaisesRegex(Exception, "block_smb_vit"):
                 load_full_vit_checkpoint(path)

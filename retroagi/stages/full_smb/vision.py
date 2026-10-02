@@ -1,12 +1,12 @@
-"""The Full SMB vision model: the shared per-pixel vision transformer, Full weights.
+"""The Full SMB vision model: the shared scene vision transformer, Full weights.
 
-The model is retroagi.core.vision.PixelVisionTransformer; Full SMB only names
+The model is retroagi.core.vision.SceneVisionTransformer; Full SMB only names
 its checkpoints and trains it on real emulator frames, whose exact labels are
 read from game memory by pixel_labels.label_frame (a frame memory cannot fully
-explain is refused, never used). Frames come from vision_frames; the test
-levels (vision_frames.TEST_LEVELS) are never trained on. Training lives in
+explain is refused, never used). Frames come from vision_frames: plays of
+every level start, measured on other plays. Training lives in
 scripts/vit/train_full_vit.py and measurement in
-scripts/vision/evaluate_full_vision.py, both through retroagi.core.pixel_vision.
+scripts/vision/evaluate_full_vision.py, both through retroagi.core.scene_vision.
 """
 
 from dataclasses import dataclass
@@ -15,15 +15,15 @@ from typing import Any, Optional
 
 import torch
 
-from retroagi.core.pixel_vision import load_pixel_vision_checkpoint
-from retroagi.core.vision import PixelVisionTransformer
+from retroagi.core.scene_vision import load_scene_vision_checkpoint
+from retroagi.core.vision import SceneVisionTransformer
 
-DEFAULT_FULL_VIT_CHECKPOINT = Path("data/full_vit/full_vit_pixel.pth")
+DEFAULT_FULL_VIT_CHECKPOINT = Path("data/full_vit/full_vit_scene.pth")
 FULL_VIT_NAME = "full_smb_vit"
 
 
-class FullVisionTransformer(PixelVisionTransformer):
-    """The shared per-pixel vision transformer under the Full SMB checkpoint name."""
+class FullVisionTransformer(SceneVisionTransformer):
+    """The shared scene vision transformer under the Full SMB checkpoint name."""
 
     def __init__(self, **settings: Any):
         super().__init__(**{**settings, "name": FULL_VIT_NAME})
@@ -37,7 +37,7 @@ class FullVITLoadResult:
     frozen: bool
 
 
-def set_full_vit_trainable(model: PixelVisionTransformer, trainable: bool) -> None:
+def set_full_vit_trainable(model: SceneVisionTransformer, trainable: bool) -> None:
     for parameter in model.parameters():
         parameter.requires_grad_(trainable)
     model.train(trainable)
@@ -62,7 +62,7 @@ def load_full_vit_checkpoint(
 
     from .adapter import FULL_SMB_SPEC
 
-    model, checkpoint = load_pixel_vision_checkpoint(
+    model, checkpoint = load_scene_vision_checkpoint(
         checkpoint_path, stage=FULL_SMB_SPEC, model_class=FullVisionTransformer, device=device
     )
     set_full_vit_trainable(model, trainable=not freeze)

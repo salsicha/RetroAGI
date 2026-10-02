@@ -28,9 +28,8 @@ LEVELS = (
     "Level7-1",
     "Level8-1",
 )
-# Levels kept out of training and used only to measure the model.
-TEST_LEVELS = ("Level1-1", "Level5-1")
-TRAIN_LEVELS = tuple(level for level in LEVELS if level not in TEST_LEVELS)
+# The vision transformer learns from plays of every level start and is
+# measured on other plays of them (other random seeds).
 
 WORLD, LEVEL = 0x75F, 0x75C  # [WorldNumber], [LevelNumber]
 ENGINE_ROUTINE, PLAYER_SCREEN_ROW = 0x0E, 0xB5  # [GameEngineSubroutine], [Player_Y_HighPos]

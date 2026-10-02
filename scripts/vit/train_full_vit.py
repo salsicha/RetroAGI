@@ -1,17 +1,17 @@
-"""Train the Full SMB vision transformer to give every pixel its type.
+"""Train the Full SMB vision transformer to report the objects drawn on screen.
 
-Frames are real emulator frames: the training levels (vision_frames.
-TRAIN_LEVELS) played from their saved starts by a random player that is
+Frames are real emulator frames: every level start (vision_frames.LEVELS)
+played from its saved start by a random player that is
 rewound after each death (retroagi/stages/full_smb/vision_frames.py). Worker
 processes play fresh episodes throughout training, so frames rarely repeat.
 Labels are read from game memory (pixel_labels.label_frame): every accepted
 frame is rebuilt from memory and matches the emulator's picture at every
-visible pixel; frames memory cannot explain are skipped. The model and the
-training loop are the shared ones (retroagi.core.vision.PixelVisionTransformer,
-retroagi.core.pixel_vision), with the same settings as the Block SMB model.
-Progress is monitored on separate plays of the training levels; the test
-levels (vision_frames.TEST_LEVELS) are kept for
-scripts/vision/evaluate_full_vision.py.
+visible pixel, and every object is what drew its pixels; frames memory cannot
+explain are skipped. The model and the training loop are the shared ones
+(retroagi.core.vision.SceneVisionTransformer, retroagi.core.scene_vision),
+with the same settings as the Block SMB model.
+Progress is monitored on separate plays of the levels;
+scripts/vision/evaluate_full_vision.py measures on further fresh plays.
 
 Example:
     python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
@@ -46,17 +46,19 @@ from retroagi.core import (
     select_device,
     validate_stage_spec,
 )
-from retroagi.core.pixel_vision import (
+from retroagi.core.scene_vision import (
     epoch_line,
+    frame_targets,
     pixel_type_weights,
-    save_pixel_vision_checkpoint,
+    save_scene_vision_checkpoint,
     seeded,
-    train_pixel_vision,
+    stack_targets,
+    train_scene_vision,
 )
 from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.stages.full_smb.adapter import FULL_SMB_SPEC
 from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, FullVisionTransformer
-from retroagi.stages.full_smb.vision_frames import TRAIN_LEVELS, labelled_frames
+from retroagi.stages.full_smb.vision_frames import LEVELS, labelled_frames
 
 DEFAULT_OUTPUT = PROJECT_ROOT / DEFAULT_FULL_VIT_CHECKPOINT
 DEFAULT_SEED = 7
@@ -102,7 +104,7 @@ class TrainConfig:
     )
     checkpoints: CheckpointConfig = field(
         default_factory=lambda: CheckpointConfig(
-            output_path=DEFAULT_OUTPUT, best_metric="mean_type_iou", best_mode="max"
+            output_path=DEFAULT_OUTPUT, best_metric="held_out_total_loss", best_mode="min"
         )
     )
     # Keep every `every`-th frame of a play; monitor plays keep fewer.
@@ -128,7 +130,7 @@ class TrainConfig:
             checkpoints=self.checkpoints,
             name="full_vit_training",
             metadata={
-                "train_levels": list(TRAIN_LEVELS),
+                "levels": list(LEVELS),
                 "every": self.every,
                 "monitor_every": self.monitor_every,
                 "monitor_plays_per_level": self.monitor_plays_per_level,
@@ -155,7 +157,7 @@ def frame_stream(seed: int, every: int, refusals: Optional[Counter] = None):
     rng = random.Random(seed)
     while True:
         yield from labelled_frames(
-            rng.choice(TRAIN_LEVELS),
+            rng.choice(LEVELS),
             frames=PLAY_FRAMES,
             seed=rng.randrange(2**31),
             every=every,
@@ -178,7 +180,7 @@ class FrameStreamDataset(IterableDataset):
         for frame in frames:
             index = rng.randrange(len(pool))
             out, pool[index] = pool[index], frame
-            yield torch.from_numpy(out.image.copy()), torch.from_numpy(out.labels)
+            yield torch.from_numpy(out.image.copy()), frame_targets(out.scene)
 
 
 def _play(level: str, seed: int, every: int) -> tuple[list, list, Counter]:
@@ -186,19 +188,19 @@ def _play(level: str, seed: int, every: int) -> tuple[list, list, Counter]:
     frames = list(
         labelled_frames(level, frames=PLAY_FRAMES, seed=seed, every=every, refusals=refusals)
     )
-    return [frame.image for frame in frames], [frame.labels for frame in frames], refusals
+    return [frame.image for frame in frames], [frame.scene for frame in frames], refusals
 
 
 def level_frames(seed: int, plays_per_level: int, every: int, workers: int):
     """Frames from fresh plays of every training level, played in parallel.
 
-    Returns (images, labels, refusals) with images [N, 240, 256, 3] and labels
-    [N, 240, 256], in a fixed order for a given seed.
+    Returns (images, scene labels, refusals) with images [N, 240, 256, 3] and
+    one smb_scene_labels.SceneLabels per image, in a fixed order for a given seed.
     """
     rng = random.Random(seed)
     plays = [
         (level, rng.randrange(2**31), every)
-        for level in TRAIN_LEVELS
+        for level in LEVELS
         for _ in range(plays_per_level)
     ]
     refusals = Counter()
@@ -208,10 +210,10 @@ def level_frames(seed: int, plays_per_level: int, every: int, workers: int):
             images += play_images
             labels += play_labels
             refusals += play_refusals
-    return np.stack(images), np.stack(labels), refusals
+    return np.stack(images), labels, refusals
 
 
-def monitor_frames(config: TrainConfig) -> tuple[np.ndarray, np.ndarray, Counter]:
+def monitor_frames(config: TrainConfig) -> tuple[np.ndarray, dict, Counter]:
     """A fixed held-out set: separate plays of every training level."""
     images, labels, refusals = level_frames(
         config.evaluation.seed, config.monitor_plays_per_level, config.monitor_every, config.workers
@@ -219,11 +221,11 @@ def monitor_frames(config: TrainConfig) -> tuple[np.ndarray, np.ndarray, Counter
     order = random.Random(config.evaluation.seed).sample(
         range(len(images)), min(config.evaluation.samples, len(images))
     )
-    return images[order], labels[order], refusals
+    return images[order], stack_targets([frame_targets(labels[i]) for i in order]), refusals
 
 
 def save_checkpoint(path, model, epoch: int, metrics: dict, config: TrainConfig) -> None:
-    save_pixel_vision_checkpoint(
+    save_scene_vision_checkpoint(
         path,
         model,
         stage=config.environment.stage,
@@ -247,14 +249,16 @@ def train(config: TrainConfig, device_name: Optional[str] = None) -> dict:
     print(f"Device: {device}; learned numbers: {parameters:,}", flush=True)
 
     started = time.time()
-    monitor_images, monitor_labels, monitor_refusals = monitor_frames(config)
+    monitor_images, monitor_targets, monitor_refusals = monitor_frames(config)
     # Type weights from one more play of every training level.
     _, sample_labels, sample_refusals = level_frames(
         seed + 999, 1, config.monitor_every, config.workers
     )
-    weights = pixel_type_weights(sample_labels, power=config.weight_power)
+    weights = pixel_type_weights(
+        np.stack([labels.types for labels in sample_labels]), power=config.weight_power
+    )
     print(
-        f"Training levels: {', '.join(TRAIN_LEVELS)}; {len(monitor_images)} monitor frames "
+        f"Levels: {', '.join(LEVELS)}; {len(monitor_images)} monitor frames "
         f"({time.time() - started:.0f}s)\n"
         f"Frames refused (not fully explained by memory): monitor {sum(monitor_refusals.values())}, "
         f"weight sample {sum(sample_refusals.values())} (of {len(sample_labels)} kept)\n"
@@ -282,14 +286,14 @@ def train(config: TrainConfig, device_name: Optional[str] = None) -> dict:
             save_checkpoint(output, model, epoch, metrics, config)
             print(f"Saved checkpoint: {output}", flush=True)
 
-    return train_pixel_vision(
+    return train_scene_vision(
         model,
         loader,
         epochs=config.training.epochs,
         steps_per_epoch=steps_per_epoch,
         held_out_images=monitor_images,
-        held_out_labels=monitor_labels,
-        weights=weights,
+        held_out_targets=monitor_targets,
+        pixel_weights=weights,
         device=device,
         learning_rate=config.training.learning_rate,
         weight_decay=config.training.weight_decay,

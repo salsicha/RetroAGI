@@ -101,9 +101,9 @@ class TestOperationsDocumentation(unittest.TestCase):
             self.assertIn(term, text)
 
         for artifact in (
-            "data/block_vit/block_vit_pixel.pth",
+            "data/block_vit/block_vit_scene.pth",
             "data/block_smb/policy.pth",
-            "data/full_vit/full_vit_pixel.pth",
+            "data/full_vit/full_vit_scene.pth",
             "data/full_smb/transferred_policy.pth",
             "artifacts/block_smb/latest/run_summary.json",
             "artifacts/full_smb/transfer_vs_scratch.json",
@@ -171,7 +171,7 @@ class TestOperationsDocumentation(unittest.TestCase):
             "artifacts/repro/block_smb_smoke/run_summary.json",
             "artifacts/repro/block_smb_smoke/events.jsonl",
             "data/block_smb/policy.pth",
-            "data/full_vit/full_vit_pixel.pth",
+            "data/full_vit/full_vit_scene.pth",
             "data/full_smb/transferred_policy.pth",
             "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
             "artifacts/full_smb/documented_benchmark_seed0/RUN.md",

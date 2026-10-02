@@ -949,9 +949,9 @@ class TestFullSMBStage(unittest.TestCase):
             expected_camera,
         )
         np.testing.assert_allclose(info["camera_vec"], expected_camera.numpy()[0])
-        # Position (2) and one mean probability per pixel type (9) precede the state.
-        self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (11, 24))
-        torch.testing.assert_close(batch.src_c[:, 20:24], expected_camera)
+        # Position (2) and one mean probability per pixel type (10) precede the state.
+        self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (12, 25))
+        torch.testing.assert_close(batch.src_c[:, 21:25], expected_camera)
 
     def test_observation_config_rejects_invalid_preprocessing_values(self):
         with self.assertRaisesRegex(ValueError, "color_mode"):
@@ -1099,7 +1099,7 @@ class TestFullSMBStage(unittest.TestCase):
             self.assertEqual(batch.src_b.shape, (1, FULL_SMB_SPEC.seq_len_b))
             self.assertEqual(batch.src_c.shape, (1, FULL_SMB_SPEC.seq_len_c))
             self.assertEqual(batch.metadata["episode"]["mask"].item(), 0.0)
-            self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (11, 20))
+            self.assertEqual(batch.metadata["vision_fusion"]["c_state"], (12, 21))
         finally:
             stage.close()
 

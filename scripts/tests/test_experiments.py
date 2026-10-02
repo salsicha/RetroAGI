@@ -125,7 +125,7 @@ class TestExperimentRunner(unittest.TestCase):
         )
         self.assertEqual(
             block["game_stage"]["perception_pipeline"]["checkpoint_path"],
-            "data/block_vit/block_vit_pixel.pth",
+            "data/block_vit/block_vit_scene.pth",
         )
         self.assertEqual(
             block["game_stage"]["perception_pipeline"]["semantic_vocabulary"]["classes"][1],

@@ -11,7 +11,8 @@ import numpy as np
 
 from retroagi.core.smb_pixel_types import TYPE_ID
 from retroagi.stages.full_smb import pixel_labels as P
-from retroagi.stages.full_smb.vision_frames import TEST_LEVELS, TRAIN_LEVELS, played_frames
+from retroagi.stages.full_smb.play import POLICY_TEST_LEVELS
+from retroagi.stages.full_smb.vision_frames import LEVELS, played_frames
 
 
 def _cartridge_available() -> bool:
@@ -84,9 +85,10 @@ class TestRealFrames(unittest.TestCase):
             for _, frame in zip(range(150), played_frames("Level1-1", frames=600, seed=3, every=4))
         ]
 
-    def test_test_levels_are_kept_out_of_training(self):
-        self.assertFalse(set(TEST_LEVELS) & set(TRAIN_LEVELS))
-        self.assertIn("Level1-1", TEST_LEVELS)
+    def test_vision_learns_every_level_and_policy_test_levels_are_among_them(self):
+        self.assertEqual(len(set(LEVELS)), 10)
+        self.assertLessEqual(set(POLICY_TEST_LEVELS), set(LEVELS))
+        self.assertIn("Level1-1", POLICY_TEST_LEVELS)
 
     def test_saved_state_memory_is_the_game_memory(self):
         frame, before, after = self.frames[10]

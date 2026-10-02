@@ -8,6 +8,8 @@ import torch.nn.functional as F
 
 from .interfaces import VISION_SUPPORT_CLASSES, VisionOutput, VisionSpec
 from .smb_pixel_types import PIXEL_TYPES, SCREEN_SHAPE, vision_output
+from .smb_scene_labels import ENEMY_KINDS, OBJECT_CELL
+from .smb_scene_labels import SUPPORTS as MARIO_SUPPORTS
 
 SUPPORT_HEAD_STATE_KEYS = ("support_head.weight", "support_head.bias")
 
@@ -379,22 +381,33 @@ class PatchVisionTransformer(SquareTransformer):
         return self.forward(observation)
 
 
-class PixelVisionTransformer(SquareTransformer):
-    """Vision transformer that gives every pixel of the SMB screen one of PIXEL_TYPES.
+class SceneVisionTransformer(SquareTransformer):
+    """Vision transformer that reports the objects drawn on an SMB screen.
 
     Both SMB games use this one class, each with its own trained weights. It
     cuts the 256x240 picture into 16x16 squares, describes each square and
-    lets the squares inform each other over ``depth`` rounds. Each square's
-    final description gives scores for its own 16x16 pixels and every type; a
-    small per-pixel refinement then reads those scores with the pixel's colour.
-    The common vision output follows from the scores by the shared rules
-    (smb_pixel_types.vision_output).
+    lets the squares inform each other over ``depth`` rounds. From each
+    square's final description it reads:
+
+    - every pixel's type (smb_pixel_types.PIXEL_TYPES), then corrects each
+      pixel's scores from the scores and colours of its 3x3 neighbourhood.
+      The types are never sent to a policy: the scene is found from them
+      (smb_scene_labels: objects are groups of touching pixels of a type;
+      surfaces, gaps, blocks and pipes follow from structure_from_types);
+    - for each of its four 8x8 cells, the kind of enemy drawn there (walker,
+      plant, other, defeated);
+    - Mario's facing and support (air, ground or moving platform: the land
+      detector), read from the squares weighted by how much of Mario each
+      holds.
+
+    scene() turns these into one smb_scene_labels.SceneObservation per
+    picture, which is all a policy may see.
     """
 
     def __init__(
         self,
         *,
-        name: str = "smb_pixel_vit",
+        name: str = "smb_scene_vit",
         dim: int = 128,
         depth: int = 4,
         heads: int = 4,
@@ -403,29 +416,68 @@ class PixelVisionTransformer(SquareTransformer):
         refine_dim: int = 32,
     ):
         super().__init__(SCREEN_SHAPE, patch_size, dim, depth, heads, 4.0, drop)
-        # Output tokens are each square's mean type probabilities (vision_output).
+        if patch_size % OBJECT_CELL:
+            raise ValueError("patch_size must be a multiple of the 8-pixel cell")
         types = len(PIXEL_TYPES)
         self.spec = VisionSpec(name=name, semantic_classes=PIXEL_TYPES, token_dim=types)
         self.hidden_dim = dim
         self.refine_dim = refine_dim
+        self.cells = patch_size // OBJECT_CELL
         # Each square's description -> scores for its 16x16 pixels x every type.
         self.pixel_head = nn.Linear(dim, patch_size * patch_size * types)
-        # Per pixel: that pixel's scores and its colour -> a correction.
+        # Per pixel: the scores and colours of its 3x3 neighbourhood -> a correction.
         self.refine = nn.Sequential(
-            nn.Conv2d(types + 3, refine_dim, kernel_size=1),
+            nn.Conv2d(types + 3, refine_dim, kernel_size=3, padding=1),
             nn.GELU(),
             nn.Conv2d(refine_dim, types, kernel_size=1),
         )
+        # Per 8x8 cell: the enemy kind scores.
+        self.kind_head = nn.Linear(dim, self.cells * self.cells * len(ENEMY_KINDS))
+        # Mario's facing (left, right) and support.
+        self.mario_head = nn.Linear(dim, 2 + len(MARIO_SUPPORTS))
 
-    def pixel_logits(self, observation: Any) -> torch.Tensor:
-        """Per-pixel type scores [B, types, 240, 256]; what training compares to labels."""
+    def heads(self, observation: Any) -> dict[str, torch.Tensor]:
+        """Every head's raw output for a batch of pictures.
+
+        pixel_logits [B, types, 240, 256]; kind_logits [B, kinds, 30, 32];
+        facing_logits [B, 2] (left, right); support_logits [B, 3].
+        """
         image = self.screen_image(observation)
         tokens = self.square_tokens(image)
         batch, size, types = image.shape[0], self.patch_size, self.spec.num_classes
         grid_h, grid_w = self.grid_size
         logits = self.pixel_head(tokens).view(batch, grid_h, grid_w, types, size, size)
         logits = logits.permute(0, 3, 1, 4, 2, 5).reshape(batch, types, *self.image_size)
-        return logits + self.refine(torch.cat((logits, image), dim=1))
+        pixel_logits = logits + self.refine(torch.cat((logits, image), dim=1))
+
+        cells, kinds = self.cells, len(ENEMY_KINDS)
+        kind_logits = self.kind_head(tokens).view(batch, grid_h, grid_w, cells, cells, kinds)
+        kind_logits = kind_logits.permute(0, 5, 1, 3, 2, 4).reshape(
+            batch, kinds, grid_h * cells, grid_w * cells
+        )
+
+        # Mario's state from the squares, weighted by how strongly each shows Mario.
+        mario = pixel_logits[:, PIXEL_TYPES.index("mario")].detach()
+        per_square = F.max_pool2d(mario.unsqueeze(1), size).flatten(1)
+        weights = per_square.softmax(dim=-1).unsqueeze(-1)
+        mario_state = self.mario_head((weights * tokens).sum(dim=1))
+        return {
+            "pixel_logits": pixel_logits,
+            "kind_logits": kind_logits,
+            "facing_logits": mario_state[:, :2],
+            "support_logits": mario_state[:, 2:],
+        }
+
+    def pixel_logits(self, observation: Any) -> torch.Tensor:
+        """Per-pixel type scores [B, types, 240, 256] (internal)."""
+        return self.heads(observation)["pixel_logits"]
+
+    @torch.no_grad()
+    def scene(self, observation: Any) -> list:
+        """One smb_scene_labels.SceneObservation per picture: all a policy may see."""
+        from .smb_scene_labels import decode_scene
+
+        return decode_scene(self.heads(observation))
 
     def forward(self, observation: Any) -> VisionOutput:
         return vision_output(self.pixel_logits(observation))
@@ -442,11 +494,29 @@ class PixelVisionTransformer(SquareTransformer):
             "heads": int(self.encoder.layers[0].self_attn.num_heads),
             "patch_size": self.patch_size,
             "dropout": float(self.dropout.p),
-            "metadata": {"refine_dim": self.refine_dim},
+            "metadata": {
+                "refine_dim": self.refine_dim,
+                "refine_reach": 3,
+                "pixel_types": list(PIXEL_TYPES),
+                "enemy_kinds": list(ENEMY_KINDS),
+                "mario_supports": list(MARIO_SUPPORTS),
+                "object_cell": OBJECT_CELL,
+            },
         }
 
     @classmethod
-    def from_architecture(cls, settings: Mapping[str, Any]) -> "PixelVisionTransformer":
+    def from_architecture(cls, settings: Mapping[str, Any]) -> "SceneVisionTransformer":
+        metadata = settings["metadata"]
+        expected = {
+            "refine_reach": 3,
+            "pixel_types": list(PIXEL_TYPES),
+            "enemy_kinds": list(ENEMY_KINDS),
+            "mario_supports": list(MARIO_SUPPORTS),
+            "object_cell": OBJECT_CELL,
+        }
+        for key, value in expected.items():
+            if metadata.get(key) != value:
+                raise ValueError(f"checkpoint {key} {metadata.get(key)!r} is not {value!r}")
         return cls(
             name=str(settings["name"]),
             dim=int(settings["hidden_dim"]),
@@ -454,7 +524,7 @@ class PixelVisionTransformer(SquareTransformer):
             heads=int(settings["heads"]),
             patch_size=int(settings["patch_size"]),
             drop=float(settings["dropout"]),
-            refine_dim=int(settings["metadata"]["refine_dim"]),
+            refine_dim=int(metadata["refine_dim"]),
         )
 
 

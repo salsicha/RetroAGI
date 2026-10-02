@@ -1,0 +1,213 @@
+{
+  "checkpoint": "data/full_vit/full_vit_scene.pth",
+  "levels": [
+    "Level1-1",
+    "Level1-4",
+    "Level2-1",
+    "Level2-1-clouds",
+    "Level3-1",
+    "Level4-1",
+    "Level5-1",
+    "Level6-1",
+    "Level7-1",
+    "Level8-1"
+  ],
+  "seed": 0,
+  "plays": 10,
+  "every": 4,
+  "refused_frames": {},
+  "learned_numbers": 1259551,
+  "seconds": 114.6,
+  "frames": 20056,
+  "pixels_correct": 0.9996261064258173,
+  "mario": {
+    "frames": 19485,
+    "found": 0.9979984603541185,
+    "false_in_frames_without_mario": 12,
+    "edge_error_px": {
+      "mean": 0.28951969556721174,
+      "p95": 2.0,
+      "max": 15.0
+    },
+    "facing": 0.9985116756479343,
+    "support": 0.997587888119066,
+    "support_confusion": {
+      "air": {
+        "air": 12829,
+        "ground": 30,
+        "moving_platform": 1
+      },
+      "ground": {
+        "air": 13,
+        "ground": 6604,
+        "moving_platform": 0
+      },
+      "moving_platform": {
+        "air": 0,
+        "ground": 3,
+        "moving_platform": 5
+      }
+    }
+  },
+  "enemy_kind_accuracy": 0.9958466453674122,
+  "enemies": {
+    "true": 27045,
+    "found": 26276,
+    "recall": 0.9258643002403402,
+    "precision": 0.9529608768457908,
+    "edge_error_px": {
+      "mean": 0.7737619808306709,
+      "p95": 4.0,
+      "max": 20.0
+    }
+  },
+  "coins": {
+    "true": 24421,
+    "found": 24448,
+    "recall": 0.9970926661479874,
+    "precision": 0.9959914921465969,
+    "edge_error_px": {
+      "mean": 0.017453798767967144,
+      "p95": 0.0,
+      "max": 8.0
+    }
+  },
+  "power_ups": {
+    "true": 98,
+    "found": 194,
+    "recall": 0.9489795918367347,
+    "precision": 0.4793814432989691,
+    "edge_error_px": {
+      "mean": 0.5376344086021505,
+      "p95": 1.0,
+      "max": 6.0
+    }
+  },
+  "moving_platforms": {
+    "true": 290,
+    "found": 308,
+    "recall": 0.9758620689655172,
+    "precision": 0.9188311688311688,
+    "edge_error_px": {
+      "mean": 0.5547703180212014,
+      "p95": 4.0,
+      "max": 21.0
+    }
+  },
+  "pipes": {
+    "true": 7686,
+    "found": 7847,
+    "recall": 0.9993494665625813,
+    "precision": 0.9788454186313241,
+    "edge_error_px": {
+      "mean": 0.0747298528837391,
+      "p95": 0.0,
+      "max": 14.0
+    }
+  },
+  "blocks": {
+    "true": 16738,
+    "found": 16932,
+    "recall": 0.997968693989724,
+    "precision": 0.9865343727852587,
+    "edge_error_px": {
+      "mean": 0.1290110153256705,
+      "p95": 1.0,
+      "max": 35.0
+    }
+  },
+  "surfaces": {
+    "true": 80973,
+    "found": 81070,
+    "recall": 0.9968508021192249,
+    "precision": 0.9956580732700135,
+    "edge_error_px": {
+      "mean": 0.08984365321241854,
+      "p95": 0.0,
+      "max": 119.0
+    }
+  },
+  "gaps": {
+    "true": 11666,
+    "found": 11645,
+    "recall": 0.9950282873307046,
+    "precision": 0.996822670674109,
+    "edge_error_px": {
+      "mean": 0.1403342522398346,
+      "p95": 0.0,
+      "max": 119.0
+    }
+  },
+  "families": {
+    "Level1-1": {
+      "mario_found": 0.9968094804010939,
+      "support": 0.9981768459434822,
+      "enemy_recall": 0.9439406430338005,
+      "surface_recall": 0.9961650357048399,
+      "gap_recall": 1.0
+    },
+    "Level1-4": {
+      "mario_found": 0.9972170686456401,
+      "support": 0.9976808905380334,
+      "enemy_recall": 0.976897689768977,
+      "surface_recall": 0.994436576977544,
+      "gap_recall": 1.0
+    },
+    "Level2-1": {
+      "mario_found": 0.996841155234657,
+      "support": 0.9990974729241877,
+      "enemy_recall": 0.8895571350464735,
+      "surface_recall": 0.9986166190168773,
+      "gap_recall": 1.0
+    },
+    "Level2-1-clouds": {
+      "mario_found": 0.9981751824817519,
+      "support": 0.9995437956204379,
+      "enemy_recall": null,
+      "surface_recall": 0.9982532751091703,
+      "gap_recall": 0.9942660550458715
+    },
+    "Level3-1": {
+      "mario_found": 0.9986369831894594,
+      "support": 0.9963652885052249,
+      "enemy_recall": 0.9197791490743747,
+      "surface_recall": 0.9969678121598508,
+      "gap_recall": 1.0
+    },
+    "Level4-1": {
+      "mario_found": 1.0,
+      "support": 0.997979797979798,
+      "enemy_recall": 0.8424467099165894,
+      "surface_recall": 0.9981592268752876,
+      "gap_recall": 1.0
+    },
+    "Level5-1": {
+      "mario_found": 0.9991099243435692,
+      "support": 0.9995549621717846,
+      "enemy_recall": 0.9445411589156926,
+      "surface_recall": 0.9976851851851852,
+      "gap_recall": 1.0
+    },
+    "Level6-1": {
+      "mario_found": 0.9986619090098127,
+      "support": 0.9973238180196253,
+      "enemy_recall": 0.962707615167659,
+      "surface_recall": 0.9991456642460487,
+      "gap_recall": 0.9776085982982534
+    },
+    "Level7-1": {
+      "mario_found": 0.9987995198079231,
+      "support": 0.9939975990396158,
+      "enemy_recall": 0.8588987217305801,
+      "surface_recall": 0.9869658472199307,
+      "gap_recall": 1.0
+    },
+    "Level8-1": {
+      "mario_found": 0.997289972899729,
+      "support": 0.9941282746160794,
+      "enemy_recall": 0.9507101086048454,
+      "surface_recall": 0.9993516597510373,
+      "gap_recall": 0.9978813559322034
+    }
+  }
+}

@@ -201,8 +201,8 @@ python -m unittest -v scripts.tests.test_synthetic_1d
 
 ## Block SMB Perception
 
-Block SMB perception trains and validates `data/block_vit/block_vit_pixel.pth`,
-the shared per-pixel vision transformer (`retroagi.core.vision.PixelVisionTransformer`)
+Block SMB perception trains and validates `data/block_vit/block_vit_scene.pth`,
+the shared per-pixel vision transformer (`retroagi.core.vision.SceneVisionTransformer`)
 with Block weights. It gives every pixel one of the shared types in
 `retroagi.core.smb_pixel_types` (background, mario, ground, brick,
 question_block, pipe, coin, enemy, moving_platform). Training labels come from
@@ -216,9 +216,9 @@ into fine-tuning.
 | Hardware | CUDA is recommended for training; CPU works for measurement and tests. |
 | Runtime | Worker processes play fresh Monte Carlo family episodes (train split, every difficulty; teacher, perturbed, delayed and random routes) and generated levels throughout training, so runtime scales with `--epochs` and `--samples-per-epoch`. |
 | Train Command | `python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000 --device auto`. |
-| Measurement Command | `python scripts/vision/evaluate_block_vision.py --checkpoint data/block_vit/block_vit_pixel.pth` (or `retroagi diagnose-vision --game smb --stage block --vision-checkpoint data/block_vit/block_vit_pixel.pth`). |
+| Measurement Command | `python scripts/vision/evaluate_block_vision.py --checkpoint data/block_vit/block_vit_scene.pth` (or `retroagi diagnose-vision --game smb --stage block --vision-checkpoint data/block_vit/block_vit_scene.pth`). |
 | Expected Metrics | Training reports per-pixel loss, pixels correct and each type's IoU on held-out train-split layouts. Measurement uses validation-split layouts with teacher and perturbed routes and the shared definitions in `retroagi.core.pixel_vision.evaluate_pixel_vision`: pixels correct, each type's found/correct, frames where Mario is found, Mario position error in pixels, standing/air agreement with the simulator, and enemies seen. |
-| Artifact Locations | Default checkpoint: `data/block_vit/block_vit_pixel.pth`, sidecar `data/block_vit/block_vit_pixel.json`, measurement `data/block_vit/block_vit_pixel_evaluation.json`. |
+| Artifact Locations | Default checkpoint: `data/block_vit/block_vit_scene.pth`, sidecar `data/block_vit/block_vit_scene.json`, measurement `data/block_vit/block_vit_scene_evaluation.json`. |
 
 ## Block SMB Policy
 
@@ -230,7 +230,7 @@ deterministic evaluation against the fixed-scenario success thresholds.
 | --- | --- |
 | Hardware | CPU is valid for smoke training and deterministic evaluation. CUDA or Apple MPS is recommended for real policy sweeps. |
 | Runtime | CI smoke training uses tiny CPU settings. Real runs scale with `--epochs`, `--episodes-per-epoch`, `--rollout-steps`, generated scenarios, evaluation cadence, and whether recording is enabled. |
-| Train Command | `retroagi train --game smb --stage block --epochs 5 --vision-checkpoint data/block_vit/block_vit_pixel.pth --checkpoint data/block_smb/policy.pth --output artifacts/block_smb/latest/run_summary.json --log-path artifacts/block_smb/latest/events.jsonl`. |
+| Train Command | `retroagi train --game smb --stage block --epochs 5 --vision-checkpoint data/block_vit/block_vit_scene.pth --checkpoint data/block_smb/policy.pth --output artifacts/block_smb/latest/run_summary.json --log-path artifacts/block_smb/latest/events.jsonl`. |
 | Resume Command | `retroagi resume --game smb --stage block --checkpoint data/block_smb/policy.pth --epochs 10`. |
 | Evaluation Command | `retroagi evaluate --game smb --stage block --checkpoint data/block_smb/policy.pth --evaluation-episodes 3 --evaluation-max-steps 200`. |
 | Expected Metrics | Training logs separated objective terms: `loss_representation`, `loss_dynamics`, `loss_reward`, `loss_value`, `loss_policy`, `loss_critic_feedback`, `loss_imagined_rollout`, `loss_total`, `gradient_norm`, and `mean_return`. Evaluation logs `eval_mean_return`, `eval_success_rate`, `eval_threshold_pass_rate`, `eval_tuning_score`, `success_thresholds_met`, and per-scenario `threshold_met` diagnostics. A known-good Block SMB policy must pass every threshold in [block-smb-success-thresholds.md](block-smb-success-thresholds.md). |
@@ -238,9 +238,9 @@ deterministic evaluation against the fixed-scenario success thresholds.
 
 ## Full SMB Vision
 
-Full SMB vision trains and measures `data/full_vit/full_vit_pixel.pth`, the
+Full SMB vision trains and measures `data/full_vit/full_vit_scene.pth`, the
 same per-pixel vision transformer class as Block SMB
-(`retroagi.core.vision.PixelVisionTransformer`) with its own Full SMB weights
+(`retroagi.core.vision.SceneVisionTransformer`) with its own Full SMB weights
 (`retroagi.stages.full_smb.vision.FullVisionTransformer`). It gives every pixel
 of the 256x240 emulator screen one of the same nine types in
 `retroagi.core.smb_pixel_types.PIXEL_TYPES` (background, mario, ground, brick,
@@ -267,10 +267,10 @@ defaults to it.
 | Hardware | CUDA is recommended for training; CPU works for measurement and tests. The emulator runs on the CPU; the trainer plays it in worker processes. |
 | Runtime | Worker processes play fresh episodes of the training levels throughout training, so frames rarely repeat; runtime scales with `--epochs`, `--samples-per-epoch`, and the number of worker processes (`--workers`). |
 | Train Command | `python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000 --device auto`. |
-| Measurement Command | `python scripts/vision/evaluate_full_vision.py --checkpoint data/full_vit/full_vit_pixel.pth` (several worker processes; four plays of each test level by default). |
-| Diagnostic Command | `retroagi diagnose-vision --game smb --stage full --vision-checkpoint data/full_vit/full_vit_pixel.pth --plays 1 --every 4 --output artifacts/full_smb/<run>/vision_diagnostic.json`. It takes the same measurement in one process. Options: `--vision-checkpoint` (default `data/full_vit/full_vit_pixel.pth`), `--device`, `--seed`, `--plays` (plays of each test level, default 1), `--every` (measure every n-th frame, default 4), `--frames` (frames per play, default 9000), `--batch-size`, and `--output`. |
+| Measurement Command | `python scripts/vision/evaluate_full_vision.py --checkpoint data/full_vit/full_vit_scene.pth` (several worker processes; four plays of each test level by default). |
+| Diagnostic Command | `retroagi diagnose-vision --game smb --stage full --vision-checkpoint data/full_vit/full_vit_scene.pth --plays 1 --every 4 --output artifacts/full_smb/<run>/vision_diagnostic.json`. It takes the same measurement in one process. Options: `--vision-checkpoint` (default `data/full_vit/full_vit_scene.pth`), `--device`, `--seed`, `--plays` (plays of each test level, default 1), `--every` (measure every n-th frame, default 4), `--frames` (frames per play, default 9000), `--batch-size`, and `--output`. |
 | Expected Metrics | Training prints, after each epoch, the held-out per-pixel loss, `pixels_correct`, `mean_type_iou` and each type's IoU (`type_iou`), measured on separate plays of the training levels; the checkpoint with the best `mean_type_iou` is kept. Measurement on the test levels uses the shared definitions in `retroagi.core.pixel_vision.evaluate_pixel_vision`, exactly as Block SMB does: `pixels_correct` (share of all pixels given their true type); for each type under `types`, the share of its true pixels the model found and the share of pixels given that type that truly are it; `mario_found` (of the frames whose true labels show Mario, the share where the model finds him); `mario_position_error_px` (mean, median, 95th percentile and largest distance in pixels between the centres of Mario's predicted and true pixels); `standing_agreement` (of those frames, the share where standing or in the air according to the predicted labels matches the game's own standing flag); and `enemies_seen` (the share of drawn enemies with at least one pixel labelled enemy). The diagnostic adds `levels`, `plays`, and `refused_frames` (the frames memory could not fully explain, counted by reason; they are not measured). Both games' perception pipelines declare the same targets (`diagnostic_thresholds` in the SMB game plugin): `min_pixels_correct` 0.999, `min_mario_found` 0.99, `max_mario_position_error_px` 1.0, `min_standing_agreement` 0.95, and `min_enemies_seen` 0.99. |
-| Artifact Locations | Default checkpoint: `data/full_vit/full_vit_pixel.pth`, sidecar `data/full_vit/full_vit_pixel.json`, measurement `data/full_vit/full_vit_pixel_evaluation.json`. Diagnostic summaries: write with `--output artifacts/full_smb/<run>/vision_diagnostic.json` when preserving a run. |
+| Artifact Locations | Default checkpoint: `data/full_vit/full_vit_scene.pth`, sidecar `data/full_vit/full_vit_scene.json`, measurement `data/full_vit/full_vit_scene_evaluation.json`. Diagnostic summaries: write with `--output artifacts/full_smb/<run>/vision_diagnostic.json` when preserving a run. |
 
 ## Full SMB Content Setup
 
@@ -393,7 +393,7 @@ python -m retroagi.stages.full_smb.benchmark \
 The benchmark reports `steps_per_second`, `emulator_frames_per_second`,
 `average_emulator_frames_per_step`, reset counts, terminal counts, final
 signals, and `recommended_settings` for `cpu`, `cuda`, and `mps`. Add
-`--encode-observations --vision-checkpoint data/full_vit/full_vit_pixel.pth` when
+`--encode-observations --vision-checkpoint data/full_vit/full_vit_scene.pth` when
 the goal is to measure emulator plus Full SMB vision model preprocessing (add
 `--no-vision-checkpoint` to time an untrained model instead). Add `--render`
 only for play-latency checks; keep training and evaluation benchmarks headless.
@@ -442,8 +442,8 @@ SMB vision model has been trained and measured on the test levels (see
 ```bash
 retroagi transfer --game smb --stage full \
   --block-policy-checkpoint data/block_smb/policy.pth \
-  --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
-  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --block-vision-checkpoint data/block_vit/block_vit_scene.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
   --output-checkpoint artifacts/full_smb/<run>/checkpoints/transferred_policy.pth
 ```
 
@@ -454,7 +454,7 @@ logs, checkpoint, recording manifest, and deterministic evaluation cadence:
 retroagi train --game smb --stage full \
   --mode fine-tune \
   --init-checkpoint artifacts/full_smb/<run>/checkpoints/transferred_policy.pth \
-  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
   --perception-mode freeze \
   --task-set curriculum \
   --epochs 1 \
@@ -565,7 +565,7 @@ retroagi compare --game smb --stage full \
   --scratch-trained-checkpoint artifacts/full_smb/<run>/checkpoints/scratch_policy.pth \
   --fine-tuned-checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth \
   --known-good-checkpoint artifacts/full_smb/<run>/checkpoints/known_good_policy.pth \
-  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
   --task-set fixed_benchmark \
   --seed 0 \
   --seed 1 \
@@ -592,15 +592,15 @@ from the transferred model checkpoints at full fidelity.
 | Hardware | CPU is required for headless smoke tests and transfer checks. GPU acceleration is not required for the adapter; CUDA or MPS may be used for policy, world-model, critic, and ViT compute after local throughput benchmarking. |
 | Runtime | Headless smoke checks should stay short at the default 200 steps. Comparison runtime scales linearly with `--steps * task_count * seed_count * policy_count` because named policies are evaluated on identical seeded task streams. Full SMB policy training scales with `--epochs`, `--updates-per-epoch`, and `--rollout-steps`; `--vector-env-count` is captured in config/checkpoints but active training remains single-env until vector rollout storage lands. Use `python -m retroagi.stages.full_smb.benchmark` to record local `emulator_frames_per_second` before long runs. |
 | Smoke Command | `retroagi evaluate --game smb --stage full --steps 500 --seed 0 --encode-observations`. |
-| Transfer Command | `retroagi transfer --game smb --stage full --block-policy-checkpoint data/block_smb/policy.pth --block-vision-checkpoint data/block_vit/block_vit_pixel.pth --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth --output-checkpoint data/full_smb/transferred_policy.pth`. |
-| Training Command | `retroagi train --game smb --stage full --mode fine-tune --init-checkpoint data/full_smb/transferred_policy.pth --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth --perception-mode freeze --updates-per-epoch 1 --rollout-steps 64 --evaluation-episodes 1 --evaluation-max-steps 64 --evaluation-interval-epochs 1 --recording-dir artifacts/full_smb/<run>/recordings --recording-path artifacts/full_smb/<run>/recordings/recording_manifest.npz --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth --log-path artifacts/full_smb/<run>/logs/train.jsonl --output-summary artifacts/full_smb/<run>/summaries/train_summary.json --tracking-log-dir artifacts/full_smb/<run>/tracking`. Use `--mode scratch` and omit `--init-checkpoint` to start a new Full SMB policy. |
+| Transfer Command | `retroagi transfer --game smb --stage full --block-policy-checkpoint data/block_smb/policy.pth --block-vision-checkpoint data/block_vit/block_vit_scene.pth --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth --output-checkpoint data/full_smb/transferred_policy.pth`. |
+| Training Command | `retroagi train --game smb --stage full --mode fine-tune --init-checkpoint data/full_smb/transferred_policy.pth --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth --perception-mode freeze --updates-per-epoch 1 --rollout-steps 64 --evaluation-episodes 1 --evaluation-max-steps 64 --evaluation-interval-epochs 1 --recording-dir artifacts/full_smb/<run>/recordings --recording-path artifacts/full_smb/<run>/recordings/recording_manifest.npz --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth --log-path artifacts/full_smb/<run>/logs/train.jsonl --output-summary artifacts/full_smb/<run>/summaries/train_summary.json --tracking-log-dir artifacts/full_smb/<run>/tracking`. Use `--mode scratch` and omit `--init-checkpoint` to start a new Full SMB policy. |
 | Resume Command | `retroagi resume --game smb --stage full --checkpoint data/full_smb/policy.pth --save-checkpoint data/full_smb/resumed_policy.pth --epochs 2`; omit `--save-checkpoint` to resume in place. Resume restores saved RNG streams and rejects changes to the saved task schedule, recurrent-state contract, or tracking destination. |
 | Evaluation Command | `retroagi evaluate --game smb --stage full --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth --evaluation-episodes 3 --evaluation-max-steps 2400 --output-summary artifacts/full_smb/<run>/evaluations/evaluation.json`. |
 | Record Command | `retroagi record --game smb --stage full --checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth --evaluation-episodes 3 --evaluation-max-steps 2400 --record-dir artifacts/full_smb/<run>/recordings --recording-path artifacts/full_smb/<run>/recordings/recording_manifest.npz --output-summary artifacts/full_smb/<run>/summaries/recording_summary.json`. If no recording destination is supplied, the command writes compressed episode artifacts under `artifacts/full_smb/recordings/` and a manifest at `artifacts/full_smb/recording_manifest.npz`. |
 | Play Command | `retroagi play --game smb --stage full --checkpoint data/full_smb/policy.pth --task-set fixed_benchmark --level 1-1 --steps 1000 --render-mode human --inspection-overlay --fps 30`. Use `--sampling-policy --temperature 0.75` for stochastic action sampling, `--render-mode none` or `--no-render` for headless playback, `--pause-at-start` for terminal-controlled stepping, `--no-reset-on-done` to stop after the first terminal episode, and `--record --record-dir artifacts/full_smb/recordings --record-output artifacts/full_smb/play_manifest.npz` to preserve playback artifacts. Human debugging uses `retroagi play --game smb --stage full --human --task-set smoke --level 1-1 --scenario debug --render-mode human --fps 30`; line controls are `d/right`, `d+/right_jump`, `a/left`, `a+/left_jump`, `w/space/jump`, and empty input for noop. Terminal controls are `p` for pause/resume, `r` for reset, and `q` for quit when stdin is interactive. |
 | Compare Command | `retroagi compare --game smb --stage full --transfer-checkpoint artifacts/full_smb/<run>/checkpoints/transferred_policy.pth --scratch-trained-checkpoint artifacts/full_smb/<run>/checkpoints/scratch_policy.pth --fine-tuned-checkpoint artifacts/full_smb/<run>/checkpoints/policy.pth --known-good-checkpoint artifacts/full_smb/<run>/checkpoints/known_good_policy.pth --task-set fixed_benchmark --seed 0 --seed 1 --output artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json`. |
 | Expected Metrics | Smoke output reports `steps`, `resets`, `episodes`, total `reward`, adapter-owned `FullSMBRewardConfig` plus `reward_terms`, the `FullSMBObservationConfig` preprocessing manifest, and `camera_vec` when stage info is retained. Transfer checkpoints preserve source policy metrics and transfer provenance. Trainer checkpoints preserve resolved rollout/update settings, loss weights, reward config, perception mode, deterministic mode, RNG state keys, task/curriculum state, backend/content metadata, source-checkpoint provenance, recording paths, tracking config, periodic deterministic evaluation cadence/results, evaluation recording manifests, and train/evaluation returns. Policy evaluation and recording report `fixed_task_results`, per-task `threshold_met` and `threshold_diagnostics`, `tuning_metrics.threshold_pass_rate`, `tuning_metrics.score`, top-level `success_thresholds_met`, and a `recording` manifest when artifacts are enabled. Play reports steps, resets, completed episodes, total/mean return, selected action IDs/names, control mode, deterministic-vs-sampling mode, render/fps settings, quit status, final signals, last reward terms, last inspection overlay, bounded overlay history, human action bindings when active, and optional recording manifest. Comparisons report one stream per task/seed pair, per-policy action histograms, mean entropies, mean margins, collection reward, reset/termination counts, and aggregate pairwise `action_agreement` across transferred, scratch, fine-tuned, known-good, and additional named policies. |
-| Artifact Locations | Use `artifacts/full_smb/<run>/` for preserved Full SMB runs. Transfer checkpoint: `data/full_smb/transferred_policy.pth` and sidecar `data/full_smb/transferred_policy.json`, copied or symlinked to `artifacts/full_smb/<run>/checkpoints/transferred_policy.pth` when preserving a run. Continued policy checkpoint: `artifacts/full_smb/<run>/checkpoints/policy.pth`. Required Full SMB vision checkpoint: `data/full_vit/full_vit_pixel.pth` (see [Full SMB Vision](#full-smb-vision)). Throughput report: `artifacts/full_smb/<run>/summaries/throughput_benchmark.json`. Training log: `artifacts/full_smb/<run>/logs/train.jsonl`. Policy evaluation summary: `artifacts/full_smb/<run>/evaluations/evaluation.json`. Recording summary: `artifacts/full_smb/<run>/summaries/recording_summary.json`. Evaluation/play recordings: compressed per-episode `.npz` files under `artifacts/full_smb/<run>/recordings/<evaluation-prefix>/` plus `artifacts/full_smb/<run>/recordings/recording_manifest.npz`, `artifacts/full_smb/<run>/recordings/recording_manifest_<evaluation-prefix>.npz`, or an explicit play manifest such as `artifacts/full_smb/<run>/recordings/play_manifest.npz`; each episode file stores frames, actions, rewards, signals, task/scenario/state IDs, and termination flags. Optional video export is attempted when `--recording-path` has a video suffix and OpenCV is installed; store videos under `artifacts/full_smb/<run>/videos/`. Optional tracker output: `artifacts/full_smb/<run>/tracking/`. Comparison summaries: `artifacts/full_smb/<run>/comparisons/transfer_vs_scratch.json` for the legacy two-policy report or `artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json` for named policy suites. Legacy flat paths such as `artifacts/full_smb/train.jsonl`, `artifacts/full_smb/evaluation.json`, and `artifacts/full_smb/transfer_vs_scratch.json` remain recognizable but should be migrated into run directories for preserved experiments. |
+| Artifact Locations | Use `artifacts/full_smb/<run>/` for preserved Full SMB runs. Transfer checkpoint: `data/full_smb/transferred_policy.pth` and sidecar `data/full_smb/transferred_policy.json`, copied or symlinked to `artifacts/full_smb/<run>/checkpoints/transferred_policy.pth` when preserving a run. Continued policy checkpoint: `artifacts/full_smb/<run>/checkpoints/policy.pth`. Required Full SMB vision checkpoint: `data/full_vit/full_vit_scene.pth` (see [Full SMB Vision](#full-smb-vision)). Throughput report: `artifacts/full_smb/<run>/summaries/throughput_benchmark.json`. Training log: `artifacts/full_smb/<run>/logs/train.jsonl`. Policy evaluation summary: `artifacts/full_smb/<run>/evaluations/evaluation.json`. Recording summary: `artifacts/full_smb/<run>/summaries/recording_summary.json`. Evaluation/play recordings: compressed per-episode `.npz` files under `artifacts/full_smb/<run>/recordings/<evaluation-prefix>/` plus `artifacts/full_smb/<run>/recordings/recording_manifest.npz`, `artifacts/full_smb/<run>/recordings/recording_manifest_<evaluation-prefix>.npz`, or an explicit play manifest such as `artifacts/full_smb/<run>/recordings/play_manifest.npz`; each episode file stores frames, actions, rewards, signals, task/scenario/state IDs, and termination flags. Optional video export is attempted when `--recording-path` has a video suffix and OpenCV is installed; store videos under `artifacts/full_smb/<run>/videos/`. Optional tracker output: `artifacts/full_smb/<run>/tracking/`. Comparison summaries: `artifacts/full_smb/<run>/comparisons/transfer_vs_scratch.json` for the legacy two-policy report or `artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json` for named policy suites. Legacy flat paths such as `artifacts/full_smb/train.jsonl`, `artifacts/full_smb/evaluation.json`, and `artifacts/full_smb/transfer_vs_scratch.json` remain recognizable but should be migrated into run directories for preserved experiments. |
 
 ## Preservation Checklist
 

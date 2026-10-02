@@ -1,11 +1,11 @@
-"""The Block SMB vision model: the shared per-pixel vision transformer, Block weights.
+"""The Block SMB vision model: the shared scene vision transformer, Block weights.
 
-The model is retroagi.core.vision.PixelVisionTransformer; Block SMB only names
+The model is retroagi.core.vision.SceneVisionTransformer; Block SMB only names
 its checkpoints and trains it on the practice game's frames, whose exact
-labels come from MarioScenarioEnv.render_labels() (the frame's own shapes
-drawn with their types instead of their colours). Training lives in
+labels come from MarioScenarioEnv.scene_labels() (the frame's own shapes
+drawn again with their types and object numbers instead of their colours). Training lives in
 scripts/vit/train_block_vit.py and measurement in
-scripts/vision/evaluate_block_vision.py, both through retroagi.core.pixel_vision.
+scripts/vision/evaluate_block_vision.py, both through retroagi.core.scene_vision.
 """
 
 from dataclasses import dataclass
@@ -14,15 +14,15 @@ from typing import Any, Optional
 
 import torch
 
-from retroagi.core.pixel_vision import load_pixel_vision_checkpoint
-from retroagi.core.vision import PixelVisionTransformer
+from retroagi.core.scene_vision import load_scene_vision_checkpoint
+from retroagi.core.vision import SceneVisionTransformer
 
-DEFAULT_BLOCK_VIT_CHECKPOINT = Path("data/block_vit/block_vit_pixel.pth")
+DEFAULT_BLOCK_VIT_CHECKPOINT = Path("data/block_vit/block_vit_scene.pth")
 BLOCK_VIT_NAME = "block_smb_vit"
 
 
-class BlockVisionTransformer(PixelVisionTransformer):
-    """The shared per-pixel vision transformer under the Block SMB checkpoint name."""
+class BlockVisionTransformer(SceneVisionTransformer):
+    """The shared scene vision transformer under the Block SMB checkpoint name."""
 
     def __init__(self, **settings: Any):
         super().__init__(**{**settings, "name": BLOCK_VIT_NAME})
@@ -36,7 +36,7 @@ class BlockVITLoadResult:
     frozen: bool
 
 
-def set_block_vit_trainable(model: PixelVisionTransformer, trainable: bool) -> None:
+def set_block_vit_trainable(model: SceneVisionTransformer, trainable: bool) -> None:
     for parameter in model.parameters():
         parameter.requires_grad_(trainable)
     model.train(trainable)
@@ -61,7 +61,7 @@ def load_block_vit_checkpoint(
 
     from .adapter import BLOCK_SMB_SPEC
 
-    model, checkpoint = load_pixel_vision_checkpoint(
+    model, checkpoint = load_scene_vision_checkpoint(
         checkpoint_path, stage=BLOCK_SMB_SPEC, model_class=BlockVisionTransformer, device=device
     )
     set_block_vit_trainable(model, trainable=not freeze)

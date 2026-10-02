@@ -41,9 +41,9 @@ class TestCompatibilityValidation(unittest.TestCase):
 
     def test_accepts_block_vit_startup_contract(self):
         model = BlockVisionTransformer(dim=16, depth=1, heads=4, drop=0.0)
-        # The pixel model's output tokens are each square's nine type shares.
-        self.assertEqual(model.spec.token_dim, 9)
-        config = ModelConfig(name="block_smb_vit", hidden_dim=9, patch_size=16)
+        # The pixel model's output tokens are each square's ten type shares.
+        self.assertEqual(model.spec.token_dim, 10)
+        config = ModelConfig(name="block_smb_vit", hidden_dim=10, patch_size=16)
 
         validate_stage_spec(BLOCK_SMB_SPEC)
         validate_model_vision_compatibility(config, model.spec)
@@ -156,7 +156,7 @@ class TestCompatibilityValidation(unittest.TestCase):
         )
 
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit_pixel.pth"
+            path = Path(tmpdir) / "block_vit_scene.pth"
             save_checkpoint(path, model, epoch=0, metrics={"mean_type_iou": 0.1}, config=config)
             checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 

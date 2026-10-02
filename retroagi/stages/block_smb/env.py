@@ -10,6 +10,7 @@ import math
 import os
 import random
 from dataclasses import asdict, dataclass
+from functools import partial
 
 import numpy as np
 import pygame
@@ -57,8 +58,11 @@ ENEMY_GRAVITY = 0.5
 # pipes are green). A scenario may name each platform's kind in
 # "platform_kinds", aligned with "platforms"; an untagged (None) platform is a
 # brick row when open space lies directly beneath it and ground otherwise.
-# Moving platforms are always lifts. render_labels() repeats render()'s shapes
-# with each shape's pixel type in place of its colour, so labels are exact.
+# Moving platforms are always lifts. Power-ups (mushrooms) only reward Mario
+# for touching them; he does not grow. render_labels() repeats render()'s
+# shapes with each shape's pixel type in place of its colour, and
+# render_instances() with the number of the object that drew it, so both are
+# exact.
 PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe")
 TILE = 16
 SKY = (107, 140, 255)
@@ -71,6 +75,8 @@ COIN, COIN_DARK = (255, 215, 0), (204, 140, 0)
 GOOMBA, GOOMBA_FEET, GOOMBA_SQUISHED = (160, 32, 240), (72, 0, 112), (100, 0, 160)
 PLANT_HEAD, PLANT_SPOT, PLANT_STEM = (216, 40, 96), (255, 200, 220), (0, 112, 72)
 MARIO, MARIO_SKIDDING, EYE = (255, 0, 0), (255, 220, 0), (255, 255, 255)
+POWER_UP_CAP, POWER_UP_SPOT, POWER_UP_STEM = (232, 48, 24), (252, 252, 252), (252, 216, 168)
+POWER_UP_SIZE = 16
 
 
 def question_cell(world_x):
@@ -79,14 +85,25 @@ def question_cell(world_x):
 
 
 class _Canvas:
-    """Draws each shape in its colour, or filled with its pixel type id."""
+    """Draws each shape in its colour, its pixel type id, or its object's number.
 
-    def __init__(self, surface, labels):
+    In "instances" mode the number of the object being drawn (``instance``,
+    0 for none) is written into the red and green channels (low and high byte).
+    """
+
+    def __init__(self, surface, mode="colour"):
+        if mode not in ("colour", "types", "instances"):
+            raise ValueError(f"unknown drawing mode {mode!r}")
         self.surface = surface
-        self.labels = labels
+        self.mode = mode
+        self.instance = 0
 
     def _color(self, color, kind):
-        return (TYPE_ID[kind],) * 3 if self.labels else color
+        if self.mode == "types":
+            return (TYPE_ID[kind],) * 3
+        if self.mode == "instances":
+            return (self.instance & 0xFF, self.instance >> 8, 0)
+        return color
 
     def fill(self, color, kind):
         self.surface.fill(self._color(color, kind))
@@ -104,6 +121,7 @@ class BlockSMBRewardConfig:
 
     progress_per_pixel: float = 0.05
     coin: float = 10.0
+    power_up: float = 10.0
     enemy_stomp: float = 5.0
     goal: float = 50.0
     fall_death: float = -10.0
@@ -134,7 +152,14 @@ class BlockSMBRewardConfig:
     def __post_init__(self) -> None:
         if self.progress_per_pixel < 0:
             raise ValueError("progress_per_pixel must be non-negative")
-        for name in ("coin", "enemy_stomp", "goal", "goal_distance_shaping", "wait_survival"):
+        for name in (
+            "coin",
+            "power_up",
+            "enemy_stomp",
+            "goal",
+            "goal_distance_shaping",
+            "wait_survival",
+        ):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
         for name in ("fall_death", "gap_jump", "enemy_hit", "frame_penalty", "energy_jump"):
@@ -145,6 +170,7 @@ class BlockSMBRewardConfig:
         return {
             "progress": 0.0,
             "coin": 0.0,
+            "power_up": 0.0,
             "enemy_stomp": 0.0,
             "goal": 0.0,
             "goal_distance": 0.0,
@@ -218,6 +244,7 @@ class MarioScenarioEnv:
         self.platforms = []  # list of platform dicts
         self.platform_kinds = []  # drawn kind of each platform
         self.coins = []
+        self.power_ups = []
         self.enemies = []
         self.goal = None
         self._goal_on_stomp = False
@@ -336,6 +363,12 @@ class MarioScenarioEnv:
             {"rect": pygame.Rect(c[0], c[1], c[2], c[3]), "collected": False}
             for c in scenario.get("coins", [])
         ]
+
+        # Power-ups: [x, y] (a 16x16 mushroom) or [x, y, w, h]; reward only.
+        self.power_ups = []
+        for p in scenario.get("power_ups", []):
+            w, h = (p[2], p[3]) if len(p) >= 4 else (POWER_UP_SIZE, POWER_UP_SIZE)
+            self.power_ups.append({"rect": pygame.Rect(p[0], p[1], w, h), "collected": False})
 
         # Enemies — accept list or dict; optional 5th element = speed
         self.enemies = []
@@ -683,6 +716,10 @@ class MarioScenarioEnv:
                 coin["collected"] = True
                 reward_terms["coin"] += self.reward_config.coin
                 self.score += 10
+        for power_up in self.power_ups:
+            if not power_up["collected"] and mario_rect.colliderect(power_up["rect"]):
+                power_up["collected"] = True
+                reward_terms["power_up"] += self.reward_config.power_up
 
         # ── 16b. Wait-survival shaping ────────────────────────────────────────
         if (
@@ -803,7 +840,7 @@ class MarioScenarioEnv:
 
         The finish marker is simulator truth and is never drawn.
         """
-        self._draw(_Canvas(self.screen, labels=False))
+        self._draw(_Canvas(self.screen))
         return np.transpose(pygame.surfarray.array3d(self.screen), (1, 0, 2))
 
     def render_labels(self) -> np.ndarray:
@@ -812,8 +849,49 @@ class MarioScenarioEnv:
         The same shapes as render(), in the same order, so every pixel carries
         the type of the shape drawn on top of it. Eyes belong to their owner.
         """
-        self._draw(_Canvas(self._label_screen, labels=True))
+        self._draw(_Canvas(self._label_screen, "types"))
         return np.ascontiguousarray(pygame.surfarray.array_red(self._label_screen).T)
+
+    def render_instances(self) -> np.ndarray:
+        """Which object drew each pixel, as an (H, W) int32 array (-1 for none).
+
+        The same shapes as render(), in the same order, so a pixel belongs to
+        the object drawn on top of it. Object numbers are those of
+        instance_meta(); terrain other than moving platforms belongs to none.
+        """
+        self._draw(_Canvas(self._label_screen, "instances"))
+        red = pygame.surfarray.array_red(self._label_screen).T.astype(np.int32)
+        green = pygame.surfarray.array_green(self._label_screen).T.astype(np.int32)
+        return red + (green << 8) - 1
+
+    def instance_meta(self) -> tuple[dict[int, str], dict[int, str]]:
+        """(category, enemy kind) of every object number render_instances() can show."""
+        categories, kinds = {}, {}
+        for number, (category, kind, _draw) in enumerate(self._objects()):
+            if category is not None:
+                categories[number] = category
+                if kind is not None:
+                    kinds[number] = kind
+        return categories, kinds
+
+    def scene_labels(self):
+        """The frame's exact SceneLabels: types, objects, Mario's standing and facing.
+
+        Like the picture a policy sees (smb_pixel_types.visible_window), the
+        labels show only the window the NES shows and repeat its edge outside.
+        """
+        from retroagi.core.smb_pixel_types import visible_window
+        from retroagi.core.smb_scene_labels import SceneLabels
+
+        categories, kinds = self.instance_meta()
+        return SceneLabels(
+            types=visible_window(self.render_labels()),
+            instances=visible_window(self.render_instances()),
+            categories=categories,
+            kinds=kinds,
+            standing=bool(self.mario["on_ground"]),
+            facing_right=self.mario["facing"] > 0,
+        )
 
     def enemy_screen_rects(self) -> list[pygame.Rect]:
         """The screen rectangle each drawn enemy is painted inside, in draw order."""
@@ -829,8 +907,20 @@ class MarioScenarioEnv:
         return rects
 
     def _draw(self, canvas: _Canvas) -> None:
-        cam = int(self.camera_x)
         canvas.fill(SKY, "background")
+        for number, (category, _kind, draw) in enumerate(self._objects()):
+            # Object numbers start at 1 on the canvas; 0 means no object.
+            canvas.instance = number + 1 if category is not None else 0
+            draw(canvas)
+
+    def _objects(self):
+        """Every drawn shape group in drawing order: (category, enemy kind, draw).
+
+        category is None for terrain that is not a separate object (ground,
+        bricks, question blocks, pipes); moving platforms, coins, power-ups,
+        enemies and Mario are objects.
+        """
+        cam = int(self.camera_x)
         if len(self.platform_kinds) != len(self.platforms):
             raise ValueError("platform kinds are out of step with the platforms")
         for plat, kind in zip(self.platforms, self.platform_kinds):
@@ -839,43 +929,73 @@ class MarioScenarioEnv:
             if screen_rect.right <= 0 or screen_rect.left >= self.width:
                 continue
             if kind == "moving_platform":
-                self._draw_lift(canvas, screen_rect)
+                yield "moving_platform", None, partial(self._draw_lift, rect=screen_rect)
             elif kind == "pipe":
-                self._draw_pipe(canvas, screen_rect)
+                yield None, None, partial(self._draw_pipe, rect=screen_rect)
             elif kind == "question_block":
-                for cell in self._cells(screen_rect):
-                    self._draw_question_block(canvas, cell)
+                yield None, None, partial(self._draw_question_row, rect=screen_rect)
             elif kind in ("brick", "brick_row"):
-                self._draw_bricks(canvas, screen_rect)
-                if kind == "brick_row":
-                    for cell in self._cells(screen_rect):
-                        if question_cell(cell.x + cam):
-                            self._draw_question_block(canvas, cell)
+                yield (
+                    None,
+                    None,
+                    partial(self._draw_brick_row, rect=screen_rect, questions=kind == "brick_row"),
+                )
             else:
-                self._draw_ground(canvas, screen_rect)
-
+                yield None, None, partial(self._draw_ground, rect=screen_rect)
         for coin in self.coins:
             if not coin["collected"]:
-                screen_rect = coin["rect"].move(-cam, 0)
-                canvas.ellipse(COIN, "coin", screen_rect)
-                inner = screen_rect.inflate(-6, -4)
-                if inner.w > 0 and inner.h > 0:
-                    canvas.ellipse(COIN_DARK, "coin", inner)
-
-        for enemy, rect in zip(
-            (e for e in self.enemies if e["h"] > 0), self.enemy_screen_rects()
-        ):
+                yield "coin", None, partial(self._draw_coin, rect=coin["rect"].move(-cam, 0))
+        for power_up in self.power_ups:
+            if not power_up["collected"]:
+                yield (
+                    "power_up",
+                    None,
+                    partial(self._draw_power_up, rect=power_up["rect"].move(-cam, 0)),
+                )
+        for enemy, rect in zip((e for e in self.enemies if e["h"] > 0), self.enemy_screen_rects()):
             if enemy.get("kind") == "piranha_plant":
-                self._draw_plant(canvas, rect)
+                yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             else:
-                self._draw_goomba(canvas, enemy, rect)
+                kind = "defeated" if enemy["dead"] else "walker"
+                yield "enemy", kind, partial(self._draw_goomba, enemy=enemy, rect=rect)
+        yield "mario", None, self._draw_mario
 
-        # Mario: yellow while skidding, red otherwise; the eye shows facing.
+    def _draw_mario(self, canvas):
+        # Yellow while skidding, red otherwise; the eye shows facing.
+        cam = int(self.camera_x)
         m = self.mario
         body = pygame.Rect(int(m["x"]) - cam, int(m["y"]), m["w"], m["h"])
         canvas.rect(MARIO_SKIDDING if m["skidding"] else MARIO, "mario", body)
         eye_x = body.right - 4 if m["facing"] > 0 else body.left + 2
         canvas.rect(EYE, "mario", pygame.Rect(eye_x, body.top + 2, 2, 2))
+
+    def _draw_question_row(self, canvas, rect):
+        for cell in self._cells(rect):
+            self._draw_question_block(canvas, cell)
+
+    def _draw_brick_row(self, canvas, rect, questions):
+        cam = int(self.camera_x)
+        self._draw_bricks(canvas, rect)
+        if questions:
+            for cell in self._cells(rect):
+                if question_cell(cell.x + cam):
+                    self._draw_question_block(canvas, cell)
+
+    def _draw_coin(self, canvas, rect):
+        canvas.ellipse(COIN, "coin", rect)
+        inner = rect.inflate(-6, -4)
+        if inner.w > 0 and inner.h > 0:
+            canvas.ellipse(COIN_DARK, "coin", inner)
+
+    def _draw_power_up(self, canvas, rect):
+        # A mushroom: a spotted cap over a pale stem.
+        cap = pygame.Rect(rect.left, rect.top, rect.w, max(1, rect.h * 5 // 8))
+        stem = pygame.Rect(0, 0, max(1, rect.w * 5 // 8), rect.bottom - cap.centery)
+        stem.midbottom = (rect.centerx, rect.bottom)
+        canvas.rect(POWER_UP_STEM, "power_up", stem)
+        canvas.ellipse(POWER_UP_CAP, "power_up", cap)
+        for x in (cap.left + cap.w // 4 - 1, cap.right - cap.w // 4 - 2):
+            canvas.rect(POWER_UP_SPOT, "power_up", pygame.Rect(x, cap.top + 2, 3, 3))
 
     def _cells(self, rect):
         """16-pixel-wide cells from the platform's left edge, visible ones only."""

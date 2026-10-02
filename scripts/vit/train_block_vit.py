@@ -1,15 +1,16 @@
-"""Train the Block SMB vision transformer to give every pixel its type.
+"""Train the Block SMB vision transformer to report the objects drawn on screen.
 
 Frames are what the policy sees: all Monte Carlo families on the train split
 at every difficulty, played with teacher, perturbed, delayed and random
-routes, plus procedurally generated levels (retroagi/stages/block_smb/
-vision_frames.py). Worker processes play fresh episodes throughout training,
-so frames rarely repeat. Labels are MarioScenarioEnv.render_labels(), exact by
+routes, plus procedurally generated levels, some with drawn power-ups
+(retroagi/stages/block_smb/vision_frames.py). Worker processes play fresh
+episodes throughout training, so frames rarely repeat. Labels are the
+simulator's own drawing (MarioScenarioEnv.scene_labels()), exact by
 construction. The model and the training loop are the shared ones
-(retroagi.core.vision.PixelVisionTransformer, retroagi.core.pixel_vision):
-per-pixel cross-entropy with rare types weighted up. Progress is monitored on
-held-out train-split layouts; the validation split is kept for
-scripts/vision/evaluate_block_vision.py.
+(retroagi.core.vision.SceneVisionTransformer, retroagi.core.scene_vision):
+pixel types, objects, enemy kinds and Mario's facing and support, trained
+together. Progress is monitored on held-out train-split layouts; the
+validation split is kept for scripts/vision/evaluate_block_vision.py.
 
 Example:
     python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
@@ -43,12 +44,14 @@ from retroagi.core import (
     select_device,
     validate_stage_spec,
 )
-from retroagi.core.pixel_vision import (
+from retroagi.core.scene_vision import (
     epoch_line,
+    frame_targets,
     pixel_type_weights,
-    save_pixel_vision_checkpoint,
+    save_scene_vision_checkpoint,
     seeded,
-    train_pixel_vision,
+    stack_targets,
+    train_scene_vision,
 )
 from retroagi.core.smb_pixel_types import PIXEL_TYPES
 from retroagi.stages.block_smb import BLOCK_SMB_SPEC
@@ -97,7 +100,7 @@ class TrainConfig:
     )
     checkpoints: CheckpointConfig = field(
         default_factory=lambda: CheckpointConfig(
-            output_path=DEFAULT_OUTPUT, best_metric="mean_type_iou", best_mode="max"
+            output_path=DEFAULT_OUTPUT, best_metric="held_out_total_loss", best_mode="min"
         )
     )
     # Train layouts per family and difficulty; held-out monitor layouts likewise.
@@ -167,24 +170,24 @@ class FrameStreamDataset(IterableDataset):
         for frame in frames:
             index = rng.randrange(len(pool))
             out, pool[index] = pool[index], frame
-            yield torch.from_numpy(out.image.copy()), torch.from_numpy(out.labels)
+            yield torch.from_numpy(out.image.copy()), frame_targets(out.scene)
 
 
-def monitor_frames(layouts, seed: int, count: int) -> tuple[np.ndarray, np.ndarray]:
+def monitor_frames(layouts, seed: int, count: int) -> tuple[np.ndarray, dict]:
     """A fixed held-out set: teacher and perturbed routes on unseen layouts."""
     rng = random.Random(seed)
-    images, labels = [], []
+    images, targets = [], []
     for layout in layouts:
         for route in ("teacher", "perturbed"):
             for frame in layout_frames(layout, route, rng, keep=0.08):
                 images.append(frame.image.copy())
-                labels.append(frame.labels)
+                targets.append(frame_targets(frame.scene))
     order = rng.sample(range(len(images)), min(count, len(images)))
-    return np.stack([images[i] for i in order]), np.stack([labels[i] for i in order])
+    return np.stack([images[i] for i in order]), stack_targets([targets[i] for i in order])
 
 
 def save_checkpoint(path, model, epoch: int, metrics: dict, config: TrainConfig) -> None:
-    save_pixel_vision_checkpoint(
+    save_scene_vision_checkpoint(
         path,
         model,
         stage=config.environment.stage,
@@ -215,14 +218,15 @@ def train(config: TrainConfig, device_name: Optional[str] = None) -> dict:
         held_out = family_layouts(
             "train", config.evaluation.seed, config.monitor_repeats, executor=pool
         )
-    monitor_images, monitor_labels = monitor_frames(
+    monitor_images, monitor_targets = monitor_frames(
         held_out, config.evaluation.seed, config.evaluation.samples
     )
     sample = frame_stream(
         train_layouts, seed + 999, keep=config.keep, generated_share=config.generated_share
     )
     weights = pixel_type_weights(
-        np.stack([frame.labels for frame in islice(sample, 4_000)]), power=config.weight_power
+        np.stack([frame.scene.types for frame in islice(sample, 4_000)]),
+        power=config.weight_power,
     )
     print(
         f"Layouts: {len(train_layouts)} train, {len(held_out)} held out; "
@@ -253,14 +257,14 @@ def train(config: TrainConfig, device_name: Optional[str] = None) -> dict:
             save_checkpoint(output, model, epoch, metrics, config)
             print(f"Saved checkpoint: {output}", flush=True)
 
-    return train_pixel_vision(
+    return train_scene_vision(
         model,
         loader,
         epochs=config.training.epochs,
         steps_per_epoch=steps_per_epoch,
         held_out_images=monitor_images,
-        held_out_labels=monitor_labels,
-        weights=weights,
+        held_out_targets=monitor_targets,
+        pixel_weights=weights,
         device=device,
         learning_rate=config.training.learning_rate,
         weight_decay=config.training.weight_decay,

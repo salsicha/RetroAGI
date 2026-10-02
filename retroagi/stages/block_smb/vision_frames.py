@@ -4,8 +4,11 @@ Monte Carlo family layouts are played with their teacher routes, with teacher
 routes perturbed by held random actions, after a random wait, and with
 persistent random actions; procedurally generated levels are played with
 random actions. Mario is therefore seen standing, running, jumping, skidding,
-falling, dying, stomping, riding lifts and pushing against walls. Each kept
-frame carries its exact labels from MarioScenarioEnv.render_labels().
+falling, dying, stomping, riding lifts and pushing against walls. Some
+episodes get drawn power-ups (with_power_ups), so the model learns them before
+Full SMB. Each kept frame carries its exact labels from the simulator's own
+drawing (MarioScenarioEnv.scene_labels()). Pictures and labels show only the
+window the NES shows, exactly as Full SMB frames do (visible_window).
 """
 
 import random
@@ -13,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 
 import numpy as np
+
+from retroagi.core.smb_pixel_types import visible_window
 
 from .env import MarioScenarioEnv
 from .monte_carlo import (
@@ -24,6 +29,9 @@ FAMILY_ROUTES = ("teacher", "perturbed", "delayed", "random")
 GENERATED_LEVEL = "generated_level"
 # Action weights for random play: mostly forward, with jumps, waits and reversals.
 RANDOM_ACTION_WEIGHTS = (12, 30, 25, 12, 8, 13)
+# Share of episodes that get power-ups, and how many at most.
+POWER_UP_SHARE = 0.35
+MAX_POWER_UPS = 2
 
 
 @dataclass(frozen=True)
@@ -34,6 +42,7 @@ class VisionFrame:
     enemy_rects: tuple  # (x, y, w, h) screen box of each drawn enemy
     family: str
     route: str
+    scene: Optional[Any] = None  # smb_scene_labels.SceneLabels of the frame
 
 
 @dataclass(frozen=True)
@@ -97,6 +106,30 @@ def route_actions(route: str, teacher: tuple, rng: random.Random) -> Iterator[in
         index += 1
 
 
+def with_power_ups(scenario: dict, rng: random.Random) -> dict:
+    """The scenario, sometimes with 1-2 power-ups (apart) resting on or floating above platforms.
+
+    Power-ups only reward Mario for touching them, so routes stay valid.
+    """
+    if rng.random() >= POWER_UP_SHARE or not scenario.get("platforms"):
+        return scenario
+    items = []
+    for _ in range(rng.randint(1, MAX_POWER_UPS)):
+        platform = rng.choice(scenario["platforms"])
+        if isinstance(platform, dict):
+            x, y, w = platform["x"], platform["y"], platform["w"]
+        else:
+            x, y, w = platform[0], platform[1], platform[2]
+        if w < 16:
+            continue
+        lift = rng.choice((0, 0, rng.randint(8, 48)))
+        item = [x + rng.randint(0, w - 16), max(32, y - 16 - lift)]
+        # Apart from one another, so each is drawn as its own picture.
+        if all(abs(item[0] - o[0]) >= 18 or abs(item[1] - o[1]) >= 18 for o in items):
+            items.append(item)
+    return {**scenario, "power_ups": [*scenario.get("power_ups", ()), *items]}
+
+
 def play(
     env: MarioScenarioEnv,
     scenario: dict,
@@ -109,20 +142,22 @@ def play(
     max_steps: int = DEFAULT_BLOCK_SMB_MC_MAX_STEPS,
 ) -> Iterator[VisionFrame]:
     """Play one episode, keeping each frame with probability ``keep`` and the last."""
-    env.reset(scenario=scenario, seed=rng.randrange(1 << 30))
+    env.reset(scenario=with_power_ups(scenario, rng), seed=rng.randrange(1 << 30))
     for step in range(max_steps + 1):
         done = False
         if step:
             _obs, _reward, terminated, truncated, _info = env.step(next(actions))
             done = terminated or truncated or step == max_steps
         if done or rng.random() < keep:
+            scene = env.scene_labels()
             yield VisionFrame(
-                image=env.render(),
-                labels=env.render_labels(),
-                on_ground=bool(env.mario["on_ground"]),
+                image=visible_window(env.render()),
+                labels=scene.types,
+                on_ground=scene.standing,
                 enemy_rects=tuple(tuple(r) for r in env.enemy_screen_rects()),
                 family=family,
                 route=route,
+                scene=scene,
             )
         if done:
             return

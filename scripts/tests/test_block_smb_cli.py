@@ -251,7 +251,7 @@ class TestBlockSMBCLI(unittest.TestCase):
 
         def fake_train(config, *, vision_factory):
             self.assertEqual(
-                config.vision_checkpoint_path, Path("data/block_vit/block_vit_pixel.pth")
+                config.vision_checkpoint_path, Path("data/block_vit/block_vit_scene.pth")
             )
             self.assertEqual(
                 config.monte_carlo_train_samples_per_epoch,
@@ -290,7 +290,7 @@ class TestBlockSMBCLI(unittest.TestCase):
                 "retroagi.stages.block_smb.cli.load_block_vit_checkpoint",
                 return_value=SimpleNamespace(
                     model=loaded_model,
-                    path=Path("data/block_vit/block_vit_pixel.pth"),
+                    path=Path("data/block_vit/block_vit_scene.pth"),
                     frozen=True,
                 ),
             ) as load_vision:
@@ -304,7 +304,7 @@ class TestBlockSMBCLI(unittest.TestCase):
                             "--device",
                             "cpu",
                             "--vision-checkpoint",
-                            "data/block_vit/block_vit_pixel.pth",
+                            "data/block_vit/block_vit_scene.pth",
                             "--output",
                             str(output),
                         ]
@@ -313,10 +313,10 @@ class TestBlockSMBCLI(unittest.TestCase):
             written = json.loads(output.read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(load_vision.call_args.args[0], Path("data/block_vit/block_vit_pixel.pth"))
+        self.assertEqual(load_vision.call_args.args[0], Path("data/block_vit/block_vit_scene.pth"))
         self.assertEqual(str(load_vision.call_args.kwargs["device"]), "cpu")
         self.assertTrue(load_vision.call_args.kwargs["freeze"])
-        self.assertEqual(payload["vision"]["checkpoint_path"], "data/block_vit/block_vit_pixel.pth")
+        self.assertEqual(payload["vision"]["checkpoint_path"], "data/block_vit/block_vit_scene.pth")
         self.assertTrue(payload["vision"]["frozen"])
         self.assertTrue(payload["vision"]["checkpoint_transfer"])
         self.assertEqual(payload["architecture"]["name"], BASELINE_ARCHITECTURE_NAME)
@@ -431,7 +431,7 @@ class TestBlockSMBCLI(unittest.TestCase):
                             "--device",
                             "cpu",
                             "--vision-checkpoint",
-                            "data/block_vit/block_vit_pixel.pth",
+                            "data/block_vit/block_vit_scene.pth",
                             "--disable-checkpoint-transfer",
                         ]
                     )
@@ -795,7 +795,7 @@ class TestBlockSMBCLI(unittest.TestCase):
             "retroagi.stages.block_smb.cli.load_block_vit_checkpoint",
             return_value=SimpleNamespace(
                 model=loaded_model,
-                path=Path("data/block_vit/block_vit_pixel.pth"),
+                path=Path("data/block_vit/block_vit_scene.pth"),
                 frozen=True,
             ),
         ) as load_vision:
@@ -808,14 +808,14 @@ class TestBlockSMBCLI(unittest.TestCase):
                     return_value=iter(()),
                 ) as frames:
                     with patch(
-                        "retroagi.core.pixel_vision.evaluate_pixel_vision",
+                        "retroagi.core.scene_vision.evaluate_scene_vision",
                         return_value=fake_metrics,
                     ) as evaluate:
                         exit_code, payload = self.run_main(
                             [
                                 "diagnose-vision",
                                 "--vision-checkpoint",
-                                "data/block_vit/block_vit_pixel.pth",
+                                "data/block_vit/block_vit_scene.pth",
                                 "--device",
                                 "cpu",
                                 "--repeats",
@@ -829,7 +829,7 @@ class TestBlockSMBCLI(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(
-            load_vision.call_args.args[0], Path("data/block_vit/block_vit_pixel.pth")
+            load_vision.call_args.args[0], Path("data/block_vit/block_vit_scene.pth")
         )
         self.assertEqual(str(load_vision.call_args.kwargs["device"]), "cpu")
         sample_layouts.assert_called_once_with("validation", 0, 2)
@@ -838,7 +838,7 @@ class TestBlockSMBCLI(unittest.TestCase):
         self.assertIs(evaluate.call_args.args[0], loaded_model)
         self.assertEqual(evaluate.call_args.kwargs["batch_size"], 2)
         self.assertEqual(
-            payload["vision"]["checkpoint_path"], "data/block_vit/block_vit_pixel.pth"
+            payload["vision"]["checkpoint_path"], "data/block_vit/block_vit_scene.pth"
         )
         self.assertEqual(payload["config"]["split"], "validation")
         self.assertEqual(payload["perception"]["pixels_correct"], 0.75)

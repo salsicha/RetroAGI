@@ -222,7 +222,7 @@ class TestPromotionPipeline(unittest.TestCase):
             )
             source_checkpoint.parent.mkdir(parents=True, exist_ok=True)
             write_block_policy_checkpoint(source_checkpoint)
-            vision_checkpoint = root / "full_vit_pixel.pth"
+            vision_checkpoint = root / "full_vit_scene.pth"
             write_full_smb_vision_checkpoint(vision_checkpoint)
 
             exit_code, manifest = self.run_main(

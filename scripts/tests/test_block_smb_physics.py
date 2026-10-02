@@ -369,6 +369,7 @@ class TestBlockSMBPhysics(unittest.TestCase):
                 {
                     "progress",
                     "coin",
+                    "power_up",
                     "enemy_stomp",
                     "goal",
                     "goal_distance",

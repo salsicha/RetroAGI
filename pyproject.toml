@@ -117,6 +117,7 @@ ignore = [
 "scripts/vit/train_full_vit.py" = ["E402"]
 "scripts/vision/evaluate_block_vision.py" = ["E402"]
 "scripts/vision/evaluate_full_vision.py" = ["E402"]
+"scripts/vision/survey_scene_slots.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["retroagi"]

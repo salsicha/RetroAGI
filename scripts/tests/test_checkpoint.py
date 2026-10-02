@@ -175,7 +175,7 @@ class TestCheckpointSchema(unittest.TestCase):
         config = TrainConfig()
 
         with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "block_vit_pixel.pth"
+            path = Path(tmpdir) / "block_vit_scene.pth"
             save_checkpoint(path, model, epoch=1, metrics={"mean_type_iou": 0.25}, config=config)
             loaded = load_checkpoint(path)
             summary = json.loads(checkpoint_summary_path(path).read_text(encoding="utf-8"))

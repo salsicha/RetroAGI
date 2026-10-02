@@ -213,7 +213,7 @@ class TestGameSpec(unittest.TestCase):
         self.assertEqual(block_perception.stage_name, "block")
         self.assertEqual(
             block_perception.checkpoint_path,
-            "data/block_vit/block_vit_pixel.pth",
+            "data/block_vit/block_vit_scene.pth",
         )
         self.assertEqual(block_perception.semantic_vocabulary.class_index("mario"), 1)
         self.assertEqual(
@@ -244,7 +244,7 @@ class TestGameSpec(unittest.TestCase):
             "retroagi.stages.full_smb.pixel_labels.label_frame",
         )
         self.assertIsNone(full_perception.synthetic_frame_composition)
-        self.assertEqual(full_perception.checkpoint_path, "data/full_vit/full_vit_pixel.pth")
+        self.assertEqual(full_perception.checkpoint_path, "data/full_vit/full_vit_scene.pth")
         self.assertEqual(
             full_perception.diagnostic_thresholds,
             block_perception.diagnostic_thresholds,

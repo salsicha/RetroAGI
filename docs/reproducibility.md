@@ -399,7 +399,7 @@ python scripts/vit/train_block_vit.py \
   --epochs 40 \
   --samples-per-epoch 40000 \
   --device auto \
-  --output data/block_vit/block_vit_pixel.pth
+  --output data/block_vit/block_vit_scene.pth
 ```
 
 Then measure it on held-out validation-split frames with the shared
@@ -407,7 +407,7 @@ measurements:
 
 ```bash
 python scripts/vision/evaluate_block_vision.py \
-  --checkpoint data/block_vit/block_vit_pixel.pth \
+  --checkpoint data/block_vit/block_vit_scene.pth \
   --output artifacts/repro/block_smb_vision_evaluation.json
 ```
 
@@ -417,12 +417,12 @@ the simulator and enemies seen. The CLI runs the same measurement:
 
 ```bash
 retroagi diagnose-vision --game smb --stage block \
-  --vision-checkpoint data/block_vit/block_vit_pixel.pth \
+  --vision-checkpoint data/block_vit/block_vit_scene.pth \
   --output artifacts/repro/block_smb_vision_diagnostic.json
 ```
 
-Preserve `data/block_vit/block_vit_pixel.pth`,
-`data/block_vit/block_vit_pixel.json`, and the measurement JSON.
+Preserve `data/block_vit/block_vit_scene.pth`,
+`data/block_vit/block_vit_scene.json`, and the measurement JSON.
 
 ## 9. Reproduce Block SMB Policy
 
@@ -435,7 +435,7 @@ retroagi train --game smb --stage block \
   --epochs 5 \
   --episodes-per-epoch 2 \
   --rollout-steps 32 \
-  --vision-checkpoint data/block_vit/block_vit_pixel.pth \
+  --vision-checkpoint data/block_vit/block_vit_scene.pth \
   --checkpoint data/block_smb/policy.pth \
   --output artifacts/block_smb/latest/run_summary.json \
   --log-path artifacts/block_smb/latest/events.jsonl
@@ -501,7 +501,7 @@ learned policy checkpoint.
 ## 10. Reproduce Full SMB Vision
 
 Train the Full SMB vision transformer: the same per-pixel model class as Block
-SMB (`retroagi.core.vision.PixelVisionTransformer`) with its own Full SMB
+SMB (`retroagi.core.vision.SceneVisionTransformer`) with its own Full SMB
 weights. It gives every pixel of the emulator screen one of the nine shared
 types in `retroagi.core.smb_pixel_types.PIXEL_TYPES`. Every Full SMB policy
 command reads screens through it, so train it before Full SMB policy inference
@@ -525,14 +525,14 @@ python scripts/vit/train_full_vit.py \
   --epochs 40 \
   --samples-per-epoch 40000 \
   --device auto \
-  --output data/full_vit/full_vit_pixel.pth
+  --output data/full_vit/full_vit_scene.pth
 ```
 
 Then measure it on the test levels with the shared measurements:
 
 ```bash
 python scripts/vision/evaluate_full_vision.py \
-  --checkpoint data/full_vit/full_vit_pixel.pth \
+  --checkpoint data/full_vit/full_vit_scene.pth \
   --output artifacts/repro/full_smb_vision_evaluation.json
 ```
 
@@ -546,7 +546,7 @@ The CLI runs the same measurement in one process:
 
 ```bash
 retroagi diagnose-vision --game smb --stage full \
-  --vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --vision-checkpoint data/full_vit/full_vit_scene.pth \
   --plays 1 \
   --every 4 \
   --output artifacts/repro/full_smb_vision_diagnostic.json
@@ -557,7 +557,7 @@ fully explain, counted by reason).
 
 Expected artifacts:
 
-- `data/full_vit/full_vit_pixel.pth` and `data/full_vit/full_vit_pixel.json`,
+- `data/full_vit/full_vit_scene.pth` and `data/full_vit/full_vit_scene.json`,
 - the measurement JSON files above.
 
 Do not move a Block SMB policy to Full SMB inference or continued training
@@ -770,8 +770,8 @@ meets its test-level targets:
 ```bash
 retroagi transfer --game smb --stage full \
   --block-policy-checkpoint data/block_smb/policy.pth \
-  --block-vision-checkpoint data/block_vit/block_vit_pixel.pth \
-  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --block-vision-checkpoint data/block_vit/block_vit_scene.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
   --output-checkpoint data/full_smb/transferred_policy.pth
 ```
 
@@ -786,7 +786,7 @@ retroagi compare --game smb --stage full \
   --scratch-trained-checkpoint data/full_smb/scratch_policy.pth \
   --fine-tuned-checkpoint data/full_smb/fine_tuned_policy.pth \
   --known-good-checkpoint data/full_smb/known_good_policy.pth \
-  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
   --task-set fixed_benchmark \
   --steps 128 \
   --seed 0 \
@@ -829,7 +829,7 @@ whether the Full SMB vision model was frozen, fine-tuned, or replaced:
 retroagi train --game smb --stage full \
   --mode fine-tune \
   --init-checkpoint data/full_smb/transferred_policy.pth \
-  --full-smb-vision-checkpoint data/full_vit/full_vit_pixel.pth \
+  --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
   --perception-mode freeze \
   --epochs 1 \
   --updates-per-epoch 1 \

@@ -691,6 +691,43 @@ def _add_common_config_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_layer_args(parser: argparse.ArgumentParser) -> None:
+    """One option per LayeredTrainConfig setting, with the same name and default."""
+    import dataclasses
+
+    from .layered_train import LayeredTrainConfig
+
+    for setting in dataclasses.fields(LayeredTrainConfig):
+        option = "--" + setting.name.replace("_", "-")
+        if setting.name == "families":
+            parser.add_argument(option, nargs="+", choices=BLOCK_SMB_MC_FAMILIES)
+        elif isinstance(setting.default, tuple):
+            parser.add_argument(option, nargs=len(setting.default), type=float, default=None)
+        elif setting.default is None or isinstance(setting.default, str):
+            parser.add_argument(option, type=str, default=setting.default)
+        else:
+            parser.add_argument(option, type=type(setting.default), default=setting.default)
+
+
+def _run_train_layer(args: argparse.Namespace) -> dict[str, Any]:
+    import dataclasses
+
+    from .layered_train import LayeredTrainConfig, train_layer
+
+    settings = {
+        setting.name: getattr(args, setting.name)
+        for setting in dataclasses.fields(LayeredTrainConfig)
+        if getattr(args, setting.name) is not None or setting.default is None
+    }
+    for name, value in list(settings.items()):
+        if isinstance(value, list):
+            settings[name] = tuple(value)
+        elif value is None and name != "init":
+            settings.pop(name)
+    summary = train_layer(LayeredTrainConfig(**settings))
+    return {"best_validation_success": summary["best_validation_success"]}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="retroagi-block-smb",
@@ -716,6 +753,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="record deterministic evaluation trajectories after each epoch",
     )
     train.add_argument("--record-dir", type=Path, help="directory for recorded trajectories")
+
+    train_layer = subparsers.add_parser(
+        "train-layer",
+        help="train one layer of the four-layer agent (action, then skill, then tactic)",
+    )
+    _add_layer_args(train_layer)
+
+    exam_layer = subparsers.add_parser(
+        "exam-layer",
+        help="play fresh held-out layouts with a saved four-layer policy",
+    )
+    exam_layer.add_argument("--checkpoint", required=True)
+    exam_layer.add_argument(
+        "--learner",
+        choices=("action", "skill", "tactic", "deployed"),
+        default="deployed",
+        help="the layer under test (the teacher gives its token from above), or the whole agent",
+    )
+    exam_layer.add_argument("--layouts-per-difficulty", type=int, default=6)
+    exam_layer.add_argument("--first-layout", type=int, default=100)
+    exam_layer.add_argument("--workers", type=int, default=12)
+    exam_layer.add_argument(
+        "--steady-frames-quantile",
+        type=float,
+        help="read walk and wait lengths cautiously (see PolicySettings)",
+    )
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a saved Block SMB checkpoint")
     _add_common_config_args(evaluate)
@@ -1155,7 +1218,7 @@ def _make_vision_factory(
 
 def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
     """The shared vision measurements on held-out validation-split frames."""
-    from retroagi.core.pixel_vision import evaluate_pixel_vision
+    from retroagi.core.scene_vision import evaluate_scene_vision
 
     from .vision_frames import family_layouts, held_out_frames
 
@@ -1166,7 +1229,7 @@ def _run_vision_diagnostic(args: argparse.Namespace) -> dict[str, Any]:
         freeze=True,
     )
     layouts = family_layouts("validation", args.seed, args.repeats)
-    metrics = evaluate_pixel_vision(
+    metrics = evaluate_scene_vision(
         loaded.model,
         held_out_frames(layouts, args.seed, keep=args.keep),
         batch_size=args.batch_size,
@@ -1347,6 +1410,19 @@ def _run_multi_seed_evaluation(args: argparse.Namespace) -> dict[str, Any]:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "train":
         config = _make_train_config(args)
+    elif args.command == "train-layer":
+        return _run_train_layer(args)
+    elif args.command == "exam-layer":
+        from .layered_train import examine_layer
+
+        return examine_layer(
+            args.checkpoint,
+            None if args.learner == "deployed" else args.learner,
+            layouts_per_difficulty=args.layouts_per_difficulty,
+            first_layout=args.first_layout,
+            workers=args.workers,
+            steady_frames_quantile=args.steady_frames_quantile,
+        )
     elif args.command == "evaluate":
         if int(getattr(args, "evaluation_seeds", 1)) > 1:
             return _run_multi_seed_evaluation(args)
@@ -1374,7 +1450,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     result = run(args)
     output = json.dumps(result, indent=2, sort_keys=True)
-    if getattr(args, "output", None) is not None:
+    # train-layer's --output is its run folder, which holds its own history.
+    if getattr(args, "output", None) is not None and args.command != "train-layer":
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(output + "\n", encoding="utf-8")
     print(output)

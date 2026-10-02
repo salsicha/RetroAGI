@@ -25,7 +25,7 @@ AVAILABILITY_NAMES = ("mario", "support", "velocity", "enemy_vx", "platform_vx")
 # For each of smb_pixel_types.PIXEL_TYPES (the types both games' vision models
 # give every pixel), its place in SEMANTICS: ground, brick, question block and
 # pipe are all standable platform.
-PIXEL_TYPE_SEMANTICS = (0, 1, 2, 2, 2, 2, 3, 5, 6)
+PIXEL_TYPE_SEMANTICS = (0, 1, 2, 2, 2, 2, 3, 5, 6, 3)
 # C-stream layout. Positions, semantics and support come from the segmentation;
 # state, enemy history, availability and relative motion from the geometry
 # observer; the class layout is a coarse map of where each class is on screen.

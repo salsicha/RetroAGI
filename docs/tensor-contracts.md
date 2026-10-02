@@ -171,9 +171,9 @@ pipeline. The SMB plugin declares two pipelines with the same nine-type
 vocabulary (`smb_pixel_types.PIXEL_TYPES`) and the same diagnostic thresholds,
 both from `emulator_state` labels: `block`, whose labels the simplified
 simulator draws itself (`MarioScenarioEnv.render_labels()`), checkpoint
-`data/block_vit/block_vit_pixel.pth`; and `full`, whose labels are read from
+`data/block_vit/block_vit_scene.pth`; and `full`, whose labels are read from
 game memory (`retroagi/stages/full_smb/pixel_labels.py`), checkpoint
-`data/full_vit/full_vit_pixel.pth`. The Pong plugin
+`data/full_vit/full_vit_scene.pth`. The Pong plugin
 declares a non-asset block pipeline from simulator state labels plus a planned
 full-frame self-supervised source. Experiment stage manifests include the
 resolved pipeline so model runs record which vocabulary, checkpoint naming
@@ -516,9 +516,9 @@ Defaults are `K=20`, `D=64`, and `P=1`.
 ### Block SMB ViT
 
 The Block ViT is the shared per-pixel vision transformer
-(`retroagi.core.vision.PixelVisionTransformer`) with Block weights
+(`retroagi.core.vision.SceneVisionTransformer`) with Block weights
 (`BlockVisionTransformer`, loaded by `load_block_vit_checkpoint` from
-`data/block_vit/block_vit_pixel.pth`). Input must
+`data/block_vit/block_vit_scene.pth`). Input must
 already be `240x256` (it is never stretched); it is divided into 16x16 squares
 (`G_H=15`, `G_W=16`, `N=240`). Each square's final description gives scores
 for its own 16x16 pixels and the nine `smb_pixel_types.PIXEL_TYPES`, refined
@@ -540,7 +540,7 @@ The output is `smb_pixel_types.vision_output(pixel_logits)`:
 
 The Full SMB ViT is the same class with its own Full SMB weights
 (`retroagi.stages.full_smb.vision.FullVisionTransformer`, loaded frozen by
-default by `load_full_vit_checkpoint` from `data/full_vit/full_vit_pixel.pth`).
+default by `load_full_vit_checkpoint` from `data/full_vit/full_vit_scene.pth`).
 Its input, the nine pixel types, and every output field and shape are exactly
 those of the Block SMB ViT above; only the trained weights differ. Full SMB
 frames are the full `240x256` NES screen, with the emulator's trimmed 8-pixel

@@ -631,7 +631,7 @@ class TestRetroAGICLI(unittest.TestCase):
                     "--stage",
                     "full",
                     "--vision-checkpoint",
-                    "data/full_vit/full_vit_pixel.pth",
+                    "data/full_vit/full_vit_scene.pth",
                     "--plays",
                     "2",
                     "--every",
@@ -645,7 +645,7 @@ class TestRetroAGICLI(unittest.TestCase):
         diagnostics_main.assert_called_once_with(
             [
                 "--vision-checkpoint",
-                "data/full_vit/full_vit_pixel.pth",
+                "data/full_vit/full_vit_scene.pth",
                 "--plays",
                 "2",
                 "--every",

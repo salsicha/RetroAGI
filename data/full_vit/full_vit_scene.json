@@ -5,17 +5,17 @@
   "code_revision": {
     "branch": "main",
     "dirty": true,
-    "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+    "revision": "ba8527340c89047f48c2592b3095cbdd9f0842a3",
     "root": "/home/amoran/repos/RetroAGI",
-    "short_revision": "2296b64",
+    "short_revision": "ba85273",
     "system": "git"
   },
   "config": {
     "checkpoints": {
-      "best_metric": "mean_type_iou",
-      "best_mode": "max",
+      "best_metric": "held_out_total_loss",
+      "best_mode": "min",
       "metadata": {},
-      "output_path": "/home/amoran/repos/RetroAGI/data/full_vit/full_vit_pixel.pth",
+      "output_path": "/home/amoran/repos/RetroAGI/data/full_vit/full_vit_scene.pth",
       "resume_path": null,
       "save_interval_epochs": 1
     },
@@ -43,18 +43,20 @@
     },
     "metadata": {
       "every": 3,
-      "monitor_every": 16,
-      "monitor_plays_per_level": 2,
-      "train_levels": [
+      "levels": [
+        "Level1-1",
         "Level1-4",
         "Level2-1",
         "Level2-1-clouds",
         "Level3-1",
         "Level4-1",
+        "Level5-1",
         "Level6-1",
         "Level7-1",
         "Level8-1"
       ],
+      "monitor_every": 16,
+      "monitor_plays_per_level": 2,
       "warmup_steps": 500,
       "weight_power": 0.5
     },
@@ -64,7 +66,32 @@
       "heads": 4,
       "hidden_dim": 128,
       "metadata": {
-        "refine_dim": 32
+        "enemy_kinds": [
+          "walker",
+          "plant",
+          "other",
+          "defeated"
+        ],
+        "mario_supports": [
+          "air",
+          "ground",
+          "moving_platform"
+        ],
+        "object_cell": 8,
+        "pixel_types": [
+          "background",
+          "mario",
+          "ground",
+          "brick",
+          "question_block",
+          "pipe",
+          "coin",
+          "enemy",
+          "moving_platform",
+          "power_up"
+        ],
+        "refine_dim": 32,
+        "refine_reach": 3
       },
       "name": "full_smb_vit",
       "patch_size": 16
@@ -103,15 +130,15 @@
       "version": "2.2.0+cu121"
     }
   },
-  "epoch": 40,
+  "epoch": 39,
   "global_step": 0,
   "metadata": {
     "code_revision": {
       "branch": "main",
       "dirty": true,
-      "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+      "revision": "ba8527340c89047f48c2592b3095cbdd9f0842a3",
       "root": "/home/amoran/repos/RetroAGI",
-      "short_revision": "2296b64",
+      "short_revision": "ba85273",
       "system": "git"
     },
     "runtime_environment": {
@@ -138,24 +165,23 @@
     "trainer": "scripts.vit.train_full_vit"
   },
   "metrics": {
-    "epoch": 40,
-    "frames_seen": 1601280,
-    "learned_numbers": 1220425,
-    "loss": 0.0005074223616781334,
-    "mean_type_iou": 0.9943848796096267,
-    "minutes": 46.547830788294476,
-    "pixels_correct": 0.999838720703125,
-    "train_loss": 0.0004684887036970783,
-    "type_iou": {
-      "background": 0.9998707819875806,
-      "brick": 0.9987699175309928,
-      "coin": 0.9976774722887558,
-      "enemy": 0.969199471001208,
-      "ground": 0.9997034040034315,
-      "mario": 0.989392020566607,
-      "moving_platform": 0.9971942281264315,
-      "pipe": 0.9996799260876218,
-      "question_block": 0.9979766948940121
+    "epoch": 39,
+    "frames_seen": 1561248,
+    "held_out": {
+      "facing": 0.005361882772995159,
+      "kind": 0.009884599916636944,
+      "pixels": 0.001214759588552018,
+      "support": 0.006542448427605753,
+      "total": 0.02300369095802307
+    },
+    "learned_numbers": 1259551,
+    "minutes": 79.40541302363077,
+    "train": {
+      "facing": 0.01254367005703047,
+      "kind": 0.008641828789491202,
+      "pixels": 0.0014505079814002009,
+      "support": 0.026147316653744236,
+      "total": 0.04878332374297245
     }
   },
   "model_name": "full_smb_vit",
@@ -172,14 +198,15 @@
         "pipe",
         "coin",
         "enemy",
-        "moving_platform"
+        "moving_platform",
+        "power_up"
       ],
       "support_classes": [
         "air",
         "ground",
         "platform"
       ],
-      "token_dim": 9
+      "token_dim": 10
     }
   },
   "stage": "full_smb",

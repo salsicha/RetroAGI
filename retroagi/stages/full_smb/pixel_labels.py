@@ -35,11 +35,13 @@ way, so every padded pixel has the label of the real pixel it copies.
 import functools
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
 from retroagi.core.smb_pixel_types import TYPE_ID
 from retroagi.core.smb_scene import canonical_rgb
+from retroagi.core.smb_scene_labels import SceneLabels
 
 SCREEN = (240, 256)
 VISIBLE = (slice(8, 232), slice(8, 248))  # the part of the screen the emulator shows
@@ -50,6 +52,7 @@ _ROWS, _COLUMNS = np.mgrid[0:240, 0:256]
 SCROLL_PAGE, SCROLL_X = 0x71A, 0x71C  # [ScreenLeft_PageLoc], [ScreenLeft_X_Pos]
 BLOCK_MAP = 0x500  # [Block_Buffer_1]; the second page follows 0xD0 bytes later
 PLAYER_FLOAT_STATE = 0x1D  # [Player_State]; 0 means standing on something
+PLAYER_FACING = 0x33  # [PlayerFacingDir]; 1 means facing right
 SPRITE_LIST = 0x200  # 64 pieces of 4 bytes: row - 1, graphic, attributes, column
 PLAYER_POINTER = 0x6E4  # [SprDataOffset]: byte offset of an object's first piece
 ENEMY_POINTERS = 0x6E5  # six enemy slots
@@ -57,7 +60,7 @@ BLOCK_POINTERS = 0x6EC  # two bouncing-block slots
 BUBBLE_POINTERS = 0x6EE  # three air-bubble slots
 FIREBALL_POINTERS = 0x6F1  # Mario's two fireballs
 MISC_POINTERS = 0x6F3  # nine loose items: coins out of blocks, Hammer Bro hammers
-ENEMY_ACTIVE, ENEMY_KIND = 0x0F, 0x16  # [Enemy_Flag], [Enemy_ID] per slot
+ENEMY_ACTIVE, ENEMY_KIND, ENEMY_STATE = 0x0F, 0x16, 0x1E  # [Enemy_Flag], [Enemy_ID], [Enemy_State]
 BLOCK_METATILE = 0x3E8  # [Block_Metatile]: the block code a bouncing block shows
 MISC_STATE = 0x2A  # [Misc_State]: 0x80 set for a hammer, 1 for a coin
 HIDDEN_ROW = 0xEF  # pieces at this row or lower are not drawn
@@ -126,12 +129,29 @@ ENEMY_KIND_TYPES = {
     0x1B: "enemy",  # fire bar turning clockwise
     0x1D: "enemy",  # fire bar turning anticlockwise
     0x2A: "moving_platform",  # lift
-    0x2E: "background",  # power-up (mushroom, flower, star)
+    0x2E: "power_up",  # mushroom, flower, star
     0x2F: "background",  # vine
     0x30: "background",  # flag on the flagpole
     0x31: "background",  # flag on the castle
     0x32: "moving_platform",  # springboard: stood on, and it moves
     0x33: "enemy",  # Bullet Bill
+}
+# What each enemy kind looks like it is to a viewer (smb_scene_labels.ENEMY_KINDS):
+# walkers walk or hop along the ground and can be stomped; plants rise from
+# pipes; everything else (thrown, flying, spiked or burning) is "other". A
+# defeated enemy is "defeated" whatever its kind.
+ENEMY_KIND_CLASSES = {
+    0x00: "walker",  # green Koopa Troopa
+    0x02: "walker",  # Buzzy Beetle
+    0x05: "other",  # Hammer Bro
+    0x06: "walker",  # Goomba
+    0x0D: "plant",  # Piranha Plant
+    0x0E: "walker",  # green Koopa Paratroopa
+    0x11: "other",  # Lakitu
+    0x12: "other",  # Spiny and its falling egg
+    0x1B: "other",  # fire bar
+    0x1D: "other",  # fire bar
+    0x33: "other",  # Bullet Bill
 }
 # Sprite drawings that are never an object's body: the floating score numbers
 # ("00", "10", "20", "40", "50", "80", "0", "1U", "P").
@@ -214,6 +234,7 @@ class LabelledFrame:
     on_ground: bool  # the game's own standing flag
     enemy_rects: tuple  # (x, y, w, h) screen box of each drawn enemy object
     family: str = ""  # the level the frame comes from
+    scene: Optional[SceneLabels] = None  # types, objects, standing and facing
 
 
 # ── The cartridge ─────────────────────────────────────────────────────────────
@@ -499,6 +520,9 @@ def rebuild(before: bytes, after: bytes, *, check_sprites: bool = True) -> dict:
     play = (slice(SCORE_BAR_ROWS, SCREEN[0]), slice(None))
     square_row = np.minimum((_ROWS[play] - SCORE_BAR_ROWS) // 16, 12)
     square_column = np.clip(world[play] // 16 - first, 0, squares.shape[1] - 1)
+    # Which 16x16 square of the play area each background pixel belongs to.
+    square_ids = np.full(SCREEN, -1, dtype=np.int64)
+    square_ids[play] = square_row * 10_000 + world[play] // 16
     labels[play] = np.where(
         background[play] > 0, squares[square_row, square_column], TYPE_ID["background"]
     )
@@ -525,7 +549,84 @@ def rebuild(before: bytes, after: bytes, *, check_sprites: bool = True) -> dict:
         "owners": owners,
         "claims": claims,
         "ram": ram,
+        "square_ids": square_ids,
     }
+
+
+def object_of(owner: str, slot: int, ram) -> tuple[Optional[str], Optional[str]]:
+    """(category, enemy kind) of the object a sprite owner draws, or (None, None).
+
+    Only things a viewer would call an object are objects: Mario, enemies (and
+    Hammer Bro hammers), loose coins, power-ups and moving platforms. Score
+    numbers, vines, flags, fireworks, fireballs and bouncing blocks are not; a
+    bouncing block's pixels already carry its block type.
+    """
+    if owner == "mario":
+        return "mario", None
+    if owner == "coin":
+        return "coin", None
+    if owner == "hammer":
+        return "enemy", "other"
+    if owner.startswith("enemy "):
+        kind = int(owner[6:], 16)
+        drawn_as = ENEMY_KIND_TYPES.get(kind)
+        if drawn_as in ("moving_platform", "power_up"):
+            return drawn_as, None
+        if drawn_as != "enemy":
+            return None, None
+        state, active = int(ram[ENEMY_STATE + slot]), int(ram[ENEMY_ACTIVE + slot])
+        defeated = not active or bool(state & 0x20) or (kind == 0x06 and state == 4)
+        return "enemy", "defeated" if defeated else ENEMY_KIND_CLASSES[kind]
+    return None, None
+
+
+def _pad(visible_part, mode="edge"):
+    return np.pad(
+        visible_part,
+        (
+            (VISIBLE[0].start, SCREEN[0] - VISIBLE[0].stop),
+            (VISIBLE[1].start, SCREEN[1] - VISIBLE[1].stop),
+        ),
+        mode=mode,
+    )
+
+
+def frame_scene_labels(built: dict, labels: np.ndarray) -> SceneLabels:
+    """The SceneLabels of a rebuilt frame (smb_scene_labels.scene_from_labels' input).
+
+    Each sprite owner (owner, slot) that is an object becomes one object; each
+    16x16 coin square of the background is one coin. Like the picture, only
+    the visible area is real and the border repeats its edge.
+    """
+    ram = built["ram"]
+    piece = built["piece"][VISIBLE]
+    instances = np.full(piece.shape, -1, dtype=np.int32)
+    numbers, categories, kinds = {}, {}, {}
+
+    def number(key, category, kind=None):
+        if key not in numbers:
+            numbers[key] = len(numbers)
+            categories[numbers[key]] = category
+            if kind is not None:
+                kinds[numbers[key]] = kind
+        return numbers[key]
+
+    for k, (owner, slot) in sorted(built["owners"].items()):
+        category, kind = object_of(owner, slot, ram)
+        if category is not None:
+            instances[piece == k] = number((owner, slot), category, kind)
+    coin = (built["labels"][VISIBLE] == TYPE_ID["coin"]) & (piece < 0)
+    squares = built["square_ids"][VISIBLE]
+    for square in np.unique(squares[coin]).tolist():
+        instances[coin & (squares == square)] = number(("coin square", square), "coin")
+    return SceneLabels(
+        types=labels,
+        instances=_pad(instances),
+        categories=categories,
+        kinds=kinds,
+        standing=int(ram[PLAYER_FLOAT_STATE]) == 0,
+        facing_right=int(ram[PLAYER_FACING]) == 1,
+    )
 
 
 def label_frame(frame, before: bytes, after: bytes, *, family: str = "") -> LabelledFrame:
@@ -544,14 +645,7 @@ def label_frame(frame, before: bytes, after: bytes, *, family: str = "") -> Labe
             f"rebuilt picture differs at {int(wrong.sum())} pixels "
             f"(rows {rows.min() + 8}-{rows.max() + 8}, columns {columns.min() + 8}-{columns.max() + 8})"
         )
-    labels = np.pad(
-        built["labels"][VISIBLE],
-        (
-            (VISIBLE[0].start, SCREEN[0] - VISIBLE[0].stop),
-            (VISIBLE[1].start, SCREEN[1] - VISIBLE[1].stop),
-        ),
-        mode="edge",
-    )
+    labels = _pad(built["labels"][VISIBLE])
     # One box per enemy object: the visible pixels its pieces drew as enemy.
     piece, owners = built["piece"][VISIBLE], built["owners"]
     enemy = built["labels"][VISIBLE] == TYPE_ID["enemy"]
@@ -575,4 +669,5 @@ def label_frame(frame, before: bytes, after: bytes, *, family: str = "") -> Labe
         on_ground=int(built["ram"][PLAYER_FLOAT_STATE]) == 0,
         enemy_rects=tuple(sorted(rects)),
         family=family,
+        scene=frame_scene_labels(built, labels),
     )

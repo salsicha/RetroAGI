@@ -971,7 +971,7 @@ SMB_GAME_SPEC = GameSpec(
             name="block",
             stage_spec_name="block_smb",
             role="simplified synthetic SMB model training",
-            required_artifacts=("data/block_vit/block_vit_pixel.pth", "data/block_smb/policy.pth"),
+            required_artifacts=("data/block_vit/block_vit_scene.pth", "data/block_smb/policy.pth"),
             promotion_gate_summary="fixed-scenario success thresholds",
         ),
         StageLadderEntry(
@@ -979,7 +979,7 @@ SMB_GAME_SPEC = GameSpec(
             stage_spec_name="full_smb",
             role="full emulator inference validation and continued training",
             required_artifacts=(
-                "data/full_vit/full_vit_pixel.pth",
+                "data/full_vit/full_vit_scene.pth",
                 "data/full_smb/transferred_policy.pth",
             ),
             promotion_gate_summary="inference, transfer, comparison, and training metrics",

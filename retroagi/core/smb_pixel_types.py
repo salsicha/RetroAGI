@@ -21,12 +21,29 @@ PIXEL_TYPES = (
     "coin",
     "enemy",
     "moving_platform",
+    "power_up",
 )
 TYPE_ID = {name: index for index, name in enumerate(PIXEL_TYPES)}
 SCREEN_SHAPE = (240, 256)
+# The part of the 256x240 screen the NES shows (8 pixels are cut from every
+# edge). Both games are seen and labelled only through this window: outside
+# it, pictures and labels repeat the window's edge (visible_window).
+VISIBLE_ROWS = (8, 232)
+VISIBLE_COLUMNS = (8, 248)
 # Surfaces Mario can stand on.
 SOLID_TYPES = tuple(TYPE_ID[name] for name in ("ground", "brick", "question_block", "pipe"))
 STANDING_TYPES = SOLID_TYPES + (TYPE_ID["moving_platform"],)
+
+
+def visible_window(array):
+    """A full-screen picture or label map with everything outside the NES window
+    replaced by the window's nearest edge pixel (no stretching)."""
+    array = np.asarray(array)
+    (top, bottom), (left, right) = VISIBLE_ROWS, VISIBLE_COLUMNS
+    inner = array[top:bottom, left:right]
+    padding = [(top, SCREEN_SHAPE[0] - bottom), (left, SCREEN_SHAPE[1] - right)]
+    padding += [(0, 0)] * (array.ndim - 2)
+    return np.pad(inner, padding, mode="edge")
 
 
 def mario_region(labels):

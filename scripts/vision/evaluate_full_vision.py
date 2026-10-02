@@ -1,28 +1,26 @@
 """Measure the Full SMB vision transformer on held-out real frames.
 
-Frames: the test levels (vision_frames.TEST_LEVELS), which training never
-sees, each played several times from its saved start by the random player.
+Frames: every level start (vision_frames.LEVELS), each played afresh from its
+saved start by the random player, with seeds training does not use.
 Labels are read from game memory (pixel_labels.label_frame); frames memory
 cannot fully explain are refused and counted, never measured. The
 measurements and the printed table are the shared ones
-(retroagi.core.pixel_vision.evaluate_pixel_vision and vision_report), so they
-mean exactly what scripts/vision/evaluate_block_vision.py reports for the
-Block SMB model:
+(retroagi.core.scene_vision.evaluate_scene_vision and scene_report), so both
+games' evaluations report the same numbers with the same meaning. Each
+frame's found scene is compared with its true scene (smb_scene_labels):
 
-- pixels correct, and each type's "found" (share of its true pixels given that
-  type) and "correct" (share of pixels given that type that truly are it):
-  compare() over all frames' pixels pooled together;
-- frames where Mario is found: of frames whose true labels show Mario, the
-  share whose predicted labels show Mario;
-- Mario position error: pixels between the predicted and true label images'
-  Mario centres (mario_position), over frames where both show him;
-- standing/air agreement: mario_standing of the predicted labels against the
-  game's own standing flag, over frames whose true labels show Mario;
-- enemies seen: a true enemy object (an enemy with at least one true enemy
-  pixel) is seen if any of its pixels is labelled enemy.
+- Mario: found when a found box overlaps his true box at least half; box
+  edge error; facing and standing / in the air / on a moving platform
+  correct, over frames that show him;
+- enemies, coins, power-ups, moving platforms, pipes and blocks: found and
+  true objects paired one to one by overlap (at least half); recall =
+  paired / true, precision = paired / found; enemy kind accuracy;
+- surfaces (paired when at most 2 rows apart and overlapping at least half
+  their joint width) and gaps (paired by overlap), with edge errors;
+- pixels given the right type: an internal check only.
 
 Example:
-    python scripts/vision/evaluate_full_vision.py --checkpoint data/full_vit/full_vit_pixel.pth
+    python scripts/vision/evaluate_full_vision.py --checkpoint data/full_vit/full_vit_scene.pth
 """
 
 import argparse
@@ -39,9 +37,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from retroagi.core import select_device
-from retroagi.core.pixel_vision import evaluate_pixel_vision, vision_report
+from retroagi.core.scene_vision import evaluate_scene_vision, scene_report
 from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, load_full_vit_checkpoint
-from retroagi.stages.full_smb.vision_frames import TEST_LEVELS, labelled_frames
+from retroagi.stages.full_smb.vision_frames import LEVELS, labelled_frames
 
 PLAY_FRAMES = 9_000
 
@@ -58,7 +56,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_FULL_VIT_CHECKPOINT)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--plays", type=int, default=4, help="plays of each test level")
+    parser.add_argument("--plays", type=int, default=1, help="fresh plays of each level")
     parser.add_argument("--every", type=int, default=4, help="measure every n-th frame")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=8)
@@ -72,25 +70,25 @@ def main() -> None:
     rng = random.Random(args.seed)
     plays = [
         (level, rng.randrange(2**31), args.every)
-        for level in TEST_LEVELS
+        for level in LEVELS
         for _ in range(args.plays)
     ]
     refusals = Counter()
 
-    def frames():
+    def frames(chosen):
         with ProcessPoolExecutor(args.workers) as pool:
-            for play_frames, play_refusals in pool.map(_play, *zip(*plays)):
+            for play_frames, play_refusals in pool.map(_play, *zip(*chosen)):
                 refusals.update(play_refusals)
                 yield from play_frames
 
-    metrics = evaluate_pixel_vision(loaded.model, frames(), batch_size=args.batch_size)
-    print(f"Full SMB vision transformer, test levels: {', '.join(TEST_LEVELS)}")
-    print(vision_report(metrics))
+    metrics = evaluate_scene_vision(loaded.model, frames(plays), batch_size=args.batch_size)
+    print("Full SMB vision transformer, fresh plays of every level")
+    print(scene_report(metrics))
     print(f"Frames refused (not fully explained by memory): {sum(refusals.values())}")
     output = args.output or args.checkpoint.with_name(f"{args.checkpoint.stem}_evaluation.json")
     report = {
         "checkpoint": str(args.checkpoint),
-        "levels": list(TEST_LEVELS),
+        "levels": list(LEVELS),
         "seed": args.seed,
         "plays": len(plays),
         "every": args.every,

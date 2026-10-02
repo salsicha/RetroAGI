@@ -5,17 +5,17 @@
   "code_revision": {
     "branch": "main",
     "dirty": true,
-    "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+    "revision": "ba8527340c89047f48c2592b3095cbdd9f0842a3",
     "root": "/home/amoran/repos/RetroAGI",
-    "short_revision": "2296b64",
+    "short_revision": "ba85273",
     "system": "git"
   },
   "config": {
     "checkpoints": {
-      "best_metric": "mean_type_iou",
-      "best_mode": "max",
+      "best_metric": "held_out_total_loss",
+      "best_mode": "min",
       "metadata": {},
-      "output_path": "data/block_vit/block_vit_pixel.pth",
+      "output_path": "/home/amoran/repos/RetroAGI/data/block_vit/block_vit_scene.pth",
       "resume_path": null,
       "save_interval_epochs": 1
     },
@@ -55,7 +55,32 @@
       "heads": 4,
       "hidden_dim": 128,
       "metadata": {
-        "refine_dim": 32
+        "enemy_kinds": [
+          "walker",
+          "plant",
+          "other",
+          "defeated"
+        ],
+        "mario_supports": [
+          "air",
+          "ground",
+          "moving_platform"
+        ],
+        "object_cell": 8,
+        "pixel_types": [
+          "background",
+          "mario",
+          "ground",
+          "brick",
+          "question_block",
+          "pipe",
+          "coin",
+          "enemy",
+          "moving_platform",
+          "power_up"
+        ],
+        "refine_dim": 32,
+        "refine_reach": 3
       },
       "name": "block_smb_vit",
       "patch_size": 16
@@ -94,15 +119,15 @@
       "version": "2.2.0+cu121"
     }
   },
-  "epoch": 32,
+  "epoch": 35,
   "global_step": 0,
   "metadata": {
     "code_revision": {
       "branch": "main",
       "dirty": true,
-      "revision": "2296b64a773d397c71e5356e4783497368fb9ffb",
+      "revision": "ba8527340c89047f48c2592b3095cbdd9f0842a3",
       "root": "/home/amoran/repos/RetroAGI",
-      "short_revision": "2296b64",
+      "short_revision": "ba85273",
       "system": "git"
     },
     "runtime_environment": {
@@ -129,24 +154,23 @@
     "trainer": "scripts.vit.train_block_vit"
   },
   "metrics": {
-    "epoch": 32,
-    "frames_seen": 1281024,
-    "learned_numbers": 1220425,
-    "loss": 3.7254356469323587e-06,
-    "mean_type_iou": 0.9996775760413636,
-    "minutes": 14.761751019954682,
-    "pixels_correct": 0.9999993055555556,
-    "train_loss": 4.069273450931433e-05,
-    "type_iou": {
-      "background": 0.9999999879042956,
-      "brick": 0.9999261229314421,
-      "coin": 0.9993105887572014,
-      "enemy": 0.9999846203534243,
-      "ground": 0.9999996837352436,
-      "mario": 0.9999412250381338,
-      "moving_platform": 1.0,
-      "pipe": 1.0,
-      "question_block": 0.9979359556525329
+    "epoch": 35,
+    "frames_seen": 1401120,
+    "held_out": {
+      "facing": 0.010159815257453981,
+      "kind": 8.8261927664765e-05,
+      "pixels": 3.1495268585179775e-05,
+      "support": 0.008804662704351358,
+      "total": 0.019084235224251945
+    },
+    "learned_numbers": 1259551,
+    "minutes": 65.67558326721192,
+    "train": {
+      "facing": 0.02668359561392654,
+      "kind": 0.001214429459080659,
+      "pixels": 0.00010059898827650424,
+      "support": 0.009358155400819863,
+      "total": 0.03735677950624127
     }
   },
   "model_name": "block_smb_vit",
@@ -163,14 +187,15 @@
         "pipe",
         "coin",
         "enemy",
-        "moving_platform"
+        "moving_platform",
+        "power_up"
       ],
       "support_classes": [
         "air",
         "ground",
         "platform"
       ],
-      "token_dim": 9
+      "token_dim": 10
     }
   },
   "stage": "block_smb",

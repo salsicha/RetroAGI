@@ -9,8 +9,9 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from retroagi.core.pixel_vision import save_pixel_vision_checkpoint
+from retroagi.core.scene_vision import save_scene_vision_checkpoint
 from retroagi.core.smb_pixel_types import TYPE_ID
+from retroagi.core.smb_scene_labels import SceneLabels
 from retroagi.stages.full_smb import (
     FULL_SMB_SPEC,
     FullVisionTransformer,
@@ -18,19 +19,29 @@ from retroagi.stages.full_smb import (
     run_full_smb_vision_diagnostic,
 )
 from retroagi.stages.full_smb.pixel_labels import LabelledFrame
-from retroagi.stages.full_smb.vision_frames import TEST_LEVELS
+from retroagi.stages.full_smb.vision_frames import LEVELS
 
 
 def _frame(level: str) -> LabelledFrame:
     labels = np.zeros((240, 256), dtype=np.uint8)
     labels[200:, :] = TYPE_ID["ground"]
     labels[184:200, 40:52] = TYPE_ID["mario"]
+    instances = np.full((240, 256), -1, dtype=np.int32)
+    instances[184:200, 40:52] = 0
     return LabelledFrame(
         image=np.zeros((240, 256, 3), dtype=np.uint8),
         labels=labels,
         on_ground=True,
         enemy_rects=(),
         family=level,
+        scene=SceneLabels(
+            types=labels,
+            instances=instances,
+            categories={0: "mario"},
+            kinds={},
+            standing=True,
+            facing_right=True,
+        ),
     )
 
 
@@ -59,18 +70,18 @@ class TestFullSMBVisionDiagnostic(unittest.TestCase):
 
         self.assertEqual(
             [call["level"] for call in fake.calls],
-            [level for level in TEST_LEVELS for _ in range(2)],
+            [level for level in LEVELS for _ in range(2)],
         )
         self.assertTrue(all(call["every"] == 5 and call["frames"] == 40 for call in fake.calls))
-        self.assertEqual(result["levels"], list(TEST_LEVELS))
-        self.assertEqual(result["plays"], 2 * len(TEST_LEVELS))
-        self.assertEqual(result["frames"], 4 * len(TEST_LEVELS))
+        self.assertEqual(result["levels"], list(LEVELS))
+        self.assertEqual(result["plays"], 2 * len(LEVELS))
+        self.assertEqual(result["frames"], 4 * len(LEVELS))
         self.assertEqual(
-            result["refused_frames"], {"a drawing memory does not explain": 2 * len(TEST_LEVELS)}
+            result["refused_frames"], {"a drawing memory does not explain": 2 * len(LEVELS)}
         )
-        for key in ("pixels_correct", "types", "mario_found", "standing_agreement"):
+        for key in ("pixels_correct", "mario", "enemies", "surfaces", "gaps"):
             self.assertIn(key, result)
-        self.assertEqual(result["mario_frames"], result["frames"])
+        self.assertEqual(result["mario"]["frames"], result["frames"])
         self.assertTrue(model.training, "the measurement must restore the model's mode")
 
     def test_play_seeds_depend_only_on_the_seed(self):
@@ -90,9 +101,9 @@ class TestFullSMBVisionDiagnostic(unittest.TestCase):
     def test_command_loads_the_checkpoint_frozen_and_writes_the_report(self):
         source = FullVisionTransformer(dim=16, depth=1, heads=4)
         with TemporaryDirectory() as tmpdir:
-            checkpoint = Path(tmpdir) / "full_vit_pixel.pth"
+            checkpoint = Path(tmpdir) / "full_vit_scene.pth"
             output = Path(tmpdir) / "reports" / "vision.json"
-            save_pixel_vision_checkpoint(checkpoint, source, stage=FULL_SMB_SPEC.name, metrics={})
+            save_scene_vision_checkpoint(checkpoint, source, stage=FULL_SMB_SPEC.name, metrics={})
             with (
                 patch.object(diagnostics, "labelled_frames", FakeLabelledFrames()),
                 patch("builtins.print"),
@@ -114,8 +125,8 @@ class TestFullSMBVisionDiagnostic(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["vision"], {"checkpoint_path": str(checkpoint), "frozen": True})
         self.assertEqual(payload["config"]["plays"], 1)
-        self.assertEqual(payload["levels"], list(TEST_LEVELS))
-        self.assertEqual(payload["frames"], 2 * len(TEST_LEVELS))
+        self.assertEqual(payload["levels"], list(LEVELS))
+        self.assertEqual(payload["frames"], 2 * len(LEVELS))
         self.assertIn("refused_frames", payload)
         self.assertTrue(torch.isfinite(torch.tensor(payload["pixels_correct"])))
 
