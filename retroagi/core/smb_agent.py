@@ -5,10 +5,13 @@ by side, sharing one vision observer and one policy. Each frame, act() takes
 only the screens and returns one button action per copy:
 
 1. the vision transformer reports each screen's scene (smb_observer);
-2. each copy's executor says whether its plan has ended (smb_executor);
-3. for each copy whose plan ended, a new action starts: first the memory
-   steps, taking in only the two latest pictures (this frame and the one
-   before), and gives its expected scene for when the coming action ends; then
+2. each copy's action ends if it has pressed all its frames, or if the vision
+   transformer's land detector says Mario has just landed on something
+   (LandingWatch) - the executor itself reads nothing but its plan
+   (smb_executor);
+3. for each copy whose action ended, a new action starts: first the memory
+   steps, taking in only the latest picture's scene, and gives its expected
+   scene for when the coming action ends; then
    the layers decide top-down (decide: strategy, tactic, skill, then the
    action plan) reading the current scene and that expected scene; and the
    executor starts the action;
@@ -162,11 +165,7 @@ def decide(
 
     def run(layer: str, inputs, above=None) -> None:
         out = policy.run_layer(layer, inputs, expected, above)
-        quantile = policy.settings.steady_frames_quantile
-        made = [
-            choose(layer, _one(out, i), sample=layer in sample, steady_quantile=quantile)
-            for i in range(count)
-        ]
+        made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]
         picked[layer] = [picks for _, picks in made]
         stacked = {
@@ -224,13 +223,29 @@ class AgentStep:
 
 
 @dataclass
+class LandingWatch:
+    """Watches the vision transformer's land detector for Mario landing, the one
+    event that ends an action early: its "feet on something" output (the ground,
+    a moving platform or an enemy) turns on after it was off. Pictures without
+    Mario change nothing."""
+
+    airborne: bool = False
+
+    def landed(self, scene: SceneObservation) -> bool:
+        if scene.mario.box is None:
+            return False
+        landed = self.airborne and scene.mario.on_something
+        self.airborne = not scene.mario.on_something
+        return landed
+
+
+@dataclass
 class _Copy:
     executor: SMBExecutor = field(default_factory=SMBExecutor)
+    landing: LandingWatch = field(default_factory=LandingWatch)
     hidden: Optional[torch.Tensor] = None
     cell: Optional[torch.Tensor] = None
     button: int = NOOP
-    # The previous frame's packed scene (None on an episode's first frame).
-    before: Optional[tuple] = None
 
 
 class SMBAgents:
@@ -245,19 +260,9 @@ class SMBAgents:
             self.reset(index)
 
     def reset(self, copy: int) -> None:
-        """Start a new episode for one copy: empty memory, no plan, no earlier frame."""
+        """Start a new episode for one copy: empty memory, no plan."""
         zeros = torch.zeros(self.policy.memory.width, device=self.device)
         self.copies[copy] = _Copy(hidden=zeros, cell=zeros.clone())
-
-    def _encoded_before(self, deciding: list, rows_now: list):
-        """The encoded scenes of the frame before, for copies starting an action
-        (nothing present where the episode has only just begun)."""
-        rows = [
-            copy.before if copy.before is not None else now for copy, now in zip(deciding, rows_now)
-        ]
-        tokens, present = self.policy.encode_scene(stack_rows(rows, self.device))
-        started = torch.tensor([copy.before is not None for copy in deciding], device=self.device)
-        return tokens * started[:, None, None], present & started[:, None]
 
     @torch.no_grad()
     def act(
@@ -277,7 +282,15 @@ class SMBAgents:
         playing = [self.copies[c] for c in copies]
         scenes = self.observer.observe(np.stack(screens))
         rows = scene_rows(scenes)
-        ended = [copy.executor.ended(scene) for copy, scene in zip(playing, scenes)]
+        ended = []
+        for copy, scene in zip(playing, scenes):
+            landed = copy.landing.landed(scene)
+            reason = None
+            if not copy.executor.idle:
+                reason = "landed" if landed else ("done" if copy.executor.finished else None)
+                if reason is not None:
+                    copy.executor.end(reason)
+            ended.append(reason)
         deciding = [k for k, copy in enumerate(playing) if copy.executor.idle]
         decisions: list[Optional[Decision]] = [None] * len(playing)
         if deciding:
@@ -286,11 +299,10 @@ class SMBAgents:
             picked_rows = [rows[k] for k in deciding]
             extra = given([copies[k] for k in deciding], picked) if given is not None else None
             now = self.policy.encode_scene(stack_rows(picked_rows, self.device))
-            # The memory steps at each action's start, from the two latest
-            # pictures only, and gives the scene it expects when the action ends.
+            # The memory steps at each action's start, from the latest picture
+            # only, and gives the scene it expects when the action ends.
             remembered = self.policy.remember(
                 now,
-                self._encoded_before(starting, picked_rows),
                 MemoryState(
                     torch.stack([copy.hidden for copy in starting]),
                     torch.stack([copy.cell for copy in starting]),
@@ -311,10 +323,9 @@ class SMBAgents:
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 decisions[k] = decision
                 playing[k].hidden, playing[k].cell = remembered.hidden[j], remembered.cell[j]
-                playing[k].executor.start(decision.plan, scenes[k])
+                playing[k].executor.start(decision.plan)
         steps = []
         for k, copy in enumerate(playing):
-            copy.before = rows[k]
             copy.button = copy.executor.press()
             steps.append(AgentStep(scenes[k], rows[k], ended[k], decisions[k], copy.button))
         return steps

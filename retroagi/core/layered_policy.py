@@ -10,11 +10,10 @@ Every layer sees the game only through the vision transformer
 - Every position number enters SceneEncoder also as sine and cosine waves of
   several wavelengths (PositionWaves), so a pixel's difference is a clear
   difference of input.
-- At the start of every action, before anything decides, FrameWindow
-  summarises the encoded scenes of the two latest pictures (the frame the
-  action starts on and the frame before), so motion is visible, and Memory, a
-  long short-term memory network, steps once with that summary. It is never
-  told what Mario will do. From its state it predicts the world when the
+- At the start of every action, before anything decides, Memory, a long
+  short-term memory network, steps once with the latest picture's scene (the
+  scene encoder's summary of the frame the action starts on). It is never
+  told what Mario will do; what happened earlier it carries itself. From its state it predicts the world when the
   coming action ends: the scene numbers the vision transformer will report
   then. It is trained action by action against what was actually reported.
 - Each layer reads the current scene's tokens, the expected scene's tokens
@@ -38,8 +37,8 @@ from typing import Mapping, Optional
 import torch
 import torch.nn as nn
 
-from .actions import SMB_ACTIONS, SMB_JUMP_ACTIONS, SMBAction
-from .smb_executor import JUMP_FRAMES, STEADY_FRAMES, ActionPlan, frame_menu
+from .actions import SMB_ACTIONS
+from .smb_executor import FRAME_COUNTS, ActionPlan
 from .smb_observer import (
     _SLOT_WIDTH,
     C_SPANS,
@@ -71,9 +70,7 @@ from .tokens import (
 )
 
 LAYERS = ("strategy", "tactic", "skill", "action")
-FRAME_BINS = len(JUMP_FRAMES)
-if len(STEADY_FRAMES) != FRAME_BINS:
-    raise ValueError("jump and steady frame menus must have the same length")
+FRAME_BINS = len(FRAME_COUNTS)  # the action layer's frame-count choices, per action
 
 
 @dataclass(frozen=True)
@@ -86,15 +83,6 @@ class PolicySettings:
     # Each position number also enters as sine and cosine waves of this many
     # wavelengths, halving from 512 pixels (8 waves: down to 4 pixels).
     position_frequencies: int = 8
-    # Attention blocks of the frame window (this frame and the two before it)
-    # whose summary the memory takes in each frame.
-    window_depth: int = 1
-    # How a walk or wait's frame count is read from the action layer: None takes
-    # the most likely count; a share q takes the shortest count whose cumulative
-    # likelihood reaches q (a cautious reading: a walk or wait that ends early
-    # costs only another decision, one that runs long cannot be taken back).
-    # Jump holds always take the most likely.
-    steady_frames_quantile: Optional[float] = None
 
 
 # ── Scene encoder ─────────────────────────────────────────────────────────────
@@ -224,54 +212,6 @@ class SceneEncoder(nn.Module):
         return self.norm(self.encoder(tokens, src_key_padding_mask=~present)), present
 
 
-# ── The two latest pictures ───────────────────────────────────────────────────
-
-WINDOW_FRAMES = 2  # the frame an action starts on and the frame before it
-
-
-class FrameWindow(nn.Module):
-    """The encoded scenes of the frame an action starts on and of the frame
-    before it -> one summary.
-
-    Every scene token gets a learned "this frame / one frame before" vector,
-    and one learned window token attends over all of them, so it can match each
-    object with where it was a frame earlier: which way and how fast things are
-    moving as the action starts. Before an episode's first frame nothing is
-    present.
-    """
-
-    def __init__(self, settings: PolicySettings):
-        super().__init__()
-        width = settings.width
-        self.age = nn.Parameter(torch.zeros(WINDOW_FRAMES, width))
-        self.window_token = nn.Parameter(torch.zeros(1, 1, width))
-        layer = nn.TransformerEncoderLayer(
-            width, settings.heads, width * 2, dropout=0.0, batch_first=True, norm_first=True
-        )
-        self.blocks = nn.TransformerEncoder(
-            layer, settings.window_depth, enable_nested_tensor=False
-        )
-        self.norm = nn.LayerNorm(width)
-
-    def forward(self, frames):
-        """frames: [(tokens [B, N, width], present [B, N])] for the frame the
-        action starts on, then the frame before. Returns [B, width]."""
-        batch = frames[0][0].shape[0]
-        tokens = [self.window_token.expand(batch, -1, -1)]
-        present = [torch.ones(batch, 1, dtype=torch.bool, device=frames[0][1].device)]
-        for age, (scene_tokens, scene_present) in enumerate(frames):
-            tokens.append(scene_tokens + self.age[age])
-            present.append(scene_present)
-        out = self.blocks(torch.cat(tokens, dim=1), src_key_padding_mask=~torch.cat(present, 1))
-        return self.norm(out[:, 0])
-
-
-def absent_like(encoded):
-    """An encoded scene with nothing present (a frame before the episode began)."""
-    tokens, present = encoded
-    return torch.zeros_like(tokens), torch.zeros_like(present)
-
-
 # ── Memory: what the world will look like when the action ends ────────────────
 
 
@@ -287,10 +227,10 @@ class MemoryState:
 class Memory(nn.Module):
     """A long short-term memory network that steps once per action, from vision only.
 
-    At the start of each action, before anything decides, it takes the summary
-    of the two latest pictures (FrameWindow: the frame the action starts on and
-    the frame before) and updates its state. It is never told what Mario will
-    do. From that state its expectation part predicts the world when the coming
+    At the start of each action, before anything decides, it takes the latest
+    picture's scene (the scene encoder's summary of the frame the action starts
+    on) and updates its state, which carries everything earlier. It is never
+    told what Mario will do. From that state its expectation part predicts the world when the coming
     action ends: the scene numbers (smb_observer C row) the vision transformer
     will report on that frame. That expected scene is what the decision layers
     read beside the current one.
@@ -310,19 +250,19 @@ class Memory(nn.Module):
         zeros = torch.zeros(batch, self.width, device=device)
         return MemoryState(zeros, zeros.clone())
 
-    def forward(self, window_summary, state: MemoryState) -> MemoryState:
-        """One action's start: window_summary [B, width]."""
+    def forward(self, scene_summary, state: MemoryState) -> MemoryState:
+        """One action's start: scene_summary [B, width]."""
         _, (hidden, cell) = self.cell(
-            window_summary.unsqueeze(1), (state.hidden.unsqueeze(0), state.cell.unsqueeze(0))
+            scene_summary.unsqueeze(1), (state.hidden.unsqueeze(0), state.cell.unsqueeze(0))
         )
         return MemoryState(hidden[0], cell[0])
 
-    def sequence(self, window_summaries) -> torch.Tensor:
-        """Every action of whole episodes from their start: window_summaries
+    def sequence(self, scene_summaries) -> torch.Tensor:
+        """Every action of whole episodes from their start: scene_summaries
         [B, K, width]. Returns the state after each action's start, [B, K,
         memory_width]. Padding after an episode's last action does not change
         its earlier steps."""
-        hidden, _ = self.cell(window_summaries)
+        hidden, _ = self.cell(scene_summaries)
         return hidden
 
     def expected_scene(self, hidden) -> torch.Tensor:
@@ -404,10 +344,10 @@ class SkillLayer(_Layer):
 
 
 class LayeredSMBPolicy(nn.Module):
-    """The four layers, the shared scene encoder, the frame window and the memory.
+    """The four layers, the shared scene encoder and the memory.
 
     When the executor's plan has ended: remember() steps the memory with the
-    two latest pictures, expect() gives its expected scene, and the layers run
+    latest picture, expect() gives its expected scene, and the layers run
     top-down (smb_agent.decide) to choose the next ActionPlan.
     """
 
@@ -415,7 +355,6 @@ class LayeredSMBPolicy(nn.Module):
         super().__init__()
         self.settings = settings
         self.scene = SceneEncoder(settings)
-        self.window = FrameWindow(settings)
         self.memory = Memory(settings)
         self.strategy = _Layer(settings, 0, {"strategy": len(STRATEGIES), "direction": 2})
         self.tactic = _Layer(settings, STRATEGY_WIDTH, {"tactic": len(TACTICS), "direction": 2})
@@ -431,20 +370,19 @@ class LayeredSMBPolicy(nn.Module):
     # The parts each training stage changes (everything else stays frozen).
     def parameters_of(self, layer: str):
         if layer == "action":
-            modules = (self.scene, self.window, self.memory, self.action)
+            modules = (self.scene, self.memory, self.action)
         else:
             modules = (getattr(self, layer),)
         return [p for module in modules for p in module.parameters()]
 
-    def remember(self, now, before, state: Optional[MemoryState]) -> MemoryState:
+    def remember(self, now, state: Optional[MemoryState]) -> MemoryState:
         """Step the memory at the start of an action, before anything decides.
 
-        ``now`` / ``before``: the encoded scenes (encode_scene) of the frame the
-        action starts on and of the frame before it (absent_like before an
-        episode's first frame); ``state``: the memory after the previous action
-        (None at an episode's start).
+        ``now``: the encoded scene (encode_scene) of the frame the action starts
+        on; the memory takes its summary token. ``state``: the memory after the
+        previous action (None at an episode's start).
         """
-        summary = self.window([now, before])
+        summary = now[0][:, 0]
         if state is None:
             state = self.memory.initial(summary.shape[0], summary.device)
         return self.memory(summary, state)
@@ -516,17 +454,8 @@ def _distributions(layer: str, out: Mapping[str, torch.Tensor], chosen_action=No
     return found
 
 
-def choose(
-    layer: str,
-    out: Mapping[str, torch.Tensor],
-    *,
-    sample: bool = False,
-    steady_quantile: Optional[float] = None,
-):
-    """One picture's raw layer outputs -> (its token or ActionPlan, the picks).
-
-    ``steady_quantile``: see PolicySettings.steady_frames_quantile.
-    """
+def choose(layer: str, out: Mapping[str, torch.Tensor], *, sample: bool = False):
+    """One picture's raw layer outputs -> (its token or ActionPlan, the picks)."""
     batched = {name: value.unsqueeze(0) for name, value in out.items()}
     picks: dict[str, int] = {}
     for head in CHOICES[layer]:
@@ -538,13 +467,6 @@ def choose(
             value = distribution.sample()
         elif head == "contact":
             value = (distribution.logits > 0).float()
-        elif (
-            head == "frames"
-            and steady_quantile is not None
-            and SMBAction(picks["action"]) not in SMB_JUMP_ACTIONS
-        ):
-            reached = torch.cumsum(distribution.probs, -1) >= steady_quantile
-            value = reached.float().argmax(-1)  # the first count reaching the share
         else:
             value = distribution.logits.argmax(-1)
         picks[head] = int(value.item())
@@ -565,7 +487,7 @@ def token_from_picks(layer: str, picks: Mapping[str, int]):
             bool(picks["contact"]),
             None if pointer == NO_TARGET else TARGETS[pointer],
         )
-    return ActionPlan(picks["action"], frame_menu(picks["action"])[picks["frames"]])
+    return ActionPlan(picks["action"], FRAME_COUNTS[picks["frames"]])
 
 
 def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[str, torch.Tensor]):

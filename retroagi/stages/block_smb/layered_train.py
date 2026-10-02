@@ -50,7 +50,7 @@ from retroagi.core.layered_policy import (
     choice_log_prob,
 )
 from retroagi.core.smb_agent import SMBAgents
-from retroagi.core.smb_executor import ActionPlan, frame_menu
+from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan
 from retroagi.core.smb_observer import (
     C_SPANS,
     SEQ_LEN_A,
@@ -59,6 +59,7 @@ from retroagi.core.smb_observer import (
     VisionObserver,
     observation_layout,
 )
+from retroagi.core.smb_physics import NES_JUMP_FRAMES
 from retroagi.core.tokens import (
     SKILLS,
     TACTICS,
@@ -187,8 +188,9 @@ class EpisodeRecord:
 
 def jump_frame_label(teacher_frames: int, holds: Sequence[int]) -> int:
     """The frame count a jump is taught: the middle of the longest run of
-    certified holds (adjacent on the menu), or the teacher's own hold."""
-    menu = list(frame_menu(int(SMBAction.RIGHT_JUMP)))
+    certified holds (holds the teacher tested, local_traversal.safe_jump_holds,
+    adjacent in the order it tests them), or the teacher's own hold."""
+    menu = list(NES_JUMP_FRAMES)
     certified = sorted(menu.index(hold) for hold in holds if hold in menu)
     if not certified:
         return teacher_frames
@@ -211,7 +213,7 @@ def _plan_label(plan: Optional[ActionPlan], holds) -> tuple[int, int, bool]:
     frames = plan.frames
     if SMBAction(plan.action) in SMB_JUMP_ACTIONS:
         frames = jump_frame_label(frames, holds)
-    return plan.action, frame_menu(plan.action).index(frames), True
+    return plan.action, FRAME_COUNTS.index(frames), True
 
 
 # ── Workers ───────────────────────────────────────────────────────────────────
@@ -317,7 +319,7 @@ class _Lane:
             d["label_action"].append(action)
             d["label_frames"].append(frame_bin)
             d["label_valid"].append(valid)
-            agreed = valid and (mine.action, frame_menu(mine.action).index(mine.frames)) == (
+            agreed = valid and (mine.action, FRAME_COUNTS.index(mine.frames)) == (
                 action,
                 frame_bin,
             )
@@ -615,18 +617,13 @@ def action_memory(policy, a, b, c, d):
     """Replay the memory over every action of a batch of episodes.
 
     At each decision (an action's start), before anything decides, the memory
-    takes the encoded scenes of that frame and the frame before (nothing
-    present before an episode's first frame); it is never told the action.
+    takes the latest picture: the summary of that frame's encoded scene. It is
+    never told the action.
     Returns, per decision, the memory's state after that step, from which it
     predicts the scene at the action's end.
     """
     e, f = d["episode"], d["frame"]
-    now = policy.scene(a[e, f], b[e, f], c[e, f])
-    earlier = (f - 1).clamp_min(0)
-    tokens, present = policy.scene(a[e, earlier], b[e, earlier], c[e, earlier])
-    started = f >= 1
-    before = (tokens * started[:, None, None], present & started[:, None])
-    summaries = policy.window([now, before])
+    summaries = policy.scene(a[e, f], b[e, f], c[e, f])[0][:, 0]
     # Arrange the decisions of each episode in order: [episodes, actions, width].
     count = int(e.max()) + 1
     per_episode = torch.bincount(e, minlength=count)
@@ -991,7 +988,6 @@ def examine_layer(
     workers: int = 12,
     families: Sequence[str] = tuple(BLOCK_SMB_MC_FAMILIES),
     vision_checkpoint: str = LayeredTrainConfig.vision_checkpoint,
-    steady_frames_quantile: Optional[float] = None,
 ) -> dict:
     """Play fresh held-out layouts (never used for validation) with a saved policy.
 
@@ -999,9 +995,6 @@ def examine_layer(
     validation; with none, the whole agent plays as deployed.
     """
     policy, _ = load_layered_checkpoint(checkpoint, "cpu")
-    policy.settings = dataclasses.replace(
-        policy.settings, steady_frames_quantile=steady_frames_quantile
-    )
     config = LayeredTrainConfig(
         learner=learner or "tactic",
         families=tuple(families),
@@ -1024,7 +1017,6 @@ def examine_layer(
     return {
         "checkpoint": str(checkpoint),
         "learner": learner,
-        "steady_frames_quantile": steady_frames_quantile,
         "episodes": len(played),
         "success": float(np.mean([e.won for e in played])),
         "families": families_won,

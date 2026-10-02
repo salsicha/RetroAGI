@@ -40,6 +40,7 @@ def _frame(level: str) -> LabelledFrame:
             categories={0: "mario"},
             kinds={},
             standing=True,
+            stomping=False,
             facing_right=True,
         ),
     )

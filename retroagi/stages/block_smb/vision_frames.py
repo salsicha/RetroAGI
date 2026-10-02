@@ -141,14 +141,15 @@ def play(
     keep: float,
     max_steps: int = DEFAULT_BLOCK_SMB_MC_MAX_STEPS,
 ) -> Iterator[VisionFrame]:
-    """Play one episode, keeping each frame with probability ``keep`` and the last."""
+    """Play one episode, keeping each frame with probability ``keep``, every frame
+    showing a stomp (rare, and the land detector must learn them) and the last."""
     env.reset(scenario=with_power_ups(scenario, rng), seed=rng.randrange(1 << 30))
     for step in range(max_steps + 1):
         done = False
         if step:
             _obs, _reward, terminated, truncated, _info = env.step(next(actions))
             done = terminated or truncated or step == max_steps
-        if done or rng.random() < keep:
+        if done or env.stomped or rng.random() < keep:
             scene = env.scene_labels()
             yield VisionFrame(
                 image=visible_window(env.render()),

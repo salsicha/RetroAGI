@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from retroagi.core.actions import SMB_JUMP_ACTIONS, SMBAction
-from retroagi.core.smb_executor import STEADY_FRAMES, ActionPlan, frame_menu
+from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan
 from retroagi.core.smb_observer import packed_lists
 from retroagi.core.smb_scene_labels import SceneObservation, box_overlap
 from retroagi.core.tokens import SkillToken, StrategyToken, TacticToken
@@ -174,17 +174,13 @@ def teacher_strategy(state: TeacherState) -> StrategyToken:
 
 
 def _first_plan(route: list[int]) -> ActionPlan:
-    """The first segment of a per-frame route as an action and a frame count on the menus."""
+    """The first stretch of one button action in a per-frame route, as that action
+    and its length (at most the longest frame count, 32 frames)."""
     action = int(route[0])
     run = 1
     while run < len(route) and int(route[run]) == action:
         run += 1
-    menu = frame_menu(action)
-    if SMBAction(action) in SMB_JUMP_ACTIONS:
-        frames = min(menu, key=lambda value: (abs(value - run), value))
-    else:
-        frames = max([value for value in STEADY_FRAMES if value <= run] or [STEADY_FRAMES[0]])
-    return ActionPlan(action, frames)
+    return ActionPlan(action, min(run, FRAME_COUNTS[-1]))
 
 
 def teacher_plan(env, state: TeacherState) -> tuple[Optional[ActionPlan], tuple[int, ...]]:

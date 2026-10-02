@@ -396,9 +396,11 @@ class SceneVisionTransformer(SquareTransformer):
       surfaces, gaps, blocks and pipes follow from structure_from_types);
     - for each of its four 8x8 cells, the kind of enemy drawn there (walker,
       plant, other, defeated);
-    - Mario's facing and support (air, ground or moving platform: the land
-      detector), read from the squares weighted by how much of Mario each
-      holds.
+    - Mario's facing, his support (air, ground or moving platform), and
+      whether his feet are on something - the ground, a moving platform or an
+      enemy he is stomping: the land detector, whose turning on after he was
+      in the air is a landing. These are read from the squares weighted by
+      how much of Mario each holds.
 
     scene() turns these into one smb_scene_labels.SceneObservation per
     picture, which is all a policy may see.
@@ -434,13 +436,15 @@ class SceneVisionTransformer(SquareTransformer):
         # Per 8x8 cell: the enemy kind scores.
         self.kind_head = nn.Linear(dim, self.cells * self.cells * len(ENEMY_KINDS))
         # Mario's facing (left, right) and support.
-        self.mario_head = nn.Linear(dim, 2 + len(MARIO_SUPPORTS))
+        # Mario's facing (left, right), support, and feet on something (no, yes).
+        self.mario_head = nn.Linear(dim, 2 + len(MARIO_SUPPORTS) + 2)
 
     def heads(self, observation: Any) -> dict[str, torch.Tensor]:
         """Every head's raw output for a batch of pictures.
 
         pixel_logits [B, types, 240, 256]; kind_logits [B, kinds, 30, 32];
-        facing_logits [B, 2] (left, right); support_logits [B, 3].
+        facing_logits [B, 2] (left, right); support_logits [B, 3];
+        on_something_logits [B, 2] (no, yes: his feet are on something).
         """
         image = self.screen_image(observation)
         tokens = self.square_tokens(image)
@@ -465,7 +469,8 @@ class SceneVisionTransformer(SquareTransformer):
             "pixel_logits": pixel_logits,
             "kind_logits": kind_logits,
             "facing_logits": mario_state[:, :2],
-            "support_logits": mario_state[:, 2:],
+            "support_logits": mario_state[:, 2 : 2 + len(MARIO_SUPPORTS)],
+            "on_something_logits": mario_state[:, 2 + len(MARIO_SUPPORTS) :],
         }
 
     def pixel_logits(self, observation: Any) -> torch.Tensor:
@@ -500,6 +505,7 @@ class SceneVisionTransformer(SquareTransformer):
                 "pixel_types": list(PIXEL_TYPES),
                 "enemy_kinds": list(ENEMY_KINDS),
                 "mario_supports": list(MARIO_SUPPORTS),
+                "mario_on_something": True,
                 "object_cell": OBJECT_CELL,
             },
         }
@@ -512,6 +518,7 @@ class SceneVisionTransformer(SquareTransformer):
             "pixel_types": list(PIXEL_TYPES),
             "enemy_kinds": list(ENEMY_KINDS),
             "mario_supports": list(MARIO_SUPPORTS),
+            "mario_on_something": True,
             "object_cell": OBJECT_CELL,
         }
         for key, value in expected.items():

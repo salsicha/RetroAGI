@@ -38,7 +38,10 @@ MATCH_OVERLAP = 0.5
 SURFACE_HEIGHT_TOLERANCE = 2
 # ── Targets and batches ───────────────────────────────────────────────────────
 
-TARGET_KEYS = ("types", "kind", "facing", "support", "mario_present")
+TARGET_KEYS = ("types", "kind", "facing", "support", "on_something", "stomping", "mario_present")
+# A picture of Mario landing on an enemy counts this many times in the
+# feet-on-something loss: such pictures are rare and look like being in the air.
+STOMP_WEIGHT = 20.0
 
 
 def frame_targets(labels) -> dict[str, torch.Tensor]:
@@ -84,7 +87,8 @@ def scene_losses(
 
     - pixels: per-pixel cross-entropy on the types (rare types weighted up);
     - kind: enemy kind in every cell holding enemy pixels;
-    - facing, support: Mario's, over frames that show him.
+    - facing, support, feet on something: Mario's, over frames that show him
+      (pictures of a stomp weighted up).
     """
     types = targets["types"].long()
     pixel_logits = out["pixel_logits"].float()
@@ -104,8 +108,15 @@ def scene_losses(
         losses["support"] = F.cross_entropy(
             out["support_logits"].float()[mario], targets["support"][mario]
         )
+        weight = 1.0 + (STOMP_WEIGHT - 1.0) * targets["stomping"][mario].float()
+        each = F.cross_entropy(
+            out["on_something_logits"].float()[mario],
+            targets["on_something"][mario],
+            reduction="none",
+        )
+        losses["on_something"] = (each * weight).sum() / weight.sum()
     else:
-        losses["facing"] = losses["support"] = nothing
+        losses["facing"] = losses["support"] = losses["on_something"] = nothing
     losses["total"] = sum(losses.values())
     return losses
 
@@ -376,6 +387,10 @@ def compare_scenes(found: SceneObservation, true: SceneObservation, tallies: dic
         mario["facing"] += found.mario.facing_right == true.mario.facing_right
         mario["support"] += found.mario.support == true.mario.support
         mario["support_confusion"][true.mario.support][found.mario.support] += 1
+        mario["on_something"] += found.mario.on_something == true.mario.on_something
+        if true.mario.on_something and true.mario.support == "air":
+            mario["stomps"] += 1
+            mario["stomps_seen"] += found.mario.on_something
     elif found.mario.box is not None:
         mario["false"] += 1
     pairs = tallies["enemy"].add(
@@ -411,6 +426,9 @@ def _new_tallies() -> dict:
             "support": 0,
             "edge_errors": [],
             "support_confusion": {a: {b: 0 for b in SUPPORTS} for a in SUPPORTS},
+            "on_something": 0,
+            "stomps": 0,
+            "stomps_seen": 0,
         },
         "enemy_kind": {"matched": 0, "correct": 0},
     }
@@ -451,6 +469,9 @@ def _report(tallies: dict, frames: int, pixels_correct: Optional[float]) -> dict
             "facing": mario["facing"] / shown if shown else None,
             "support": mario["support"] / shown if shown else None,
             "support_confusion": mario["support_confusion"],
+            "on_something": mario["on_something"] / shown if shown else None,
+            "stomp_pictures": mario["stomps"],
+            "stomps_seen": mario["stomps_seen"] / mario["stomps"] if mario["stomps"] else None,
         },
         "enemy_kind_accuracy": (
             tallies["enemy_kind"]["correct"] / tallies["enemy_kind"]["matched"]
@@ -565,6 +586,9 @@ def scene_report(metrics: Mapping[str, Any]) -> str:
         + (", ".join(f"{key} {value:.2f}" for key, value in error.items()) or "-"),
         f"  facing right/left correct: {_percent(mario['facing'])}",
         f"  standing / in the air / on a moving platform correct: {_percent(mario['support'])}",
+        f"  feet on something (the land detector) correct: {_percent(mario['on_something'])}; "
+        f"on an enemy he is stomping: {_percent(mario['stomps_seen'])} "
+        f"of {mario['stomp_pictures']} pictures",
         "",
         f"{'objects':<18}{'true':>8}{'found':>8}{'recall':>10}{'precision':>11}"
         f"{'edge err p95':>14}",

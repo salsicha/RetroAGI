@@ -1,170 +1,82 @@
-"""The executor: plays one chosen action, and says when it has ended.
+"""The executor: presses one button action for a number of frames.
 
-The action layer chooses an action (SMBAction) and a frame count only when the
-previous action has ended. The executor then turns them into one button
-press per frame:
+The action layer gives it two numbers, and nothing else reaches it:
 
-- walk and wait actions (right, left, nothing) last their frame count, or,
-  when started in the air (after a stomp bounce, say), until Mario lands;
-- a jump action (right jump, left jump, jump) holds the jump button for its
-  frame count, keeps the direction after release, and ends when Mario lands.
-  The NES starts a jump only on a fresh press, so if the jump button is still
-  down from the previous action, the jump first releases it for one frame.
+- which button action to press: nothing, right, right + jump, left,
+  left + jump or jump;
+- for how many frames: any whole number from 1 to 32.
 
-An action is interrupted, ending early, by things the vision transformer
-reports in the current picture, and nothing else:
-
-- Mario's drawn box touches an enemy that is not defeated;
-- Mario is not drawn at all;
-- during a walk or wait, Mario stops standing (he walked off an edge).
-
-The executor sees only SceneObservations: never the game.
+It presses that button action on each of those frames. The action is over
+when it has pressed all of them, or earlier when the agent tells it Mario has
+landed (smb_agent watches the vision transformer's report for that); then the
+layers choose the next action. A jump is the jump button held for its frames;
+when they are pressed the layers choose again, even with Mario in the air,
+and his landing ends whatever action is running then.
 """
 
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .actions import SMB_JUMP_ACTIONS, SMBAction, smb_jump_release_action
-from .smb_physics import NES_JUMP_FRAMES
-from .smb_scene_labels import SceneObservation
+from .actions import SMBAction
 
-# Frame counts the action layer chooses from: jump holds (the NES menu) and
-# the lengths of walks and waits.
-JUMP_FRAMES = NES_JUMP_FRAMES
-STEADY_FRAMES = (1, 2, 3, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64, 96)
-# A jump that has not landed after this many frames ends anyway.
-MAX_JUMP_FRAMES = 150
-# The picture shows the game one frame late, so a jump that has not left the
-# ground this many frames after its hold never will (a ceiling, say).
-TAKEOFF_GRACE = 4
-# Pixels between boxes that still count as touching.
-TOUCH = 1
-
-
-def frame_menu(action: int) -> tuple[int, ...]:
-    """The frame counts available for an action."""
-    return JUMP_FRAMES if SMBAction(action) in SMB_JUMP_ACTIONS else STEADY_FRAMES
-
-
-def touching(a, b, margin: int = TOUCH) -> bool:
-    """Whether two boxes overlap or are at most ``margin`` pixels apart."""
-    return (
-        a[0] - margin < b[2]
-        and b[0] - margin < a[2]
-        and a[1] - margin < b[3]
-        and b[1] - margin < a[3]
-    )
-
-
-def enemy_contact(scene: SceneObservation) -> bool:
-    if scene.mario.box is None:
-        return False
-    return any(
-        enemy.kind != "defeated" and touching(scene.mario.box, enemy.box) for enemy in scene.enemies
-    )
+# The frame counts the action layer chooses from, for every action.
+FRAME_COUNTS = tuple(range(1, 33))
 
 
 @dataclass
 class ActionPlan:
-    """One decision of the action layer."""
+    """One decision of the action layer: a button action and a frame count."""
 
     action: int
     frames: int
 
     def __post_init__(self):
         self.action = int(SMBAction(self.action))
-        if self.frames not in frame_menu(self.action):
-            raise ValueError(
-                f"{self.frames} frames is not on the menu for {SMBAction(self.action).name}"
-            )
+        if self.frames not in FRAME_COUNTS:
+            raise ValueError(f"{self.frames} frames is outside 1 to {FRAME_COUNTS[-1]}")
 
 
 @dataclass
 class SMBExecutor:
-    """Plays one ActionPlan at a time. Each frame, in this order:
+    """Plays one ActionPlan at a time. Each frame:
 
-    1. ``ended(scene)``: has the plan ended, judged from this frame's picture?
-       Returns the reason ("done", "landed", "timeout", "enemy_contact",
-       "mario_missing", "left_ground") or None. When it ends, the layers
-       decide again and ``start`` the next plan.
-    2. ``press()``: the button action (SMBAction) to send to the game this frame.
+    1. if it has pressed all of the plan's frames, ``finished`` is true and the
+       agent ends the plan (``end("done")``); if the agent saw Mario land, it
+       ends the plan (``end("landed")``);
+    2. when idle, the agent starts the next plan;
+    3. ``press()`` gives the button action for this frame.
     """
 
     plan: Optional[ActionPlan] = None
     pressed: int = 0
-    airborne: bool = False
-    started_standing: bool = False
-    repress: bool = False  # the jump button must be released for one frame first
-    last_button: int = int(SMBAction.NOOP)
-    history: list = field(default_factory=list)
+    history: list = field(default_factory=list)  # (plan, frames pressed, why it ended)
 
     @property
     def idle(self) -> bool:
         return self.plan is None
 
-    def start(self, plan: ActionPlan, scene: SceneObservation) -> None:
+    @property
+    def finished(self) -> bool:
+        """The plan has pressed all of its frames."""
+        return self.plan is not None and self.pressed >= self.plan.frames
+
+    def start(self, plan: ActionPlan) -> None:
         if not self.idle:
             raise RuntimeError("the executor is still playing an action")
         self.plan = plan
         self.pressed = 0
-        self.airborne = False
-        self.started_standing = scene.mario.support != "air"
-        self.repress = (
-            SMBAction(plan.action) in SMB_JUMP_ACTIONS
-            and SMBAction(self.last_button) in SMB_JUMP_ACTIONS
-        )
 
-    def reset(self) -> None:
-        self.plan = None
-        self.pressed = 0
-        self.airborne = False
-        self.repress = False
-        self.last_button = int(SMBAction.NOOP)
-
-    @property
-    def jumping(self) -> bool:
-        return self.plan is not None and SMBAction(self.plan.action) in SMB_JUMP_ACTIONS
-
-    def ended(self, scene: SceneObservation) -> Optional[str]:
-        """Why the plan ends at this frame's picture (and end it), or None."""
-        if self.plan is None:
-            return None
-        reason = None
-        if self.pressed > 0:
-            if scene.mario.box is None:
-                reason = "mario_missing"
-            elif enemy_contact(scene):
-                reason = "enemy_contact"
-            elif self.jumping:
-                if scene.mario.support == "air":
-                    self.airborne = True
-                elif self.airborne or self.pressed >= self.plan.frames + TAKEOFF_GRACE:
-                    reason = "landed"
-                if reason is None and self.pressed >= MAX_JUMP_FRAMES:
-                    reason = "timeout"
-            elif self.started_standing and scene.mario.support == "air":
-                reason = "left_ground"
-            elif not self.started_standing and scene.mario.support != "air":
-                reason = "landed"
-            elif self.pressed >= self.plan.frames:
-                reason = "done"
-        if reason is not None:
+    def end(self, reason: str) -> None:
+        """End the current plan ("done" or "landed")."""
+        if self.plan is not None:
             self.history.append((self.plan, self.pressed, reason))
             self.plan = None
-        return reason
 
     def press(self) -> int:
-        """The button action for this frame (a jump is released after its hold)."""
+        """The button action for this frame."""
         if self.plan is None:
             raise RuntimeError("no action to play: start a plan first")
-        action = SMBAction(self.plan.action)
-        if self.repress:
-            # One frame with the jump button up, so the NES sees a fresh press.
-            self.repress = False
-            self.last_button = int(smb_jump_release_action(action))
-            return self.last_button
-        if self.jumping and self.pressed >= self.plan.frames:
-            action = smb_jump_release_action(action)
+        if self.finished:
+            raise RuntimeError("the plan has pressed all of its frames: end it first")
         self.pressed += 1
-        self.last_button = int(action)
-        return self.last_button
+        return self.plan.action

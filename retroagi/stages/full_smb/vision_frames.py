@@ -14,7 +14,7 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-from .pixel_labels import LabelledFrame, Unexplained, label_frame
+from .pixel_labels import LabelledFrame, Unexplained, label_frame, stomp_shown
 
 LEVELS = (
     "Level1-1",
@@ -42,8 +42,10 @@ def _dying(ram) -> bool:
 
 
 def played_frames(level: str, *, frames: int, seed: int, every: int) -> Iterator[tuple]:
-    """Play ``level`` for up to ``frames`` frames; yield (frame, state before, state after)
-    for every ``every``-th frame, until the level is finished."""
+    """Play ``level`` for up to ``frames`` frames; yield (frame, state before, state
+    after, game memory at the start of the frame before) for every ``every``-th
+    frame and for every frame showing a stomp (rare, and the land detector must
+    learn them), until the level is finished."""
     import retro
 
     rng = np.random.default_rng(seed)
@@ -54,7 +56,9 @@ def played_frames(level: str, *, frames: int, seed: int, every: int) -> Iterator
         start = (int(env.get_ram()[WORLD]), int(env.get_ram()[LEVEL]))
         history = deque(maxlen=40)
         jump = back = wait = deaths = 0
+        earlier_ram = None
         for t in range(frames):
+            now_ram = env.get_ram().copy()  # the memory this frame's picture shows
             if t % REWIND_EVERY == 0:
                 history.append(env.em.get_state())
             if jump == 0 and rng.random() < 0.07:
@@ -74,14 +78,17 @@ def played_frames(level: str, *, frames: int, seed: int, every: int) -> Iterator
                 action[buttons.index("RIGHT")] = 1
             if jump:
                 action[buttons.index("A")], jump = 1, jump - 1
-            if t % every == 0:
+            stomp = earlier_ram is not None and stomp_shown(earlier_ram, now_ram)
+            if t % every == 0 or stomp:
                 before = env.em.get_state()
                 frame, *_ = env.step(action)
-                yield frame, before, env.em.get_state()
+                yield frame, before, env.em.get_state(), earlier_ram
             else:
                 env.step(action)
+            earlier_ram = now_ram
             ram = env.get_ram()
             if _dying(ram):
+                earlier_ram = None  # rewound: the frame before is not this one's
                 deaths += 1
                 steps = min(len(history), 2 + deaths)
                 env.em.set_state(history[-steps])
@@ -105,9 +112,11 @@ def labelled_frames(
     refusals: Optional[Counter] = None,
 ) -> Iterator[LabelledFrame]:
     """Exactly labelled frames from playing ``level``; refused frames are counted by reason."""
-    for frame, before, after in played_frames(level, frames=frames, seed=seed, every=every):
+    for frame, before, after, earlier in played_frames(
+        level, frames=frames, seed=seed, every=every
+    ):
         try:
-            yield label_frame(frame, before, after, family=level)
+            yield label_frame(frame, before, after, family=level, earlier_ram=earlier)
         except Unexplained as reason:
             if refusals is not None:
                 refusals[str(reason)] += 1

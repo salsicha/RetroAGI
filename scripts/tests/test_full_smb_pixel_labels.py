@@ -91,7 +91,7 @@ class TestRealFrames(unittest.TestCase):
         self.assertIn("Level1-1", POLICY_TEST_LEVELS)
 
     def test_saved_state_memory_is_the_game_memory(self):
-        frame, before, after = self.frames[10]
+        frame, before, after, _ = self.frames[10]
         blocks = P.state_blocks(after)
         self.assertEqual(blocks["RAM"].shape, (2048,))
         self.assertEqual(blocks["NTAR"].shape, (2048,))
@@ -99,7 +99,7 @@ class TestRealFrames(unittest.TestCase):
 
     def test_every_frame_is_rebuilt_exactly_and_labelled(self):
         seen = Counter()
-        for frame, before, after in self.frames:
+        for frame, before, after, _ in self.frames:
             out = P.label_frame(frame, before, after, family="Level1-1")
             self.assertEqual(out.image.shape, (240, 256, 3))
             self.assertEqual(out.labels.shape, (240, 256))
@@ -113,20 +113,32 @@ class TestRealFrames(unittest.TestCase):
             self.assertIn(TYPE_ID[name], seen, name)
 
     def test_padded_border_repeats_the_edge_labels(self):
-        frame, before, after = self.frames[20]
+        frame, before, after, _ = self.frames[20]
         out = P.label_frame(frame, before, after)
         np.testing.assert_array_equal(out.labels[:8], np.repeat(out.labels[8:9], 8, axis=0))
         np.testing.assert_array_equal(out.labels[:, :8], np.repeat(out.labels[:, 8:9], 8, axis=1))
 
     def test_a_picture_memory_does_not_explain_is_refused(self):
-        frame, before, after = self.frames[30]
+        frame, before, after, _ = self.frames[30]
         changed = frame.copy()
         changed[100, 100] = 255 - changed[100, 100]
         with self.assertRaises(P.Unexplained):
             P.label_frame(changed, before, after)
 
+    def test_a_stomp_is_mario_turning_from_falling_to_rising_in_the_air(self):
+        def memory(state, speed):
+            ram = np.zeros(2048, np.uint8)
+            ram[P.PLAYER_FLOAT_STATE], ram[P.PLAYER_Y_SPEED] = state, speed % 256
+            return ram
+
+        falling, bounced = memory(2, 3), memory(1, -4)
+        self.assertTrue(P.stomp_shown(falling, bounced))
+        self.assertFalse(P.stomp_shown(memory(0, 0), memory(1, -4)))  # a jump from the ground
+        self.assertFalse(P.stomp_shown(falling, memory(2, 4)))  # still falling
+        self.assertFalse(P.stomp_shown(falling, memory(0, 0)))  # landed on the ground
+
     def test_mario_standing_flag_matches_the_start(self):
-        frame, before, after = self.frames[0]
+        frame, before, after, _ = self.frames[0]
         self.assertTrue(P.label_frame(frame, before, after).on_ground)
 
 

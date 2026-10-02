@@ -89,6 +89,7 @@ def perfect_heads(targets: dict) -> dict:
         "kind_logits": one(kinds, len(ENEMY_KINDS)).permute(0, 3, 1, 2).float() * 20,
         "facing_logits": one(batch("facing"), 2).float() * 20,
         "support_logits": one(batch("support"), len(SUPPORTS)).float() * 20,
+        "on_something_logits": one(batch("on_something"), 2).float() * 20,
     }
 
 
@@ -117,6 +118,7 @@ class BackgroundOnlyVision(BlockVisionTransformer):
             "kind": np.zeros((30, 32), np.int64),
             "facing": np.int64(1),
             "support": np.int64(0),
+            "on_something": np.int64(0),
         }
         return perfect_heads([empty] * len(images))
 
@@ -142,7 +144,14 @@ class TestVisionInterface(unittest.TestCase):
             scenes = encoder.scene(np.stack([frame.image for frame in frames]))
 
         self.assertEqual(
-            set(out), {"pixel_logits", "kind_logits", "facing_logits", "support_logits"}
+            set(out),
+            {
+                "pixel_logits",
+                "kind_logits",
+                "facing_logits",
+                "support_logits",
+                "on_something_logits",
+            },
         )
         self.assertEqual(out["pixel_logits"].shape, (2, len(PIXEL_TYPES), 240, 256))
         self.assertEqual(out["kind_logits"].shape, (2, len(ENEMY_KINDS), 30, 32))
@@ -181,7 +190,7 @@ class TestVisionInterface(unittest.TestCase):
         self.assertTrue(seen[0][1])
         self.assertEqual(
             set(best["held_out"]),
-            {"pixels", "kind", "facing", "support", "total"},
+            {"pixels", "kind", "facing", "support", "on_something", "total"},
         )
         self.assertFalse(torch.equal(before, model.kind_head.weight))
 

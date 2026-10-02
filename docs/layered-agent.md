@@ -15,8 +15,11 @@ outputs:
   coin, enemy, moving platform, power-up;
 - for each 8x8 cell, the kind of enemy drawn there: walker, plant, other,
   defeated;
-- Mario's facing, and whether he is standing, in the air or on a moving
-  platform.
+- Mario's facing; whether he is standing, in the air or on a moving
+  platform; and whether his feet are on something (the land detector). Each
+  game's land detector learns from its own engine's truth: the standing flag,
+  plus stomps. In Full SMB the stomps are read from the emulator's memory; in
+  Block SMB they come from the simulator's stomp handling.
 
 The pixel types never reach a policy. `retroagi/core/smb_scene_labels.py` turns
 them into one description of the screen, a `SceneObservation`:
@@ -53,7 +56,7 @@ inputs:
 ## How it decides
 
 `retroagi/core/layered_policy.py` holds the policy: four layers, a shared scene
-encoder, a two-picture window and a memory.
+encoder and a memory.
 - **Scene encoder:** one token per reported object, plus the band codes.
   Every position number also enters as 8 sine and 8 cosine waves, with
   wavelengths from 512 pixels (480 vertically) down to 4. A difference of one
@@ -62,10 +65,9 @@ encoder, a two-picture window and a memory.
 - **Memory**, a long short-term memory network, steps once per action, at
   the action's start, before anything decides:
   - **Input:** vision information only, never the action Mario is about to
-    take. It is the window's summary of the two latest pictures: the frame
-    the action starts on and the frame before. In that summary, each object
-    is marked "this frame" or "one frame before", so motion and speed are
-    visible.
+    take: the scene encoder's summary of the latest picture, the frame the
+    action starts on. What happened at earlier actions, including how things
+    moved, it carries in its own state.
   - **Output:** its expected scene, a prediction of the scene numbers the
     vision transformer will report when the coming action ends, completed
     or interrupted.
@@ -80,18 +82,22 @@ encoder, a two-picture window and a memory.
   required, and points at a target object. The skills are advance, clear a
   gap, mount a platform, wait for something to pass, clear an enemy, and
   retreat and recover.
-- **Action layer:** emits an action and how many frames it lasts. Walks and
-  waits choose from 1 to 96 frames; jumps choose how long the jump button is
-  held, from the NES menu.
+- **Action layer:** emits a button action (nothing, right, right + jump, left,
+  left + jump or jump) and how many frames to press it: any whole number from
+  1 to 32, for every action.
 
-The executor (`retroagi/core/smb_executor.py`) plays one plan at a time.
-- **Walks and waits** last their frame count.
-- **A jump** holds the button for its count, then keeps the direction until
-  the vision transformer reports a landing.
-- **A plan is cut short** when the vision transformer reports Mario touching
-  an enemy, Mario missing, or Mario walking off an edge.
+The executor (`retroagi/core/smb_executor.py`) takes only those two numbers
+from the action layer and presses that button action on each of those frames;
+it reads nothing else. An action ends in one of two ways, and only these two
+make the layers choose a new one:
+- **It ran its course:** it pressed all of its frames. A jump is the jump
+  button held for its frames, so the layers may choose the next action with
+  Mario still in the air.
+- **Mario landed:** the vision transformer decides. Its land detector says
+  whether Mario's feet are on something in the picture: the ground, a moving
+  platform, or an enemy he is stomping. When it switches on after being off
+  (he was in the air), the running action ends.
 
-The layers decide only when a plan ends, top layer first.
 `retroagi/core/smb_agent.py` (`SMBAgents`) runs all of this from screens
 alone, for both games.
 

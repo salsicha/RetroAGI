@@ -245,6 +245,7 @@ class MarioScenarioEnv:
         self.platform_kinds = []  # drawn kind of each platform
         self.coins = []
         self.power_ups = []
+        self.stomped = False
         self.enemies = []
         self.goal = None
         self._goal_on_stomp = False
@@ -366,6 +367,7 @@ class MarioScenarioEnv:
 
         # Power-ups: [x, y] (a 16x16 mushroom) or [x, y, w, h]; reward only.
         self.power_ups = []
+        self.stomped = False
         for p in scenario.get("power_ups", []):
             w, h = (p[2], p[3]) if len(p) >= 4 else (POWER_UP_SIZE, POWER_UP_SIZE)
             self.power_ups.append({"rect": pygame.Rect(p[0], p[1], w, h), "collected": False})
@@ -501,6 +503,7 @@ class MarioScenarioEnv:
         truncated = False
         death = False
         info = {}
+        self.stomped = False  # set when this step resolves a stomp (scene_labels)
         stomp_geometry = None
 
         useful_bridge_wait = False
@@ -692,6 +695,7 @@ class MarioScenarioEnv:
                 continue
             if geometry["stomp"] and enemy.get("stompable", True):
                 # Stomp!
+                self.stomped = True
                 enemy["dead"] = True
                 self._stomp_credited = True
                 reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
@@ -891,6 +895,7 @@ class MarioScenarioEnv:
             kinds=kinds,
             standing=bool(self.mario["on_ground"]),
             facing_right=self.mario["facing"] > 0,
+            stomping=self.stomped,
         )
 
     def enemy_screen_rects(self) -> list[pygame.Rect]:

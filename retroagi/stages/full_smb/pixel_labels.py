@@ -52,6 +52,31 @@ _ROWS, _COLUMNS = np.mgrid[0:240, 0:256]
 SCROLL_PAGE, SCROLL_X = 0x71A, 0x71C  # [ScreenLeft_PageLoc], [ScreenLeft_X_Pos]
 BLOCK_MAP = 0x500  # [Block_Buffer_1]; the second page follows 0xD0 bytes later
 PLAYER_FLOAT_STATE = 0x1D  # [Player_State]; 0 means standing on something
+PLAYER_Y_SPEED = 0x9F  # [Player_Y_Speed], signed: below zero is rising
+
+
+def stomp_shown(earlier_ram, ram) -> bool:
+    """Whether the picture of the frame whose memory is ``ram`` shows Mario landing
+    on an enemy (a stomp), given the memory of the frame before (``earlier_ram``).
+
+    A picture shows the game as it is at the start of its frame. Mario stomped
+    in between when he was in the air and falling then, and is in the air and
+    rising now: while airborne only a stomp turns his fall into a rise (a jump
+    starts from the ground).
+    """
+
+    def speed(memory) -> int:
+        value = int(memory[PLAYER_Y_SPEED])
+        return value - 256 if value > 127 else value
+
+    return (
+        int(earlier_ram[PLAYER_FLOAT_STATE]) != 0
+        and int(ram[PLAYER_FLOAT_STATE]) != 0
+        and speed(earlier_ram) >= 0
+        and speed(ram) < 0
+    )
+
+
 PLAYER_FACING = 0x33  # [PlayerFacingDir]; 1 means facing right
 SPRITE_LIST = 0x200  # 64 pieces of 4 bytes: row - 1, graphic, attributes, column
 PLAYER_POINTER = 0x6E4  # [SprDataOffset]: byte offset of an object's first piece
@@ -591,7 +616,7 @@ def _pad(visible_part, mode="edge"):
     )
 
 
-def frame_scene_labels(built: dict, labels: np.ndarray) -> SceneLabels:
+def frame_scene_labels(built: dict, labels: np.ndarray, stomping: bool = False) -> SceneLabels:
     """The SceneLabels of a rebuilt frame (smb_scene_labels.scene_from_labels' input).
 
     Each sprite owner (owner, slot) that is an object becomes one object; each
@@ -626,14 +651,19 @@ def frame_scene_labels(built: dict, labels: np.ndarray) -> SceneLabels:
         kinds=kinds,
         standing=int(ram[PLAYER_FLOAT_STATE]) == 0,
         facing_right=int(ram[PLAYER_FACING]) == 1,
+        stomping=stomping,
     )
 
 
-def label_frame(frame, before: bytes, after: bytes, *, family: str = "") -> LabelledFrame:
+def label_frame(
+    frame, before: bytes, after: bytes, *, family: str = "", earlier_ram=None
+) -> LabelledFrame:
     """Exact labels for one emulator frame, or Unexplained.
 
     ``frame`` is the emulator's 224x240 picture of one step; ``before`` and
-    ``after`` are the saved states taken just before and just after that step.
+    ``after`` are the saved states taken just before and just after that step;
+    ``earlier_ram`` is the game memory at the start of the step before (None
+    at a play's first frame), from which a stomp is recognised (stomp_shown).
     """
     image = canonical_rgb(frame)
     built = rebuild(before, after)
@@ -669,5 +699,9 @@ def label_frame(frame, before: bytes, after: bytes, *, family: str = "") -> Labe
         on_ground=int(built["ram"][PLAYER_FLOAT_STATE]) == 0,
         enemy_rects=tuple(sorted(rects)),
         family=family,
-        scene=frame_scene_labels(built, labels),
+        scene=frame_scene_labels(
+            built,
+            labels,
+            stomping=earlier_ram is not None and stomp_shown(earlier_ram, built["ram"]),
+        ),
     )

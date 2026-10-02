@@ -7,17 +7,10 @@ import torch
 from retroagi.core.actions import SMBAction
 from retroagi.core.layered_policy import (
     LayeredSMBPolicy,
-    absent_like,
     action_plan,
     skill_token,
 )
-from retroagi.core.smb_executor import (
-    JUMP_FRAMES,
-    STEADY_FRAMES,
-    TAKEOFF_GRACE,
-    ActionPlan,
-    SMBExecutor,
-)
+from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan, SMBExecutor
 from retroagi.core.smb_observer import (
     C_SPANS,
     CODE,
@@ -44,9 +37,21 @@ from retroagi.core.tokens import (
 )
 
 
-def scene(mario=(100, 192, 112, 208), support="ground", enemies=(), surfaces=None, gaps=()):
+def scene(
+    mario=(100, 192, 112, 208),
+    support="ground",
+    enemies=(),
+    surfaces=None,
+    gaps=(),
+    on_something=None,
+):
     return SceneObservation(
-        mario=MarioView(box=mario, facing_right=True, support=support),
+        mario=MarioView(
+            box=mario,
+            facing_right=True,
+            support=support,
+            on_something=support != "air" if on_something is None else on_something,
+        ),
         enemies=tuple(enemies),
         surfaces=tuple(surfaces if surfaces is not None else (Surface(8, 248, 208, False),)),
         gaps=tuple(gaps),
@@ -112,62 +117,85 @@ def test_tokens_refuse_unknown_values_and_encode_pointers():
 # ── Executor ──────────────────────────────────────────────────────────────────
 
 
-def play(executor, scenes):
-    pressed, reasons = [], []
-    for picture in scenes:
-        reason = executor.ended(picture)
-        if reason is not None:
-            reasons.append(reason)
-            break
+def test_the_executor_presses_its_button_for_its_frame_count():
+    executor = SMBExecutor()
+    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 5))
+    pressed = []
+    while not executor.finished:
         pressed.append(executor.press())
-    return pressed, reasons
+    assert pressed == [SMBAction.RIGHT_JUMP] * 5
+    with pytest.raises(RuntimeError):
+        executor.press()
+    executor.end("done")
+    assert executor.idle and executor.history[-1][1:] == (5, "done")
 
 
-def test_a_walk_lasts_its_frame_count():
-    executor = SMBExecutor()
-    executor.start(ActionPlan(SMBAction.RIGHT, 6), scene())
-    pressed, reasons = play(executor, [scene()] * 20)
-    assert pressed == [SMBAction.RIGHT] * 6 and reasons == ["done"]
-    assert executor.idle
+def test_every_action_takes_any_frame_count_from_1_to_32():
+    assert FRAME_COUNTS == tuple(range(1, 33))
+    for action in SMBAction:
+        for frames in (1, 7, 15, 32):
+            assert ActionPlan(action, frames).frames == frames
+        for frames in (0, 33):
+            with pytest.raises(ValueError):
+                ActionPlan(action, frames)
 
 
-def test_a_jump_holds_then_keeps_direction_until_the_vision_reports_landing():
-    executor = SMBExecutor()
-    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 4), scene())
-    pictures = [scene()] * 2 + [scene(support="air")] * 10 + [scene()] * 3
-    pressed, reasons = play(executor, pictures)
-    assert pressed[:4] == [SMBAction.RIGHT_JUMP] * 4
-    assert set(pressed[4:]) == {SMBAction.RIGHT}
-    assert reasons == ["landed"] and len(pressed) == 12
+def test_a_landing_is_the_land_detector_turning_on_after_mario_was_in_the_air():
+    from retroagi.core.smb_agent import LandingWatch
+
+    def watch(pictures):
+        seen = LandingWatch()
+        return [seen.landed(picture) for picture in pictures]
+
+    air = scene(support="air")
+    assert watch([air, scene()]) == [False, True]
+    assert watch([air, scene(support="moving_platform")]) == [False, True]
+    # Landing on an enemy: still in the air, but the detector says his feet are on something.
+    stomp = scene(support="air", on_something=True)
+    assert watch([air, stomp, air]) == [False, True, False]
+    assert watch([scene(), scene()]) == [False, False]
+    assert watch([scene(), air]) == [False, False]  # leaving the ground
+    # Nothing but the land detector counts: an enemy under his feet does not.
+    goomba = EnemyView((100, 208, 112, 218), "walker")
+    assert watch([air, scene(support="air", enemies=[goomba])]) == [False, False]
+    # A picture without Mario changes nothing.
+    assert watch([air, scene(mario=None, support="ground"), scene()]) == [False, False, True]
 
 
-def test_a_jump_that_never_leaves_the_ground_ends_after_a_grace():
-    executor = SMBExecutor()
-    executor.start(ActionPlan(SMBAction.JUMP, 2), scene())
-    pressed, reasons = play(executor, [scene()] * 20)
-    assert reasons == ["landed"] and len(pressed) == 2 + TAKEOFF_GRACE
+class SceneList:
+    """A stand-in vision transformer that reports a given scene for each frame in turn."""
+
+    def __init__(self, pictures):
+        self.pictures = list(pictures)
+
+    def eval(self):
+        return self
+
+    def scene(self, screens):
+        return [self.pictures.pop(0) for _ in screens]
 
 
-def test_enemy_contact_and_walking_off_an_edge_interrupt():
-    executor = SMBExecutor()
-    executor.start(ActionPlan(SMBAction.RIGHT, 32), scene())
-    touching = scene(enemies=[EnemyView((112, 196, 122, 208), "walker")])
-    pressed, reasons = play(executor, [scene(), scene(), touching])
-    assert reasons == ["enemy_contact"] and len(pressed) == 2
-    executor.start(ActionPlan(SMBAction.RIGHT, 32), scene())
-    pressed, reasons = play(executor, [scene(), scene(support="air")])
-    assert reasons == ["left_ground"]
-    executor.start(ActionPlan(SMBAction.NOOP, 32), scene())
-    defeated = scene(enemies=[EnemyView((112, 196, 122, 208), "defeated")])
-    pressed, reasons = play(executor, [scene(), defeated, scene(mario=None)])
-    assert reasons == ["mario_missing"]
+def test_a_landing_ends_the_action_early_and_nothing_else_does():
+    from retroagi.core.smb_agent import SMBAgents
+    from retroagi.core.smb_observer import VisionObserver
 
+    torch.manual_seed(0)
+    goomba = EnemyView((112, 196, 122, 208), "walker")
+    pictures = [scene(), scene(enemies=[goomba]), scene(mario=None), scene(support="air")]
+    pictures += [scene(support="air"), scene()]
+    agents = SMBAgents(VisionObserver(SceneList(pictures)), LayeredSMBPolicy().eval(), "cpu")
+    plan = ActionPlan(SMBAction.RIGHT, 20)
 
-def test_plans_must_use_the_frame_menus():
-    assert ActionPlan(SMBAction.RIGHT_JUMP, JUMP_FRAMES[-1]).frames == 32
-    assert ActionPlan(SMBAction.NOOP, STEADY_FRAMES[-1]).frames == 96
-    with pytest.raises(ValueError):
-        ActionPlan(SMBAction.RIGHT_JUMP, 15)
+    def given(copies, scenes):
+        return {"skill": [SkillToken("advance")], "action": [plan]}
+
+    screen = [np.zeros((240, 256, 3), np.uint8)]
+    steps = [agents.act(screen, [0], given=given)[0] for _ in pictures]
+    # Touching an enemy, Mario vanishing and leaving the ground change nothing;
+    # the landing on the last frame ends the action and a new one starts.
+    assert [step.ended for step in steps] == [None, None, None, None, None, "landed"]
+    assert [step.decision is not None for step in steps] == [True] + [False] * 4 + [True]
+    assert [step.button for step in steps] == [SMBAction.RIGHT] * 6
 
 
 # ── Layers ────────────────────────────────────────────────────────────────────
@@ -180,7 +208,7 @@ def test_layers_read_only_the_inputs_and_the_token_above():
     rows = (inputs.src_a[None], inputs.src_b[None], inputs.src_c[None])
     with torch.no_grad():
         now = policy.encode_scene(rows)
-        _, memory = policy.expect(policy.remember(now, absent_like(now), None))
+        _, memory = policy.expect(policy.remember(now, None))
         tactic = torch.zeros(1, 5)
         tactic[0, 0] = tactic[0, -1] = 1.0
         out = policy.layer_outputs(
@@ -210,23 +238,6 @@ def test_layers_read_only_the_inputs_and_the_token_above():
     assert np.isneginf(absent[enemy_slots].numpy()).all()  # absent slots cannot be pointed at
 
 
-def test_a_jump_after_a_held_jump_first_releases_the_button():
-    executor = SMBExecutor()
-    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 32), scene())
-    pictures = [scene()] * 2 + [scene(support="air")] * 10 + [scene()]
-    play(executor, pictures)  # lands while the button is still held
-    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 4), scene())
-    assert executor.press() == SMBAction.RIGHT  # released for one frame
-    assert executor.press() == SMBAction.RIGHT_JUMP
-
-
-def test_a_plan_started_in_the_air_ends_when_mario_lands():
-    executor = SMBExecutor()
-    executor.start(ActionPlan(SMBAction.RIGHT, 32), scene(support="air"))
-    pressed, reasons = play(executor, [scene(support="air")] * 3 + [scene()])
-    assert reasons == ["landed"] and len(pressed) == 3
-
-
 # ── Agent and trainer pieces ──────────────────────────────────────────────────
 
 
@@ -251,7 +262,7 @@ def test_given_tokens_replace_the_policy_only_where_given():
     agents = SMBAgents(VisionObserver(SceneEcho(scene())), LayeredSMBPolicy().eval(), "cpu", 2)
     screens = [np.zeros((240, 256, 3), np.uint8)] * 2
     teacher_skill = SkillToken("clear_gap", 1)
-    teacher_plan = ActionPlan(SMBAction.RIGHT_JUMP, JUMP_FRAMES[3])
+    teacher_plan = ActionPlan(SMBAction.RIGHT_JUMP, 6)
 
     def given(copies, scenes):
         assert copies == [0, 1] and len(scenes) == 2
@@ -271,9 +282,10 @@ def test_given_tokens_replace_the_policy_only_where_given():
 
 
 def test_jumps_are_taught_the_middle_of_the_longest_certified_run():
+    from retroagi.core.smb_physics import NES_JUMP_FRAMES
     from retroagi.stages.block_smb.layered_train import jump_frame_label
 
-    menu = list(JUMP_FRAMES)
+    menu = list(NES_JUMP_FRAMES)
     assert jump_frame_label(menu[0], ()) == menu[0]
     assert jump_frame_label(menu[0], (menu[2], menu[3], menu[4], menu[9])) == menu[3]
     assert jump_frame_label(menu[0], (menu[9],)) == menu[9]
@@ -403,20 +415,20 @@ def _rows(xs):
     return [(p.src_a[None], p.src_b[None], p.src_c[None]) for p in picked]
 
 
-def test_the_memory_reads_only_the_two_latest_pictures():
+def test_the_memory_reads_only_the_latest_picture():
     torch.manual_seed(0)
     policy = LayeredSMBPolicy().eval()
-    # It takes the window's summary and nothing else: no action, no button.
+    # It takes the latest scene's summary and nothing else: no action, no button.
     assert policy.memory.cell.input_size == policy.settings.width
     with torch.no_grad():
-        frames = [policy.encode_scene(rows) for rows in _rows([150, 152, 160])]
-        coming = policy.remember(frames[1], frames[0], None)
-        going = policy.remember(frames[1], frames[2], None)
-        alone = policy.remember(frames[1], absent_like(frames[1]), None)
-        expected, _ = policy.expect(coming)
-    # The same picture with the enemy arriving from elsewhere, or from nowhere: different memory.
-    assert not torch.allclose(coming.hidden, going.hidden)
-    assert not torch.allclose(coming.hidden, alone.hidden)
+        frames = [policy.encode_scene(rows) for rows in _rows([150, 160])]
+        near = policy.remember(frames[0], None)
+        far = policy.remember(frames[1], None)
+        later = policy.remember(frames[1], near)
+        expected, _ = policy.expect(near)
+    assert not torch.allclose(near.hidden, far.hidden)
+    # What it saw at an earlier action stays in its state.
+    assert not torch.allclose(far.hidden, later.hidden)
     assert expected.shape == (1, SEQ_LEN_C)
 
 
@@ -430,9 +442,7 @@ def test_replaying_an_episode_gives_the_memory_play_gave():
     with torch.no_grad():
         state, played = None, []
         for t in starts:
-            now = policy.encode_scene(frames[t])
-            before = policy.encode_scene(frames[t - 1]) if t else absent_like(now)
-            state = policy.remember(now, before, state)
+            state = policy.remember(policy.encode_scene(frames[t]), state)
             played.append(state.hidden[0])
         a, b, c = (torch.cat([r[i] for r in frames]).unsqueeze(0) for i in range(3))
         d = {

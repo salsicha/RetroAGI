@@ -34,7 +34,9 @@ def floor_with_pit(pit=(100, 140)):
     return types
 
 
-def labels(types, instances=None, categories=None, kinds=None, standing=True, facing=True):
+def labels(
+    types, instances=None, categories=None, kinds=None, standing=True, facing=True, stomping=False
+):
     return SceneLabels(
         types=types,
         instances=instances if instances is not None else np.full(types.shape, -1, np.int32),
@@ -42,6 +44,7 @@ def labels(types, instances=None, categories=None, kinds=None, standing=True, fa
         kinds=kinds or {},
         standing=standing,
         facing_right=facing,
+        stomping=stomping,
     )
 
 
@@ -115,10 +118,13 @@ def test_objects_are_their_drawn_boxes_and_mario_support_reads_the_pixels_below(
         labels(types, np.where(instances == 0, -1, instances), {1: "moving_platform", 2: "mario"})
     )
     assert on_lift.mario.support == "moving_platform"
-    assert (
-        scene_from_labels(labels(types, instances, {0: "mario"}, standing=False)).mario.support
-        == "air"
-    )
+    in_air = scene_from_labels(labels(types, instances, {0: "mario"}, standing=False)).mario
+    assert in_air.support == "air" and not in_air.on_something
+    assert on_lift.mario.on_something
+    # Landing on an enemy: in the air, yet his feet are on something.
+    stomping = labels(types, instances, {0: "mario"}, standing=False, stomping=True)
+    assert scene_from_labels(stomping).mario.on_something
+    assert scene_targets(stomping)["stomping"] == 1
 
 
 def test_targets_decode_back_to_the_exact_scene():
@@ -138,6 +144,7 @@ def test_targets_decode_back_to_the_exact_scene():
         * 20.0,
         "facing_logits": one(torch.as_tensor(targets["facing"]), 2)[None].float() * 20,
         "support_logits": one(torch.as_tensor(targets["support"]), 3)[None].float() * 20,
+        "on_something_logits": one(torch.as_tensor(targets["on_something"]), 2)[None].float() * 20,
     }
     assert decode_scene(heads)[0] == scene_from_labels(truth_labels)
 

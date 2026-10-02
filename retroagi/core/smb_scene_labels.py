@@ -14,7 +14,8 @@ emulator memory in Full SMB. The vision transformer's scene is found from
 the per-pixel types it predicts, by the same rules for both games: each
 object (Mario, enemy, coin, power-up, moving platform) is a group of touching
 pixels of its type (objects_from_types), and surfaces, gaps, blocks and pipes
-come from structure_from_types. Only Mario's facing and support and each
+come from structure_from_types. Only Mario's facing, his support, whether his
+feet are on something (the landing signal) and each
 enemy's kind are read from its other outputs. So the scene differs from the
 truth only where the types differ, or where two objects of one type touch
 (the truth keeps them apart; one group of pixels cannot).
@@ -83,6 +84,9 @@ class MarioView:
     box: Optional[Box]  # None when Mario is not drawn
     facing_right: bool
     support: str  # one of SUPPORTS
+    # His feet are on something in this picture: the ground, a moving platform,
+    # or an enemy he is stomping. Turning on after he was in the air is a landing.
+    on_something: bool
 
 
 @dataclass(frozen=True)
@@ -134,6 +138,7 @@ class SceneLabels:
     kinds: Mapping[int, str]  # enemy object number -> one of ENEMY_KINDS
     standing: bool  # the game's own flag: Mario stands on something
     facing_right: bool  # Mario as drawn
+    stomping: bool  # the game's own event: this picture shows Mario landing on an enemy
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -390,6 +395,7 @@ def scene_from_labels(labels: SceneLabels) -> SceneObservation:
             box=mario_box,
             facing_right=bool(labels.facing_right),
             support=mario_support(labels.types, mario_box, labels.standing),
+            on_something=bool(labels.standing or labels.stomping),
         ),
         enemies=tuple(sorted(enemies, key=lambda e: (e.box[0], e.box[1]))),
         coins=_left_to_right(boxes[n] for n in by_category["coin"]),
@@ -485,8 +491,9 @@ def scene_targets(labels: SceneLabels) -> dict[str, np.ndarray]:
 
     types [240, 256]; kind [30, 32]: in each 8x8 cell holding enemy pixels,
     the ENEMY_KINDS index of the enemy drawing most of them (-1 elsewhere);
-    facing (1 = right), support (SUPPORTS index) and mario_present are
-    numbers.
+    facing (1 = right), support (SUPPORTS index), on_something (1 = his feet
+    are on something), stomping (1 = on an enemy: weighted up, being rare) and
+    mario_present are numbers.
     """
     scene = scene_from_labels(labels)
     rows, columns = CELL_GRID
@@ -510,6 +517,8 @@ def scene_targets(labels: SceneLabels) -> dict[str, np.ndarray]:
         "kind": kind,
         "facing": np.int64(scene.mario.facing_right),
         "support": np.int64(SUPPORTS.index(scene.mario.support)),
+        "on_something": np.int64(scene.mario.on_something),
+        "stomping": np.int64(bool(labels.stomping)),
         "mario_present": np.int64(scene.mario.box is not None),
     }
 
@@ -528,6 +537,7 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
     types = chosen("pixel_logits")
     kind_probability = torch.softmax(heads["kind_logits"].float(), dim=1).cpu().numpy()
     facing, support = chosen("facing_logits"), chosen("support_logits")
+    on_something = chosen("on_something_logits")
     scenes = []
     for b in range(types.shape[0]):
         objects = objects_from_types(types[b], kind_probability[b])
@@ -537,6 +547,7 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
                     box=objects.pop("mario"),
                     facing_right=bool(facing[b]),
                     support=SUPPORTS[int(support[b])],
+                    on_something=bool(on_something[b]),
                 ),
                 **objects,
                 **structure_from_types(types[b]),

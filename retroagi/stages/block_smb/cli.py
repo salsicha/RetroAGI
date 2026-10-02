@@ -774,11 +774,6 @@ def build_parser() -> argparse.ArgumentParser:
     exam_layer.add_argument("--layouts-per-difficulty", type=int, default=6)
     exam_layer.add_argument("--first-layout", type=int, default=100)
     exam_layer.add_argument("--workers", type=int, default=12)
-    exam_layer.add_argument(
-        "--steady-frames-quantile",
-        type=float,
-        help="read walk and wait lengths cautiously (see PolicySettings)",
-    )
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a saved Block SMB checkpoint")
     _add_common_config_args(evaluate)
@@ -1421,7 +1416,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             layouts_per_difficulty=args.layouts_per_difficulty,
             first_layout=args.first_layout,
             workers=args.workers,
-            steady_frames_quantile=args.steady_frames_quantile,
         )
     elif args.command == "evaluate":
         if int(getattr(args, "evaluation_seeds", 1)) > 1:
