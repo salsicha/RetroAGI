@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import copy
 import random
+from pathlib import Path
 
 from .compose import FLOOR, compose, route_actions
 from .tactic_schedule import segment
@@ -236,22 +237,40 @@ def _coins_collected(scenario: dict, route: list[int]) -> int:
         env.close()
 
 
-# Each layout's route combinations, as played by the teacher: siblings made in
-# the same process share them (the layout depends only on the sample's seed).
+# Each layout's route combinations, as played by the teacher. The three
+# strategy siblings play the same layouts (the layout depends only on the
+# sample's seed), so the results are kept in memory and on disk, where every
+# worker process finds them (RETROAGI_ROUTE_CACHE, else a temporary folder).
 _PLAYED: dict = {}
+
+
+def _route_cache() -> Path:
+    import os
+    import tempfile
+
+    return Path(os.environ.get("RETROAGI_ROUTE_CACHE") or tempfile.gettempdir()) / (
+        "retroagi_route_cache"
+    )
 
 
 def _played_routes(scenario: dict) -> dict:
     """{combination: (frames, coins collected, enemies passed, route)} for every
     route combination the teacher finishes."""
+    import hashlib
     import json
+    import os
 
     key = json.dumps(
         {k: v for k, v in scenario.items() if k not in ("strategy", "strategy_objective")},
         sort_keys=True,
         default=str,
     )
-    if key not in _PLAYED:
+    if key in _PLAYED:
+        return _PLAYED[key]
+    path = _route_cache() / (hashlib.sha256(key.encode()).hexdigest() + ".json")
+    try:
+        played = {c: tuple(v) for c, v in json.loads(path.read_text()).items()}
+    except (OSError, ValueError):
         played = {}
         for combination, schedule in scenario["route_tactics"].items():
             trial = {
@@ -264,10 +283,17 @@ def _played_routes(scenario: dict) -> dict:
             if route:
                 hazards = scenario["route_hazards"][combination]
                 played[combination] = (len(route), _coins_collected(trial, route), hazards, route)
-        if len(_PLAYED) > 64:
-            _PLAYED.clear()
-        _PLAYED[key] = played
-    return _PLAYED[key]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            spare = path.with_suffix(f".{os.getpid()}.tmp")
+            spare.write_text(json.dumps(played))
+            os.replace(spare, path)  # whole files only, for the other workers
+        except OSError:
+            pass
+    if len(_PLAYED) > 64:
+        _PLAYED.clear()
+    _PLAYED[key] = played
+    return played
 
 
 def _strategy_route(family: str, scenario: dict) -> list[int]:

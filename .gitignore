@@ -57,3 +57,9 @@ artifacts/block_smb/full_curve_*
 !/artifacts/full_smb/p3a_env_check.json
 !/artifacts/full_smb/recording_manifest.npz
 /artifacts/smb_composable/
+
+# Superseded vision transformer checkpoints kept locally for comparison: before
+# the land detector (in git history) and the first land-detector run (stomp
+# pictures weighted 20, worse at objects).
+data/*_vit/*_before_land_detector*
+data/*_vit/*_stomp20*

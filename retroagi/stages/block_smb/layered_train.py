@@ -261,6 +261,11 @@ def task_scenario(task: EpisodeTask) -> dict:
     )
 
 
+# An episode that makes no progress for this many frames ends as a timeout:
+# no new tactic segment or route platform, and Mario no nearer the goal.
+STALL_FRAMES = 400
+
+
 class _Lane:
     """One episode being played: the simulator, its teacher, and the records."""
 
@@ -282,6 +287,17 @@ class _Lane:
         self.frames: dict[str, list] = defaultdict(list)
         self.decisions: dict[str, list] = defaultdict(list)
         self.asked: dict = {}
+        self.progress, self.progressed = None, 0
+
+    def stalled(self) -> bool:
+        """Whether the episode has made no progress for STALL_FRAMES frames."""
+        env = self.env
+        nearest = abs(env.mario["x"] - env.goal.centerx) if env.goal is not None else 0.0
+        mark = (env._tactic_index, env._route_done)
+        if self.progress is None or mark != self.progress[0] or nearest < self.progress[1] - 1:
+            self.progress = (mark, min(nearest, self.progress[1]) if self.progress else nearest)
+            self.progressed = env.steps
+        return env.steps - self.progressed > STALL_FRAMES
 
     def ask_teacher(self, learner: str, scene) -> dict:
         """The teacher's tokens (and, for the action learner, its plan) here.
@@ -460,7 +476,7 @@ def play_episodes(
             lane.screen, reward, terminated, truncated, info = lane.env.step(step.button)
             lane.frames["reward"].append(float(reward))
             lane.goal += float(info["reward_terms"].get("goal", 0.0))
-            if len(lane.frames["button"]) >= lane.frame_limit:
+            if len(lane.frames["button"]) >= lane.frame_limit or lane.stalled():
                 truncated = True
             if terminated or truncated:
                 lane.end = (
@@ -504,25 +520,38 @@ class EpisodePool:
     def play(
         self, tasks: Sequence[EpisodeTask], *, as_deployed: bool = False
     ) -> list[EpisodeRecord]:
-        """Play the tasks for the learner, or (``as_deployed``) with no teacher at all."""
-        # Spread the episodes over every worker, at most two batches of lanes per job.
-        size = max(1, min(self.config.lanes * 2, -(-len(tasks) // self.config.workers)))
+        """Play the tasks for the learner, or (``as_deployed``) with no teacher at all.
+
+        The tasks go out shuffled, one batch of lanes per job, so slow and fast
+        families mix and every worker stays busy to the end; the records come
+        back in the tasks' order.
+        """
+        order = list(range(len(tasks)))
+        random.Random(self.version).shuffle(order)
+        size = self.config.lanes
+        chunks = [order[i : i + size] for i in range(0, len(order), size)]
         jobs = [
             (
                 str(self.weights),
                 self.version,
                 None if as_deployed else self.config.learner,
                 self.config.lanes,
-                chunk,
+                [tasks[i] for i in chunk],
             )
-            for chunk in (tasks[i : i + size] for i in range(0, len(tasks), size))
+            for chunk in chunks
         ]
-        return [record for chunk in self.pool.map(_play_job, jobs) for record in chunk]
+        records: list = [None] * len(tasks)
+        for chunk, played in zip(chunks, self.pool.map(_play_job, jobs)):
+            for i, record in zip(chunk, played):
+                records[i] = record
+        return records
 
     def with_scenarios(self, tasks: Sequence[EpisodeTask]) -> list[EpisodeTask]:
         """The tasks with their layouts made once (for sets played every round)."""
-        scenarios = self.pool.map(task_scenario, tasks)
-        return [dataclasses.replace(t, scenario=s) for t, s in zip(tasks, scenarios)]
+        order = list(range(len(tasks)))
+        random.Random(len(tasks)).shuffle(order)  # slow families spread over the workers
+        made = dict(zip(order, self.pool.map(task_scenario, [tasks[i] for i in order])))
+        return [dataclasses.replace(t, scenario=made[i]) for i, t in enumerate(tasks)]
 
     def close(self) -> None:
         self.pool.shutdown(cancel_futures=True)
@@ -920,7 +949,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     replay: list[EpisodeRecord] = []
     focus: dict[str, int] = {}  # extra layouts per family, from the last validation
     history: list[dict] = []
-    best = -1.0
+    best = best_passed = -1.0
     try:
         for round_index in range(config.rounds + config.reward_rounds):
             started = time.time()
@@ -1022,6 +1051,10 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             if mean > best:
                 best = mean
                 save_layered_checkpoint(output / "best.pt", policy, config, layers, history)
+            if gate_met and mean > best_passed:
+                # The best round that met the gate: the next layer starts from it.
+                best_passed = mean
+                save_layered_checkpoint(output / "passed.pt", policy, config, layers, history)
             (output / "history.json").write_text(json.dumps(history, indent=2))
     finally:
         pool.close()
