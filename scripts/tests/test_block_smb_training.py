@@ -845,6 +845,9 @@ class TestBlockSMBTraining(unittest.TestCase):
     # Every family x difficulty layout is generated with a physics-verified
     # route; NES-length arcs make that take over a minute on one CPU.
     @pytest.mark.timeout(300)
+    # Every family x difficulty layout is made with its teacher's route; the
+    # composed and strategy-course families take several seconds each.
+    @pytest.mark.timeout(1800)
     def test_monte_carlo_evaluation_can_use_full_parameter_sweep(self):
         config = tiny_config(
             generated_scenarios=0,
@@ -872,8 +875,9 @@ class TestBlockSMBTraining(unittest.TestCase):
         self.assertFalse(evaluation["coverage"]["missing_families"])
 
     # Every family x difficulty layout is generated with a physics-verified
-    # route; NES-length arcs make that take over a minute on one CPU.
-    @pytest.mark.timeout(300)
+    # route; NES-length arcs, composed scenes and strategy courses make that
+    # take many minutes on one CPU.
+    @pytest.mark.timeout(1800)
     def test_validation_measures_every_family_on_a_fixed_layout_base(self):
         # The joint draw spread ~40 validation layouts over 21 families
         # (~2 each), so per-family curves and the mastery gate steered on

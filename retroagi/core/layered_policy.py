@@ -16,9 +16,10 @@ Every layer sees the game only through the vision transformer
   told what Mario will do; what happened earlier it carries itself. From its state it predicts the world when the
   coming action ends: the scene numbers the vision transformer will report
   then. It is trained action by action against what was actually reported.
-- Each layer reads the current scene's tokens, the expected scene's tokens
-  (the memory's prediction, encoded the same way) and the token from the
-  layer above, and emits its own token: strategy -> tactic -> skill -> action. The
+- Each layer is a transformer whose context holds the current scene's
+  tokens, the expected scene's tokens (the memory's prediction, encoded the
+  same way), the token from the layer above, and its own last 16 choices
+  (each marked with how many decisions ago it was made), and emits its own token: strategy -> tactic -> skill -> action. The
   action layer's output is an executor plan: an action and a frame count
   (smb_executor). The skill layer points at its target among the scene's
   surfaces, enemies and moving platforms.
@@ -71,6 +72,51 @@ from .tokens import (
 
 LAYERS = ("strategy", "tactic", "skill", "action")
 FRAME_BINS = len(FRAME_COUNTS)  # the action layer's frame-count choices, per action
+# Each layer's context holds its own last HISTORY choices (the ones used).
+HISTORY = 16
+ACTION_WIDTH = len(SMB_ACTIONS) + FRAME_BINS
+# A remembered skill choice: the skill, direction, and where its target was
+# (present, then its box measured from Mario at that moment), not which slot it
+# was in: slots are re-filled for every picture.
+SKILL_HISTORY_WIDTH = len(SKILLS) + 1 + TARGET_WIDTH
+SKILL_HISTORY_POSITIONS = tuple(range(len(SKILLS) + 2, SKILL_HISTORY_WIDTH))
+CHOICE_WIDTH = {
+    "strategy": STRATEGY_WIDTH,
+    "tactic": TACTIC_WIDTH,
+    "skill": SKILL_HISTORY_WIDTH,
+    "action": ACTION_WIDTH,
+}
+
+
+def encode_plan(plan: ActionPlan) -> torch.Tensor:
+    """[ACTION_WIDTH]: one-hot button action, then one-hot frame count (1 to 32)."""
+    vector = torch.zeros(ACTION_WIDTH)
+    vector[plan.action] = 1.0
+    vector[len(SMB_ACTIONS) + FRAME_COUNTS.index(plan.frames)] = 1.0
+    return vector
+
+
+def encode_remembered_skill(skill: SkillToken, target=None) -> torch.Tensor:
+    """[SKILL_HISTORY_WIDTH]: one-hot skill, direction, then the target's place:
+    ``target`` is the c_target row used with the skill (present, then the box
+    measured from Mario), zeros for none."""
+    vector = torch.zeros(SKILL_HISTORY_WIDTH)
+    vector[SKILLS.index(skill.kind)] = 1.0
+    vector[len(SKILLS)] = float(skill.direction)
+    if target is not None:
+        vector[len(SKILLS) + 1 :] = torch.as_tensor(target, dtype=torch.float32)
+    return vector
+
+
+def encode_choice(layer: str, choice, target=None) -> torch.Tensor:
+    """A layer's choice (token or ActionPlan) as the numbers its history holds.
+
+    ``target``: for the skill layer, the c_target row used with the skill.
+    """
+    if layer == "skill":
+        return encode_remembered_skill(choice, target)
+    encode = {"strategy": encode_strategy, "tactic": encode_tactic, "action": encode_plan}[layer]
+    return encode(choice)
 
 
 @dataclass(frozen=True)
@@ -274,13 +320,26 @@ class Memory(nn.Module):
 
 
 class _Layer(nn.Module):
-    """The current scene's tokens + the expected scene's tokens (the memory's
-    prediction of the world when the coming action ends) + the token from above
-    -> a decision token."""
+    """A transformer whose context holds the current scene's tokens, the expected
+    scene's tokens (the memory's prediction of the world when the coming action
+    ends), the token from above, and its own last HISTORY choices, each marked
+    with how many decisions ago it was made -> a decision token."""
 
-    def __init__(self, settings: PolicySettings, above_width: int, outputs: Mapping[str, int]):
+    def __init__(
+        self,
+        settings: PolicySettings,
+        above_width: int,
+        outputs: Mapping[str, int],
+        choice_width: int,
+        choice_positions: tuple = (),
+    ):
         super().__init__()
         width = settings.width
+        # Its own previous choices (any position numbers in them also as sine and
+        # cosine waves), and how many decisions ago each was made.
+        self.history_waves = PositionWaves(choice_positions, settings.position_frequencies)
+        self.history = nn.Linear(choice_width + self.history_waves.extra_width(), width)
+        self.history_age = nn.Parameter(torch.zeros(HISTORY, width))
         # Marks the expected scene's tokens apart from the current scene's.
         self.expected_marker = nn.Parameter(torch.zeros(1, 1, width))
         self.above = nn.Linear(above_width, width) if above_width else None
@@ -293,28 +352,37 @@ class _Layer(nn.Module):
         self.heads = nn.ModuleDict({name: nn.Linear(width, size) for name, size in outputs.items()})
         self.value = nn.Linear(width, 1)
 
-    def encode(self, scene_tokens, present, expected, above=None):
-        """Returns the decision token and the current scene's tokens after the blocks."""
+    def encode(self, scene_tokens, present, expected, above=None, history=None):
+        """Returns the decision token and the current scene's tokens after the blocks.
+
+        ``history``: (choices [B, HISTORY, choice width], present [B, HISTORY]),
+        the layer's own previous choices, the most recent first; None for none.
+        """
         batch = scene_tokens.shape[0]
         expected_tokens, expected_present = expected
         extra = [self.query.expand(batch, -1, -1)]
         if self.above is not None:
             extra.append(self.above(above).unsqueeze(1))
-        tokens = torch.cat((*extra, scene_tokens, expected_tokens + self.expected_marker), dim=1)
-        mask = torch.cat(
-            (
-                torch.ones(batch, len(extra), dtype=torch.bool, device=present.device),
-                present,
-                expected_present,
-            ),
-            dim=1,
-        )
+        parts = [*extra, scene_tokens, expected_tokens + self.expected_marker]
+        masks = [
+            torch.ones(batch, len(extra), dtype=torch.bool, device=present.device),
+            present,
+            expected_present,
+        ]
+        if history is not None:
+            choices, made = history
+            parts.append(self.history(self.history_waves(choices)) + self.history_age)
+            masks.append(made)
+        tokens = torch.cat(parts, dim=1)
+        mask = torch.cat(masks, dim=1)
         out = self.norm(self.blocks(tokens, src_key_padding_mask=~mask))
         seen = slice(len(extra), len(extra) + scene_tokens.shape[1])
         return out[:, 0], out[:, seen]
 
-    def forward(self, scene_tokens, present, expected, above=None) -> dict[str, torch.Tensor]:
-        decision, _ = self.encode(scene_tokens, present, expected, above)
+    def forward(
+        self, scene_tokens, present, expected, above=None, history=None
+    ) -> dict[str, torch.Tensor]:
+        decision, _ = self.encode(scene_tokens, present, expected, above, history)
         out = {name: head(decision) for name, head in self.heads.items()}
         # The estimate of reward to come reads the decision without shaping it.
         out["value"] = self.value(decision.detach()).squeeze(-1)
@@ -326,13 +394,17 @@ class SkillLayer(_Layer):
 
     def __init__(self, settings: PolicySettings):
         super().__init__(
-            settings, TACTIC_WIDTH, {"skill": len(SKILLS), "direction": 2, "contact": 1}
+            settings,
+            TACTIC_WIDTH,
+            {"skill": len(SKILLS), "direction": 2},
+            SKILL_HISTORY_WIDTH,
+            SKILL_HISTORY_POSITIONS,
         )
         self.pointer_key = nn.Linear(settings.width, settings.width)
         self.no_target = nn.Parameter(torch.zeros(1))
 
-    def forward(self, scene_tokens, present, expected, above=None, target_index=None):
-        decision, encoded = self.encode(scene_tokens, present, expected, above)
+    def forward(self, scene_tokens, present, expected, above=None, history=None, target_index=None):
+        decision, encoded = self.encode(scene_tokens, present, expected, above, history)
         out = {name: head(decision) for name, head in self.heads.items()}
         # The estimate of reward to come reads the decision without shaping it.
         out["value"] = self.value(decision.detach()).squeeze(-1)
@@ -356,13 +428,18 @@ class LayeredSMBPolicy(nn.Module):
         self.settings = settings
         self.scene = SceneEncoder(settings)
         self.memory = Memory(settings)
-        self.strategy = _Layer(settings, 0, {"strategy": len(STRATEGIES), "direction": 2})
-        self.tactic = _Layer(settings, STRATEGY_WIDTH, {"tactic": len(TACTICS), "direction": 2})
+        self.strategy = _Layer(
+            settings, 0, {"strategy": len(STRATEGIES), "direction": 2}, STRATEGY_WIDTH
+        )
+        self.tactic = _Layer(
+            settings, STRATEGY_WIDTH, {"tactic": len(TACTICS), "direction": 2}, TACTIC_WIDTH
+        )
         self.skill = SkillLayer(settings)
         self.action = _Layer(
             settings,
             SKILL_WIDTH,
             {"action": len(SMB_ACTIONS), "frames": len(SMB_ACTIONS) * FRAME_BINS},
+            ACTION_WIDTH,
         )
         # Set once the strategy layer has learned from Full SMB play.
         self.register_buffer("strategy_trained", torch.zeros((), dtype=torch.bool))
@@ -397,29 +474,44 @@ class LayeredSMBPolicy(nn.Module):
         """Batched PolicyInput rows (src_a, src_b, src_c) -> scene tokens and their mask."""
         return self.scene(*inputs)
 
-    def run_layer(self, layer: str, encoded, expected, above=None):
+    def run_layer(self, layer: str, encoded, expected, above=None, history=None):
         """One layer's raw outputs from the encoded current scene, the encoded
-        expected scene and the (encoded) token from the layer above (none for
-        the strategy layer)."""
+        expected scene, the (encoded) token from the layer above (none for the
+        strategy layer) and the layer's own previous choices (``history``, see
+        _Layer.encode)."""
         scene_tokens, present = encoded
         if layer == "skill":
             index = self.scene.target_token_index.to(scene_tokens.device)
-            return self.skill(scene_tokens, present, expected, above, target_index=index)
-        return getattr(self, layer)(scene_tokens, present, expected, above)
+            return self.skill(scene_tokens, present, expected, above, history, target_index=index)
+        return getattr(self, layer)(scene_tokens, present, expected, above, history)
 
-    def layer_outputs(self, inputs, expected, tokens_above: Mapping[str, torch.Tensor]):
+    def layer_outputs(
+        self,
+        inputs,
+        expected,
+        tokens_above: Mapping[str, torch.Tensor],
+        histories: Optional[Mapping[str, tuple]] = None,
+    ):
         """Raw outputs of each layer whose token from above is given (encoded).
 
-        ``expected``: the encoded expected scene (expect). The strategy layer
-        needs no token and always runs; the tactic layer runs given "strategy",
-        the skill layer given "tactic", the action layer given "skill". Tokens
-        may come from a teacher (training) or from the layer above.
+        ``expected``: the encoded expected scene (expect); ``histories``: each
+        layer's previous choices (_Layer.encode). The strategy layer needs no
+        token and always runs; the tactic layer runs given "strategy", the skill
+        layer given "tactic", the action layer given "skill". Tokens may come
+        from a teacher (training) or from the layer above.
         """
+        histories = histories or {}
         encoded = self.encode_scene(inputs)
-        out = {"strategy": self.run_layer("strategy", encoded, expected)}
+        out = {
+            "strategy": self.run_layer(
+                "strategy", encoded, expected, history=histories.get("strategy")
+            )
+        }
         for layer, above in (("tactic", "strategy"), ("skill", "tactic"), ("action", "skill")):
             if above in tokens_above:
-                out[layer] = self.run_layer(layer, encoded, expected, tokens_above[above])
+                out[layer] = self.run_layer(
+                    layer, encoded, expected, tokens_above[above], histories.get(layer)
+                )
         return out
 
 
@@ -427,14 +519,14 @@ class LayeredSMBPolicy(nn.Module):
 #
 # Each layer's choice is a few categorical picks, named by its heads:
 # strategy (strategy, direction), tactic (tactic, direction), skill (skill,
-# direction, contact, pointer) and action (action, frames: the frame-count bin
+# direction, pointer) and action (action, frames: the frame-count bin
 # on the chosen action's menu). ``choose`` picks them for one picture, the most
 # likely or sampled; ``choice_log_prob`` scores picks for a batch (training).
 
 CHOICES = {
     "strategy": ("strategy", "direction"),
     "tactic": ("tactic", "direction"),
-    "skill": ("skill", "direction", "contact", "pointer"),
+    "skill": ("skill", "direction", "pointer"),
     "action": ("action", "frames"),
 }
 
@@ -443,9 +535,7 @@ def _distributions(layer: str, out: Mapping[str, torch.Tensor], chosen_action=No
     """Batched distributions of a layer's picks; ``frames`` needs the chosen actions."""
     found = {}
     for head in CHOICES[layer]:
-        if head == "contact":
-            found[head] = torch.distributions.Bernoulli(logits=out["contact"].squeeze(-1))
-        elif head == "frames":
+        if head == "frames":
             rows = out["frames"].view(-1, len(SMB_ACTIONS), FRAME_BINS)
             index = torch.arange(rows.shape[0], device=rows.device)
             found[head] = torch.distributions.Categorical(logits=rows[index, chosen_action])
@@ -465,8 +555,6 @@ def choose(layer: str, out: Mapping[str, torch.Tensor], *, sample: bool = False)
         distribution = _distributions(layer, batched, action)[head]
         if sample:
             value = distribution.sample()
-        elif head == "contact":
-            value = (distribution.logits > 0).float()
         else:
             value = distribution.logits.argmax(-1)
         picks[head] = int(value.item())
@@ -484,7 +572,6 @@ def token_from_picks(layer: str, picks: Mapping[str, int]):
         return SkillToken(
             SKILLS[picks["skill"]],
             direction,
-            bool(picks["contact"]),
             None if pointer == NO_TARGET else TARGETS[pointer],
         )
     return ActionPlan(picks["action"], FRAME_COUNTS[picks["frames"]])
@@ -495,7 +582,7 @@ def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[
     distributions = _distributions(layer, out, picks.get("action"))
     log_prob = entropy = 0.0
     for head in CHOICES[layer]:
-        value = picks[head].float() if head == "contact" else picks[head].long()
+        value = picks[head].long()
         log_prob = log_prob + distributions[head].log_prob(value)
         entropy = entropy + distributions[head].entropy()
     return log_prob, entropy

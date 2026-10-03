@@ -78,7 +78,7 @@ def runner_crossing_frame(scenario, plant, *, limit=240):
     from .env import MarioScenarioEnv
 
     flat = copy.deepcopy(
-        {k: v for k, v in scenario.items() if k not in ("enemies", "platform_kinds")}
+        {k: v for k, v in scenario.items() if k not in ("enemies", "platform_kinds", "tactics")}
     )
     flat["platforms"] = [scenario["platforms"][0]]
     env = MarioScenarioEnv()
@@ -126,9 +126,12 @@ def freeze_plant_envelopes(env):
             position_plant(enemy)
 
 
-def conservative_suffix(env, *, max_frames=320, release_state=None, variant=0):
+def conservative_suffix(env, *, max_frames=320, release_state=None, variant=0, replay_check=True):
+    """The teacher's route with every plant held at its full height; it must
+    then win with the plants as they are (through the old jump executor too,
+    with replay_check)."""
     from .geometry_expert import restore_env_state, snapshot_env_state
-    from .policy_recovery import _coached_suffix
+    from .policy_recovery import _coached_suffix, route_wins
     from .primitive_execution import teacher_route_reachable
 
     saved = snapshot_env_state(env)
@@ -140,13 +143,18 @@ def conservative_suffix(env, *, max_frames=320, release_state=None, variant=0):
             release_state=release_state,
             hold_variant=variant,
             robust_takeoff=True,
+            replay_check=False,
         )
         restore_env_state(env, saved)
-        if actions is not None and teacher_route_reachable(
-            env, actions, release_state=release_state
-        ):
-            return actions
-        return None
+        if actions is None:
+            return None
+        if replay_check:
+            return (
+                actions
+                if teacher_route_reachable(env, actions, release_state=release_state)
+                else None
+            )
+        return actions if route_wins(env, actions) else None
     finally:
         restore_env_state(env, saved)
 

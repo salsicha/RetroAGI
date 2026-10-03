@@ -49,6 +49,12 @@ def training_target(env):
         target = required_stomp(env)
         if target is not None:
             return target
+    # The layout's tactic segment: its route's next platform, or its retreat line.
+    from retroagi.stages.block_smb.local_traversal import retreat_objective, route_objective
+
+    target = route_objective(env) or retreat_objective(env)
+    if target is not None:
+        return target
     return plant_clearance_target(env, local_objective(env))
 
 

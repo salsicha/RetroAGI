@@ -20,6 +20,7 @@ from retroagi.stages.block_smb.monte_carlo import (
     validate_block_smb_monte_carlo_oracle,
 )
 from retroagi.stages.block_smb.policy_recovery import RECOVERY_FAMILIES, repair_policy_actions
+from retroagi.stages.block_smb.tactic_families import NEW_FAMILIES
 from retroagi.stages.block_smb.transfer_failure_families import TRANSFER_FAILURE_FAMILIES
 from scripts.tests.test_block_smb_training import StaticBlockVision, tiny_config
 from scripts.tests.test_tall_pipe_traversal import PhaseIntentPolicy, rollout
@@ -48,7 +49,8 @@ def test_new_families_append_without_renumbering_cached_family_labels():
     ).split()
     assert BLOCK_SMB_MC_FAMILIES[:24] == tuple(original)
     assert BLOCK_SMB_MC_FAMILIES[24:28] == TRANSFER_FAILURE_FAMILIES
-    assert BLOCK_SMB_MC_FAMILIES[28:] == HIERARCHY_FAMILIES
+    assert BLOCK_SMB_MC_FAMILIES[28:32] == HIERARCHY_FAMILIES
+    assert BLOCK_SMB_MC_FAMILIES[32:] == NEW_FAMILIES
     assert set(TRANSFER_FAILURE_FAMILIES) <= LOCAL_TRAVERSAL_FAMILIES & RECOVERY_FAMILIES
     config = json.loads(Path("scripts/configs/block_smb_full_volume.json").read_text())
     assert all(config["monte_carlo_family_weights"][f] > 0 for f in TRANSFER_FAILURE_FAMILIES)

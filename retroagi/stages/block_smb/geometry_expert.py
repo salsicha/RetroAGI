@@ -24,6 +24,7 @@ from typing import Any, Mapping, Optional
 
 import pygame
 
+from retroagi.stages.block_smb import tactic_schedule
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
 NOOP = 0
@@ -63,6 +64,8 @@ def snapshot_env_state(env: MarioScenarioEnv) -> dict[str, Any]:
         "_attempt_failed",
         "_prev_goal_distance",
         "_episode_energy",
+        "_objective_missed",
+        *tactic_schedule.STATE_FIELDS,
     )
     return {
         "motion": copy.deepcopy(env.motion),

@@ -103,13 +103,31 @@ def test_post_stomp_pipe_stall_is_repaired_and_only_suffix_is_supervised():
     assert data.valid_durations[0].any()
 
 
+# An enemy and two pipes, the second taller (the hand-made chained_obstacles
+# layout before the chained families were composed from sections).
+TWO_PIPES = {
+    "world_width": 512,
+    "mario": [20, 204],
+    "platforms": [[0, 220, 512, 20], [178, 178, 28, 42], [317, 162, 32, 58]],
+    "platform_kinds": ["ground", "pipe", "pipe"],
+    "enemies": [
+        [97, 206, 97, 97, 0],
+        {"x": 386, "y": 206, "patrol_min": 374, "patrol_max": 414, "speed": 0.484},
+    ],
+    "coins": [[132, 190, 10, 10], [220, 176, 10, 10], [356, 156, 10, 10], [430, 190, 10, 10]],
+    "goal": [482, 200, 16, 20],
+    "reward_goal_distance_shaping": 2.0,
+    "goal_requires_support": True,
+}
+
+
 def test_short_second_pipe_jump_gets_certified_longer_hold_and_complete_recovery():
-    case = sample("chained_obstacles", "hard", 351)
+    scenario = TWO_PIPES
     # Stomp, mount and leave the first pipe, then a 6-frame jump at the taller second pipe.
     runs = [(1, 26), (2, 20), (1, 46), (2, 20), (1, 46), (2, 6), (1, 160)]
     actions = [action for action, count in runs for _ in range(count)]
-    repairs = repair_policy_actions(case.scenario, actions)
-    assert_completed(case.scenario, repairs)
+    repairs = repair_policy_actions(scenario, actions)
+    assert_completed(scenario, repairs)
     assert any(
         r["recovery_reason"] == "duration" and r["supervision_start_frame"] == 158 for r in repairs
     )

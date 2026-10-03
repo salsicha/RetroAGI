@@ -15,7 +15,7 @@ LOCAL_TRAVERSAL_FAMILIES = frozenset(
     "platform_chain mixed_section full_smb_opening_proxy enemy_patrol enemy_gap "
     "chained_obstacles chained_enemy_gauntlet".split()
     + list(TRANSFER_FAILURE_FAMILIES)
-    + ["tactics_obstacle_sequence", "strategy_mixed_sequence", "strategy_bridge_then_gap"]
+    + ["tactics_obstacle_sequence", "tactics_mixed_sequence", "tactics_bridge_then_gap"]
 )
 
 
@@ -55,9 +55,13 @@ class LocalObjective:
         if self.platform_index is not None:
             target = env.platforms[self.platform_index]
             support = m.get("_platform")
+            off_route = support is not None and any(
+                env.platforms[i] is support for i in _forbidden(env)
+            )
             return bool(
                 m["on_ground"]
                 and support is not None
+                and not off_route
                 and (
                     support is target
                     or (
@@ -86,19 +90,32 @@ def _clear_path_under(env, left, right, bottom):
     )
 
 
+def _forbidden(env) -> frozenset:
+    """Platforms the current tactic segment forbids or avoids: never a target or landing."""
+    from . import tactic_schedule
+
+    seg = tactic_schedule.current(env)
+    return frozenset((*seg.get("forbidden", ()), *seg.get("avoid", ())))
+
+
 def local_objective(env) -> LocalObjective:
-    """Next obstacle in the direction of the goal, based on current geometry."""
+    """Next obstacle in the direction of the goal, based on current geometry.
+
+    Platforms the layout's current tactic segment forbids or avoids are left out.
+    """
     m = env.mario
     x, feet = m["x"], m["y"] + m["h"]
     goal = env.goal
     finish = LocalObjective("finish", goal.left, goal.right, goal.bottom)
     if goal.centerx < x:
         return _left_objective(env)
+    forbidden = _forbidden(env)
     candidates = []
     for i, p in enumerate(env.platforms):
         r = p["rect"]
         if (
-            r.right <= x
+            i in forbidden
+            or r.right <= x
             or r.left >= goal.right
             or p.get("moving")
             or _clear_path_under(env, r.left, r.right, r.bottom)
@@ -120,7 +137,7 @@ def local_objective(env) -> LocalObjective:
         landings = [
             (i, p["rect"])
             for i, p in enumerate(env.platforms)
-            if not p.get("moving") and p["rect"].left >= edge
+            if not p.get("moving") and p["rect"].left >= edge and i not in forbidden
         ]
         # A raised pipe ending above continuous lower floor is a descent,
         # not a pit. Calling it a gap selects the next pipe as a landing and
@@ -156,6 +173,53 @@ def local_objective(env) -> LocalObjective:
                 )
             )
     return min(candidates, key=lambda pair: pair[0])[1] if candidates else finish
+
+
+def route_objective(env) -> LocalObjective | None:
+    """The tactic segment's next platform to stand on (tactic_schedule), if any.
+
+    Higher than Mario's feet it is climbed, lower it is descended to (both
+    "mount": reached by standing on it); level with them, across open space,
+    it is a gap, and otherwise walked onto.
+    """
+    from . import tactic_schedule
+
+    index = tactic_schedule.next_route_platform(env)
+    if index is None:
+        return None
+    rect = env.platforms[index]["rect"]
+    m = env.mario
+    feet = m["y"] + m["h"]
+    if m["x"] + m["w"] <= rect.left:
+        direction = 1
+    elif m["x"] >= rect.right:
+        direction = -1
+    else:
+        direction = tactic_schedule.current(env)["direction"]
+    level = abs(rect.top - feet) <= 1
+    support = m.get("_platform")
+    touching = support is not None and (
+        support["rect"].right >= rect.left if direction > 0 else support["rect"].left <= rect.right
+    )
+    if level and m["on_ground"] and not touching:
+        near, far = (rect.left, min(rect.right, rect.left + 48))
+        if direction < 0:
+            near, far = max(rect.left, rect.right - 48), rect.right
+        return LocalObjective("gap", near, far, rect.top, index, direction=direction)
+    return LocalObjective("mount", rect.left, rect.right, rect.top, index, direction=direction)
+
+
+def retreat_objective(env) -> LocalObjective | None:
+    """A retreat segment's line to walk back to (tactic_schedule), if it is current."""
+    from . import tactic_schedule
+
+    seg = tactic_schedule.current(env)
+    if seg["stance"] != "retreat" or seg["kind"] != "plain" or "reach_x" not in seg["end"]:
+        return None
+    x = float(seg["end"]["reach_x"])
+    return LocalObjective(
+        "retreat", x - 8, x + 8, env.mario["y"] + env.mario["h"], direction=seg["direction"]
+    )
 
 
 def _plant_pipe_index(env, plant):
@@ -217,11 +281,13 @@ def _left_objective(env) -> LocalObjective:
     x, feet = m["x"], m["y"] + m["h"]
     goal = env.goal
     finish = LocalObjective("retreat", goal.left, goal.right, goal.bottom, direction=-1)
+    forbidden = _forbidden(env)
     candidates = []
     for i, p in enumerate(env.platforms):
         r = p["rect"]
         if (
-            not p.get("moving")
+            i not in forbidden
+            and not p.get("moving")
             and r.left < x
             and r.right > goal.left
             and r.top < feet - 1
@@ -246,7 +312,7 @@ def _left_objective(env) -> LocalObjective:
         landings = [
             (i, p["rect"])
             for i, p in enumerate(env.platforms)
-            if not p.get("moving") and p["rect"].right <= edge
+            if not p.get("moving") and p["rect"].right <= edge and i not in forbidden
         ]
         lower_floor = any(
             not p.get("moving")
@@ -332,7 +398,12 @@ def safe_jump_holds(
     from .piranha import freeze_plant_envelopes
     from .piranha_tactics import timed_plant, timed_safe_holds
 
-    if timed_plant(env) is not None:
+    plant = timed_plant(env)
+    if (
+        plant is not None
+        and objective.enemy_index is not None
+        and env.enemies[objective.enemy_index] is plant
+    ):
         return timed_safe_holds(env, plant_history, direction)
 
     snapshot = snapshot_env_state(env)

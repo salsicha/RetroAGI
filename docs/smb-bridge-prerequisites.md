@@ -52,7 +52,7 @@ are the prerequisites of the composed `tactics_bridge_sequence` family
 (`FAMILY_PREREQUISITES` in `retroagi/stages/block_smb/hierarchy.py`), which
 unlocks only after all three are mastered on held-out layouts.
 `tactics_bridge_sequence` is in turn a prerequisite of
-`strategy_bridge_then_gap`. Production route coverage for these tasks is
+`tactics_bridge_then_gap`. Production route coverage for these tasks is
 described in [the production supervision repair](smb-bridge-production-supervision.md).
 
 ## Learning from passive progress

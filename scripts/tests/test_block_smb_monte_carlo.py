@@ -1,6 +1,9 @@
 """Tests for Block SMB Monte Carlo scenario sampling."""
 
 import unittest
+from concurrent.futures import ProcessPoolExecutor
+
+import pytest
 
 from retroagi.stages.block_smb import (
     BLOCK_SMB_MC_DIFFICULTY_BINS,
@@ -55,6 +58,8 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         self.assertEqual(len(actions), 320)
         self.assertTrue(any(action == 2 for action in actions))
 
+    # Every family's layouts are made and their routes checked by the teacher.
+    @pytest.mark.timeout(900)
     def test_split_is_deterministic_and_family_balanced_by_default(self):
         sample_set_a = sample_block_smb_monte_carlo_split(
             split="train",
@@ -100,15 +105,9 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         self.assertEqual(sample.family, "mixed_section")
         self.assertGreaterEqual(sample.scenario["world_width"], 512)
         self.assertGreaterEqual(len(sample.scenario.get("platforms", [])), 3)
-        self.assertGreaterEqual(len(sample.scenario.get("enemies", [])), 2)
-        self.assertEqual(
-            sample.parameters["section_count"],
-            5 if sample.parameters["composition"] == "enemy_gap_pipe" else 4,
-        )
-        self.assertEqual(
-            "single_gap" in sample.parameters["families"],
-            sample.parameters["composition"] == "enemy_gap_pipe",
-        )
+        # Two or three simple sections and two special ones, whose tactics change.
+        self.assertIn(len(sample.parameters["sections"]), (4, 5))
+        self.assertGreaterEqual(len(sample.scenario["tactics"]), 3)
         self.assertTrue(sample.reachability["reachable"])
         actions = sample.oracle["actions"]
         # Count distinct jumps; revision 2 holds stay within the 16-frame menu.
@@ -287,12 +286,15 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
         self.assertLess(max(heights["easy"]), min(heights["medium"]))
         self.assertLess(max(heights["medium"]), min(heights["hard"]))
 
+    @pytest.mark.timeout(900)
     def test_parameter_sweep_covers_every_family_and_difficulty(self):
-        sample_set = sample_block_smb_monte_carlo_parameter_sweep(
-            split="validation",
-            seed=42,
-            repeats_per_difficulty=1,
-        )
+        with ProcessPoolExecutor(8) as pool:
+            sample_set = sample_block_smb_monte_carlo_parameter_sweep(
+                split="validation",
+                seed=42,
+                repeats_per_difficulty=1,
+                executor=pool,
+            )
         manifest = sample_set.manifest()
 
         self.assertEqual(

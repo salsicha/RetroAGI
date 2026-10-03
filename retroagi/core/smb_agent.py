@@ -11,10 +11,10 @@ only the screens and returns one button action per copy:
    (smb_executor);
 3. for each copy whose action ended, a new action starts: first the memory
    steps, taking in only the latest picture's scene, and gives its expected
-   scene for when the coming action ends; then
-   the layers decide top-down (decide: strategy, tactic, skill, then the
-   action plan) reading the current scene and that expected scene; and the
-   executor starts the action;
+   scene for when the coming action ends; then the layers decide top-down
+   (decide: strategy, tactic, skill, then the action plan), each reading the
+   current scene, that expected scene, the token from above and its own last
+   16 choices; and the executor starts the action;
 4. each executor presses this frame's button.
 
 Nothing else about the game reaches the agent. In training only, a collector
@@ -31,11 +31,15 @@ import torch
 
 from .actions import SMBAction
 from .layered_policy import (
+    CHOICE_WIDTH,
     CHOICES,
+    HISTORY,
+    LAYERS,
     LayeredSMBPolicy,
     MemoryState,
     choice_log_prob,
     choose,
+    encode_choice,
 )
 from .smb_executor import ActionPlan, SMBExecutor
 from .smb_observer import (
@@ -111,12 +115,14 @@ def decide(
     run_given: Sequence[str] = (),
     sample: Sequence[str] = (),
     encoded_scene=None,
+    histories: Optional[Mapping[str, tuple]] = None,
 ) -> list[Decision]:
     """The layers' decisions, top-down, for a batch of pictures.
 
     ``expected``: the memory's expected scene at the end of the coming action,
     encoded (LayeredSMBPolicy.expect). ``encoded_scene``: the pictures' scenes
     already encoded (without a skill target), when the caller has them.
+    ``histories``: each layer's own previous choices (choice_histories).
 
     ``given[layer][i]``, when not None, replaces the policy's choice at that
     layer ("strategy", "tactic", "skill": tokens; "action": an ActionPlan) for
@@ -164,7 +170,7 @@ def decide(
     scores: dict[str, tuple] = {}
 
     def run(layer: str, inputs, above=None) -> None:
-        out = policy.run_layer(layer, inputs, expected, above)
+        out = policy.run_layer(layer, inputs, expected, above, (histories or {}).get(layer))
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]
         picked[layer] = [picks for _, picks in made]
@@ -246,6 +252,37 @@ class _Copy:
     hidden: Optional[torch.Tensor] = None
     cell: Optional[torch.Tensor] = None
     button: int = NOOP
+    # Each layer's choices used at earlier decisions, the most recent first.
+    choices: dict = field(default_factory=lambda: {layer: [] for layer in LAYERS})
+
+
+def choice_histories(copies: Sequence[_Copy], device) -> dict:
+    """Each layer's previous choices for a batch of copies: (choices [B, HISTORY,
+    width], present [B, HISTORY]), the most recent first."""
+    histories = {}
+    for layer in LAYERS:
+        choices = torch.zeros(len(copies), HISTORY, CHOICE_WIDTH[layer])
+        present = torch.zeros(len(copies), HISTORY, dtype=torch.bool)
+        for i, copy in enumerate(copies):
+            for age, vector in enumerate(copy.choices[layer][:HISTORY]):
+                choices[i, age] = vector
+                present[i, age] = True
+        histories[layer] = (choices.to(device), present.to(device))
+    return histories
+
+
+def remember_choices(copy: _Copy, decision: Decision) -> None:
+    """Add a decision's used choices to the copy's history (layers that chose nothing skip)."""
+    used = {
+        "strategy": decision.strategy,
+        "tactic": decision.tactic,
+        "skill": decision.skill,
+        "action": decision.plan,
+    }
+    for layer, choice in used.items():
+        if choice is not None:
+            vector = encode_choice(layer, choice, decision.target if layer == "skill" else None)
+            copy.choices[layer] = [vector, *copy.choices[layer]][:HISTORY]
 
 
 class SMBAgents:
@@ -319,10 +356,12 @@ class SMBAgents:
                 run_given,
                 sample,
                 now,
+                choice_histories(starting, self.device),
             )
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 decisions[k] = decision
                 playing[k].hidden, playing[k].cell = remembered.hidden[j], remembered.cell[j]
+                remember_choices(playing[k], decision)
                 playing[k].executor.start(decision.plan)
         steps = []
         for k, copy in enumerate(playing):

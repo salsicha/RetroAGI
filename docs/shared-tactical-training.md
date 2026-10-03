@@ -26,8 +26,8 @@ episode:
 | --- | --- | --- |
 | `tactics_bridge_sequence` | Wait, board, hold while riding, exit | `wait_timing`, `bridge_mount`, `bridge_dismount` |
 | `tactics_obstacle_sequence` | Approach, clear enemy, climb obstacles, clear enemy | `enemy_hop`, `tall_pipe_jump`, `enemy_patrol` |
-| `strategy_bridge_then_gap` | Wait/board/ride/exit, jump a gap, climb to the goal | `tactics_bridge_sequence`, `single_gap`, `stair_climb` |
-| `strategy_mixed_sequence` | Clear enemy, jump gap, clear enemy, climb | `tactics_obstacle_sequence`, `single_gap` |
+| `tactics_bridge_then_gap` | Wait/board/ride/exit, jump a gap, climb to the goal | `tactics_bridge_sequence`, `single_gap`, `stair_climb` |
+| `tactics_mixed_sequence` | Clear enemy, jump gap, clear enemy, climb | `tactics_obstacle_sequence`, `single_gap` |
 
 The tactical sequences reuse the existing randomized bridge and obstacle
 generators. The bridge/gap strategy sequence extends the world beyond the

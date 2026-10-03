@@ -41,8 +41,8 @@ OBSTACLE_FAMILIES = frozenset(
         "enemy_gap",
         "stomp_mount",
         "tactics_obstacle_sequence",
-        "strategy_mixed_sequence",
-        "strategy_bridge_then_gap",
+        "tactics_mixed_sequence",
+        "tactics_bridge_then_gap",
     )
 )
 # Demonstrations reverse direction here: back off an enemy before stomping
@@ -112,7 +112,7 @@ def tactic_label(env, history=None, action=None, *, family, phase=None):
         return TACTIC_STANCES.index(stance) if stance is not None else -1
 
     if family in ("bridge_wait", "wait_timing", "moving_bridge", "tactics_bridge_sequence") or (
-        family == "strategy_bridge_then_gap" and not env._bridge_crossed
+        family == "tactics_bridge_then_gap" and not env._bridge_crossed
     ):
         from .bridge_traversal import bridge_phase
 

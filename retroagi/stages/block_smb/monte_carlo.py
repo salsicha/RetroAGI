@@ -15,7 +15,9 @@ from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
-from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES, hierarchy_scenario
+from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES
+from .tactic_families import NEW_FAMILIES, TACTIC_FAMILIES, family_route, tactic_family_scenario
+from .tactic_schedule import segment
 from .transfer_failure_families import (
     TRANSFER_FAILURE_FAMILIES,
     TRANSFER_FAILURE_SCHEMAS,
@@ -53,8 +55,20 @@ BLOCK_SMB_MC_FAMILIES = (
     "bridge_dismount",
     *TRANSFER_FAILURE_FAMILIES,
     *HIERARCHY_FAMILIES,
+    *NEW_FAMILIES,
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
+# Families that are advance all the way: their schedule is one advance segment
+# toward the goal (tactic_schedule). Every other family states its own.
+ADVANCE_FAMILIES = frozenset(
+    "flat_run single_gap stair_climb platform_chain enemy_hop enemy_patrol enemy_gap "
+    "enemy_stomp retreat_recovery tall_pipe_jump pipe_mount pit_leap stomp_mount "
+    "stomp_recovery platform_hop stair_gap landing_enemy enemy_on_platform".split()
+)
+# Families whose moving platform is waited for, ridden or jumped to and from.
+BRIDGE_SEGMENT_FAMILIES = frozenset(
+    ("bridge_wait", "wait_timing", "moving_bridge", "bridge_mount", "bridge_dismount")
+)
 
 
 @dataclass(frozen=True)
@@ -399,6 +413,11 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
             "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
             "prerequisites": list(FAMILY_PREREQUISITES[family]),
         }
+    for family in TACTIC_FAMILIES:
+        schemas[family] = {
+            "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
+            "tactics": "explicit, per layout (tactic_schedule)",
+        }
     return {
         family: BlockSMBScenarioFamilySpec(
             family=family,
@@ -417,7 +436,7 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
                             "wait_timing",
                             "moving_bridge",
                             "tactics_bridge_sequence",
-                            "strategy_bridge_then_gap",
+                            "tactics_bridge_then_gap",
                         )
                         else (110 if family == "platform_hop" else 66)
                     )
@@ -510,7 +529,7 @@ def sample_block_smb_monte_carlo_scenario(
             actions = route
         oracle = {
             "kind": "scripted_action_sequence",
-            "actions": list(actions[:DEFAULT_BLOCK_SMB_MC_MAX_STEPS]),
+            "actions": list(actions[: _frame_budget(scenario)]),
             "action_source": f"{selected_family}:{action_source}",
             "expected_completion_steps": reachability.get("completion_steps"),
             "expected_min_progress": reachability.get("max_progress"),
@@ -659,10 +678,12 @@ def validate_block_smb_monte_carlo_oracle(
     scenario: Mapping[str, Any],
     actions: Iterable[int],
     *,
-    max_steps: int = DEFAULT_BLOCK_SMB_MC_MAX_STEPS,
+    max_steps: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Run the scripted oracle and return reachability diagnostics."""
+    """Run the scripted oracle and return reachability diagnostics (within the
+    layout's frame budget unless ``max_steps`` is given)."""
 
+    max_steps = _frame_budget(scenario) if max_steps is None else max_steps
     env = MarioScenarioEnv()
     total_return = 0.0
     completion_steps: int | None = None
@@ -999,6 +1020,26 @@ def _oracle_rejection_reason(
     return "goal_not_reached"
 
 
+def _frame_budget(scenario) -> int:
+    """Frames the teacher's route may take (the layout's own budget, if it has one)."""
+    return int(scenario.get("frame_budget", DEFAULT_BLOCK_SMB_MC_MAX_STEPS))
+
+
+def _family_tactics(family, scenario) -> list:
+    """The layout's tactic segments: its own, or its family's (tactic_schedule)."""
+    if "tactics" in scenario:
+        return scenario["tactics"]
+    goal = scenario["goal"]
+    direction = -1 if goal[0] + goal[2] / 2 < scenario["mario"][0] else 1
+    if family in BRIDGE_SEGMENT_FAMILIES:
+        return [segment("advance", direction, kind="bridge")]
+    if family == "piranha_avoidance":
+        return [segment("advance", 1, kind="plant", past_enemy=0), segment("advance", 1)]
+    if family in ADVANCE_FAMILIES:
+        return [segment("advance", direction)]
+    raise ValueError(f"family {family!r} states no tactics")
+
+
 def _generate_family_scenario(family, rng, *, split, difficulty=None):
     from .local_traversal import LOCAL_TRAVERSAL_FAMILIES, normalize_oracle_jumps
 
@@ -1009,6 +1050,11 @@ def _generate_family_scenario(family, rng, *, split, difficulty=None):
         scenario.setdefault("reward_goal_distance_shaping", 2.0)
         scenario.setdefault("goal_requires_support", True)
     _finish_layout(family, scenario, params)
+    scenario["tactics"] = _family_tactics(family, scenario)
+    if family in TACTIC_FAMILIES:
+        # The teacher's route under the layout's own tactics.
+        actions = family_route(family, scenario)
+        return scenario, params, actions or [0]
     if family in LOCAL_TRAVERSAL_FAMILIES and family not in (
         "pipe_mount",
         "pit_leap",
@@ -1061,11 +1107,17 @@ def _verified_route(family, scenario, authored_actions):
     """
     from .local_traversal import terrain_oracle
 
-    max_steps = DEFAULT_BLOCK_SMB_MC_MAX_STEPS
+    max_steps = _frame_budget(scenario)
 
     def reachable(actions):
         return validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=max_steps)
 
+    if family in TACTIC_FAMILIES:
+        # Only the teacher's route under the layout's tactics counts.
+        result = reachable(authored_actions)
+        if result["reachable"]:
+            return list(authored_actions), "tactic_teacher", result
+        return None, "no_verified_route", None
     candidates = [list(authored_actions)]
     if family == "platform_hop":
         # This family isolates duration selection at the initial state.
@@ -1098,10 +1150,10 @@ def _generate_family_scenario_raw(
     difficulty = difficulty or _difficulty_bin(rng, split)
     if difficulty not in BLOCK_SMB_MC_DIFFICULTY_BINS:
         raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
+    if family in TACTIC_FAMILIES:
+        return tactic_family_scenario(family, rng, difficulty)
     if family in TRANSFER_FAILURE_FAMILIES:
         return transfer_failure_scenario(family, rng, difficulty)
-    if family in HIERARCHY_FAMILIES:
-        return hierarchy_scenario(family, rng, difficulty)
     if family == "flat_run":
         return _flat_run(rng, difficulty)
     if family == "single_gap":
@@ -1124,14 +1176,6 @@ def _generate_family_scenario_raw(
         return _retreat_recovery(rng, difficulty)
     if family == "wait_timing":
         return _wait_timing(rng, difficulty)
-    if family == "chained_obstacles":
-        return _chained_obstacles(rng, difficulty)
-    if family == "chained_enemy_gauntlet":
-        return _chained_enemy_gauntlet(rng, difficulty)
-    if family == "full_smb_opening_proxy":
-        return _full_smb_opening_proxy(rng, difficulty)
-    if family == "mixed_section":
-        return _mixed_section(rng, difficulty)
     if family == "tall_pipe_jump":
         return _tall_pipe_jump(rng, difficulty)
     if family == "pipe_mount":
@@ -1571,169 +1615,6 @@ def _bridge_wait(
         },
         _pad(actions),
     )
-
-
-def _chained_obstacles(
-    rng: random.Random,
-    difficulty: str,
-) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    enemy_x = {"easy": 94, "medium": 96, "hard": 98}[difficulty] + rng.randint(-2, 2)
-    pipe_a_h = {"easy": 34, "medium": 38, "hard": 42}[difficulty] + rng.randint(-2, 2)
-    pipe_b_h = {"easy": 48, "medium": 54, "hard": 58}[difficulty] + rng.randint(-2, 2)
-    # Below ~0.255 the patrol phase collides with the shared oracle script, so
-    # keep the jitter floor above that for the easy bin.
-    second_enemy_speed = round(
-        {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty] + rng.uniform(-0.02, 0.05), 3
-    )
-    pipe_a_x = 180 + rng.randint(-6, 6)
-    pipe_b_x = 318 + rng.randint(-6, 6)
-    scenario = {
-        "world_width": 512,
-        "mario": [20, 200],
-        "platforms": [
-            [0, 220, 512, 20],
-            [pipe_a_x, 220 - pipe_a_h, 28, pipe_a_h],
-            [pipe_b_x, 220 - pipe_b_h, 32, pipe_b_h],
-        ],
-        "platform_kinds": ["ground", "pipe", "pipe"],
-        "enemies": [
-            [enemy_x, 206, enemy_x, enemy_x, 0],
-            {
-                "x": 386,
-                "y": 206,
-                "patrol_min": 374,
-                "patrol_max": 414,
-                "speed": second_enemy_speed,
-            },
-        ],
-        "coins": [
-            [132, 190, 10, 10],
-            [220, 176, 10, 10],
-            [356, 156, 10, 10],
-            [430, 190, 10, 10],
-        ],
-        "goal": [482, 200, 16, 20],
-    }
-    actions = _pad([1] * 16 + [2] * 18 + [1] * 30 + [2] * 20 + [1] * 44 + [2] * 20 + [1] * 90)
-    return (
-        scenario,
-        {
-            "section_count": 4,
-            "world_width": 512,
-            "enemy_count": 2,
-            "pipe_count": 2,
-            "pipe_positions": [pipe_a_x, pipe_b_x],
-            "pipe_heights": [pipe_a_h, pipe_b_h],
-            "difficulty_bin": difficulty,
-        },
-        actions,
-    )
-
-
-def _chained_enemy_gauntlet(
-    rng: random.Random,
-    difficulty: str,
-) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    gap_width = {"easy": 48, "medium": 50, "hard": 52}[difficulty] + rng.randint(-1, 1)
-    landing_x = 180 + gap_width
-    pipe_h = {"easy": 40, "medium": 44, "hard": 48}[difficulty] + rng.randint(-2, 2)
-    patrol_speed = round(
-        {"easy": 0.3, "medium": 0.4, "hard": 0.5}[difficulty] + rng.uniform(-0.05, 0.05), 3
-    )
-    pipe_x = 370 + rng.randint(-8, 8)
-    scenario = {
-        "world_width": 544,
-        "mario": [20, 200],
-        "platforms": [
-            [0, 220, 180, 20],
-            [landing_x, 220, 544 - landing_x, 20],
-            [pipe_x, 220 - pipe_h, 30, pipe_h],
-        ],
-        "platform_kinds": ["ground", "ground", "pipe"],
-        "enemies": [
-            [96, 206, 96, 96, 0],
-            {
-                "x": 294,
-                "y": 206,
-                "patrol_min": 284,
-                "patrol_max": 314,
-                "speed": patrol_speed,
-            },
-        ],
-        "coins": [
-            [132, 190, 10, 10],
-            [204, 170, 10, 10],
-            [330, 190, 10, 10],
-            [430, 190, 10, 10],
-        ],
-        "goal": [508, 200, 16, 20],
-    }
-    actions = _pad(
-        [1] * 16
-        + [2] * 18
-        + [1] * 8
-        + [2] * 20
-        + [1] * 8
-        + [2] * 20
-        + [1] * 40
-        + [2] * 20
-        + [1] * 110
-    )
-    return (
-        scenario,
-        {
-            "section_count": 5,
-            "world_width": 544,
-            "enemy_count": 2,
-            "gap_count": 1,
-            "gap_width": gap_width,
-            "pipe_count": 1,
-            "pipe_x": pipe_x,
-            "pipe_height": pipe_h,
-            "difficulty_bin": difficulty,
-        },
-        actions,
-    )
-
-
-def _full_smb_opening_proxy(
-    rng: random.Random,
-    difficulty: str,
-) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    # Mirrors the early Full SMB demands that were failing: first enemy, pipe,
-    # taller pipe, and another enemy before the level can stabilize.
-    scenario, params, actions = _chained_obstacles(rng, difficulty)
-    scenario = copy.deepcopy(scenario)
-    tall_pipe_h = {"easy": 50, "medium": 56, "hard": 60}[difficulty] + rng.randint(-2, 2)
-    scenario["platforms"][2] = [params["pipe_positions"][1], 220 - tall_pipe_h, 32, tall_pipe_h]
-    params = {
-        **params,
-        "section_count": 4,
-        "proxy_only": True,
-        "families": ["enemy_hop", "pipe_jump", "tall_pipe_jump", "enemy_patrol"],
-        "pipe_heights": [params["pipe_heights"][0], tall_pipe_h],
-        "difficulty_bin": difficulty,
-    }
-    return scenario, params, actions
-
-
-def _mixed_section(
-    rng: random.Random, difficulty: str
-) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    composition = rng.choice(("enemy_gap_pipe", "enemy_two_pipes"))
-    builder = _chained_enemy_gauntlet if composition == "enemy_gap_pipe" else _chained_obstacles
-    scenario, params, actions = builder(rng, difficulty)
-    params = {
-        **params,
-        "composition": composition,
-        "families": (
-            ["enemy_hop", "single_gap", "enemy_patrol", "pipe_jump"]
-            if composition == "enemy_gap_pipe"
-            else ["enemy_hop", "pipe_jump", "enemy_patrol"]
-        ),
-        "difficulty_bin": difficulty,
-    }
-    return scenario, params, actions
 
 
 def _verified_isolation_hold(scenario):

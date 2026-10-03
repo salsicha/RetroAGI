@@ -22,7 +22,9 @@ from retroagi.stages.block_smb.train import (
 from scripts.tests.test_block_smb_training import StaticBlockVision, tiny_config
 from scripts.tests.test_tall_pipe_traversal import PhaseIntentPolicy, rollout
 
-FAMILIES = "wait_timing pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery platform_chain moving_bridge mixed_section full_smb_opening_proxy enemy_patrol enemy_gap chained_obstacles chained_enemy_gauntlet".split()
+# The composed families (tactic_families) are checked through the layered
+# agent's executor instead (test_tactic_families).
+FAMILIES = "wait_timing pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery platform_chain moving_bridge enemy_patrol enemy_gap".split()
 
 
 @pytest.fixture(autouse=True)
@@ -134,9 +136,9 @@ def test_platform_chain_varies_terrain_and_keeps_wide_far_shore():
 
 def test_mixed_sections_sample_distinct_compositions():
     compositions = {
-        sample("mixed_section", seed=seed).parameters["composition"] for seed in range(6)
+        tuple(sample("mixed_section", seed=seed).parameters["sections"]) for seed in range(6)
     }
-    assert compositions == {"enemy_gap_pipe", "enemy_two_pipes"}
+    assert len(compositions) > 1
 
 
 @pytest.mark.parametrize("family", ("wait_timing", "moving_bridge"))

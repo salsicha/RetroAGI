@@ -42,12 +42,15 @@ import torch.nn.functional as F
 
 from retroagi.core.actions import SMB_ACTIONS, SMB_JUMP_ACTIONS, SMBAction
 from retroagi.core.layered_policy import (
+    CHOICE_WIDTH,
     CHOICES,
     FRAME_BINS,
+    HISTORY,
     LayeredSMBPolicy,
     MemoryState,
     PolicySettings,
     choice_log_prob,
+    encode_choice,
 )
 from retroagi.core.smb_agent import SMBAgents
 from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan
@@ -177,6 +180,7 @@ class EpisodeRecord:
     picks: dict = field(default_factory=dict)  # head -> [D] the learner's own picks
     old_log_prob: Optional[np.ndarray] = None  # [D] their log-probability when played
     old_value: Optional[np.ndarray] = None  # [D] the learner's estimate of the return then
+    used: Optional[np.ndarray] = None  # [D, choice width] the learner's choice used, per decision
 
     @property
     def frames(self) -> int:
@@ -267,6 +271,8 @@ class _Lane:
         scenario = task.scenario if task.scenario is not None else task_scenario(task)
         self.task = task
         self.copy = copy
+        # A long layout gets the frames its teacher's route is allowed.
+        self.frame_limit = max(task.frames, int(scenario.get("frame_budget", 0)))
         self.env = MarioScenarioEnv()
         self.screen, _ = self.env.reset(scenario=scenario, seed=0)
         self.teacher = episode_teacher(scenario)
@@ -285,14 +291,15 @@ class _Lane:
         """
         from .teacher_tokens import teacher_plan, teacher_skill, teacher_strategy, teacher_tactic
 
-        # Only what this learner is given or taught (the tactic label is costly).
-        skill = teacher_skill(self.env, scene, self.teacher)
+        # Only what this learner is given or taught. The skill is decided by
+        # the tactic, so the teacher's tactic is worked out for every learner.
+        tactic = teacher_tactic(self.env, self.teacher)
         asked = {
             "strategy": teacher_strategy(self.teacher) if learner == "tactic" else None,
-            "tactic": teacher_tactic(self.env, self.teacher, skill)
-            if learner != "action"
+            "tactic": tactic,
+            "skill": teacher_skill(self.env, scene, self.teacher, tactic)
+            if learner != "tactic"
             else None,
-            "skill": skill,
             "action": None,
             "holds": (),
             "plays_teacher": self.rng.random() < self.task.teacher_share,
@@ -312,6 +319,15 @@ class _Lane:
             d[f"pick_{head}"].append(value)
         d["log_prob"].append(decision.log_prob[learner])
         d["value"].append(decision.value[learner])
+        used = {
+            "strategy": decision.strategy,
+            "tactic": decision.tactic,
+            "skill": decision.skill,
+            "action": decision.plan,
+        }[learner]
+        d["used"].append(
+            encode_choice(learner, used, decision.target if learner == "skill" else None).numpy()
+        )
         mine = decision.chosen[learner]
         if learner == "action":
             d["given"].append(encode_skill(decision.skill).numpy())
@@ -328,7 +344,6 @@ class _Lane:
             token: SkillToken = asked["skill"]
             d["label_skill"].append(SKILLS.index(token.kind))
             d["label_direction"].append(int(token.direction > 0))
-            d["label_contact"].append(float(token.contact_required))
             d["label_pointer"].append(token.pointer)
             d["label_valid"].append(True)
             agreed = mine == token
@@ -366,7 +381,7 @@ class _Lane:
             played_teacher=np.asarray(d["played_teacher"], bool),
             agreed=np.asarray(d["agreed"], bool),
             rewards=np.asarray(self.frames["reward"], np.float32),
-            terminal=self.end in ("goal", "death"),
+            terminal=self.end in ("goal", "death", "off_route", "missed_objective"),
             explored=self.task.explore,
             picks={
                 name[len("pick_") :]: np.asarray(d[name], np.int64)
@@ -375,6 +390,7 @@ class _Lane:
             },
             old_log_prob=np.asarray(d["log_prob"], np.float32),
             old_value=np.asarray(d["value"], np.float32),
+            used=np.asarray(d["used"], np.float32).reshape(count, -1),
         )
 
 
@@ -444,11 +460,21 @@ def play_episodes(
             lane.screen, reward, terminated, truncated, info = lane.env.step(step.button)
             lane.frames["reward"].append(float(reward))
             lane.goal += float(info["reward_terms"].get("goal", 0.0))
-            if len(lane.frames["button"]) >= lane.task.frames:
+            if len(lane.frames["button"]) >= lane.frame_limit:
                 truncated = True
             if terminated or truncated:
                 lane.end = (
-                    "goal" if lane.goal > 0 else ("death" if info.get("death") else "timeout")
+                    "goal"
+                    if lane.goal > 0
+                    else (
+                        "death"
+                        if info.get("death")
+                        else (
+                            "off_route"
+                            if info.get("off_route")
+                            else ("missed_objective" if info.get("objective_missed") else "timeout")
+                        )
+                    )
                 )
                 done[lane.task.index] = lane.record()
                 lane.env.close()
@@ -569,7 +595,12 @@ def reward_advantages(
 
 
 def _decisions(
-    episodes: Sequence[EpisodeRecord], device, discount=0.995, smoothing=0.95, scale=1.0
+    episodes: Sequence[EpisodeRecord],
+    device,
+    learner: str,
+    discount=0.995,
+    smoothing=0.95,
+    scale=1.0,
 ):
     """Every decision in the batch, flattened, with masks for those the teacher
     labelled and those the learner chose by sampling (reward rounds)."""
@@ -596,11 +627,13 @@ def _decisions(
         parts["old_log_prob"].append(
             e.old_log_prob if e.old_log_prob is not None else np.zeros(count, np.float32)
         )
+        width = CHOICE_WIDTH[learner]
+        parts["used"].append(e.used if e.used is not None else np.zeros((count, width), np.float32))
         for head, value in e.picks.items():
             parts[f"pick_{head}"].append(value)
     if not parts:
         return None
-    floats = ("target", "given", "advantage", "return", "old_log_prob", "label_contact")
+    floats = ("target", "given", "advantage", "return", "old_log_prob", "used")
     return {
         name: torch.as_tensor(
             np.concatenate(values),
@@ -634,6 +667,23 @@ def action_memory(policy, a, b, c, d):
     return policy.memory.sequence(window)[e, position]
 
 
+def choice_history(used, episode):
+    """For every decision of a batch (episode after episode, in order): the
+    learner's choices used at its previous HISTORY decisions in the same
+    episode, the most recent first, and which of them exist. ``used``: [D,
+    width]; ``episode``: [D] episode numbers. Returns ([D, HISTORY, width],
+    [D, HISTORY])."""
+    count = int(episode.max()) + 1
+    per_episode = torch.bincount(episode, minlength=count)
+    first = torch.cumsum(per_episode, 0) - per_episode
+    index = torch.arange(len(episode), device=episode.device)
+    position = index - first[episode]
+    ages = torch.arange(1, HISTORY + 1, device=episode.device)
+    exists = position[:, None] - ages[None, :] >= 0
+    earlier = (index[:, None] - ages[None, :]).clamp_min(0)
+    return used[earlier] * exists.unsqueeze(-1), exists
+
+
 def learner_losses(policy, learner: str, episodes, expectation_weight: float, device, rl=None):
     """The learner's losses on a batch of episodes.
 
@@ -649,6 +699,7 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     d = _decisions(
         episodes,
         device,
+        learner,
         *((rl.discount, rl.advantage_smoothing, rl.reward_scale) if rl is not None else ()),
     )
     if d is None:
@@ -673,7 +724,12 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     if learner == "action":
         rows_c = rows_c.clone()
         rows_c[:, TARGET_SPAN] = d["target"]
-    out = policy.layer_outputs((a[e, f], b[e, f], rows_c), expected, {GIVEN[learner]: d["given"]})
+    out = policy.layer_outputs(
+        (a[e, f], b[e, f], rows_c),
+        expected,
+        {GIVEN[learner]: d["given"]},
+        {learner: choice_history(d["used"], e)},
+    )
     out = out[learner]
     stats = {"decisions": int(len(e))}
     imitation = 1.0 if rl is None else rl.imitation_weight
@@ -697,9 +753,6 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
             losses["skill"] = imitation * F.cross_entropy(out["skill"][m], label["skill"])
             losses["direction"] = imitation * F.cross_entropy(
                 out["direction"][m], label["direction"]
-            )
-            losses["contact"] = imitation * F.binary_cross_entropy_with_logits(
-                out["contact"][m].squeeze(-1), label["contact"]
             )
             pointer = out["pointer"][m]
             reachable = torch.isfinite(pointer.gather(1, label["pointer"][:, None])).squeeze(1)
@@ -734,6 +787,16 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
 # ── Rounds ────────────────────────────────────────────────────────────────────
 
 
+def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
+    """The families a learner trains and is tested on. The tactic layer leaves
+    out the clones, whose tactic is given rather than decided by the scene."""
+    from .tactic_families import CLONE_FAMILIES
+
+    if learner == "tactic":
+        return tuple(f for f in families if f not in CLONE_FAMILIES)
+    return tuple(families)
+
+
 def _tasks(
     config,
     split: str,
@@ -749,7 +812,7 @@ def _tasks(
     per family at each difficulty."""
     tasks = []
     rng = random.Random(f"{config.seed}|{split}|{round_index}")
-    for family in config.families:
+    for family in learner_families(config.learner, config.families):
         if split == "train":
             count = layouts + (extra or {}).get(family, 0)
             difficulties = rng.choices(DIFFICULTIES, weights=config.difficulty_weights, k=count)

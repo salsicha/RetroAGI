@@ -9,8 +9,6 @@ starts while the plant is still descending. Otherwise the teacher stops in the
 staging window without overshooting it.
 """
 
-from dataclasses import replace
-
 from retroagi.core.models import TACTIC_STANCES
 from retroagi.core.smb_enemy_history import EnemyObservationHistory
 
@@ -223,53 +221,16 @@ def tactic_label(env, history, action=None):
 
 
 def timed_suffix(env, *, max_frames=320, release_state=None, variant=0, observation_history=None):
-    from copy import deepcopy
+    """The teacher's route through a timed plant (policy_recovery._coached_suffix)."""
+    from .policy_recovery import _coached_suffix
 
-    from .geometry_expert import restore_env_state, snapshot_env_state
-    from .policy_recovery import interior_hold
-    from .primitive_execution import JumpReleaseState, teacher_route_reachable
-
-    saved = snapshot_env_state(env)
-    history = (
-        deepcopy(observation_history)
-        if observation_history is not None
-        else EnemyObservationHistory()
+    return _coached_suffix(
+        env,
+        max_frames=max_frames,
+        release_state=release_state,
+        hold_variant=variant,
+        observation_history=observation_history,
     )
-    release = replace(release_state) if release_state is not None else JumpReleaseState()
-    remaining = 0
-    airborne = not env.mario["on_ground"]
-    actions = []
-    try:
-        for frame in range(max_frames):
-            features = history.observe(env, env.steps)
-            if release.remaining:
-                action = release.action
-            elif remaining:
-                action = 2
-                remaining -= 1
-            elif airborne and not env.mario["on_ground"]:
-                action = 1
-            else:
-                airborne = False
-                _, action, valid = tactical_choice(env, features)
-                if valid:
-                    chosen = interior_hold(valid, hold_menu(env))
-                    chosen = valid[(valid.index(chosen) + variant) % len(valid)]
-                    remaining = chosen - 1
-                    airborne = True
-            _, _, done, truncated, info = env.step(action)
-            release.observe(env, action, info)
-            actions.append(action)
-            if done or truncated:
-                break
-        if not env._goal_credited:
-            return None
-        restore_env_state(env, saved)
-        return (
-            actions if teacher_route_reachable(env, actions, release_state=release_state) else None
-        )
-    finally:
-        restore_env_state(env, saved)
 
 
 def _plant(env):

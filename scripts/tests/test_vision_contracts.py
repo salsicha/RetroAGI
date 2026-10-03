@@ -151,16 +151,21 @@ class TestBlockSMBDrawingContract(unittest.TestCase):
             "tall_pipe_jump": ["ground", "pipe"],
             "pipe_mount": ["ground", "pipe"],
             "piranha_avoidance": ["ground", "pipe"],
-            "chained_obstacles": ["ground", "pipe", "pipe"],
-            "chained_enemy_gauntlet": ["ground", "ground", "pipe"],
-            "full_smb_opening_proxy": ["ground", "pipe", "pipe"],
-            "tactics_obstacle_sequence": ["ground", "pipe", "pipe"],
         }
         for family, kinds in expected.items():
             sample = sample_block_smb_monte_carlo_scenario(
                 split="train", seed=3, sample_index=0, family=family, difficulty="easy"
             )
             self.assertEqual(sample.scenario["platform_kinds"], kinds, family)
+            self.assertEqual(len(sample.scenario["platforms"]), len(kinds), family)
+        # Composed layouts tag one pipe per pipe or plant section.
+        for family in ("chained_obstacles", "full_smb_opening_proxy", "tactics_obstacle_sequence"):
+            sample = sample_block_smb_monte_carlo_scenario(
+                split="train", seed=3, sample_index=0, family=family, difficulty="easy"
+            )
+            kinds = sample.scenario["platform_kinds"]
+            pipes = sum(s in ("pipe", "plant") for s in sample.parameters["sections"])
+            self.assertEqual(kinds.count("pipe"), pipes, family)
             self.assertEqual(len(sample.scenario["platforms"]), len(kinds), family)
 
 

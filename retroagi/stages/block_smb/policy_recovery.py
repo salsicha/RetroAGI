@@ -43,20 +43,43 @@ def interior_hold(valid, menu=NES_JUMP_FRAMES):
     return run[len(run) // 2]
 
 
-def coached_suffix(env, *, max_frames=320, release_state=None, observation_history=None):
-    from .piranha import conservative_suffix, has_plants
-    from .piranha_tactics import timed_plant, timed_suffix
+def coached_suffix(
+    env, *, max_frames=320, release_state=None, observation_history=None, replay_check=True
+):
+    """The teacher's route from here to the goal, following the layout's tactics.
 
-    if timed_plant(env) is not None:
-        return timed_suffix(
-            env,
-            max_frames=max_frames,
-            release_state=release_state,
-            observation_history=observation_history,
+    Plants that can always be cleared are certified against their full height
+    (piranha.conservative_suffix); a timed plant is crossed by its teacher.
+    With replay_check, the route must also replay through the old jump
+    executor (primitive_execution.teacher_route_reachable), as the old trainer
+    needs; the four-layer agent's executor plays any route exactly.
+    """
+    from .piranha import conservative_suffix, has_plants
+    from .piranha_tactics import timed_plant
+
+    if has_plants(env) and timed_plant(env) is None:
+        return conservative_suffix(
+            env, max_frames=max_frames, release_state=release_state, replay_check=replay_check
         )
-    if has_plants(env):
-        return conservative_suffix(env, max_frames=max_frames, release_state=release_state)
-    return _coached_suffix(env, max_frames=max_frames, release_state=release_state)
+    return _coached_suffix(
+        env,
+        max_frames=max_frames,
+        release_state=release_state,
+        observation_history=observation_history,
+        replay_check=replay_check,
+    )
+
+
+def route_wins(env, actions) -> bool:
+    """Whether ``actions``, pressed frame by frame from here, reach the goal (state restored)."""
+    saved = snapshot_env_state(env)
+    try:
+        for action in actions:
+            if env.step(action)[2]:
+                break
+        return bool(env._goal_credited)
+    finally:
+        restore_env_state(env, saved)
 
 
 def _coached_suffix(
@@ -66,20 +89,60 @@ def _coached_suffix(
     release_state=None,
     hold_variant=0,
     robust_takeoff=False,
+    observation_history=None,
+    replay_check=True,
 ):
-    """Complete from a grounded decision state; never used by policy playback.
+    """Complete from a decision state; never used by policy playback.
 
-    With robust_takeoff, launch only where the online takeoff-timing labels
-    allow a jump, so demonstrations never contradict them.
+    Each grounded frame does what the layout's current tactic segment
+    (tactic_schedule) calls for: ride or wait for a moving platform, wait for
+    or cross a timed plant (piranha_tactics.tactical_choice), keep away from or
+    jump over a monster (monster.monster_choice), hold still, or reach the next
+    objective (smb_coaching.training_target: the segment's route platform or
+    retreat line, else the nearest obstacle toward the goal). With
+    robust_takeoff, jumps over a plant launch only where the online takeoff-timing
+    labels allow one, so demonstrations never contradict them.
     """
+    from copy import deepcopy
+
+    from retroagi.core.smb_enemy_history import EnemyObservationHistory
+
+    from . import tactic_schedule
+    from .monster import monster_choice
+    from .piranha_tactics import tactical_choice, timed_plant
+
     initial = snapshot_env_state(env)
+    history = None
+    if timed_plant(env) is not None:
+        history = (
+            deepcopy(observation_history)
+            if observation_history is not None
+            else EnemyObservationHistory()
+        )
     actions = []
     remaining = 0
-    direction = 1
+    # A route that starts in the air keeps going toward its target.
+    direction = training_target(env).direction
     airborne = False
     retreat = 0
+    coasting = False
     release = replace(release_state) if release_state is not None else JumpReleaseState()
+
+    def jump(valid, toward):
+        nonlocal remaining, airborne, retreat, direction
+        chosen = interior_hold(valid, NES_JUMP_FRAMES)
+        if hold_variant:
+            chosen = valid[(valid.index(chosen) + hold_variant) % len(valid)]
+        remaining = chosen - 1
+        airborne = True
+        retreat = 0
+        direction = toward
+        return 2 if toward > 0 else 4
+
     for _ in range(max_frames):
+        features = history.observe(env, env.steps) if history is not None else None
+        segment = tactic_schedule.current(env)
+        plant = timed_plant(env)
         if env.mario["on_ground"]:
             airborne = False
         if release.remaining:
@@ -90,11 +153,34 @@ def _coached_suffix(
             remaining -= 1
         elif airborne or not env.mario["on_ground"]:
             action = 1 if direction > 0 else 3
-        elif bridge_training_active(env) and not env._bridge_jump_task:
+        elif (
+            tactic_schedule.in_kind(env, "bridge")
+            and bridge_training_active(env)
+            and not env._bridge_jump_task
+        ):
             from .bridge_traversal import bridge_phase
 
             phase = bridge_phase(env, True)
             action = 1 if phase in ("approach", "board", "exit", "finish") else 0
+            # Arriving at a run, coast down to walking pace before the shore
+            # ends: from above 1.5 pixels a frame to below 0.75.
+            coasting = phase == "approach" and env.mario["vx"] > (0.75 if coasting else 1.5)
+            if coasting:
+                action = 0
+        elif (
+            plant is not None
+            and tactic_schedule.in_kind(env, "plant")
+            and env.mario["x"] < plant["x"] + plant["w"]
+        ):
+            _, action, valid = tactical_choice(env, features)
+            if valid:
+                action = jump(valid, 1)
+        elif (choice := monster_choice(env)) is not None:
+            _, action, valid = choice
+            if valid:
+                action = jump(valid, segment["direction"])
+        elif segment["kind"] == "plain" and segment["stance"] == "hold_area":
+            action = 0
         else:
             target = training_target(env)
             direction = target.direction
@@ -103,11 +189,15 @@ def _coached_suffix(
             wall = blocking_wall_distance(env, target)
             ready = bridge or distance < 65 or support_edge_distance(env, direction) < 24
             valid = (
-                safe_jump_holds(env, target, direction)
+                safe_jump_holds(env, target, direction, plant_history=features)
                 if ready and (bridge or target.kind not in ("finish", "retreat"))
                 else []
             )
-            if valid and robust_takeoff and not bridge:
+            at_plant = (
+                target.enemy_index is not None
+                and env.enemies[target.enemy_index].get("kind") == "piranha_plant"
+            )
+            if valid and robust_takeoff and at_plant:
                 timing = takeoff_timing_actions(env)
                 if timing is not None and not timing[2 if direction > 0 else 4]:
                     valid = []
@@ -120,19 +210,15 @@ def _coached_suffix(
                 )
                 if not bridge_jump_allowed(now, later):
                     valid = []
-            if valid:
-                from retroagi.core.smb_physics import NES_JUMP_FRAMES
-
-                menu = NES_JUMP_FRAMES
+            if valid and bridge:
                 # Bridge departures take the longest certified hold, which
                 # tolerates departure-timing drift across the window.
-                chosen = max(valid) if bridge else interior_hold(valid, menu)
-                if hold_variant:
-                    chosen = valid[(valid.index(chosen) + hold_variant) % len(valid)]
-                remaining = chosen - 1
+                remaining = max(valid) - 1
                 airborne = True
                 retreat = 0
                 action = 2 if direction > 0 else 4
+            elif valid:
+                action = jump(valid, direction)
             elif bridge:
                 action = 0 if abs(env.mario["vx"]) < 1 / 16 else (3 if env.mario["vx"] > 0 else 1)
             elif retreat or (wall is not None and wall <= 1):
@@ -159,6 +245,8 @@ def _coached_suffix(
     final = snapshot_env_state(env)
     try:
         restore_env_state(env, initial)
+        if not replay_check:
+            return actions
         return (
             actions if teacher_route_reachable(env, actions, release_state=release_state) else None
         )

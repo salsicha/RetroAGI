@@ -18,6 +18,7 @@ import pygame
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_pixel_types import TYPE_ID
 
+from . import tactic_schedule
 from .stomp import stomp_collision_geometry
 
 # ── Gym-compatible space stubs (no gym dependency required) ──────────────────
@@ -74,9 +75,24 @@ LIFT, LIFT_EDGE = (216, 216, 216), (120, 120, 120)
 COIN, COIN_DARK = (255, 215, 0), (204, 140, 0)
 GOOMBA, GOOMBA_FEET, GOOMBA_SQUISHED = (160, 32, 240), (72, 0, 112), (100, 0, 160)
 PLANT_HEAD, PLANT_SPOT, PLANT_STEM = (216, 40, 96), (255, 200, 220), (0, 112, 72)
+MONSTER, MONSTER_SPIKE, MONSTER_BELLY = (24, 104, 40), (240, 240, 208), (248, 168, 56)
+# The monster: an enemy that cannot be stomped (touching it from any side
+# kills Mario), larger than a Goomba. Drawn as its own sprite, it is the
+# vision's "other" enemy kind, like Full SMB's Spiny, Hammer Bro and Bullet Bill.
+MONSTER_W, MONSTER_H = 16, 20
 MARIO, MARIO_SKIDDING, EYE = (255, 0, 0), (255, 220, 0), (255, 255, 255)
 POWER_UP_CAP, POWER_UP_SPOT, POWER_UP_STEM = (232, 48, 24), (252, 252, 252), (252, 216, 168)
 POWER_UP_SIZE = 16
+
+# What each strategy is paid for, as multipliers of the reward terms (training
+# only; a layout names its strategy in "strategy", see tactic_families). Speed
+# run also earns a time bonus at the goal: the goal reward again, times the
+# share of its deadline left unused.
+STRATEGY_REWARDS = {
+    "speed_run": {"frame_penalty": 5.0},
+    "max_coins": {"coin": 2.5},
+    "careful": {"fall_death": 5.0, "enemy_hit": 5.0, "frame_penalty": 0.0},
+}
 
 
 def question_cell(world_x):
@@ -205,8 +221,15 @@ class MarioScenarioEnv:
     enemies       : list of [x, y, patrol_min, patrol_max] or
                     [x, y, patrol_min, patrol_max, speed] or
                     dict with keys x,y,patrol_min,patrol_max,speed,edge_aware;
-                    a piranha_plant uses kind,x,pipe_top and optional cycle durations
+                    a piranha_plant uses kind,x,pipe_top and optional cycle durations;
+                    kind "monster" is a large walker that cannot be stomped
     goal          : [x, y, w, h]
+    tactics       : the layout's tactic segments, in order (tactic_schedule;
+                    training only: teacher tokens, route rules, success)
+    strategy      : the strategy the layout is played for (STRATEGY_REWARDS),
+                    with "strategy_objective": {"deadline": frames} (the goal
+                    counts only until then) or {"coins": count} (only with at
+                    least that many coins); missing it ends the episode as a loss
     """
 
     # ── Construction ─────────────────────────────────────────────────────────
@@ -261,10 +284,14 @@ class MarioScenarioEnv:
         self._single_jump_attempt = False
         self._attempt_failed = False
         self._goal_credited = False
+        self._strategy = None  # the strategy a layout is played for (STRATEGY_REWARDS)
+        self._strategy_objective = {}
+        self._objective_missed = False
         self.camera_x = 0.0
         self.score = 0
         self.steps = 0
         self.max_steps = 1000
+        self.frame_budget = 320  # frames a teacher's route may take (reset reads the layout's)
         self._max_x_reached = 0.0
 
     def seed(self, n: int = None):
@@ -307,6 +334,10 @@ class MarioScenarioEnv:
             }
 
         self.world_width = scenario.get("world_width", self.width)
+        # Long composed layouts state how many frames their route may take.
+        self.frame_budget = int(scenario.get("frame_budget", 320))
+        if "frame_budget" in scenario:
+            self.max_steps = max(1000, self.frame_budget)
         self.motion = NESPlayerMotion()
 
         # Mario state
@@ -376,7 +407,9 @@ class MarioScenarioEnv:
         self.enemies = []
         for e in scenario.get("enemies", []):
             enemy = self._parse_enemy(e)
-            if enemy.get("kind") != "piranha_plant":
+            if enemy.get("kind") == "monster":
+                enemy.update(w=MONSTER_W, h=MONSTER_H, foot_offset=0, stompable=False)
+            elif enemy.get("kind") != "piranha_plant":
                 # NES Goomba damage body is 10x6, four pixels above its
                 # physical feet. Background support is a separate probe.
                 enemy.update(w=10, h=6, foot_offset=4, y=enemy["y"] + 4)
@@ -442,6 +475,12 @@ class MarioScenarioEnv:
             if isinstance(window, (list, tuple)) and len(window) == 2
             else None
         )
+        tactic_schedule.start(self, scenario.get("tactics"))
+        self._strategy = scenario.get("strategy")
+        if self._strategy is not None and self._strategy not in STRATEGY_REWARDS:
+            raise ValueError(f"unknown strategy {self._strategy!r}")
+        self._strategy_objective = dict(scenario.get("strategy_objective") or {})
+        self._objective_missed = False
 
         obs = self.render()
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
@@ -770,6 +809,18 @@ class MarioScenarioEnv:
             if landed:
                 self._bridge_jump_launched = False
 
+        # ── 16c. The layout's tactics (training only) ─────────────────────────
+        # Standing on a platform the current segment forbids, or leaving a
+        # hold area early, ends the episode as a loss: Mario left the route.
+        if tactic_schedule.track(self) and not terminated:
+            terminated = True
+
+        # ── 16d. The strategy's objective (training only) ────────────────────
+        deadline = self._strategy_objective.get("deadline")
+        if deadline is not None and self.steps > deadline and not terminated:
+            terminated = True
+            self._objective_missed = True
+
         # ── 17. Goal ──────────────────────────────────────────────────────────
         # Under goal_on_stomp the rect is only a tracking proxy for shaping
         # and observations; brushing it mid-air must not count as success.
@@ -778,6 +829,8 @@ class MarioScenarioEnv:
             and not self._bridge_jump_task
             and not self._goal_on_stomp
             and not death
+            and not self._off_route
+            and tactic_schedule.goal_allowed(self)
             and (not self._require_stomp_before_goal or self._stomp_credited)
             and (not self._require_bridge_before_goal or self._bridge_crossed)
             and (
@@ -791,8 +844,16 @@ class MarioScenarioEnv:
             and mario_rect.colliderect(self.goal)
         ):
             terminated = True
-            reward_terms["goal"] += self.reward_config.goal
-            self._goal_credited = True
+            coins = sum(coin["collected"] for coin in self.coins)
+            if coins < self._strategy_objective.get("coins", 0):
+                self._objective_missed = True  # reached the goal without the coins
+            else:
+                reward_terms["goal"] += self.reward_config.goal
+                self._goal_credited = True
+                if deadline is not None and self._strategy == "speed_run":
+                    reward_terms["goal"] += self.reward_config.goal * max(
+                        0.0, 1.0 - self.steps / deadline
+                    )
 
         if (
             self._single_jump_attempt
@@ -817,6 +878,8 @@ class MarioScenarioEnv:
 
         # Small per-step penalty to encourage speed.
         reward_terms["frame_penalty"] += self.reward_config.frame_penalty
+        for term, scale in STRATEGY_REWARDS.get(self._strategy, {}).items():
+            reward_terms[term] *= scale
         reward, reward_terms = self._finalize_reward_terms(reward_terms)
 
         obs = self.render()
@@ -960,6 +1023,8 @@ class MarioScenarioEnv:
         for enemy, rect in zip((e for e in self.enemies if e["h"] > 0), self.enemy_screen_rects()):
             if enemy.get("kind") == "piranha_plant":
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
+            elif enemy.get("kind") == "monster":
+                yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
                 kind = "defeated" if enemy["dead"] else "walker"
                 yield "enemy", kind, partial(self._draw_goomba, enemy=enemy, rect=rect)
@@ -1065,6 +1130,16 @@ class MarioScenarioEnv:
         eye_x = rect.right - 4 if enemy["direction"] > 0 else rect.left + 2
         canvas.rect(EYE, "enemy", pygame.Rect(eye_x, rect.top + 1, 2, 2))
 
+    def _draw_monster(self, canvas, enemy, rect):
+        # A spiked shell over a pale belly, with an eye on the side it walks to.
+        canvas.rect(MONSTER, "enemy", rect)
+        belly = pygame.Rect(rect.left + 3, rect.bottom - 6, rect.w - 6, 4)
+        canvas.rect(MONSTER_BELLY, "enemy", belly)
+        for x in range(rect.left + 1, rect.right - 2, 5):
+            canvas.rect(MONSTER_SPIKE, "enemy", pygame.Rect(x, rect.top, 3, 3))
+        eye_x = rect.right - 5 if enemy["direction"] > 0 else rect.left + 3
+        canvas.rect(EYE, "enemy", pygame.Rect(eye_x, rect.top + 6, 2, 3))
+
     def _draw_plant(self, canvas, rect):
         head = pygame.Rect(rect.left, rect.top, rect.w, min(8, rect.h))
         if rect.h > head.h:
@@ -1155,6 +1230,8 @@ class MarioScenarioEnv:
             "bridge_boarded": self._bridge_boarded,
             "bridge_crossed": self._bridge_crossed,
             "attempt_failed": self._attempt_failed,
+            "off_route": bool(getattr(self, "_off_route", False)),
+            "objective_missed": bool(getattr(self, "_objective_missed", False)),
             "reward_terms": dict(reward_terms),
             "reward_total": reward_total,
             "reward_config": asdict(self.reward_config),
@@ -1173,6 +1250,11 @@ class MarioScenarioEnv:
             enemy["plant_tick"] += 1
             position_plant(enemy)
             return
+        if enemy.get("kind") == "monster" and not enemy.get("awake"):
+            # Like NES enemies, a monster starts moving once it is on screen.
+            if enemy["x"] >= self.camera_x + self.width:
+                return
+            enemy["awake"] = True
         # Gravity
         enemy["vy"] += ENEMY_GRAVITY
         if enemy["vy"] > self.max_fall_speed:
@@ -1284,6 +1366,9 @@ class MarioScenarioEnv:
             from .piranha import parse_plant
 
             return parse_plant(e)
+        kind = e.get("kind") if isinstance(e, dict) else None
+        if kind not in (None, "monster"):
+            raise ValueError(f"unknown enemy kind {kind!r}")
         if isinstance(e, dict):
             x, y = float(e["x"]), float(e["y"])
             pmin, pmax = float(e["patrol_min"]), float(e["patrol_max"])
@@ -1300,6 +1385,7 @@ class MarioScenarioEnv:
         if direction not in (-1, 1):
             raise ValueError("enemy direction must be -1 or 1")
         return {
+            **({"kind": kind} if kind else {}),
             "x": x,
             "y": y,
             "vx": 0.0,
