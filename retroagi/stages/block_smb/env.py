@@ -224,6 +224,8 @@ class MarioScenarioEnv:
                     a piranha_plant uses kind,x,pipe_top and optional cycle durations;
                     kind "monster" is a large walker that cannot be stomped
     goal          : [x, y, w, h]
+    optional_bridge: a moving platform Mario may ride or not (its crossing is
+                    tracked, but the goal does not require it)
     tactics       : the layout's tactic segments, in order (tactic_schedule;
                     training only: teacher tokens, route rules, success)
     strategy      : the strategy the layout is played for (STRATEGY_REWARDS),
@@ -279,6 +281,7 @@ class MarioScenarioEnv:
         self._bridge_crossed = False
         self._bridge_jump_task = None
         self._bridge_then_terrain = False
+        self._optional_bridge = False
         self._bridge_jump_launched = False
         self._goal_requires_support = False
         self._single_jump_attempt = False
@@ -436,6 +439,9 @@ class MarioScenarioEnv:
         )
         self._bridge_boarded = False
         self._bridge_crossed = False
+        # A moving platform Mario may ride or not: its crossing is tracked for
+        # the layout's tactics, but the goal does not require it.
+        self._optional_bridge = bool(scenario.get("optional_bridge", False))
         self._bridge_jump_task = None
         self._bridge_jump_launched = False
         self._bridge_jump_task = scenario.get("bridge_jump_task")
@@ -780,7 +786,7 @@ class MarioScenarioEnv:
         ):
             reward_terms["wait_survival"] += self._wait_survival
 
-        if self._require_bridge_before_goal and self.mario["on_ground"]:
+        if (self._require_bridge_before_goal or self._optional_bridge) and self.mario["on_ground"]:
             support = self.mario.get("_platform")
             if support and support.get("moving"):
                 self._bridge_boarded = True

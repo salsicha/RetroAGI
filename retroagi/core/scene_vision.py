@@ -41,7 +41,11 @@ SURFACE_HEIGHT_TOLERANCE = 2
 TARGET_KEYS = ("types", "kind", "facing", "support", "on_something", "stomping", "mario_present")
 # A picture of Mario landing on an enemy counts this many times in the
 # feet-on-something loss: such pictures are rare and look like being in the air.
-STOMP_WEIGHT = 20.0
+# Pictures of Mario landing on an enemy he stomps count this many times in the
+# land detector's training loss: rare, so weighted up, but not so far that they
+# pull the shared model away from everything else (at 20 the enemy kinds,
+# moving platforms and power-ups of the Full SMB model came out clearly worse).
+STOMP_WEIGHT = 4.0
 
 
 def frame_targets(labels) -> dict[str, torch.Tensor]:
@@ -82,13 +86,14 @@ def scene_losses(
     out: Mapping[str, torch.Tensor],
     targets: Mapping[str, torch.Tensor],
     pixel_weights: Optional[torch.Tensor] = None,
+    stomp_weight: float = STOMP_WEIGHT,
 ) -> dict[str, torch.Tensor]:
     """Every head's loss and their sum ("total").
 
     - pixels: per-pixel cross-entropy on the types (rare types weighted up);
     - kind: enemy kind in every cell holding enemy pixels;
     - facing, support, feet on something: Mario's, over frames that show him
-      (pictures of a stomp weighted up).
+      (pictures of a stomp weighted up by ``stomp_weight``).
     """
     types = targets["types"].long()
     pixel_logits = out["pixel_logits"].float()
@@ -108,7 +113,7 @@ def scene_losses(
         losses["support"] = F.cross_entropy(
             out["support_logits"].float()[mario], targets["support"][mario]
         )
-        weight = 1.0 + (STOMP_WEIGHT - 1.0) * targets["stomping"][mario].float()
+        weight = 1.0 + (stomp_weight - 1.0) * targets["stomping"][mario].float()
         each = F.cross_entropy(
             out["on_something_logits"].float()[mario],
             targets["on_something"][mario],
@@ -130,7 +135,8 @@ def _to_device(targets: Mapping[str, Any], device: torch.device) -> dict[str, to
 
 @torch.no_grad()
 def held_out_loss(model, images, targets, device, batch_size: int = 32) -> dict[str, float]:
-    """Mean of each loss (plain per-pixel weights) over held-out screens."""
+    """Mean of each loss over held-out screens, every pixel and picture counted
+    once (no weighting): the measure checkpoints are chosen by."""
     was_training = model.training
     model.eval()
     sums: dict[str, float] = {}
@@ -141,7 +147,7 @@ def held_out_loss(model, images, targets, device, batch_size: int = 32) -> dict[
         )
         with torch.autocast(device.type, dtype=torch.float16, enabled=device.type == "cuda"):
             out = model.heads(image)
-        for name, value in scene_losses(out, batch).items():
+        for name, value in scene_losses(out, batch, stomp_weight=1.0).items():
             sums[name] = sums.get(name, 0.0) + float(value) * len(image)
     model.train(was_training)
     return {name: value / len(images) for name, value in sums.items()}

@@ -18,17 +18,17 @@ Four groups, all with explicit tactics (tactic_schedule):
   left out of tactic-layer training: their tactic is not decided by the scene.
 - **Strategy courses**: composed scenes only, played by three siblings, one
   per strategy (tokens.STRATEGIES), on the very same layouts. Each course has
-  a coin detour (coins on a slower raised path) and a hazard bypass (enemies
-  on the floor under a slower raised path with none), among other sections.
-  The strategy given to the tactic layer decides its tactics there:
-  - speed run: the fastest route; paid a time bonus for finishing early
-    (MarioScenarioEnv.STRATEGY_REWARDS); wins only before a deadline;
-  - max coins: the coin detours; paid more per coin; wins only with most of
-    the detours' coins;
-  - careful: around the enemies; paid nothing for time and charged more for
-    dying; wins by finishing.
-  Every layout is checked: each strategy's teacher route must finish, speed
-  run's must be clearly the fastest and max coins' must collect more coins.
+  two or three sections that offer two routes (compose: coin_detour,
+  hazard_bypass, lift_shortcut) among other sections. The teacher plays every
+  combination of routes and each strategy takes the best for its objective:
+  - speed run: the fewest frames; paid a time bonus for finishing early
+    (MarioScenarioEnv.STRATEGY_REWARDS); wins only within 10% of that time;
+  - max coins: the most coins, then the fewest frames; paid more per coin;
+    wins only with most of the coins it gathers beyond speed run's;
+  - careful: the fewest enemies passed, then the fewest frames; paid nothing
+    for time and charged more for dying; wins by finishing.
+  A layout is kept only if max coins' best route gathers more coins than speed
+  run's.
 """
 
 from __future__ import annotations
@@ -75,9 +75,18 @@ TACTIC_FAMILIES = (
     *STRATEGY_FAMILIES,
 )
 NEW_FAMILIES = (*SCENE_TACTIC_FAMILIES, *CLONE_FAMILIES, *STRATEGY_FAMILIES)
-# A speed run must be at least this much faster than the other strategies' routes.
-SPEED_MARGIN = 1.1
+# A speed run wins within this much of its teacher's (the fastest) time.
+SPEED_SLACK = 1.1
+# Sections that offer two routes, and the other sections of a course.
+ROUTE_SECTIONS = ("coin_detour", "hazard_bypass", "lift_shortcut")
 COURSE_SECTIONS = ("enemy", "gap", "pipe", "stairs", "plant", "monster")
+# What each strategy minimises over a layout's route combinations, given
+# (frames, coins collected, enemies passed).
+STRATEGY_ORDER = {
+    "speed_run": lambda frames, coins, hazards: (frames,),
+    "max_coins": lambda frames, coins, hazards: (-coins, frames),
+    "careful": lambda frames, coins, hazards: (hazards, frames),
+}
 
 SIMPLE_SECTIONS = ("enemy", "gap", "pipe", "stairs")
 SPECIAL_SECTIONS = ("plant", "upper_route", "lower_route", "monster", "dead_end", "bridge")
@@ -91,11 +100,9 @@ def mixed_recipe(rng: random.Random) -> list:
 
 
 def course_recipe(rng: random.Random) -> list:
-    """A coin detour and a hazard bypass (sometimes a second of one), and one
-    or two other sections, shuffled."""
-    choices = ["coin_detour", "hazard_bypass"]
-    if rng.random() < 0.5:
-        choices.append(rng.choice(choices))
+    """Two or three sections that offer routes (at most one moving platform)
+    and one or two other sections, shuffled."""
+    choices = rng.sample(ROUTE_SECTIONS, rng.choice((2, 3)))
     parts = choices + rng.sample(COURSE_SECTIONS, rng.choice((1, 2)))
     rng.shuffle(parts)
     return parts
@@ -203,9 +210,7 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
         scenario, params = _low_choice_layout(rng, difficulty)
     elif family in STRATEGY_FAMILIES:
         scenario, params = compose(rng, difficulty, course_recipe(rng))
-        strategy = STRATEGY_FAMILIES[family]
-        scenario["strategy"] = strategy
-        scenario["tactics"] = scenario["strategy_tactics"][strategy]
+        scenario["strategy"] = STRATEGY_FAMILIES[family]
     else:
         recipe = STANDALONE.get(family) or COMPOSED_RECIPES[family] or mixed_recipe(rng)
         scenario, params = compose(rng, difficulty, recipe)
@@ -231,30 +236,67 @@ def _coins_collected(scenario: dict, route: list[int]) -> int:
         env.close()
 
 
+# Each layout's route combinations, as played by the teacher: siblings made in
+# the same process share them (the layout depends only on the sample's seed).
+_PLAYED: dict = {}
+
+
+def _played_routes(scenario: dict) -> dict:
+    """{combination: (frames, coins collected, enemies passed, route)} for every
+    route combination the teacher finishes."""
+    import json
+
+    key = json.dumps(
+        {k: v for k, v in scenario.items() if k not in ("strategy", "strategy_objective")},
+        sort_keys=True,
+        default=str,
+    )
+    if key not in _PLAYED:
+        played = {}
+        for combination, schedule in scenario["route_tactics"].items():
+            trial = {
+                k: v for k, v in scenario.items() if k not in ("route_tactics", "route_hazards")
+            }
+            trial = copy.deepcopy(trial)
+            trial["tactics"] = schedule
+            trial.pop("strategy_objective", None)
+            route = route_actions(trial)
+            if route:
+                hazards = scenario["route_hazards"][combination]
+                played[combination] = (len(route), _coins_collected(trial, route), hazards, route)
+        if len(_PLAYED) > 64:
+            _PLAYED.clear()
+        _PLAYED[key] = played
+    return _PLAYED[key]
+
+
 def _strategy_route(family: str, scenario: dict) -> list[int]:
-    """The teacher's route for one strategy course, after checking the layout
-    under every strategy, and the strategy's objective set on ``scenario``."""
-    routes = {}
-    for strategy, schedule in scenario.pop("strategy_tactics").items():
-        trial = copy.deepcopy(scenario)
-        trial.update(tactics=schedule, strategy=strategy)
-        route = route_actions(trial)
-        if not route:
-            return []
-        routes[strategy] = (len(route), _coins_collected(trial, route), route)
-    speed, _, _ = routes["speed_run"]
-    next_fastest = min(frames for name, (frames, _, _) in routes.items() if name != "speed_run")
-    if speed * SPEED_MARGIN > next_fastest:
-        return []  # the detours are not clearly slower here
-    few, many = routes["speed_run"][1], routes["max_coins"][1]
+    """The teacher's route for one strategy course: the route combination best
+    for the course's strategy, with the strategy's objective set on ``scenario``."""
+    played = _played_routes(scenario)
+    choices = scenario.pop("route_tactics")
+    scenario.pop("route_hazards")
+    if not played:
+        return []
+
+    def best(strategy):
+        return min(played, key=lambda c: STRATEGY_ORDER[strategy](*played[c][:3]))
+
+    fastest, richest = best("speed_run"), best("max_coins")
+    few, many = played[fastest][1], played[richest][1]
     if many <= few:
-        return []  # the coin detours gained nothing
+        return []  # coins gained nothing over the fastest route here
     strategy = STRATEGY_FAMILIES[family]
+    chosen = best(strategy)
+    scenario["tactics"] = choices[chosen]
+    scenario["strategy_route"] = chosen
+    # What the teacher measured: frames, coins collected, enemies passed.
+    scenario["route_results"] = {c: list(result[:3]) for c, result in played.items()}
     if strategy == "speed_run":
-        scenario["strategy_objective"] = {"deadline": (speed + next_fastest) // 2}
+        scenario["strategy_objective"] = {"deadline": int(played[chosen][0] * SPEED_SLACK)}
     elif strategy == "max_coins":
         scenario["strategy_objective"] = {"coins": few + -(-3 * (many - few) // 4)}
-    return routes[strategy][2]
+    return played[chosen][3]
 
 
 def family_route(family: str, scenario: dict) -> list[int]:

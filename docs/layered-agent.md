@@ -204,29 +204,43 @@ three families play the very same layouts. The only differences are:
 - the tactics the teacher follows;
 - what the episode pays and what counts as winning.
 
-Each course has a coin detour and a hazard bypass among its sections, and
-sometimes a second of one:
-- **Coin detour:** coins on a zig-zag tower above the floor. Climbing it means
-  turning back and forth, which costs time. Max coins climbs it (alternate
-  route); speed run and careful walk on (advance).
+Each course has two or three sections that offer two routes, among other
+sections:
+- **Coin detour:** coins on a zig-zag tower above the floor. Walk past
+  (advance) or climb it for the coins (alternate route).
 - **Hazard bypass:** enemies patrol the floor under a high walkway with none,
-  reached by a zig-zag. Mario keeps his running speed through a jump, so
-  jumping the enemies is faster. Speed run and max coins go through (advance);
-  careful climbs to the walkway (alternate route).
+  reached by a zig-zag. Go through the enemies (advance) or over them
+  (alternate route).
+- **Lift shortcut:** a pit too wide to jump. Ride a moving platform (advance;
+  how long that takes depends on where the platform is when Mario arrives),
+  or climb a zig-zag to a walkway across (alternate route, with a few
+  coins).
+
+The teacher plays every combination of the routes and measures each one:
+frames to the goal, coins collected and enemies passed. Each strategy takes
+the best combination for its objective:
+- **speed run:** the fewest frames;
+- **max coins:** the most coins, then the fewest frames;
+- **careful:** the fewest enemies passed, then the fewest frames.
+
+So speed run takes a raised route whenever that is quicker: past a far-away
+moving platform, or over enemies that would slow it down. In checks over 24
+layouts it took at least one raised route in 12. Turning back and forth on a
+zig-zag costs time; jumping does not, because Mario keeps his running speed
+through a jump.
 
 What each strategy is paid for (`MarioScenarioEnv.STRATEGY_REWARDS`) and how it
 wins:
 
 | Strategy | Paid for | Wins when |
 |---|---|---|
-| Speed run | a time bonus at the goal for each frame left before its deadline, and a frame cost five times the usual | it reaches the goal before the deadline, halfway between its teacher's time and the next fastest strategy's |
-| Max coins | coins, at two and a half times the usual reward | it reaches the goal with at least three quarters of the extra coins its teacher gathered |
+| Speed run | a time bonus at the goal for each frame left before its deadline, and a frame cost five times the usual | it reaches the goal within 10% of the fastest route's time |
+| Max coins | coins, at two and a half times the usual reward | it reaches the goal with at least three quarters of the extra coins its route gathers beyond speed run's |
 | Careful | no frame cost; dying costs five times as much | it reaches the goal |
 
-Every course layout is checked when it is made:
-- each strategy's teacher route must finish;
-- speed run's must be at least 10% faster than the others;
-- max coins' must collect more coins than speed run's.
+A course layout is kept only if max coins' best route gathers more coins than
+speed run's. Each layout records what the teacher measured for every
+combination (`route_results`).
 
 Every other family is played as a speed run.
 

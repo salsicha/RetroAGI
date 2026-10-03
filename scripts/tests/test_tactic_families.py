@@ -254,46 +254,50 @@ def _played(scenario, actions):
 
 
 @pytest.mark.timeout(600)
-def test_strategy_courses_share_layouts_and_their_tactics_follow_the_strategy():
-    from retroagi.stages.block_smb.tactic_families import STRATEGY_FAMILIES
+def test_strategy_courses_share_layouts_and_each_takes_its_best_route():
+    from retroagi.stages.block_smb.tactic_families import STRATEGY_FAMILIES, STRATEGY_ORDER
 
     courses = {family: _course(family) for family in STRATEGY_FAMILIES}
     first = courses["speed_run_course"]
     for family, scenario in courses.items():
+        strategy = STRATEGY_FAMILIES[family]
         assert scenario["platforms"] == first["platforms"]
-        assert scenario["strategy"] == STRATEGY_FAMILIES[family]
-    stances = {
-        family: [seg["stance"] for seg in scenario["tactics"]]
-        for family, scenario in courses.items()
-    }
-    assert "alternate_route" not in stances["speed_run_course"]
-    assert "alternate_route" in stances["max_coins_course"]  # up to the coins
-    assert "alternate_route" in stances["careful_course"]  # around the enemies
-    assert stances["max_coins_course"] != stances["careful_course"]
-    assert set(courses["speed_run_course"]["strategy_objective"]) == {"deadline"}
+        assert scenario["strategy"] == strategy
+        results = scenario["route_results"]
+        assert results == first["route_results"]  # every combination was played
+        best = min(results, key=lambda c: STRATEGY_ORDER[strategy](*results[c]))
+        assert scenario["strategy_route"] == best
+    fastest = first["route_results"][first["strategy_route"]][0]
+    assert first["strategy_objective"] == {"deadline": int(fastest * 1.1)}
     assert set(courses["max_coins_course"]["strategy_objective"]) == {"coins"}
     assert "strategy_objective" not in courses["careful_course"]
 
 
 @pytest.mark.timeout(600)
-def test_each_strategy_is_paid_for_and_judged_by_its_own_objective():
+def test_each_strategy_wins_its_own_course_and_the_coin_course_needs_its_route():
     from retroagi.stages.block_smb.monte_carlo import block_smb_monte_carlo_oracle_actions
 
     speed = _course("speed_run_course")
     coins = _course("max_coins_course")
     fast_route = block_smb_monte_carlo_oracle_actions(speed, max_steps=speed["frame_budget"])
     coin_route = block_smb_monte_carlo_oracle_actions(coins, max_steps=coins["frame_budget"])
-    # Each strategy's own route wins its course.
-    fast_info, fast_return, fast_coins = _played(speed, fast_route)
+    fast_info, _, fast_coins = _played(speed, fast_route)
     assert fast_info["reward_terms"]["goal"] > 50  # the goal reward plus a time bonus
     coin_info, _, many = _played(coins, coin_route)
     assert coin_info["reward_terms"]["goal"] > 0 and many > fast_coins
-    # The fast route never climbs the coin course's towers: no win there.
+    # The fastest route does not win the coin course.
     skipped, _, _ = _played(coins, fast_route)
     assert skipped["reward_terms"]["goal"] == 0
-    # The coin route is too slow for the speed run's deadline: a loss.
-    late, _, _ = _played(speed, coin_route)
-    assert late["objective_missed"] and late["reward_terms"]["goal"] == 0
+
+
+def test_finishing_after_the_deadline_misses_the_objective():
+    scenario = _flat([segment("advance", 1)])
+    scenario.update(strategy="speed_run", strategy_objective={"deadline": 60})
+    info, _, _ = _played(scenario, [1] * 400)  # walking to x=300 takes longer
+    assert info["objective_missed"] and info["reward_terms"]["goal"] == 0
+    scenario["strategy_objective"] = {"deadline": 400}
+    info, _, _ = _played(scenario, [1] * 400)
+    assert not info["objective_missed"] and info["reward_terms"]["goal"] > 50
 
 
 def test_reaching_the_goal_without_the_coins_misses_the_objective():

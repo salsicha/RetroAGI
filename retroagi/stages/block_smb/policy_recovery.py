@@ -33,6 +33,10 @@ RECOVERY_FAMILIES = (
 )
 
 
+# Frames without progress after which the teacher's route is given up.
+STALL_FRAMES = 400
+
+
 def interior_hold(valid, menu=NES_JUMP_FRAMES):
     runs = []
     for hold in valid:
@@ -139,7 +143,15 @@ def _coached_suffix(
         direction = toward
         return 2 if toward > 0 else 4
 
+    # A route that makes no progress for this long is given up: no new
+    # segment, route platform or furthest point.
+    progress, stalled = None, 0
     for _ in range(max_frames):
+        mark = (env._tactic_index, env._route_done, int(env._max_x_reached))
+        stalled = 0 if mark != progress else stalled + 1
+        progress = mark
+        if stalled > STALL_FRAMES:
+            break
         features = history.observe(env, env.steps) if history is not None else None
         segment = tactic_schedule.current(env)
         plant = timed_plant(env)

@@ -1361,6 +1361,9 @@ class TestBlockSMBMasterySchedule(unittest.TestCase):
         # thrash between difficulty distributions.
         self.assertIn("medium", state["single_gap"]["unlocked_difficulties"])
 
+    # It makes layouts across the catalogue three times; a strategy course
+    # plays every combination of its routes to make one.
+    @pytest.mark.timeout(300)
     def test_mastery_curriculum_is_deterministic_and_respects_unlocks(self):
         from retroagi.stages.block_smb.monte_carlo import (
             block_smb_monte_carlo_metadata,

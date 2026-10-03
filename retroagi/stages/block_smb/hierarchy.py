@@ -47,7 +47,15 @@ def hierarchy_status(families, mastery):
 
 
 def bridge_training_active(env):
-    """A bridge followed by terrain stops requesting waits once it is crossed."""
+    """A bridge followed by terrain stops requesting waits once it is crossed.
+
+    A moving platform Mario may ride or not (optional_bridge) is taught only
+    in a moving-platform segment of the layout's tactics, until crossed.
+    """
+    if getattr(env, "_optional_bridge", False):
+        from . import tactic_schedule
+
+        return tactic_schedule.current(env)["kind"] == "bridge" and not env._bridge_crossed
     return bool(env._require_bridge_before_goal) and not (
         getattr(env, "_bridge_then_terrain", False) and env._bridge_crossed
     )

@@ -5,9 +5,9 @@
   "code_revision": {
     "branch": "main",
     "dirty": true,
-    "revision": "ba8527340c89047f48c2592b3095cbdd9f0842a3",
+    "revision": "5b8d57e992104c7bbeecf607ea971c155201360a",
     "root": "/home/amoran/repos/RetroAGI",
-    "short_revision": "ba85273",
+    "short_revision": "5b8d57e",
     "system": "git"
   },
   "config": {
@@ -72,6 +72,7 @@
           "other",
           "defeated"
         ],
+        "mario_on_something": true,
         "mario_supports": [
           "air",
           "ground",
@@ -130,15 +131,15 @@
       "version": "2.2.0+cu121"
     }
   },
-  "epoch": 39,
+  "epoch": 38,
   "global_step": 0,
   "metadata": {
     "code_revision": {
       "branch": "main",
       "dirty": true,
-      "revision": "ba8527340c89047f48c2592b3095cbdd9f0842a3",
+      "revision": "5b8d57e992104c7bbeecf607ea971c155201360a",
       "root": "/home/amoran/repos/RetroAGI",
-      "short_revision": "ba85273",
+      "short_revision": "5b8d57e",
       "system": "git"
     },
     "runtime_environment": {
@@ -165,23 +166,25 @@
     "trainer": "scripts.vit.train_full_vit"
   },
   "metrics": {
-    "epoch": 39,
-    "frames_seen": 1561248,
+    "epoch": 38,
+    "frames_seen": 1521216,
     "held_out": {
-      "facing": 0.005361882772995159,
-      "kind": 0.009884599916636944,
-      "pixels": 0.001214759588552018,
-      "support": 0.006542448427605753,
-      "total": 0.02300369095802307
+      "facing": 0.008313266236917116,
+      "kind": 0.021502757894806563,
+      "on_something": 0.024206308988543847,
+      "pixels": 0.0016355992980922262,
+      "support": 0.008170364087757965,
+      "total": 0.06382829580083489
     },
-    "learned_numbers": 1259551,
-    "minutes": 79.40541302363077,
+    "learned_numbers": 1259809,
+    "minutes": 78.09773034652075,
     "train": {
-      "facing": 0.01254367005703047,
-      "kind": 0.008641828789491202,
-      "pixels": 0.0014505079814002009,
-      "support": 0.026147316653744236,
-      "total": 0.04878332374297245
+      "facing": 0.012575783216300112,
+      "kind": 0.009500551836997273,
+      "on_something": 0.018000006061499388,
+      "pixels": 0.002216315795460881,
+      "support": 0.01145899969186293,
+      "total": 0.05375165679258664
     }
   },
   "model_name": "full_smb_vit",
