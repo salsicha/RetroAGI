@@ -79,4 +79,4 @@ USER retroagi
 ENV PATH="/venv/bin:$PATH"
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "/scripts/run.py"]
+CMD ["python3", "/scripts/mario_scenario_env.py"]

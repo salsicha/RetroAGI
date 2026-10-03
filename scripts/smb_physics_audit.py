@@ -6,13 +6,10 @@ from pathlib import Path
 
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.full_smb.adapter import FullSMBEnvConfig, FullSMBStage
+from retroagi.stages.full_smb.play import FullSMBGame
 
 
 def audit():
-    class NoVision:
-        pass
-
     scripts = {
         "run": [1] * 90,
         "reverse": [1] * 35 + [3] * 30,
@@ -22,11 +19,11 @@ def audit():
         "release_repress": [5] * 28 + [0] * 40 + [5] * 10 + [0] * 45,
     }
     scripts.update({f"jump_{hold}": [5] * hold + [0] * 65 for hold in (1, 3, 7, 13, 19, 28, 32)})
-    stage = FullSMBStage(env_config=FullSMBEnvConfig(state="Level1-1"), vision=NoVision())
+    stage = FullSMBGame("Level1-1")
     reports = []
     try:
         for name, actions in scripts.items():
-            stage.reset(seed=901)
+            stage.reset()
             ram = stage.env.get_ram()
             block = MarioScenarioEnv()
             block.reset(

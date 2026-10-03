@@ -32,7 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core import select_device
+from retroagi.core.devices import select_device
 from retroagi.core.scene_vision import evaluate_scene_vision, scene_report
 from retroagi.stages.block_smb.vision import (
     DEFAULT_BLOCK_VIT_CHECKPOINT,

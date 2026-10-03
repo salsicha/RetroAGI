@@ -1,435 +1,127 @@
 # RetroAGI
 General purpose machine learning agent for retro games.
 
-RetroAGI is organized as a progressive-resolution curriculum for training and
-promoting an architecture toward full Super Mario Bros:
+RetroAGI trains an agent for Super Mario Bros that decides in four layers and
+sees only through a vision transformer:
 
-1. **Synthetic 1D** fully validates the architecture on procedural sequence
-   data: tensor contracts, hierarchy behavior, losses, gradients, baselines,
-   primitive labels, k-step world-model outcomes, checkpointing, and
-   deterministic metrics.
-2. **Block SMB** trains all trainable game-facing models on a simplified
-   synthetic version of SMB: Block ViT perception plus the hierarchical
-   actor/world-model/critic policy in fast scenario-driven tasks. Basic skill
-   families compose into chained scenarios (`chained_obstacles`,
-   `chained_enemy_gauntlet`, `mixed_section`, `full_smb_opening_proxy`) and
-   then tactics and strategy sequence families; each composed family unlocks
-   only after its prerequisite families are mastered on held-out layouts.
-3. **Full SMB** transfers the Block-trained policy (hierarchy, LSTM world
-   model, critic and adaptive-controller settings) to the emulator. Full SMB
-   play is RAM-assisted: collision geometry and object boxes come from NES RAM,
-   and the frozen Full SMB vision model supplies scene semantics. That model is
-   the same per-pixel vision transformer class as Block SMB's, with its own
-   weights, trained first on real emulator frames of the training levels
-   (`scripts/vit/train_full_vit.py`); each pixel's true type is read exactly
-   from game memory, and any frame memory cannot fully explain is refused. It
-   is measured on the test levels `Level1-1` and `Level5-1`, which it never
-   trains on. The stage then tests transfer on local approaches, continued Full
-   SMB training, and then full-level play.
+1. **Strategy** — what the run is for: finish fast, collect the most coins, or
+   take the fewest risks.
+2. **Tactic** — what to do in this part of the level: advance, take another
+   route, hold the area, or retreat.
+3. **Skill** — the next move: advance, jump a gap, climb, descend, stomp,
+   retreat or wait, with its target.
+4. **Action** — which buttons to press and for how many frames.
 
-The stage code is separated, but all stages share the same core contract:
+Each game has its own vision transformer (same model, its own weights). It
+reads the screen and reports the objects on it: Mario, the ground and
+platforms, gaps, pipes, blocks, coins and enemies. The four layers read only
+that report; game state is used for training labels and scores, never as an
+input.
 
-```text
-observation -> frozen perception -> scene state
-strategy network -> tactics network -> skill network -> action network
-action + parameters -> adaptive controller -> frame-by-frame buttons
-scene + committed action -> world model -> predicted primitive outcome
-prediction -> critic gates -> acceptance / feedback
-carried LSTM state -> next decision
-```
+Training happens in two games:
 
-Shared components live in `retroagi/core`. Stage adapters live in
-`retroagi/stages/*` and convert stage-native observations into the common
-A/B/C timescale tensors.
+- **Block SMB** is a simplified Mario game with the real game's physics. Its
+  layouts are generated in families (gaps, stairs, enemies, moving platforms,
+  piranha plants, alternate routes, retreats, and composed scenes whose tactic
+  changes along the way). A teacher that can look ahead in the simulator
+  labels every decision. The action, skill and tactic layers train here, in
+  that order; each layer starts only after the one below it passes on
+  held-out layouts.
+- **Full SMB** is the original game in the stable-retro emulator. The layers
+  trained in Block SMB play it unchanged, through the Full SMB vision
+  transformer. The strategy layer learns only here.
 
-Each game has one geometry observer: Block SMB reads simulator ground truth and
-Full SMB reads NES RAM; there is no pixels-only Full SMB player. Block and Full
-perception have different weights but emit one canonical scene interface;
-shared-core architecture and timing stay compatible. Critic feedback and carried
-recurrent memory are enabled only under the qualified common runtime. Block SMB
-production training runs through `scripts/block_smb_full_volume.py` with
-`scripts/configs/block_smb_full_volume.json`; the
-[shared transfer contract](docs/full-smb-transfer-contract.md) documents the
-Block-to-Full transfer and its measured results.
+[docs/layered-agent.md](docs/layered-agent.md) explains what the agent sees,
+how each layer decides and how it learns.
 
 ## Project Layout
 
 ```text
 retroagi/
   core/
-    interfaces.py      # StageSpec, StageBatch, shared adapter protocol
-    models.py          # skill/action networks, tactics/strategy networks,
-                       # world model, critic (one AgentWorldModelCritic module)
-    actions.py         # SMBAdaptiveController: committed adaptive primitives
-    temporal.py        # HSP0 goal/span contracts and episode reconstruction
-    skills.py          # measurable skill-goal encodings
+    vision.py, scene_vision.py   # the vision transformer, its training and measurements
+    smb_pixel_types.py           # the pixel types and the objects built from them
+    smb_scene_labels.py          # true objects for training labels
+    smb_observer.py              # turns a screen into the report the layers read
+    tokens.py                    # the strategy, tactic and skill vocabularies
+    layered_policy.py            # the four decision layers and their memory
+    smb_agent.py                 # the agent: screens in, button actions out
+    smb_executor.py              # plays an action for its frames
+    smb_physics.py               # Mario's NES motion, shared by both games
   stages/
-    synthetic_1d/      # procedural one-dimensional validation
-    block_smb/         # pygame-ce SMB-like scenarios and adapter
-    full_smb/          # stable-retro adapter and emulator runner
-scripts/               # compatibility wrappers and older experiments
+    block_smb/                   # the Block SMB game, layout families, teachers
+                                 # and the layer trainer (layered_train.py)
+    full_smb/                    # emulator play, frame labels from game memory,
+                                 # and the Full SMB evaluation of trained layers
+scripts/
+  vit/                           # train the two vision transformers
+  vision/                        # measure the two vision transformers
+  tests/                         # the test suite
 ```
-
-## Architecture
-
-One learned module (`AgentWorldModelCritic`, about 1.2M parameters at the
-default width of 128) contains every trainable part; the decision procedures
-around it are plain, inspectable code. Top to bottom:
-
-- **Strategy network** — a transformer over the recent sequence of tactical
-  stances; decides the sequence of tactics.
-- **Tactics network** — a transformer over the scene state; proposes one of
-  four tactical stances (advance toward the goal, take the alternate route,
-  hold the area, retreat) plus a context vector for the skill network. The
-  injection is zero-initialized, so an untrained tactics stack is
-  behavior-neutral; it learns end-to-end from the policy gradients.
-- **Skill network (A-level)** — a transformer encoder; decides the next
-  immediate action.
-- **Action network (B-level)** — a transformer decoder; decides that action's
-  parameters: the hold duration over a complete 1-16 frame menu, controller
-  gains, and release prediction.
-- **Controller (C-level, `SMBAdaptiveController`)** — mechanical, no weights.
-  Executes every action class (jump, walk, wait) as a committed multi-frame
-  primitive whose duration is a slew-limited adaptive setpoint tracking the
-  action network's live belief; physical events (landing, enemy contact) end
-  primitives early. Learned interrupt heads have no runtime authority.
-- **World model (LSTM)** — predicts the *outcome state* of the committed
-  primitive (the world at landing), not merely the next frame.
-- **Critic** — learned progress/death judges, value and reward heads, plus
-  deterministic gates that read the world model's predicted goal distance and
-  death flag directly.
-- **Perception (Block ViT)** — the shared per-pixel vision transformer
-  (`SceneVisionTransformer`) with Block weights: it types every pixel as
-  background, Mario, ground, brick, question block, pipe, coin, enemy or
-  moving platform. Trained and frozen before policy training. Full SMB uses
-  the same class with its own weights. `canonical_vision` maps the nine types
-  onto the policy's seven classes by meaning (ground, brick, question block
-  and pipe all become standable platform), and Mario's position and whether
-  he stands are computed from the labelled pixels by the same rules in both
-  games.
-
-Training is self-supervised from the agent's own play (see the
-[hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)):
-policy gradients with a value baseline; **hindsight hold coaching** (every
-completed jump or walk relabels its frames with the duration that would have
-hit the target); release-timing supervision from completed spans; **scenario
-rehearsal** (layouts the policy has solved are stored per family and a
-balanced sample is re-rolled live each epoch through the normal on-policy
-losses — retention practice that cannot go stale, with the rehearsal
-success rate logged as a direct retention gauge); **HSP0 temporal spans** recording every frame of
-every rollout into versioned goal/span records with unambiguous end reasons;
-and a **mastery-gated curriculum with graduated retention** (practice focuses
-on failing families, newly mastered families ease off over a grace period,
-difficulty unlocks are monotonic, evaluation splits are read-only, and gates
-are never force-passed).
-
-See the [architecture diagram](docs/architecture.html) for the hierarchical
-flow.
-
-## Current Status
-
-- **Synthetic 1D** is the architecture validation stage and is reproducible from
-  a clean checkout with deterministic datasets, baselines, checkpoint
-  save/restore, primitive-control supervision, k-step primitive-outcome
-  supervision, and held-out metrics.
-- **Block SMB** is the simplified synthetic game-training stage. It has a
-  pygame-ce environment, fixed success thresholds, Block ViT perception, policy
-  training, evaluation, resume, recording, ablations, structured logs, and
-  optional TensorBoard or W&B tracking. Generated scenarios come from the
-  Block SMB Monte Carlo families, laid out and route-verified under NES physics,
-  so policy training can cover parameterized ground-truth tasks rather than
-  only a small fixed set.
-  Fresh Block SMB train/distill CLI runs use the initial real-volume MC target
-  of 512 train, 128 validation, and 256 test samples, with failure-focused
-  train oversampling biased toward `full_smb_opening_proxy`, unless a
-  smoke/sweep override is passed.
-- **Full SMB** has a per-pixel vision model trained on real emulator frames
-  labelled exactly from game memory, a stable-retro stage adapter, headless
-  smoke evaluation, Block SMB policy transfer, continued Full SMB training,
-  transfer-vs-scratch comparison tooling, and a documented local benchmark run
-  at `artifacts/full_smb/documented_benchmark_seed0/`.
-  The [shared transfer contract and emulator audit](docs/full-smb-transfer-contract.md)
-  documents the current compatibility fixes and failed full-level qualification.
-- **Operations** are covered by CI, native install instructions, stage
-  operations guidance, and a clean-checkout reproducibility procedure.
 
 ## Supported Platforms
 
 RetroAGI supports Linux x86-64 and macOS Apple Silicon with Python 3.12
 through 3.14. It pins PyTorch 2.9.1 with torchvision 0.24.1. CPU-only
 execution is the baseline; CUDA and Apple Metal/MPS acceleration are selected
-automatically when available. CUDA 12.8 is the primary Linux GPU target, CUDA
-13.0 is the secondary Linux GPU target, and MPS is the native macOS GPU target.
+automatically when available.
 
 Reference training runs were performed on an Intel NUC with a 12th-generation
 Intel processor and 64 GB of RAM, connected over Thunderbolt to a Razer Core X
 V2 external GPU enclosure housing an NVIDIA Tesla V100 with 32 GB of memory.
 
 See the [compatibility matrix and installation commands](docs/compatibility.md)
-before creating an environment.
-
-The [stage semantics](docs/stage-semantics.md) define observations, actions,
-rewards, episode endings, and resets across the curriculum.
-
-Block SMB production training uses generated families only. The
-[family-only repair](docs/block-smb-family-only-training.md) documents the
-30-epoch recipe, expanded bridge and leftward-recovery coverage, and validation.
-The [Block SMB Monte Carlo curriculum plan](docs/block-smb-monte-carlo-curriculum.md)
-defines the generalization gate: parameterized scenario families, sampled
-train/validation/test/stress splits, coverage metrics, held-out evaluation, and
-distribution-level promotion criteria before Full SMB transfer.
-The [universal retro oracle roadmap](docs/universal-retro-oracle.md) lays out
-the path from scripted Block SMB oracle labels to a learned cross-game AI
-teacher that improves through maximum-likelihood training and EM relabeling.
-The [hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)
-extends that roadmap with persistent primitives, learned skills, tactics,
-landmark routes, and per-level improvement loops grounded in real play.
-The [universal embodied framework design](docs/universal-embodied-framework.md)
-describes how the same machinery can serve any game or robot, with a
-low-fidelity simulation → photoreal simulation → real robot promotion ladder.
-The current known-good baseline is a scripted policy artifact at
-`artifacts/block_smb/known_good_scripted_seed20260622/`.
-Full SMB cannot commit ROM-derived emulator artifacts, so its checked-in
-counterpart is the documented local benchmark manifest at
-`artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json`.
-
-The [operations reference](docs/operations.md) lists hardware expectations,
-runtime targets, metrics, and artifact locations for each stage.
-
-The [reproducibility procedure](docs/reproducibility.md) starts from a clean
-checkout and walks through installation, tests, smoke training, and artifact
-verification.
-
-The [tensor contracts](docs/tensor-contracts.md) define hierarchy and vision
-shapes, dtypes, normalization ranges, and timescales.
-
-The [AI teaching curriculum](docs/ai-teaching-curriculum.md) provides a
-10-week path for using the project to teach practical AI engineering.
-
+before creating an environment. Full SMB needs the game imported into
+stable-retro; see [docs/full-smb-content.md](docs/full-smb-content.md).
 
 ## Usage
-1. Create and activate a supported Python environment using the commands in
-   [docs/compatibility.md](docs/compatibility.md). For a fully traceable run
-   from a fresh clone, follow
-   [docs/reproducibility.md](docs/reproducibility.md).
-2. Run a curriculum stage:
+
+The [reproducibility procedure](docs/reproducibility.md) goes from a clean
+checkout to a trained agent. In short:
+
+1. Train and measure the vision transformers:
    ```bash
-   python -m retroagi.stages.synthetic_1d.train
-   retroagi train --game smb --stage block --epochs 5 \
-     --vision-checkpoint data/block_vit/block_vit_scene.pth \
-     --checkpoint data/block_smb/policy.pth \
-     --output artifacts/block_smb/latest/run_summary.json
-   retroagi resume --game smb --stage block \
-     --checkpoint data/block_smb/policy.pth --epochs 10
-   retroagi evaluate --game smb --stage block \
-     --checkpoint data/block_smb/policy.pth
-   retroagi record --game smb --stage block \
-     --checkpoint data/block_smb/policy.pth \
-     --record-dir artifacts/block_smb/recordings
-   retroagi transfer --game smb --stage full \
-     --block-policy-checkpoint data/block_smb/policy.pth \
-     --block-vision-checkpoint data/block_vit/block_vit_scene.pth \
-     --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
-     --output-checkpoint data/full_smb/transferred_policy.pth
-   retroagi train --game smb --stage full \
-     --init-checkpoint data/full_smb/transferred_policy.pth \
-     --full-smb-vision-checkpoint data/full_vit/full_vit_scene.pth \
-     --perception-mode freeze \
-     --updates-per-epoch 1 \
-     --rollout-steps 64 \
-     --checkpoint data/full_smb/policy.pth
-   retroagi evaluate --game smb --stage full \
-     --checkpoint data/full_smb/policy.pth \
-     --evaluation-episodes 3
-   retroagi record --game smb --stage full \
-     --checkpoint data/full_smb/policy.pth \
-     --record-dir artifacts/full_smb/recordings \
-     --recording-path artifacts/full_smb/recording_manifest.npz
-   retroagi play --game smb --stage full \
-     --checkpoint data/full_smb/policy.pth \
-     --task-set fixed_benchmark \
-     --level 1-1 \
-     --frame-skip 4 \
-     --action-repeat 2 \
-     --render-mode human \
-     --deterministic-policy \
-     --inspection-overlay \
-     --render \
-     --fps 30 \
-     --record-output artifacts/full_smb/play_manifest.npz
-   retroagi play --game smb --stage full \
-     --human \
-     --task-set smoke \
-     --level 1-1 \
-     --render-mode human \
-     --render \
-     --fps 30
-   retroagi compare --game smb --stage full \
-     --transfer-checkpoint data/full_smb/transferred_policy.pth \
-     --scratch-trained-checkpoint data/full_smb/scratch_policy.pth \
-     --fine-tuned-checkpoint data/full_smb/fine_tuned_policy.pth \
-     --known-good-checkpoint data/full_smb/known_good_policy.pth \
-     --task-set fixed_benchmark \
-     --seed 0 \
-     --seed 1 \
-     --output artifacts/full_smb/policy_suite_comparison.json
-   retroagi evaluate --game smb --stage full --steps 500 --seed 0
+   python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
+   python scripts/vision/evaluate_block_vision.py
+   python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
+   python scripts/vision/evaluate_full_vision.py
    ```
-   The `retroagi` command is the preferred entry point for selecting a game and
-   fidelity rung. Use `--game smb --stage synthetic|block|full`; legacy stage
-   aliases such as `block-smb` and `full-smb` remain accepted. Stage-specific
-   options are forwarded to the selected implementation; the legacy
-   `retroagi-block-smb` command remains available for Block SMB-only workflows.
-   Full SMB commands accept `--task-set`, `--task`, `--level`, `--state`,
-   `--scenario`, and `--frame-skip` to select repeatable task starts. Full SMB
-   play mode also accepts `--render-mode human|none`, `--action-repeat`,
-   `--deterministic-policy` or `--sampling-policy`, and `--record-output` for
-   the playback manifest. Add `--inspection-overlay` to stream a compact
-   policy-inspection HUD to stderr with action probabilities, reward terms,
-   score/progress signals, termination reason, and fixed-task threshold gates.
-   Preserved Full SMB runs should use the canonical layout from
-   `full_smb_artifact_layout("<run>")` under `artifacts/full_smb/<run>/` for
-   summaries, logs, recordings, videos, evaluation reports, comparisons,
-   tracking output, and checkpoint copies.
-   Full SMB policy training records its perception choice in every checkpoint:
-   `--perception-mode freeze` reuses the trained Full SMB vision checkpoint
-   (`data/full_vit/full_vit_scene.pth` by default) unchanged, `fine_tune`
-   includes its parameters in the optimizer, and `replace` starts from a fresh,
-   untrained, trainable Full SMB vision model.
-   Full SMB trainer checkpoints also capture the resolved rollout/update shape,
-   vector environment request, reward config, loss weights, recording paths,
-   tracking config, deterministic mode, training source provenance, and the
-   validated Full SMB A/B/C stage-batch contract. Scratch training is selected
-   by omitting `--resume` and `--init-checkpoint`, which builds the policy via
-   the shared architecture factory before consuming Full SMB stage batches.
-   `--init-checkpoint` starts transferred-policy fine-tuning from either a raw
-   Block SMB policy checkpoint or an existing Full SMB transfer checkpoint.
-   Rollouts carry recurrent world-model state only while the episode continues
-   and drop it on manual reset, death, timeout, completion, game over,
-   termination, or truncation boundaries.
-   Training summaries and checkpoints now include compact rollout replay
-   records with actions, rewards, done/truncated flags, episode masks,
-   boundary reasons, scenario/task/emulator-state IDs when available, selected
-   Full SMB signals, and reward terms.
-   Full SMB training also records numerical safety settings and metrics:
-   finite loss/logit/gradient checks, gradient clipping, reward-scale bounds,
-   reward/value prediction bounds, action entropy, and early-stop reasons for
-   NaN or exploding values.
-   Real Full SMB emulator runs require the optional stable-retro backend:
-   `pip install ".[full-smb]"`. Unit tests, Block SMB training, and CI smoke
-   training do not install or build that native emulator dependency.
-   Each versioned checkpoint also writes a JSON sidecar beside the `.pth` file
-   containing the resolved config, metrics, code revision, runtime environment,
-   specs, metadata, and state keys.
-   Block SMB ablations can be run with paired switches such as
-   `--disable-vision`, `--disable-world-model`, `--disable-critic-feedback`,
-   `--disable-hierarchy`, `--disable-recurrent-state`, and
-   `--disable-checkpoint-transfer`. The
-   resolved ablation config is written beside each run summary and checkpoint.
-   Training can write structured JSONL events with `--log-path`; deterministic
-   evaluation cadence is controlled with `--evaluation-interval-epochs`.
-   Optional TensorBoard and Weights & Biases tracking can be installed with
-   `pip install ".[tracking]"` and enabled with
-   `--tracking-backend tensorboard|wandb`.
-   Low-level controller gain schedules are selectable with
-   `--controller-schedule constant|linear`. The Full SMB random-agent runner is
-   headless by default; pass `--render` only for local visual inspection. Full
-   SMB policy transfer reuses Block SMB actor/world-model/critic weights.
-   The Full SMB vision model is trained on real emulator frames, labelled
-   exactly from game memory, with `scripts/vit/train_full_vit.py` (see
-   [Reproduce Full SMB Vision](docs/reproducibility.md#10-reproduce-full-smb-vision));
-   Full SMB collision geometry comes from NES RAM, not from that model.
-   Transfer comparisons evaluate the transferred policy and a scratch Full SMB
-   baseline on identical seeded observation batches.
-   Learned-dynamics imagination is selectable with
-   `--imagined-rollout-horizon` and `--imagined-rollout-weight`.
-   Target-network stabilization is selectable with `--target-network-mode`,
-   `--target-network-tau`, and `--target-network-instability-threshold`.
-3. Run the test suite:
+   [scripts/vit/README.md](scripts/vit/README.md) describes both models,
+   their trainers and their measurements.
+2. Train the layers in Block SMB, each starting from the run below it:
    ```bash
-   python -m unittest discover -s scripts/tests -v
+   retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
+   retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
+   retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
+   ```
+   `passed.pt` is the best round that met the layer's bar on every family;
+   `best.pt` is the best round overall. `retroagi-block-smb train-layer --help`
+   lists every setting.
+3. Examine a saved agent on fresh held-out Block SMB layouts, and play Full SMB
+   with it:
+   ```bash
+   retroagi-block-smb exam-layer --checkpoint artifacts/block_smb/tactic/passed.pt
+   python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
+   ```
+4. Run the test suite:
+   ```bash
+   python -m pytest scripts/tests
    ```
 
-Legacy wrappers still work:
-   ```bash
-   python scripts/simple_transformer.py
-   python scripts/run.py
-   ```
+Other tools:
 
-## Training
+- `python scripts/mario_scenario_env.py` plays Block SMB by keyboard.
+- `python scripts/semantic_segmentation.py` shows Block SMB beside its true
+  pixel types.
+- `python scripts/smb_physics_audit.py --output <file>` checks that Block SMB
+  moves Mario exactly as the emulator does.
 
-Train the Block SMB vision transformer on the frames the policy sees: every
-Monte Carlo family on the train split at every difficulty, played with
-teacher, perturbed, delayed and random routes, plus generated levels. Each
-pixel's true type comes from `MarioScenarioEnv.render_labels()`, which draws
-the frame's own shapes with their types instead of their colours:
+## Earlier design notes
 
-```bash
-python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
-```
+These describe ideas from before the four-layer agent; the code they mention
+has been removed:
 
-The best checkpoint is written to `data/block_vit/block_vit_scene.pth`. Measure
-it on held-out validation-split frames with the shared measurements (pixels
-correct, each type found/correct, Mario found and position error, standing
-agreement, enemies seen):
-
-```bash
-python scripts/vision/evaluate_block_vision.py
-```
-
-Train the Full SMB vision transformer (the same class with its own weights) on
-real emulator frames of the training levels. It needs the ROM imported into
-stable-retro ([docs/full-smb-content.md](docs/full-smb-content.md)). Each
-pixel's true type is read from game memory; a frame is used only when the
-picture rebuilt from memory matches the emulator's picture at every visible
-pixel:
-
-```bash
-python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
-```
-
-The best checkpoint is written to `data/full_vit/full_vit_scene.pth`. Measure
-it with the same measurements on the test levels `Level1-1` and `Level5-1`,
-which it never trains on; frames memory cannot fully explain are counted and
-not measured:
-
-```bash
-python scripts/vision/evaluate_full_vision.py
-retroagi diagnose-vision --game smb --stage full
-```
-
-[scripts/vit/README.md](scripts/vit/README.md) describes both models, their
-trainers and their evaluators.
-
-### Synthetic 1D validation
-
-Stage 1 trains the shared hierarchical actor/world-model/critic stack on
-synthetic data. It now mirrors the Block SMB controller contract: the B-level
-primitive decoder is supervised for button combo, hold duration, release,
-cancel, replan, post-release action, and hazard-window timing, and the LSTM
-world model predicts k-step primitive outcomes for progress, support loss,
-collision/death risk, terminal outcome, continue, cancel, and replan. The
-deterministic validation path is covered by:
-
-```bash
-timeout 120s python3 -m unittest -v scripts.tests.test_synthetic_1d
-```
-
-Expected CPU runtime for this Stage 1 suite is under 20 seconds on the current
-development machine; the held-out baseline demonstration itself runs in about
-7 seconds. It trains a small `AgentWorldModelCritic` on deterministic Synthetic
-1D train data and evaluates on the fixed test split. The expected result is that
-the trained policy's held-out `controller_mse` is below both declared baselines:
-seeded `random` and train-marginal `simple`, with an asserted margin of at least
-25% below the simple baseline. The same suite also verifies finite CPU gradients,
-decreasing total loss, deterministic data/permutation seeding, shared-schema
-checkpoint save/restore, and these evaluation metrics: `controller_mse`,
-`controller_mae`, `controller_rmse`, `error_B`, and `accuracy_A`. Training
-history additionally records `loss_primitive_labels` and
-`loss_primitive_outcome` so architecture ideas fail early if the primitive
-contract does not learn on perfectly known 1-D ground truth.
-
-Block SMB policy training uses `AgentWorldModelCritic` through the shared stage
-contract and can be run, resumed, evaluated, and recorded from the CLI. Full SMB
-keeps emulator interaction isolated behind `retroagi/stages/full_smb` and
-supports deterministic smoke evaluation plus transferred-policy comparison.
+- [AI teaching curriculum](docs/ai-teaching-curriculum.md)
+- [Universal retro oracle roadmap](docs/universal-retro-oracle.md)
+- [Hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)
+- [Universal embodied framework design](docs/universal-embodied-framework.md)

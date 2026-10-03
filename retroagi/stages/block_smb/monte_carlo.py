@@ -574,38 +574,6 @@ def sample_block_smb_monte_carlo_scenario(
     )
 
 
-def sample_block_smb_monte_carlo_split(
-    *,
-    split: str,
-    seed: int,
-    sample_count: int,
-    family_weights: Optional[Mapping[str, float]] = None,
-    max_rejections: int = 32,
-) -> BlockSMBMonteCarloSampleSet:
-    """Sample a deterministic split manifest."""
-
-    if sample_count < 0:
-        raise ValueError("sample_count must be non-negative")
-    samples: list[BlockSMBScenarioSample] = []
-    rejected_counts: Counter[str] = Counter()
-    for sample_index in range(sample_count):
-        sample = sample_block_smb_monte_carlo_scenario(
-            split=split,
-            seed=seed,
-            sample_index=sample_index,
-            family_weights=family_weights,
-            max_rejections=max_rejections,
-            rejection_counter=rejected_counts,
-        )
-        samples.append(sample)
-    return BlockSMBMonteCarloSampleSet(
-        split=split,
-        seed=int(seed),
-        samples=tuple(samples),
-        rejected_counts=dict(rejected_counts),
-    )
-
-
 def sample_block_smb_monte_carlo_parameter_sweep(
     *,
     split: str,
@@ -740,24 +708,6 @@ def block_smb_monte_carlo_metadata(scenario: Mapping[str, Any]) -> dict[str, Any
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def block_smb_monte_carlo_oracle_actions(
-    scenario: Mapping[str, Any],
-    *,
-    max_steps: int = DEFAULT_BLOCK_SMB_MC_MAX_STEPS,
-) -> list[int]:
-    """Return padded oracle actions stored in a sampled scenario."""
-
-    metadata = block_smb_monte_carlo_metadata(scenario)
-    oracle = metadata.get("oracle") if isinstance(metadata, Mapping) else None
-    actions = oracle.get("actions") if isinstance(oracle, Mapping) else None
-    if not isinstance(actions, list) or not actions:
-        raise ValueError("scenario does not contain Monte Carlo oracle actions")
-    parsed = [int(action) for action in actions]
-    if len(parsed) < max_steps:
-        parsed.extend([parsed[-1]] * (max_steps - len(parsed)))
-    return parsed[:max_steps]
-
-
 def summarize_block_smb_monte_carlo_samples(
     samples: Iterable[BlockSMBScenarioSample | Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -797,102 +747,6 @@ def summarize_block_smb_monte_carlo_samples(
         "difficulty_bin_counts": dict(sorted(bin_counts.items())),
         "missing_families": sorted(expected - present),
         "scenario_ids": scenario_ids,
-    }
-
-
-def summarize_block_smb_monte_carlo_action_counts(
-    actions: Iterable[int],
-) -> dict[str, int]:
-    counts: Counter[str] = Counter(str(int(action)) for action in actions)
-    return {str(index): int(counts.get(str(index), 0)) for index in range(6)}
-
-
-def evaluate_block_smb_monte_carlo_gates(
-    evaluation: Mapping[str, Any],
-    *,
-    pass_rate_gate: float,
-    family_pass_rate_gate: float,
-) -> dict[str, Any]:
-    """Evaluate held-out Monte Carlo promotion gates."""
-
-    pass_rate = float(evaluation.get("success_rate", 0.0))
-    families = evaluation.get("families", {})
-    family_results = families if isinstance(families, Mapping) else {}
-    per_family = {
-        family: float(result.get("success_rate", 0.0))
-        for family, result in family_results.items()
-        if isinstance(result, Mapping)
-    }
-    missing_families = list(
-        evaluation.get("coverage", {}).get("missing_families", [])
-        if isinstance(evaluation.get("coverage"), Mapping)
-        else []
-    )
-    pass_rate_met = pass_rate >= float(pass_rate_gate)
-    per_family_met = all(
-        value >= float(family_pass_rate_gate) for value in per_family.values()
-    ) and bool(per_family)
-    missing_families = sorted(
-        set(missing_families) | (set(BLOCK_SMB_MC_FAMILIES) - set(per_family))
-    )
-    coverage_met = not missing_families
-    bins = evaluation.get("difficulty_bins", {})
-    expected_bins = {
-        f"{f}:{d}" for f in BLOCK_SMB_MC_FAMILIES for d in BLOCK_SMB_MC_DIFFICULTY_BINS
-    }
-    bin_rates = {
-        k: float(v.get("success_rate", 0)) for k, v in bins.items() if isinstance(v, Mapping)
-    }
-    missing_bins = sorted(expected_bins - set(bin_rates))
-    difficulty_met = not missing_bins and all(
-        v >= family_pass_rate_gate for v in bin_rates.values()
-    )
-    return {
-        "pass_rate": pass_rate,
-        "pass_rate_gate": float(pass_rate_gate),
-        "pass_rate_gate_met": bool(pass_rate_met),
-        "family_pass_rates": per_family,
-        "family_pass_rate_gate": float(family_pass_rate_gate),
-        "family_pass_rate_gate_met": bool(per_family_met),
-        "coverage_gate_met": bool(coverage_met),
-        "missing_families": missing_families,
-        "difficulty_pass_rates": bin_rates,
-        "missing_difficulty_bins": missing_bins,
-        "difficulty_gate_met": difficulty_met,
-        "gate_met": bool(pass_rate_met and per_family_met and coverage_met and difficulty_met),
-    }
-
-
-def block_smb_transfer_gate_metrics_from_evaluation(
-    evaluation: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Return the combined Block SMB transfer-source gate summary."""
-
-    tuning = evaluation.get("tuning_metrics", {})
-    fixed_pass_rate = (
-        float(tuning.get("threshold_pass_rate", 0.0)) if isinstance(tuning, Mapping) else 0.0
-    )
-    fixed_required = evaluation.get("evaluation_suite") != "families"
-    fixed_gate_met = (
-        not fixed_required
-        or bool(evaluation.get("success_thresholds_met", False))
-        and (fixed_pass_rate >= 1.0)
-    )
-    monte_carlo = evaluation.get("monte_carlo_validation", {})
-    # Fail closed: without Monte Carlo validation evidence the gate is not met.
-    mc_gate_met = False
-    mc_pass_rate = None
-    if isinstance(monte_carlo, Mapping) and monte_carlo:
-        gates = monte_carlo.get("gates", {})
-        mc_gate_met = bool(gates.get("gate_met", False)) if isinstance(gates, Mapping) else False
-        mc_pass_rate = float(monte_carlo.get("success_rate", 0.0))
-    return {
-        "fixed_required": fixed_required,
-        "fixed_threshold_pass_rate": fixed_pass_rate if fixed_required else None,
-        "fixed_gate_met": bool(fixed_gate_met),
-        "monte_carlo_validation_success_rate": mc_pass_rate,
-        "monte_carlo_validation_gate_met": bool(mc_gate_met),
-        "transfer_source_gate_met": bool(fixed_gate_met and mc_gate_met),
     }
 
 
@@ -1051,7 +905,7 @@ def _generate_family_scenario(family, rng, *, split, difficulty=None):
         scenario.setdefault("goal_requires_support", True)
     _finish_layout(family, scenario, params)
     scenario["tactics"] = _family_tactics(family, scenario)
-    if family in TACTIC_FAMILIES:
+    if family in TACTIC_FAMILIES or family in ("bridge_mount", "bridge_dismount"):
         # The teacher's route under the layout's own tactics.
         actions = family_route(family, scenario)
         return scenario, params, actions or [0]

@@ -78,10 +78,6 @@ class TeacherState:
         self.history = self.observer.observe(env, env.steps)
 
 
-def _goal_direction(env) -> int:
-    return -1 if env.goal is not None and env.goal.centerx < env.mario["x"] else 1
-
-
 def _screen(env, left: float, right: float) -> tuple[float, float]:
     camera = int(env.camera_x)
     return left - camera, right - camera
@@ -276,7 +272,7 @@ def _first_plan(route: list[int]) -> ActionPlan:
 def _fingerprint(env) -> int:
     """Everything a frame can change in the simulator, hashed: equal fingerprints
     are the same state, so the same route continues from both."""
-    from .geometry_expert import snapshot_env_state
+    from .env_state import snapshot_env_state
 
     snap = snapshot_env_state(env)
     snap["platforms"] = [
@@ -331,7 +327,6 @@ def teacher_plan(env, state: TeacherState) -> tuple[Optional[ActionPlan], tuple[
                 env,
                 max_frames=env.frame_budget,
                 observation_history=copy.deepcopy(state.observer) if state.observer else None,
-                replay_check=False,  # the executor plays any route exactly
             )
         if not route:
             state.notes.pop("route", None)

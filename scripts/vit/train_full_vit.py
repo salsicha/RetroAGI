@@ -36,16 +36,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core import (
+from retroagi.core.config import (
     CheckpointConfig,
     EnvironmentConfig,
     EvaluationConfig,
     ExperimentConfig,
     ModelConfig,
     TrainingConfig,
-    select_device,
-    validate_stage_spec,
 )
+from retroagi.core.devices import select_device
 from retroagi.core.scene_vision import (
     epoch_line,
     frame_targets,
@@ -56,7 +55,6 @@ from retroagi.core.scene_vision import (
     train_scene_vision,
 )
 from retroagi.core.smb_pixel_types import PIXEL_TYPES
-from retroagi.stages.full_smb.adapter import FULL_SMB_SPEC
 from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, FullVisionTransformer
 from retroagi.stages.full_smb.vision_frames import LEVELS, labelled_frames
 
@@ -199,9 +197,7 @@ def level_frames(seed: int, plays_per_level: int, every: int, workers: int):
     """
     rng = random.Random(seed)
     plays = [
-        (level, rng.randrange(2**31), every)
-        for level in LEVELS
-        for _ in range(plays_per_level)
+        (level, rng.randrange(2**31), every) for level in LEVELS for _ in range(plays_per_level)
     ]
     refusals = Counter()
     images, labels = [], []
@@ -241,7 +237,6 @@ def train(config: TrainConfig, device_name: Optional[str] = None) -> dict:
     seeded(seed)
     device = select_device(device_name or config.training.device)
     output = Path(config.checkpoints.output_path or DEFAULT_OUTPUT)
-    validate_stage_spec(FULL_SMB_SPEC, context="Full ViT startup stage")
     model = build_model(config)
     if config.model.name != model.spec.name:
         raise ValueError(f"model name {config.model.name!r} is not {model.spec.name!r}")

@@ -6,9 +6,48 @@ choose the policy's action or replace the episode's final success condition.
 
 from dataclasses import dataclass
 
-from .geometry_expert import restore_env_state, snapshot_env_state
-from .primitive_execution import JumpReleaseState
+from .env_state import restore_env_state, snapshot_env_state
 from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
+
+
+@dataclass
+class JumpReleaseState:
+    """Track executor-owned landing frames while replaying executed actions.
+
+    A jump whose button was released in the air owns no landing frames: the
+    first grounded frame is a fresh decision (resolve_landing). A jump still
+    held when it lands releases on landing and suppresses a new jump for one
+    more frame. Stomps reset the executor, and ordinary falls own no release
+    frames. Teachers and repair splices must preserve this state across their
+    prefix.
+    """
+
+    remaining: int = 0
+    action: int = 1
+    jumping: bool = False
+    airborne: bool = False
+    bouncing: bool = False
+
+    def observe(self, env, action, info):
+        if self.remaining:
+            self.remaining -= 1
+        if info["reward_terms"]["enemy_stomp"] > 0:
+            self.jumping = self.airborne = False
+            self.remaining = 0
+            self.bouncing = True
+        if self.bouncing:
+            if env.mario["on_ground"]:
+                self.bouncing = False
+            return
+        if not self.jumping and action in (2, 4, 5):
+            self.jumping = True
+            self.action = {2: 1, 4: 3, 5: 0}[action]
+        if self.jumping:
+            self.airborne |= not env.mario["on_ground"]
+            if self.airborne and env.mario["on_ground"]:
+                self.remaining = 2 if action in (2, 4, 5) else 0
+                self.jumping = self.airborne = False
+
 
 LOCAL_TRAVERSAL_FAMILIES = frozenset(
     "tall_pipe_jump pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery "
@@ -637,27 +676,3 @@ def normalize_oracle_jumps(scenario: dict, actions: list[int]) -> list[int]:
         return result
     finally:
         env.close()
-
-
-def traversal_metrics(episodes, cleared, objectives, finishes, timeouts, deaths):
-    return {
-        "episodes": episodes,
-        "episodes_with_local_clear": cleared,
-        "local_objectives_completed": objectives,
-        "finishes_after_local_clear": finishes,
-        "timeouts": timeouts,
-        "deaths": deaths,
-        "local_clear_rate": cleared / episodes if episodes else None,
-        "finish_after_local_clear_rate": finishes / cleared if cleared else None,
-        "timeout_rate": timeouts / episodes if episodes else None,
-    }
-
-
-TRAVERSAL_COUNT_FIELDS = (
-    "episodes",
-    "episodes_with_local_clear",
-    "local_objectives_completed",
-    "finishes_after_local_clear",
-    "timeouts",
-    "deaths",
-)

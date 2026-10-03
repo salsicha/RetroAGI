@@ -1,22 +1,11 @@
 """Enemy clearance must survive landing release and a subsequent walk-off."""
 
-from dataclasses import replace
-from types import SimpleNamespace
-
 import pytest
 import torch
 
-from retroagi.stages.block_smb.demonstrations import collect_demonstrations
 from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
+from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
 from retroagi.stages.block_smb.local_traversal import local_objective, safe_jump_holds
-from retroagi.stages.block_smb.monte_carlo import BLOCK_SMB_MC_FAMILIES
-from retroagi.stages.block_smb.policy_recovery import repair_policy_actions
-from retroagi.stages.block_smb.primitive_execution import teacher_route_reachable
-from scripts.block_smb_batched_evaluation import evaluate_batched
-from scripts.tests.test_block_smb_training import StaticBlockVision, tiny_config
-from scripts.tests.test_full_smb_failure_families import sample
-from scripts.tests.test_tall_pipe_traversal import PhaseIntentPolicy, rollout
 
 
 @pytest.fixture(autouse=True)
@@ -64,127 +53,5 @@ def test_mount_certificate_hands_the_first_grounded_frame_to_the_next_enemy_jump
         env.step(1)
         _, _, _, _, info = env.step(1)
         assert info["death"]
-    finally:
-        env.close()
-
-
-class ClearThenFinishPolicy(PhaseIntentPolicy):
-    """Expose any resurrected enemy goal by turning back toward it."""
-
-    def forward(self, a, b, c, **kwargs):
-        goal = kwargs["skill_goal"]
-        requested = goal.any(-1)
-        action = torch.where(requested, 2, 1)
-        action = torch.where(requested & (c[:, 12] > 190 / 352), 4, action)
-        logits = torch.full((len(c), a.shape[1], 6), -30.0)
-        logits.scatter_(2, action[:, None, None].expand(-1, a.shape[1], 1), 30)
-        self.last_policy_logits_a = logits
-        holds = torch.full((len(c), 1, 16), -30.0)
-        holds[..., 7] = 30
-        self.last_motor_primitives = SimpleNamespace(
-            hold_duration_logits=holds,
-            duration_bin_values=torch.arange(1, 17),
-            hold_duration=torch.full((len(c), 1), 8.0),
-        )
-        return a.float(), c.clone(), torch.zeros_like(c), a.float(), logits, b, b, None
-
-
-@pytest.mark.parametrize("batched", [False, True])
-def test_completed_enemy_goal_does_not_return_when_walking_off_platform(batched):
-    scenario = platform_scenario()
-    scenario["mario"] = [120, 175]
-    case = replace(sample("enemy_on_platform", "easy"), scenario=scenario)
-    policy = ClearThenFinishPolicy()
-    if batched:
-        out = evaluate_batched(
-            policy,
-            [case],
-            tiny_config(
-                walk_duration_primitives=False,
-                ablation={"recurrent_state_enabled": False},
-                engine_support_override=True,
-                skill_goal_conditioning=True,
-                ranked_candidate_search=False,
-                evaluation_max_steps=160,
-            ),
-            StaticBlockVision,
-            return_actions=True,
-        )
-        assert not out["failures"]
-        assert 4 not in out["actions"][0]
-    else:
-        trajectory = rollout(case, policy, steps=160, walk_duration_primitives=False)
-        assert trajectory.success
-        assert all(t.action != 4 for t in trajectory.transitions)
-        assert any(t.info.get("skill_phase") == "finish" for t in trajectory.transitions)
-
-
-def test_recovery_after_a_released_landing_supervises_the_first_grounded_frame():
-    case = replace(sample("enemy_on_platform", "easy", split="train"), scenario=platform_scenario())
-    # Landing on the platform with the next enemy still ahead; the 6-frame
-    # hold is released 15 frames before the landing.
-    actions = [1] * 34 + [2] * 6 + [1] * 120
-    # Preserve dataset provenance independently of the explicit task identity.
-    case.scenario["metadata"] = {
-        "block_smb_monte_carlo": {"family": "enemy_on_platform", "split": "train"}
-    }
-    repairs = repair_policy_actions(case.scenario, actions)
-    repair = next(r for r in repairs if r["recovery_reason"] == "landing_recovery")
-    start = repair["supervision_start_frame"]
-    # No forced release frames at the splice: the correction can jump at once.
-    assert repair["actions"][start] == 2
-    env = MarioScenarioEnv()
-    try:
-        env.reset(scenario=case.scenario)
-        assert teacher_route_reachable(env, repair["actions"])
-    finally:
-        env.close()
-    data = collect_demonstrations(
-        [(BLOCK_SMB_MC_FAMILIES.index("enemy_on_platform"), replace(case, oracle=repair))],
-        tiny_config(walk_duration_primitives=False),
-        StaticBlockVision,
-    )
-    # The replayed prefix is unsupervised context; the suffix opens on a
-    # supervised decision rather than a release.
-    assert int(data.context.sum()) == start
-    assert not data.forced_release[start : start + 2].any()
-    assert not data.actor_mask[:start].any()
-    assert data.actor_mask[start] and int(data.action[start]) == 2
-
-
-@pytest.mark.parametrize("index", [35, 53, 56, 101, 161])
-def test_previous_hard_fallback_routes_obey_executor_timing(index):
-    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
-
-    case = sample_block_smb_monte_carlo_scenario(
-        family="enemy_on_platform",
-        split="train",
-        seed=20260908,
-        sample_index=index,
-        difficulty="hard",
-    )
-    env = MarioScenarioEnv()
-    try:
-        env.reset(scenario=case.scenario)
-        assert teacher_route_reachable(env, case.oracle["actions"])
-    finally:
-        env.close()
-
-
-def test_dangerous_mount_duration_gets_an_executor_valid_repair():
-    case = platform_scenario(hard=True)
-    case["metadata"] = {"block_smb_monte_carlo": {"family": "enemy_on_platform"}}
-    # Only 24-32 frame holds from this takeoff reach the platform; a 6-frame
-    # hop falls short against its wall.
-    repairs = repair_policy_actions(case, [1] * 20 + [2] * 6 + [1] * 12)
-    repair = next(
-        r
-        for r in repairs
-        if r["supervision_start_frame"] == 20 and r["recovery_reason"] == "duration"
-    )
-    env = MarioScenarioEnv()
-    try:
-        env.reset(scenario=case)
-        assert teacher_route_reachable(env, repair["actions"])
     finally:
         env.close()

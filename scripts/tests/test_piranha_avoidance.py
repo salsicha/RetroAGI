@@ -2,13 +2,11 @@
 
 import pytest
 
-from retroagi.core.smb_scene import block_oracle_scene
 from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
+from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
 from retroagi.stages.block_smb.local_traversal import local_objective, safe_jump_holds
 from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 from retroagi.stages.block_smb.piranha import parse_plant
-from retroagi.stages.block_smb.primitive_execution import teacher_route_reachable
 
 
 def contact_scenario(*, phase=20, mario=(120, 181)):
@@ -52,23 +50,6 @@ def test_ordinary_enemy_remains_stompable():
         env.close()
 
 
-def test_hidden_plant_has_no_collision_or_observable_enemy_then_emerges():
-    env = MarioScenarioEnv()
-    try:
-        env.reset(scenario=contact_scenario(phase=85, mario=(120, 204)))
-        assert env.enemies[0]["h"] == 0
-        assert not block_oracle_scene(env)["scene"].enemies
-        assert local_objective(env).kind == "finish"
-        for _ in range(27):
-            _, _, done, _, info = env.step(0)
-            assert not done and not info["death"]
-        _, _, done, _, info = env.step(0)
-        assert env.enemies[0]["h"] > 0 and block_oracle_scene(env)["scene"].enemies
-        assert done and info["death"]
-    finally:
-        env.close()
-
-
 def test_plant_cycle_and_probes_restore_phase_exactly():
     env = MarioScenarioEnv()
     try:
@@ -86,40 +67,6 @@ def test_plant_cycle_and_probes_restore_phase_exactly():
         assert snapshot_env_state(env) == saved
     finally:
         env.close()
-
-
-@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
-def test_generated_routes_clear_live_plants_without_stomp_credit(difficulty):
-    exposed_crossings = 0
-    for seed in range(12):
-        sample = sample_block_smb_monte_carlo_scenario(
-            family="piranha_avoidance",
-            split="train",
-            seed=seed,
-            difficulty=difficulty,
-            sample_index=0,
-        )
-        env = MarioScenarioEnv()
-        try:
-            env.reset(scenario=sample.scenario)
-            assert teacher_route_reachable(env, sample.oracle["actions"])
-            for action in sample.oracle["actions"]:
-                _, _, done, _, info = env.step(action)
-                assert not info["death"] and info["reward_terms"]["enemy_stomp"] == 0
-                plant = env.enemies[0]
-                assert not plant["dead"]
-                if (
-                    plant["h"] > 0
-                    and env.mario["x"] < plant["x"] + plant["w"]
-                    and env.mario["x"] + env.mario["w"] > plant["x"]
-                ):
-                    exposed_crossings += 1
-                if done:
-                    break
-            assert env._goal_credited
-        finally:
-            env.close()
-    assert exposed_crossings > 0, "Family must teach passing exposed plants, not only empty pipes"
 
 
 def test_invalid_plant_timing_is_rejected():
@@ -154,43 +101,3 @@ def test_plant_duration_labels_do_not_depend_on_cycle_phase():
         assert results[0] and all(holds == results[0] for holds in results)
     finally:
         env.close()
-
-
-@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
-def test_conservative_routes_survive_shifted_cycles_through_real_executor(difficulty):
-    from copy import deepcopy
-
-    from retroagi.stages.block_smb.demonstrations import varied_demonstration
-
-    sample = sample_block_smb_monte_carlo_scenario(
-        family="piranha_avoidance",
-        split="train",
-        seed=13,
-        difficulty=difficulty,
-        sample_index=0,
-    )
-    # This regression concerns the clearance subfamily. Timed routes must
-    # replan their waiting period when the cycle changes.
-    for seed in range(14, 50):
-        if sample.parameters["crossing_mode"] == "clearance":
-            break
-        sample = sample_block_smb_monte_carlo_scenario(
-            family="piranha_avoidance",
-            split="train",
-            seed=seed,
-            difficulty=difficulty,
-            sample_index=0,
-        )
-    assert sample.parameters["crossing_mode"] == "clearance"
-    variant = varied_demonstration(sample, 13, robust=True)
-    assert variant is not None and variant.oracle["actions"] != sample.oracle["actions"]
-    for phase in (0, 20, 70, 100):
-        scenario = deepcopy(sample.scenario)
-        scenario["enemies"][0]["phase"] = phase
-        env = MarioScenarioEnv()
-        try:
-            env.reset(scenario=scenario)
-            assert teacher_route_reachable(env, sample.oracle["actions"])
-            assert teacher_route_reachable(env, variant.oracle["actions"])
-        finally:
-            env.close()

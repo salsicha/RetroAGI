@@ -1,8 +1,8 @@
 # Full SMB Content Setup
 
 This is the supported local content setup for real Full SMB emulator runs. It
-is required for headless Full SMB training, evaluation, transfer checks, and
-future play commands that use `stable-retro`.
+is required for training the Full SMB vision transformer and for playing Full
+SMB with the trained agent, both of which use `stable-retro`.
 
 ## Supported Game
 
@@ -10,7 +10,7 @@ future play commands that use `stable-retro`.
 | --- | --- |
 | stable-retro game id | `SuperMarioBros-Nes` |
 | RetroAGI stage | `full_smb` |
-| CLI selector | `retroagi ... --game smb --stage full` |
+| Play module | `retroagi/stages/full_smb/play.py` (`FullSMBGame`) |
 | Backend entrypoint | `retro.make(game="SuperMarioBros-Nes")` |
 | Required package | `python -m pip install -e '.[full-smb]'` |
 
@@ -54,29 +54,12 @@ must not be committed, bundled, uploaded with artifacts, or redistributed.
 
 ## Environment Check
 
-`FullSMBStage()` creates the backend lazily through
-`make_stable_retro_env(...)`. When `stable-retro` is not installed or the
-`SuperMarioBros-Nes` game has not been imported, RetroAGI raises a
-`RuntimeError` that includes:
-
-- the failing stable-retro game id,
-- the `full-smb` extra install command,
-- the local ROM staging directory,
-- the `python -m retro.import local/full_smb/roms` import command,
-- the SHA-256 checksum record path,
-- the legal/provenance reminder.
-
-After importing the ROM, run the headless capability check before training:
+After importing the ROM, check that the emulator starts a level and steps:
 
 ```bash
-retroagi check-env --game smb --stage full \
-  --seed 0 \
-  --steps 4 \
-  --frame-skip 2 \
-  --output artifacts/full_smb/env_check.json
+python -c 'from retroagi.stages.full_smb.play import FullSMBGame; g = FullSMBGame("Level1-1"); g.reset(); print(g.step(1)[1]); g.close()'
 ```
 
-The command uses this content spec, then verifies backend import, game
-registration, ROM availability, headless reset, render reset, save/load state,
-action stepping, frame-skip metadata, and deterministic seeding. It writes a
-JSON report and exits nonzero if any required check fails.
+It prints how far into the level Mario is (`level_x`) and whether he is
+dying. If stable-retro is missing or the
+game has not been imported, `retro.make` raises an error naming the game.

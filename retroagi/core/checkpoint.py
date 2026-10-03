@@ -1,4 +1,4 @@
-"""Versioned checkpoint schema shared across curriculum stages."""
+"""The versioned checkpoint file both vision transformers are saved in."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from .config import to_plain_data
 CHECKPOINT_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_KEY = "checkpoint_schema_version"
 CHECKPOINT_ARCHITECTURE_EXTENSION_KEY = "architecture"
-CHECKPOINT_ARCHITECTURE_EXTENSION_VERSION = 1
 
 StateDict = Mapping[str, Any]
 
@@ -104,167 +103,6 @@ def checkpoint_trace_metadata(
     return merged
 
 
-def build_architecture_checkpoint_extension(
-    architecture_name: str,
-    architecture_config: Optional[Mapping[str, Any]] = None,
-    *,
-    migration: Optional[Mapping[str, Any]] = None,
-) -> dict[str, Any]:
-    """Build the checkpoint extension that identifies a model-family contract."""
-
-    spec = _get_registered_architecture(architecture_name)
-    extension = {
-        "extension_schema_version": CHECKPOINT_ARCHITECTURE_EXTENSION_VERSION,
-        "name": spec.name,
-        "checkpoint_model_name": spec.checkpoint_model_name,
-        "checkpoint_compatibility_policy": spec.checkpoint_compatibility_policy,
-        "output_contract": spec.output_contract,
-        "supported_stage_names": list(spec.supported_stage_names),
-        "config": to_plain_data(architecture_config or {}),
-    }
-    if migration is not None:
-        extension["migration"] = to_plain_data(migration)
-    return extension
-
-
-def _get_registered_architecture(architecture_name: str) -> Any:
-    from .architectures import get_architecture
-
-    try:
-        return get_architecture(str(architecture_name))
-    except KeyError as exc:
-        raise ValueError(f"unknown checkpoint architecture {architecture_name!r}") from exc
-
-
-def _known_registered_architecture(architecture_name: str) -> bool:
-    try:
-        _get_registered_architecture(architecture_name)
-    except ValueError:
-        return False
-    return True
-
-
-def _architecture_config_from_checkpoint_config(
-    config: Mapping[str, Any],
-) -> tuple[Optional[str], Mapping[str, Any]]:
-    architecture_name = config.get("architecture_name")
-    if architecture_name is None:
-        return None, {}
-    architecture_config = config.get("architecture_config", {})
-    if architecture_config is None:
-        architecture_config = {}
-    if not isinstance(architecture_config, Mapping):
-        raise ValueError("checkpoint config architecture_config must be a mapping")
-    return str(architecture_name), architecture_config
-
-
-def validate_architecture_checkpoint_extension(
-    extension: Mapping[str, Any],
-    *,
-    config: Optional[Mapping[str, Any]] = None,
-) -> dict[str, Any]:
-    """Validate and normalize an explicit architecture checkpoint extension."""
-
-    if not isinstance(extension, Mapping):
-        raise ValueError("checkpoint architecture extension must be a mapping")
-    if not extension:
-        return {}
-    version = int(extension.get("extension_schema_version", 0))
-    if version != CHECKPOINT_ARCHITECTURE_EXTENSION_VERSION:
-        raise ValueError(
-            "unsupported checkpoint architecture extension schema version "
-            f"{version}; expected {CHECKPOINT_ARCHITECTURE_EXTENSION_VERSION}"
-        )
-
-    architecture_name = str(extension.get("name", ""))
-    if not architecture_name:
-        raise ValueError("checkpoint architecture extension name must be non-empty")
-    spec = _get_registered_architecture(architecture_name)
-
-    expected = {
-        "checkpoint_model_name": spec.checkpoint_model_name,
-        "checkpoint_compatibility_policy": spec.checkpoint_compatibility_policy,
-        "output_contract": spec.output_contract,
-    }
-    for key, expected_value in expected.items():
-        actual_value = to_plain_data(extension.get(key))
-        if actual_value != expected_value:
-            raise ValueError(
-                "checkpoint architecture extension "
-                f"{key} {actual_value!r} does not match registered "
-                f"{architecture_name!r} value {expected_value!r}"
-            )
-    # A checkpoint saved before new stages were registered must keep loading, so
-    # the stored stage list only needs to be a subset of the registered one.
-    stored_stage_names = to_plain_data(extension.get("supported_stage_names"))
-    if not isinstance(stored_stage_names, list) or not set(stored_stage_names) <= set(
-        spec.supported_stage_names
-    ):
-        raise ValueError(
-            "checkpoint architecture extension "
-            f"supported_stage_names {stored_stage_names!r} is not a subset of registered "
-            f"{architecture_name!r} value {list(spec.supported_stage_names)!r}"
-        )
-    expected["supported_stage_names"] = list(spec.supported_stage_names)
-
-    architecture_config = extension.get("config", {})
-    if architecture_config is None:
-        architecture_config = {}
-    if not isinstance(architecture_config, Mapping):
-        raise ValueError("checkpoint architecture extension config must be a mapping")
-
-    config = config or {}
-    config_architecture_name, config_architecture = _architecture_config_from_checkpoint_config(
-        config
-    )
-    if config_architecture_name is not None and config_architecture_name != architecture_name:
-        raise ValueError(
-            "checkpoint architecture extension name "
-            f"{architecture_name!r} does not match config architecture_name "
-            f"{config_architecture_name!r}"
-        )
-    if config_architecture_name is not None and dict(config_architecture) != dict(
-        architecture_config
-    ):
-        raise ValueError(
-            "checkpoint architecture extension config "
-            f"{dict(architecture_config)!r} does not match config architecture_config "
-            f"{dict(config_architecture)!r}"
-        )
-
-    normalized = {
-        "extension_schema_version": CHECKPOINT_ARCHITECTURE_EXTENSION_VERSION,
-        "name": architecture_name,
-        **expected,
-        "config": to_plain_data(architecture_config),
-    }
-    if "migration" in extension:
-        normalized["migration"] = to_plain_data(extension["migration"])
-    return normalized
-
-
-def _resolve_checkpoint_architecture_extension(
-    *,
-    architecture: Optional[Mapping[str, Any]],
-    config: Mapping[str, Any],
-    migration: Optional[Mapping[str, Any]] = None,
-) -> dict[str, Any]:
-    if architecture is not None:
-        if not isinstance(architecture, Mapping):
-            return validate_architecture_checkpoint_extension(architecture, config=config)
-        if architecture:
-            return validate_architecture_checkpoint_extension(architecture, config=config)
-
-    architecture_name, architecture_config = _architecture_config_from_checkpoint_config(config)
-    if architecture_name is None or not _known_registered_architecture(architecture_name):
-        return {}
-    return build_architecture_checkpoint_extension(
-        architecture_name,
-        architecture_config,
-        migration=migration,
-    )
-
-
 @dataclass(frozen=True)
 class CheckpointPayload:
     """Serializable checkpoint envelope used by every stage."""
@@ -329,7 +167,6 @@ def build_checkpoint(
     metrics: Optional[Mapping[str, float]] = None,
     config: Optional[Mapping[str, Any]] = None,
     specs: Optional[Mapping[str, Any]] = None,
-    architecture: Optional[Mapping[str, Any]] = None,
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build a validated versioned checkpoint dictionary."""
@@ -344,17 +181,9 @@ def build_checkpoint(
         metrics=metrics or {},
         config=checkpoint_config,
         specs=specs or {},
-        architecture=_resolve_checkpoint_architecture_extension(
-            architecture=architecture,
-            config=checkpoint_config,
-        ),
         metadata=checkpoint_trace_metadata(metadata),
     )
     return payload.to_dict()
-
-
-def is_versioned_checkpoint(checkpoint: Mapping[str, Any]) -> bool:
-    return CHECKPOINT_SCHEMA_KEY in checkpoint
 
 
 def validate_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
@@ -385,14 +214,7 @@ def validate_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
         metrics=checkpoint.get("metrics", {}),
         config=config,
         specs=checkpoint.get("specs", {}),
-        architecture=_resolve_checkpoint_architecture_extension(
-            architecture=checkpoint.get(CHECKPOINT_ARCHITECTURE_EXTENSION_KEY),
-            config=config,
-            migration={
-                "from": "config.architecture_name",
-                "reason": "legacy checkpoint without architecture extension",
-            },
-        ),
+        architecture=checkpoint.get(CHECKPOINT_ARCHITECTURE_EXTENSION_KEY) or {},
         metadata=checkpoint.get("metadata", {}),
         schema_version=version,
     )

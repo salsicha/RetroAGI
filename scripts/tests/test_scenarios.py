@@ -3,7 +3,10 @@
 import unittest
 from pathlib import Path
 
-from retroagi.stages.block_smb import SCENARIOS_DIR, MarioScenarioEnv
+from retroagi.stages.block_smb import env as block_env
+from retroagi.stages.block_smb.env import MarioScenarioEnv
+
+SCENARIOS_DIR = Path(block_env.__file__).with_name("scenarios")
 
 
 class TestMarioScenarios(unittest.TestCase):
@@ -11,7 +14,7 @@ class TestMarioScenarios(unittest.TestCase):
 
     def setUp(self):
         self.env = MarioScenarioEnv()
-        self.scenarios_dir = Path(SCENARIOS_DIR)
+        self.scenarios_dir = SCENARIOS_DIR
 
     def _test_scenario(
         self,

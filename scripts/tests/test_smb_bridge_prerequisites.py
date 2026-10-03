@@ -1,14 +1,9 @@
 """Moving-bridge prerequisite tasks, progress credit, and replay allocation."""
 
 import pytest
-import torch
 
-from retroagi.stages.block_smb.demonstrations import (
-    DemonstrationBatch,
-    demonstration_sample_weights,
-)
 from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.geometry_expert import restore_env_state, snapshot_env_state
+from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
 
 
 def touching_bridge(task):
@@ -64,27 +59,6 @@ def test_passive_carry_receives_existing_progress_without_right_and_no_double_pa
         assert not env._bridge_jump_launched
     finally:
         env.close()
-
-
-def test_passive_progress_changes_replay_allocation_without_dropping_other_families():
-    data = DemonstrationBatch(
-        torch.zeros(4, 8),
-        torch.zeros(4, 16),
-        torch.zeros(4, 64),
-        torch.zeros(4, 8),
-        torch.zeros(4, dtype=torch.long),
-        torch.zeros(4, dtype=torch.long),
-        torch.zeros(4, dtype=torch.long),
-        torch.ones(4, dtype=torch.bool),
-        torch.zeros(4, 64),
-        torch.tensor([20, 20, 0, 0]),
-        torch.ones(4, 16, dtype=torch.bool),
-        torch.tensor([4, 4, 0, 0]),
-        torch.tensor([0.0, 0.1, 0.0, 0.0]),
-    )
-    weights = demonstration_sample_weights(data)
-    assert weights[1] == pytest.approx(3 * weights[0])
-    assert weights[:2].sum() == pytest.approx(weights[2:].sum())
 
 
 @pytest.mark.parametrize("task", ["mount", "dismount"])

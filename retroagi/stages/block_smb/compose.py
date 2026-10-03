@@ -575,7 +575,6 @@ def route_actions(scenario: dict, max_frames: Optional[int] = None) -> list[int]
         env.reset(scenario=scenario)
         env.render = lambda: None
         budget = max_frames or scenario.get("frame_budget", 320)
-        # The four-layer agent's executor plays any route exactly.
-        return coached_suffix(env, max_frames=budget, replay_check=False) or []
+        return coached_suffix(env, max_frames=budget) or []
     finally:
         env.close()

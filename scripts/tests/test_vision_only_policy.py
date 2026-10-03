@@ -13,14 +13,12 @@ expected-to-fail (strictly) until the redesign closes every route; run them
 with ``--runxfail`` to see the current list of leaks.
 """
 
-import copy
 from typing import Any
 
 import numpy as np
 import pytest
 import torch
 
-from retroagi.stages.block_smb.adapter import BlockSMBStage
 from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 from retroagi.stages.block_smb.vision import BlockVisionTransformer
 
@@ -117,49 +115,8 @@ def scramble_block_state(env) -> None:
     env.steps += 50
 
 
-def block_stage(family: str) -> BlockSMBStage:
-    sample = sample_block_smb_monte_carlo_scenario(
-        split="validation", seed=0, sample_index=0, family=family, difficulty="medium"
-    )
-    torch.manual_seed(0)
-    # Any vision model that reads only the picture will do; an untrained one is enough.
-    stage = BlockSMBStage(scenario=dict(sample.scenario), vision=BlockVisionTransformer())
-    stage.reset(seed=0)
-    return stage
-
-
 BLOCK_FAMILIES = ("enemy_stomp", "moving_bridge")
 BLOCK_ACTIONS = [1] * 18 + [2] * 8 + [1] * 18
-
-
-@LEAKS_REMAIN
-@pytest.mark.parametrize("family", BLOCK_FAMILIES)
-def test_block_policy_input_depends_only_on_the_picture(family):
-    honest_stage, tampered_stage = block_stage(family), block_stage(family)
-    frame = None
-    for action in BLOCK_ACTIONS:
-        frame, *_ = honest_stage.step(action)
-        tampered_stage.step(action)
-        honest_stage.encode_observation(frame)
-        tampered_stage.encode_observation(frame)
-    honest = honest_stage.encode_observation(frame)
-    scramble_block_state(tampered_stage.env)
-    tampered = tampered_stage.encode_observation(frame, {"junk": True})
-    found = leaks(honest, tampered)
-    assert not found, f"Block SMB ({family}) policy input reads game state: {found}"
-
-
-@LEAKS_REMAIN
-def test_block_policy_input_never_touches_the_simulator():
-    stage = block_stage("enemy_stomp")
-    frame = None
-    for action in BLOCK_ACTIONS:
-        frame, *_ = stage.step(action)
-    recorder = Recorder(stage.env)
-    stage.env = recorder
-    stage.encode_observation(frame)
-    touched = sorted(set(recorder.touched))
-    assert not touched, f"Block SMB policy input reads simulator fields: {touched}"
 
 
 # ── Full SMB ──────────────────────────────────────────────────────────────────
@@ -178,84 +135,6 @@ def _cartridge_available() -> bool:
 needs_cartridge = pytest.mark.skipif(
     not _cartridge_available(), reason="Super Mario Bros cartridge file not installed"
 )
-
-
-def full_stage():
-    from retroagi.core.smb_runtime import SMBRuntimeContract
-    from retroagi.stages.full_smb.adapter import FullSMBEnvConfig, FullSMBStage
-    from retroagi.stages.full_smb.vision import FullVisionTransformer
-
-    torch.manual_seed(0)
-    stage = FullSMBStage(
-        env_config=FullSMBEnvConfig(state="Level1-1"), vision=FullVisionTransformer()
-    )
-    stage.configure_policy_runtime(SMBRuntimeContract())
-    stage.reset()
-    right = 1
-    for frame_index in range(160):
-        stage.encode_observation(stage._last_observation)
-        stage.step(2 if 60 <= frame_index < 72 else right)
-    return stage
-
-
-@LEAKS_REMAIN
-@needs_cartridge
-def test_full_policy_input_depends_only_on_the_picture():
-    import retro
-
-    stage = full_stage()
-    try:
-        frame, info = stage._last_observation.copy(), copy.deepcopy(dict(stage.last_info))
-        saved = stage.save_emulator_state()
-        honest = stage.encode_observation(frame, info)
-        stage.load_emulator_state(saved)
-        # Same picture, entirely different game memory: another level's start.
-        stage.env.load_state("Level5-1", retro.data.Integrations.STABLE)
-        stage.env.reset()
-        tampered = stage.encode_observation(frame, {"junk": True})
-        found = leaks(honest, tampered)
-        assert not found, f"Full SMB policy input reads game memory: {found}"
-    finally:
-        stage.close()
-
-
-@LEAKS_REMAIN
-@needs_cartridge
-def test_full_policy_input_never_touches_the_emulator():
-    stage = full_stage()
-    try:
-        frame = stage._last_observation.copy()
-        env, backend = Recorder(stage.env), Recorder(stage.backend)
-        stage.env, stage.backend = env, backend
-        stage.encode_observation(frame)
-        touched = sorted(set(env.touched) | {f"backend.{name}" for name in backend.touched})
-        assert not touched, f"Full SMB policy input reads the emulator: {touched}"
-    finally:
-        stage.env, stage.backend = env._target, backend._target
-        stage.close()
-
-
-def test_policy_view_names_every_part():
-    """The helper itself: identical batches show no leak; a changed span is named."""
-    from retroagi.core.interfaces import StageBatch
-
-    def batch(c):
-        return StageBatch(
-            src_a=torch.zeros(1, 8, dtype=torch.long),
-            target_a=None,
-            src_b=torch.zeros(1, 16, dtype=torch.long),
-            target_b=None,
-            src_c=c,
-            target_c=None,
-            metadata={"vision_fusion": {"c_one": (0, 2), "c_two": (2, 4)}},
-        )
-
-    base = torch.zeros(1, 4)
-    changed = base.clone()
-    changed[0, 3] = 1.0
-    assert leaks(batch(base), batch(base.clone())) == []
-    assert leaks(batch(base), batch(changed)) == ["c_two"]
-    assert np.array_equal(policy_view(batch(base))["c_one"].numpy(), np.zeros((1, 2)))
 
 
 # ── The four-layer agent ──────────────────────────────────────────────────────
@@ -323,11 +202,13 @@ def scramble_hidden_block_state(env) -> None:
 def same_decision(a, b) -> bool:
     if a is None or b is None:
         return a is b
-    return (
-        (a.strategy, a.tactic, a.skill, a.plan, a.chosen)
-        == (b.strategy, b.tactic, b.skill, b.plan, b.chosen)
-        and np.array_equal(a.target, b.target)
-    )
+    return (a.strategy, a.tactic, a.skill, a.plan, a.chosen) == (
+        b.strategy,
+        b.tactic,
+        b.skill,
+        b.plan,
+        b.chosen,
+    ) and np.array_equal(a.target, b.target)
 
 
 @pytest.mark.parametrize("family", BLOCK_FAMILIES)

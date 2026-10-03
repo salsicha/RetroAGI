@@ -17,8 +17,8 @@ from typing import Sequence
 import numpy as np
 
 from retroagi.core.actions import SMBAction, full_smb_action
-from retroagi.core.smb_scene import canonical_rgb
 
+from .pixel_labels import canonical_rgb
 from .vision_frames import _dying
 
 WORLD, LEVEL = 0x75F, 0x75C  # [WorldNumber], [LevelNumber]

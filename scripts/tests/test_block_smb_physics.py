@@ -2,7 +2,7 @@
 
 import unittest
 
-from retroagi.stages.block_smb import BlockSMBRewardConfig, MarioScenarioEnv
+from retroagi.stages.block_smb.env import BlockSMBRewardConfig, MarioScenarioEnv
 
 
 class TestBlockSMBPhysics(unittest.TestCase):

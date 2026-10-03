@@ -1188,9 +1188,6 @@ class MarioScenarioEnv:
         Returns a rich info dict containing:
         - mario   : core kinematic state
         - camera_x, max_x_reached
-        - nearest_coin, nearest_enemy : {dx, dy, dist}  (normalised 0-1)
-        - platform_below_dist          : normalised 0-1
-        - state_vec                    : geometry features in world coordinates (FEATURE_NAMES)
         - reward_terms                 : transition reward breakdown
         - reward_total                 : scalar transition reward
         - reward_config                : resolved reward configuration
@@ -1204,14 +1201,6 @@ class MarioScenarioEnv:
                 or reward_terms.get("enemy_hit", 0.0) < 0.0
             )
 
-        from retroagi.core.smb_geometry import geometry_features
-
-        features = geometry_features(
-            self,
-            death=death,
-            terminated=terminated,
-            truncated=truncated,
-        )
         m = self.mario
 
         return {
@@ -1229,9 +1218,6 @@ class MarioScenarioEnv:
             },
             "camera_x": self.camera_x,
             "max_x_reached": self._max_x_reached,
-            # The stage-wide symbolic state; the policy's observation is smb_scene's.
-            "state_vec": features.pop("state"),
-            **features,
             "stomp_completed": self._stomp_credited,
             "bridge_boarded": self._bridge_boarded,
             "bridge_crossed": self._bridge_crossed,

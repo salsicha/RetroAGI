@@ -76,12 +76,6 @@ def mario_standing(labels, *, reach=2):
     return bool(np.isin(below, STANDING_TYPES).any())
 
 
-def type_shares(labels):
-    """Fraction of the screen covered by each type, in PIXEL_TYPES order."""
-    counts = np.bincount(np.asarray(labels).ravel(), minlength=len(PIXEL_TYPES))
-    return counts[: len(PIXEL_TYPES)] / max(int(counts.sum()), 1)
-
-
 def compare(predicted, truth):
     """Per-type agreement between a predicted and a true label image.
 

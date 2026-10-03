@@ -22,9 +22,9 @@ Python 3.11 and earlier, Python 3.15 and later, ROCm, and CUDA versions other
 than those listed above are not currently supported. They may work, but are
 outside the tested project matrix.
 
-CUDA is optional. The synthetic, Block SMB, Full SMB adapter tests, vision, and
-test code must remain functional with the CPU-only PyTorch wheel. GPU
-acceleration is selected with `retroagi.core.select_device`: `auto` prefers
+CUDA is optional. Block SMB, the vision transformers and the tests must remain
+functional with the CPU-only PyTorch wheel. GPU acceleration is selected with
+`retroagi.core.devices.select_device`: `auto` prefers
 CUDA, then Apple MPS, then CPU. Explicit `cuda` or `mps` requests fail early if
 the backend is unavailable.
 
@@ -86,7 +86,7 @@ the selected wheel is still required.
 For Python 3.13 and 3.14, RetroAGI installs `stable-retro` from pinned upstream
 source commit `778186c71e003f7c8a5682187832ba430b8e34b3` only when the
 `full-smb` extra is requested, because the latest PyPI release metadata still
-excludes those Python versions. Keep this extra out of Block SMB CI smoke
+excludes those Python versions. Keep this extra out of Block SMB CI
 environments; it builds native emulator components that are unrelated to Block
 SMB training. macOS source builds may require the Homebrew dependencies listed
 by the upstream stable-retro macOS installation guide.

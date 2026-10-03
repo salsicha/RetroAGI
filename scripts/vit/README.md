@@ -14,12 +14,14 @@ each other over a few rounds. Each square's final description gives scores for
 its own 256 pixels and every type, and a small per-pixel step then corrects
 those scores using the pixel's colour.
 
-The policy never reads the model's internal values. What it reads is computed
-from the pixel types by shared rules: `canonical_vision` in
-`retroagi/core/smb_scene.py` maps the types onto the policy's classes by
-meaning, and `retroagi/core/smb_pixel_types.py` computes Mario's position and
-whether he is standing from the labelled pixels. Because both games use the
-same types and the same rules, the two models cannot drift apart in meaning.
+The agent never reads the model's internal values. What it reads is built
+from the pixel types by shared rules: `objects_from_types` in
+`retroagi/core/smb_scene_labels.py` turns each group of touching pixels of one
+type into an object (Mario, a surface, a gap, a pipe, a coin, an enemy), and
+`retroagi/core/smb_observer.py` turns those objects into the report the
+decision layers read. Because both games use
+the same types and the same rules, the two models cannot drift apart in
+meaning.
 
 ## Trainers (this folder)
 
@@ -33,7 +35,7 @@ python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
 python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
 ```
 
-Both trainers use the same training loop (`retroagi/core/pixel_vision.py`):
+Both trainers use the same training loop (`retroagi/core/scene_vision.py`):
 per-pixel cross-entropy with rare types (Mario, coins, enemies, question
 blocks) weighted up. Worker processes play fresh episodes throughout training,
 so frames rarely repeat. Progress is printed each epoch on held-out frames from
@@ -56,7 +58,7 @@ python scripts/vision/evaluate_full_vision.py --checkpoint data/full_vit/full_vi
 ```
 
 Both evaluators take the same measurements
-(`retroagi.core.pixel_vision.evaluate_pixel_vision`) and print the same table:
+(`retroagi.core.scene_vision.evaluate_scene_vision`) and print the same table:
 
 - pixels correct, and for each type the share of its true pixels the model
   found and the share of pixels given that type that truly are it;
@@ -69,18 +71,11 @@ Both evaluators take the same measurements
   enemy.
 
 Each evaluator writes its results beside the checkpoint as
-`<checkpoint name>_evaluation.json`. The same measurement also runs from the
-main command line:
-
-```bash
-retroagi diagnose-vision --game smb --stage block --vision-checkpoint data/block_vit/block_vit_scene.pth
-retroagi diagnose-vision --game smb --stage full --vision-checkpoint data/full_vit/full_vit_scene.pth
-```
+`<checkpoint name>_evaluation.json`.
 
 ## Using a trained model
 
-`retroagi.stages.block_smb.load_block_vit_checkpoint` and
-`retroagi.stages.full_smb.load_full_vit_checkpoint` load a checkpoint, check
-that it was saved for that game, and freeze it by default so policy training
-cannot change it. The Full SMB stage adapter loads
-`data/full_vit/full_vit_scene.pth` when it is not given a vision model.
+`retroagi.stages.block_smb.vision.load_block_vit_checkpoint` and
+`retroagi.stages.full_smb.vision.load_full_vit_checkpoint` load a checkpoint,
+check that it was saved for that game, and freeze it by default so policy
+training cannot change it.

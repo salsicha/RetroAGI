@@ -126,13 +126,11 @@ def freeze_plant_envelopes(env):
             position_plant(enemy)
 
 
-def conservative_suffix(env, *, max_frames=320, release_state=None, variant=0, replay_check=True):
+def conservative_suffix(env, *, max_frames=320, release_state=None, variant=0):
     """The teacher's route with every plant held at its full height; it must
-    then win with the plants as they are (through the old jump executor too,
-    with replay_check)."""
-    from .geometry_expert import restore_env_state, snapshot_env_state
+    then win with the plants as they are."""
+    from .env_state import restore_env_state, snapshot_env_state
     from .policy_recovery import _coached_suffix, route_wins
-    from .primitive_execution import teacher_route_reachable
 
     saved = snapshot_env_state(env)
     try:
@@ -143,18 +141,9 @@ def conservative_suffix(env, *, max_frames=320, release_state=None, variant=0, r
             release_state=release_state,
             hold_variant=variant,
             robust_takeoff=True,
-            replay_check=False,
         )
         restore_env_state(env, saved)
-        if actions is None:
-            return None
-        if replay_check:
-            return (
-                actions
-                if teacher_route_reachable(env, actions, release_state=release_state)
-                else None
-            )
-        return actions if route_wins(env, actions) else None
+        return actions if actions is not None and route_wins(env, actions) else None
     finally:
         restore_env_state(env, saved)
 

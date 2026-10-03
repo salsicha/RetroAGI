@@ -7,7 +7,6 @@ actual boarding/landing remains authoritative for policy jumps.
 
 import copy
 from dataclasses import dataclass, replace
-from typing import Any
 
 from retroagi.core.smb_physics import NESPlayerMotion
 
@@ -136,32 +135,6 @@ def bridge_phase(env, opening_wait: bool) -> str:
             return "approach"
         return "board" if 0 in bridge_safe_wait_frames(env) else "wait"
     return "board"
-
-
-def bridge_completion_metrics(
-    episodes: int,
-    departures: int,
-    safe: int,
-    boards: int,
-    crosses: int,
-    finishes: int,
-    events: int = 0,
-    timers: int = 0,
-) -> dict[str, Any]:
-    return {
-        "episodes": episodes,
-        "opening_departures": departures,
-        "safe_departures": safe,
-        "boardings": boards,
-        "crossings": crosses,
-        "finishes_after_boarding": finishes,
-        "event_releases": events,
-        "timer_releases": timers,
-        "safe_departure_rate": safe / departures if departures else None,
-        "boarding_rate": boards / episodes if episodes else None,
-        "crossing_after_boarding_rate": crosses / boards if boards else None,
-        "finish_after_boarding_rate": finishes / boards if boards else None,
-    }
 
 
 def bridge_oracle(scenario: dict, max_steps: int = 320) -> tuple[list[int], int]:

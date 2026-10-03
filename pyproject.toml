@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "retroagi"
 version = "0.1.0"
-description = "Hierarchical actor-world-model-critic research for retro games"
+description = "A four-layer Super Mario Bros agent that sees only through vision transformers"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 classifiers = [
@@ -19,9 +19,9 @@ classifiers = [
 dependencies = [
     "numpy==2.3.2",
     "pygame-ce==2.5.7",
+    "scipy==1.16.3",
     "torch==2.9.1",
     "torchvision==0.24.1",
-    "tqdm==4.67.1",
 ]
 
 [project.optional-dependencies]
@@ -40,14 +40,7 @@ lint = [
     "ruff==0.15.17",
 ]
 vision = [
-    "matplotlib==3.10.5",
-    "opencv-python==4.13.0.92",
     "pillow==11.3.0",
-    "scipy==1.16.3",
-]
-tracking = [
-    "tensorboard>=2.20,<3",
-    "wandb>=0.22,<1",
 ]
 dev = [
     "black==26.5.1",
@@ -57,9 +50,7 @@ dev = [
 ]
 
 [project.scripts]
-retroagi = "retroagi.cli:main"
 retroagi-block-smb = "retroagi.stages.block_smb.cli:main"
-retroagi-block-smb-distill = "retroagi.stages.block_smb.distill:main"
 
 [tool.setuptools.packages.find]
 include = ["retroagi*"]
@@ -110,9 +101,7 @@ ignore = [
 # E402: these scripts insert the project root into sys.path before importing
 # retroagi, so their imports legitimately follow module-level code.
 "scripts/mario_scenario_env.py" = ["E402"]
-"scripts/run.py" = ["E402"]
 "scripts/semantic_segmentation.py" = ["E402"]
-"scripts/simple_transformer.py" = ["E402"]
 "scripts/vit/train_block_vit.py" = ["E402"]
 "scripts/vit/train_full_vit.py" = ["E402"]
 "scripts/vision/evaluate_block_vision.py" = ["E402"]

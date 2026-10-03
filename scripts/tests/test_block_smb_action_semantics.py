@@ -8,7 +8,7 @@ mechanics (coyote time, jump buffering, rebound on a held jump).
 
 import unittest
 
-from retroagi.core import SMBAction
+from retroagi.core.actions import SMBAction
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
 FLAT_SCENARIO = {

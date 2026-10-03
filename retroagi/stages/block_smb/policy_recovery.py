@@ -1,37 +1,24 @@
-"""Training-only successful suffixes from the policy's actual approach states."""
+"""The teacher's route from a decision state to the goal. Training only.
 
-from dataclasses import fields, replace
-from types import SimpleNamespace
+Each frame does what the layout's current tactic segment calls for
+(_coached_suffix); the teachers take their plans, holds and checks from it.
+"""
 
-import torch
+from dataclasses import replace
 
 from retroagi.core.smb_coaching import training_target
 from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
-from .env import MarioScenarioEnv
-from .geometry_expert import restore_env_state, snapshot_env_state
+from .env_state import restore_env_state, snapshot_env_state
 from .hierarchy import bridge_training_active
 from .local_traversal import (
+    JumpReleaseState,
     blocking_wall_distance,
     local_target_distance,
     safe_jump_holds,
     support_edge_distance,
     takeoff_timing_actions,
 )
-from .monte_carlo import BLOCK_SMB_MC_FAMILIES, block_smb_monte_carlo_metadata
-from .primitive_execution import JumpReleaseState, teacher_route_reachable
-from .tactics import TACTICAL_FAMILIES
-from .transfer_failure_families import TRANSFER_FAILURE_FAMILIES
-
-RECOVERY_FAMILIES = (
-    frozenset(
-        "bridge_mount bridge_dismount chained_obstacles mixed_section full_smb_opening_proxy "
-        "chained_enemy_gauntlet tall_pipe_jump pipe_mount enemy_stomp stair_climb".split()
-        + list(TRANSFER_FAILURE_FAMILIES)
-    )
-    | TACTICAL_FAMILIES
-)
-
 
 # Frames without progress after which the teacher's route is given up.
 STALL_FRAMES = 400
@@ -47,30 +34,22 @@ def interior_hold(valid, menu=NES_JUMP_FRAMES):
     return run[len(run) // 2]
 
 
-def coached_suffix(
-    env, *, max_frames=320, release_state=None, observation_history=None, replay_check=True
-):
+def coached_suffix(env, *, max_frames=320, release_state=None, observation_history=None):
     """The teacher's route from here to the goal, following the layout's tactics.
 
     Plants that can always be cleared are certified against their full height
     (piranha.conservative_suffix); a timed plant is crossed by its teacher.
-    With replay_check, the route must also replay through the old jump
-    executor (primitive_execution.teacher_route_reachable), as the old trainer
-    needs; the four-layer agent's executor plays any route exactly.
     """
     from .piranha import conservative_suffix, has_plants
     from .piranha_tactics import timed_plant
 
     if has_plants(env) and timed_plant(env) is None:
-        return conservative_suffix(
-            env, max_frames=max_frames, release_state=release_state, replay_check=replay_check
-        )
+        return conservative_suffix(env, max_frames=max_frames, release_state=release_state)
     return _coached_suffix(
         env,
         max_frames=max_frames,
         release_state=release_state,
         observation_history=observation_history,
-        replay_check=replay_check,
     )
 
 
@@ -94,7 +73,6 @@ def _coached_suffix(
     hold_variant=0,
     robust_takeoff=False,
     observation_history=None,
-    replay_check=True,
 ):
     """Complete from a decision state; never used by policy playback.
 
@@ -115,7 +93,6 @@ def _coached_suffix(
     from .monster import monster_choice
     from .piranha_tactics import tactical_choice, timed_plant
 
-    initial = snapshot_env_state(env)
     history = None
     if timed_plant(env) is not None:
         history = (
@@ -254,261 +231,4 @@ def _coached_suffix(
             break
     if not env._goal_credited:
         return None
-    final = snapshot_env_state(env)
-    try:
-        restore_env_state(env, initial)
-        if not replay_check:
-            return actions
-        return (
-            actions if teacher_route_reachable(env, actions, release_state=release_state) else None
-        )
-    finally:
-        restore_env_state(env, final)
-
-
-def _bridge_departure_allowed(env, target):
-    from .bridge_curriculum import bridge_jump_allowed, bridge_takeoff_window
-
-    now, later = bridge_takeoff_window(
-        env, lambda: safe_jump_holds(env, training_target(env), target.direction)
-    )
-    return bridge_jump_allowed(now, later)
-
-
-def repair_policy_actions(scenario, actions, *, seed=0, max_repairs=3):
-    """Retain completed suffixes only; replay, but never supervise, failed prefixes."""
-    env = MarioScenarioEnv()
-    repairs = []
-    priorities = []
-    family = block_smb_monte_carlo_metadata(scenario).get("family")
-    stairs = family in ("stair_climb", "stair_gap")
-    transfer_failure = family in TRANSFER_FAILURE_FAMILIES
-    plants = family == "piranha_avoidance"
-    stomp = family == "enemy_stomp"
-    revisit_states = plants or stomp
-    prioritize_late = stairs or family == "enemy_on_platform" or revisit_states
-    captured = set()
-    plant_attempt = 0
-    stalled = 0
-    just_landed = False
-    jump_target = None
-    release = JumpReleaseState()
-    try:
-        env.reset(scenario=scenario, seed=seed)
-        env.render = lambda: None
-        from retroagi.core.smb_enemy_history import EnemyObservationHistory
-
-        from .piranha_tactics import tactical_choice, timed_plant
-
-        history = EnemyObservationHistory()
-        for frame, action in enumerate(actions):
-            plant_features = history.observe(env, env.steps)
-            if (
-                env.mario["on_ground"]
-                and max_repairs > 0
-                and (prioritize_late or len(repairs) < max_repairs)
-            ):
-                target = training_target(env)
-                bridge = bool(env._bridge_jump_task)
-                relevant = (
-                    bridge
-                    or target.kind in ("mount", "stomp")
-                    or (transfer_failure and target.kind in ("gap", "enemy"))
-                )
-                reason = None
-                valid = None
-                if (
-                    bridge_training_active(env)
-                    and not env._bridge_jump_task
-                    and not release.remaining
-                ):
-                    from .bridge_traversal import bridge_phase
-
-                    desired = (
-                        1
-                        if bridge_phase(env, True) in ("approach", "board", "exit", "finish")
-                        else 0
-                    )
-                    if action != desired:
-                        reason = "tactic"
-                elif (
-                    family in ("enemy_patrol", "retreat_recovery")
-                    and action in (0, 1, 3)
-                    and not release.remaining
-                ):
-                    from .tactics import compatible_actions, tactic_label
-
-                    label = tactic_label(env, plant_features, family=family)
-                    if label >= 0 and not compatible_actions(env, label)[action]:
-                        reason = "tactic"
-                elif timed_plant(env) is not None and not release.remaining:
-                    _, desired, valid = tactical_choice(env, plant_features)
-                    held = 0
-                    for future in actions[frame:]:
-                        if future != action:
-                            break
-                        held += 1
-                    if action != desired or (action == 2 and held not in valid):
-                        reason = "tactic" if action != desired else "duration"
-                elif relevant and action in (2, 4):
-                    valid = safe_jump_holds(env, target, 1 if action == 2 else -1)
-                    held = 0
-                    for future in actions[frame:]:
-                        if future != action:
-                            break
-                        held += 1
-                    if bridge and valid and not _bridge_departure_allowed(env, target):
-                        reason = "takeoff"
-                    elif held not in valid:
-                        reason = "takeoff" if not valid else "duration"
-                elif bridge and action == 0:
-                    if _bridge_departure_allowed(env, target):
-                        reason = "departure_window"
-                elif relevant and (stalled >= 3 or just_landed):
-                    reason = "stall" if stalled >= 3 else "landing_recovery"
-                    if stairs:
-                        if just_landed and jump_target is not None and not jump_target.reached(env):
-                            reason = "retry_recovery"
-                        elif stalled >= 16:
-                            reason = "pause_recovery"
-                    candidate = (reason, target.kind, target.platform_index, target.enemy_index)
-                    # A prolonged wall stall otherwise repeats all sixteen
-                    # collision probes on every remaining frame.
-                    if candidate not in captured and not safe_jump_holds(
-                        env, target, target.direction
-                    ):
-                        wall = blocking_wall_distance(env, target)
-                        # A standing NES jump cannot clear a tall wall; the
-                        # coached suffix backs off for a run-up. Each wall
-                        # stall is captured once.
-                        at_wall = stalled >= 3 and wall is not None and wall <= 1
-                        reason = "wall_stall" if at_wall else None
-                key = (reason, target.kind, target.platform_index, target.enemy_index)
-                if reason == "wall_stall":
-                    pass
-                elif plants:
-                    key += (
-                        plant_attempt,
-                        int(env.mario["x"] // 8),
-                        tuple(e["h"] // 4 for e in env.enemies),
-                        round(float(plant_features[5]) * 64) if timed_plant(env) else 0,
-                    )
-                elif stomp:
-                    # Returning to the same enemy from the other side or with
-                    # different momentum is a new interception problem. A
-                    # family/object-only key suppresses those later repairs.
-                    key += (
-                        target.direction,
-                        int(env.mario["x"] // 8),
-                        round(env.mario["vx"] * 2),
-                    )
-                if reason and key not in captured:
-                    saved = snapshot_env_state(env)
-                    if prioritize_late or len(repairs) < max_repairs:
-                        restore_env_state(env, saved)
-                        suffix = coached_suffix(
-                            env,
-                            release_state=release,
-                            observation_history=history,
-                        )
-                        if suffix is not None:
-                            repairs.append(
-                                dict(
-                                    actions=list(actions[:frame]) + suffix,
-                                    supervision_start_frame=frame,
-                                    recovery=True,
-                                    recovery_reason=reason,
-                                )
-                            )
-                            if prioritize_late:
-                                # Keep late arrivals/retries represented: early
-                                # mounts must not crowd out the final riser or
-                                # the enemy on the platform.
-                                priorities.append(
-                                    (
-                                        frame
-                                        if revisit_states
-                                        else target.direction * target.center,
-                                        {
-                                            "retry_recovery": 4,
-                                            "landing_recovery": 3,
-                                            "pause_recovery": 2,
-                                            "stall": 1,
-                                            "wall_stall": 1,
-                                        }.get(reason, 0),
-                                    )
-                                )
-                                if len(repairs) > max_repairs:
-                                    # Keep the first corrected departure as
-                                    # well as later recovery states. Otherwise
-                                    # repeated plant retries evict the very
-                                    # mistake that caused the failed prefix.
-                                    discard = min(
-                                        range(
-                                            1 if revisit_states and max_repairs > 1 else 0,
-                                            len(priorities),
-                                        ),
-                                        key=priorities.__getitem__,
-                                    )
-                                    priorities.pop(discard)
-                                    repairs.pop(discard)
-                    restore_env_state(env, saved)
-                    captured.add(key)
-            before_x = env.mario["x"]
-            before_ground = env.mario["on_ground"]
-            if plants and before_ground and action in (2, 4) and not release.remaining:
-                plant_attempt += 1
-            if stairs and before_ground and action in (2, 4):
-                jump_target = training_target(env)
-            _, _, done, truncated, info = env.step(action)
-            release.observe(env, action, info)
-            just_landed = not before_ground and env.mario["on_ground"]
-            stationary = abs(env.mario["x"] - before_x) < 1
-            if stairs:
-                stationary &= before_ground and env.mario["on_ground"]
-            stalled = stalled + 1 if stationary else 0
-            if done or truncated:
-                break
-        return repairs
-    finally:
-        env.close()
-
-
-def _repair_task(record):
-    return repair_policy_actions(record["scenario"], record["actions"], seed=record["seed"])
-
-
-def collect_policy_recovery(records, config, vision_factory, *, pool=None):
-    from .demonstrations import collect_demonstrations
-
-    for record in records:
-        if block_smb_monte_carlo_metadata(record["scenario"]).get("split") != "train":
-            raise ValueError("Policy recovery supervision must come from the train split")
-    repairs = map(_repair_task, records) if pool is None else pool.map(_repair_task, records)
-    cases = []
-    for record, record_repairs in zip(records, repairs):
-        family = block_smb_monte_carlo_metadata(record["scenario"])["family"]
-        for repair in record_repairs:
-            sample = SimpleNamespace(
-                scenario=record["scenario"],
-                scenario_id=record["scenario_id"],
-                sample_seed=record["seed"],
-                oracle=repair,
-            )
-            cases.append((BLOCK_SMB_MC_FAMILIES.index(family), sample))
-    if not cases:
-        return None
-    return collect_demonstrations(cases, config, vision_factory, pool=pool)
-
-
-def combine_demonstrations(batches):
-    from .demonstrations import DemonstrationBatch
-
-    return DemonstrationBatch(
-        **{
-            field.name: torch.cat([getattr(batch, field.name) for batch in batches])
-            for field in fields(DemonstrationBatch)
-            # Carried states depend on the weights at refresh; recompute them.
-            if field.name not in ("memory_state", "world_model_inputs")
-        }
-    )
+    return actions

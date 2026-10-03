@@ -256,14 +256,13 @@ Every other family is played as a speed run.
 A layer counts as trained when every family passes the bar on held-out
 layouts. After the tactic layer, the whole agent is also scored as deployed:
 every token is its own, and the strategy is "speed run" until the strategy
-layer has learned.
+layer has learned. The best round that passes is saved as `passed.pt`, and the
+next layer starts from it.
 
 ```bash
-python -m retroagi.stages.block_smb.cli train-layer --learner action --reward-rounds 8
-```
-
-```bash
-python -m retroagi.stages.block_smb.cli train-layer --learner skill --init artifacts/block_smb/layered/best.pt
+retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
+retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
+retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
 ```
 
 ## Full SMB
@@ -273,7 +272,7 @@ vision transformer. `retroagi/stages/full_smb/play.py` gives the agent screens;
 game memory is read only to score how far Mario got.
 
 ```bash
-python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/layered/best.pt
+python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
 ```
 
 The strategy layer learns only from playing Full SMB.

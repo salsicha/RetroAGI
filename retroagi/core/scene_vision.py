@@ -18,8 +18,7 @@ import torch
 import torch.nn.functional as F
 
 from .checkpoint import build_checkpoint, load_checkpoint, save_checkpoint
-from .compatibility import validate_checkpoint_compatibility
-from .config import ModelConfig, to_plain_data
+from .config import to_plain_data
 from .smb_pixel_types import PIXEL_TYPES, VISIBLE_COLUMNS, VISIBLE_ROWS
 from .smb_scene_labels import (
     ENEMY_KINDS,
@@ -277,7 +276,7 @@ def save_scene_vision_checkpoint(
 def load_scene_vision_checkpoint(
     path: Path,
     *,
-    stage,
+    stage: str,
     model_class=SceneVisionTransformer,
     device: str | torch.device = "cpu",
 ) -> tuple[SceneVisionTransformer, dict]:
@@ -285,15 +284,18 @@ def load_scene_vision_checkpoint(
     checkpoint = load_checkpoint(path, map_location=device)
     settings = checkpoint["config"]["model"]
     model = model_class.from_architecture(settings).to(device)
-    validate_checkpoint_compatibility(
-        checkpoint,
-        stage=stage,
-        model=ModelConfig(name=model.spec.name),
-        vision=model.spec,
-        checkpoint_kind="vision_encoder",
-        required_states=("model",),
-        context=f"scene vision checkpoint {path}",
-    )
+    expected = {
+        "stage": stage,
+        "model_name": model.spec.name,
+        "checkpoint_kind": "vision_encoder",
+    }
+    for key, value in expected.items():
+        if checkpoint[key] != value:
+            raise ValueError(
+                f"scene vision checkpoint {path}: {key} {checkpoint[key]!r} is not {value!r}"
+            )
+    if "model" not in checkpoint["states"]:
+        raise ValueError(f"scene vision checkpoint {path} has no model weights")
     model.load_state_dict(checkpoint["states"]["model"])
     return model, checkpoint
 

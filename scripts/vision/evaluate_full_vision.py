@@ -36,7 +36,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core import select_device
+from retroagi.core.devices import select_device
 from retroagi.core.scene_vision import evaluate_scene_vision, scene_report
 from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, load_full_vit_checkpoint
 from retroagi.stages.full_smb.vision_frames import LEVELS, labelled_frames
@@ -69,9 +69,7 @@ def main() -> None:
     loaded = load_full_vit_checkpoint(args.checkpoint, device=device, freeze=True)
     rng = random.Random(args.seed)
     plays = [
-        (level, rng.randrange(2**31), args.every)
-        for level in LEVELS
-        for _ in range(args.plays)
+        (level, rng.randrange(2**31), args.every) for level in LEVELS for _ in range(args.plays)
     ]
     refusals = Counter()
 

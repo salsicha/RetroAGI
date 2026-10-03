@@ -7,15 +7,13 @@ WORKFLOW = Path(".github/workflows/ci.yml")
 
 
 class TestCIWorkflow(unittest.TestCase):
-    def test_ci_workflow_covers_required_p6_checks(self):
+    def test_ci_workflow_formats_lints_and_tests(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn("name: CI", workflow)
         self.assertIn("format:", workflow)
         self.assertIn("lint:", workflow)
         self.assertIn("unit-tests:", workflow)
-        self.assertIn("cpu-smoke-training:", workflow)
-        self.assertIn("architecture-promotion-fixture:", workflow)
         self.assertIn("git diff --name-only --diff-filter=ACMRT", workflow)
         self.assertIn("python -m black --check ${PYTHON_FILES}", workflow)
         self.assertIn("python -m ruff check ${PYTHON_FILES}", workflow)
@@ -26,17 +24,6 @@ class TestCIWorkflow(unittest.TestCase):
         self.assertIn("torchvision==0.24.1", workflow)
         self.assertIn('python -m pip install ".[test,vision]"', workflow)
         self.assertNotIn(".[full-smb]", workflow)
-        self.assertIn("retroagi train --stage block-smb", workflow)
-        self.assertIn("Run tiny Full SMB CPU smoke tests", workflow)
-        self.assertIn("python -m unittest scripts.tests.test_full_smb_cpu_smoke -v", workflow)
-        self.assertIn("retroagi promote", workflow)
-        self.assertIn("--rung interface-smoke", workflow)
-        self.assertIn("--output artifacts/ci/promotion_baseline_interface.json", workflow)
-        self.assertIn("--architecture baseline", workflow)
-        self.assertIn("--architecture-config hidden_dim=8", workflow)
-        self.assertIn("Verify baseline promotion manifest", workflow)
-        self.assertIn("--device cpu", workflow)
-        self.assertIn("--disable-checkpoint-transfer", workflow)
         self.assertIn('python-version: "3.14"', workflow)
         self.assertIn('python-version: ["3.12", "3.14"]', workflow)
 

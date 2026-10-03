@@ -1,280 +1,65 @@
-"""Tests for project documentation coverage."""
+"""The documentation only points at files, modules and commands that exist."""
 
+import re
+import shlex
 import unittest
 from pathlib import Path
 
-OPERATIONS_DOC = Path("docs/operations.md")
-REPRODUCIBILITY_DOC = Path("docs/reproducibility.md")
-FULL_SMB_CONTENT_DOC = Path("docs/full-smb-content.md")
-FULL_SMB_TASKS_DOC = Path("docs/full-smb-tasks.md")
-FULL_SMB_SAVE_STATES_DOC = Path("docs/full-smb-save-states.md")
-FULL_SMB_SUCCESS_THRESHOLDS_DOC = Path("docs/full-smb-success-thresholds.md")
-README = Path("README.md")
+DOCS = [Path("README.md"), Path("scripts/vit/README.md"), *sorted(Path("docs").glob("*.md"))]
+# Documents kept from before the four-layer agent; they describe removed code
+# and link to removed documents, so they are not checked.
+EARLIER_NOTES = {
+    "ai-teaching-curriculum.md",
+    "hierarchical-self-supervised-planning.md",
+    "issues.md",
+    "universal-embodied-framework.md",
+    "universal-retro-oracle.md",
+}
+CURRENT = [path for path in DOCS if path.name not in EARLIER_NOTES]
 
 
-class TestOperationsDocumentation(unittest.TestCase):
-    def test_operations_reference_covers_stage_runtime_metrics_and_artifacts(self):
-        text = OPERATIONS_DOC.read_text(encoding="utf-8")
+def code_lines(text):
+    """Lines of the documents' bash blocks, with continuation lines joined."""
+    for block in re.findall(r"```bash\n(.*?)```", text, re.S):
+        yield from block.replace("\\\n", " ").splitlines()
 
-        for section in (
-            "# Operations Reference",
-            "## Runtime Baseline",
-            "## Multi-Game Operations",
-            "## Synthetic 1D",
-            "## Block SMB Perception",
-            "## Block SMB Policy",
-            "## Full SMB Vision",
-            "## Full SMB Content Setup",
-            "## Full SMB Task Sets",
-            "## Full SMB Adapter And Transfer",
-            "## Full SMB Throughput Benchmark And Device Settings",
-            "## Full SMB Command Workflow",
-        ):
-            self.assertIn(section, text)
 
-        for term in ("Hardware", "Runtime", "Expected Metrics", "Artifact Locations"):
-            self.assertIn(term, text)
+class TestDocumentation(unittest.TestCase):
+    def test_links_point_at_existing_files(self):
+        for doc in CURRENT:
+            for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", doc.read_text(encoding="utf-8")):
+                if target.startswith("http"):
+                    continue
+                with self.subTest(doc=str(doc), target=target):
+                    self.assertTrue((doc.parent / target).exists())
 
-        for metric in (
-            "controller_mse",
-            "mean_type_iou",
-            "mario_position_error_px",
-            "success_thresholds_met",
-            "action_agreement",
-        ):
-            self.assertIn(metric, text)
+    def test_commands_name_existing_scripts_modules_and_subcommands(self):
+        from retroagi.stages.block_smb.cli import build_parser
 
-        for term in (
-            "artifacts/multi_game/<game>/<architecture>/manifest.json",
-            "retroagi experiment",
-            "--game pong",
-            "artifacts/multi_game/reports/baseline_cross_game.json",
-            "game_key",
-            "[full-smb-content.md](full-smb-content.md)",
-            "SuperMarioBros-Nes",
-            "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
-            "retroagi check-env --game smb --stage full",
-            "artifacts/full_smb/env_check.json",
-            "python -m retroagi.stages.full_smb.benchmark",
-            "artifacts/full_smb/<run>/summaries/throughput_benchmark.json",
-            "emulator_frames_per_second",
-            "`--device cuda`",
-            "`--device mps`",
-            "[full-smb-tasks.md](full-smb-tasks.md)",
-            "[full-smb-save-states.md](full-smb-save-states.md)",
-            "[full-smb-success-thresholds.md](full-smb-success-thresholds.md)",
-            "## Full SMB Run Artifact Layout",
-            "full_smb_artifact_layout",
-            "artifacts/full_smb/<run>/artifact_layout.json",
-            "artifacts/full_smb/<run>/summaries/throughput_benchmark.json",
-            "artifacts/full_smb/<run>/summaries/train_summary.json",
-            "artifacts/full_smb/<run>/summaries/resume_summary.json",
-            "artifacts/full_smb/<run>/logs/train.jsonl",
-            "artifacts/full_smb/<run>/recordings/",
-            "artifacts/full_smb/<run>/videos/",
-            "artifacts/full_smb/<run>/evaluations/evaluation.json",
-            "artifacts/full_smb/<run>/comparisons/policy_suite_comparison.json",
-            "artifacts/full_smb/<run>/tracking/",
-            "heldout_generalization",
-            "python -m retroagi.stages.full_smb.save_states create",
-            "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
-            "FullSMBRewardConfig",
-            "reward_terms",
-            "FullSMBObservationConfig",
-            "camera_vec",
-            "retroagi diagnose-vision --game smb --stage full",
-            "pixels_correct",
-            "mario_found",
-            "standing_agreement",
-            "enemies_seen",
-            "refused_frames",
-            "retroagi train --game smb --stage full",
-            "retroagi resume --game smb --stage full",
-            "retroagi record --game smb --stage full",
-            "retroagi play --game smb --stage full",
-            "retroagi compare --game smb --stage full",
-            "artifacts/full_smb/<run>/checkpoints/resumed_policy.pth",
-            "artifacts/full_smb/<run>/recordings/play_manifest.npz",
-            "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
-            "artifacts/full_smb/documented_benchmark_seed0/RUN.md",
-        ):
-            self.assertIn(term, text)
+        subcommands = build_parser()._subparsers._group_actions[0].choices
+        for doc in CURRENT:
+            for line in code_lines(doc.read_text(encoding="utf-8")):
+                words = shlex.split(line) if line.strip() else []
+                if not words:
+                    continue
+                with self.subTest(doc=str(doc), line=line):
+                    if words[0] == "retroagi-block-smb":
+                        self.assertIn(words[1], subcommands)
+                    elif words[:2] == ["python", "-m"] and words[2].startswith("retroagi"):
+                        module = Path(*words[2].split("."))
+                        self.assertTrue(
+                            module.with_suffix(".py").exists() or (module / "__init__.py").exists()
+                        )
+                    elif words[0] == "python" and words[1].endswith(".py"):
+                        self.assertTrue(Path(words[1]).exists())
 
-        for artifact in (
-            "data/block_vit/block_vit_scene.pth",
-            "data/block_smb/policy.pth",
-            "data/full_vit/full_vit_scene.pth",
-            "data/full_smb/transferred_policy.pth",
-            "artifacts/block_smb/latest/run_summary.json",
-            "artifacts/full_smb/transfer_vs_scratch.json",
-        ):
-            self.assertIn(artifact, text)
-
-    def test_readme_links_operations_reference(self):
-        readme = README.read_text(encoding="utf-8")
-
-        self.assertIn("[operations reference](docs/operations.md)", readme)
-        self.assertIn(
-            "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
-            readme,
-        )
-
-    def test_reproducibility_procedure_starts_from_clean_checkout(self):
-        text = REPRODUCIBILITY_DOC.read_text(encoding="utf-8")
-
-        for section in (
-            "# Reproducibility Procedure",
-            "## 1. Start From A Clean Checkout",
-            "## 2. Create A Supported Environment",
-            "## 3. Run The Baseline Test Suite",
-            "## 4. Run The Baseline Architecture Promotion Fixture",
-            "## 5. Run A Traceable Architecture Sweep",
-            "## 6. Run A Traceable CPU Smoke Training",
-            "## 10. Reproduce Full SMB Vision",
-            "## 11. Set Up Full SMB Local Content",
-            "## 13. Preserve The Run",
-        ):
-            self.assertIn(section, text)
-
-        for command in (
-            "git clone https://github.com/salsicha/RetroAGI.git",
-            "git status --short",
-            "python -m unittest discover -s scripts/tests -v",
-            "retroagi promote",
-            "retroagi experiment",
-            "retroagi report",
-            "retroagi experiment \\\n  --game pong",
-            "retroagi train --game smb --stage block",
-            "retroagi diagnose-vision --game smb --stage block",
-            "python scripts/vit/train_full_vit.py",
-            "retroagi diagnose-vision --game smb --stage full",
-            "retroagi evaluate --game smb --stage full",
-            "retroagi play --game smb --stage full",
-            "retroagi transfer --game smb --stage full",
-            "retroagi compare --game smb --stage full",
-            "python -m retro.import local/full_smb/roms",
-            "retroagi check-env --game smb --stage full",
-            "python -m retroagi.stages.full_smb.benchmark",
-            "python -m retroagi.stages.full_smb.save_states plan",
-            "python -m retroagi.stages.full_smb.save_states create",
-            "from retroagi.stages.full_smb import full_smb_task_catalog",
-            "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
-        ):
-            self.assertIn(command, text)
-
-        for artifact in (
-            "artifacts/repro/promotion_baseline_interface.json",
-            "artifacts/repro/architecture_sweeps/baseline/manifest.json",
-            "artifacts/repro/architecture_sweeps/report.json",
-            "artifacts/repro/multi_game/pong/baseline/manifest.json",
-            "artifacts/repro/multi_game/report.json",
-            "artifacts/repro/block_smb_smoke/run_summary.json",
-            "artifacts/repro/block_smb_smoke/events.jsonl",
-            "data/block_smb/policy.pth",
-            "data/full_vit/full_vit_scene.pth",
-            "data/full_smb/transferred_policy.pth",
-            "artifacts/full_smb/documented_benchmark_seed0/benchmark_manifest.json",
-            "artifacts/full_smb/documented_benchmark_seed0/RUN.md",
-            "artifacts/full_smb/baseline_seed0/artifact_layout.json",
-            "artifacts/full_smb/baseline_seed0/summaries/throughput_benchmark.json",
-            "artifacts/full_smb/baseline_seed0/logs/train.jsonl",
-            "artifacts/full_smb/baseline_seed0/summaries/resume_summary.json",
-            "artifacts/full_smb/baseline_seed0/evaluations/evaluation.json",
-            "artifacts/full_smb/baseline_seed0/comparisons/policy_suite_comparison.json",
-            "artifacts/full_smb/transfer_vs_scratch.json",
-            "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
-            "artifacts/full_smb/env_check.json",
-            "local/full_smb/states/save_state_plan.json",
-            "local/full_smb/states/save_state_manifest.json",
-        ):
-            self.assertIn(artifact, text)
-
-    def test_full_smb_content_setup_documents_local_only_rom_contract(self):
-        text = FULL_SMB_CONTENT_DOC.read_text(encoding="utf-8")
-
-        for term in (
-            "# Full SMB Content Setup",
-            "SuperMarioBros-Nes",
-            'retro.make(game="SuperMarioBros-Nes")',
-            "python -m pip install -e '.[full-smb]'",
-            "local/full_smb/roms/",
-            "python -m retro.import local/full_smb/roms",
-            "local/full_smb/checksums/SuperMarioBros-Nes.sha256",
-            "shasum -a 256",
-            "must not be committed",
-            "RuntimeError",
-            "retroagi check-env --game smb --stage full",
-            "verifies backend import",
-            "registration, ROM availability",
-        ):
-            self.assertIn(term, text)
-
-    def test_full_smb_task_sets_document_train_eval_catalog(self):
-        text = FULL_SMB_TASKS_DOC.read_text(encoding="utf-8")
-
-        for term in (
-            "# Full SMB Task Sets",
-            "full_smb_task_catalog",
-            "`smoke`",
-            "`fixed_benchmark`",
-            "`curriculum`",
-            "`heldout_generalization`",
-            "`Level1-1`",
-            "`local/full_smb/states/`",
-            "[full-smb-save-states.md](full-smb-save-states.md)",
-            "`smoke_1_1_spawn`",
-            "`benchmark_1_1_start`",
-            "`curriculum_1_1_midpipe`",
-            "`heldout_8_1_long`",
-            "[full-smb-success-thresholds.md](full-smb-success-thresholds.md)",
-            "progress, completion, survival, score/coins",
-        ):
-            self.assertIn(term, text)
-
-    def test_full_smb_save_states_document_local_artifact_workflow(self):
-        text = FULL_SMB_SAVE_STATES_DOC.read_text(encoding="utf-8")
-
-        for term in (
-            "# Full SMB Save-State Artifacts",
-            "full_smb_save_state_plan",
-            "`starting_position`",
-            "`benchmark`",
-            "`level_section`",
-            "`death_retry`",
-            "python -m retroagi.stages.full_smb.save_states plan",
-            "python -m retroagi.stages.full_smb.save_states create",
-            "local/full_smb/states/save_state_plan.json",
-            "local/full_smb/states/save_state_manifest.json",
-            "`section_1_1_midpipe`",
-            "`death_retry_1_1_first_gap`",
-            "must not be committed",
-            "[full-smb-success-thresholds.md](full-smb-success-thresholds.md)",
-        ):
-            self.assertIn(term, text)
-
-    def test_full_smb_success_thresholds_document_fixed_benchmark_protocol(self):
-        text = FULL_SMB_SUCCESS_THRESHOLDS_DOC.read_text(encoding="utf-8")
-
-        for term in (
-            "# Full SMB Success Thresholds",
-            "FIXED_FULL_SMB_SUCCESS_THRESHOLDS",
-            "`benchmark_1_1_start`",
-            "`benchmark_1_2_start`",
-            "`benchmark_2_1_start`",
-            "`3200`",
-            "`0.667`",
-            "`0.333`",
-            "progress, completion, survival, score/coins",
-            "evaluate_full_smb_success_threshold",
-            "threshold_met",
-            "Full SMB signal extraction",
-        ):
-            self.assertIn(term, text)
-
-    def test_readme_links_reproducibility_procedure(self):
-        readme = README.read_text(encoding="utf-8")
-
-        self.assertIn("[reproducibility procedure](docs/reproducibility.md)", readme)
+    def test_current_docs_name_no_removed_commands(self):
+        removed = ("retroagi train", "retroagi evaluate", "retroagi check-env", "retroagi promote")
+        for doc in CURRENT:
+            text = doc.read_text(encoding="utf-8")
+            for command in removed:
+                with self.subTest(doc=str(doc), command=command):
+                    self.assertNotIn(command, text)
 
 
 if __name__ == "__main__":

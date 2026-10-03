@@ -3,7 +3,7 @@
 import unittest
 from pathlib import Path
 
-from retroagi.core import (
+from retroagi.core.config import (
     CheckpointConfig,
     EnvironmentConfig,
     EvaluationConfig,

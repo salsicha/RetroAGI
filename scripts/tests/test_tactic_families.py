@@ -273,23 +273,6 @@ def test_strategy_courses_share_layouts_and_each_takes_its_best_route():
     assert "strategy_objective" not in courses["careful_course"]
 
 
-@pytest.mark.timeout(600)
-def test_each_strategy_wins_its_own_course_and_the_coin_course_needs_its_route():
-    from retroagi.stages.block_smb.monte_carlo import block_smb_monte_carlo_oracle_actions
-
-    speed = _course("speed_run_course")
-    coins = _course("max_coins_course")
-    fast_route = block_smb_monte_carlo_oracle_actions(speed, max_steps=speed["frame_budget"])
-    coin_route = block_smb_monte_carlo_oracle_actions(coins, max_steps=coins["frame_budget"])
-    fast_info, _, fast_coins = _played(speed, fast_route)
-    assert fast_info["reward_terms"]["goal"] > 50  # the goal reward plus a time bonus
-    coin_info, _, many = _played(coins, coin_route)
-    assert coin_info["reward_terms"]["goal"] > 0 and many > fast_coins
-    # The fastest route does not win the coin course.
-    skipped, _, _ = _played(coins, fast_route)
-    assert skipped["reward_terms"]["goal"] == 0
-
-
 def test_finishing_after_the_deadline_misses_the_objective():
     scenario = _flat([segment("advance", 1)])
     scenario.update(strategy="speed_run", strategy_objective={"deadline": 60})

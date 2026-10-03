@@ -60,10 +60,8 @@ def load_full_vit_checkpoint(
             "scripts/vit/train_full_vit.py or pass an explicit checkpoint path"
         )
 
-    from .adapter import FULL_SMB_SPEC
-
     model, checkpoint = load_scene_vision_checkpoint(
-        checkpoint_path, stage=FULL_SMB_SPEC, model_class=FullVisionTransformer, device=device
+        checkpoint_path, stage="full_smb", model_class=FullVisionTransformer, device=device
     )
     set_full_vit_trainable(model, trainable=not freeze)
     return FullVITLoadResult(

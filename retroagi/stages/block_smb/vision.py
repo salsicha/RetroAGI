@@ -59,10 +59,8 @@ def load_block_vit_checkpoint(
             "scripts/vit/train_block_vit.py or pass an explicit checkpoint path"
         )
 
-    from .adapter import BLOCK_SMB_SPEC
-
     model, checkpoint = load_scene_vision_checkpoint(
-        checkpoint_path, stage=BLOCK_SMB_SPEC, model_class=BlockVisionTransformer, device=device
+        checkpoint_path, stage="block_smb", model_class=BlockVisionTransformer, device=device
     )
     set_block_vit_trainable(model, trainable=not freeze)
     return BlockVITLoadResult(

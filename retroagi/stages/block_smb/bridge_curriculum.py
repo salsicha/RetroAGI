@@ -1,10 +1,5 @@
 """Jump-on and jump-off prerequisites for moving-bridge traversal."""
 
-from types import SimpleNamespace
-
-BRIDGE_JUMP_FAMILIES = ("bridge_mount", "bridge_dismount")
-BRIDGE_FAMILIES = (*BRIDGE_JUMP_FAMILIES, "bridge_wait", "moving_bridge", "wait_timing")
-
 
 def bridge_jump_scenario(rng, difficulty, family):
     width = rng.randint(*{"easy": (88, 100), "medium": (72, 84), "hard": (56, 68)}[difficulty])
@@ -58,7 +53,8 @@ def bridge_jump_scenario(rng, difficulty, family):
         a_level_action_scope="first_primitive",
         difficulty_bin=difficulty,
     )
-    return scenario, params, bridge_jump_oracle(scenario)
+    # The route is the teacher's, played once the layout's tactics are set.
+    return scenario, params, []
 
 
 def bridge_takeoff_window(env, certify):
@@ -67,7 +63,7 @@ def bridge_takeoff_window(env, certify):
     `certify` lists the holds certified in the current state. The probe
     restores the full environment state.
     """
-    from .geometry_expert import restore_env_state, snapshot_env_state
+    from .env_state import restore_env_state, snapshot_env_state
 
     now = certify() if env.mario["on_ground"] else []
     if not now:
@@ -101,64 +97,3 @@ def bridge_jump_allowed(now, later, robust=None):
 
     robust = ROBUST_TAKEOFF_HOLDS if robust is None else robust
     return bool(now) and (not later or len(now) >= robust or len(later) < len(now))
-
-
-def bridge_takeoff_actions(env, certify):
-    """Six-slot wait/jump labels at a grounded bridge-jump decision."""
-    now, later = bridge_takeoff_window(env, certify)
-    labels = [False] * 6
-    labels[0] = not (now and not later)
-    labels[2] = bridge_jump_allowed(now, later)
-    return labels
-
-
-def bridge_jump_choice(model, env, *, variant=0):
-    from retroagi.core.smb_coaching import safe_jump_indices
-
-    from .local_traversal import ROBUST_TAKEOFF_HOLDS
-
-    valid, later = bridge_takeoff_window(env, lambda: safe_jump_indices(model, env, 2))
-    # Variants launch one or two holds deeper into the widening window (nine
-    # holds leave fast hard bridges 2-4 frames before the longest hold stops
-    # landing); each still launches once the window narrows or is about to
-    # close. The longest certified hold lands through almost the whole
-    # window, so it tolerates a departure that drifts a few frames early.
-    robust = ROBUST_TAKEOFF_HOLDS + (0, 1, 2, 1)[variant % 4]
-    if bridge_jump_allowed(valid, later, robust):
-        return 2, valid[-1], valid
-    if abs(env.mario["vx"]) > 1 / 16:
-        return (3 if env.mario["vx"] > 0 else 1), 0, list(range(16))
-    return 0, 0, [0]
-
-
-def bridge_jump_oracle(scenario, *, variant=0):
-    from retroagi.core.smb_coaching import physical_batch, primitive, teacher_runtime
-    from retroagi.core.smb_runtime import make_smb_executor
-
-    from .env import MarioScenarioEnv
-
-    env = MarioScenarioEnv()
-    model = SimpleNamespace(smb_runtime_contract=teacher_runtime())
-    executor = make_smb_executor(model)
-    actions = []
-    try:
-        env.reset(scenario=scenario)
-        env.render = lambda: None
-        for _ in range(320):
-            batch = physical_batch(env)
-            # All bridge waits are reconsidered every frame.
-            batch.metadata["smb_geometry"]["scene"] = env
-            committed = executor.prepare(batch)
-            if committed is None and env.mario["on_ground"]:
-                action, index, _ = bridge_jump_choice(model, env, variant=variant)
-            else:
-                action = committed if committed is not None else 1
-                index = 0
-            execution = executor.execute(action, batch=batch, motor_primitives=primitive(index))
-            _, _, done, truncated, _ = env.step(execution.action)
-            actions.append(int(execution.action))
-            if done or truncated:
-                break
-        return actions
-    finally:
-        env.close()

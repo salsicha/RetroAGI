@@ -1,26 +1,12 @@
 """Physical credit, counterfactual labels, and completion for the remaining curriculum."""
 
-from dataclasses import replace
-from unittest.mock import patch
-
 import pytest
 import torch
 
 from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.geometry_expert import snapshot_env_state
+from retroagi.stages.block_smb.env_state import snapshot_env_state
 from retroagi.stages.block_smb.local_traversal import local_objective, safe_jump_holds
-from retroagi.stages.block_smb.monte_carlo import (
-    sample_block_smb_monte_carlo_scenario,
-    sample_block_smb_monte_carlo_split,
-)
-from retroagi.stages.block_smb.pipe_traversal import training_rollout_steps
-from retroagi.stages.block_smb.train import (
-    evaluate_block_smb_monte_carlo,
-    make_block_smb_model,
-    train_block_smb_epoch,
-)
-from scripts.tests.test_block_smb_training import StaticBlockVision, tiny_config
-from scripts.tests.test_tall_pipe_traversal import PhaseIntentPolicy, rollout
+from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 
 # The composed families (tactic_families) are checked through the layered
 # agent's executor instead (test_tactic_families).
@@ -39,23 +25,6 @@ def sample(family, difficulty="hard", seed=2):
     return sample_block_smb_monte_carlo_scenario(
         split="validation", seed=seed, sample_index=0, family=family, difficulty=difficulty
     )
-
-
-@pytest.mark.parametrize("family", FAMILIES)
-@pytest.mark.parametrize("difficulty", ("easy", "medium", "hard"))
-def test_revised_oracles_complete_through_real_controller(family, difficulty):
-    item = sample(family, difficulty)
-    trajectory = rollout(
-        item,
-        PhaseIntentPolicy(),
-        steps=training_rollout_steps(60, item.scenario),
-        use_oracle_actions=True,
-    )
-    assert trajectory.success
-    assert len(trajectory.transitions) == item.reachability["completion_steps"]
-    assert not any(t.info.get("jump_overreach") for t in trajectory.transitions)
-    if family != "retreat_recovery":
-        assert any(t.info.get("primitive_valid_hold_frames") for t in trajectory.transitions)
 
 
 @pytest.mark.parametrize("family", ("pit_leap", "pipe_mount"))
@@ -146,47 +115,3 @@ def test_bridge_families_leave_wait_choice_to_policy(family):
     item = sample(family)
     assert item.scenario["require_bridge_before_goal"]
     assert "a_level_action" not in item.parameters
-
-
-def test_partial_traversal_metrics_expose_evaluation_timeout():
-    item = sample("chained_obstacles")
-    samples = replace(
-        sample_block_smb_monte_carlo_split(split="validation", seed=2, sample_count=0),
-        samples=(item,),
-    )
-    with patch(
-        "retroagi.stages.block_smb.train.sample_block_smb_monte_carlo_parameter_sweep",
-        return_value=samples,
-    ):
-        result = evaluate_block_smb_monte_carlo(
-            PhaseIntentPolicy(),
-            tiny_config(evaluation_episodes=1, evaluation_max_steps=1),
-            split="validation",
-            sample_count=1,
-            stratified_repeats_per_difficulty=3,
-            device=torch.device("cpu"),
-            vision_factory=StaticBlockVision,
-        )
-    metrics = result["families"]["chained_obstacles"]["traversal_metrics"]
-    assert metrics["episodes"] == metrics["timeouts"] == 1
-    assert metrics["finishes_after_local_clear"] == 0
-
-
-def test_real_optimizer_consumes_local_safe_sets_and_long_composites():
-    config = tiny_config(rollout_steps=60, use_oracle_actions=True, generated_scenarios=0)
-    model = make_block_smb_model(config)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    items = [sample("pipe_mount"), sample("enemy_gap"), sample("chained_obstacles")]
-    metrics, _ = train_block_smb_epoch(
-        model,
-        optimizer,
-        [(s.scenario_id, s.scenario) for s in items],
-        config,
-        epoch=0,
-        device=torch.device("cpu"),
-        vision_factory=StaticBlockVision,
-    )
-    assert metrics["training_rollout_steps_max"] >= 240
-    assert metrics["loss_primitive_outcome"] > 0
-    assert metrics["optimizer_updates"] > 0
-    assert all(torch.isfinite(p).all() for p in model.parameters())

@@ -21,31 +21,6 @@ FAMILY_PREREQUISITES = {
 }
 
 
-def eligible_families(families, mastery):
-    """Unlock after held-out prerequisite mastery, retaining unlocked practice."""
-    eligible = set(families) - FAMILY_PREREQUISITES.keys()
-    eligible.update(name for name in families if mastery.get(name, {}).get("hierarchy_unlocked"))
-    for _ in range(len(FAMILY_PREREQUISITES)):
-        for name, prerequisites in FAMILY_PREREQUISITES.items():
-            if name in families and all(
-                p in eligible and mastery.get(p, {}).get("mastered", False) for p in prerequisites
-            ):
-                eligible.add(name)
-    return tuple(name for name in families if name in eligible)
-
-
-def hierarchy_status(families, mastery):
-    active = set(eligible_families(families, mastery))
-    return {
-        "active_families": sorted(active),
-        "locked_families": {
-            name: list(FAMILY_PREREQUISITES[name]) for name in families if name not in active
-        },
-        "tactics_families": [f for f in TACTICS_SEQUENCE_FAMILIES if f in active],
-        "strategy_families": [f for f in STRATEGY_SEQUENCE_FAMILIES if f in active],
-    }
-
-
 def bridge_training_active(env):
     """A bridge followed by terrain stops requesting waits once it is crossed.
 

@@ -40,7 +40,6 @@ from typing import Optional
 import numpy as np
 
 from retroagi.core.smb_pixel_types import TYPE_ID
-from retroagi.core.smb_scene import canonical_rgb
 from retroagi.core.smb_scene_labels import SceneLabels
 
 SCREEN = (240, 256)
@@ -53,6 +52,17 @@ SCROLL_PAGE, SCROLL_X = 0x71A, 0x71C  # [ScreenLeft_PageLoc], [ScreenLeft_X_Pos]
 BLOCK_MAP = 0x500  # [Block_Buffer_1]; the second page follows 0xD0 bytes later
 PLAYER_FLOAT_STATE = 0x1D  # [Player_State]; 0 means standing on something
 PLAYER_Y_SPEED = 0x9F  # [Player_Y_Speed], signed: below zero is rising
+
+
+def canonical_rgb(observation):
+    """Pad the emulator's cropped frame back to the full 256 x 240 screen by
+    repeating its edge pixels, so nothing is stretched."""
+    array = np.asarray(observation)
+    h, w = array.shape[:2]
+    if h > 240 or w > 256 or array.ndim != 3:
+        raise ValueError("Unsupported SMB capture dimensions")
+    top, left = (240 - h) // 2, (256 - w) // 2
+    return np.pad(array, ((top, 240 - h - top), (left, 256 - w - left), (0, 0)), mode="edge")
 
 
 def stomp_shown(earlier_ram, ram) -> bool:

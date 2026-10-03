@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from retroagi.core import select_device
+from retroagi.core.devices import select_device
 
 
 class TestDeviceSelection(unittest.TestCase):

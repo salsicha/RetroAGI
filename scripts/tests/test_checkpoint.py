@@ -7,20 +7,16 @@ from tempfile import TemporaryDirectory
 
 import torch
 
-from retroagi.core import (
-    BASELINE_ARCHITECTURE_NAME,
+from retroagi.core.checkpoint import (
     CHECKPOINT_ARCHITECTURE_EXTENSION_KEY,
     CHECKPOINT_SCHEMA_VERSION,
-    build_architecture_checkpoint_extension,
     build_checkpoint,
     checkpoint_summary_path,
     load_checkpoint,
     validate_checkpoint,
 )
-from retroagi.core import (
-    save_checkpoint as save_versioned_checkpoint,
-)
-from retroagi.stages.block_smb import BlockVisionTransformer
+from retroagi.core.checkpoint import save_checkpoint as save_versioned_checkpoint
+from retroagi.stages.block_smb.vision import BlockVisionTransformer
 from scripts.vit.train_block_vit import TrainConfig, save_checkpoint
 
 
@@ -50,96 +46,6 @@ class TestCheckpointSchema(unittest.TestCase):
         self.assertTrue(checkpoint["metadata"]["unit"])
         self.assertIn("code_revision", checkpoint["metadata"])
         self.assertIn("runtime_environment", checkpoint["metadata"])
-
-    def test_builds_architecture_extension_from_registered_config(self):
-        checkpoint = build_checkpoint(
-            stage="block_smb",
-            model_name="block_smb_policy",
-            checkpoint_kind="policy",
-            config={
-                "architecture_name": BASELINE_ARCHITECTURE_NAME,
-                "architecture_config": {"hidden_dim": 8, "controller_schedule": "linear"},
-            },
-            states={"model": {"weight": torch.tensor([1.0])}},
-        )
-
-        architecture = checkpoint[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY]
-        self.assertEqual(architecture["name"], BASELINE_ARCHITECTURE_NAME)
-        self.assertEqual(
-            architecture["checkpoint_model_name"],
-            BASELINE_ARCHITECTURE_NAME,
-        )
-        self.assertEqual(
-            architecture["output_contract"],
-            "agent_world_model_critic.forward.v1",
-        )
-        self.assertEqual(
-            architecture["supported_stage_names"],
-            ["synthetic_1d", "block_smb", "full_smb", "pong_block"],
-        )
-        self.assertEqual(
-            architecture["config"],
-            {"hidden_dim": 8, "controller_schedule": "linear"},
-        )
-
-    def test_validate_migrates_legacy_architecture_config(self):
-        checkpoint = self.make_checkpoint()
-        checkpoint["config"] = {
-            "architecture_name": BASELINE_ARCHITECTURE_NAME,
-            "architecture_config": {"hidden_dim": 16},
-        }
-        checkpoint.pop(CHECKPOINT_ARCHITECTURE_EXTENSION_KEY)
-
-        normalized = validate_checkpoint(checkpoint)
-
-        architecture = normalized[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY]
-        self.assertEqual(architecture["name"], BASELINE_ARCHITECTURE_NAME)
-        self.assertEqual(architecture["config"], {"hidden_dim": 16})
-        self.assertEqual(architecture["migration"]["from"], "config.architecture_name")
-
-    def test_rejects_explicit_architecture_extension_that_conflicts_with_config(self):
-        checkpoint = self.make_checkpoint()
-        checkpoint["config"] = {
-            "architecture_name": BASELINE_ARCHITECTURE_NAME,
-            "architecture_config": {"hidden_dim": 16},
-        }
-        checkpoint[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY] = build_architecture_checkpoint_extension(
-            BASELINE_ARCHITECTURE_NAME,
-            {"hidden_dim": 8},
-        )
-        checkpoint[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY]["config"] = {"hidden_dim": 8}
-
-        with self.assertRaisesRegex(ValueError, "architecture extension config"):
-            validate_checkpoint(checkpoint)
-
-    def test_accepts_extension_saved_before_new_stages_were_registered(self):
-        checkpoint = self.make_checkpoint()
-        extension = build_architecture_checkpoint_extension(
-            BASELINE_ARCHITECTURE_NAME,
-            {"hidden_dim": 8},
-        )
-        registered_stage_names = list(extension["supported_stage_names"])
-        extension["supported_stage_names"] = registered_stage_names[:-1]
-        checkpoint[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY] = extension
-
-        normalized = validate_checkpoint(checkpoint)
-
-        self.assertEqual(
-            normalized[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY]["supported_stage_names"],
-            registered_stage_names,
-        )
-
-    def test_rejects_extension_with_unregistered_stage_names(self):
-        checkpoint = self.make_checkpoint()
-        extension = build_architecture_checkpoint_extension(
-            BASELINE_ARCHITECTURE_NAME,
-            {"hidden_dim": 8},
-        )
-        extension["supported_stage_names"] = ["synthetic_1d", "unknown_game"]
-        checkpoint[CHECKPOINT_ARCHITECTURE_EXTENSION_KEY] = extension
-
-        with self.assertRaisesRegex(ValueError, "supported_stage_names"):
-            validate_checkpoint(checkpoint)
 
     def test_round_trips_through_torch_file_and_writes_sidecar_summary(self):
         checkpoint = self.make_checkpoint()
