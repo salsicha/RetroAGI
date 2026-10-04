@@ -18,6 +18,7 @@ from retroagi.stages.block_smb.tactic_families import (
     CHOICE_FAMILIES,
     CLONE_FAMILIES,
     LOW_CHOICE_FAMILIES,
+    STRATEGY_FAMILIES,
     TACTIC_FAMILIES,
 )
 from retroagi.stages.block_smb.tactic_schedule import segment
@@ -226,6 +227,14 @@ def test_the_tactic_learner_leaves_out_the_clones():
     assert set(CLONE_FAMILIES) <= set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
 
 
+def test_only_the_tactic_learner_trains_on_the_strategy_courses():
+    from retroagi.stages.block_smb.layered_train import learner_families
+
+    for learner in ("action", "skill"):
+        assert not set(STRATEGY_FAMILIES) & set(learner_families(learner, BLOCK_SMB_MC_FAMILIES))
+    assert set(STRATEGY_FAMILIES) <= set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
+
+
 # ── Strategy courses ──────────────────────────────────────────────────────────
 
 _COURSES: dict = {}
@@ -255,7 +264,7 @@ def _played(scenario, actions):
 
 @pytest.mark.timeout(600)
 def test_strategy_courses_share_layouts_and_each_takes_its_best_route():
-    from retroagi.stages.block_smb.tactic_families import STRATEGY_FAMILIES, STRATEGY_ORDER
+    from retroagi.stages.block_smb.tactic_families import STRATEGY_ORDER
 
     courses = {family: _course(family) for family in STRATEGY_FAMILIES}
     first = courses["speed_run_course"]

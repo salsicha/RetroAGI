@@ -167,6 +167,9 @@ bottom up, with the others frozen.
 - **Skill layer:** given the tactic.
 - **Tactic layer:** reading the layout's strategy switch.
 
+The action and skill layers train on every family except the strategy
+courses; the tactic layer trains on every family except the clones.
+
 The token from above comes from a teacher that reads the simulator
 (`retroagi/stages/block_smb/teacher_tokens.py`). The teacher is used only in
 training.
@@ -232,9 +235,13 @@ the clones, because their tactic isn't decided by the scene.
 
 ### Strategy courses
 
-The strategy token matters only in the strategy courses: speed_run_course,
+The strategy switch matters only in the strategy courses: speed_run_course,
 max_coins_course and careful_course. They are composed scenes only, and the
-three families play the very same layouts. The only differences are:
+three families play the very same layouts. They train only the tactic layer,
+once the action and skill layers are trained: a course is about its
+strategy's objective (a deadline, a coin count), which the action and skill
+layers can't see, so the same situation and the same skill would be taught
+different buttons by different strategies. The only differences are:
 - the strategy given to the tactic layer;
 - the tactics the teacher follows;
 - what the episode pays and what counts as winning.

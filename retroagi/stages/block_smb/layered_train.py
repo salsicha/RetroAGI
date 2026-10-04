@@ -1260,13 +1260,21 @@ def end_agreement(episodes, tolerance: int) -> dict:
 
 
 def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
-    """The families a learner trains and is tested on. The tactic layer leaves
-    out the clones, whose tactic is given rather than decided by the scene."""
-    from .tactic_families import CLONE_FAMILIES
+    """The families a learner trains and is tested on.
+
+    - The action and skill layers leave out the strategy courses: a course is
+      about the strategy (its pay and its win condition: a deadline, a coin
+      count), which those layers cannot see. The courses are used only once the
+      actions and skills are trained, by the tactic layer, which reads the
+      strategy switch.
+    - The tactic layer leaves out the clones, whose tactic is given rather
+      than decided by the scene.
+    """
+    from .tactic_families import CLONE_FAMILIES, STRATEGY_FAMILIES
 
     if learner == "tactic":
         return tuple(f for f in families if f not in CLONE_FAMILIES)
-    return tuple(families)
+    return tuple(f for f in families if f not in STRATEGY_FAMILIES)
 
 
 def _tasks(

@@ -37,6 +37,111 @@ Training happens in two games:
 [docs/layered-agent.md](docs/layered-agent.md) explains what the agent sees,
 how each layer decides and how it learns.
 
+## Architecture
+
+```text
+ screen
+   │
+   ▼
+ vision transformer (one per game) ──► objects on the screen ──► scene numbers
+                                                                     │
+                                                         scene encoder (tokens)
+                                                                     │
+                                  ┌──────────────────────────────────┤
+                                  ▼                                  ▼
+                       action memory (steps once      every layer reads the scene
+                       per action; predicts the       and the action memory's
+                       scene when the action ends)    prediction
+                                  │
+ strategy switch ─────────────────┼──────────────┐
+ (set from outside:               │              ▼
+  strategy, goal side)            │     tactic layer (option-critic) ◄──► tactic memory
+                                  │     holds a tactic over many actions;  (steps once per
+                                  │     end check, critic, choice           tactic; predicts the
+                                  │              │ tactic                   scene when it ends)
+                                  │              ▼
+                                  │     skill layer: skill, direction, target
+                                  │              │ skill
+                                  │              ▼
+                                  └───► action layer: button action and frame count
+                                                 │
+                                                 ▼
+                                   executor: presses it for its frames, or until
+                                   the vision transformer sees Mario land
+                                                 │
+                                                 ▼
+                                              buttons
+```
+
+**What the agent sees.** Each game has its own copy of one vision transformer
+(`core/vision.py`).
+- **Its output:** for every pixel of the 256×240 screen, a type: background,
+  Mario, ground, brick, question block, pipe, coin, enemy, moving platform or
+  power-up. For each 8×8 cell, the kind of enemy drawn there. Mario's facing,
+  and whether his feet are on something (its land detector).
+- **Objects:** groups of touching pixels of one type become the objects on
+  the screen: Mario, each enemy, coin, power-up, moving platform, pipe and
+  block, every surface Mario can stand on, and every gap.
+- **The report:** the objects are packed into the numbers the layers read
+  (`core/smb_observer.py`), every position measured from Mario.
+
+Nothing else about the game reaches the agent: no speed, nothing hidden, no
+game memory.
+
+**How it decides.** The layers decide only when an action has ended, top to
+bottom (`core/smb_agent.py`, `core/layered_policy.py`):
+- **Scene encoder:** one token per reported object; every position also
+  enters as sine and cosine waves, so a pixel's difference is a clear
+  difference.
+- **Action memory:** a long short-term memory network. It steps once at the
+  start of every action, from the picture alone, and predicts the scene when
+  the action will end. Every layer reads that prediction beside the current
+  scene; it is how the agent knows about motion.
+- **Strategy switch:** what the run is for (speed run, max coins or careful)
+  and which side the goal is on. It is set from outside, not learned.
+- **Tactic layer:** an option-critic transformer. It holds a tactic (advance,
+  alternate route, hold area or retreat) over many actions. At every action
+  start it checks whether the held tactic is finished, values each tactic
+  (its critic), and says which it would choose. When the tactic ends, its own
+  memory network steps once and predicts the scene when the next tactic will
+  end, and the layer chooses the next tactic. A tactic's direction follows
+  from the goal's side.
+- **Skill layer:** a transformer that reads the tactic and its own last 16
+  choices, and gives the next move. The move is a skill (advance, jump gap,
+  climb, descend, stomp, retreat or wait), a direction, and a target: a
+  surface, enemy or moving platform on the screen.
+- **Action layer:** a transformer that reads the skill, the target's box and
+  its own last 16 choices. It gives a button action (nothing, right, right +
+  jump, left, left + jump or jump) and a frame count from 1 to 32.
+- **Executor:** presses that button action on each of those frames and reads
+  nothing else. The action ends when its frames are pressed, or when the
+  vision transformer's land detector sees Mario land.
+
+**How it learns** (`stages/block_smb/layered_train.py`). In Block SMB, one
+layer at a time, bottom-up, with everything else frozen. A teacher that reads
+the simulator gives each learner the token from the layer above, and labels
+what the learner should do at every decision (training only).
+- **Action layer:** given the teacher's skill. It also trains the scene
+  encoder and the action memory.
+- **Skill layer:** given the teacher's tactic.
+- **Tactic layer:** reads each layout's strategy switch. It learns the
+  teacher's tactics and where they end, its memory's predictions and its
+  critic. Then reward rounds improve its choices and its end check by the
+  option-critic rules, once the critic predicts held-out returns well enough.
+
+The action and skill layers train on every family except the strategy
+courses. A course is about its strategy's objective (a deadline, a coin
+count), which those layers can't see, so the courses are used only by the
+tactic layer, once the actions and skills are trained. The tactic layer
+leaves out the clone families, whose tactic is given rather than decided by
+the scene.
+
+A layer passes when every family wins at least 90% of its 18 held-out
+layouts. The tactic layer must also agree with the teacher on where tactics
+change. The next layer starts from the passing checkpoint (`passed.pt`). In
+Full SMB the trained layers play unchanged, through the Full SMB vision
+transformer, under the strategy switch set for the run.
+
 ## Project Layout
 
 ```text
