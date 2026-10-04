@@ -100,16 +100,17 @@ them sits the strategy switch.
   always to the right. A strategy is an objective, a definition of what is
   rewarded, so there is nothing for a layer to learn in choosing one.
 - **Tactic layer:** chooses advance, alternate route, hold area or retreat, and
-  holds it over many actions. Its direction follows from the goal's side:
-  retreat goes away from the goal, every other tactic toward it (hold area
-  faces it).
-  - advance: toward the goal along the main path;
-  - alternate route: toward the goal along another path, higher platforms or a
+  holds it over many actions. Going left is never advancing:
+  - advance: go right, the level's way, along the main path;
+  - alternate route: go right along another path, higher platforms or a
     lower floor;
   - hold area: stay put until something changes (a moving platform comes, a
     plant goes back into its pipe, a monster comes close enough to jump);
-  - retreat: back away from the goal for a while, out of a dead end or away
-    from a monster.
+    it faces the goal;
+  - retreat: go back to the left. That covers backing out of a dead end,
+    keeping away from a monster, or getting back to something behind Mario:
+    a goal on the left, an enemy to stomp behind him, or the goal after a
+    jump carried him past it.
 
   It is an option-critic: a tactic is an "option", a behaviour that lasts
   many actions. Its transformer reads the current scene, the action memory's
@@ -167,16 +168,44 @@ bottom up, with the others frozen.
 - **Skill layer:** given the tactic.
 - **Tactic layer:** reading the layout's strategy switch.
 
-The action layer trains only on the 18 basic families whose tactic is advance
-the whole way (`monte_carlo.ADVANCE_FAMILIES`): no family that teaches a tactic
-or a strategy. Its training layouts are a full sweep
-(`monte_carlo.block_smb_parameter_combinations`): each family's generator is
-run with every combination of the parameters it draws, each at three values
-(its two ends and middle, or every value of a smaller range), at every
-difficulty. That is about 4,350 layouts; all of them are played every round,
-and each family weighs the same in learning however many layouts it has.
-Held-out layouts are drawn at random, as for every layer. The skill layer trains on every family except the strategy
-courses; the tactic layer on every family except the clones.
+Which families each layer trains on (`layered_train.learner_families`):
+- **Action layer:** the 16 basic families in which Mario advances, going right
+  the whole way (`monte_carlo.ADVANCE_FAMILIES`). No family that teaches a
+  tactic or a strategy.
+- **Skill layer:** 34 families: every family except the strategy courses and
+  the 8 composed scenes (`tactic_families.COMPOSED_RECIPES`), which string
+  several skills together.
+- **Tactic layer:** every family except the clones.
+
+The action and skill layers' training layouts are a full sweep
+(`monte_carlo.block_smb_parameter_combinations`). Each family's generator is
+run with every combination of the parameters it draws: each at three values
+(its two ends and middle, or every value of a smaller range), every option of
+a choice, every order of a shuffle, at every difficulty. For the action layer
+that is about 3,800 layouts, and many more for the skill layer, mostly from the
+moving-platform and plant families. All of them are played every round, and
+each family weighs the same in learning however many layouts it has. Slow
+families are split across the workers by their first draws, and the made
+layouts are kept on disk, keyed by the code that makes them. Held-out layouts
+are drawn at random, as for every layer.
+
+**Rule for each layer's families (don't forget this).** A layer trains only
+on families at its own level:
+- **Action layer:** scenes that each need a single action (one jump, one
+  climb onto something, one stomp, one walk back, one wait). Never scenarios
+  that string several actions together; composing actions is the skill
+  layer's job. The 16 families used so far break this rule in places:
+  - stair_climb, platform_chain, stair_gap, enemy_patrol, enemy_gap,
+    landing_enemy and enemy_on_platform each compose several actions;
+  - none teaches waiting, and only the walk back after an overshoot teaches
+    going left.
+
+  The action layer's next set of families should be single-action scenes
+  only, one for every action the skills ask for.
+- **Skill layer:** no strategy courses, whose point is a strategy's
+  objective, and no composed scenes, which string several skills together.
+- **Tactic layer:** the strategy courses and composed scenes only once the
+  actions and skills are trained.
 
 The token from above comes from a teacher that reads the simulator
 (`retroagi/stages/block_smb/teacher_tokens.py`). The teacher is used only in
@@ -199,12 +228,17 @@ Three kinds of segment change their stance inside, by their teacher's rule:
 - plant: hold the area while waiting for it to go back into its pipe;
 - monster: retreat from it, hold the area, then jump over it.
 
-The teachers follow the segments. The tactic is the current segment's. The
-skill is decided by the tactic:
+The teachers follow the segments. The tactic is the current segment's, except
+that going left is never advancing: where an advance segment takes Mario back
+to something behind him (a goal on the left, an enemy to stomp behind him, the
+goal after a jump carried him past it), the tactic is retreat. The skill is
+decided by the tactic:
 - hold area: wait;
-- retreat: retreat;
-- advance or alternate route: the next step of that path (climb, descend,
-  jump gap, stomp or advance).
+- retreat, backing out or keeping away (a retreat segment, or the plant and
+  monster rules): retreat;
+- advance, alternate route, or retreat back to something behind: the next
+  step of that path (climb, descend, jump gap, stomp, or advance), where
+  walking to the left is retreat, never advance.
 
 The action teacher's route follows the same segments.
 
@@ -213,7 +247,7 @@ The action teacher's route follows the same segments.
 | Advance | every family; the simple ones are advance only |
 | Alternate route | upper_route, lower_route, dead_end_retreat, chained_obstacles, tactics_obstacle_sequence, tactics_bridge_then_gap, tactics_mixed_sequence, mixed_section, choice_alternate_route, low_choice_alternate_route |
 | Hold area | bridge_wait, wait_timing, moving_bridge, bridge_mount, bridge_dismount, piranha_avoidance, monster_retreat, chained_enemy_gauntlet, full_smb_opening_proxy, tactics_bridge_sequence, tactics_obstacle_sequence, tactics_bridge_then_gap, tactics_mixed_sequence, mixed_section, choice_hold_area |
-| Retreat | dead_end_retreat, monster_retreat, tactics_bridge_then_gap, chained_enemy_gauntlet, tactics_mixed_sequence, choice_retreat; the plant teacher when Mario overshoots its waiting spot |
+| Retreat | dead_end_retreat, monster_retreat, tactics_bridge_then_gap, chained_enemy_gauntlet, tactics_mixed_sequence, choice_retreat; the plant teacher when Mario overshoots its waiting spot; retreat_recovery and stomp_recovery (back to a goal or an enemy behind Mario); the walk back after a jump overshoots the goal |
 
 The new families (`retroagi/stages/block_smb/tactic_families.py`):
 - **upper_route:** the floor is cut by a pit too wide to jump, or a wall too

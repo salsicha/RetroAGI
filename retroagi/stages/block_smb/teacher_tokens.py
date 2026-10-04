@@ -14,12 +14,17 @@ the explicit token for the layer above it.
   teachers' rules: hold the area while waiting for (or riding) a moving
   platform, while waiting for a plant to go back into its pipe, or while a
   monster is far enough; retreat while backing away from it; advance
-  otherwise;
-- skill: decided by the tactic. Hold area is waiting; retreat is retreating;
-  advance and alternate route take the next step of their path (the segment's
-  route platform, else the nearest obstacle toward the goal): climb, descend,
-  jump gap, stomp or advance. Its target is matched to the object the vision
-  transformer reports for it;
+  otherwise. Going left is never advancing: advance means going right, the
+  level's way, so advancing toward a goal or an enemy behind Mario (a goal on
+  the left, a stomp target behind him, the goal after a jump overshot it) is
+  labelled retreat;
+- skill: decided by the tactic. Hold area is waiting; a scheduled retreat
+  (backing out, keeping away) is retreating; advance, alternate route, and
+  going back to something behind take the next step of their path (the
+  segment's route platform, else the nearest obstacle toward the goal):
+  climb, descend, jump gap, stomp or advance, where advancing to the left is
+  retreating. Its target is matched to the object the vision transformer
+  reports for it;
 - action: the first segment of the coached route from the current state
   (policy_recovery.coached_suffix), as an action and a frame count on the
   executor's menu; for a jump, also every certified hold (safe_jump_holds).
@@ -199,6 +204,18 @@ def teacher_tactic(env, state: TeacherState) -> TacticToken:
         stance = choice[0] if choice is not None else "advance"
     if seg["kind"] != "plain" and stance == "retreat":
         direction = -direction
+    if seg["kind"] == "plain" and stance == "advance":
+        # The way Mario actually goes: toward his objective, which is behind
+        # him for a goal on the left, a stomp target behind him, or the goal
+        # after a jump overshot it.
+        from retroagi.core.smb_coaching import training_target
+
+        objective = training_target(env).direction
+        if objective in (-1, 1):
+            direction = objective
+    if stance in ("advance", "alternate_route") and direction < 0:
+        # Going back to the left is retreating, never advancing.
+        stance = "retreat"
     return TacticToken(stance, direction)
 
 
@@ -217,13 +234,14 @@ def teacher_skill(
     if tactic.stance == "hold_area":
         target = _lift_pointer(env, scene) if seg["kind"] == "bridge" else None
         return SkillToken("wait", tactic.direction, target or _enemy_pointer(env, scene, focus))
-    if tactic.stance == "retreat":
+    if tactic.stance == "retreat" and (seg["stance"] == "retreat" or seg["kind"] != "plain"):
+        # Backing out of a dead end, away from a monster or a plant.
         return SkillToken("retreat", tactic.direction, _enemy_pointer(env, scene, focus))
     phase = _bridge_phase(env, state) if seg["kind"] == "bridge" else ""
     if phase and not env._bridge_jump_task:
         # Walking up to, onto, along and off a moving platform is advancing.
         target = _lift_pointer(env, scene) if phase in ("approach", "board") else None
-        return SkillToken("advance", tactic.direction, target)
+        return _moving("advance", tactic.direction, target)
     if phase in ("board", "exit"):
         objective = training_target(env)
         left, right = _screen(env, objective.left, objective.right)
@@ -234,7 +252,7 @@ def teacher_skill(
         )
         return SkillToken("jump_gap", objective.direction, target)
     if active_monster(env) is not None:
-        return SkillToken("advance", tactic.direction, None)
+        return _moving("advance", tactic.direction, None)
     objective = training_target(env)
     if objective.kind == "mount":
         feet = env.mario["y"] + env.mario["h"]
@@ -252,6 +270,14 @@ def teacher_skill(
         left, right = _screen(env, objective.left, objective.right)
         target = _surface_pointer(scene, left, right, objective.top)
     direction = int(objective.direction) if objective.direction in (-1, 1) else tactic.direction
+    return _moving(kind, direction, target)
+
+
+def _moving(kind: str, direction: int, target) -> SkillToken:
+    """A skill toward ``direction``; walking back to the left is retreating,
+    never advancing."""
+    if kind == "advance" and direction < 0:
+        kind = "retreat"
     return SkillToken(kind, direction, target)
 
 

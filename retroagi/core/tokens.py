@@ -8,9 +8,10 @@
   course, else speed_run, and the side its goal is on); in Full SMB it is set
   for the run (the goal is always to the right).
 - The tactic layer holds a TacticToken over many actions: advance,
-  alternate_route, hold_area or retreat. Its direction follows from the
-  goal's side (tactic_direction): retreat goes away from the goal, every
-  other tactic toward it (hold area faces it).
+  alternate_route, hold_area or retreat. Advance and alternate route go
+  right, the level's way; retreat goes back to the left, whether to back away
+  from something or to get back to a goal or an enemy behind Mario; hold area
+  faces the goal (tactic_direction).
 - The skill layer emits a SkillToken: a skill (advance, jump a gap, climb,
   descend, stomp, retreat or wait), a direction, and which object in the
   scene is the target, if any. Avoiding enemies is part of every skill, not
@@ -90,14 +91,17 @@ DEFAULT_STRATEGY = StrategyToken("speed_run", 1)
 
 
 def tactic_direction(stance: str, goal_side: int) -> int:
-    """The way a tactic goes: retreat away from the goal, every other tactic
-    toward it (hold area faces it)."""
+    """The way a tactic goes: advance and alternate route right (the level's
+    way), retreat back to the left; hold area faces the goal."""
     _direction(goal_side)
-    return -goal_side if stance == "retreat" else goal_side
+    if stance == "hold_area":
+        return goal_side
+    return -1 if stance == "retreat" else 1
 
 
 def tactic_token(stance: str, switch: StrategyToken) -> TacticToken:
-    """A tactic with the direction the strategy switch's goal side gives it."""
+    """A tactic with its direction (tactic_direction; hold area faces the
+    strategy switch's goal side)."""
     return TacticToken(stance, tactic_direction(stance, switch.direction))
 
 

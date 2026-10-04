@@ -60,11 +60,16 @@ BLOCK_SMB_MC_FAMILIES = (
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 # Families that are advance all the way: their schedule is one advance segment
 # toward the goal (tactic_schedule). Every other family states its own.
-ADVANCE_FAMILIES = frozenset(
+# Families whose schedule is one segment toward the goal, all the way.
+ONE_SEGMENT_FAMILIES = frozenset(
     "flat_run single_gap stair_climb platform_chain enemy_hop enemy_patrol enemy_gap "
     "enemy_stomp retreat_recovery tall_pipe_jump pipe_mount pit_leap stomp_mount "
     "stomp_recovery platform_hop stair_gap landing_enemy enemy_on_platform".split()
 )
+# Of those, the families that advance: Mario goes right, the level's way. In
+# retreat_recovery the goal is behind him and in stomp_recovery the enemy to
+# stomp often is: going back to the left is retreating (teacher_tokens).
+ADVANCE_FAMILIES = ONE_SEGMENT_FAMILIES - {"retreat_recovery", "stomp_recovery"}
 # Families whose moving platform is waited for, ridden or jumped to and from.
 BRIDGE_SEGMENT_FAMILIES = frozenset(
     ("bridge_wait", "wait_timing", "moving_bridge", "bridge_mount", "bridge_dismount")
@@ -653,7 +658,8 @@ class CombinationDraws:
     """Stands in for random.Random in a family's layout generator, to make every
     combination of the parameters it draws.
 
-    Each draw (randint, randrange, uniform, random, choice, choices) takes one
+    Each draw (randint, randrange, uniform, random, choice, choices, sample,
+    shuffle) takes one
     of a few values spanning its range: ``levels`` of them, its two ends and
     evenly spaced values between, or every value when its range has no more; a
     choice takes every option. ``path`` names the value of each draw in turn
@@ -707,6 +713,17 @@ class CombinationDraws:
     def choices(self, population, weights=None, *, cum_weights=None, k=1):
         return [self.choice(population) for _ in range(k)]
 
+    def sample(self, population, k):
+        """``k`` different items in order: every ordered pick."""
+        left = list(population)
+        return [left.pop(left.index(self.choice(left))) for _ in range(k)]
+
+    def shuffle(self, items):
+        """Every order of ``items`` (in place)."""
+        for i in range(len(items) - 1, 0, -1):
+            j = self._pick(list(range(i + 1)))
+            items[i], items[j] = items[j], items[i]
+
     def next_path(self) -> Optional[list[int]]:
         """The next combination after the one just drawn (None after the last)."""
         k = len(self.taken) - 1
@@ -715,12 +732,34 @@ class CombinationDraws:
         return None if k < 0 else self.taken[:k] + [self.taken[k] + 1]
 
 
+def combination_prefixes(
+    family: str, difficulty: str, *, levels: int = SWEEP_LEVELS, at_least: int = 12
+) -> list[tuple[int, ...]]:
+    """The first few draws' values, as prefixes that split a family's
+    combinations into parts that can be made side by side: each prefix's
+    combinations are those starting with it (block_smb_parameter_combinations
+    with ``prefix``). Draws are added until there are at least ``at_least``
+    prefixes or a combination has no more draws."""
+    prefixes: list[tuple[int, ...]] = [()]
+    while len(prefixes) < at_least:
+        grown = []
+        for prefix in prefixes:
+            draws = CombinationDraws(prefix, levels)
+            _generate_family_scenario_raw(family, draws, split="train", difficulty=difficulty)
+            if len(draws.counts) <= len(prefix):
+                return prefixes  # a combination with no further draw
+            grown += [(*prefix, i) for i in range(draws.counts[len(prefix)])]
+        prefixes = grown
+    return prefixes
+
+
 def block_smb_parameter_combinations(
-    family: str, difficulty: str, *, levels: int = SWEEP_LEVELS
+    family: str, difficulty: str, *, levels: int = SWEEP_LEVELS, prefix: tuple = ()
 ) -> tuple[list[dict[str, Any]], int]:
     """Every layout a full sweep of a family's drawn parameters makes at one
     difficulty (CombinationDraws: each draw at ``levels`` values, every
-    combination), finished and route-verified as the sampler makes them.
+    combination), finished and route-verified as the sampler makes them; with
+    ``prefix``, only the combinations whose first draws take those values.
 
     A layout made by two combinations is kept once; a combination whose layout
     has no verified route is left out. Returns the layouts and how many
@@ -732,13 +771,15 @@ def block_smb_parameter_combinations(
     layouts: list[dict[str, Any]] = []
     seen: set[str] = set()
     dropped = 0
-    path: Optional[list[int]] = []
+    path: Optional[list[int]] = list(prefix)
     while path is not None:
         draws = CombinationDraws(path, levels)
         scenario, parameters, actions = _generate_family_scenario(
             family, draws, split="train", difficulty=difficulty
         )
         path = draws.next_path()
+        if path is not None and tuple(path[: len(prefix)]) != tuple(prefix):
+            path = None  # past this prefix's combinations
         made = repr(scenario)
         if made in seen:
             continue
@@ -1024,7 +1065,7 @@ def _family_tactics(family, scenario) -> list:
         return [segment("advance", direction, kind="bridge")]
     if family == "piranha_avoidance":
         return [segment("advance", 1, kind="plant", past_enemy=0), segment("advance", 1)]
-    if family in ADVANCE_FAMILIES:
+    if family in ONE_SEGMENT_FAMILIES:
         return [segment("advance", direction)]
     raise ValueError(f"family {family!r} states no tactics")
 

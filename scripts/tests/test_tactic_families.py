@@ -23,6 +23,7 @@ from retroagi.stages.block_smb.tactic_families import (
 )
 from retroagi.stages.block_smb.tactic_schedule import segment
 from retroagi.stages.block_smb.teacher_tokens import (
+    _first_plan,
     episode_teacher,
     teacher_plan,
     teacher_skill,
@@ -240,11 +241,53 @@ def test_the_action_learner_trains_only_on_advance_families():
     from retroagi.stages.block_smb.monte_carlo import ADVANCE_FAMILIES
 
     families = learner_families("action", BLOCK_SMB_MC_FAMILIES)
-    assert set(families) == set(ADVANCE_FAMILIES) and len(families) == 18
+    assert set(families) == set(ADVANCE_FAMILIES) and len(families) == 16
     assert not set(families) & set(TACTIC_FAMILIES)
-    assert "moving_bridge" not in families and "piranha_avoidance" not in families
+    for family in ("moving_bridge", "piranha_avoidance", "retreat_recovery", "stomp_recovery"):
+        assert family not in families
     for family in families:
         assert {seg["stance"] for seg in _sample(family)["tactics"]} == {"advance"}
+
+
+def test_the_skill_learner_leaves_out_courses_and_composed_scenes():
+    from retroagi.stages.block_smb.layered_train import learner_families
+    from retroagi.stages.block_smb.tactic_families import COMPOSED_RECIPES
+
+    families = learner_families("skill", BLOCK_SMB_MC_FAMILIES)
+    assert not set(families) & (set(STRATEGY_FAMILIES) | set(COMPOSED_RECIPES))
+    assert set(CLONE_FAMILIES) <= set(families) and len(families) == 34
+
+
+def _labels_along_the_route(family):
+    """The teacher's tactic and skill at the start of each stretch of its route."""
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=0, sample_index=0, family=family, difficulty="easy"
+    )
+    env = MarioScenarioEnv()
+    env.reset(scenario=sample.scenario, seed=0)
+    teacher = episode_teacher(sample.scenario)
+    route, made, t = list(sample.oracle["actions"]), [], 0
+    while t < len(route) and not env._goal_credited:
+        teacher.observe_frame(env)
+        plan = _first_plan(route[t:])
+        tactic = teacher_tactic(env, teacher)
+        skill = teacher_skill(env, scene_from_labels(env.scene_labels()), teacher, tactic)
+        made.append((plan.action, tactic, skill))
+        for action in route[t : t + plan.frames]:
+            env.step(action)
+        t += plan.frames
+    env.close()
+    return made
+
+
+@pytest.mark.parametrize("family", ["retreat_recovery", "stomp_recovery"])
+def test_going_back_to_the_left_is_never_labelled_advance(family):
+    made = _labels_along_the_route(family)
+    left = [(tactic, skill) for action, tactic, skill in made if action in (3, 4)]
+    assert left
+    for tactic, skill in left:
+        assert tactic.stance == "retreat" and tactic.direction == -1
+        assert skill.kind != "advance"
 
 
 # ── Strategy courses ──────────────────────────────────────────────────────────

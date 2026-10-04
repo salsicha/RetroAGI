@@ -104,8 +104,10 @@ bottom (`core/smb_agent.py`, `core/layered_policy.py`):
   start it checks whether the held tactic is finished, values each tactic
   (its critic), and says which it would choose. When the tactic ends, its own
   memory network steps once and predicts the scene when the next tactic will
-  end, and the layer chooses the next tactic. A tactic's direction follows
-  from the goal's side.
+  end, and the layer chooses the next tactic. Advance and alternate route go
+  right, the level's way; retreat goes back to the left, whether to back away
+  from something or to get back to a goal or an enemy behind Mario. Going
+  left is never advancing.
 - **Skill layer:** a transformer that reads the tactic and its own last 16
   choices, and gives the next move. The move is a skill (advance, jump gap,
   climb, descend, stomp, retreat or wait), a direction, and a target: a
@@ -130,21 +132,37 @@ what the learner should do at every decision (training only).
   option-critic rules, once the critic predicts held-out returns well enough.
 
 Which families each layer trains on:
-- **Action layer:** only the 18 basic families, whose tactic is advance the
-  whole way (running, jumping gaps and pits, climbing steps and pipes,
-  getting past and stomping enemies, turning back toward a goal behind).
-  Actions are the most basic things Mario does, so no family that teaches a
-  tactic or a strategy is used. It trains on a full sweep: every combination
-  of each family's parameters (each at its two ends and middle, or every
-  value of a smaller range), at every difficulty, all of them every round,
-  with each family weighing the same. Its held-out test layouts are drawn at
-  random.
-- **Skill layer:** every family except the strategy courses. A course is about
-  its strategy's objective (a deadline, a coin count), which the skill layer
-  can't see.
+- **Action layer:** only the 16 basic families in which Mario advances, going
+  right the whole way: running, jumping gaps and pits, climbing steps and
+  pipes, getting past and stomping enemies. Actions are the most basic things
+  Mario does, so no family that teaches a tactic or a strategy is used.
+- **Skill layer:** 34 families: every family except the strategy courses and
+  the 8 composed scenes. A course is about its strategy's objective (a
+  deadline, a coin count), which the skill layer can't see, and a composed
+  scene strings several skills together, which is the tactic layer's level.
 - **Tactic layer:** every family except the clones, whose tactic is given
-  rather than decided by the scene. Only it trains on the strategy courses,
-  once the actions and skills are trained.
+  rather than decided by the scene. Only it trains on the strategy courses
+  and the composed scenes, once the actions and skills are trained.
+
+The action and skill layers train on a full sweep. Every combination of each
+family's parameters is used: each at its two ends and middle, or every value
+of a smaller range, at every difficulty. All of them are played every round,
+and each family weighs the same. Their held-out test layouts are drawn at
+random.
+
+**Rule for each layer's families.** A layer trains only on families at its
+own level. The action layer's families must be scenes that each need a single
+action: one jump, one climb onto something, one stomp, one walk back, one
+wait. They must never be scenarios that string several actions together,
+because composing actions is the skill layer's job. The 16 families used for
+the action layer so far don't all follow this rule:
+- stair_climb, platform_chain, stair_gap, enemy_patrol, enemy_gap,
+  landing_enemy and enemy_on_platform each compose several actions;
+- none of the 16 teaches waiting, and only the walk back after an overshoot
+  teaches going left.
+
+The action layer's next set of families should be single-action scenes only,
+one for every action the skills ask for.
 
 A layer passes when every family wins at least 90% of its 18 held-out
 layouts. The tactic layer must also agree with the teacher on where tactics

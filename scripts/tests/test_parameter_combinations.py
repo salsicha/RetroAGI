@@ -73,3 +73,21 @@ def test_each_family_weighs_the_same_in_the_action_layers_training():
     assert np.mean([t.weight for t in tasks]) == pytest.approx(1.0, rel=0.5)
     assert all(t.scenario is not None and t.label for t in tasks)
     assert made["single_gap:hard"] == {"layouts": 27, "no_route": 0}
+
+
+def test_a_family_split_by_its_first_draws_makes_the_same_layouts():
+    from retroagi.stages.block_smb.monte_carlo import combination_prefixes
+
+    whole, _ = block_smb_parameter_combinations("single_gap", "medium")
+    prefixes = combination_prefixes("single_gap", "medium", at_least=4)
+    assert len(prefixes) >= 4
+    parts = [
+        layout
+        for prefix in prefixes
+        for layout in block_smb_parameter_combinations("single_gap", "medium", prefix=prefix)[0]
+    ]
+
+    def key(layout):
+        return repr({k: v for k, v in layout.items() if k != "metadata"})
+
+    assert sorted(map(key, parts)) == sorted(map(key, whole))

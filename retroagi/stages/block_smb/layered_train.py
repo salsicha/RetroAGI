@@ -104,12 +104,14 @@ class LayeredTrainConfig:
     # Extra layouts next round for a family that lost validation episodes:
     # this many times its share of losses.
     focus_layouts: int = 8
-    # The action layer trains on a full sweep: every combination of its
-    # families' drawn parameters, each at this many values
+    # The action and skill layers train on a full sweep: every combination of
+    # their families' drawn parameters, each at this many values
     # (monte_carlo.block_smb_parameter_combinations), all of them every round,
     # each family weighing the same in learning (focus_layouts is not used).
     # 0: train_layouts_per_family layouts per family drawn at random instead.
-    # Held-out layouts are always drawn at random.
+    # Held-out layouts are always drawn at random. The made layouts are kept on
+    # disk (RETROAGI_COMBINATION_CACHE, else a temporary folder), keyed by the
+    # code that makes them.
     sweep_levels: int = 3
     # Held-out layouts per family and difficulty (easy, medium, hard), fixed for the run.
     validation_layouts_per_difficulty: int = 3
@@ -1289,22 +1291,25 @@ def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
       advance the whole way (monte_carlo.ADVANCE_FAMILIES). Actions are the most
       basic things Mario does; no family that teaches a tactic (holding the area,
       another route, retreating, composed scenes, the clones) or a strategy
-      (the courses) is used for it.
-    - The skill layer leaves out the strategy courses: a course is about its
-      strategy's objective (a deadline, a coin count), which the skill layer
-      cannot see. The courses are used only by the tactic layer, which reads
-      the strategy switch.
+      (the courses) is used for it. Rule: its families should be scenes that
+      each need a single action, never scenarios that compose several actions
+      (several of the advance-only families still do; see docs/layered-agent.md).
+    - The skill layer leaves out the strategy courses (a course is about its
+      strategy's objective, a deadline or a coin count, which the skill layer
+      cannot see; the courses are used only by the tactic layer, which reads
+      the strategy switch) and the composed scenes, which string several skills
+      together: composing skills is the tactic layer's level.
     - The tactic layer leaves out the clones, whose tactic is given rather
       than decided by the scene.
     """
     from .monte_carlo import ADVANCE_FAMILIES
-    from .tactic_families import CLONE_FAMILIES, STRATEGY_FAMILIES
+    from .tactic_families import CLONE_FAMILIES, COMPOSED_RECIPES, STRATEGY_FAMILIES
 
     if learner == "action":
         return tuple(f for f in families if f in ADVANCE_FAMILIES)
     if learner == "tactic":
         return tuple(f for f in families if f not in CLONE_FAMILIES)
-    return tuple(f for f in families if f not in STRATEGY_FAMILIES)
+    return tuple(f for f in families if f not in STRATEGY_FAMILIES and f not in COMPOSED_RECIPES)
 
 
 def _tasks(
@@ -1346,11 +1351,60 @@ def _tasks(
     return tasks
 
 
-def _combination_job(job):
+def _prefix_job(job):
     family, difficulty, levels = job
+    from .monte_carlo import combination_prefixes
+
+    return combination_prefixes(family, difficulty, levels=levels)
+
+
+def _code_fingerprint() -> str:
+    """A hash of the code that makes and checks layouts: the Block SMB stage and
+    the shared SMB modules. Any change makes new combination layouts."""
+    digest = hashlib.sha256()
+    root = Path(__file__).resolve().parents[2]
+    # The trainer, its command line and the vision models don't make layouts.
+    unused = {"layered_train.py", "cli.py", "vision.py", "vision_frames.py"}
+    for path in sorted([*root.glob("stages/block_smb/*.py"), *root.glob("core/smb_*.py")]):
+        if path.name not in unused:
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def _combination_cache() -> Path:
+    import os
+    import tempfile
+
+    return Path(os.environ.get("RETROAGI_COMBINATION_CACHE") or tempfile.gettempdir()) / (
+        "retroagi_combinations"
+    )
+
+
+def _combination_job(job):
+    """One part of a family's combinations (its prefix), from the disk cache when
+    the same code made it before."""
+    import pickle
+
     from .monte_carlo import block_smb_parameter_combinations
 
-    layouts, dropped = block_smb_parameter_combinations(family, difficulty, levels=levels)
+    family, difficulty, levels, prefix, fingerprint = job
+    name = f"{family}.{difficulty}.{levels}.{'-'.join(map(str, prefix))}.{fingerprint}.pkl"
+    path = _combination_cache() / name
+    try:
+        return family, difficulty, *pickle.loads(path.read_bytes())
+    except (OSError, ValueError, EOFError, pickle.UnpicklingError):
+        pass
+    layouts, dropped = block_smb_parameter_combinations(
+        family, difficulty, levels=levels, prefix=prefix
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        spare = path.with_suffix(".tmp")
+        spare.write_bytes(pickle.dumps((layouts, dropped)))
+        spare.replace(path)
+    except OSError:
+        pass
     return family, difficulty, layouts, dropped
 
 
@@ -1362,12 +1416,34 @@ def combination_tasks(config, pool) -> tuple[list[EpisodeTask], dict]:
     over its own family's count. Returns the tasks (in order, with their
     layouts) and per family and difficulty how many layouts there are and how
     many combinations had no verified route."""
-    jobs = [
+    parts = [
         (family, difficulty, config.sweep_levels)
         for family in learner_families(config.learner, config.families)
         for difficulty in DIFFICULTIES
     ]
-    made = list(pool.pool.map(_combination_job, jobs))
+    fingerprint = _code_fingerprint()
+    # Each family and difficulty is split into parts by its first draws, so slow
+    # families are made by many workers side by side.
+    jobs = [
+        (family, difficulty, levels, prefix, fingerprint)
+        for (family, difficulty, levels), prefixes in zip(parts, pool.pool.map(_prefix_job, parts))
+        for prefix in prefixes
+    ]
+    jobs.sort(key=lambda job: job[0] not in ("moving_bridge", "bridge_wait", "wait_timing"))
+    pieces = defaultdict(list)
+    for family, difficulty, layouts, dropped in pool.pool.map(_combination_job, jobs):
+        pieces[(family, difficulty)].append((layouts, dropped))
+    made = []
+    for family, difficulty, _ in parts:
+        seen, layouts, dropped = set(), [], 0
+        for part, missing in pieces[(family, difficulty)]:
+            dropped += missing
+            for layout in part:
+                key = repr({k: v for k, v in layout.items() if k != "metadata"})
+                if key not in seen:
+                    seen.add(key)
+                    layouts.append(layout)
+        made.append((family, difficulty, layouts, dropped))
     counts = defaultdict(int)
     for family, _, layouts, _ in made:
         counts[family] += len(layouts)
@@ -1498,7 +1574,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     validation_tasks = pool.with_scenarios(
         _tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
     )
-    sweep = config.learner == "action" and config.sweep_levels > 0
+    sweep = config.learner in ("action", "skill") and config.sweep_levels > 0
     combinations: list[EpisodeTask] = []
     if sweep:
         combinations, made = combination_tasks(config, pool)

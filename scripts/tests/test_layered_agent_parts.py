@@ -604,14 +604,15 @@ def test_waiting_for_a_moving_platform_is_holding_the_area_and_waiting():
 # ── The tactic layer: an option-critic with its own memory ───────────────────
 
 
-def test_a_tactics_direction_follows_the_goal_side():
+def test_advance_goes_right_and_retreat_goes_back_left():
     from retroagi.core.tokens import tactic_token
 
-    left = StrategyToken("speed_run", -1)
-    assert tactic_token("advance", left).direction == -1
-    assert tactic_token("alternate_route", left).direction == -1
-    assert tactic_token("hold_area", left).direction == -1  # facing the goal
-    assert tactic_token("retreat", left).direction == 1  # away from it
+    for side in (-1, 1):
+        switch = StrategyToken("speed_run", side)
+        assert tactic_token("advance", switch).direction == 1  # the level's way
+        assert tactic_token("alternate_route", switch).direction == 1
+        assert tactic_token("retreat", switch).direction == -1  # back, even to a goal behind
+        assert tactic_token("hold_area", switch).direction == side  # facing the goal
 
 
 def _held_agents(end_bias: float, copies: int = 1, pictures=None):
