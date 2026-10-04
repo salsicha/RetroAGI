@@ -642,6 +642,141 @@ def _sweep_sample(spec):
     return _with_sweep_metadata(candidate, repeat=repeat), rejected
 
 
+# ── Every combination of a family's parameters ──────────────────────────────
+
+# How many values each drawn parameter takes in a full sweep: its two ends and
+# evenly spaced values between (every value, when its range has no more).
+SWEEP_LEVELS = 3
+
+
+class CombinationDraws:
+    """Stands in for random.Random in a family's layout generator, to make every
+    combination of the parameters it draws.
+
+    Each draw (randint, randrange, uniform, random, choice, choices) takes one
+    of a few values spanning its range: ``levels`` of them, its two ends and
+    evenly spaced values between, or every value when its range has no more; a
+    choice takes every option. ``path`` names the value of each draw in turn
+    (the first, past its end). The draws made, and how many values each had,
+    are kept, so next_path() gives the next combination; the number of draws
+    may depend on earlier values, and every branch is followed.
+    """
+
+    def __init__(self, path=(), levels: int = SWEEP_LEVELS):
+        if levels < 2:
+            raise ValueError("a sweep needs at least the two ends of each range")
+        self.path = list(path)
+        self.levels = levels
+        self.taken: list[int] = []
+        self.counts: list[int] = []
+
+    def _pick(self, values):
+        k = len(self.taken)
+        index = self.path[k] if k < len(self.path) else 0
+        self.taken.append(index)
+        self.counts.append(len(values))
+        return values[index]
+
+    def _spread(self, values):
+        values = list(values)
+        if len(values) <= self.levels:
+            return values
+        last = len(values) - 1
+        picks = sorted({round(last * i / (self.levels - 1)) for i in range(self.levels)})
+        return [values[i] for i in picks]
+
+    def randint(self, low, high):
+        return self._pick(self._spread(range(low, high + 1)))
+
+    def randrange(self, start, stop=None, step=1):
+        if stop is None:
+            start, stop = 0, start
+        return self._pick(self._spread(range(start, stop, step)))
+
+    def uniform(self, low, high):
+        if low == high:
+            return self._pick([low])
+        return self._pick([low + (high - low) * i / (self.levels - 1) for i in range(self.levels)])
+
+    def random(self):
+        return self._pick([(i + 0.5) / self.levels for i in range(self.levels)])
+
+    def choice(self, options):
+        return self._pick(list(options))
+
+    def choices(self, population, weights=None, *, cum_weights=None, k=1):
+        return [self.choice(population) for _ in range(k)]
+
+    def next_path(self) -> Optional[list[int]]:
+        """The next combination after the one just drawn (None after the last)."""
+        k = len(self.taken) - 1
+        while k >= 0 and self.taken[k] + 1 >= self.counts[k]:
+            k -= 1
+        return None if k < 0 else self.taken[:k] + [self.taken[k] + 1]
+
+
+def block_smb_parameter_combinations(
+    family: str, difficulty: str, *, levels: int = SWEEP_LEVELS
+) -> tuple[list[dict[str, Any]], int]:
+    """Every layout a full sweep of a family's drawn parameters makes at one
+    difficulty (CombinationDraws: each draw at ``levels`` values, every
+    combination), finished and route-verified as the sampler makes them.
+
+    A layout made by two combinations is kept once; a combination whose layout
+    has no verified route is left out. Returns the layouts and how many
+    combinations were left out.
+    """
+    if difficulty not in BLOCK_SMB_MC_DIFFICULTY_BINS:
+        raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
+    constraints = block_smb_monte_carlo_family_specs()[family].constraints
+    layouts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    dropped = 0
+    path: Optional[list[int]] = []
+    while path is not None:
+        draws = CombinationDraws(path, levels)
+        scenario, parameters, actions = _generate_family_scenario(
+            family, draws, split="train", difficulty=difficulty
+        )
+        path = draws.next_path()
+        made = repr(scenario)
+        if made in seen:
+            continue
+        seen.add(made)
+        route, source, reachability = _verified_route(family, scenario, actions)
+        if route is None:
+            dropped += 1
+            continue
+        index = len(layouts)
+        oracle = {
+            "kind": "scripted_action_sequence",
+            "actions": list(route[: _frame_budget(scenario)]),
+            "action_source": f"{family}:{source}",
+            "expected_completion_steps": reachability.get("completion_steps"),
+            "expected_min_progress": reachability.get("max_progress"),
+        }
+        layouts.append(
+            _with_sample_metadata(
+                scenario,
+                family=family,
+                split="train",
+                seed=0,
+                sample_seed=index,
+                sample_index=index,
+                scenario_id=f"{BLOCK_SMB_MC_ID}.combination.{family}.{difficulty}.{index:06d}",
+                parameters={
+                    **dict(parameters),
+                    "difficulty_bin": difficulty,
+                    "combination": list(draws.taken),
+                },
+                constraints=constraints,
+                oracle=oracle,
+                reachability=reachability,
+            )
+        )
+    return layouts, dropped
+
+
 def validate_block_smb_monte_carlo_oracle(
     scenario: Mapping[str, Any],
     actions: Iterable[int],

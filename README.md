@@ -134,7 +134,11 @@ Which families each layer trains on:
   whole way (running, jumping gaps and pits, climbing steps and pipes,
   getting past and stomping enemies, turning back toward a goal behind).
   Actions are the most basic things Mario does, so no family that teaches a
-  tactic or a strategy is used.
+  tactic or a strategy is used. It trains on a full sweep: every combination
+  of each family's parameters (each at its two ends and middle, or every
+  value of a smaller range), at every difficulty, all of them every round,
+  with each family weighing the same. Its held-out test layouts are drawn at
+  random.
 - **Skill layer:** every family except the strategy courses. A course is about
   its strategy's objective (a deadline, a coin count), which the skill layer
   can't see.

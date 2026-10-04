@@ -169,7 +169,13 @@ bottom up, with the others frozen.
 
 The action layer trains only on the 18 basic families whose tactic is advance
 the whole way (`monte_carlo.ADVANCE_FAMILIES`): no family that teaches a tactic
-or a strategy. The skill layer trains on every family except the strategy
+or a strategy. Its training layouts are a full sweep
+(`monte_carlo.block_smb_parameter_combinations`): each family's generator is
+run with every combination of the parameters it draws, each at three values
+(its two ends and middle, or every value of a smaller range), at every
+difficulty. That is about 4,350 layouts; all of them are played every round,
+and each family weighs the same in learning however many layouts it has.
+Held-out layouts are drawn at random, as for every layer. The skill layer trains on every family except the strategy
 courses; the tactic layer on every family except the clones.
 
 The token from above comes from a teacher that reads the simulator

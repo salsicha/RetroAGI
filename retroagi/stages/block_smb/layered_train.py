@@ -104,6 +104,13 @@ class LayeredTrainConfig:
     # Extra layouts next round for a family that lost validation episodes:
     # this many times its share of losses.
     focus_layouts: int = 8
+    # The action layer trains on a full sweep: every combination of its
+    # families' drawn parameters, each at this many values
+    # (monte_carlo.block_smb_parameter_combinations), all of them every round,
+    # each family weighing the same in learning (focus_layouts is not used).
+    # 0: train_layouts_per_family layouts per family drawn at random instead.
+    # Held-out layouts are always drawn at random.
+    sweep_levels: int = 3
     # Held-out layouts per family and difficulty (easy, medium, hard), fixed for the run.
     validation_layouts_per_difficulty: int = 3
     # Training layouts' difficulty: easy, medium and hard in these proportions.
@@ -170,6 +177,7 @@ class EpisodeTask:
     scenario: Optional[dict] = None  # the layout, when already made (else made from the above)
     difficulty: Optional[str] = None  # easy, medium or hard (None: the split's own mix)
     explore: bool = False  # the learner samples its choices (reward rounds)
+    weight: float = 1.0  # how much its decisions count in learning
 
 
 @dataclass
@@ -206,6 +214,7 @@ class EpisodeRecord:
     # index held coming in, -1 none), "actions" and "frames" (how long),
     # "started", "used" (tactic index), "own_end", "end_probability".
     tactic: dict = field(default_factory=dict)
+    weight: float = 1.0  # how much its decisions count in learning (EpisodeTask.weight)
 
     @property
     def frames(self) -> int:
@@ -463,6 +472,7 @@ class _Lane:
             old_value=np.asarray(d["value"], np.float32),
             used=_rows(d["used"], count),
             potentials=np.asarray(self.frames["potential"], np.float32),
+            weight=self.task.weight,
             tactic={
                 name[len("tactic_") :]: np.asarray(d[name])
                 for name in d
@@ -717,6 +727,7 @@ def _decisions(
         parts["given"].append(e.given)
         parts["labelled"].append(e.labels["valid"].astype(bool))
         parts["explored"].append(np.full(count, e.explored) & ~e.played_teacher)
+        parts["weight"].append(np.full(count, e.weight, np.float32))
         for name, value in e.labels.items():
             if name != "valid":
                 parts[f"label_{name}"].append(np.asarray(value))
@@ -735,7 +746,7 @@ def _decisions(
             parts[f"pick_{head}"].append(value)
     if not parts:
         return None
-    floats = ("target", "given", "advantage", "return", "old_log_prob", "used")
+    floats = ("target", "given", "advantage", "return", "old_log_prob", "used", "weight")
     return {
         name: torch.as_tensor(
             np.concatenate(values),
@@ -746,6 +757,11 @@ def _decisions(
         )
         for name, values in parts.items()
     }
+
+
+def _weighted_mean(values, weights):
+    """The mean of ``values`` with each counted by its weight."""
+    return (values * weights).sum() / weights.sum().clamp_min(1e-12)
 
 
 def action_memory(policy, a, b, c, d):
@@ -827,7 +843,9 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         scene_numbers = slice(0, C_SPANS["c_target"][0])
         predicted = numbers[:-1][ends][:, scene_numbers]
         actual = c[e[1:][ends], f[1:][ends]][:, scene_numbers]
-        losses["expectation"] = expectation_weight * (predicted - actual).pow(2).mean()
+        losses["expectation"] = expectation_weight * _weighted_mean(
+            (predicted - actual).pow(2).mean(-1), d["weight"][:-1][ends]
+        )
     rows_c = c[e, f]
     if learner == "action":
         rows_c = rows_c.clone()
@@ -849,10 +867,15 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
             if name.startswith("label_")
         }
         if learner == "action":
-            losses["action"] = imitation * F.cross_entropy(out["action"][m], label["action"])
+            weight = d["weight"][m]
+            losses["action"] = imitation * _weighted_mean(
+                F.cross_entropy(out["action"][m], label["action"], reduction="none"), weight
+            )
             frames = out["frames"][m].view(-1, len(SMB_ACTIONS), FRAME_BINS)
             chosen = frames[torch.arange(len(frames)), label["action"]]
-            losses["frames"] = imitation * F.cross_entropy(chosen, label["frames"])
+            losses["frames"] = imitation * _weighted_mean(
+                F.cross_entropy(chosen, label["frames"], reduction="none"), weight
+            )
             agree = out["action"][m].argmax(-1) == label["action"]
             stats["action_accuracy"] = float(agree.float().mean())
             same_length = chosen.argmax(-1) == label["frames"]
@@ -1323,6 +1346,54 @@ def _tasks(
     return tasks
 
 
+def _combination_job(job):
+    family, difficulty, levels = job
+    from .monte_carlo import block_smb_parameter_combinations
+
+    layouts, dropped = block_smb_parameter_combinations(family, difficulty, levels=levels)
+    return family, difficulty, layouts, dropped
+
+
+def combination_tasks(config, pool) -> tuple[list[EpisodeTask], dict]:
+    """The action layer's training layouts: every combination of each family's
+    drawn parameters at every difficulty (monte_carlo.block_smb_parameter_
+    combinations), made once by the pool's workers. Each family weighs the
+    same in learning: an episode's weight is the layouts per family on average
+    over its own family's count. Returns the tasks (in order, with their
+    layouts) and per family and difficulty how many layouts there are and how
+    many combinations had no verified route."""
+    jobs = [
+        (family, difficulty, config.sweep_levels)
+        for family in learner_families(config.learner, config.families)
+        for difficulty in DIFFICULTIES
+    ]
+    made = list(pool.pool.map(_combination_job, jobs))
+    counts = defaultdict(int)
+    for family, _, layouts, _ in made:
+        counts[family] += len(layouts)
+    average = sum(counts.values()) / max(1, len(counts))
+    tasks, summary = [], {}
+    for family, difficulty, layouts, dropped in made:
+        summary[f"{family}:{difficulty}"] = {"layouts": len(layouts), "no_route": dropped}
+        for k, scenario in enumerate(layouts):
+            tasks.append(
+                EpisodeTask(
+                    index=len(tasks),
+                    family=family,
+                    split="train",
+                    seed=config.seed,
+                    sample_index=k,
+                    teacher_share=1.0,
+                    label=True,
+                    frames=config.episode_frames,
+                    scenario=scenario,
+                    difficulty=difficulty,
+                    weight=average / counts[family],
+                )
+            )
+    return tasks, summary
+
+
 def family_success(episodes: Sequence[EpisodeRecord], by_difficulty: bool = False) -> dict:
     """Share of episodes won per family (or per family and difficulty)."""
     wins = defaultdict(list)
@@ -1427,6 +1498,20 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     validation_tasks = pool.with_scenarios(
         _tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
     )
+    sweep = config.learner == "action" and config.sweep_levels > 0
+    combinations: list[EpisodeTask] = []
+    if sweep:
+        combinations, made = combination_tasks(config, pool)
+        (output / "combinations.json").write_text(json.dumps(made, indent=2))
+        per_family = defaultdict(int)
+        for name, entry in made.items():
+            per_family[name.split(":")[0]] += entry["layouts"]
+        print(
+            f"[{config.learner}] full sweep: {len(combinations)} layouts, every combination of "
+            f"each family's parameters at {config.sweep_levels} values: "
+            + ", ".join(f"{f} {n}" for f, n in per_family.items()),
+            flush=True,
+        )
     replay: list[EpisodeRecord] = []
     focus: dict[str, int] = {}  # extra layouts per family, from the last validation
     history: list[dict] = []
@@ -1451,16 +1536,28 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 + fraction * (config.teacher_share_end - config.teacher_share_start)
             )
             pool.publish(policy)
-            tasks = _tasks(
-                config,
-                "train",
-                config.train_layouts_per_family,
-                round_index,
-                share,
-                True,
-                explore=by_reward,
-                extra=focus,
-            )
+            if sweep:
+                # Every combination, every round.
+                tasks = [
+                    dataclasses.replace(
+                        task,
+                        sample_index=round_index * 1_000_000 + task.sample_index,
+                        teacher_share=share,
+                        explore=by_reward,
+                    )
+                    for task in combinations
+                ]
+            else:
+                tasks = _tasks(
+                    config,
+                    "train",
+                    config.train_layouts_per_family,
+                    round_index,
+                    share,
+                    True,
+                    explore=by_reward,
+                    extra=focus,
+                )
             played = pool.play(tasks)
             replay = (replay + played)[-config.replay_episodes :]
             play_time = time.time() - started
