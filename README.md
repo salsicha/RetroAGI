@@ -5,16 +5,19 @@ RetroAGI trains an agent for Super Mario Bros that decides in four layers and
 sees only through a vision transformer:
 
 1. **Strategy** — what the run is for: finish fast, collect the most coins, or
-   take the fewest risks.
+   take the fewest risks. It is a switch set by whoever runs the agent, not a
+   learned layer.
 2. **Tactic** — what to do in this part of the level: advance, take another
-   route, hold the area, or retreat.
+   route, hold the area, or retreat. A tactic is held over many actions; the
+   layer is an option-critic with its own memory, so it decides when the
+   tactic is finished.
 3. **Skill** — the next move: advance, jump a gap, climb, descend, stomp,
    retreat or wait, with its target.
 4. **Action** — which buttons to press and for how many frames.
 
 Each game has its own vision transformer (same model, its own weights). It
 reads the screen and reports the objects on it: Mario, the ground and
-platforms, gaps, pipes, blocks, coins and enemies. The four layers read only
+platforms, gaps, pipes, blocks, coins and enemies. The layers read only
 that report; game state is used for training labels and scores, never as an
 input.
 
@@ -29,7 +32,7 @@ Training happens in two games:
   held-out layouts.
 - **Full SMB** is the original game in the stable-retro emulator. The layers
   trained in Block SMB play it unchanged, through the Full SMB vision
-  transformer. The strategy layer learns only here.
+  transformer, under the strategy switch set for the run.
 
 [docs/layered-agent.md](docs/layered-agent.md) explains what the agent sees,
 how each layer decides and how it learns.
@@ -44,7 +47,7 @@ retroagi/
     smb_scene_labels.py          # true objects for training labels
     smb_observer.py              # turns a screen into the report the layers read
     tokens.py                    # the strategy, tactic and skill vocabularies
-    layered_policy.py            # the four decision layers and their memory
+    layered_policy.py            # the tactic, skill and action layers and their memories
     smb_agent.py                 # the agent: screens in, button actions out
     smb_executor.py              # plays an action for its frames
     smb_physics.py               # Mario's NES motion, shared by both games

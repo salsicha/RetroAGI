@@ -9,13 +9,21 @@ only the screens and returns one button action per copy:
    transformer's land detector says Mario has just landed on something
    (LandingWatch) - the executor itself reads nothing but its plan
    (smb_executor);
-3. for each copy whose action ended, a new action starts: first the memory
-   steps, taking in only the latest picture's scene, and gives its expected
-   scene for when the coming action ends; then the layers decide top-down
-   (decide: strategy, tactic, skill, then the action plan), each reading the
-   current scene, that expected scene, the token from above and its own last
-   16 choices; and the executor starts the action;
+3. for each copy whose action ended, a new action starts: first the action
+   memory steps, taking in only the latest picture's scene, and gives its
+   expected scene for when the coming action ends; then the tactic layer
+   checks the tactic it holds (_tactics): if its end check says the tactic is
+   finished (or none is held, at an episode's start), the tactic memory steps
+   and the layer chooses the next tactic, which it then holds over the
+   following actions; then the skill and action layers decide (decide), each
+   reading the current scene, that expected scene, the token from above and
+   its own last 16 choices; and the executor starts the action;
 4. each executor presses this frame's button.
+
+Each copy also holds a strategy switch (tokens.StrategyToken), set when its
+episode starts by whoever runs the agent: what the run is for and which side
+the goal is on. The tactic layer reads it, and a tactic's direction follows
+from its goal side.
 
 Nothing else about the game reaches the agent. In training only, a collector
 may pass ``given``: for the copies deciding this frame, tokens that replace
@@ -34,12 +42,13 @@ from .layered_policy import (
     CHOICE_WIDTH,
     CHOICES,
     HISTORY,
-    LAYERS,
+    HISTORY_LAYERS,
     LayeredSMBPolicy,
     MemoryState,
     choice_log_prob,
     choose,
     encode_choice,
+    held_features,
 )
 from .smb_executor import ActionPlan, SMBExecutor
 from .smb_observer import (
@@ -61,6 +70,7 @@ from .tokens import (
     encode_skill,
     encode_strategy,
     encode_tactic,
+    tactic_token,
 )
 
 TARGET_SPAN = slice(*C_SPANS["c_target"])
@@ -68,10 +78,24 @@ NOOP = int(SMBAction.NOOP)
 
 
 @dataclass
+class TacticStep:
+    """What the tactic layer did at one decision point (when it ran)."""
+
+    held: Optional[str]  # the tactic held coming in (None at an episode's start)
+    actions: int  # how many actions it had been held
+    frames: int  # ... and how many frames
+    end_probability: Optional[float]  # its end check's chance that the held tactic is finished
+    own_end: bool  # whether the layer itself ended it (always, with none held)
+    own: str  # the tactic the layer itself would use now: its held one or its new choice
+    started: bool  # the tactic used from here started here (the tactic memory stepped)
+    choice_log_prob: float  # the log-probability of its new choice (0 when it chose none)
+
+
+@dataclass
 class Decision:
     """What the layers decided for one copy at one decision point."""
 
-    strategy: Optional[StrategyToken]  # None when no layer below needed one
+    strategy: StrategyToken  # the copy's strategy switch
     tactic: Optional[TacticToken]
     skill: SkillToken
     plan: ActionPlan
@@ -80,6 +104,7 @@ class Decision:
     picks: dict = field(default_factory=dict)  # layer -> its own picks (layered_policy.choose)
     log_prob: dict = field(default_factory=dict)  # layer -> log-probability of its own picks
     value: dict = field(default_factory=dict)  # layer -> its estimate of the return to come
+    tactic_step: Optional[TacticStep] = None  # when the tactic layer ran
 
 
 def scene_rows(scenes: Sequence[SceneObservation]) -> list[tuple]:
@@ -111,26 +136,29 @@ def decide(
     rows: Sequence[tuple],
     expected,
     device,
+    switches: Sequence[StrategyToken],
+    tactics: Sequence[Optional[TacticToken]],
     given: Optional[Mapping[str, Sequence]] = None,
     run_given: Sequence[str] = (),
     sample: Sequence[str] = (),
     encoded_scene=None,
     histories: Optional[Mapping[str, tuple]] = None,
+    tactic_steps: Optional[Sequence[Optional[TacticStep]]] = None,
 ) -> list[Decision]:
-    """The layers' decisions, top-down, for a batch of pictures.
+    """The skill and action layers' decisions for a batch of pictures, under
+    ``tactics`` (each held by the tactic layer, or given).
 
-    ``expected``: the memory's expected scene at the end of the coming action,
-    encoded (LayeredSMBPolicy.expect). ``encoded_scene``: the pictures' scenes
-    already encoded (without a skill target), when the caller has them.
+    ``expected``: the action memory's expected scene at the end of the coming
+    action, encoded (LayeredSMBPolicy.expect). ``encoded_scene``: the pictures'
+    scenes already encoded (without a skill target), when the caller has them.
     ``histories``: each layer's own previous choices (choice_histories).
 
     ``given[layer][i]``, when not None, replaces the policy's choice at that
-    layer ("strategy", "tactic", "skill": tokens; "action": an ActionPlan) for
-    picture i: training only. A layer whose choice is given for every picture
-    does not run, unless it is listed in ``run_given`` (to compare its choice
-    with the given one). Layers in ``sample`` sample their choice (training
-    by reward); the others take the most likely. Until the strategy layer has
-    learned from Full SMB play, the strategy is DEFAULT_STRATEGY.
+    layer ("skill": a token; "action": an ActionPlan) for picture i: training
+    only. A layer whose choice is given for every picture does not run, unless
+    it is listed in ``run_given`` (to compare its choice with the given one).
+    Layers in ``sample`` sample their choice (training by reward); the others
+    take the most likely.
     """
     count = len(scenes)
     given = given or {}
@@ -139,17 +167,8 @@ def decide(
         values = given.get(layer)
         return values is None or any(value is None for value in values)
 
-    # Top-down, a layer runs when it is listed in run_given, or when its choice
-    # is not given for every picture and the layer below needs it: the action
-    # layer always runs or is given; each layer above runs only for a layer
-    # below that runs.
-    needed = {"action": True}
-    needed["skill"] = True  # the action layer reads the skill token, run or given
-    needed["tactic"] = "skill" in run_given or missing("skill")
-    needed["strategy"] = "tactic" in run_given or (needed["tactic"] and missing("tactic"))
-
     def runs(layer: str) -> bool:
-        return layer in run_given or (needed[layer] and missing(layer))
+        return layer in run_given or missing(layer)
 
     def replaced(layer: str, chosen: Sequence) -> list:
         values = given.get(layer)
@@ -181,13 +200,6 @@ def decide(
         log_prob, _ = choice_log_prob(layer, out, stacked)
         scores[layer] = (log_prob.tolist(), out["value"].tolist())
 
-    if runs("strategy") and bool(policy.strategy_trained):
-        run("strategy", encoded())
-    default = DEFAULT_STRATEGY if needed["strategy"] else None
-    strategies = replaced("strategy", chosen.get("strategy", [default] * count))
-    if runs("tactic"):
-        run("tactic", encoded(), _encoded(encode_strategy, strategies, device))
-    tactics = replaced("tactic", chosen.get("tactic", [None] * count))
     if runs("skill"):
         run("skill", encoded(), _encoded(encode_tactic, tactics, device))
     skills = replaced("skill", chosen.get("skill", [None] * count))
@@ -201,20 +213,27 @@ def decide(
             _encoded(encode_skill, skills, device),
         )
     plans = replaced("action", chosen.get("action", [None] * count))
-    return [
-        Decision(
-            strategy=strategies[i],
-            tactic=tactics[i],
-            skill=skills[i],
-            plan=plans[i],
-            chosen={layer: values[i] for layer, values in chosen.items()},
-            target=targets[i],
-            picks={layer: values[i] for layer, values in picked.items()},
-            log_prob={layer: values[0][i] for layer, values in scores.items()},
-            value={layer: values[1][i] for layer, values in scores.items()},
+    steps = list(tactic_steps) if tactic_steps is not None else [None] * count
+    decisions = []
+    for i in range(count):
+        own = {layer: values[i] for layer, values in chosen.items()}
+        if steps[i] is not None:
+            own["tactic"] = tactic_token(steps[i].own, switches[i])
+        decisions.append(
+            Decision(
+                strategy=switches[i],
+                tactic=tactics[i],
+                skill=skills[i],
+                plan=plans[i],
+                chosen=own,
+                target=targets[i],
+                picks={layer: values[i] for layer, values in picked.items()},
+                log_prob={layer: values[0][i] for layer, values in scores.items()},
+                value={layer: values[1][i] for layer, values in scores.items()},
+                tactic_step=steps[i],
+            )
         )
-        for i in range(count)
-    ]
+    return decisions
 
 
 @dataclass
@@ -253,14 +272,21 @@ class _Copy:
     cell: Optional[torch.Tensor] = None
     button: int = NOOP
     # Each layer's choices used at earlier decisions, the most recent first.
-    choices: dict = field(default_factory=lambda: {layer: [] for layer in LAYERS})
+    choices: dict = field(default_factory=lambda: {layer: [] for layer in HISTORY_LAYERS})
+    switch: StrategyToken = DEFAULT_STRATEGY  # the strategy switch
+    held: Optional[str] = None  # the tactic held (None before the first decision)
+    held_since: tuple[int, int] = (0, 0)  # (decisions, frames) when it started
+    decisions: int = 0  # decisions made this episode
+    frame: int = 0  # frames played this episode
+    tactic_hidden: Optional[torch.Tensor] = None  # the tactic memory
+    tactic_cell: Optional[torch.Tensor] = None
 
 
 def choice_histories(copies: Sequence[_Copy], device) -> dict:
-    """Each layer's previous choices for a batch of copies: (choices [B, HISTORY,
-    width], present [B, HISTORY]), the most recent first."""
+    """Each history layer's previous choices for a batch of copies: (choices [B,
+    HISTORY, width], present [B, HISTORY]), the most recent first."""
     histories = {}
-    for layer in LAYERS:
+    for layer in HISTORY_LAYERS:
         choices = torch.zeros(len(copies), HISTORY, CHOICE_WIDTH[layer])
         present = torch.zeros(len(copies), HISTORY, dtype=torch.bool)
         for i, copy in enumerate(copies):
@@ -273,12 +299,7 @@ def choice_histories(copies: Sequence[_Copy], device) -> dict:
 
 def remember_choices(copy: _Copy, decision: Decision) -> None:
     """Add a decision's used choices to the copy's history (layers that chose nothing skip)."""
-    used = {
-        "strategy": decision.strategy,
-        "tactic": decision.tactic,
-        "skill": decision.skill,
-        "action": decision.plan,
-    }
+    used = {"skill": decision.skill, "action": decision.plan}
     for layer, choice in used.items():
         if choice is not None:
             vector = encode_choice(layer, choice, decision.target if layer == "skill" else None)
@@ -288,18 +309,150 @@ def remember_choices(copy: _Copy, decision: Decision) -> None:
 class SMBAgents:
     """Copies of the agent sharing one observer and one policy."""
 
-    def __init__(self, observer: VisionObserver, policy: LayeredSMBPolicy, device, copies: int = 1):
+    def __init__(
+        self,
+        observer: VisionObserver,
+        policy: LayeredSMBPolicy,
+        device,
+        copies: int = 1,
+        switch: StrategyToken = DEFAULT_STRATEGY,
+    ):
         self.observer = observer
         self.policy = policy
         self.device = torch.device(device)
+        self.switch = switch  # the strategy switch a copy starts with, unless told otherwise
         self.copies = [_Copy() for _ in range(copies)]
         for index in range(copies):
             self.reset(index)
 
-    def reset(self, copy: int) -> None:
-        """Start a new episode for one copy: empty memory, no plan."""
+    def reset(self, copy: int, switch: Optional[StrategyToken] = None) -> None:
+        """Start a new episode for one copy: empty memories, no plan, no tactic,
+        and its strategy switch (``switch``, else the agents' own)."""
         zeros = torch.zeros(self.policy.memory.width, device=self.device)
-        self.copies[copy] = _Copy(hidden=zeros, cell=zeros.clone())
+        tactic = torch.zeros(self.policy.tactic_memory.width, device=self.device)
+        self.copies[copy] = _Copy(
+            hidden=zeros,
+            cell=zeros.clone(),
+            switch=switch or self.switch,
+            tactic_hidden=tactic,
+            tactic_cell=tactic.clone(),
+        )
+
+    @torch.no_grad()
+    def _tactics(self, starting, now, expected, action_memory, given, run_given, sample):
+        """The tactic each deciding copy uses for its next action, and what the
+        tactic layer did (TacticStep, None where it did not run).
+
+        Where the tactic is given for every copy (training a layer below it), the
+        tactic layer does not run. Otherwise, for each copy holding a tactic, the
+        end check runs; a copy whose tactic ended (or that holds none) steps its
+        tactic memory and chooses the next. A given tactic (the teacher's, while
+        the tactic layer trains) replaces the layer's own; it starts when it
+        differs from the one held.
+        """
+        count = len(starting)
+        given = given or {}
+        given_tactics = given.get("tactic") or [None] * count
+        given_skills = given.get("skill") or [None] * count
+        missing = any(token is None for token in given_tactics)
+        if "tactic" not in run_given and not (
+            missing and ("skill" in run_given or any(s is None for s in given_skills))
+        ):
+            return list(given_tactics), [None] * count
+        policy, device = self.policy, self.device
+        explore = "tactic" in sample
+
+        def part(index, encoded):
+            tokens, present = encoded
+            return tokens[index], present[index]
+
+        switches = torch.stack([encode_strategy(c.switch) for c in starting]).to(device)
+        held_in = [
+            held_features(c.held, c.decisions - c.held_since[0], c.frame - c.held_since[1])
+            for c in starting
+        ]
+        held_rows = torch.stack(held_in).to(device)
+        hidden = torch.stack([c.tactic_hidden for c in starting])
+        cell = torch.stack([c.tactic_cell for c in starting])
+
+        # The end check, for every copy holding a tactic.
+        end_probability: list[Optional[float]] = [None] * count
+        own_end = [c.held is None for c in starting]
+        holding = [i for i, c in enumerate(starting) if c.held is not None]
+        if holding:
+            index = torch.tensor(holding, device=device)
+            out = policy.tactic_outputs(
+                part(index, now),
+                part(index, expected),
+                switches[index],
+                held_rows[index],
+                hidden[index],
+            )
+            chance = torch.sigmoid(out["end"])
+            ends = torch.bernoulli(chance) > 0.5 if explore else chance > 0.5
+            for k, i in enumerate(holding):
+                end_probability[i] = float(chance[k])
+                own_end[i] = bool(ends[k])
+
+        # Where a tactic starts, the tactic memory steps.
+        started = [
+            (starting[i].held is None or given_tactics[i].stance != starting[i].held)
+            if given_tactics[i] is not None
+            else own_end[i]
+            for i in range(count)
+        ]
+        stepping = [i for i in range(count) if started[i]]
+        if stepping:
+            index = torch.tensor(stepping, device=device)
+            stepped = policy.recall(
+                part(index, now),
+                held_rows[index],
+                action_memory[index],
+                MemoryState(hidden[index], cell[index]),
+            )
+            hidden, cell = hidden.clone(), cell.clone()
+            hidden[index], cell[index] = stepped.hidden, stepped.cell
+
+        # The layer's own choice, wherever it ended its tactic.
+        own = [c.held for c in starting]
+        log_prob = [0.0] * count
+        choosing = [i for i in range(count) if own_end[i]]
+        if choosing:
+            index = torch.tensor(choosing, device=device)
+            none = held_features(None).to(device).expand(len(choosing), -1)
+            out = policy.tactic_outputs(
+                part(index, now), part(index, expected), switches[index], none, hidden[index]
+            )
+            for k, i in enumerate(choosing):
+                stance, picks = choose("tactic", {"tactic": out["tactic"][k]}, sample=explore)
+                own[i] = stance
+                chance, _ = choice_log_prob(
+                    "tactic",
+                    {"tactic": out["tactic"][k : k + 1]},
+                    {"tactic": torch.tensor([picks["tactic"]], device=device)},
+                )
+                log_prob[i] = float(chance[0])
+
+        tactics, steps = [], []
+        for i, c in enumerate(starting):
+            used = given_tactics[i].stance if given_tactics[i] is not None else own[i]
+            steps.append(
+                TacticStep(
+                    held=c.held,
+                    actions=c.decisions - c.held_since[0],
+                    frames=c.frame - c.held_since[1],
+                    end_probability=end_probability[i],
+                    own_end=own_end[i],
+                    own=own[i],
+                    started=started[i],
+                    choice_log_prob=log_prob[i],
+                )
+            )
+            if started[i]:
+                c.held, c.held_since = used, (c.decisions, c.frame)
+                c.tactic_hidden, c.tactic_cell = hidden[i], cell[i]
+            tactics.append(tactic_token(used, c.switch))
+        return tactics, steps
 
     @torch.no_grad()
     def act(
@@ -314,7 +467,7 @@ class SMBAgents:
 
         ``given`` (training only) is called with the copies deciding this frame
         and their scenes, and returns tokens that replace the policy's own
-        (see decide, also for ``run_given`` and ``sample``).
+        (see decide and _tactics, also for ``run_given`` and ``sample``).
         """
         playing = [self.copies[c] for c in copies]
         scenes = self.observer.observe(np.stack(screens))
@@ -346,25 +499,33 @@ class SMBAgents:
                 ),
             )
             _, expected = self.policy.expect(remembered)
+            tactics, tactic_steps = self._tactics(
+                starting, now, expected, remembered.hidden, extra, run_given, sample
+            )
             made = decide(
                 self.policy,
                 picked,
                 picked_rows,
                 expected,
                 self.device,
+                [copy.switch for copy in starting],
+                tactics,
                 extra,
                 run_given,
                 sample,
                 now,
                 choice_histories(starting, self.device),
+                tactic_steps,
             )
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 decisions[k] = decision
                 playing[k].hidden, playing[k].cell = remembered.hidden[j], remembered.cell[j]
                 remember_choices(playing[k], decision)
+                playing[k].decisions += 1
                 playing[k].executor.start(decision.plan)
         steps = []
         for k, copy in enumerate(playing):
             copy.button = copy.executor.press()
+            copy.frame += 1
             steps.append(AgentStep(scenes[k], rows[k], ended[k], decisions[k], copy.button))
         return steps

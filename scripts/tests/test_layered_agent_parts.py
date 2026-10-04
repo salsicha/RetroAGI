@@ -1,5 +1,7 @@
 """The game-neutral parts of the four-layer agent: reader, tokens, executor, layers."""
 
+from collections import defaultdict
+
 import numpy as np
 import pytest
 import torch
@@ -306,8 +308,20 @@ def _record(learner: str, frames: int = 30):
             "direction": np.array([1, 1, 0]),
             "pointer": np.array([NO_TARGET, NO_TARGET, NO_TARGET]),
         },
-        "tactic": {"tactic": np.array([0, 2, 0]), "direction": np.array([1, 1, 1])},
+        # The teacher's tactic, and whether the held one is finished.
+        "tactic": {"tactic": np.array([0, 2, 2]), "end": np.array([False, True, False])},
     }[learner]
+    # The tactic learner: advance from the start, ended at the second decision
+    # for alternate route, held through the third.
+    tactic = {
+        "held": np.array([-1, 0, 1]),
+        "actions": np.array([0, 1, 1]),
+        "frames": np.array([0, 10, 10]),
+        "started": np.array([True, True, False]),
+        "used": np.array([0, 1, 1]),
+        "own_end": np.array([True, True, False]),
+        "end_probability": np.array([-1.0, 0.7, 0.2]),
+    }
     return EpisodeRecord(
         family="flat_run",
         split="train",
@@ -325,6 +339,10 @@ def _record(learner: str, frames: int = 30):
         labels={**labels, "valid": np.ones(3, bool)},
         played_teacher=np.ones(3, bool),
         agreed=np.zeros(3, bool),
+        rewards=np.zeros(frames, np.float32),
+        old_log_prob=np.zeros(3, np.float32),
+        potentials=np.zeros(frames, np.float32),
+        tactic=tactic if learner == "tactic" else {},
     )
 
 
@@ -581,3 +599,299 @@ def test_waiting_for_a_moving_platform_is_holding_the_area_and_waiting():
     skill = teacher_skill(env, scene_from_labels(env.scene_labels()), teacher, tactic)
     env.close()
     assert (tactic.stance, skill.kind) == ("hold_area", "wait")
+
+
+# ── The tactic layer: an option-critic with its own memory ───────────────────
+
+
+def test_a_tactics_direction_follows_the_goal_side():
+    from retroagi.core.tokens import tactic_token
+
+    left = StrategyToken("speed_run", -1)
+    assert tactic_token("advance", left).direction == -1
+    assert tactic_token("alternate_route", left).direction == -1
+    assert tactic_token("hold_area", left).direction == -1  # facing the goal
+    assert tactic_token("retreat", left).direction == 1  # away from it
+
+
+def _held_agents(end_bias: float, copies: int = 1, pictures=None):
+    from retroagi.core.smb_agent import SMBAgents
+    from retroagi.core.smb_observer import VisionObserver
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy().eval()
+    policy.tactic.heads["end"].bias.data.fill_(end_bias)
+    vision = SceneList(pictures) if pictures is not None else SceneEcho(scene())
+    return SMBAgents(VisionObserver(vision), policy, "cpu", copies)
+
+
+def test_the_agent_holds_its_tactic_until_its_end_check_says_finished():
+    screen = [np.zeros((240, 256, 3), np.uint8)]
+    for end_bias, starts in ((-20.0, 1), (20.0, None)):
+        agents = _held_agents(end_bias)
+        made = []
+        for _ in range(100):
+            (step,) = agents.act(screen, [0])
+            if step.decision is not None:
+                made.append(step.decision.tactic_step)
+        assert len(made) > 3
+        # The first decision always chooses; after it the end check decides.
+        assert made[0].held is None and made[0].started
+        if starts == 1:
+            assert [m.started for m in made] == [True] + [False] * (len(made) - 1)
+            assert [m.actions for m in made[1:]] == list(range(1, len(made)))
+        else:
+            assert all(m.started for m in made) and all(m.actions <= 1 for m in made)
+
+
+def test_the_tactic_memory_steps_only_when_a_tactic_starts():
+    screen = [np.zeros((240, 256, 3), np.uint8)]
+    agents = _held_agents(-20.0)
+    states = []
+    for _ in range(60):
+        (step,) = agents.act(screen, [0])
+        if step.decision is not None:
+            states.append(agents.copies[0].tactic_hidden.clone())
+    assert not torch.equal(states[0], torch.zeros_like(states[0]))  # stepped at the start
+    assert all(torch.equal(states[0], later) for later in states[1:])  # held: no step
+
+
+def _played_tactic_episode(end_bias: float = 0.0, frames: int = 90):
+    """Play one episode with the tactic layer deciding (its end check sampled), and
+    record it as the trainer does."""
+    from retroagi.core.layered_policy import encode_choice
+    from retroagi.core.tokens import TACTICS, encode_strategy
+    from retroagi.stages.block_smb.layered_train import EpisodeRecord
+
+    pictures = [
+        scene(enemies=[EnemyView((150 + 3 * (t % 20), 198, 160 + 3 * (t % 20), 208), "walker")])
+        for t in range(frames)
+    ]
+    agents = _held_agents(end_bias, pictures=list(pictures))
+    torch.manual_seed(1)
+    screen = [np.zeros((240, 256, 3), np.uint8)]
+    rows, decided, d = [], [], defaultdict(list)
+    for t in range(frames):
+        (step,) = agents.act(screen, [0], sample=("tactic",))
+        rows.append(step.rows)
+        if step.decision is not None:
+            decision, tactic = step.decision, step.decision.tactic_step
+            decided.append(tactic)
+            d["frame"].append(t)
+            d["given"].append(encode_strategy(decision.strategy).numpy())
+            d["used"].append(encode_choice("tactic", decision.tactic).numpy())
+            d["held"].append(-1 if tactic.held is None else TACTICS.index(tactic.held))
+            d["actions"].append(tactic.actions)
+            d["frames"].append(tactic.frames)
+            d["started"].append(tactic.started)
+            d["used_index"].append(TACTICS.index(decision.tactic.stance))
+            d["log_prob"].append(tactic.choice_log_prob)
+    count = len(d["frame"])
+    a, b, c = (np.stack([np.asarray(r[i]) for r in rows]) for i in range(3))
+    record = EpisodeRecord(
+        family="flat_run",
+        split="train",
+        sample_index=0,
+        won=False,
+        difficulty="easy",
+        end="timeout",
+        src_a=a.astype(np.int8),
+        src_b=b.astype(np.int8),
+        src_c=c.astype(np.float32),  # (training stores half precision; exact here)
+        buttons=np.zeros(frames, np.int8),
+        decision_frames=np.asarray(d["frame"], np.int32),
+        targets=np.zeros((count, 5), np.float32),
+        given=np.stack(d["given"]).astype(np.float32),
+        labels={
+            "tactic": np.asarray(d["used_index"]),
+            "end": np.zeros(count, bool),
+            "valid": np.ones(count, bool),
+        },
+        played_teacher=np.zeros(count, bool),
+        agreed=np.zeros(count, bool),
+        rewards=np.zeros(frames, np.float32),
+        old_log_prob=np.asarray(d["log_prob"], np.float32),
+        potentials=np.zeros(frames, np.float32),
+        tactic={
+            "held": np.asarray(d["held"]),
+            "actions": np.asarray(d["actions"]),
+            "frames": np.asarray(d["frames"]),
+            "started": np.asarray(d["started"]),
+            "used": np.asarray(d["used_index"]),
+        },
+    )
+    return agents.policy, record, decided
+
+
+def test_replaying_an_episode_gives_the_tactic_layer_what_play_gave():
+    from retroagi.core.tokens import TACTICS
+    from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, tactic_forward
+
+    policy, record, decided = _played_tactic_episode()
+    starts = [k for k, step in enumerate(decided) if step.started]
+    assert 1 < len(starts) < len(decided)  # both holding and ending happened
+    config = LayeredTrainConfig(learner="tactic")
+    with torch.no_grad():
+        d, out = tactic_forward(policy, [record], config, "cpu", memory_grad=False)
+    # The end check gives what it gave in play, wherever a tactic was held.
+    holding = out["holding"].tolist()
+    replayed = torch.sigmoid(out["hold"]["end"])
+    for k, chance in zip(holding, replayed):
+        assert decided[k].end_probability == pytest.approx(float(chance), abs=1e-5)
+    # The choice, where the layer chose, from the memory as play stepped it.
+    choosing = torch.log_softmax(out["choose"]["tactic"], -1)
+    for k, step in enumerate(decided):
+        if step.own_end:
+            mine = TACTICS.index(step.own)
+            assert step.choice_log_prob == pytest.approx(float(choosing[k, mine]), abs=1e-5)
+
+
+def test_tactic_returns_blend_the_critics_next_estimate_with_what_followed():
+    from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, critic_targets
+
+    tactics = 4
+    count = 3
+    d = {
+        "episode": torch.zeros(count, dtype=torch.long),
+        "used": torch.tensor([0, 0, 1]),
+        "earned": torch.tensor([1.0, 2.0, 4.0]),
+        "length": torch.tensor([1, 1, 1]),
+        "last": torch.tensor([False, False, True]),
+        "terminal": torch.tensor([True, True, True]),
+    }
+    values = torch.zeros(count, tactics)
+    values[1, 0] = 10.0  # holding tactic 0 at the second decision
+    choose = {"tactic": torch.zeros(count, tactics), "values": values}
+    hold = {"end": torch.tensor([-100.0, 100.0])}  # decision 1 keeps it; decision 2 ends it
+    out = {
+        "choose": choose,
+        "hold": hold,
+        "holding": torch.tensor([1, 2]),
+        "before": None,
+        "ends": torch.tensor([], dtype=torch.long),
+    }
+    config = LayeredTrainConfig(learner="tactic", discount=1.0)
+    # Nothing blended: each return is the rewards that followed.
+    returns, _ = critic_targets(d, out, config, smoothing=1.0)
+    assert returns.tolist() == pytest.approx([7.0, 6.0, 4.0])
+    # Only the critic: decision 0 continues tactic 0 into decision 1 (worth 10).
+    returns, _ = critic_targets(d, out, config, smoothing=0.0)
+    assert returns[0].item() == pytest.approx(1.0 + 10.0)
+    # Decision 1's tactic ends at decision 2: the value of choosing anew there (0).
+    assert returns[1].item() == pytest.approx(2.0)
+
+
+def test_the_end_check_holds_a_tactic_worth_more_and_drops_one_worth_less():
+    from retroagi.stages.block_smb.layered_train import termination_loss
+
+    for held_value, direction in ((5.0, -1), (-5.0, 1)):
+        logit = torch.zeros(1, requires_grad=True)
+        termination_loss(logit, torch.tensor([held_value]), torch.tensor([0.0]), 0.01).backward()
+        # A gradient step moves the chance of ending down (worth more) or up.
+        assert np.sign(-logit.grad.item()) == direction
+
+
+def test_the_shaping_cannot_change_which_tactic_is_best():
+    from retroagi.stages.block_smb.layered_train import EpisodeRecord, shaped_rewards
+
+    def shaped_return(distances, discount=0.9):
+        weight = 2.0
+        frames = len(distances) - 1
+        rewards = [weight * (distances[t] - distances[t + 1]) for t in range(frames)]
+        record = EpisodeRecord(
+            family="flat_run",
+            split="train",
+            sample_index=0,
+            won=False,
+            difficulty="easy",
+            end="death",
+            src_a=np.zeros((frames, 8)),
+            src_b=np.zeros((frames, 16)),
+            src_c=np.zeros((frames, SEQ_LEN_C)),
+            buttons=np.zeros(frames),
+            decision_frames=np.array([0]),
+            targets=np.zeros((1, 5)),
+            given=np.zeros((1, 4)),
+            labels={},
+            played_teacher=np.zeros(1, bool),
+            agreed=np.zeros(1, bool),
+            rewards=np.asarray(rewards, np.float32),
+            potentials=np.asarray([weight * x for x in distances[1:]], np.float32),
+            terminal=True,
+        )
+        shaped = shaped_rewards(record, discount, 1.0)
+        return float((shaped * discount ** np.arange(frames)).sum())
+
+    # However Mario moved before the episode ended, the shaping pays the same:
+    # the weight times the distance he started at.
+    assert shaped_return([0.5, 0.4, 0.3, 0.2]) == pytest.approx(1.0)
+    assert shaped_return([0.5, 0.6, 0.9]) == pytest.approx(1.0)
+
+
+def test_tactic_changes_agree_when_within_the_tolerance():
+    from retroagi.stages.block_smb.layered_train import end_agreement
+
+    record = _record("tactic")
+    record.tactic["used"] = np.array([0, 0, 1, 1, 2, 2])
+    record.labels = {"tactic": np.array([0, 1, 1, 1, 1, 2]), "valid": np.ones(6, bool)}
+    # Learner changes at 2 and 4; teacher at 1 and 5: both within 1 decision.
+    assert end_agreement([record], tolerance=1)["overall"] == pytest.approx(1.0)
+    assert end_agreement([record], tolerance=0)["overall"] == pytest.approx(0.0)
+
+
+def test_reward_rounds_improve_the_tactic_choice_and_end_check_once_the_critic_is_ready():
+    from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, tactic_losses
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy()
+    record = _record("tactic")
+    record.explored = True
+    record.played_teacher = np.zeros(3, bool)
+    record.rewards = np.linspace(0, 1, record.frames).astype(np.float32)
+    config = LayeredTrainConfig(learner="tactic", reward_rounds=1)
+    waiting, _ = tactic_losses(policy, [record], config, "cpu", by_reward=True, critic_ready=False)
+    assert {"reward", "ending"}.isdisjoint(waiting) and "estimate" in waiting
+    losses, _ = tactic_losses(policy, [record], config, "cpu", by_reward=True, critic_ready=True)
+    assert {"reward", "entropy", "ending", "estimate", "tactic", "end"} <= set(losses)
+    sum(losses.values()).backward()
+    assert policy.tactic.heads["end"].weight.grad is not None
+    imitation, _ = tactic_losses(policy, [record], config, "cpu")
+    assert "tactic_expectation" in imitation  # the memory learns the end scene
+
+
+def test_a_checkpoint_from_before_the_switch_loads_without_its_strategy_layer(tmp_path):
+    from dataclasses import asdict
+
+    from retroagi.core.smb_observer import observation_layout
+    from retroagi.core.tokens import token_layout
+    from retroagi.stages.block_smb.layered_train import load_layered_checkpoint
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy()
+    old = {
+        name: value
+        for name, value in policy.state_dict().items()
+        if not name.startswith(("tactic.", "tactic_memory."))
+    }
+    old["strategy.query"] = torch.zeros(1, 1, 96)  # the strategy layer it had
+    old["strategy_trained"] = torch.zeros((), dtype=torch.bool)
+    old["tactic.heads.direction.weight"] = torch.zeros(2, 96)  # its old tactic layer
+
+    def saved(layers):
+        path = tmp_path / f"{'_'.join(layers)}.pt"
+        torch.save(
+            {
+                "settings": asdict(policy.settings),
+                "state_dict": old,
+                "observation_layout": observation_layout(),
+                "token_layout": token_layout(),
+                "trained_layers": layers,
+            },
+            path,
+        )
+        return path
+
+    loaded, _ = load_layered_checkpoint(saved(["action", "skill"]))
+    assert torch.equal(loaded.action.query, policy.action.query)
+    with pytest.raises(ValueError, match="old kind"):
+        load_layered_checkpoint(saved(["action", "skill", "tactic"]))

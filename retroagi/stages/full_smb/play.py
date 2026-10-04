@@ -22,7 +22,7 @@ from .pixel_labels import canonical_rgb
 from .vision_frames import _dying
 
 WORLD, LEVEL = 0x75F, 0x75C  # [WorldNumber], [LevelNumber]
-# Levels kept out of Full SMB policy training (the strategy layer) to test it.
+# Levels kept out of any Full SMB policy training, to test the agent on.
 # The vision transformer learns from every level (vision_frames.LEVELS).
 POLICY_TEST_LEVELS = ("Level1-1", "Level5-1")
 PAGE, X_ON_PAGE = 0x6D, 0x86  # [Player_PageLoc], [Player_X_Position]

@@ -55,8 +55,9 @@ inputs:
 
 ## How it decides
 
-`retroagi/core/layered_policy.py` holds the policy: four layers, a shared scene
-encoder and a memory.
+`retroagi/core/layered_policy.py` holds the policy: three learned layers
+(tactic, skill and action), a shared scene encoder and two memories. Above
+them sits the strategy switch.
 - **Scene encoder:** one token per reported object, plus the band codes.
   Every position number also enters as 8 sine and 8 cosine waves, with
   wavelengths from 512 pixels (480 vertically) down to 4. A difference of one
@@ -75,7 +76,7 @@ encoder and a memory.
     to the decision layers beside the current scene.
   - **Training:** action by action. It's scored against the scene actually
     reported when each action ended.
-- **The four layers** are each a transformer whose context holds:
+- **The skill and action layers** are each a transformer whose context holds:
   - the current scene;
   - the memory's expected scene;
   - the token from the layer above;
@@ -85,14 +86,23 @@ encoder and a memory.
     where each past target was (its box measured from Mario at that moment),
     not which slot it filled, because slots are re-filled for every picture.
 
-  So every layer knows what it chose before, and keeping or changing course
-  is something it learns.
-- **Strategy layer:** emits what the run is for, and a direction:
+  So each knows what it chose before, and keeping or changing course is
+  something it learns.
+- **Strategy switch:** not a learned layer. Whoever runs the agent sets what
+  the run is for and which side the goal is on (the agent can't see the
+  goal):
   - speed run: finish as fast as possible;
   - max coins: collect as many coins as possible;
   - careful: finish without risk, however long it takes.
-- **Tactic layer:** emits advance, alternate route, hold area or retreat, and a
-  direction:
+
+  A Block SMB layout sets it (its strategy course, otherwise speed run, and
+  the side its goal is on). In Full SMB it is set for the run, and the goal is
+  always to the right. A strategy is an objective, a definition of what is
+  rewarded, so there is nothing for a layer to learn in choosing one.
+- **Tactic layer:** chooses advance, alternate route, hold area or retreat, and
+  holds it over many actions. Its direction follows from the goal's side:
+  retreat goes away from the goal, every other tactic toward it (hold area
+  faces it).
   - advance: toward the goal along the main path;
   - alternate route: toward the goal along another path, higher platforms or a
     lower floor;
@@ -100,6 +110,31 @@ encoder and a memory.
     plant goes back into its pipe, a monster comes close enough to jump);
   - retreat: back away from the goal for a while, out of a dead end or away
     from a monster.
+
+  It is an option-critic: a tactic is an "option", a behaviour that lasts
+  many actions. Its transformer reads the current scene, the action memory's
+  expected scene, the strategy switch, the tactic it holds and how long it has
+  held it (actions and frames), its own memory's state, and that memory's
+  expected scene when the tactic ends. At every action's start it gives:
+  - **the end check:** the chance that the held tactic is finished;
+  - **the critic:** for every tactic, the reward to expect from holding it
+    from here;
+  - **the choice:** which tactic it would choose now.
+
+  If the end check says finished (in play, a chance over one half; while
+  exploring, a draw), the tactic memory steps and the layer chooses the next
+  tactic; otherwise it keeps the tactic it holds. It may choose the same one
+  again, which starts it afresh.
+- **Tactic memory**, the tactic layer's own long short-term memory network,
+  steps once per tactic, when one starts (at the episode's start, and when
+  the held tactic ends):
+  - **Input:** the latest picture's summary, the tactic that just ended and
+    how long it lasted, and the action memory's state, which carries what
+    happened while that tactic was held. It is never told the next tactic.
+  - **Output:** a prediction of the scene when the coming tactic will end,
+    read by the tactic layer.
+  - **Training:** tactic by tactic, against the scene reported when each
+    tactic actually ended.
 - **Skill layer:** emits a skill and a direction, and points at a target
   object. The skills are advance, jump gap, climb, descend, stomp, retreat and
   wait. Avoiding enemies is part of every skill, not a skill of its own.
@@ -130,7 +165,7 @@ alone, for both games.
 bottom up, with the others frozen.
 - **Action layer:** given the skill.
 - **Skill layer:** given the tactic.
-- **Tactic layer:** given the strategy.
+- **Tactic layer:** reading the layout's strategy switch.
 
 The token from above comes from a teacher that reads the simulator
 (`retroagi/stages/block_smb/teacher_tokens.py`). The teacher is used only in
@@ -253,11 +288,37 @@ Every other family is played as a speed run.
    rewards each family gives until the next decision. The teacher's labels
    still count.
 
+The tactic layer learns, in its imitation rounds:
+- **the choice:** at every decision, the teacher's tactic there;
+- **the end check:** wherever a tactic is held, whether it is finished, which
+  is when the teacher's tactic is no longer it. Those moments are rare, so
+  they weigh four times as much;
+- **its memory's prediction:** at each tactic's start, the scene when it
+  ended;
+- **the critic:** each decision's tactic is valued at the reward that
+  followed, blended with the critic's own estimate at the next decision (the
+  chance the tactic continues times its value there, plus the chance it ends
+  times the value of choosing anew). Rewards are discounted per frame. The
+  goal-distance shaping is made exactly potential-based for that discount,
+  so it can't change which tactic is best.
+
+Its reward rounds change only the tactic transformer, and only once its
+critic predicts held-out returns well enough (explained variance at least
+0.5, measured every round):
+- **the choice**, where it chose by sampling: the clipped policy-gradient
+  rule, crediting the return over the value of the situation;
+- **the end check**, the option-critic rule: lower the chance of ending where
+  holding the tactic is worth more than choosing anew, raise it where it is
+  worth less, with a small cost for every switch so it doesn't flip back and
+  forth.
+
 A layer counts as trained when every family passes the bar on held-out
-layouts. After the tactic layer, the whole agent is also scored as deployed:
-every token is its own, and the strategy is "speed run" until the strategy
-layer has learned. The best round that passes is saved as `passed.pt`, and the
-next layer starts from it.
+layouts. The tactic layer must also agree with the teacher on where tactics
+change: each of its changes is matched to one of the teacher's within two
+decisions, and at least 70% must match both ways. After the tactic layer,
+the whole agent is also scored as deployed: every token is its own, under
+each layout's strategy switch. The best round that passes is saved as
+`passed.pt`, and the next layer starts from it.
 
 ```bash
 retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
@@ -275,4 +336,5 @@ game memory is read only to score how far Mario got.
 python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
 ```
 
-The strategy layer learns only from playing Full SMB.
+The strategy switch is set for the run: `--strategy speed_run`, `max_coins` or
+`careful` (speed run by default).

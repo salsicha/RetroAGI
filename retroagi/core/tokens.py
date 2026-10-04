@@ -1,27 +1,26 @@
-"""The tokens the four policy layers pass down: strategy, tactic, skill.
+"""The strategy switch and the tokens the policy layers pass down: tactic, skill.
 
-The agent has four layers. Each reads what the vision transformer reports
-(smb_observer.PolicyInput), its own memory, and the token of the layer above,
-and emits a token for the layer below:
-
-- the strategy layer emits a StrategyToken: what the run is for, and a
-  direction. speed_run: finish as fast as possible; max_coins: collect as many
-  coins as possible; careful: finish without risk, however long it takes.
-  The Block SMB strategy courses (stages/block_smb/tactic_families) pay each
-  for its own objective and teach the tactic layer to serve it;
-- the tactic layer emits a TacticToken: advance, alternate_route, hold_area
-  or retreat, and a direction;
-- the skill layer emits a SkillToken: a skill (advance, jump a gap, climb,
+- The strategy is a switch, set by whoever runs the agent, not chosen by a
+  layer: a StrategyToken holds what the run is for and which side the goal is
+  on (the agent cannot see the goal). speed_run: finish as fast as possible;
+  max_coins: collect as many coins as possible; careful: finish without
+  risk, however long it takes. A Block SMB layout sets it (its strategy
+  course, else speed_run, and the side its goal is on); in Full SMB it is set
+  for the run (the goal is always to the right).
+- The tactic layer holds a TacticToken over many actions: advance,
+  alternate_route, hold_area or retreat. Its direction follows from the
+  goal's side (tactic_direction): retreat goes away from the goal, every
+  other tactic toward it (hold area faces it).
+- The skill layer emits a SkillToken: a skill (advance, jump a gap, climb,
   descend, stomp, retreat or wait), a direction, and which object in the
   scene is the target, if any. Avoiding enemies is part of every skill, not
-  a skill of its own;
-- the action layer turns the skill token into an action and a frame count
+  a skill of its own.
+- The action layer turns the skill token into an action and a frame count
   for the executor (smb_executor).
 
 In Block SMB each layer learns from explicit tokens given by a teacher. At
-play time a layer's token comes only from the layer above; the strategy layer
-learns only from playing Full SMB, and until then the default strategy token
-drives the stack.
+play time a layer's token comes only from the layer above, and the tactic
+layer reads the switch.
 """
 
 from dataclasses import dataclass
@@ -88,6 +87,19 @@ class SkillToken:
 
 
 DEFAULT_STRATEGY = StrategyToken("speed_run", 1)
+
+
+def tactic_direction(stance: str, goal_side: int) -> int:
+    """The way a tactic goes: retreat away from the goal, every other tactic
+    toward it (hold area faces it)."""
+    _direction(goal_side)
+    return -goal_side if stance == "retreat" else goal_side
+
+
+def tactic_token(stance: str, switch: StrategyToken) -> TacticToken:
+    """A tactic with the direction the strategy switch's goal side gives it."""
+    return TacticToken(stance, tactic_direction(stance, switch.direction))
+
 
 STRATEGY_WIDTH = len(STRATEGIES) + 1
 TACTIC_WIDTH = len(TACTICS) + 1
