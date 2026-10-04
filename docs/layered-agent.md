@@ -167,8 +167,10 @@ bottom up, with the others frozen.
 - **Skill layer:** given the tactic.
 - **Tactic layer:** reading the layout's strategy switch.
 
-The action and skill layers train on every family except the strategy
-courses; the tactic layer trains on every family except the clones.
+The action layer trains only on the 18 basic families whose tactic is advance
+the whole way (`monte_carlo.ADVANCE_FAMILIES`): no family that teaches a tactic
+or a strategy. The skill layer trains on every family except the strategy
+courses; the tactic layer on every family except the clones.
 
 The token from above comes from a teacher that reads the simulator
 (`retroagi/stages/block_smb/teacher_tokens.py`). The teacher is used only in

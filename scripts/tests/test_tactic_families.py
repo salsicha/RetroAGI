@@ -235,6 +235,18 @@ def test_only_the_tactic_learner_trains_on_the_strategy_courses():
     assert set(STRATEGY_FAMILIES) <= set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
 
 
+def test_the_action_learner_trains_only_on_advance_families():
+    from retroagi.stages.block_smb.layered_train import learner_families
+    from retroagi.stages.block_smb.monte_carlo import ADVANCE_FAMILIES
+
+    families = learner_families("action", BLOCK_SMB_MC_FAMILIES)
+    assert set(families) == set(ADVANCE_FAMILIES) and len(families) == 18
+    assert not set(families) & set(TACTIC_FAMILIES)
+    assert "moving_bridge" not in families and "piranha_avoidance" not in families
+    for family in families:
+        assert {seg["stance"] for seg in _sample(family)["tactics"]} == {"advance"}
+
+
 # ── Strategy courses ──────────────────────────────────────────────────────────
 
 _COURSES: dict = {}

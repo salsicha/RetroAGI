@@ -129,12 +129,18 @@ what the learner should do at every decision (training only).
   critic. Then reward rounds improve its choices and its end check by the
   option-critic rules, once the critic predicts held-out returns well enough.
 
-The action and skill layers train on every family except the strategy
-courses. A course is about its strategy's objective (a deadline, a coin
-count), which those layers can't see, so the courses are used only by the
-tactic layer, once the actions and skills are trained. The tactic layer
-leaves out the clone families, whose tactic is given rather than decided by
-the scene.
+Which families each layer trains on:
+- **Action layer:** only the 18 basic families, whose tactic is advance the
+  whole way (running, jumping gaps and pits, climbing steps and pipes,
+  getting past and stomping enemies, turning back toward a goal behind).
+  Actions are the most basic things Mario does, so no family that teaches a
+  tactic or a strategy is used.
+- **Skill layer:** every family except the strategy courses. A course is about
+  its strategy's objective (a deadline, a coin count), which the skill layer
+  can't see.
+- **Tactic layer:** every family except the clones, whose tactic is given
+  rather than decided by the scene. Only it trains on the strategy courses,
+  once the actions and skills are trained.
 
 A layer passes when every family wins at least 90% of its 18 held-out
 layouts. The tactic layer must also agree with the teacher on where tactics

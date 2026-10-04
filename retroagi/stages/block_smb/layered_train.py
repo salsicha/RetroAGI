@@ -1262,16 +1262,23 @@ def end_agreement(episodes, tolerance: int) -> dict:
 def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
     """The families a learner trains and is tested on.
 
-    - The action and skill layers leave out the strategy courses: a course is
-      about the strategy (its pay and its win condition: a deadline, a coin
-      count), which those layers cannot see. The courses are used only once the
-      actions and skills are trained, by the tactic layer, which reads the
-      strategy switch.
+    - The action layer trains only on the basic families: those whose tactic is
+      advance the whole way (monte_carlo.ADVANCE_FAMILIES). Actions are the most
+      basic things Mario does; no family that teaches a tactic (holding the area,
+      another route, retreating, composed scenes, the clones) or a strategy
+      (the courses) is used for it.
+    - The skill layer leaves out the strategy courses: a course is about its
+      strategy's objective (a deadline, a coin count), which the skill layer
+      cannot see. The courses are used only by the tactic layer, which reads
+      the strategy switch.
     - The tactic layer leaves out the clones, whose tactic is given rather
       than decided by the scene.
     """
+    from .monte_carlo import ADVANCE_FAMILIES
     from .tactic_families import CLONE_FAMILIES, STRATEGY_FAMILIES
 
+    if learner == "action":
+        return tuple(f for f in families if f in ADVANCE_FAMILIES)
     if learner == "tactic":
         return tuple(f for f in families if f not in CLONE_FAMILIES)
     return tuple(f for f in families if f not in STRATEGY_FAMILIES)
