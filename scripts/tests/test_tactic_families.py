@@ -6,6 +6,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pytest
 
+from retroagi.core.smb_executor import HOLD_GROUND
 from retroagi.core.tokens import BACKWARD_TACTICS
 from retroagi.stages.block_smb import tactic_schedule
 from retroagi.stages.block_smb.env import MarioScenarioEnv
@@ -89,6 +90,36 @@ def test_the_goal_counts_only_after_the_retreat():
     assert tactic_schedule.current(env)["stance"] == "advance"
     _run(env, 1, 400)
     assert env._goal_credited
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_holding_ground_tracks_the_platform_and_rejects_walking_or_jumping(direction):
+    from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
+
+    platform = {
+        "x": 100,
+        "y": 220,
+        "w": 64,
+        "h": 10,
+        "moving": [60, 160, 0.7],
+        "direction": direction,
+    }
+    scenario = _flat([segment("hold_area", area=1)], platforms=[platform], mario=(120, 204))
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        saved = snapshot_env_state(env)
+        offset = env.mario["x"] - env.platforms[0]["rect"].x
+        teacher = episode_teacher(scenario)
+        assert teacher_tactic(env, teacher).stance == "hold_ground"
+        assert not _run(env, 0, 80)["off_route"]
+        assert env.mario["x"] - env.platforms[0]["rect"].x == pytest.approx(offset, abs=1)
+        assert abs(env.mario["x"] - saved["mario"]["x"]) > 10
+        for action in (1, 3, 5):
+            restore_env_state(env, saved)
+            assert _run(env, action, 10)["off_route"]
+    finally:
+        env.close()
 
 
 def test_segments_end_in_order_and_routes_follow_the_platform_underfoot():
@@ -175,7 +206,7 @@ def test_in_the_clones_the_schedule_decides_the_first_tactic():
         env.close()
     assert first["choice_advance"][0] == "advance"
     assert first["choice_alternate_route"][0] == "climb_forward"
-    assert first["choice_hold_area"] == ("advance", 0)  # waiting is part of advancing
+    assert first["choice_hold_area"] == ("hold_ground", HOLD_GROUND)
     assert first["choice_retreat"][0] == "retreat"
     assert first["low_choice_advance"][0] == "advance"
     assert first["low_choice_alternate_route"][0] == "descend_forward"
@@ -227,7 +258,7 @@ def test_the_action_learner_trains_only_on_single_action_families():
     from retroagi.stages.block_smb.layered_train import learner_families
 
     families = learner_families("action", BLOCK_SMB_MC_FAMILIES)
-    assert families == ACTION_FAMILIES and len(families) == 9
+    assert families == ACTION_FAMILIES and len(families) == 17
     assert not set(ACTION_FAMILIES) & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
 
 
@@ -243,7 +274,7 @@ def test_the_action_learner_trains_only_on_single_action_families():
         ("action_descend", "descend_forward"),
         ("action_descend_back", "descend_backward"),
         ("action_stomp", "advance"),
-        ("action_wait", "advance"),
+        ("action_wait", "hold_ground"),
     ],
 )
 def test_a_single_action_family_asks_for_one_tactic_from_start_to_finish(family, tactic):
@@ -278,4 +309,4 @@ def test_going_back_to_the_left_is_never_labelled_advance(family):
     left = [tactic for action, tactic in made if action in (3, 4)]
     assert left
     for tactic in left:
-        assert tactic.stance in BACKWARD_TACTICS and tactic.direction == -1
+        assert tactic.stance in BACKWARD_TACTICS

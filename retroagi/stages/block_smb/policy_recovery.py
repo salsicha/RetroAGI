@@ -40,6 +40,14 @@ def coached_suffix(env, *, max_frames=320, release_state=None, observation_histo
     Plants that can always be cleared are certified against their full height
     (piranha.conservative_suffix); a timed plant is crossed by its teacher.
     """
+    if getattr(env, "_action_jump_direction", 0):
+        routes = single_jump_routes(env, max_frames=max_frames)
+        if not routes:
+            return []
+        holds = list(routes)
+        chosen = interior_hold(holds, menu=tuple(range(33)))
+        return routes[chosen]
+
     from .piranha import conservative_suffix, has_plants
     from .piranha_tactics import timed_plant
 
@@ -182,6 +190,12 @@ def _coached_suffix(
                 if ready and (bridge or target.kind not in ("finish", "retreat"))
                 else []
             )
+            if valid and target.kind == "enemy" and getattr(env, "_prefer_enemy_bypass", False):
+                bypass = safe_jump_holds(
+                    env, target, direction, plant_history=features, avoid_stomp=True
+                )
+                if bypass:
+                    valid = bypass
             at_plant = (
                 target.enemy_index is not None
                 and env.enemies[target.enemy_index].get("kind") == "piranha_plant"
@@ -232,3 +246,33 @@ def _coached_suffix(
     if not env._goal_credited:
         return None
     return actions
+
+
+def single_jump_routes(env, *, max_frames=160):
+    """Certify one immediate jump and landing, without walking off or retrying.
+
+    Used only by the isolated directional jump families. Replaying a partial
+    maneuver in the air only coasts; it cannot launch a second jump.
+    """
+    from retroagi.core.smb_coaching import probe_state
+    from retroagi.core.smb_executor import FRAME_COUNTS
+
+    direction = env._action_jump_direction
+    jump_action, coast = (2, 1) if direction > 0 else (4, 3)
+    holds = FRAME_COUNTS if env.mario["on_ground"] else (0,)
+    routes = {}
+    for hold in holds:
+        with probe_state(env):
+            airborne = not env.mario["on_ground"]
+            route = []
+            for frame in range(min(max_frames, 160)):
+                action = jump_action if frame < hold else coast
+                route.append(action)
+                _, _, done, _, _ = env.step(action)
+                airborne = airborne or not env.mario["on_ground"]
+                if env._goal_credited:
+                    routes[hold] = route
+                    break
+                if done or (airborne and env.mario["on_ground"]):
+                    break
+    return routes

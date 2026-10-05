@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_layer = subparsers.add_parser(
         "train-layer",
-        help="train one layer of the layered agent (action, then tactic)",
+        help="train one layer of the layered agent (action, then skill, then tactic)",
     )
     _add_layer_args(train_layer)
 
@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     exam_layer.add_argument("--checkpoint", required=True)
     exam_layer.add_argument(
         "--learner",
-        choices=("action", "tactic", "deployed"),
+        choices=("action", "skill", "tactic", "deployed"),
         default="deployed",
         help="the layer under test (the teacher gives its token from above), or the whole agent",
     )

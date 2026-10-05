@@ -94,16 +94,20 @@ on every family (`passed.pt`). Never pass a layer whose bar was not met.
 
 ```bash
 retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
-retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/tactic
+retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
+retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
 ```
 
-- **Action layer:** trains on the nine single-action families, every
-  combination of their parameters every round (10,375 layouts).
-- **Tactic layer:** trains on the 12 strategy families (one scene per tactic,
+- **Action layer:** trains on 17 isolated maneuver families, every declared
+  parameter combination every round. Inputs are spatial skill commands only.
+- **Skill layer:** trains on all 75 registered scene families, including enemy
+  bypass and piranha avoidance,
+  learning destinations from vision, memory, tactic and its previous 16 choices.
+- **Tactic layer:** trains on the 14 strategy families (one scene per tactic,
   under speed run and under max points), with layouts drawn at random.
 
-The current runs add `--validation-layouts-per-difficulty 6 --workers 15` to
-both, and `--reward-rounds 4 --train-layouts-per-family 32` to the tactic
+Example larger runs add `--validation-layouts-per-difficulty 6 --workers 15` to
+each, and `--reward-rounds 4 --train-layouts-per-family 32` to the tactic
 layer. `retroagi-block-smb train-layer --help` lists every setting.
 
 Each run folder holds `history.json` (every round's

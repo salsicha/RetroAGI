@@ -65,11 +65,11 @@ def _played(scenario, actions):
     return info, terms, points
 
 
-def test_there_are_two_strategies_and_twelve_families_one_per_tactic_and_strategy():
+def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strategy():
     from retroagi.stages.block_smb.layered_train import learner_families
 
     assert STRATEGIES == ("speed_run", "max_points")
-    assert len(STRATEGY_TACTIC_FAMILIES) == 12
+    assert len(STRATEGY_TACTIC_FAMILIES) == 14
     assert set(STRATEGY_TACTIC_FAMILIES.values()) == {(s, t) for s in STRATEGIES for t in TACTICS}
     assert set(STRATEGY_TACTIC_FAMILIES) <= set(BLOCK_SMB_MC_FAMILIES)
     families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
@@ -78,7 +78,7 @@ def test_there_are_two_strategies_and_twelve_families_one_per_tactic_and_strateg
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("tactic", ["advance", "climb_backward"])
+@pytest.mark.parametrize("tactic", ["advance", "climb_backward", "hold_ground"])
 def test_siblings_share_layouts_and_each_strategy_takes_its_best_route(tactic):
     fast = _sample(f"speed_run_{tactic}").scenario
     rich = _sample(f"max_points_{tactic}").scenario
@@ -165,3 +165,18 @@ def test_a_segment_naming_an_enemy_sends_the_teacher_back_to_stomp_it():
     assert route
     _, terms, points = _played(scenario, route)
     assert terms["enemy_stomp"] > 0 and points == 1
+
+
+def test_speed_run_can_select_a_faster_bypass_while_max_points_selects_stomps(monkeypatch):
+    from retroagi.stages.block_smb import strategy_families as module
+
+    routes = {
+        "detour=skip|motion=default": (20, 1, [1] * 20),
+        "detour=skip|motion=bypass": (12, 0, [2] * 12),
+    }
+    monkeypatch.setattr(module, "_played_routes", lambda scenario: routes)
+    for strategy, motion in (("speed_run", "bypass"), ("max_points", "default")):
+        scenario = {"route_tactics": {"detour=skip": [segment("advance")]}}
+        route = module.strategy_route(f"{strategy}_advance", scenario)
+        assert route == routes[f"detour=skip|motion={motion}"][2]
+        assert scenario["prefer_enemy_bypass"] == (motion == "bypass")

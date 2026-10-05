@@ -7,9 +7,9 @@ reports (core.smb_observer). The simulator is read only by the teachers
 
 Layers are trained bottom-up, one at a time, with the others frozen:
 
-- action: given the teacher's tactic token, choose the action and frame count
-  (this also trains the scene encoder and the memory, whose world-model part
-  learns to predict the scene when each action ends);
+- action: given only the teacher's spatial command, choose the executor plan;
+- skill: given the tactic, scene, memory prediction and 16 prior spatial
+  commands, choose a destination (also trains scene encoder and scene memory);
 - tactic: reading the layout's strategy switch, hold a tactic over many
   actions and know when it is finished: the tactic layer is an option-critic
   (core.layered_policy.TacticLayer) with its own memory network.
@@ -47,7 +47,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from retroagi.core.actions import SMB_ACTIONS, SMB_JUMP_ACTIONS, SMBAction
+from retroagi.core.actions import SMBAction
 from retroagi.core.layered_policy import (
     CHOICE_WIDTH,
     CHOICES,
@@ -61,7 +61,7 @@ from retroagi.core.layered_policy import (
     encode_choice,
 )
 from retroagi.core.smb_agent import SMBAgents
-from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan
+from retroagi.core.smb_executor import EXECUTOR_ACTIONS, FRAME_COUNTS, ActionPlan
 from retroagi.core.smb_observer import (
     C_SPANS,
     SEQ_LEN_A,
@@ -74,18 +74,20 @@ from retroagi.core.smb_physics import NES_JUMP_FRAMES
 from retroagi.core.tokens import (
     TACTICS,
     TacticToken,
+    encode_skill,
     encode_strategy,
     encode_tactic,
+    skill_picks,
     token_layout,
 )
 
 from .monte_carlo import BLOCK_SMB_MC_DIFFICULTY_BINS as DIFFICULTIES
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES
 
-LEARNERS = ("action", "tactic")
+LEARNERS = ("action", "skill", "tactic")
 # The token each learner is given from above (the tactic layer reads the
 # strategy switch, which every episode sets).
-GIVEN = {"action": "tactic", "tactic": None}
+GIVEN = {"action": "skill", "skill": "tactic", "tactic": None}
 # The C row's scene numbers (what the memory predicts), before the unused rest.
 SCENE_NUMBERS = slice(0, C_SPANS["c_reserved"][0])
 NOOP = int(SMBAction.NOOP)
@@ -251,8 +253,8 @@ def _plan_label(plan: Optional[ActionPlan], holds) -> tuple[int, int, bool]:
     if plan is None:
         return NOOP, 0, False
     frames = plan.frames
-    if SMBAction(plan.action) in SMB_JUMP_ACTIONS:
-        frames = jump_frame_label(frames, holds)
+    # A skill command names the endpoint of this exact plan: another certified
+    # hold can land elsewhere, so do not substitute a different duration.
     return plan.action, FRAME_COUNTS.index(frames), True
 
 
@@ -350,16 +352,20 @@ class _Lane:
 
         Reads the simulator: training only.
         """
-        from .teacher_tokens import teacher_plan, teacher_tactic
+        from .teacher_tokens import teacher_plan, teacher_skill, teacher_tactic
 
         asked = {
             "tactic": teacher_tactic(self.env, self.teacher),
             "action": None,
+            "skill": None,
             "holds": (),
             "plays_teacher": self.rng.random() < self.task.teacher_share,
         }
-        if learner == "action" and (self.task.label or self.task.teacher_share > 0):
-            asked["action"], asked["holds"] = teacher_plan(self.env, self.teacher)
+        if learner in ("action", "skill"):
+            asked["action"], asked["holds"] = teacher_plan(
+                self.env, self.teacher, certify_holds=False
+            )
+            asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
         self.asked = asked
         return asked
 
@@ -375,9 +381,18 @@ class _Lane:
             d[f"pick_{head}"].append(value)
         d["log_prob"].append(decision.log_prob[learner])
         d["value"].append(decision.value[learner])
-        d["used"].append(encode_choice("action", decision.plan).numpy())
-        mine = decision.chosen["action"]
-        d["given"].append(encode_tactic(decision.tactic).numpy())
+        used = decision.plan if learner == "action" else decision.skill
+        d["used"].append(encode_choice(learner, used).numpy())
+        mine = decision.chosen[learner]
+        if learner == "skill":
+            d["given"].append(encode_tactic(decision.tactic).numpy())
+            for head, value in skill_picks(asked["skill"]).items():
+                d[f"label_{head}"].append(value)
+            valid = asked["action"] is not None
+            d["label_valid"].append(valid)
+            d["agreed"].append(valid and mine == asked["skill"])
+            return
+        d["given"].append(encode_skill(decision.skill).numpy())
         action, frame_bin, valid = _plan_label(asked["action"], asked["holds"])
         d["label_action"].append(action)
         d["label_frames"].append(frame_bin)
@@ -789,7 +804,7 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     - reward (``rl``, a LayeredTrainConfig, on decisions the learner sampled):
       the clipped policy-gradient objective, its estimate of the return, and
       an entropy bonus;
-    - the memory's expectation (action learner only: it alone trains the
+    - the memory's expectation (skill learner only: it alone trains the
       scene encoder, the window and the memory): at each action's start, the
       scene the vision transformer reports when that action ends.
 
@@ -799,7 +814,6 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     if learner == "tactic":
         config = rl or LayeredTrainConfig(learner="tactic", expectation_weight=expectation_weight)
         return tactic_losses(policy, episodes, config, device, by_reward=rl is not None)
-    a, b, c, _, _, _ = _padded(episodes, device)
     d = _decisions(
         episodes,
         device,
@@ -809,28 +823,29 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     if d is None:
         return {}, {}
     e, f = d["episode"], d["frame"]
-    # Reward rounds change only the learner's own layer: what imitation built of
-    # the scene encoder, the window and the memory stays as it is.
-    trains_memory = learner == "action" and rl is None
-    with torch.set_grad_enabled(trains_memory):
-        state = action_memory(policy, a, b, c, d)
-        numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
     losses = {}
-    # An action ends on the frame the next action starts on (same episode); the
-    # last action of an episode that ended in death or the goal has no picture.
-    ends = e[1:] == e[:-1]
-    if trains_memory and ends.any():
-        predicted = numbers[:-1][ends][:, SCENE_NUMBERS]
-        actual = c[e[1:][ends], f[1:][ends]][:, SCENE_NUMBERS]
-        losses["expectation"] = expectation_weight * _weighted_mean(
-            (predicted - actual).pow(2).mean(-1), d["weight"][:-1][ends]
+    if learner == "action":
+        # The action network cannot access observations or either memory.
+        out = policy.run_action(d["given"])
+    else:
+        a, b, c, _, _, _ = _padded(episodes, device)
+        trains_memory = rl is None
+        with torch.set_grad_enabled(trains_memory):
+            state = action_memory(policy, a, b, c, d)
+            numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
+        ends = e[1:] == e[:-1]
+        if trains_memory and ends.any():
+            predicted = numbers[:-1][ends][:, SCENE_NUMBERS]
+            actual = c[e[1:][ends], f[1:][ends]][:, SCENE_NUMBERS]
+            losses["expectation"] = expectation_weight * _weighted_mean(
+                (predicted - actual).pow(2).mean(-1), d["weight"][:-1][ends]
+            )
+        out = policy.run_skill(
+            policy.encode_scene((a[e, f], b[e, f], c[e, f])),
+            expected,
+            d["given"],
+            choice_history(d["used"], e),
         )
-    out = policy.run_action(
-        policy.encode_scene((a[e, f], b[e, f], c[e, f])),
-        expected,
-        d["given"],
-        choice_history(d["used"], e),
-    )
     stats = {"decisions": int(len(e))}
     imitation = 1.0 if rl is None else rl.imitation_weight
     m = d["labelled"]
@@ -841,18 +856,27 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
             if name.startswith("label_")
         }
         weight = d["weight"][m]
-        losses["action"] = imitation * _weighted_mean(
-            F.cross_entropy(out["action"][m], label["action"], reduction="none"), weight
-        )
-        frames = out["frames"][m].view(-1, len(SMB_ACTIONS), FRAME_BINS)
-        chosen = frames[torch.arange(len(frames)), label["action"]]
-        losses["frames"] = imitation * _weighted_mean(
-            F.cross_entropy(chosen, label["frames"], reduction="none"), weight
-        )
-        agree = out["action"][m].argmax(-1) == label["action"]
-        stats["action_accuracy"] = float(agree.float().mean())
-        same_length = chosen.argmax(-1) == label["frames"]
-        stats["frames_accuracy"] = float(same_length.float().mean())
+        if learner == "skill":
+            for head in CHOICES["skill"]:
+                losses[head] = imitation * _weighted_mean(
+                    F.cross_entropy(out[head][m], label[head], reduction="none"), weight
+                )
+                stats[f"{head}_accuracy"] = float(
+                    (out[head][m].argmax(-1) == label[head]).float().mean()
+                )
+        else:
+            losses["action"] = imitation * _weighted_mean(
+                F.cross_entropy(out["action"][m], label["action"], reduction="none"), weight
+            )
+            frames = out["frames"][m].view(-1, len(EXECUTOR_ACTIONS), FRAME_BINS)
+            chosen = frames[torch.arange(len(frames)), label["action"]]
+            losses["frames"] = imitation * _weighted_mean(
+                F.cross_entropy(chosen, label["frames"], reduction="none"), weight
+            )
+            agree = out["action"][m].argmax(-1) == label["action"]
+            stats["action_accuracy"] = float(agree.float().mean())
+            same_length = chosen.argmax(-1) == label["frames"]
+            stats["frames_accuracy"] = float(same_length.float().mean())
     x = d["explored"]
     if rl is not None and x.any():
         picks = {head: d[f"pick_{head}"][x] for head in CHOICES[learner]}
@@ -1247,13 +1271,20 @@ def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
 
     - Action layer: the single-action families (action_families), scenes that
       each need one action and nothing else.
-    - Tactic layer: the 12 strategy families (strategy_families), one scene
+    - Skill layer: all registered scenes, with spatial destination labels.
+    - Tactic layer: the 14 strategy families (strategy_families), one scene
       per tactic played under each strategy.
     """
     from .action_families import ACTION_FAMILIES
     from .strategy_families import STRATEGY_TACTIC_FAMILIES
 
-    own = ACTION_FAMILIES if learner == "action" else STRATEGY_TACTIC_FAMILIES
+    own = (
+        ACTION_FAMILIES
+        if learner == "action"
+        else BLOCK_SMB_MC_FAMILIES
+        if learner == "skill"
+        else STRATEGY_TACTIC_FAMILIES
+    )
     return tuple(f for f in families if f in own)
 
 
@@ -1469,8 +1500,12 @@ def load_layered_checkpoint(path, device="cpu"):
         raise ValueError(f"{path} was trained on a different observation layout")
     saved, now = checkpoint["token_layout"], token_layout()
     other_strategies = saved.get("strategies") != now["strategies"]
-    if saved.get("tactics") != now["tactics"] or (
-        other_strategies and "tactic" in checkpoint["trained_layers"]
+    if (
+        saved.get("skill") != now["skill"]
+        or saved.get("action_input") != now["action_input"]
+        or saved.get("executor_actions") != now["executor_actions"]
+        or saved.get("tactics") != now["tactics"]
+        or (other_strategies and "tactic" in checkpoint["trained_layers"])
     ):
         raise ValueError(f"{path} was trained with different tokens")
     policy = LayeredSMBPolicy(PolicySettings(**checkpoint["settings"])).to(device)

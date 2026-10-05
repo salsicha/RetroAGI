@@ -427,6 +427,7 @@ def safe_jump_holds(
     *,
     verify_recovery: bool = True,
     plant_history=None,
+    avoid_stomp: bool = False,
 ) -> list[int]:
     """Replay the 1–16-frame menu through landing or terminal success, then restore.
 
@@ -468,6 +469,8 @@ def safe_jump_holds(
                 airborne |= not env.mario["on_ground"]
                 landed = airborne and env.mario["on_ground"]
                 bouncing |= info["reward_terms"]["enemy_stomp"] > 0
+                if bouncing and avoid_stomp:
+                    break
                 if info["death"]:
                     break
                 achieved = (

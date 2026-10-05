@@ -338,6 +338,7 @@ def compose(rng: random.Random, difficulty: str, parts: list) -> tuple[dict, dic
             seg["end"] = end
             if "stomp" in seg:
                 seg["stomp"] += e0
+            seg["keep_alive"] = [i + e0 for i in seg.get("keep_alive", ())]
             return seg
 
         if section.segments:

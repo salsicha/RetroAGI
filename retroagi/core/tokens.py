@@ -10,18 +10,19 @@
 - The tactic layer holds a TacticToken over many actions: the way Mario is to
   move. Forward is right, the level's way; backward is left:
   - advance: go forward on the level (getting past enemies, jumping gaps,
-    stomping and waiting for the way to clear are all part of it);
+    and stomping are all part of it);
   - retreat: go backward on the level;
   - climb_forward / climb_backward: go up onto something higher, ahead or
     behind;
   - descend_forward / descend_backward: go down to something lower, ahead or
-    behind.
-- The action layer turns the tactic token into a button action and a frame
-  count for the executor (smb_executor).
+    behind;
+  - hold_ground: stay at the current spot on the supporting platform, moving
+    with that platform until the tactic ends.
+- The skill layer reads the tactic and chooses a run/jump/hold destination.
+- The action layer reads only that spatial command and emits an executor plan.
 
-In Block SMB the action layer learns from explicit tactic tokens given by a
-teacher; at play time the token comes only from the tactic layer, which reads
-the switch.
+In Block SMB each learner receives a teacher command from above. At play
+time the skill receives the tactic and the action receives the skill command.
 """
 
 from dataclasses import dataclass
@@ -36,8 +37,50 @@ TACTICS = (
     "climb_backward",
     "descend_forward",
     "descend_backward",
+    "hold_ground",
 )
 BACKWARD_TACTICS = frozenset(("retreat", "climb_backward", "descend_backward"))
+SKILL_MODES = ("run", "jump", "hold")
+# Pixel destinations relative to Mario's feet at the decision frame. Positive
+# x is right; positive y is down. These are coordinates, not object slot IDs.
+SKILL_X = tuple(range(-256, 257))
+SKILL_Y = tuple(range(-240, 241))
+SKILL_WIDTH = len(SKILL_MODES) + 2
+
+
+@dataclass(frozen=True)
+class SkillToken:
+    """A movement mode and a destination relative to Mario's foot center.
+
+    Hold anchors the current spot on the supporting platform; x/y are ignored.
+    Run/jump coordinates describe the destination, not a button duration.
+    """
+
+    mode: str
+    x: int
+    y: int
+
+    def __post_init__(self):
+        if self.mode not in SKILL_MODES:
+            raise ValueError(f"unknown skill mode {self.mode!r}")
+        if self.x not in SKILL_X or self.y not in SKILL_Y:
+            raise ValueError("skill destination must be integer pixels within the local screen")
+
+
+def encode_skill(token: SkillToken) -> torch.Tensor:
+    vector = torch.zeros(SKILL_WIDTH)
+    vector[SKILL_MODES.index(token.mode)] = 1.0
+    if token.mode != "hold":
+        vector[-2:] = torch.tensor((token.x / 256, token.y / 256))
+    return vector
+
+
+def skill_picks(token: SkillToken) -> dict:
+    return {
+        "mode": SKILL_MODES.index(token.mode),
+        "x": SKILL_X.index(token.x),
+        "y": SKILL_Y.index(token.y),
+    }
 
 
 def _direction(value: int) -> int:
@@ -60,31 +103,22 @@ class StrategyToken:
 @dataclass(frozen=True)
 class TacticToken:
     stance: str
-    direction: int = 1
 
     def __post_init__(self):
         if self.stance not in TACTICS:
             raise ValueError(f"unknown tactic {self.stance!r}")
-        _direction(self.direction)
-        if self.direction != tactic_direction(self.stance):
-            raise ValueError(f"{self.stance} goes {tactic_direction(self.stance)}")
 
 
 DEFAULT_STRATEGY = StrategyToken("speed_run", 1)
 
 
-def tactic_direction(stance: str) -> int:
-    """The way a tactic goes: forward (right, the level's way) or backward (left)."""
-    return -1 if stance in BACKWARD_TACTICS else 1
-
-
 def tactic_token(stance: str) -> TacticToken:
-    """A tactic with its direction."""
-    return TacticToken(stance, tactic_direction(stance))
+    """A categorical tactic with no separate direction channel."""
+    return TacticToken(stance)
 
 
 STRATEGY_WIDTH = len(STRATEGIES) + 1
-TACTIC_WIDTH = len(TACTICS) + 1
+TACTIC_WIDTH = len(TACTICS)
 
 
 def encode_strategy(token: StrategyToken) -> torch.Tensor:
@@ -96,13 +130,26 @@ def encode_strategy(token: StrategyToken) -> torch.Tensor:
 
 
 def encode_tactic(token: TacticToken) -> torch.Tensor:
-    """[TACTIC_WIDTH]: one-hot tactic, then its direction (-1 or 1)."""
+    """[TACTIC_WIDTH]: one-hot tactic only."""
     vector = torch.zeros(TACTIC_WIDTH)
     vector[TACTICS.index(token.stance)] = 1.0
-    vector[-1] = float(token.direction)
     return vector
 
 
 def token_layout() -> dict:
     """The token vocabularies, stored with checkpoints and compared on load."""
-    return {"strategies": list(STRATEGIES), "tactics": list(TACTICS)}
+    from .actions import SMB_ACTIONS
+
+    return {
+        "strategies": list(STRATEGIES),
+        "tactics": list(TACTICS),
+        "executor_actions": [action.name for action in SMB_ACTIONS] + ["HOLD_GROUND"],
+        "skill": {
+            "modes": list(SKILL_MODES),
+            "x": list(SKILL_X),
+            "y": list(SKILL_Y),
+            "reference": "mario_feet_relative_pixels",
+            "history": 16,
+        },
+        "action_input": "skill_only_v1",
+    }

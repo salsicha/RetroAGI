@@ -1,7 +1,7 @@
 """Families with an explicit plan (tactic_schedule), in four groups.
 
-Only the strategy families train a layer (the tactic layer); the other three
-groups are no longer trained on:
+All four groups train the skill layer. Strategy families also train the
+tactic layer:
 
 - **The scene decides the tactic**: upper_route and lower_route (an alternate route), dead_end_retreat (retreat out of a dead
   end, then an alternate route) and monster_retreat (keep away from a monster
@@ -10,7 +10,7 @@ groups are no longer trained on:
   chained and sequence families, rebuilt from sections.
 - **Clones**: sibling families that play the very same layouts (the layout
   depends only on the sample's seed) and differ only in their plans. They
-  were made for the skill layer, which is gone; no layer trains on them now.
+  teach the skill layer different destination choices in the same scene.
   A sibling loses its episode when Mario does not follow its plan (a
   forbidden platform, leaving a hold area early; the goal counts only once the
   retreat is done). Every sibling's route is checked on each layout, so a

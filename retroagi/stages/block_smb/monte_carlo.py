@@ -17,6 +17,7 @@ from .action_families import ACTION_FAMILIES, action_family_scenario
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
 from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES
+from .skill_families import SKILL_FAMILIES, skill_family_scenario
 from .tactic_families import NEW_FAMILIES, TACTIC_FAMILIES, family_route, tactic_family_scenario
 from .tactic_schedule import segment
 from .transfer_failure_families import (
@@ -58,6 +59,7 @@ BLOCK_SMB_MC_FAMILIES = (
     *HIERARCHY_FAMILIES,
     *NEW_FAMILIES,
     *ACTION_FAMILIES,
+    *SKILL_FAMILIES,
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 # Families that are advance all the way: their schedule is one advance segment
@@ -424,6 +426,11 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
         schemas[family] = {
             "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
             "tactics": "explicit, per layout (tactic_schedule)",
+        }
+    for family in SKILL_FAMILIES:
+        schemas[family] = {
+            "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
+            "objective": "land past the enemy without killing it",
         }
     for family in ACTION_FAMILIES:
         schemas[family] = {
@@ -1103,6 +1110,14 @@ def _family_tactics(family, scenario) -> list:
         return scenario["tactics"]
     goal = scenario["goal"]
     direction = -1 if goal[0] + goal[2] / 2 < scenario["mario"][0] else 1
+    if family in SKILL_FAMILIES:
+        return [
+            segment(
+                "advance" if direction > 0 else "retreat",
+                direction,
+                keep_alive=range(len(scenario.get("enemies", ()))),
+            )
+        ]
     if family in BRIDGE_SEGMENT_FAMILIES:
         return [segment("advance", direction, kind="bridge")]
     if family == "piranha_avoidance":
@@ -1126,6 +1141,7 @@ def _generate_family_scenario(family, rng, *, split, difficulty=None):
     if (
         family in TACTIC_FAMILIES
         or family in ACTION_FAMILIES
+        or family in SKILL_FAMILIES
         or family in ("bridge_mount", "bridge_dismount")
     ):
         # The teacher's route under the layout's own tactics.
@@ -1188,7 +1204,7 @@ def _verified_route(family, scenario, authored_actions):
     def reachable(actions):
         return validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=max_steps)
 
-    if family in TACTIC_FAMILIES or family in ACTION_FAMILIES:
+    if family in TACTIC_FAMILIES or family in ACTION_FAMILIES or family in SKILL_FAMILIES:
         # Only the teacher's route under the layout's tactics counts.
         result = reachable(authored_actions)
         if result["reachable"]:
@@ -1228,6 +1244,8 @@ def _generate_family_scenario_raw(
         raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
     if family in TACTIC_FAMILIES:
         return tactic_family_scenario(family, rng, difficulty)
+    if family in SKILL_FAMILIES:
+        return skill_family_scenario(family, rng, difficulty)
     if family in ACTION_FAMILIES:
         return action_family_scenario(family, rng, difficulty)
     if family in TRANSFER_FAILURE_FAMILIES:

@@ -17,8 +17,8 @@ the explicit tactic token.
      riding a moving platform, while waiting for a plant to go back into its
      pipe, or while a monster is far enough; retreat while backing away from
      it; advance otherwise);
-  2. the next move under that stance. Holding the area is advancing (the
-     action layer sees from the scene when to stand still). A scheduled
+  2. the next move under that stance. Holding the area is hold_ground: stay
+     at the current spot relative to the supporting platform. A scheduled
      retreat is retreating. Under advance or alternate route the move aims
      at the segment's next route platform, else the nearest obstacle toward
      the goal: a platform higher than Mario's feet is climbed, a lower one
@@ -38,8 +38,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from retroagi.core.actions import SMB_JUMP_ACTIONS, SMBAction
-from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan
-from retroagi.core.tokens import DEFAULT_STRATEGY, StrategyToken, TacticToken, tactic_token
+from retroagi.core.smb_executor import FRAME_COUNTS, HOLD_GROUND, ActionPlan
+from retroagi.core.tokens import (
+    DEFAULT_STRATEGY,
+    SkillToken,
+    StrategyToken,
+    TacticToken,
+    tactic_token,
+)
 
 from . import tactic_schedule
 from .monte_carlo import block_smb_monte_carlo_metadata
@@ -153,7 +159,7 @@ def _move(env, state: TeacherState, stance: str, direction: int) -> tuple[str, i
 
     seg = tactic_schedule.current(env)
     if stance == "hold_area":
-        return "walk", 1
+        return "hold", 0
     if stance == "retreat" and (seg["stance"] == "retreat" or seg["kind"] != "plain"):
         # Backing out of a dead end, away from a monster or a plant.
         return "walk", direction
@@ -190,6 +196,8 @@ def _objective_move(env, objective) -> str:
 
 def tactic_of_move(move: str, direction: int) -> str:
     """A move and its way as a tactic name: forward is right, backward left."""
+    if move == "hold":
+        return "hold_ground"
     if move in ("climb", "descend"):
         return f"{move}_{'forward' if direction > 0 else 'backward'}"
     return "advance" if direction > 0 else "retreat"
@@ -236,7 +244,7 @@ def _remembered_route(env, state: TeacherState) -> Optional[list[int]]:
         return None
     start, route, fingerprints = state.notes["route"]
     k = env.steps - start
-    if 0 < k < len(route) and fingerprints[k] == _fingerprint(env):
+    if 0 <= k < len(route) and fingerprints[k] == _fingerprint(env):
         return route[k:]
     return None
 
@@ -253,7 +261,9 @@ def _remember_route(env, state: TeacherState, route: list[int]) -> None:
     state.notes["route"] = (env.steps, list(route), fingerprints)
 
 
-def teacher_plan(env, state: TeacherState) -> tuple[Optional[ActionPlan], tuple[int, ...]]:
+def teacher_plan(
+    env, state: TeacherState, *, certify_holds: bool = True
+) -> tuple[Optional[ActionPlan], tuple[int, ...]]:
     """The coached route's next action and frame count, and every certified jump hold.
 
     Returns (None, ()) when no coached route reaches the goal from here. While
@@ -266,6 +276,9 @@ def teacher_plan(env, state: TeacherState) -> tuple[Optional[ActionPlan], tuple[
     from .policy_recovery import coached_suffix
 
     route = _remembered_route(env, state)
+    if route is None and env.steps == 0 and state.notes.get("initial_route"):
+        route = list(state.notes["initial_route"])
+        _remember_route(env, state, route)
     if route is None:
         # The coached route plays itself forward in the simulator; put it back after.
         with probe_state(env):
@@ -279,12 +292,19 @@ def teacher_plan(env, state: TeacherState) -> tuple[Optional[ActionPlan], tuple[
             return None, ()
         _remember_route(env, state, route)
     plan = _first_plan(route)
+    if plan.action == SMBAction.NOOP and teacher_tactic(env, state).stance == "hold_ground":
+        plan = ActionPlan(HOLD_GROUND, plan.frames)
     holds: tuple[int, ...] = ()
-    if SMBAction(plan.action) in SMB_JUMP_ACTIONS:
+    if certify_holds and plan.action in SMB_JUMP_ACTIONS:
         direction = -1 if plan.action == SMBAction.LEFT_JUMP else 1
-        holds = tuple(
-            safe_jump_holds(env, training_target(env), direction, plant_history=state.history)
-        )
+        if getattr(env, "_action_jump_direction", 0):
+            from .policy_recovery import single_jump_routes
+
+            holds = tuple(h for h in single_jump_routes(env) if h > 0)
+        else:
+            holds = tuple(
+                safe_jump_holds(env, training_target(env), direction, plant_history=state.history)
+            )
     return plan, holds
 
 
@@ -295,4 +315,45 @@ def episode_teacher(scenario) -> TeacherState:
         family=str(block_smb_monte_carlo_metadata(scenario).get("family", "")),
         direction=direction,
         strategy=scenario.get("strategy") or DEFAULT_STRATEGY.kind,
+        notes={
+            "initial_route": block_smb_monte_carlo_metadata(scenario)
+            .get("oracle", {})
+            .get("actions")
+        },
     )
+
+
+def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> SkillToken:
+    """A spatial destination for the next maneuver, from the teacher's rollout.
+
+    A jump targets its landing/stomp, not its takeoff or a hidden object ID.
+    Run targets the end of the next bounded movement. The probe is restored
+    exactly; only this resulting command reaches an action learner.
+    """
+    from retroagi.core.smb_coaching import probe_state
+
+    if plan is not None and plan.action == HOLD_GROUND:
+        return SkillToken("hold", 0, 0)
+    start_x = env.mario["x"] + env.mario["w"] / 2
+    start_y = env.mario["y"] + env.mario["h"]
+    route = _remembered_route(env, state) if plan is not None else None
+    mode = "jump" if plan is not None and plan.action in SMB_JUMP_ACTIONS else "run"
+    if route:
+        with probe_state(env):
+            airborne = not env.mario["on_ground"]
+            limit = 160 if mode == "jump" else plan.frames
+            for action in route[:limit]:
+                _, _, done, _, _ = env.step(action)
+                airborne = airborne or not env.mario["on_ground"]
+                if done or (
+                    mode == "jump" and airborne and (env.mario["on_ground"] or env.stomped)
+                ):
+                    break
+            x = env.mario["x"] + env.mario["w"] / 2 - start_x
+            y = env.mario["y"] + env.mario["h"] - start_y
+    else:
+        # Unlabelled recovery state: provide a local destination so collection
+        # can continue, but do not treat it as a certified skill demonstration.
+        x = env.goal.centerx - start_x if env.goal is not None else 0
+        y = 0
+    return SkillToken(mode, max(-256, min(256, round(x))), max(-240, min(240, round(y))))

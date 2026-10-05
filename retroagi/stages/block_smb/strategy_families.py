@@ -1,7 +1,7 @@
 """The tactic layer's families: one scene per tactic, played under each strategy.
 
-There are six scenes, one per tactic (tokens.TACTICS), and each is played under
-both strategies (tokens.STRATEGIES): 12 families, named <strategy>_<tactic>
+There are seven scenes, one per tactic (tokens.TACTICS), and each is played under
+both strategies (tokens.STRATEGIES): 14 families, named <strategy>_<tactic>
 (speed_run_advance, max_points_climb_backward, ...). The two families of a
 scene play the very same layouts (a layout depends only on the sample's seed)
 and differ only in the strategy switch, what the episode pays and wins, and
@@ -17,6 +17,7 @@ A scene's main structure needs its tactic to reach the goal:
 | climb_backward | the goal on a step behind |
 | descend_forward | Mario on a ledge, the goal on the floor ahead |
 | descend_backward | Mario on a ledge, the goal on the floor behind |
+| hold_ground | hold the starting spot for 64 frames, then traverse to the right |
 
 Forward is right. The backward scenes fit in one screen: the camera never
 scrolls back. Difficulty sets the pit, step and drop sizes (as in
@@ -168,7 +169,9 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
     detour; scenario["route_tactics"] holds one schedule for every
     combination of taking and skipping them (keyed "name=take|name=skip").
     """
-    main = _main(rng, difficulty, tactic)
+    if tactic not in TACTICS:
+        raise ValueError(f"unknown tactic {tactic!r}")
+    main = _main(rng, difficulty, "advance" if tactic == "hold_ground" else tactic)
     side, ground = main["side"], main["ground"]
     (lo, hi), (back_lo, back_hi) = main["way"], main["behind"]
     platforms = list(main["platforms"])
@@ -245,6 +248,10 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
     for taken in itertools.product((False, True), repeat=len(detours)):
         key = "|".join(f"{d['name']}={'take' if t else 'skip'}" for d, t in zip(detours, taken))
         schedules[key] = _schedule(side, detours, dict(zip(chosen, taken)))
+        if tactic == "hold_ground":
+            # A fixed interval is observable through tactic age. Both strategies
+            # must preserve this spot before choosing their onward route.
+            schedules[key].insert(0, segment("hold_area", side, area=1, frames=64))
     world = main["world"]
     scenario = {
         "world_width": world,
@@ -323,7 +330,7 @@ def _played_routes(scenario: dict) -> dict:
     import json
     import os
 
-    key = json.dumps(
+    key = "bypass-candidates-v1:" + json.dumps(
         {k: v for k, v in scenario.items() if k not in ("strategy", "strategy_objective")},
         sort_keys=True,
         default=str,
@@ -336,13 +343,16 @@ def _played_routes(scenario: dict) -> dict:
     except (OSError, ValueError):
         played = {}
         for combination, schedule in scenario["route_tactics"].items():
-            trial = copy.deepcopy({k: v for k, v in scenario.items() if k != "route_tactics"})
-            trial["tactics"] = schedule
-            trial.pop("strategy", None)
-            trial.pop("strategy_objective", None)
-            route = route_actions(trial)
-            if route:
-                played[combination] = (len(route), _points_collected(trial, route), route)
+            for bypass in (False, True):
+                trial = copy.deepcopy({k: v for k, v in scenario.items() if k != "route_tactics"})
+                trial["tactics"] = schedule
+                trial["prefer_enemy_bypass"] = bypass
+                trial.pop("strategy", None)
+                trial.pop("strategy_objective", None)
+                route = route_actions(trial)
+                if route:
+                    key_name = combination + ("|motion=bypass" if bypass else "|motion=default")
+                    played[key_name] = (len(route), _points_collected(trial, route), route)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             spare = path.with_suffix(f".{os.getpid()}.tmp")
@@ -374,7 +384,9 @@ def strategy_route(family: str, scenario: dict) -> list[int]:
         return []  # no detour gained points over the fastest route here
     strategy = STRATEGY_TACTIC_FAMILIES[family][0]
     chosen = best(strategy)
-    scenario["tactics"] = choices[chosen]
+    base, motion = chosen.rsplit("|motion=", 1)
+    scenario["tactics"] = choices[base]
+    scenario["prefer_enemy_bypass"] = motion == "bypass"
     scenario["strategy_route"] = chosen
     # What the teacher measured: frames and points.
     scenario["route_results"] = {c: list(result[:2]) for c, result in played.items()}

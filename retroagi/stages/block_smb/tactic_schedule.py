@@ -23,11 +23,13 @@ A segment is a dictionary:
 - ``avoid``: platform indices the teacher's route keeps off, without
   standing on them being a loss (optional);
 - ``area``: for hold_area, how far (pixels) Mario may move from where the
-  segment began;
+  segment began, relative to the platform supporting him then;
 - ``keep_behind``: for a monster segment, a line Mario should stay behind
   until he jumps over it (monster.py);
 - ``stomp``: an enemy the teacher goes to stomp while the segment lasts
   (smb_coaching.training_target), optional;
+- ``keep_alive``: enemies that must remain alive; killing one fails the segment,
+  used to distinguish bypassing an enemy from stomping it;
 - ``end``: when the segment is over, one of
   ``{"on": i}`` standing on platform i,
   ``{"reach_x": x}`` Mario's left edge at or past x in the segment's direction,
@@ -61,6 +63,7 @@ def segment(
     area: Optional[float] = None,
     keep_behind: Optional[float] = None,
     stomp: Optional[int] = None,
+    keep_alive: Iterable[int] = (),
     **end: Any,
 ) -> dict:
     """One segment (see the module notes); ``end`` is one keyword, e.g. on=3."""
@@ -71,6 +74,7 @@ def segment(
         "route": [int(i) for i in route],
         "forbidden": [int(i) for i in forbidden],
         "avoid": [int(i) for i in avoid],
+        "keep_alive": [int(i) for i in keep_alive],
         "end": dict(end) or {"goal": True},
     }
     if area is not None:
@@ -113,6 +117,8 @@ def check_schedule(schedule: list, platform_count: int, enemy_count: int) -> Non
         for enemy in (seg["end"].get("past_enemy"), seg.get("stomp")):
             if enemy is not None and not 0 <= enemy < enemy_count:
                 raise ValueError(f"enemy {enemy} is not in the layout")
+        if any(not 0 <= i < enemy_count for i in seg.get("keep_alive", ())):
+            raise ValueError("keep_alive names an enemy outside the layout")
 
 
 def advance_only(direction: int = 1) -> list:
@@ -136,6 +142,12 @@ def start(env, schedule: Optional[list]) -> None:
 def _begin(env) -> None:
     env._tactic_started = env.steps
     env._tactic_anchor = env.mario["x"]
+    env._tactic_anchor_platform = _support_index(env)
+    env._tactic_anchor_platform_x = (
+        env.platforms[env._tactic_anchor_platform]["rect"].x
+        if env._tactic_anchor_platform is not None
+        else 0
+    )
     env._route_done = 0
 
 
@@ -195,9 +207,18 @@ def track(env) -> bool:
         env._route_done = route.index(on) + 1
     if on is not None and on in seg.get("forbidden", ()):
         env._off_route = True
-    area = seg.get("area")
-    if area is not None and abs(env.mario["x"] - env._tactic_anchor) > area:
+    if any(env.enemies[i]["dead"] for i in seg.get("keep_alive", ())):
         env._off_route = True
+    area = seg.get("area")
+    if area is not None:
+        anchor = env._tactic_anchor
+        platform = env._tactic_anchor_platform
+        if platform is not None:
+            anchor += env.platforms[platform]["rect"].x - env._tactic_anchor_platform_x
+        if abs(env.mario["x"] - anchor) > area or (
+            seg["stance"] == "hold_area" and platform is not None and on != platform
+        ):
+            env._off_route = True
     while env._tactic_index < len(env._tactics) - 1 and _over(env, current(env)):
         env._tactic_index += 1
         _begin(env)
@@ -234,6 +255,8 @@ STATE_FIELDS = (
     "_tactic_index",
     "_tactic_started",
     "_tactic_anchor",
+    "_tactic_anchor_platform",
+    "_tactic_anchor_platform_x",
     "_route_done",
     "_off_route",
 )

@@ -1,7 +1,9 @@
 """The action layer's families: scenes that each need a single action.
 
-Each scene asks for one action, under one tactic, the one the teacher labels
-at every decision of its route, and nothing else:
+Each scene asks for one isolated maneuver. The teacher supplies spatial skill
+commands to the action learner. The tactic labels below are used when these
+scenes train skill. The additional mirrored families at the end cover raised
+platforms/enemies and immediate jumps down to a lower landing.
 
 | Family | The one action | Tactic | Parameters (every value is swept) |
 |---|---|---|---|
@@ -13,7 +15,7 @@ at every decision of its route, and nothing else:
 | action_descend | walk off a ledge ahead down to the floor | descend_forward | drop height, distance to the edge |
 | action_descend_back | walk off a ledge behind down to the floor | descend_backward | drop height, distance to the edge |
 | action_stomp | land on an enemy walking toward Mario | advance | its distance, its speed |
-| action_wait | stand still on a moving platform that carries Mario to the goal | advance | how far it travels, its speed |
+| action_wait | stand still on a moving platform that carries Mario to the goal | hold_ground | how far it travels, its speed |
 
 The scenes going back to the left fit in one screen: the camera never
 scrolls back, so the whole scene must be in view from the start.
@@ -47,6 +49,14 @@ ACTION_FAMILIES = (
     "action_descend_back",
     "action_stomp",
     "action_wait",
+    "action_jump_gap_back",
+    "action_platform_up",
+    "action_platform_up_back",
+    "action_stomp_back",
+    "action_stomp_up",
+    "action_stomp_up_back",
+    "action_jump_down",
+    "action_jump_down_back",
 )
 
 # The main parameter's range at each difficulty.
@@ -193,10 +203,107 @@ def action_wait(rng, difficulty: str):
         # Where Mario is when the platform reaches the end of its travel.
         "goal": [end + offset - 3, STANDING, MARIO_WIDTH + 6, 20],
         "goal_requires_support": True,
-        "tactics": [segment("hold_area", 1)],
+        "tactics": [segment("hold_area", 1, area=1)],
     }
     parameters = {"travel": travel, "platform_speed": speed, "difficulty_bin": difficulty}
     return scenario, parameters, [0]
+
+
+def _mirror(scenario):
+    """Reflect a one-screen maneuver, including enemy motion and its goal."""
+    import copy
+
+    reflected = copy.deepcopy(scenario)
+    world = scenario["world_width"]
+    reflected["mario"][0] = world - scenario["mario"][0] - MARIO_WIDTH
+    for platform in reflected["platforms"]:
+        platform[0] = world - platform[0] - platform[2]
+    goal = reflected["goal"]
+    goal[0] = world - goal[0] - goal[2]
+    for enemy in reflected.get("enemies", []):
+        enemy[0] = world - enemy[0] - 10
+        enemy[2], enemy[3] = world - enemy[3], world - enemy[2]
+        enemy[5] = -enemy[5]
+    reflected["action_jump_direction"] = -1
+    return reflected
+
+
+def action_jump_gap_back(rng, difficulty):
+    scenario, params, _ = action_jump_gap(rng, difficulty)
+    # Fit backward landings entirely in view.
+    scenario["world_width"] = 256
+    scenario["platforms"][-1][2] = 256 - scenario["platforms"][-1][0]
+    return _mirror(scenario), params, [4]
+
+
+def action_stomp_back(rng, difficulty):
+    scenario, params, _ = action_stomp(rng, difficulty)
+    scenario["world_width"] = 256
+    scenario["platforms"][0][2] = 256
+    scenario["enemies"][0][3] = 256
+    return _mirror(scenario), params, [4]
+
+
+def _raised(rng, difficulty, *, enemy=False, back=False):
+    height = rng.randint(*({"easy": (8, 16), "medium": (17, 28), "hard": (29, 40)}[difficulty]))
+    distance = rng.randint(0, 4)
+    step, width = 120, 88
+    top = FLOOR - height
+    scenario = {
+        "world_width": 256,
+        "mario": [step - MARIO_WIDTH - distance, STANDING],
+        "platforms": [[0, FLOOR, 256, 20], [step, top, width, 8]],
+        "goal": [step + 4, top - 20, width - 8, 20],
+        "goal_requires_support": True,
+        "action_jump_direction": 1,
+    }
+    params = {"height": height, "distance": distance, "difficulty_bin": difficulty}
+    if enemy:
+        speed = rng.choice((0.0, 0.4, 0.8))
+        scenario["enemies"] = [[step + 24, top - 14, step, step + width, speed, -1]]
+        scenario["goal_on_stomp"] = True
+        params["enemy_speed"] = speed
+    return (_mirror(scenario) if back else scenario), params, [4 if back else 2]
+
+
+def action_platform_up(rng, difficulty):
+    return _raised(rng, difficulty)
+
+
+def action_platform_up_back(rng, difficulty):
+    return _raised(rng, difficulty, back=True)
+
+
+def action_stomp_up(rng, difficulty):
+    return _raised(rng, difficulty, enemy=True)
+
+
+def action_stomp_up_back(rng, difficulty):
+    return _raised(rng, difficulty, enemy=True, back=True)
+
+
+def _jump_down(rng, difficulty, back=False):
+    drop = rng.randint(*DROPS[difficulty])
+    gap = rng.randint(8, 24)
+    edge = 104
+    scenario = {
+        "world_width": 256,
+        "mario": [edge - MARIO_WIDTH - 2, FLOOR - drop - 20],
+        "platforms": [[0, FLOOR - drop, edge, 12], [edge + gap, FLOOR, 256 - edge - gap, 20]],
+        "goal": [edge + gap, STANDING, 256 - edge - gap, 20],
+        "goal_requires_support": True,
+        "action_jump_direction": 1,
+    }
+    params = {"drop_height": drop, "gap_width": gap, "difficulty_bin": difficulty}
+    return (_mirror(scenario) if back else scenario), params, [4 if back else 2]
+
+
+def action_jump_down(rng, difficulty):
+    return _jump_down(rng, difficulty)
+
+
+def action_jump_down_back(rng, difficulty):
+    return _jump_down(rng, difficulty, back=True)
 
 
 GENERATORS = {
@@ -209,6 +316,14 @@ GENERATORS = {
     "action_descend_back": action_descend_back,
     "action_stomp": action_stomp,
     "action_wait": action_wait,
+    "action_jump_gap_back": action_jump_gap_back,
+    "action_platform_up": action_platform_up,
+    "action_platform_up_back": action_platform_up_back,
+    "action_stomp_back": action_stomp_back,
+    "action_stomp_up": action_stomp_up,
+    "action_stomp_up_back": action_stomp_up_back,
+    "action_jump_down": action_jump_down,
+    "action_jump_down_back": action_jump_down_back,
 }
 
 

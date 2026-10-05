@@ -393,6 +393,7 @@ class MarioScenarioEnv:
             if horizontally_over and 0 <= drop <= 8:
                 self.mario["y"] = float(rect.top - self.mario["h"])
                 self.mario["on_ground"] = True
+                self.mario["_platform"] = platform
                 break
 
         # Coins
@@ -428,6 +429,8 @@ class MarioScenarioEnv:
         # track the moving target, and goal credit is granted by the stomp
         # itself rather than by touching the goal rect.
         self._goal_on_stomp = bool(scenario.get("goal_on_stomp", False))
+        self._action_jump_direction = int(scenario.get("action_jump_direction", 0))
+        self._prefer_enemy_bypass = bool(scenario.get("prefer_enemy_bypass", False))
         from .tasks import scenario_family
 
         family = scenario_family(scenario)

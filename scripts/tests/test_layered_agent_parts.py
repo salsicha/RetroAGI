@@ -26,10 +26,13 @@ from retroagi.core.smb_scene_labels import (
     Surface,
 )
 from retroagi.core.tokens import (
+    SKILL_WIDTH,
     TACTIC_WIDTH,
     TACTICS,
+    SkillToken,
     StrategyToken,
     TacticToken,
+    encode_skill,
     encode_tactic,
     tactic_token,
 )
@@ -105,14 +108,18 @@ def test_tokens_refuse_unknown_values_and_wrong_directions():
         StrategyToken("hurry")
     with pytest.raises(ValueError):
         TacticToken("jump_gap")
-    with pytest.raises(ValueError):
-        TacticToken("advance", -1)  # forward is right
+    with pytest.raises(TypeError):
+        TacticToken("advance", -1)  # no direction argument
     vector = encode_tactic(tactic_token("climb_backward"))
     assert vector.shape == (TACTIC_WIDTH,)
-    assert vector[TACTICS.index("climb_backward")] == 1.0 and vector[-1] == -1.0
+    assert TACTIC_WIDTH == len(TACTICS) == 7
+    assert vector[TACTICS.index("climb_backward")] == 1.0
+    assert vector.sum() == 1.0 and vector[-1] == 0.0
+    hold = encode_tactic(tactic_token("hold_ground"))
+    assert hold[-1] == 1.0 and hold.sum() == 1.0
 
 
-def test_the_tactics_are_the_six_ways_to_move_forward_is_right():
+def test_tactics_include_holding_and_have_no_direction_field():
     assert TACTICS == (
         "advance",
         "retreat",
@@ -120,9 +127,9 @@ def test_the_tactics_are_the_six_ways_to_move_forward_is_right():
         "climb_backward",
         "descend_forward",
         "descend_backward",
+        "hold_ground",
     )
-    backward = {t for t in TACTICS if tactic_token(t).direction == -1}
-    assert backward == {"retreat", "climb_backward", "descend_backward"}
+    assert all(not hasattr(tactic_token(t), "direction") for t in TACTICS)
 
 
 # ── Executor ──────────────────────────────────────────────────────────────────
@@ -209,21 +216,39 @@ def test_a_landing_ends_the_action_early_and_nothing_else_does():
     assert [step.button for step in steps] == [SMBAction.RIGHT] * 6
 
 
+def test_the_agent_updates_the_hold_controller_between_policy_decisions():
+    from retroagi.core.smb_agent import SMBAgents
+    from retroagi.core.smb_executor import HOLD_GROUND
+    from retroagi.core.smb_observer import VisionObserver
+
+    pictures = [scene(), scene(mario=(104, 192, 116, 208)), scene(mario=(96, 192, 108, 208))]
+    agents = SMBAgents(VisionObserver(SceneList(pictures)), LayeredSMBPolicy().eval(), "cpu")
+
+    def given(copies, scenes):
+        return {"tactic": [tactic_token("hold_ground")], "action": [ActionPlan(HOLD_GROUND, 8)]}
+
+    screen = [np.zeros((240, 256, 3), np.uint8)]
+    steps = [agents.act(screen, [0], given=given)[0] for _ in pictures]
+    assert [step.button for step in steps] == [SMBAction.NOOP, SMBAction.LEFT, SMBAction.RIGHT]
+    assert [step.decision is not None for step in steps] == [True, False, False]
+
+
 # ── Layers ────────────────────────────────────────────────────────────────────
 
 
-def test_the_action_layer_reads_only_the_inputs_and_the_tactic_token():
+def test_the_action_layer_reads_only_the_spatial_command(monkeypatch):
     torch.manual_seed(0)
     policy = LayeredSMBPolicy().eval()
-    inputs = policy_input(scene(enemies=[EnemyView((150, 198, 160, 208), "walker")]))
-    rows = (inputs.src_a[None], inputs.src_b[None], inputs.src_c[None])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("action network read vision or memory")
+
+    monkeypatch.setattr(policy.scene, "forward", forbidden)
+    monkeypatch.setattr(policy.memory, "forward", forbidden)
     with torch.no_grad():
-        now = policy.encode_scene(rows)
-        _, memory = policy.expect(policy.remember(now, None))
-        out = policy.run_action(now, memory, encode_tactic(tactic_token("advance"))[None])
-        other = policy.run_action(now, memory, encode_tactic(tactic_token("retreat"))[None])
-    first = {name: value[0] for name, value in out.items()}
-    assert isinstance(action_plan(first), ActionPlan)
+        out = policy.run_action(encode_skill(SkillToken("jump", 40, -24))[None])
+        other = policy.run_action(encode_skill(SkillToken("jump", -40, -24))[None])
+    assert isinstance(action_plan({name: value[0] for name, value in out.items()}), ActionPlan)
     assert not torch.equal(out["action"], other["action"])
 
 
@@ -287,9 +312,14 @@ def _record(learner: str, frames: int = 30):
     rng = np.random.default_rng(0)
     rows = [policy_input(scene(mario=(100 + t, 192, 112 + t, 208))) for t in range(frames)]
     decisions = np.array([0, 10, 20], np.int32)
-    width = {"action": TACTIC_WIDTH, "tactic": STRATEGY_WIDTH}[learner]
+    width = {"action": SKILL_WIDTH, "skill": TACTIC_WIDTH, "tactic": STRATEGY_WIDTH}[learner]
     labels = {
         "action": {"action": np.array([1, 2, 0]), "frames": np.array([3, 0, 5])},
+        "skill": {
+            "mode": np.array([0, 1, 2]),
+            "x": np.array([280, 216, 256]),
+            "y": np.array([240, 216, 240]),
+        },
         # The teacher's tactic, and whether the held one is finished.
         "tactic": {"tactic": np.array([0, 2, 2]), "end": np.array([False, True, False])},
     }[learner]
@@ -327,7 +357,7 @@ def _record(learner: str, frames: int = 30):
     )
 
 
-@pytest.mark.parametrize("learner", ["action", "tactic"])
+@pytest.mark.parametrize("learner", ["action", "skill", "tactic"])
 def test_training_one_layer_leaves_every_other_part_unchanged(learner):
     from retroagi.stages.block_smb.layered_train import learner_losses
 
@@ -341,7 +371,7 @@ def test_training_one_layer_leaves_every_other_part_unchanged(learner):
         parameter.requires_grad_(True)
     optimizer = torch.optim.SGD(learning, lr=0.1)
     losses, _ = learner_losses(policy, learner, [_record(learner)], 1.0, "cpu")
-    assert ("expectation" in losses) == (learner == "action")
+    assert ("expectation" in losses) == (learner == "skill")
     optimizer.zero_grad()
     sum(losses.values()).backward()
     optimizer.step()
@@ -454,7 +484,7 @@ def test_replaying_an_episode_gives_the_memory_play_gave():
 # ── Each layer's own previous choices ─────────────────────────────────────────
 
 
-def test_the_action_layer_reads_its_own_previous_choices():
+def test_the_skill_layer_reads_its_own_previous_destinations():
     from retroagi.core.layered_policy import CHOICE_WIDTH, HISTORY, encode_choice
 
     torch.manual_seed(0)
@@ -464,20 +494,20 @@ def test_the_action_layer_reads_its_own_previous_choices():
     tactic = encode_tactic(tactic_token("advance"))[None]
 
     def action_scores(previous):
-        choices = torch.zeros(1, HISTORY, CHOICE_WIDTH["action"])
+        choices = torch.zeros(1, HISTORY, CHOICE_WIDTH["skill"])
         present = torch.zeros(1, HISTORY, dtype=torch.bool)
         for age, plan in enumerate(previous):
-            choices[0, age] = encode_choice("action", plan)
+            choices[0, age] = encode_choice("skill", plan)
             present[0, age] = True
         with torch.no_grad():
             now = policy.encode_scene(rows)
             _, expected = policy.expect(policy.remember(now, None))
-            out = policy.run_action(now, expected, tactic, (choices, present))
-        return out["action"]
+            out = policy.run_skill(now, expected, tactic, (choices, present))
+        return out["x"]
 
     nothing = action_scores([])
-    walked = action_scores([ActionPlan(SMBAction.RIGHT, 8)] * 3)
-    jumped = action_scores([ActionPlan(SMBAction.RIGHT_JUMP, 20)] * 3)
+    walked = action_scores([SkillToken("run", 24, 0)] * 3)
+    jumped = action_scores([SkillToken("jump", 40, -24)] * 3)
     assert not torch.allclose(nothing, walked) and not torch.allclose(walked, jumped)
 
 
@@ -488,11 +518,15 @@ def test_the_agent_keeps_its_last_16_used_choices_newest_first():
 
     torch.manual_seed(0)
     agents = SMBAgents(VisionObserver(SceneEcho(scene())), LayeredSMBPolicy().eval(), "cpu")
-    plans = [ActionPlan(SMBAction.RIGHT, 1 + i % 32) for i in range(20)]
+    plans = [SkillToken("run", 1 + i, 0) for i in range(20)]
     turn = iter(plans)
 
     def given(copies, scenes):
-        return {"tactic": [tactic_token("advance")], "action": [next(turn)]}
+        return {
+            "tactic": [tactic_token("advance")],
+            "skill": [next(turn)],
+            "action": [ActionPlan(SMBAction.RIGHT, 1)],
+        }
 
     screen = [np.zeros((240, 256, 3), np.uint8)]
     while True:
@@ -502,9 +536,9 @@ def test_the_agent_keeps_its_last_16_used_choices_newest_first():
             break
         while not agents.copies[0].executor.finished:
             agents.copies[0].executor.press()
-    kept = agents.copies[0].choices["action"]
+    kept = agents.copies[0].choices["skill"]
     assert len(kept) == HISTORY
-    expected = [encode_choice("action", plan) for plan in reversed(plans)][:HISTORY]
+    expected = [encode_choice("skill", plan) for plan in reversed(plans)][:HISTORY]
     assert all(torch.equal(a, b) for a, b in zip(kept, expected))
 
 
@@ -524,7 +558,7 @@ def test_training_rebuilds_each_decisions_history_within_its_episode():
     assert choices[6, :3, 0].tolist() == [5.0, 4.0, 3.0] and not exists[6, 3]
 
 
-def test_waiting_for_a_moving_platform_is_advancing():
+def test_waiting_for_a_moving_platform_is_holding_ground():
     from retroagi.stages.block_smb.env import MarioScenarioEnv
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
     from retroagi.stages.block_smb.teacher_tokens import (
@@ -542,9 +576,7 @@ def test_waiting_for_a_moving_platform_is_advancing():
     stance, _ = schedule_stance(env, teacher)
     tactic = teacher_tactic(env, teacher)
     env.close()
-    # The schedule holds the area; the tactic is advance (the action layer
-    # sees from the scene when to stand still).
-    assert (stance, tactic.stance) == ("hold_area", "advance")
+    assert (stance, tactic.stance) == ("hold_area", "hold_ground")
 
 
 # ── The tactic layer: an option-critic with its own memory ───────────────────
@@ -825,10 +857,13 @@ def test_a_checkpoint_with_other_tokens_is_refused_unless_only_untrained_layers_
 
     older = {**token_layout(), "strategies": old_strategies}
     loaded, _ = load_layered_checkpoint(saved(older, ["action"], "action"))
-    assert torch.equal(loaded.action.query, policy.action.query)
+    assert torch.equal(loaded.action.network[0].weight, policy.action.network[0].weight)
     assert loaded.tactic.above.weight.shape == policy.tactic.above.weight.shape  # fresh
     with pytest.raises(ValueError, match="different tokens"):
         load_layered_checkpoint(saved(older, ["action", "tactic"], "tactic"))
     other_tactics = {**token_layout(), "tactics": ["advance", "alternate_route"]}
     with pytest.raises(ValueError, match="different tokens"):
         load_layered_checkpoint(saved(other_tactics, ["action"], "tactics"))
+    old_actions = {**token_layout(), "executor_actions": token_layout()["executor_actions"][:-1]}
+    with pytest.raises(ValueError, match="different tokens"):
+        load_layered_checkpoint(saved(old_actions, ["action"], "buttons_only"))

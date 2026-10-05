@@ -1,9 +1,9 @@
-"""The executor: presses one button action for a number of frames.
+"""Timed button actions and a closed-loop, platform-relative hold controller.
 
-The action layer gives it two numbers, and nothing else reaches it:
+The action layer gives it two numbers:
 
 - which button action to press: nothing, right, right + jump, left,
-  left + jump or jump;
+  left + jump, jump, or HOLD_GROUND;
 - for how many frames: any whole number from 1 to 32.
 
 It presses that button action on each of those frames. The action is over
@@ -11,13 +11,23 @@ when it has pressed all of them, or earlier when the agent tells it Mario has
 landed (smb_agent watches the vision transformer's report for that); then the
 layers choose the next action. A jump is the jump button held for its frames;
 when they are pressed the layers choose again, even with Mario in the air,
-and his landing ends whatever action is running then.
+and his landing ends whatever action is running then. HOLD_GROUND instead
+reads the current vision scene every frame and emits left, right or no buttons
+to preserve the initial horizontal offset on the supporting platform. The
+anchor persists across consecutive hold plans. No simulator state is read.
 """
 
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .actions import SMBAction
+from .smb_pixel_types import VISIBLE_COLUMNS
+from .smb_scene_labels import SceneObservation, Surface
+
+# Controller actions are not emulator buttons. Only press() translates these
+# into the six shared SMBAction values.
+HOLD_GROUND = 6
+EXECUTOR_ACTIONS = (*tuple(SMBAction), HOLD_GROUND)
 
 # The frame counts the action layer chooses from, for every action.
 FRAME_COUNTS = tuple(range(1, 33))
@@ -31,9 +41,98 @@ class ActionPlan:
     frames: int
 
     def __post_init__(self):
-        self.action = int(SMBAction(self.action))
+        if self.action not in EXECUTOR_ACTIONS:
+            raise ValueError(f"unknown executor action {self.action!r}")
+        self.action = int(self.action)
         if self.frames not in FRAME_COUNTS:
             raise ValueError(f"{self.frames} frames is outside 1 to {FRAME_COUNTS[-1]}")
+
+
+@dataclass
+class GroundHold:
+    """Track a visual support and correct relative position and drift.
+
+    Surfaces have no identity in vision, so match by geometry between frames.
+    Missing/ambiguous support releases buttons without acquiring a new anchor.
+    """
+
+    surface: Optional[Surface] = None
+    offset: Optional[float] = None
+    previous: Optional[float] = None
+    width: float = 0.0
+    right_edge: bool = False
+
+    @staticmethod
+    def clipped(surface: Surface) -> bool:
+        return surface.x0 <= VISIBLE_COLUMNS[0] or surface.x1 >= VISIBLE_COLUMNS[1]
+
+    def reference(self, surface: Surface) -> float:
+        """Use a visible edge and the remembered width when the other is clipped."""
+        self.width = max(self.width, surface.x1 - surface.x0)
+        if self.right_edge:
+            return surface.x0 + self.width if surface.x1 >= VISIBLE_COLUMNS[1] else surface.x1
+        return surface.x1 - self.width if surface.x0 <= VISIBLE_COLUMNS[0] else surface.x0
+
+    def press(self, scene: Optional[SceneObservation]) -> int:
+        if scene is None or scene.mario.box is None:
+            self.previous = None
+            return int(SMBAction.NOOP)
+        x0, _, x1, feet = scene.mario.box
+        center = (x0 + x1) / 2
+        # Compact moving-platform boxes preserve the platform edges even where
+        # Mario covers part of the surface. Fall back to reported surfaces.
+        moving = [Surface(b[0], b[2], b[1], True) for b in scene.moving_platforms]
+        surfaces = [s for s in scene.surfaces if not s.moving or not moving] + moving
+        if self.surface is None:
+            candidates = [
+                s
+                for s in surfaces
+                if s.x0 < x1
+                and s.x1 > x0
+                and abs(s.top - feet) <= 4
+                and s.moving == (scene.mario.support == "moving_platform")
+            ]
+            if scene.mario.support == "air" or not candidates:
+                return int(SMBAction.NOOP)
+            support = min(candidates, key=lambda s: abs(s.top - feet))
+            self.right_edge = support.x0 <= VISIBLE_COLUMNS[0]
+            self.offset = center - self.reference(support)
+        else:
+            old = self.surface
+            candidates = [
+                s
+                for s in surfaces
+                if s.moving == old.moving
+                and (
+                    abs((s.x1 - s.x0) - (old.x1 - old.x0)) <= 8
+                    or self.clipped(s)
+                    or self.clipped(old)
+                )
+                and abs(s.x0 - old.x0) <= 48
+                and abs(s.top - old.top) <= 24
+            ]
+            candidates.sort(key=lambda s: abs(s.x0 - old.x0) + abs(s.top - old.top))
+            if not candidates or (
+                len(candidates) > 1
+                and abs(candidates[0].x0 - old.x0) + abs(candidates[0].top - old.top)
+                == abs(candidates[1].x0 - old.x0) + abs(candidates[1].top - old.top)
+            ):
+                self.previous = None
+                return int(SMBAction.NOOP)
+            support = candidates[0]
+        self.surface = support
+        current = center - self.reference(support)
+        velocity = 0.0 if self.previous is None else current - self.previous
+        self.previous = current
+        if scene.mario.support == "air" or abs(support.top - feet) > 4:
+            self.previous = None
+            return int(SMBAction.NOOP)
+        # Anticipate two frames of drift so corrections brake before crossing
+        # the anchor. A pixel of tolerance avoids reacting to sprite rounding.
+        correction = self.offset - current - 2.0 * velocity
+        if abs(correction) <= 1.0:
+            return int(SMBAction.NOOP)
+        return int(SMBAction.RIGHT if correction > 0 else SMBAction.LEFT)
 
 
 @dataclass
@@ -50,6 +149,7 @@ class SMBExecutor:
     plan: Optional[ActionPlan] = None
     pressed: int = 0
     history: list = field(default_factory=list)  # (plan, frames pressed, why it ended)
+    hold: GroundHold = field(default_factory=GroundHold)
 
     @property
     def idle(self) -> bool:
@@ -65,6 +165,8 @@ class SMBExecutor:
             raise RuntimeError("the executor is still playing an action")
         self.plan = plan
         self.pressed = 0
+        if plan.action != HOLD_GROUND:
+            self.hold = GroundHold()
 
     def end(self, reason: str) -> None:
         """End the current plan ("done" or "landed")."""
@@ -72,11 +174,13 @@ class SMBExecutor:
             self.history.append((self.plan, self.pressed, reason))
             self.plan = None
 
-    def press(self) -> int:
+    def press(self, scene: Optional[SceneObservation] = None) -> int:
         """The button action for this frame."""
         if self.plan is None:
             raise RuntimeError("no action to play: start a plan first")
         if self.finished:
             raise RuntimeError("the plan has pressed all of its frames: end it first")
         self.pressed += 1
+        if self.plan.action == HOLD_GROUND:
+            return self.hold.press(scene)
         return self.plan.action
