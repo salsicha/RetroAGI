@@ -23,8 +23,9 @@ the explicit token for the layer above it.
   going back to something behind take the next step of their path (the
   segment's route platform, else the nearest obstacle toward the goal):
   climb, descend, jump gap, stomp or advance, where advancing to the left is
-  retreating. Its target is matched to the object the vision transformer
-  reports for it;
+  retreating and a goal on lower ground is descended to. A skill lasts until
+  Mario lands: in the air he keeps the skill he left the ground with. Its
+  target is matched to the object the vision transformer reports for it;
 - action: the first segment of the coached route from the current state
   (policy_recovery.coached_suffix), as an action and a frame count on the
   executor's menu; for a jump, also every certified hold (safe_jump_holds).
@@ -253,24 +254,42 @@ def teacher_skill(
         return SkillToken("jump_gap", objective.direction, target)
     if active_monster(env) is not None:
         return _moving("advance", tactic.direction, None)
-    objective = training_target(env)
-    if objective.kind == "mount":
-        feet = env.mario["y"] + env.mario["h"]
-        kind = (
-            "climb"
-            if objective.top < feet - STEP
-            else ("descend" if objective.top > feet + STEP else "advance")
-        )
+    # A move lasts until Mario lands: in the air he keeps the skill he left the
+    # ground with (a jump, a climb, a drop), aimed at the same objective.
+    held = state.notes.get("ground_skill")
+    if env.mario["on_ground"] or held is None:
+        objective = training_target(env)
+        kind = _objective_skill(env, objective)
+        direction = int(objective.direction) if objective.direction in (-1, 1) else tactic.direction
+        state.notes["ground_skill"] = (kind, direction, objective)
     else:
-        kind = OBJECTIVE_SKILLS.get(objective.kind, "advance")
+        kind, direction, objective = held
     target = None
     if kind == "stomp" and objective.enemy_index is not None:
         target = _enemy_pointer(env, scene, objective.enemy_index)
     elif objective.kind in ("gap", "mount"):
         left, right = _screen(env, objective.left, objective.right)
         target = _surface_pointer(scene, left, right, objective.top)
-    direction = int(objective.direction) if objective.direction in (-1, 1) else tactic.direction
     return _moving(kind, direction, target)
+
+
+def _objective_skill(env, objective) -> str:
+    """The skill that reaches an objective from where Mario stands: a platform
+    higher than his feet is climbed, a lower one (or a goal on lower ground)
+    descended to; otherwise the objective's own skill (OBJECTIVE_SKILLS)."""
+    feet = env.mario["y"] + env.mario["h"]
+    if objective.kind == "mount":
+        if objective.top < feet - STEP:
+            return "climb"
+        return "descend" if objective.top > feet + STEP else "advance"
+    kind = OBJECTIVE_SKILLS.get(objective.kind, "advance")
+    if (
+        kind == "advance"
+        and objective.kind in ("finish", "retreat")
+        and objective.top > feet + STEP
+    ):
+        return "descend"  # the goal stands on lower ground
+    return kind
 
 
 def _moving(kind: str, direction: int, target) -> SkillToken:

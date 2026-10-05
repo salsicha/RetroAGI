@@ -169,42 +169,60 @@ bottom up, with the others frozen.
 - **Tactic layer:** reading the layout's strategy switch.
 
 Which families each layer trains on (`layered_train.learner_families`):
-- **Action layer:** the 16 basic families in which Mario advances, going right
-  the whole way (`monte_carlo.ADVANCE_FAMILIES`). No family that teaches a
-  tactic or a strategy.
-- **Skill layer:** 34 families: every family except the strategy courses and
-  the 8 composed scenes (`tactic_families.COMPOSED_RECIPES`), which string
-  several skills together.
-- **Tactic layer:** every family except the clones.
+- **Action layer:** the seven single-action families
+  (`stages/block_smb/action_families.py`), one scene per action:
+
+  | Family | The one action | Parameters, every value swept |
+  |---|---|---|
+  | action_walk | walk right to the goal | distance (24-200 px) |
+  | action_walk_back | walk back left to a goal behind | distance (24-200 px) |
+  | action_jump_gap | jump a pit from a standstill at its edge | pit width (8-40 px), distance to the edge (0-4 px) |
+  | action_climb | jump up onto a step from a standstill | step height (8-56 px), distance to it (0-8 px) |
+  | action_descend | walk off a ledge down to the floor | drop (8-80 px), distance to the edge (0-24 px) |
+  | action_stomp | land on an enemy walking toward Mario | its distance (24-72 px), its speed (0.40-0.80 px a frame) |
+  | action_wait | stand still on a moving platform that carries Mario to the goal | its travel (48-112 px), its speed (0.50-1.00 px a frame) |
+
+  Difficulty splits each family's main parameter into three ranges.
+- **Skill layer:** every family except the single-action ones, the strategy
+  courses and the 8 composed scenes (`tactic_families.COMPOSED_RECIPES`),
+  which string several skills together.
+- **Tactic layer:** every family except the single-action ones and the clones.
 
 The action and skill layers' training layouts are a full sweep
-(`monte_carlo.block_smb_parameter_combinations`). Each family's generator is
-run with every combination of the parameters it draws: each at three values
-(its two ends and middle, or every value of a smaller range), every option of
-a choice, every order of a shuffle, at every difficulty. For the action layer
-that is about 3,800 layouts, and many more for the skill layer, mostly from the
-moving-platform and plant families. All of them are played every round, and
-each family weighs the same in learning however many layouts it has. Slow
-families are split across the workers by their first draws, and the made
-layouts are kept on disk, keyed by the code that makes them. Held-out layouts
-are drawn at random, as for every layer.
+(`monte_carlo.block_smb_parameter_combinations`). Each family's generator is run
+with every combination of every value of the parameters it draws: every whole
+number of a range, every option of a choice, every order of a shuffle, and
+fractional ranges (speeds) in steps of 0.01. This happens at every difficulty,
+and only layouts whose teacher route wins are kept.
+- **Action layer:** 8,109 layouts, all played every round, with each family
+  weighing the same in learning however many layouts it has.
+- **Speed:** slow families are split across the workers by their first draws,
+  and the made layouts are kept on disk, keyed by the code that makes them.
+- **Test layouts:** held-out layouts are drawn at random from the same values
+  (`monte_carlo.ParameterDraws`), so every test layout is one the sweep
+  covered.
+- **Skill layer:** many of its families have parameter spaces far too large
+  for a full sweep. The clones and platform_chain have about 1.5-2.3 million
+  combinations at one difficulty, monster_retreat and upper_route about 8-10
+  million, and the moving-platform and plant families 0.3-13 billion. The
+  trainer refuses any family with more than 20,000 combinations at a
+  difficulty (`sweep_limit`) and names it. Those families need smaller
+  parameter spaces before the skill layer trains.
 
 **Rule for each layer's families (don't forget this).** A layer trains only
 on families at its own level:
-- **Action layer:** scenes that each need a single action (one jump, one
-  climb onto something, one stomp, one walk back, one wait). Never scenarios
-  that string several actions together; composing actions is the skill
-  layer's job. The 16 families used so far break this rule in places:
-  - stair_climb, platform_chain, stair_gap, enemy_patrol, enemy_gap,
-    landing_enemy and enemy_on_platform each compose several actions;
-  - none teaches waiting, and only the walk back after an overshoot teaches
-    going left.
-
-  The action layer's next set of families should be single-action scenes
-  only, one for every action the skills ask for.
-- **Skill layer:** no strategy courses, whose point is a strategy's
-  objective, and no composed scenes, which string several skills together.
-- **Tactic layer:** the strategy courses and composed scenes only once the
+- **Action layer:** scenes that each need a single action. The teacher labels
+  exactly one skill, the same at every decision from start to finish, and
+  `test_a_single_action_family_asks_for_one_skill_from_start_to_finish`
+  checks it. Never scenarios that string several actions together; composing
+  actions is the skill layer's job. A skill lasts until Mario lands (in the
+  air he keeps the skill he left the ground with), so a jump is one action
+  from take-off to landing. Families such as stair_climb, platform_chain or
+  stair_gap compose several actions and belong to the skill layer.
+- **Skill layer:** no single-action scenes, no strategy courses (whose point
+  is a strategy's objective) and no composed scenes (which string several
+  skills together).
+- **Tactic layer:** the strategy courses and composed scenes, once the
   actions and skills are trained.
 
 The token from above comes from a teacher that reads the simulator
@@ -238,7 +256,11 @@ decided by the tactic:
   monster rules): retreat;
 - advance, alternate route, or retreat back to something behind: the next
   step of that path (climb, descend, jump gap, stomp, or advance), where
-  walking to the left is retreat, never advance.
+  walking to the left is retreat, never advance, and a goal on lower ground
+  is descended to.
+
+A skill lasts until Mario lands: in the air he keeps the skill he left the
+ground with, so a jump is labelled the same from take-off to landing.
 
 The action teacher's route follows the same segments.
 

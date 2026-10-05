@@ -131,38 +131,43 @@ what the learner should do at every decision (training only).
   critic. Then reward rounds improve its choices and its end check by the
   option-critic rules, once the critic predicts held-out returns well enough.
 
-Which families each layer trains on:
-- **Action layer:** only the 16 basic families in which Mario advances, going
-  right the whole way: running, jumping gaps and pits, climbing steps and
-  pipes, getting past and stomping enemies. Actions are the most basic things
-  Mario does, so no family that teaches a tactic or a strategy is used.
-- **Skill layer:** 34 families: every family except the strategy courses and
-  the 8 composed scenes. A course is about its strategy's objective (a
-  deadline, a coin count), which the skill layer can't see, and a composed
-  scene strings several skills together, which is the tactic layer's level.
-- **Tactic layer:** every family except the clones, whose tactic is given
-  rather than decided by the scene. Only it trains on the strategy courses
-  and the composed scenes, once the actions and skills are trained.
+Which families each layer trains on (each only on families at its own level):
+- **Action layer:** seven single-action families
+  (`stages/block_smb/action_families.py`). Each is a scene that needs one
+  action and nothing else: walk to the goal, walk back to a goal behind, jump
+  a pit, climb onto a step, walk off a ledge, stomp an enemy coming toward
+  Mario, and wait on a moving platform that carries him to the goal.
+- **Skill layer:** every family except the single-action ones, the strategy
+  courses and the 8 composed scenes. A course is about its strategy's
+  objective (a deadline, a coin count), which the skill layer can't see, and a
+  composed scene strings several skills together, which is the tactic
+  layer's level.
+- **Tactic layer:** every family except the single-action ones and the clones,
+  whose tactic is given rather than decided by the scene. Only it trains on
+  the strategy courses and the composed scenes, once the actions and skills
+  are trained.
 
-The action and skill layers train on a full sweep. Every combination of each
-family's parameters is used: each at its two ends and middle, or every value
-of a smaller range, at every difficulty. All of them are played every round,
-and each family weighs the same. Their held-out test layouts are drawn at
-random.
+The action and skill layers train on a full sweep: every combination of every
+value of each family's parameters.
+- **What counts as a value:** every whole number of a range, every option,
+  every order; speeds in steps of 0.01 pixels a frame.
+- **Coverage:** all of them are played every round, at every difficulty, and
+  each family weighs the same.
+- **Testing:** their held-out test layouts are drawn at random from the same
+  values, so every test layout is one the sweep covers.
+- **Size:** the seven action families make 8,109 layouts. Many of the skill
+  layer's families would make millions or billions, so the trainer refuses a
+  family with more than 20,000 combinations at a difficulty and names it.
+  Those families need smaller parameter spaces before the skill layer can
+  train on a full sweep.
 
 **Rule for each layer's families.** A layer trains only on families at its
 own level. The action layer's families must be scenes that each need a single
-action: one jump, one climb onto something, one stomp, one walk back, one
-wait. They must never be scenarios that string several actions together,
-because composing actions is the skill layer's job. The 16 families used for
-the action layer so far don't all follow this rule:
-- stair_climb, platform_chain, stair_gap, enemy_patrol, enemy_gap,
-  landing_enemy and enemy_on_platform each compose several actions;
-- none of the 16 teaches waiting, and only the walk back after an overshoot
-  teaches going left.
-
-The action layer's next set of families should be single-action scenes only,
-one for every action the skills ask for.
+action. The teacher labels one skill, and only that skill, from start to
+finish, and a test checks every family. They must never be scenarios that
+string several actions together, because composing actions is the skill
+layer's job. A skill lasts until Mario lands, so a jump is one action from
+take-off to landing.
 
 A layer passes when every family wins at least 90% of its 18 held-out
 layouts. The tactic layer must also agree with the teacher on where tactics

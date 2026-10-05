@@ -1,33 +1,38 @@
-"""The action layer's training layouts: every combination of each family's parameters."""
+"""The action and skill layers' training layouts: every combination of every value
+of each family's parameters."""
 
 import itertools
+import random
 
-import numpy as np
 import pytest
 
 from retroagi.stages.block_smb.monte_carlo import (
     CombinationDraws,
+    ParameterDraws,
     block_smb_parameter_combinations,
+    combination_prefixes,
+    sample_block_smb_monte_carlo_scenario,
+    uniform_values,
 )
 
 
-def every_combination(make, levels=3):
+def every_combination(make):
     """Run ``make(draws)`` for every combination; returns what each run made."""
     made, path = [], []
     while path is not None:
-        draws = CombinationDraws(path, levels)
+        draws = CombinationDraws(path)
         made.append(make(draws))
         path = draws.next_path()
     return made
 
 
-def test_every_combination_of_the_draws_is_made_once():
-    made = every_combination(lambda d: (d.randint(0, 10), d.choice("xy"), d.uniform(0.0, 1.0)))
-    expected = itertools.product((0, 5, 10), ("x", "y"), (0.0, 0.5, 1.0))
-    assert sorted(made) == sorted(expected)  # both ends of every range, and the middle
+def test_every_value_of_every_draw_is_combined_once():
+    made = every_combination(lambda d: (d.randint(0, 3), d.choice("xy"), d.uniform(0.0, 0.02)))
+    expected = itertools.product(range(4), "xy", (0.0, 0.01, 0.02))
+    assert sorted(made) == sorted(expected)
 
 
-def test_small_ranges_take_every_value():
+def test_ranges_with_steps_take_every_value():
     made = every_combination(lambda d: (d.randint(3, 4), d.randrange(0, 6, 3)))
     assert sorted(made) == [(3, 0), (3, 3), (4, 0), (4, 3)]
 
@@ -43,16 +48,56 @@ def test_draws_that_depend_on_earlier_ones_are_followed_on_every_branch():
     )
 
 
-def test_a_family_sweep_covers_the_ends_of_its_ranges_with_verified_routes():
-    layouts, dropped = block_smb_parameter_combinations("single_gap", "easy")
-    assert len(layouts) == 27 and dropped == 0
-    assert len({repr((layout["platforms"], layout["coins"])) for layout in layouts}) == 27
-    gaps = [layout["platforms"][1][0] - sum(layout["platforms"][0][::2]) for layout in layouts]
-    assert len(set(gaps)) > 1
+def test_random_draws_take_the_sweeps_values():
+    draws = ParameterDraws(random.Random(0))
+    for _ in range(200):
+        assert draws.uniform(0.4, 0.53) in uniform_values(0.4, 0.53)
+
+
+def test_a_family_sweep_takes_every_value_with_verified_routes():
+    layouts, dropped = block_smb_parameter_combinations("action_jump_gap", "easy")
+    assert dropped == 0
+    seen = {
+        (meta["gap_width"], meta["edge_distance"])
+        for meta in (
+            layout["metadata"]["block_smb_monte_carlo"]["parameters"] for layout in layouts
+        )
+    }
+    assert seen == set(itertools.product(range(8, 21), range(0, 5)))  # 13 widths x 5 distances
     for layout in layouts:
         meta = layout["metadata"]["block_smb_monte_carlo"]
-        assert meta["family"] == "single_gap" and meta["reachability"]["reachable"]
-        assert meta["oracle"]["actions"]
+        assert meta["family"] == "action_jump_gap" and meta["reachability"]["reachable"]
+
+
+def test_every_random_test_layout_is_one_the_sweep_covers():
+    swept = {
+        (p["enemy_distance"], p["enemy_speed"])
+        for p in (
+            layout["metadata"]["block_smb_monte_carlo"]["parameters"]
+            for layout in block_smb_parameter_combinations("action_stomp", "hard")[0]
+        )
+    }
+    for index in range(12):
+        sample = sample_block_smb_monte_carlo_scenario(
+            split="validation", seed=3, sample_index=index, family="action_stomp", difficulty="hard"
+        )
+        assert (sample.parameters["enemy_distance"], sample.parameters["enemy_speed"]) in swept
+
+
+def test_a_family_split_by_its_first_draws_makes_the_same_layouts():
+    whole, _ = block_smb_parameter_combinations("action_climb", "medium")
+    prefixes = combination_prefixes("action_climb", "medium", at_least=4)
+    assert len(prefixes) >= 4
+    parts = [
+        layout
+        for prefix in prefixes
+        for layout in block_smb_parameter_combinations("action_climb", "medium", prefix=prefix)[0]
+    ]
+
+    def key(layout):
+        return repr({k: v for k, v in layout.items() if k != "metadata"})
+
+    assert sorted(map(key, parts)) == sorted(map(key, whole))
 
 
 class _MapPool:
@@ -61,33 +106,26 @@ class _MapPool:
     pool = type("Inline", (), {"map": staticmethod(map)})
 
 
-def test_each_family_weighs_the_same_in_the_action_layers_training():
+def test_each_family_weighs_the_same_in_the_action_layers_training(tmp_path, monkeypatch):
     from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, combination_tasks
 
-    config = LayeredTrainConfig(learner="action", families=("flat_run", "single_gap"))
+    monkeypatch.setenv("RETROAGI_COMBINATION_CACHE", str(tmp_path))
+    config = LayeredTrainConfig(learner="action", families=("action_walk", "action_jump_gap"))
     tasks, made = combination_tasks(config, _MapPool())
     sizes = {f: sum(t.family == f for t in tasks) for f in config.families}
-    assert sizes == {"flat_run": 27, "single_gap": 81}  # 9 and 27 per difficulty
+    assert sizes == {"action_walk": 177, "action_jump_gap": 165}
     totals = {f: sum(t.weight for t in tasks if t.family == f) for f in config.families}
-    assert totals["flat_run"] == pytest.approx(totals["single_gap"])
-    assert np.mean([t.weight for t in tasks]) == pytest.approx(1.0, rel=0.5)
+    assert totals["action_walk"] == pytest.approx(totals["action_jump_gap"])
     assert all(t.scenario is not None and t.label for t in tasks)
-    assert made["single_gap:hard"] == {"layouts": 27, "no_route": 0}
+    assert made["action_jump_gap:hard"] == {"layouts": 50, "no_route": 0}
+    # Made again, the layouts come from the disk.
+    again, _ = combination_tasks(config, _MapPool())
+    assert [t.scenario for t in again] == [t.scenario for t in tasks]
 
 
-def test_a_family_split_by_its_first_draws_makes_the_same_layouts():
-    from retroagi.stages.block_smb.monte_carlo import combination_prefixes
+def test_a_sweep_too_large_to_make_stops_the_run_and_names_the_family():
+    from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, combination_tasks
 
-    whole, _ = block_smb_parameter_combinations("single_gap", "medium")
-    prefixes = combination_prefixes("single_gap", "medium", at_least=4)
-    assert len(prefixes) >= 4
-    parts = [
-        layout
-        for prefix in prefixes
-        for layout in block_smb_parameter_combinations("single_gap", "medium", prefix=prefix)[0]
-    ]
-
-    def key(layout):
-        return repr({k: v for k, v in layout.items() if k != "metadata"})
-
-    assert sorted(map(key, parts)) == sorted(map(key, whole))
+    config = LayeredTrainConfig(learner="skill", families=("moving_bridge",))
+    with pytest.raises(ValueError, match="moving_bridge"):
+        combination_tasks(config, _MapPool())

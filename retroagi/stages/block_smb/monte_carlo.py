@@ -13,6 +13,7 @@ import pygame
 
 from retroagi.core.smb_physics import NES_JUMP_FRAMES
 
+from .action_families import ACTION_FAMILIES, action_family_scenario
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
 from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES
@@ -56,6 +57,7 @@ BLOCK_SMB_MC_FAMILIES = (
     *TRANSFER_FAILURE_FAMILIES,
     *HIERARCHY_FAMILIES,
     *NEW_FAMILIES,
+    *ACTION_FAMILIES,
 )
 DEFAULT_BLOCK_SMB_MC_MAX_STEPS = 320
 # Families that are advance all the way: their schedule is one advance segment
@@ -423,6 +425,11 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
             "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
             "tactics": "explicit, per layout (tactic_schedule)",
         }
+    for family in ACTION_FAMILIES:
+        schemas[family] = {
+            "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
+            "single_action": "one skill throughout (action_families)",
+        }
     return {
         family: BlockSMBScenarioFamilySpec(
             family=family,
@@ -509,7 +516,7 @@ def sample_block_smb_monte_carlo_scenario(
             sample_index,
             attempt=attempt,
         )
-        rng = random.Random(sample_seed)
+        rng = ParameterDraws(random.Random(sample_seed))
         selected_family = family or _select_family(sample_index, rng, family_weights)
         if selected_family not in specs:
             raise ValueError(f"unknown Block SMB Monte Carlo family {selected_family!r}")
@@ -649,30 +656,75 @@ def _sweep_sample(spec):
 
 # ── Every combination of a family's parameters ──────────────────────────────
 
-# How many values each drawn parameter takes in a full sweep: its two ends and
-# evenly spaced values between (every value, when its range has no more).
-SWEEP_LEVELS = 3
+# A full sweep takes every value of every drawn parameter: every whole number
+# of an integer range, every option, every order, and the values of a
+# fractional range in steps of UNIFORM_STEP (speeds, in pixels a frame), of a
+# 0-1 draw in steps of RANDOM_STEP (it only ever decides a branch). Layouts
+# sampled at random take their values from the same sets (ParameterDraws), so
+# every held-out layout is one the sweep covers.
+UNIFORM_STEP = 0.01
+RANDOM_STEP = 0.05
+
+
+def uniform_values(low: float, high: float) -> list[float]:
+    """Every value of a fractional range, in steps of UNIFORM_STEP."""
+    if high < low:
+        low, high = high, low
+    count = int(round((high - low) / UNIFORM_STEP))
+    return [round(low + UNIFORM_STEP * i, 6) for i in range(count + 1)]
+
+
+def random_values() -> list[float]:
+    """Every value of a 0-1 draw, in steps of RANDOM_STEP."""
+    count = int(round(1.0 / RANDOM_STEP))
+    return [round(RANDOM_STEP * i, 6) for i in range(count)]
+
+
+class ParameterDraws:
+    """random.Random for the layout sampler, with fractional draws taking the
+    sweep's values (uniform_values, random_values), so a layout sampled at
+    random is always one a full sweep makes."""
+
+    def __init__(self, rng: random.Random):
+        self._rng = rng
+
+    def __getattr__(self, name):
+        return getattr(self._rng, name)
+
+    def uniform(self, low, high):
+        return self._rng.choice(uniform_values(low, high))
+
+    def random(self):
+        return self._rng.choice(random_values())
+
+
+def combination_count(family: str, difficulty: str) -> int:
+    """How many combinations a full sweep of a family makes at one difficulty,
+    counted from its first combination's draws (exact when later draws don't
+    depend on earlier values, which holds for every family's main draws)."""
+    draws = CombinationDraws()
+    _generate_family_scenario_raw(family, draws, split="train", difficulty=difficulty)
+    count = 1
+    for values in draws.counts:
+        count *= values
+    return count
 
 
 class CombinationDraws:
     """Stands in for random.Random in a family's layout generator, to make every
-    combination of the parameters it draws.
+    combination of every value of the parameters it draws.
 
     Each draw (randint, randrange, uniform, random, choice, choices, sample,
-    shuffle) takes one
-    of a few values spanning its range: ``levels`` of them, its two ends and
-    evenly spaced values between, or every value when its range has no more; a
-    choice takes every option. ``path`` names the value of each draw in turn
-    (the first, past its end). The draws made, and how many values each had,
-    are kept, so next_path() gives the next combination; the number of draws
-    may depend on earlier values, and every branch is followed.
+    shuffle) takes each of its values in turn: every whole number of its range,
+    every option, every order; a fractional range in steps of UNIFORM_STEP, a
+    0-1 draw in steps of RANDOM_STEP. ``path`` names the value of each draw in
+    turn (the first, past its end). The draws made, and how many values each
+    had, are kept, so next_path() gives the next combination; the number of
+    draws may depend on earlier values, and every branch is followed.
     """
 
-    def __init__(self, path=(), levels: int = SWEEP_LEVELS):
-        if levels < 2:
-            raise ValueError("a sweep needs at least the two ends of each range")
+    def __init__(self, path=()):
         self.path = list(path)
-        self.levels = levels
         self.taken: list[int] = []
         self.counts: list[int] = []
 
@@ -683,29 +735,19 @@ class CombinationDraws:
         self.counts.append(len(values))
         return values[index]
 
-    def _spread(self, values):
-        values = list(values)
-        if len(values) <= self.levels:
-            return values
-        last = len(values) - 1
-        picks = sorted({round(last * i / (self.levels - 1)) for i in range(self.levels)})
-        return [values[i] for i in picks]
-
     def randint(self, low, high):
-        return self._pick(self._spread(range(low, high + 1)))
+        return self._pick(list(range(low, high + 1)))
 
     def randrange(self, start, stop=None, step=1):
         if stop is None:
             start, stop = 0, start
-        return self._pick(self._spread(range(start, stop, step)))
+        return self._pick(list(range(start, stop, step)))
 
     def uniform(self, low, high):
-        if low == high:
-            return self._pick([low])
-        return self._pick([low + (high - low) * i / (self.levels - 1) for i in range(self.levels)])
+        return self._pick(uniform_values(low, high))
 
     def random(self):
-        return self._pick([(i + 0.5) / self.levels for i in range(self.levels)])
+        return self._pick(random_values())
 
     def choice(self, options):
         return self._pick(list(options))
@@ -733,7 +775,7 @@ class CombinationDraws:
 
 
 def combination_prefixes(
-    family: str, difficulty: str, *, levels: int = SWEEP_LEVELS, at_least: int = 12
+    family: str, difficulty: str, *, at_least: int = 12
 ) -> list[tuple[int, ...]]:
     """The first few draws' values, as prefixes that split a family's
     combinations into parts that can be made side by side: each prefix's
@@ -744,7 +786,7 @@ def combination_prefixes(
     while len(prefixes) < at_least:
         grown = []
         for prefix in prefixes:
-            draws = CombinationDraws(prefix, levels)
+            draws = CombinationDraws(prefix)
             _generate_family_scenario_raw(family, draws, split="train", difficulty=difficulty)
             if len(draws.counts) <= len(prefix):
                 return prefixes  # a combination with no further draw
@@ -754,10 +796,10 @@ def combination_prefixes(
 
 
 def block_smb_parameter_combinations(
-    family: str, difficulty: str, *, levels: int = SWEEP_LEVELS, prefix: tuple = ()
+    family: str, difficulty: str, *, prefix: tuple = ()
 ) -> tuple[list[dict[str, Any]], int]:
     """Every layout a full sweep of a family's drawn parameters makes at one
-    difficulty (CombinationDraws: each draw at ``levels`` values, every
+    difficulty (CombinationDraws: every value of every draw, every
     combination), finished and route-verified as the sampler makes them; with
     ``prefix``, only the combinations whose first draws take those values.
 
@@ -773,7 +815,7 @@ def block_smb_parameter_combinations(
     dropped = 0
     path: Optional[list[int]] = list(prefix)
     while path is not None:
-        draws = CombinationDraws(path, levels)
+        draws = CombinationDraws(path)
         scenario, parameters, actions = _generate_family_scenario(
             family, draws, split="train", difficulty=difficulty
         )
@@ -1065,7 +1107,7 @@ def _family_tactics(family, scenario) -> list:
         return [segment("advance", direction, kind="bridge")]
     if family == "piranha_avoidance":
         return [segment("advance", 1, kind="plant", past_enemy=0), segment("advance", 1)]
-    if family in ONE_SEGMENT_FAMILIES:
+    if family in ONE_SEGMENT_FAMILIES or family in ACTION_FAMILIES:
         return [segment("advance", direction)]
     raise ValueError(f"family {family!r} states no tactics")
 
@@ -1081,7 +1123,11 @@ def _generate_family_scenario(family, rng, *, split, difficulty=None):
         scenario.setdefault("goal_requires_support", True)
     _finish_layout(family, scenario, params)
     scenario["tactics"] = _family_tactics(family, scenario)
-    if family in TACTIC_FAMILIES or family in ("bridge_mount", "bridge_dismount"):
+    if (
+        family in TACTIC_FAMILIES
+        or family in ACTION_FAMILIES
+        or family in ("bridge_mount", "bridge_dismount")
+    ):
         # The teacher's route under the layout's own tactics.
         actions = family_route(family, scenario)
         return scenario, params, actions or [0]
@@ -1142,7 +1188,7 @@ def _verified_route(family, scenario, authored_actions):
     def reachable(actions):
         return validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=max_steps)
 
-    if family in TACTIC_FAMILIES:
+    if family in TACTIC_FAMILIES or family in ACTION_FAMILIES:
         # Only the teacher's route under the layout's tactics counts.
         result = reachable(authored_actions)
         if result["reachable"]:
@@ -1182,6 +1228,8 @@ def _generate_family_scenario_raw(
         raise ValueError(f"difficulty must be one of {BLOCK_SMB_MC_DIFFICULTY_BINS}")
     if family in TACTIC_FAMILIES:
         return tactic_family_scenario(family, rng, difficulty)
+    if family in ACTION_FAMILIES:
+        return action_family_scenario(family, rng, difficulty)
     if family in TRANSFER_FAILURE_FAMILIES:
         return transfer_failure_scenario(family, rng, difficulty)
     if family == "flat_run":

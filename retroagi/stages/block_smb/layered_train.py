@@ -105,14 +105,18 @@ class LayeredTrainConfig:
     # this many times its share of losses.
     focus_layouts: int = 8
     # The action and skill layers train on a full sweep: every combination of
-    # their families' drawn parameters, each at this many values
+    # every value of their families' drawn parameters
     # (monte_carlo.block_smb_parameter_combinations), all of them every round,
     # each family weighing the same in learning (focus_layouts is not used).
-    # 0: train_layouts_per_family layouts per family drawn at random instead.
-    # Held-out layouts are always drawn at random. The made layouts are kept on
-    # disk (RETROAGI_COMBINATION_CACHE, else a temporary folder), keyed by the
-    # code that makes them.
-    sweep_levels: int = 3
+    # Held-out layouts are drawn at random from the same values
+    # (monte_carlo.ParameterDraws), so each is one the sweep covers. The made
+    # layouts are kept on disk (RETROAGI_COMBINATION_CACHE, else a temporary
+    # folder), keyed by the code that makes them. False: train_layouts_per_family
+    # layouts per family drawn at random instead.
+    sweep: bool = True
+    # A family and difficulty with more combinations than this is not made: the
+    # run stops and names it (its parameters need a smaller space first).
+    sweep_limit: int = 20_000
     # Held-out layouts per family and difficulty (easy, medium, hard), fixed for the run.
     validation_layouts_per_difficulty: int = 3
     # Training layouts' difficulty: easy, medium and hard in these proportions.
@@ -1285,31 +1289,30 @@ def end_agreement(episodes, tolerance: int) -> dict:
 
 
 def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
-    """The families a learner trains and is tested on.
+    """The families a learner trains and is tested on. Each layer trains only on
+    families at its own level:
 
-    - The action layer trains only on the basic families: those whose tactic is
-      advance the whole way (monte_carlo.ADVANCE_FAMILIES). Actions are the most
-      basic things Mario does; no family that teaches a tactic (holding the area,
-      another route, retreating, composed scenes, the clones) or a strategy
-      (the courses) is used for it. Rule: its families should be scenes that
-      each need a single action, never scenarios that compose several actions
-      (several of the advance-only families still do; see docs/layered-agent.md).
-    - The skill layer leaves out the strategy courses (a course is about its
-      strategy's objective, a deadline or a coin count, which the skill layer
-      cannot see; the courses are used only by the tactic layer, which reads
-      the strategy switch) and the composed scenes, which string several skills
-      together: composing skills is the tactic layer's level.
-    - The tactic layer leaves out the clones, whose tactic is given rather
-      than decided by the scene.
+    - Action layer: the single-action families (action_families), scenes that
+      each need one action and nothing else.
+    - Skill layer: every family except the single-action ones, the strategy
+      courses (a course is about its strategy's objective, a deadline or a coin
+      count, which the skill layer cannot see) and the composed scenes, which
+      string several skills together (composing skills is the tactic layer's
+      level).
+    - Tactic layer: every family except the single-action ones and the clones,
+      whose tactic is given rather than decided by the scene. Only it trains on
+      the strategy courses and the composed scenes.
     """
-    from .monte_carlo import ADVANCE_FAMILIES
+    from .action_families import ACTION_FAMILIES
     from .tactic_families import CLONE_FAMILIES, COMPOSED_RECIPES, STRATEGY_FAMILIES
 
     if learner == "action":
-        return tuple(f for f in families if f in ADVANCE_FAMILIES)
+        return tuple(f for f in families if f in ACTION_FAMILIES)
     if learner == "tactic":
-        return tuple(f for f in families if f not in CLONE_FAMILIES)
-    return tuple(f for f in families if f not in STRATEGY_FAMILIES and f not in COMPOSED_RECIPES)
+        left_out = set(CLONE_FAMILIES) | set(ACTION_FAMILIES)
+    else:
+        left_out = set(STRATEGY_FAMILIES) | set(COMPOSED_RECIPES) | set(ACTION_FAMILIES)
+    return tuple(f for f in families if f not in left_out)
 
 
 def _tasks(
@@ -1352,10 +1355,13 @@ def _tasks(
 
 
 def _prefix_job(job):
-    family, difficulty, levels = job
-    from .monte_carlo import combination_prefixes
+    family, difficulty, limit = job
+    from .monte_carlo import combination_count, combination_prefixes
 
-    return combination_prefixes(family, difficulty, levels=levels)
+    count = combination_count(family, difficulty)
+    if count > limit:
+        return count, []
+    return count, combination_prefixes(family, difficulty)
 
 
 def _code_fingerprint() -> str:
@@ -1388,16 +1394,14 @@ def _combination_job(job):
 
     from .monte_carlo import block_smb_parameter_combinations
 
-    family, difficulty, levels, prefix, fingerprint = job
-    name = f"{family}.{difficulty}.{levels}.{'-'.join(map(str, prefix))}.{fingerprint}.pkl"
+    family, difficulty, prefix, fingerprint = job
+    name = f"{family}.{difficulty}.{'-'.join(map(str, prefix))}.{fingerprint}.pkl"
     path = _combination_cache() / name
     try:
         return family, difficulty, *pickle.loads(path.read_bytes())
     except (OSError, ValueError, EOFError, pickle.UnpicklingError):
         pass
-    layouts, dropped = block_smb_parameter_combinations(
-        family, difficulty, levels=levels, prefix=prefix
-    )
+    layouts, dropped = block_smb_parameter_combinations(family, difficulty, prefix=prefix)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         spare = path.with_suffix(".tmp")
@@ -1417,16 +1421,28 @@ def combination_tasks(config, pool) -> tuple[list[EpisodeTask], dict]:
     layouts) and per family and difficulty how many layouts there are and how
     many combinations had no verified route."""
     parts = [
-        (family, difficulty, config.sweep_levels)
+        (family, difficulty, config.sweep_limit)
         for family in learner_families(config.learner, config.families)
         for difficulty in DIFFICULTIES
     ]
     fingerprint = _code_fingerprint()
     # Each family and difficulty is split into parts by its first draws, so slow
     # families are made by many workers side by side.
+    split = list(pool.pool.map(_prefix_job, parts))
+    too_many = {
+        f"{family}:{difficulty}": count
+        for (family, difficulty, _), (count, _) in zip(parts, split)
+        if count > config.sweep_limit
+    }
+    if too_many:
+        raise ValueError(
+            "a full sweep of these families would make more layouts than "
+            f"sweep_limit ({config.sweep_limit}); their parameters need a smaller "
+            f"space first: {too_many}"
+        )
     jobs = [
-        (family, difficulty, levels, prefix, fingerprint)
-        for (family, difficulty, levels), prefixes in zip(parts, pool.pool.map(_prefix_job, parts))
+        (family, difficulty, prefix, fingerprint)
+        for (family, difficulty, _), (_, prefixes) in zip(parts, split)
         for prefix in prefixes
     ]
     jobs.sort(key=lambda job: job[0] not in ("moving_bridge", "bridge_wait", "wait_timing"))
@@ -1574,7 +1590,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     validation_tasks = pool.with_scenarios(
         _tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
     )
-    sweep = config.learner in ("action", "skill") and config.sweep_levels > 0
+    sweep = config.learner in ("action", "skill") and config.sweep
     combinations: list[EpisodeTask] = []
     if sweep:
         combinations, made = combination_tasks(config, pool)
@@ -1584,7 +1600,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             per_family[name.split(":")[0]] += entry["layouts"]
         print(
             f"[{config.learner}] full sweep: {len(combinations)} layouts, every combination of "
-            f"each family's parameters at {config.sweep_levels} values: "
+            "every value of each family's parameters: "
             + ", ".join(f"{f} {n}" for f, n in per_family.items()),
             flush=True,
         )

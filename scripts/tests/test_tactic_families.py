@@ -236,17 +236,33 @@ def test_only_the_tactic_learner_trains_on_the_strategy_courses():
     assert set(STRATEGY_FAMILIES) <= set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
 
 
-def test_the_action_learner_trains_only_on_advance_families():
+def test_the_action_learner_trains_only_on_single_action_families():
+    from retroagi.stages.block_smb.action_families import ACTION_FAMILIES
     from retroagi.stages.block_smb.layered_train import learner_families
-    from retroagi.stages.block_smb.monte_carlo import ADVANCE_FAMILIES
 
     families = learner_families("action", BLOCK_SMB_MC_FAMILIES)
-    assert set(families) == set(ADVANCE_FAMILIES) and len(families) == 16
-    assert not set(families) & set(TACTIC_FAMILIES)
-    for family in ("moving_bridge", "piranha_avoidance", "retreat_recovery", "stomp_recovery"):
-        assert family not in families
-    for family in families:
-        assert {seg["stance"] for seg in _sample(family)["tactics"]} == {"advance"}
+    assert families == ACTION_FAMILIES and len(families) == 7
+    for learner in ("skill", "tactic"):
+        assert not set(ACTION_FAMILIES) & set(learner_families(learner, BLOCK_SMB_MC_FAMILIES))
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    "family,skill",
+    [
+        ("action_walk", "advance"),
+        ("action_walk_back", "retreat"),
+        ("action_jump_gap", "jump_gap"),
+        ("action_climb", "climb"),
+        ("action_descend", "descend"),
+        ("action_stomp", "stomp"),
+        ("action_wait", "wait"),
+    ],
+)
+def test_a_single_action_family_asks_for_one_skill_from_start_to_finish(family, skill):
+    for difficulty in ("easy", "hard"):
+        made = _labels_along_the_route(family, difficulty)
+        assert made and {s.kind for _, _, s in made} == {skill}
 
 
 def test_the_skill_learner_leaves_out_courses_and_composed_scenes():
@@ -258,10 +274,10 @@ def test_the_skill_learner_leaves_out_courses_and_composed_scenes():
     assert set(CLONE_FAMILIES) <= set(families) and len(families) == 34
 
 
-def _labels_along_the_route(family):
+def _labels_along_the_route(family, difficulty="easy"):
     """The teacher's tactic and skill at the start of each stretch of its route."""
     sample = sample_block_smb_monte_carlo_scenario(
-        split="validation", seed=0, sample_index=0, family=family, difficulty="easy"
+        split="validation", seed=0, sample_index=0, family=family, difficulty=difficulty
     )
     env = MarioScenarioEnv()
     env.reset(scenario=sample.scenario, seed=0)
