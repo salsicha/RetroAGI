@@ -6,8 +6,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pytest
 
-from retroagi.core.smb_scene_labels import scene_from_labels
-from retroagi.core.tokens import TACTICS
+from retroagi.core.tokens import BACKWARD_TACTICS
 from retroagi.stages.block_smb import tactic_schedule
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.monte_carlo import (
@@ -18,15 +17,13 @@ from retroagi.stages.block_smb.tactic_families import (
     CHOICE_FAMILIES,
     CLONE_FAMILIES,
     LOW_CHOICE_FAMILIES,
-    STRATEGY_FAMILIES,
     TACTIC_FAMILIES,
 )
-from retroagi.stages.block_smb.tactic_schedule import segment
+from retroagi.stages.block_smb.tactic_schedule import SCHEDULE_STANCES, segment
 from retroagi.stages.block_smb.teacher_tokens import (
     _first_plan,
     episode_teacher,
     teacher_plan,
-    teacher_skill,
     teacher_tactic,
 )
 
@@ -128,7 +125,7 @@ def test_the_monster_cannot_be_stomped_is_the_other_kind_and_wakes_on_screen():
     env.close()
 
 
-def test_every_family_states_its_tactics_and_every_tactic_has_families():
+def test_every_family_states_its_schedule_and_every_schedule_stance_has_families():
     from retroagi.stages.block_smb.monte_carlo import _family_tactics
 
     stances = set()
@@ -150,7 +147,7 @@ def test_every_family_states_its_tactics_and_every_tactic_has_families():
             stances.add(seg["stance"])
             kinds.add(seg["kind"])
     # Hold area also comes from the moving-platform, plant and monster segments.
-    assert stances == set(TACTICS) and {"bridge", "plant", "monster"} <= kinds
+    assert stances == set(SCHEDULE_STANCES) and {"bridge", "plant", "monster"} <= kinds
 
 
 def test_clones_play_the_same_layouts_and_only_their_tactics_differ():
@@ -164,7 +161,7 @@ def test_clones_play_the_same_layouts_and_only_their_tactics_differ():
         assert len(set(schedules)) == len(group)
 
 
-def test_in_the_clones_the_tactic_decides_the_first_skill():
+def test_in_the_clones_the_schedule_decides_the_first_tactic():
     first = {}
     for family in CHOICE_FAMILIES + LOW_CHOICE_FAMILIES:
         scenario = _sample(family, index=3)
@@ -172,18 +169,16 @@ def test_in_the_clones_the_tactic_decides_the_first_skill():
         env.reset(scenario=scenario, seed=0)
         teacher = episode_teacher(scenario)
         teacher.observe_frame(env)
-        scene = scene_from_labels(env.scene_labels())
         tactic = teacher_tactic(env, teacher)
-        skill = teacher_skill(env, scene, teacher, tactic)
         plan, _ = teacher_plan(env, teacher)
-        first[family] = (tactic.stance, skill.kind, plan.action if plan else None)
+        first[family] = (tactic.stance, plan.action if plan else None)
         env.close()
-    assert first["choice_advance"][:2] == ("advance", "jump_gap")
-    assert first["choice_alternate_route"][:2] == ("alternate_route", "climb")
-    assert first["choice_hold_area"] == ("hold_area", "wait", 0)
-    assert first["choice_retreat"][:2] == ("retreat", "retreat")
-    assert first["low_choice_advance"][:2] == ("advance", "jump_gap")
-    assert first["low_choice_alternate_route"][:2] == ("alternate_route", "descend")
+    assert first["choice_advance"][0] == "advance"
+    assert first["choice_alternate_route"][0] == "climb_forward"
+    assert first["choice_hold_area"] == ("advance", 0)  # waiting is part of advancing
+    assert first["choice_retreat"][0] == "retreat"
+    assert first["low_choice_advance"][0] == "advance"
+    assert first["low_choice_alternate_route"][0] == "descend_forward"
 
 
 def test_the_monster_family_needs_backing_off_jumping_in_the_tunnel_fails():
@@ -225,15 +220,6 @@ def test_the_tactic_learner_leaves_out_the_clones():
 
     families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
     assert not set(CLONE_FAMILIES) & set(families)
-    assert set(CLONE_FAMILIES) <= set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
-
-
-def test_only_the_tactic_learner_trains_on_the_strategy_courses():
-    from retroagi.stages.block_smb.layered_train import learner_families
-
-    for learner in ("action", "skill"):
-        assert not set(STRATEGY_FAMILIES) & set(learner_families(learner, BLOCK_SMB_MC_FAMILIES))
-    assert set(STRATEGY_FAMILIES) <= set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
 
 
 def test_the_action_learner_trains_only_on_single_action_families():
@@ -241,41 +227,33 @@ def test_the_action_learner_trains_only_on_single_action_families():
     from retroagi.stages.block_smb.layered_train import learner_families
 
     families = learner_families("action", BLOCK_SMB_MC_FAMILIES)
-    assert families == ACTION_FAMILIES and len(families) == 7
-    for learner in ("skill", "tactic"):
-        assert not set(ACTION_FAMILIES) & set(learner_families(learner, BLOCK_SMB_MC_FAMILIES))
+    assert families == ACTION_FAMILIES and len(families) == 9
+    assert not set(ACTION_FAMILIES) & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
 
 
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize(
-    "family,skill",
+    "family,tactic",
     [
         ("action_walk", "advance"),
         ("action_walk_back", "retreat"),
-        ("action_jump_gap", "jump_gap"),
-        ("action_climb", "climb"),
-        ("action_descend", "descend"),
-        ("action_stomp", "stomp"),
-        ("action_wait", "wait"),
+        ("action_jump_gap", "advance"),
+        ("action_climb", "climb_forward"),
+        ("action_climb_back", "climb_backward"),
+        ("action_descend", "descend_forward"),
+        ("action_descend_back", "descend_backward"),
+        ("action_stomp", "advance"),
+        ("action_wait", "advance"),
     ],
 )
-def test_a_single_action_family_asks_for_one_skill_from_start_to_finish(family, skill):
+def test_a_single_action_family_asks_for_one_tactic_from_start_to_finish(family, tactic):
     for difficulty in ("easy", "hard"):
         made = _labels_along_the_route(family, difficulty)
-        assert made and {s.kind for _, _, s in made} == {skill}
-
-
-def test_the_skill_learner_leaves_out_courses_and_composed_scenes():
-    from retroagi.stages.block_smb.layered_train import learner_families
-    from retroagi.stages.block_smb.tactic_families import COMPOSED_RECIPES
-
-    families = learner_families("skill", BLOCK_SMB_MC_FAMILIES)
-    assert not set(families) & (set(STRATEGY_FAMILIES) | set(COMPOSED_RECIPES))
-    assert set(CLONE_FAMILIES) <= set(families) and len(families) == 34
+        assert made and {t.stance for _, t in made} == {tactic}
 
 
 def _labels_along_the_route(family, difficulty="easy"):
-    """The teacher's tactic and skill at the start of each stretch of its route."""
+    """The teacher's tactic at the start of each stretch of its route."""
     sample = sample_block_smb_monte_carlo_scenario(
         split="validation", seed=0, sample_index=0, family=family, difficulty=difficulty
     )
@@ -286,9 +264,7 @@ def _labels_along_the_route(family, difficulty="easy"):
     while t < len(route) and not env._goal_credited:
         teacher.observe_frame(env)
         plan = _first_plan(route[t:])
-        tactic = teacher_tactic(env, teacher)
-        skill = teacher_skill(env, scene_from_labels(env.scene_labels()), teacher, tactic)
-        made.append((plan.action, tactic, skill))
+        made.append((plan.action, teacher_tactic(env, teacher)))
         for action in route[t : t + plan.frames]:
             env.step(action)
         t += plan.frames
@@ -299,87 +275,7 @@ def _labels_along_the_route(family, difficulty="easy"):
 @pytest.mark.parametrize("family", ["retreat_recovery", "stomp_recovery"])
 def test_going_back_to_the_left_is_never_labelled_advance(family):
     made = _labels_along_the_route(family)
-    left = [(tactic, skill) for action, tactic, skill in made if action in (3, 4)]
+    left = [tactic for action, tactic in made if action in (3, 4)]
     assert left
-    for tactic, skill in left:
-        assert tactic.stance == "retreat" and tactic.direction == -1
-        assert skill.kind != "advance"
-
-
-# ── Strategy courses ──────────────────────────────────────────────────────────
-
-_COURSES: dict = {}
-
-
-def _course(family):
-    """A strategy course layout (cached: each sample plays all three strategies)."""
-    if family not in _COURSES:
-        _COURSES[family] = _sample(family, index=5, difficulty="medium")
-    return _COURSES[family]
-
-
-def _played(scenario, actions):
-    env = MarioScenarioEnv()
-    env.reset(scenario=scenario, seed=0)
-    env.render = lambda: None
-    info, total = {}, 0.0
-    for action in actions:
-        _, reward, done, _, info = env.step(action)
-        total += reward
-        if done:
-            break
-    coins = sum(coin["collected"] for coin in env.coins)
-    env.close()
-    return info, total, coins
-
-
-@pytest.mark.timeout(600)
-def test_strategy_courses_share_layouts_and_each_takes_its_best_route():
-    from retroagi.stages.block_smb.tactic_families import STRATEGY_ORDER
-
-    courses = {family: _course(family) for family in STRATEGY_FAMILIES}
-    first = courses["speed_run_course"]
-    for family, scenario in courses.items():
-        strategy = STRATEGY_FAMILIES[family]
-        assert scenario["platforms"] == first["platforms"]
-        assert scenario["strategy"] == strategy
-        results = scenario["route_results"]
-        assert results == first["route_results"]  # every combination was played
-        best = min(results, key=lambda c: STRATEGY_ORDER[strategy](*results[c]))
-        assert scenario["strategy_route"] == best
-    fastest = first["route_results"][first["strategy_route"]][0]
-    assert first["strategy_objective"] == {"deadline": int(fastest * 1.1)}
-    assert set(courses["max_coins_course"]["strategy_objective"]) == {"coins"}
-    assert "strategy_objective" not in courses["careful_course"]
-
-
-def test_finishing_after_the_deadline_misses_the_objective():
-    scenario = _flat([segment("advance", 1)])
-    scenario.update(strategy="speed_run", strategy_objective={"deadline": 60})
-    info, _, _ = _played(scenario, [1] * 400)  # walking to x=300 takes longer
-    assert info["objective_missed"] and info["reward_terms"]["goal"] == 0
-    scenario["strategy_objective"] = {"deadline": 400}
-    info, _, _ = _played(scenario, [1] * 400)
-    assert not info["objective_missed"] and info["reward_terms"]["goal"] > 50
-
-
-def test_reaching_the_goal_without_the_coins_misses_the_objective():
-    scenario = _flat([segment("advance", 1)])
-    scenario.update(
-        coins=[[150, 150, 10, 10]],  # above Mario's head: walking on misses it
-        strategy="max_coins",
-        strategy_objective={"coins": 1},
-    )
-    info, _, _ = _played(scenario, [1] * 400)
-    assert info["objective_missed"] and info["terminated"] and info["reward_terms"]["goal"] == 0
-    scenario["coins"] = [[150, 200, 10, 10]]  # on the way: collected
-    info, total, _ = _played(scenario, [1] * 400)
-    assert not info["objective_missed"] and info["reward_terms"]["goal"] == 50
-
-
-@pytest.mark.timeout(600)
-def test_the_teacher_gives_the_course_strategy_and_other_layouts_a_speed_run():
-    from retroagi.stages.block_smb.teacher_tokens import teacher_strategy
-
-    assert teacher_strategy(episode_teacher(_course("max_coins_course"))).kind == "max_coins"
-    assert teacher_strategy(episode_teacher(_sample("flat_run"))).kind == "speed_run"
+    for tactic in left:
+        assert tactic.stance in BACKWARD_TACTICS and tactic.direction == -1

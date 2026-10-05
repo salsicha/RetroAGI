@@ -10,7 +10,9 @@ played in order. The simulator follows it every frame (``track``):
 
 A segment is a dictionary:
 
-- ``stance``: advance, alternate_route, hold_area or retreat;
+- ``stance``: advance, alternate_route, hold_area or retreat (SCHEDULE_STANCES:
+  the teacher's own plan, not the tactic tokens; teacher_tokens.teacher_tactic
+  turns where Mario is going under it into one of tokens.TACTICS);
 - ``direction``: 1 (right) or -1 (left). For advance, alternate_route and
   retreat the way Mario travels; for hold_area the way he faces;
 - ``kind``: "plain" (the stance holds throughout), or "bridge", "plant" or
@@ -24,6 +26,8 @@ A segment is a dictionary:
   segment began;
 - ``keep_behind``: for a monster segment, a line Mario should stay behind
   until he jumps over it (monster.py);
+- ``stomp``: an enemy the teacher goes to stomp while the segment lasts
+  (smb_coaching.training_target), optional;
 - ``end``: when the segment is over, one of
   ``{"on": i}`` standing on platform i,
   ``{"reach_x": x}`` Mario's left edge at or past x in the segment's direction,
@@ -41,8 +45,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-from retroagi.core.tokens import TACTICS
-
+SCHEDULE_STANCES = ("advance", "alternate_route", "hold_area", "retreat")
 SEGMENT_KINDS = ("plain", "bridge", "plant", "monster")
 END_KEYS = ("on", "reach_x", "frames", "bridge_crossed", "past_enemy", "goal")
 
@@ -57,6 +60,7 @@ def segment(
     avoid: Iterable[int] = (),
     area: Optional[float] = None,
     keep_behind: Optional[float] = None,
+    stomp: Optional[int] = None,
     **end: Any,
 ) -> dict:
     """One segment (see the module notes); ``end`` is one keyword, e.g. on=3."""
@@ -73,12 +77,14 @@ def segment(
         built["area"] = float(area)
     if keep_behind is not None:
         built["keep_behind"] = float(keep_behind)
+    if stomp is not None:
+        built["stomp"] = int(stomp)
     check_segment(built)
     return built
 
 
 def check_segment(seg: dict) -> None:
-    if seg.get("stance") not in TACTICS:
+    if seg.get("stance") not in SCHEDULE_STANCES:
         raise ValueError(f"unknown stance {seg.get('stance')!r}")
     if seg.get("direction") not in (-1, 1):
         raise ValueError("a segment's direction is -1 or 1")
@@ -104,8 +110,9 @@ def check_schedule(schedule: list, platform_count: int, enemy_count: int) -> Non
         for key in ("on",):
             if key in seg["end"] and not 0 <= seg["end"][key] < platform_count:
                 raise ValueError(f"platform {seg['end'][key]} is not in the layout")
-        if "past_enemy" in seg["end"] and not 0 <= seg["end"]["past_enemy"] < enemy_count:
-            raise ValueError(f"enemy {seg['end']['past_enemy']} is not in the layout")
+        for enemy in (seg["end"].get("past_enemy"), seg.get("stomp")):
+            if enemy is not None and not 0 <= enemy < enemy_count:
+                raise ValueError(f"enemy {enemy} is not in the layout")
 
 
 def advance_only(direction: int = 1) -> list:

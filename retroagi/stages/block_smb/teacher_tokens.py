@@ -1,31 +1,33 @@
-"""Teachers for the four-layer agent in Block SMB. Training only.
+"""Teachers for the layered agent in Block SMB. Training only.
 
 At each decision point of a training episode these say what each layer
-should emit: the strategy, tactic and skill tokens, and the action plan. They
-read the simulator's own state, which is allowed only for teaching. A policy
-never receives anything from here, except, while one layer is being trained,
-the explicit token for the layer above it.
+should emit: the strategy, the tactic token and the action plan. They read
+the simulator's own state, which is allowed only for teaching. A policy never
+receives anything from here, except, while the action layer is being trained,
+the explicit tactic token.
 
-- strategy: the one the layout is played for (a strategy course names it;
+- strategy: the one the layout is played for (a strategy family names it;
   every other layout is a speed run), toward the side the goal was on when
   the episode began;
-- tactic: what the layout's current tactic segment says (tactic_schedule).
-  Moving-platform, plant and monster segments change it inside by their
-  teachers' rules: hold the area while waiting for (or riding) a moving
-  platform, while waiting for a plant to go back into its pipe, or while a
-  monster is far enough; retreat while backing away from it; advance
-  otherwise. Going left is never advancing: advance means going right, the
-  level's way, so advancing toward a goal or an enemy behind Mario (a goal on
-  the left, a stomp target behind him, the goal after a jump overshot it) is
-  labelled retreat;
-- skill: decided by the tactic. Hold area is waiting; a scheduled retreat
-  (backing out, keeping away) is retreating; advance, alternate route, and
-  going back to something behind take the next step of their path (the
-  segment's route platform, else the nearest obstacle toward the goal):
-  climb, descend, jump gap, stomp or advance, where advancing to the left is
-  retreating and a goal on lower ground is descended to. A skill lasts until
-  Mario lands: in the air he keeps the skill he left the ground with. Its
-  target is matched to the object the vision transformer reports for it;
+- tactic: one of tokens.TACTICS, the way Mario is going here. It is worked
+  out in two steps:
+  1. the layout's schedule stance (tactic_schedule): what its current
+     segment says, changed inside moving-platform, plant and monster
+     segments by their teachers' rules (hold the area while waiting for or
+     riding a moving platform, while waiting for a plant to go back into its
+     pipe, or while a monster is far enough; retreat while backing away from
+     it; advance otherwise);
+  2. the next move under that stance. Holding the area is advancing (the
+     action layer sees from the scene when to stand still). A scheduled
+     retreat is retreating. Under advance or alternate route the move aims
+     at the segment's next route platform, else the nearest obstacle toward
+     the goal: a platform higher than Mario's feet is climbed, a lower one
+     (or a goal on lower ground) descended to, and anything else (walking,
+     jumping a gap, getting past or stomping an enemy, the moving platform's
+     approach, boarding and leaving) is advancing.
+  Forward is right, the level's way: a move to the left is retreat,
+  climb_backward or descend_backward, never advance. A move lasts until
+  Mario lands: in the air he keeps the tactic he left the ground with;
 - action: the first segment of the coached route from the current state
   (policy_recovery.coached_suffix), as an action and a frame count on the
   executor's menu; for a jump, also every certified hold (safe_jump_holds).
@@ -37,28 +39,13 @@ from typing import Optional
 
 from retroagi.core.actions import SMB_JUMP_ACTIONS, SMBAction
 from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan
-from retroagi.core.smb_observer import packed_lists
-from retroagi.core.smb_scene_labels import SceneObservation, box_overlap
-from retroagi.core.tokens import DEFAULT_STRATEGY, SkillToken, StrategyToken, TacticToken
+from retroagi.core.tokens import DEFAULT_STRATEGY, StrategyToken, TacticToken, tactic_token
 
 from . import tactic_schedule
 from .monte_carlo import block_smb_monte_carlo_metadata
 
-# An objective (local_traversal / smb_objectives) under advance or alternate
-# route -> its skill. Getting past an enemy is part of every skill, so it is
-# advancing; a platform to stand on is climbed or descended to by its height
-# (STEP), walked onto if level.
-OBJECTIVE_SKILLS = {
-    "gap": "jump_gap",
-    "enemy": "advance",
-    "stomp": "stomp",
-    "retreat": "advance",  # the finish, when the goal lies to the left
-    "finish": "advance",
-}
 # A platform this many pixels above (below) Mario's feet is climbed (descended to).
 STEP = 2
-# A teacher's surface matches a reported one at most this many rows apart.
-SURFACE_MATCH = 3
 
 
 @dataclass
@@ -84,61 +71,10 @@ class TeacherState:
         self.history = self.observer.observe(env, env.steps)
 
 
-def _screen(env, left: float, right: float) -> tuple[float, float]:
-    camera = int(env.camera_x)
-    return left - camera, right - camera
-
-
-def _surface_pointer(scene, x0: float, x1: float, top: float):
-    best, best_overlap = None, 0.0
-    for slot, surface in enumerate(packed_lists(scene)["surfaces"]):
-        if abs(surface.top - top) > SURFACE_MATCH:
-            continue
-        overlap = min(surface.x1, x1) - max(surface.x0, x0)
-        if overlap > best_overlap:
-            best, best_overlap = ("surfaces", slot), overlap
-    return best
-
-
-def _box_pointer(scene, name: str, box) -> Optional[tuple[str, int]]:
-    best, best_overlap = None, 0.2
-    for slot, item in enumerate(packed_lists(scene)[name]):
-        overlap = box_overlap(getattr(item, "box", item), box)
-        if overlap > best_overlap:
-            best, best_overlap = (name, slot), overlap
-    return best
-
-
-def _enemy_screen_box(env, index: int):
-    enemy = env.enemies[index]
-    camera = int(env.camera_x)
-    x = int(enemy["x"]) - camera
-    height = enemy["h"] + enemy.get("foot_offset", 0)
-    return (x, int(enemy["y"]), x + enemy["w"], int(enemy["y"]) + height)
-
-
-def _enemy_pointer(env, scene, index: Optional[int]):
-    if index is None or env.enemies[index]["h"] <= 0:
-        return None
-    return _box_pointer(scene, "enemies", _enemy_screen_box(env, index))
-
-
-def _lift_pointer(env, scene):
-    lifts = [p for p in env.platforms if p.get("moving")]
-    if not lifts:
-        return None
-    rect = lifts[0]["rect"]
-    left, right = _screen(env, rect.left, rect.right)
-    return _box_pointer(
-        scene, "moving_platforms", (left, rect.top, right, rect.bottom)
-    ) or _surface_pointer(scene, left, right, rect.top)
-
-
 def _bridge_phase(env, state: TeacherState) -> str:
     """The moving-platform teacher's phase now ("" when none is being crossed).
 
-    Worked out once per frame and kept in ``state``: the tactic and the skill
-    read the same phase.
+    Worked out once per frame and kept in ``state``.
     """
     from .bridge_traversal import bridge_phase
     from .hierarchy import bridge_training_active
@@ -177,8 +113,9 @@ def _bridge_jump_now(env) -> bool:
     return bridge_jump_allowed(now, later)
 
 
-def teacher_tactic(env, state: TeacherState) -> TacticToken:
-    """The layout's tactic here: its current segment's, by the segment's rule."""
+def schedule_stance(env, state: TeacherState) -> tuple[str, int]:
+    """The layout's schedule stance here (tactic_schedule.SCHEDULE_STANCES) and
+    the way it goes: its current segment's, by the segment's rule."""
     from .monster import monster_choice
     from .piranha_tactics import tactical_choice, timed_plant
 
@@ -205,99 +142,63 @@ def teacher_tactic(env, state: TeacherState) -> TacticToken:
         stance = choice[0] if choice is not None else "advance"
     if seg["kind"] != "plain" and stance == "retreat":
         direction = -direction
-    if seg["kind"] == "plain" and stance == "advance":
-        # The way Mario actually goes: toward his objective, which is behind
-        # him for a goal on the left, a stomp target behind him, or the goal
-        # after a jump overshot it.
-        from retroagi.core.smb_coaching import training_target
-
-        objective = training_target(env).direction
-        if objective in (-1, 1):
-            direction = objective
-    if stance in ("advance", "alternate_route") and direction < 0:
-        # Going back to the left is retreating, never advancing.
-        stance = "retreat"
-    return TacticToken(stance, direction)
+    return stance, direction
 
 
-def teacher_skill(
-    env, scene: SceneObservation, state: TeacherState, tactic: TacticToken
-) -> SkillToken:
-    """The skill the tactic calls for here, pointing at what the vision reports."""
+def _move(env, state: TeacherState, stance: str, direction: int) -> tuple[str, int]:
+    """The next move under a schedule stance: walk, climb or descend, and its way."""
     from retroagi.core.smb_coaching import training_target
 
     from .monster import active_monster
 
     seg = tactic_schedule.current(env)
-    focus = None  # the enemy a plant or monster segment is about
-    if seg["kind"] in ("plant", "monster"):
-        focus = seg["end"].get("past_enemy")
-    if tactic.stance == "hold_area":
-        target = _lift_pointer(env, scene) if seg["kind"] == "bridge" else None
-        return SkillToken("wait", tactic.direction, target or _enemy_pointer(env, scene, focus))
-    if tactic.stance == "retreat" and (seg["stance"] == "retreat" or seg["kind"] != "plain"):
+    if stance == "hold_area":
+        return "walk", 1
+    if stance == "retreat" and (seg["stance"] == "retreat" or seg["kind"] != "plain"):
         # Backing out of a dead end, away from a monster or a plant.
-        return SkillToken("retreat", tactic.direction, _enemy_pointer(env, scene, focus))
+        return "walk", direction
     phase = _bridge_phase(env, state) if seg["kind"] == "bridge" else ""
     if phase and not env._bridge_jump_task:
-        # Walking up to, onto, along and off a moving platform is advancing.
-        target = _lift_pointer(env, scene) if phase in ("approach", "board") else None
-        return _moving("advance", tactic.direction, target)
+        # Walking up to, onto, along and off a moving platform.
+        return "walk", direction
     if phase in ("board", "exit"):
-        objective = training_target(env)
-        left, right = _screen(env, objective.left, objective.right)
-        target = (
-            _lift_pointer(env, scene)
-            if phase == "board"
-            else _surface_pointer(scene, left, right, objective.top)
-        )
-        return SkillToken("jump_gap", objective.direction, target)
+        return "walk", int(training_target(env).direction)
     if active_monster(env) is not None:
-        return _moving("advance", tactic.direction, None)
-    # A move lasts until Mario lands: in the air he keeps the skill he left the
-    # ground with (a jump, a climb, a drop), aimed at the same objective.
-    held = state.notes.get("ground_skill")
+        return "walk", direction
+    # A move lasts until Mario lands: in the air he keeps the move he left the
+    # ground with (a jump, a climb, a drop).
+    held = state.notes.get("ground_move")
     if env.mario["on_ground"] or held is None:
         objective = training_target(env)
-        kind = _objective_skill(env, objective)
-        direction = int(objective.direction) if objective.direction in (-1, 1) else tactic.direction
-        state.notes["ground_skill"] = (kind, direction, objective)
-    else:
-        kind, direction, objective = held
-    target = None
-    if kind == "stomp" and objective.enemy_index is not None:
-        target = _enemy_pointer(env, scene, objective.enemy_index)
-    elif objective.kind in ("gap", "mount"):
-        left, right = _screen(env, objective.left, objective.right)
-        target = _surface_pointer(scene, left, right, objective.top)
-    return _moving(kind, direction, target)
+        way = int(objective.direction) if objective.direction in (-1, 1) else direction
+        state.notes["ground_move"] = (_objective_move(env, objective), way)
+    return state.notes["ground_move"]
 
 
-def _objective_skill(env, objective) -> str:
-    """The skill that reaches an objective from where Mario stands: a platform
-    higher than his feet is climbed, a lower one (or a goal on lower ground)
-    descended to; otherwise the objective's own skill (OBJECTIVE_SKILLS)."""
+def _objective_move(env, objective) -> str:
+    """How an objective is reached from where Mario stands: a platform higher
+    than his feet is climbed, a lower one (or a goal on lower ground)
+    descended to; anything else is walked or jumped to."""
     feet = env.mario["y"] + env.mario["h"]
-    if objective.kind == "mount":
-        if objective.top < feet - STEP:
+    if objective.kind == "mount" or objective.kind in ("finish", "retreat"):
+        if objective.kind == "mount" and objective.top < feet - STEP:
             return "climb"
-        return "descend" if objective.top > feet + STEP else "advance"
-    kind = OBJECTIVE_SKILLS.get(objective.kind, "advance")
-    if (
-        kind == "advance"
-        and objective.kind in ("finish", "retreat")
-        and objective.top > feet + STEP
-    ):
-        return "descend"  # the goal stands on lower ground
-    return kind
+        if objective.top > feet + STEP:
+            return "descend"
+    return "walk"
 
 
-def _moving(kind: str, direction: int, target) -> SkillToken:
-    """A skill toward ``direction``; walking back to the left is retreating,
-    never advancing."""
-    if kind == "advance" and direction < 0:
-        kind = "retreat"
-    return SkillToken(kind, direction, target)
+def tactic_of_move(move: str, direction: int) -> str:
+    """A move and its way as a tactic name: forward is right, backward left."""
+    if move in ("climb", "descend"):
+        return f"{move}_{'forward' if direction > 0 else 'backward'}"
+    return "advance" if direction > 0 else "retreat"
+
+
+def teacher_tactic(env, state: TeacherState) -> TacticToken:
+    """The tactic here (see the module notes)."""
+    stance, direction = schedule_stance(env, state)
+    return tactic_token(tactic_of_move(*_move(env, state, stance, direction)))
 
 
 def teacher_strategy(state: TeacherState) -> StrategyToken:

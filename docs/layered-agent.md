@@ -1,4 +1,4 @@
-# The four-layer SMB agent
+# The layered SMB agent
 
 One agent plays both Super Mario Bros games: Block SMB (a simulator drawn to
 look like the NES game) and Full SMB (the real game in an emulator). It sees
@@ -47,17 +47,16 @@ The truth the vision transformers learn from uses the same rules.
 inputs:
 
 - **C (352 numbers):** Mario, then fixed-length lists, each item "present"
-  plus its box relative to Mario, and the current skill's target. The lists
-  are enemies, coins, power-ups, moving platforms, pipes, blocks, surfaces
-  and gaps.
+  plus its box relative to Mario. The lists are enemies, coins, power-ups,
+  moving platforms, pipes, blocks, surfaces and gaps.
 - **A and B (8 and 16 numbers):** for each vertical band of the screen, the
   most important thing drawn in it.
 
 ## How it decides
 
-`retroagi/core/layered_policy.py` holds the policy: three learned layers
-(tactic, skill and action), a shared scene encoder and two memories. Above
-them sits the strategy switch.
+`retroagi/core/layered_policy.py` holds the policy: two learned layers
+(tactic and action), a shared scene encoder and two memories. Above them sits
+the strategy switch.
 - **Scene encoder:** one token per reported object, plus the band codes.
   Every position number also enters as 8 sine and 8 cosine waves, with
   wavelengths from 512 pixels (480 vertically) down to 4. A difference of one
@@ -76,41 +75,43 @@ them sits the strategy switch.
     to the decision layers beside the current scene.
   - **Training:** action by action. It's scored against the scene actually
     reported when each action ended.
-- **The skill and action layers** are each a transformer whose context holds:
+- **The action layer** is a transformer whose context holds:
   - the current scene;
   - the memory's expected scene;
-  - the token from the layer above;
+  - the tactic token;
   - its own last 16 choices, each marked with how many decisions ago it was
     made. In play these are its own choices; in training they're whatever
-    was actually used, including the teacher's. The skill layer remembers
-    where each past target was (its box measured from Mario at that moment),
-    not which slot it filled, because slots are re-filled for every picture.
+    was actually used, including the teacher's.
 
-  So each knows what it chose before, and keeping or changing course is
+  So it knows what it chose before, and keeping or changing course is
   something it learns.
 - **Strategy switch:** not a learned layer. Whoever runs the agent sets what
   the run is for and which side the goal is on (the agent can't see the
   goal):
-  - speed run: finish as fast as possible;
-  - max coins: collect as many coins as possible;
-  - careful: finish without risk, however long it takes.
+  - speed run: finish in the least time;
+  - max points: finish with the most points, a point for every coin collected
+    and every enemy killed.
 
-  A Block SMB layout sets it (its strategy course, otherwise speed run, and
+  A Block SMB layout sets it (its family's strategy, otherwise speed run, and
   the side its goal is on). In Full SMB it is set for the run, and the goal is
   always to the right. A strategy is an objective, a definition of what is
   rewarded, so there is nothing for a layer to learn in choosing one.
-- **Tactic layer:** chooses advance, alternate route, hold area or retreat, and
-  holds it over many actions. Going left is never advancing:
-  - advance: go right, the level's way, along the main path;
-  - alternate route: go right along another path, higher platforms or a
-    lower floor;
-  - hold area: stay put until something changes (a moving platform comes, a
-    plant goes back into its pipe, a monster comes close enough to jump);
-    it faces the goal;
+- **Tactic layer:** chooses one of six tactics, the way Mario is going, and
+  holds it over many actions. Forward is right, the level's way; backward is
+  left. Going left is never advancing:
+  - advance: go right. Walking, jumping gaps, getting past or stomping
+    enemies, and waiting for the way to clear (a moving platform to come, a
+    plant to go back into its pipe, a monster to come close enough to jump)
+    are all part of it; the action layer sees from the scene which is
+    needed;
   - retreat: go back to the left. That covers backing out of a dead end,
     keeping away from a monster, or getting back to something behind Mario:
     a goal on the left, an enemy to stomp behind him, or the goal after a
-    jump carried him past it.
+    jump carried him past it;
+  - climb forward / climb backward: go up onto something higher, to the right
+    or to the left;
+  - descend forward / descend backward: go down to something lower, to the
+    right or to the left.
 
   It is an option-critic: a tactic is an "option", a behaviour that lasts
   many actions. Its transformer reads the current scene, the action memory's
@@ -136,11 +137,6 @@ them sits the strategy switch.
     read by the tactic layer.
   - **Training:** tactic by tactic, against the scene reported when each
     tactic actually ended.
-- **Skill layer:** emits a skill and a direction, and points at a target
-  object. The skills are advance, jump gap, climb, descend, stomp, retreat and
-  wait. Avoiding enemies is part of every skill, not a skill of its own.
-  Walking up to a moving platform is advancing, jumping onto one is jumping a
-  gap, and riding one is waiting.
 - **Action layer:** emits a button action (nothing, right, right + jump, left,
   left + jump or jump) and how many frames to press it: any whole number from
   1 to 32, for every action.
@@ -164,66 +160,64 @@ alone, for both games.
 
 `retroagi/stages/block_smb/layered_train.py` trains one layer at a time, from the
 bottom up, with the others frozen.
-- **Action layer:** given the skill.
-- **Skill layer:** given the tactic.
+- **Action layer:** given the tactic.
 - **Tactic layer:** reading the layout's strategy switch.
 
 Which families each layer trains on (`layered_train.learner_families`):
-- **Action layer:** the seven single-action families
+- **Action layer:** the nine single-action families
   (`stages/block_smb/action_families.py`), one scene per action:
 
-  | Family | The one action | Parameters, every value swept |
-  |---|---|---|
-  | action_walk | walk right to the goal | distance (24-200 px) |
-  | action_walk_back | walk back left to a goal behind | distance (24-200 px) |
-  | action_jump_gap | jump a pit from a standstill at its edge | pit width (8-40 px), distance to the edge (0-4 px) |
-  | action_climb | jump up onto a step from a standstill | step height (8-56 px), distance to it (0-8 px) |
-  | action_descend | walk off a ledge down to the floor | drop (8-80 px), distance to the edge (0-24 px) |
-  | action_stomp | land on an enemy walking toward Mario | its distance (24-72 px), its speed (0.40-0.80 px a frame) |
-  | action_wait | stand still on a moving platform that carries Mario to the goal | its travel (48-112 px), its speed (0.50-1.00 px a frame) |
+  | Family | The one action | Tactic | Parameters, every value swept |
+  |---|---|---|---|
+  | action_walk | walk right to the goal | advance | distance (24-200 px) |
+  | action_walk_back | walk back left to a goal behind | retreat | distance (24-200 px) |
+  | action_jump_gap | jump a pit from a standstill at its edge | advance | pit width (8-40 px), distance to the edge (0-4 px) |
+  | action_climb | jump up onto a step ahead from a standstill | climb_forward | step height (8-56 px), distance to it (0-8 px) |
+  | action_climb_back | jump up onto a step behind from a standstill | climb_backward | step height (8-56 px), distance to it (0-8 px) |
+  | action_descend | walk off a ledge ahead down to the floor | descend_forward | drop (8-80 px), distance to the edge (0-24 px) |
+  | action_descend_back | walk off a ledge behind down to the floor | descend_backward | drop (8-80 px), distance to the edge (0-24 px) |
+  | action_stomp | land on an enemy walking toward Mario | advance | its distance (24-72 px), its speed (0.40-0.80 px a frame) |
+  | action_wait | stand still on a moving platform that carries Mario to the goal | advance | its travel (48-112 px), its speed (0.50-1.00 px a frame) |
 
-  Difficulty splits each family's main parameter into three ranges.
-- **Skill layer:** every family except the single-action ones, the strategy
-  courses and the 8 composed scenes (`tactic_families.COMPOSED_RECIPES`),
-  which string several skills together.
-- **Tactic layer:** every family except the single-action ones and the clones.
+  Difficulty splits each family's main parameter into three ranges. The
+  scenes going back to the left fit in one screen, because the camera never
+  scrolls back.
+- **Tactic layer:** the 12 strategy families (see below), one scene per
+  tactic played under each strategy.
 
-The action and skill layers' training layouts are a full sweep
+The action layer's training layouts are a full sweep
 (`monte_carlo.block_smb_parameter_combinations`). Each family's generator is run
 with every combination of every value of the parameters it draws: every whole
 number of a range, every option of a choice, every order of a shuffle, and
 fractional ranges (speeds) in steps of 0.01. This happens at every difficulty,
 and only layouts whose teacher route wins are kept.
-- **Action layer:** 8,109 layouts, all played every round, with each family
-  weighing the same in learning however many layouts it has.
+- **Action layer:** 10,375 layouts, all played every round, with each family
+  weighing the same in learning however many layouts it has. Every
+  combination has a winning teacher route.
 - **Speed:** slow families are split across the workers by their first draws,
   and the made layouts are kept on disk, keyed by the code that makes them.
 - **Test layouts:** held-out layouts are drawn at random from the same values
   (`monte_carlo.ParameterDraws`), so every test layout is one the sweep
   covered.
-- **Skill layer:** many of its families have parameter spaces far too large
-  for a full sweep. The clones and platform_chain have about 1.5-2.3 million
-  combinations at one difficulty, monster_retreat and upper_route about 8-10
-  million, and the moving-platform and plant families 0.3-13 billion. The
-  trainer refuses any family with more than 20,000 combinations at a
-  difficulty (`sweep_limit`) and names it. Those families need smaller
-  parameter spaces before the skill layer trains.
+- **Limit:** the trainer refuses any family with more than 20,000
+  combinations at a difficulty (`sweep_limit`) and names it.
+
+The tactic layer's layouts are drawn at random, never swept: its families
+insert coins and enemies at random, far too many combinations to play.
 
 **Rule for each layer's families (don't forget this).** A layer trains only
 on families at its own level:
 - **Action layer:** scenes that each need a single action. The teacher labels
-  exactly one skill, the same at every decision from start to finish, and
-  `test_a_single_action_family_asks_for_one_skill_from_start_to_finish`
+  exactly one tactic, the same at every decision from start to finish, and
+  `test_a_single_action_family_asks_for_one_tactic_from_start_to_finish`
   checks it. Never scenarios that string several actions together; composing
-  actions is the skill layer's job. A skill lasts until Mario lands (in the
-  air he keeps the skill he left the ground with), so a jump is one action
+  actions is the tactic layer's job. A tactic lasts until Mario lands (in the
+  air he keeps the tactic he left the ground with), so a jump is one action
   from take-off to landing. Families such as stair_climb, platform_chain or
-  stair_gap compose several actions and belong to the skill layer.
-- **Skill layer:** no single-action scenes, no strategy courses (whose point
-  is a strategy's objective) and no composed scenes (which string several
-  skills together).
-- **Tactic layer:** the strategy courses and composed scenes, once the
-  actions and skills are trained.
+  stair_gap compose several actions and belong to the tactic layer.
+- **Tactic layer:** the strategy families only, once the action layer is
+  trained. Each strings several actions together, and only the tactic layer
+  reads the strategy switch.
 
 The token from above comes from a teacher that reads the simulator
 (`retroagi/stages/block_smb/teacher_tokens.py`). The teacher is used only in
@@ -231,10 +225,11 @@ training.
 
 ### Every layout states its tactics
 
-Each layout carries its tactics in order: a list of segments
-(`retroagi/stages/block_smb/tactic_schedule.py`). A segment has a stance, a
-direction, and optionally a route (platforms to stand on, in order) and
-forbidden platforms. It ends at a platform, at a line, after a number of
+Each layout carries its plan in order: a list of segments
+(`retroagi/stages/block_smb/tactic_schedule.py`). A segment has a schedule
+stance (advance, alternate route, hold area or retreat: the teacher's own
+plan, not the tactic tokens), a direction, and optionally a route (platforms
+to stand on, in order) and forbidden platforms. It ends at a platform, at a line, after a number of
 frames, once a moving platform is crossed, or once an enemy is passed. The
 simulator follows the segments during training:
 - the goal counts only in the last segment;
@@ -246,109 +241,114 @@ Three kinds of segment change their stance inside, by their teacher's rule:
 - plant: hold the area while waiting for it to go back into its pipe;
 - monster: retreat from it, hold the area, then jump over it.
 
-The teachers follow the segments. The tactic is the current segment's, except
-that going left is never advancing: where an advance segment takes Mario back
-to something behind him (a goal on the left, an enemy to stomp behind him, the
-goal after a jump carried him past it), the tactic is retreat. The skill is
-decided by the tactic:
-- hold area: wait;
-- retreat, backing out or keeping away (a retreat segment, or the plant and
-  monster rules): retreat;
-- advance, alternate route, or retreat back to something behind: the next
-  step of that path (climb, descend, jump gap, stomp, or advance), where
-  walking to the left is retreat, never advance, and a goal on lower ground
-  is descended to.
+The teachers follow the segments (`teacher_tokens.teacher_tactic`). The
+tactic is the next move under the current segment's stance:
+- hold area: advance (standing still is the action layer's choice);
+- backing out or keeping away (a retreat segment, or the plant and monster
+  rules): retreat;
+- advance or alternate route: the next step of that path, aimed at the
+  segment's next route platform, else the nearest obstacle toward the goal.
+  A platform higher than Mario's feet is climbed and a lower one (or a goal
+  on lower ground) descended to, forward or backward by its side; anything
+  else (walking, jumping a gap, getting past or stomping an enemy, boarding
+  or leaving a moving platform) is advance to the right and retreat to the
+  left.
 
-A skill lasts until Mario lands: in the air he keeps the skill he left the
+A tactic lasts until Mario lands: in the air he keeps the tactic he left the
 ground with, so a jump is labelled the same from take-off to landing.
 
 The action teacher's route follows the same segments.
 
-| Tactic | Families that teach it |
-|---|---|
-| Advance | every family; the simple ones are advance only |
-| Alternate route | upper_route, lower_route, dead_end_retreat, chained_obstacles, tactics_obstacle_sequence, tactics_bridge_then_gap, tactics_mixed_sequence, mixed_section, choice_alternate_route, low_choice_alternate_route |
-| Hold area | bridge_wait, wait_timing, moving_bridge, bridge_mount, bridge_dismount, piranha_avoidance, monster_retreat, chained_enemy_gauntlet, full_smb_opening_proxy, tactics_bridge_sequence, tactics_obstacle_sequence, tactics_bridge_then_gap, tactics_mixed_sequence, mixed_section, choice_hold_area |
-| Retreat | dead_end_retreat, monster_retreat, tactics_bridge_then_gap, chained_enemy_gauntlet, tactics_mixed_sequence, choice_retreat; the plant teacher when Mario overshoots its waiting spot; retreat_recovery and stomp_recovery (back to a goal or an enemy behind Mario); the walk back after a jump overshoots the goal |
+### Strategy families: the tactic layer's families
 
-The new families (`retroagi/stages/block_smb/tactic_families.py`):
-- **upper_route:** the floor is cut by a pit too wide to jump, or a wall too
-  tall to climb; raised platforms cross it.
-- **lower_route:** a raised ledge is cut by an opening too wide to jump; Mario
-  drops to the floor below and climbs back up.
-- **dead_end_retreat:** Mario starts in a corridor that ends at a wall too
-  tall to climb. He backs out to a step behind him, then takes a high path
-  over the wall.
-- **monster_retreat:** a monster that can't be stomped (the vision reports it
-  as the "other" enemy kind) walks out of a tunnel too low to jump in. Mario
-  backs out of the tunnel, waits, and jumps over it in the open.
-
-The chained and sequence families are composed from sections
-(`retroagi/stages/block_smb/compose.py`), so their tactics change along the
-way. tactics_bridge_sequence is a moving platform, then a plant.
-
-**Clones**, for the skill layer, play the very same layouts and differ only in
-their tactics, so the right skill is decided by the tactic token:
-- choice_advance, choice_alternate_route, choice_hold_area and choice_retreat
-  share a floor with a pit ahead, a raised path above it and room behind;
-- low_choice_advance and low_choice_alternate_route share a ledge path with
-  gaps over a lower floor.
-
-Not following the tactic loses the episode. The tactic layer doesn't train on
-the clones, because their tactic isn't decided by the scene.
-
-### Strategy courses
-
-The strategy switch matters only in the strategy courses: speed_run_course,
-max_coins_course and careful_course. They are composed scenes only, and the
-three families play the very same layouts. They train only the tactic layer,
-once the action and skill layers are trained: a course is about its
-strategy's objective (a deadline, a coin count), which the action and skill
-layers can't see, so the same situation and the same skill would be taught
-different buttons by different strategies. The only differences are:
-- the strategy given to the tactic layer;
-- the tactics the teacher follows;
+`retroagi/stages/block_smb/strategy_families.py` builds six scenes, one per
+tactic, and plays each under both strategies: 12 families, named
+`<strategy>_<tactic>` (speed_run_advance, max_points_climb_backward, ...). The
+two families of a scene play the very same layouts and differ only in:
+- the strategy switch the tactic layer reads;
+- the route the teacher takes;
 - what the episode pays and what counts as winning.
 
-Each course has two or three sections that offer two routes, among other
-sections:
-- **Coin detour:** coins on a zig-zag tower above the floor. Walk past
-  (advance) or climb it for the coins (alternate route).
-- **Hazard bypass:** enemies patrol the floor under a high walkway with none,
-  reached by a zig-zag. Go through the enemies (advance) or over them
-  (alternate route).
-- **Lift shortcut:** a pit too wide to jump. Ride a moving platform (advance;
-  how long that takes depends on where the platform is when Mario arrives),
-  or climb a zig-zag to a walkway across (alternate route, with a few
-  coins).
+Each scene's main structure needs its tactic to reach the goal:
 
-The teacher plays every combination of the routes and measures each one:
-frames to the goal, coins collected and enemies passed. Each strategy takes
-the best combination for its objective:
+| Scene | Main structure |
+|---|---|
+| advance | a floor to the right, sometimes cut by a pit to jump |
+| retreat | the goal back to the left |
+| climb_forward | the goal on a step ahead |
+| climb_backward | the goal on a step behind |
+| descend_forward | Mario on a ledge, the goal on the floor ahead |
+| descend_backward | Mario on a ledge, the goal on the floor behind |
+
+The backward scenes fit in one screen, because the camera never scrolls back.
+Difficulty sets the pit, step and drop sizes (the action families' ranges) and
+how many enemies walk the way.
+
+Coins and enemies are inserted at random:
+- **on the way:** zero to three coins at Mario's height and zero to two enemies
+  walking toward him, which every route meets;
+- **off the way:** one or two detours, each one Mario may take or skip: coins
+  on a floating platform above the way (climb onto it), coins behind him (go
+  back for them), or an enemy patrolling behind him (go back and stomp it).
+  A plan segment can name an enemy, and the teacher then goes to stomp it.
+
+The teacher plays every combination of taking and skipping the detours and
+measures each: frames to the goal, and points (coins collected plus enemies
+killed). Each strategy takes its best combination:
 - **speed run:** the fewest frames;
-- **max coins:** the most coins, then the fewest frames;
-- **careful:** the fewest enemies passed, then the fewest frames.
+- **max points:** the most points, then the fewest frames.
 
-So speed run takes a raised route whenever that is quicker: past a far-away
-moving platform, or over enemies that would slow it down. In checks over 24
-layouts it took at least one raised route in 12. Turning back and forth on a
-zig-zag costs time; jumping does not, because Mario keeps his running speed
-through a jump.
-
-What each strategy is paid for (`MarioScenarioEnv.STRATEGY_REWARDS`) and how it
-wins:
-
-| Strategy | Paid for | Wins when |
-|---|---|---|
-| Speed run | a time bonus at the goal for each frame left before its deadline, and a frame cost five times the usual | it reaches the goal within 10% of the fastest route's time |
-| Max coins | coins, at two and a half times the usual reward | it reaches the goal with at least three quarters of the extra coins its route gathers beyond speed run's |
-| Careful | no frame cost; dying costs five times as much | it reaches the goal |
-
-A course layout is kept only if max coins' best route gathers more coins than
+A layout is kept only if max points' best route gathers more points than
 speed run's. Each layout records what the teacher measured for every
 combination (`route_results`).
 
-Every other family is played as a speed run.
+What each strategy is paid for (`env.STRATEGY_REWARDS`) and how it wins:
+
+| Strategy | Paid for | Wins when |
+|---|---|---|
+| Speed run | time only: a frame cost five times the usual, a time bonus at the goal for each frame left before its deadline, nothing for coins or kills | it reaches the goal within 10% of the fastest route's time |
+| Max points | 25 for every coin and every kill (two and a half times the usual coin reward, five times the usual stomp reward) | it reaches the goal with at least three quarters of the extra points its route gathers beyond speed run's |
+
+Which tactics the teacher labels in the strategy families, counted at the
+decisions along its route on 6 layouts per family (2 per difficulty; every
+one won; measured 2026-10-05):
+
+| Family | Advance | Retreat | Climb forward | Climb backward | Descend forward | Descend backward |
+|---|---|---|---|---|---|---|
+| speed_run_advance | 41 | | | | | |
+| speed_run_retreat | | 28 | | | | |
+| speed_run_climb_forward | 26 | | 14 | | | |
+| speed_run_climb_backward | | 19 | | 14 | | |
+| speed_run_descend_forward | 25 | | 4 | | 8 | |
+| speed_run_descend_backward | | 11 | | | | 11 |
+| max_points_advance | 39 | 15 | 13 | | 3 | |
+| max_points_retreat | 8 | 24 | | 15 | | 4 |
+| max_points_climb_forward | 29 | 12 | 31 | | 3 | |
+| max_points_climb_backward | 12 | 33 | | 16 | | 1 |
+| max_points_descend_forward | 29 | 12 | 16 | | 13 | |
+| max_points_descend_backward | 15 | 29 | | | | 10 |
+
+Speed run walks straight to the goal; max points goes back for coins and
+enemies behind (retreat, or advance in the backward scenes) and climbs onto
+coin platforms, so the strategy switch changes which tactics are right.
+
+### Families no layer trains on
+
+These families have explicit plans but no layer trains on them now
+(`retroagi/stages/block_smb/tactic_families.py`):
+- **upper_route, lower_route, dead_end_retreat, monster_retreat:** a pit too
+  wide to jump crossed by raised platforms; a ledge cut by an opening, crossed
+  below; a dead end backed out of; a monster that can't be stomped, kept away
+  from and jumped over.
+- **The chained and sequence families,** composed from sections
+  (`retroagi/stages/block_smb/compose.py`), whose tactics change along the way.
+- **The clones** (choice_advance, choice_alternate_route, choice_hold_area,
+  choice_retreat, low_choice_advance, low_choice_alternate_route): the very
+  same layouts with different plans, made for the skill layer, which is gone.
+- **The older basic families** (flat_run, single_gap, stair_climb, the enemy
+  and moving-platform families, and the rest).
+
+### Rounds
 
 1. **Imitation rounds.** Workers play episodes through the vision transformer.
    At every decision the teacher says what it would do from that exact state;
@@ -393,8 +393,7 @@ each layout's strategy switch. The best round that passes is saved as
 
 ```bash
 retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
-retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
-retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
+retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/tactic
 ```
 
 ## Full SMB
@@ -407,5 +406,5 @@ game memory is read only to score how far Mario got.
 python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
 ```
 
-The strategy switch is set for the run: `--strategy speed_run`, `max_coins` or
-`careful` (speed run by default).
+The strategy switch is set for the run: `--strategy speed_run` or `max_points`
+(speed run by default).

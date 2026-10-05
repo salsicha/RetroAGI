@@ -1,4 +1,4 @@
-"""Play Full SMB levels with a four-layer agent trained in Block SMB.
+"""Play Full SMB levels with a layered agent trained in Block SMB.
 
 The agent sees each level only through the Full SMB vision transformer and
 plays exactly as deployed: every token is its own, under the strategy switch

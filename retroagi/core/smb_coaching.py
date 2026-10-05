@@ -51,6 +51,20 @@ def required_stomp(scene):
     )
 
 
+def segment_stomp(env):
+    """The enemy the layout's tactic segment says to stomp, while it lives."""
+    from retroagi.stages.block_smb import tactic_schedule
+
+    index = tactic_schedule.current(env).get("stomp")
+    if index is None or env.enemies[index]["dead"]:
+        return None
+    e, m = env.enemies[index], env.mario
+    direction = 1 if e["x"] + e["w"] / 2 >= m["x"] + m["w"] / 2 else -1
+    return LocalObjective(
+        "stomp", e["x"], e["x"] + e["w"], e["y"], enemy_index=index, direction=direction
+    )
+
+
 def training_target(env):
     if getattr(env, "_bridge_jump_task", None):
         # The jump task succeeds only on the required collision landing.
@@ -60,6 +74,9 @@ def training_target(env):
         target = required_stomp(env)
         if target is not None:
             return target
+    target = segment_stomp(env)
+    if target is not None:
+        return target
     # The layout's tactic segment: its route's next platform, or its retreat line.
     target = route_objective(env) or retreat_objective(env)
     if target is not None:

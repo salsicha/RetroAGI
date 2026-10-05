@@ -1,7 +1,7 @@
-"""Skill prerequisites and physically continuous tactical/strategic families.
+"""Family prerequisites and physically continuous tactical/strategic families.
 
 Family names and teacher plans are curriculum metadata, never policy inputs.
-Every layer learns on basic skills; these later tasks teach their composition.
+These later tasks teach the composition of basic moves.
 The sequence families are composed from sections (tactic_families.COMPOSED_RECIPES).
 """
 

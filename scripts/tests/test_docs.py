@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 DOCS = [Path("README.md"), Path("scripts/vit/README.md"), *sorted(Path("docs").glob("*.md"))]
-# Documents kept from before the four-layer agent; they describe removed code
+# Documents kept from before the layered agent; they describe removed code
 # and link to removed documents, so they are not checked.
 EARLIER_NOTES = {
     "ai-teaching-curriculum.md",

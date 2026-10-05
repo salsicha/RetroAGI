@@ -85,13 +85,14 @@ POWER_UP_CAP, POWER_UP_SPOT, POWER_UP_STEM = (232, 48, 24), (252, 252, 252), (25
 POWER_UP_SIZE = 16
 
 # What each strategy is paid for, as multipliers of the reward terms (training
-# only; a layout names its strategy in "strategy", see tactic_families). Speed
-# run also earns a time bonus at the goal: the goal reward again, times the
-# share of its deadline left unused.
+# only; a layout names its strategy in "strategy", see strategy_families).
+# Speed run is paid for time alone: five times the frame cost, nothing for
+# coins or kills, and a time bonus at the goal (the goal reward again, times
+# the share of its deadline left unused). Max points is paid for points: coins
+# and kills, each worth 25.
 STRATEGY_REWARDS = {
-    "speed_run": {"frame_penalty": 5.0},
-    "max_coins": {"coin": 2.5},
-    "careful": {"fall_death": 5.0, "enemy_hit": 5.0, "frame_penalty": 0.0},
+    "speed_run": {"frame_penalty": 5.0, "coin": 0.0, "enemy_stomp": 0.0},
+    "max_points": {"coin": 2.5, "enemy_stomp": 5.0},
 }
 
 
@@ -230,8 +231,9 @@ class MarioScenarioEnv:
                     training only: teacher tokens, route rules, success)
     strategy      : the strategy the layout is played for (STRATEGY_REWARDS),
                     with "strategy_objective": {"deadline": frames} (the goal
-                    counts only until then) or {"coins": count} (only with at
-                    least that many coins); missing it ends the episode as a loss
+                    counts only until then) or {"points": count} (only with at
+                    least that many points: coins collected plus enemies
+                    killed); missing it ends the episode as a loss
     """
 
     # ── Construction ─────────────────────────────────────────────────────────
@@ -850,9 +852,8 @@ class MarioScenarioEnv:
             and mario_rect.colliderect(self.goal)
         ):
             terminated = True
-            coins = sum(coin["collected"] for coin in self.coins)
-            if coins < self._strategy_objective.get("coins", 0):
-                self._objective_missed = True  # reached the goal without the coins
+            if self.points() < self._strategy_objective.get("points", 0):
+                self._objective_missed = True  # reached the goal without the points
             else:
                 reward_terms["goal"] += self.reward_config.goal
                 self._goal_credited = True
@@ -1158,6 +1159,11 @@ class MarioScenarioEnv:
                 canvas.rect(PLANT_SPOT, "enemy", pygame.Rect(x, head.top + 1, 2, 2))
 
     # ── Structured state / info ───────────────────────────────────────────────
+
+    def points(self) -> int:
+        """Max points' score so far: coins collected plus enemies killed (stomped)."""
+        coins = sum(coin["collected"] for coin in self.coins)
+        return coins + sum(bool(enemy["dead"]) for enemy in self.enemies)
 
     @staticmethod
     def _finalize_reward_terms(reward_terms: dict[str, float]) -> tuple[float, dict[str, float]]:

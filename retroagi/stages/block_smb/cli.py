@@ -1,4 +1,4 @@
-"""Command line for the four-layer Block SMB agent: train one layer, or examine one."""
+"""Command line for the layered Block SMB agent: train one layer, or examine one."""
 
 from __future__ import annotations
 
@@ -7,6 +7,15 @@ import json
 from typing import Any, Sequence
 
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES
+
+
+def _yes_or_no(text: str) -> bool:
+    """A true/false setting on the command line: true/yes/1 or false/no/0."""
+    if text.lower() in ("true", "yes", "1"):
+        return True
+    if text.lower() in ("false", "no", "0"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected true or false, got {text!r}")
 
 
 def _add_layer_args(parser: argparse.ArgumentParser) -> None:
@@ -23,6 +32,8 @@ def _add_layer_args(parser: argparse.ArgumentParser) -> None:
             parser.add_argument(option, nargs=len(setting.default), type=float, default=None)
         elif setting.default is None or isinstance(setting.default, str):
             parser.add_argument(option, type=str, default=setting.default)
+        elif isinstance(setting.default, bool):
+            parser.add_argument(option, type=_yes_or_no, default=setting.default)
         else:
             parser.add_argument(option, type=type(setting.default), default=setting.default)
 
@@ -49,24 +60,24 @@ def _run_train_layer(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="retroagi-block-smb",
-        description="Train and examine the layers of the four-layer Block SMB agent.",
+        description="Train and examine the layers of the layered Block SMB agent.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     train_layer = subparsers.add_parser(
         "train-layer",
-        help="train one layer of the four-layer agent (action, then skill, then tactic)",
+        help="train one layer of the layered agent (action, then tactic)",
     )
     _add_layer_args(train_layer)
 
     exam_layer = subparsers.add_parser(
         "exam-layer",
-        help="play fresh held-out layouts with a saved four-layer policy",
+        help="play fresh held-out layouts with a saved layered policy",
     )
     exam_layer.add_argument("--checkpoint", required=True)
     exam_layer.add_argument(
         "--learner",
-        choices=("action", "skill", "tactic", "deployed"),
+        choices=("action", "tactic", "deployed"),
         default="deployed",
         help="the layer under test (the teacher gives its token from above), or the whole agent",
     )

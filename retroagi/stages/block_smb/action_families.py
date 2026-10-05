@@ -1,17 +1,22 @@
 """The action layer's families: scenes that each need a single action.
 
-Each scene asks for one skill, the one the teacher labels at every decision of
-its route, and nothing else:
+Each scene asks for one action, under one tactic, the one the teacher labels
+at every decision of its route, and nothing else:
 
-| Family | The one action | Parameters (every value is swept) |
-|---|---|---|
-| action_walk | walk right to the goal | distance |
-| action_walk_back | walk back left to the goal behind | distance |
-| action_jump_gap | jump a pit from a standstill at its edge | pit width, distance to the edge |
-| action_climb | jump up onto a step from a standstill | step height, distance to the step |
-| action_descend | walk off a ledge down to the floor | drop height, distance to the edge |
-| action_stomp | land on an enemy walking toward Mario | its distance, its speed |
-| action_wait | stand still on a moving platform that carries Mario to the goal | how far it travels, its speed |
+| Family | The one action | Tactic | Parameters (every value is swept) |
+|---|---|---|---|
+| action_walk | walk right to the goal | advance | distance |
+| action_walk_back | walk back left to the goal behind | retreat | distance |
+| action_jump_gap | jump a pit from a standstill at its edge | advance | pit width, distance to the edge |
+| action_climb | jump up onto a step ahead from a standstill | climb_forward | step height, distance to the step |
+| action_climb_back | jump up onto a step behind from a standstill | climb_backward | step height, distance to the step |
+| action_descend | walk off a ledge ahead down to the floor | descend_forward | drop height, distance to the edge |
+| action_descend_back | walk off a ledge behind down to the floor | descend_backward | drop height, distance to the edge |
+| action_stomp | land on an enemy walking toward Mario | advance | its distance, its speed |
+| action_wait | stand still on a moving platform that carries Mario to the goal | advance | how far it travels, its speed |
+
+The scenes going back to the left fit in one screen: the camera never
+scrolls back, so the whole scene must be in view from the start.
 
 Difficulty splits each family's main parameter into three ranges. The ranges
 stay inside what a jump from a standstill reaches (about 50 pixels forward and
@@ -37,7 +42,9 @@ ACTION_FAMILIES = (
     "action_walk_back",
     "action_jump_gap",
     "action_climb",
+    "action_climb_back",
     "action_descend",
+    "action_descend_back",
     "action_stomp",
     "action_wait",
 )
@@ -102,6 +109,22 @@ def action_climb(rng, difficulty: str):
     return scenario, parameters, [2]
 
 
+def action_climb_back(rng, difficulty: str):
+    height = rng.randint(*STEPS[difficulty])
+    step, width = 40, 48
+    distance = rng.randint(0, 8)  # from Mario's back to the step
+    world = step + width + 120
+    scenario = {
+        "world_width": world,
+        "mario": [step + width + distance, STANDING],
+        "platforms": [[0, FLOOR, world, 20], [step, FLOOR - height, width, height]],
+        "goal": [step + 8, FLOOR - height - 20, 32, 20],
+        "goal_requires_support": True,
+    }
+    parameters = {"step_height": height, "step_distance": distance, "difficulty_bin": difficulty}
+    return scenario, parameters, [4]
+
+
 def action_descend(rng, difficulty: str):
     height = rng.randint(*DROPS[difficulty])
     edge = 120
@@ -116,6 +139,22 @@ def action_descend(rng, difficulty: str):
     }
     parameters = {"drop_height": height, "edge_distance": distance, "difficulty_bin": difficulty}
     return scenario, parameters, [1]
+
+
+def action_descend_back(rng, difficulty: str):
+    height = rng.randint(*DROPS[difficulty])
+    edge, world = 136, 256
+    distance = rng.randint(0, 24)  # from Mario's back to the ledge's edge
+    # The goal covers the floor where a walk off the ledge lands, however high.
+    scenario = {
+        "world_width": world,
+        "mario": [edge + distance, FLOOR - height - 20],
+        "platforms": [[0, FLOOR, world, 20], [edge, FLOOR - height, world - edge, height]],
+        "goal": [edge - 128, STANDING, 120, 20],
+        "goal_requires_support": True,
+    }
+    parameters = {"drop_height": height, "edge_distance": distance, "difficulty_bin": difficulty}
+    return scenario, parameters, [3]
 
 
 def action_stomp(rng, difficulty: str):
@@ -165,7 +204,9 @@ GENERATORS = {
     "action_walk_back": action_walk_back,
     "action_jump_gap": action_jump_gap,
     "action_climb": action_climb,
+    "action_climb_back": action_climb_back,
     "action_descend": action_descend,
+    "action_descend_back": action_descend_back,
     "action_stomp": action_stomp,
     "action_wait": action_wait,
 }

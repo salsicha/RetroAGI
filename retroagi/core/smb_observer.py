@@ -9,9 +9,8 @@ transformer reports and the policy's three inputs packed from it:
   box, facing, standing / in the air / on a moving platform), then fixed-length
   lists of enemies, coins, power-ups, moving platforms, pipes, blocks,
   surfaces and gaps, each slot "present" plus the thing's position relative
-  to Mario, and c_target, the current skill's target (filled by the policy's
-  own skill layer, zeros otherwise). There is no speed, no motion and nothing
-  from earlier frames: anything over time is the policy's own memory.
+  to Mario. There is no speed, no motion and nothing from earlier frames:
+  anything over time is the policy's own memory.
 - src_a, src_b: a code for each of 8 (A) and 16 (B) vertical screen bands,
   the most important thing drawn in the band (COLUMN_CODES).
 
@@ -23,7 +22,7 @@ things nearest Mario are kept.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -54,7 +53,6 @@ _SLOT_WIDTH = {
     "gaps": 3,
 }
 MARIO_WIDTH = 6 + len(SUPPORTS)  # present, box (4), facing right, support one-hot
-TARGET_WIDTH = 5  # present, box relative to Mario
 # The policy's three inputs (StageSpec): A has 8 bands, B 16, and C is 16 x 22.
 SEQ_LEN_A, SEQ_LEN_B, RATIO_BC = 8, 16, 22
 SEQ_LEN_C = SEQ_LEN_B * RATIO_BC
@@ -65,7 +63,6 @@ def _spans() -> dict[str, tuple[int, int]]:
     for name, width in (
         ("c_mario", MARIO_WIDTH),
         *((f"c_{name}", SCENE_SLOTS[name] * _SLOT_WIDTH[name]) for name in SCENE_SLOTS),
-        ("c_target", TARGET_WIDTH),
     ):
         spans[name] = (offset, offset + width)
         offset += width
@@ -186,31 +183,8 @@ def packed_lists(scene: SceneObservation) -> dict[str, list]:
     return lists
 
 
-def target_box(scene: SceneObservation, target: Optional[tuple[str, int]]) -> Optional[Box]:
-    """The box of a pointer's target (a surface is its top edge, one row tall), or None."""
-    if target is None:
-        return None
-    name, slot = target
-    items = packed_lists(scene)[name]
-    if slot >= len(items):
-        return None
-    item = items[slot]
-    if name == "surfaces":
-        return (item.x0, item.top, item.x1, item.top + 1)
-    return item.box if hasattr(item, "box") else item
-
-
-def target_row(scene: SceneObservation, target: Optional[Box]) -> np.ndarray:
-    """The c_target span: present, then the target's box relative to Mario (zeros if none)."""
-    row = np.zeros(TARGET_WIDTH, np.float32)
-    if target is not None:
-        mx, my, _ = _reference(scene)
-        row[:] = (1.0, *_relative_box(target, mx, my))
-    return row
-
-
-def pack_c(scene: SceneObservation, target: Optional[Box] = None) -> np.ndarray:
-    """The C row for one scene (C_SPANS); ``target`` is the skill's target box, if any."""
+def pack_c(scene: SceneObservation) -> np.ndarray:
+    """The C row for one scene (C_SPANS)."""
     row = np.zeros(SEQ_LEN_C, np.float32)
     mx, my, feet = _reference(scene)
     width, height = SCREEN_SHAPE[1], SCREEN_SHAPE[0]
@@ -263,7 +237,6 @@ def pack_c(scene: SceneObservation, target: Optional[Box] = None) -> np.ndarray:
         ],
     )
     fill("gaps", [[1.0, (g.x0 - mx) / width, (g.x1 - mx) / width] for g in lists["gaps"]])
-    row[slice(*C_SPANS["c_target"])] = target_row(scene, target)
     return row
 
 
@@ -312,12 +285,12 @@ def column_codes(scene: SceneObservation, bands: int) -> np.ndarray:
     return np.array([min(codes) if codes else CODE["nothing"] for codes in found], np.int64)
 
 
-def policy_input(scene: SceneObservation, target: Optional[Box] = None) -> PolicyInput:
+def policy_input(scene: SceneObservation) -> PolicyInput:
     """A scene packed into the policy's three inputs."""
     return PolicyInput(
         src_a=torch.from_numpy(column_codes(scene, SEQ_LEN_A)),
         src_b=torch.from_numpy(column_codes(scene, SEQ_LEN_B)),
-        src_c=torch.from_numpy(pack_c(scene, target)),
+        src_c=torch.from_numpy(pack_c(scene)),
         scene=scene,
     )
 

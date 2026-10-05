@@ -1,6 +1,6 @@
 # Reproducibility Procedure
 
-This procedure goes from a clean checkout to a trained four-layer agent, and
+This procedure goes from a clean checkout to a trained layered agent, and
 records what is needed to repeat the run.
 
 ## 1. Start From A Clean Checkout
@@ -94,8 +94,7 @@ on every family (`passed.pt`). Never pass a layer whose bar was not met.
 
 ```bash
 retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
-retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
-retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
+retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/tactic
 ```
 
 Each run folder holds `history.json` (every round's

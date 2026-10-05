@@ -25,7 +25,7 @@ def test_train_layer_passes_every_given_setting_to_the_trainer():
                 [
                     "train-layer",
                     "--learner",
-                    "skill",
+                    "tactic",
                     "--init",
                     "runs/action/passed.pt",
                     "--families",
@@ -38,7 +38,7 @@ def test_train_layer_passes_every_given_setting_to_the_trainer():
         )
     config = seen["config"]
     assert result == {"best_validation_success": 0.5}
-    assert config.learner == "skill"
+    assert config.learner == "tactic"
     assert config.init == "runs/action/passed.pt"
     assert config.families == ("flat_run", "single_gap")
     assert config.workers == 3
@@ -47,6 +47,13 @@ def test_train_layer_passes_every_given_setting_to_the_trainer():
     for setting in dataclasses.fields(LayeredTrainConfig):
         if setting.name not in ("learner", "init", "families", "workers"):
             assert getattr(config, setting.name) == getattr(defaults, setting.name), setting.name
+
+
+def test_a_true_or_false_setting_reads_false_as_false():
+    args = cli.build_parser().parse_args(["train-layer", "--sweep", "False"])
+    assert args.sweep is False
+    args = cli.build_parser().parse_args(["train-layer", "--sweep", "true"])
+    assert args.sweep is True
 
 
 def test_exam_layer_examines_the_whole_agent_by_default():

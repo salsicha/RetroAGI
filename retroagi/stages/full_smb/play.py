@@ -1,4 +1,4 @@
-"""Full SMB for the four-layer agent: the game gives screens, the agent gives buttons.
+"""Full SMB for the layered agent: the game gives screens, the agent gives buttons.
 
 FullSMBGame plays one saved level start in the emulator. reset() and
 step(action) return the screen, padded back to the 256x240 NES picture like

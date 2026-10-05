@@ -1,5 +1,5 @@
-"""The action and skill layers' training layouts: every combination of every value
-of each family's parameters."""
+"""The action layer's training layouts: every combination of every value of each
+family's parameters."""
 
 import itertools
 import random
@@ -69,6 +69,7 @@ def test_a_family_sweep_takes_every_value_with_verified_routes():
         assert meta["family"] == "action_jump_gap" and meta["reachability"]["reachable"]
 
 
+@pytest.mark.timeout(300)
 def test_every_random_test_layout_is_one_the_sweep_covers():
     swept = {
         (p["enemy_distance"], p["enemy_speed"])
@@ -126,8 +127,8 @@ def test_each_family_weighs_the_same_in_the_action_layers_training(tmp_path, mon
 def test_a_sweep_too_large_to_make_stops_the_run_and_names_the_family():
     from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, combination_tasks
 
-    config = LayeredTrainConfig(learner="skill", families=("moving_bridge",))
-    with pytest.raises(ValueError, match="moving_bridge"):
+    config = LayeredTrainConfig(learner="action", families=("action_stomp",), sweep_limit=10)
+    with pytest.raises(ValueError, match="action_stomp"):
         combination_tasks(config, _MapPool())
 
 

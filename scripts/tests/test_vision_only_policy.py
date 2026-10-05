@@ -137,7 +137,7 @@ needs_cartridge = pytest.mark.skipif(
 )
 
 
-# ── The four-layer agent ──────────────────────────────────────────────────────
+# ── The layered agent ─────────────────────────────────────────────────────────
 
 AGENT_MODULES = (
     "retroagi.core.smb_agent",
@@ -202,13 +202,7 @@ def scramble_hidden_block_state(env) -> None:
 def same_decision(a, b) -> bool:
     if a is None or b is None:
         return a is b
-    return (a.strategy, a.tactic, a.skill, a.plan, a.chosen) == (
-        b.strategy,
-        b.tactic,
-        b.skill,
-        b.plan,
-        b.chosen,
-    ) and np.array_equal(a.target, b.target)
+    return (a.strategy, a.tactic, a.plan, a.chosen) == (b.strategy, b.tactic, b.plan, b.chosen)
 
 
 @pytest.mark.parametrize("family", BLOCK_FAMILIES)

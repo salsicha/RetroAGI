@@ -428,7 +428,7 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
     for family in ACTION_FAMILIES:
         schemas[family] = {
             "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
-            "single_action": "one skill throughout (action_families)",
+            "single_action": "one tactic throughout (action_families)",
         }
     return {
         family: BlockSMBScenarioFamilySpec(
