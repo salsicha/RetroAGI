@@ -1,5 +1,25 @@
 # RetroAGI TODO
 
+## Current Work: The Layered Agent (2026-10-05)
+
+The agent is now the strategy switch (speed run or max points), the tactic
+layer and the action layer, seeing only through the vision transformers
+([docs/layered-agent.md](docs/layered-agent.md)). Open work:
+
+- [x] Action layer: nine single-action families, trained on a full sweep of
+      their parameters.
+- [ ] Tactic layer: train on the 12 strategy families (one scene per tactic,
+      under each strategy), with layouts drawn at random.
+- [ ] Score the whole agent as deployed in Block SMB, then in Full SMB under
+      each strategy.
+- [ ] Find a way to make the tactic families' parameter spaces small enough to
+      sweep.
+- [ ] Decide what to do with the families no layer trains on now (the route,
+      composed, clone and older basic families).
+
+The milestones below predate the layered agent. Much of the code they name
+has been removed; they are kept as a record of earlier plans.
+
 This roadmap is ordered by dependency and execution priority. Finish each
 milestone's exit criteria before expanding the next one.
 

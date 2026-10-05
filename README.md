@@ -27,9 +27,9 @@ Training happens in two games:
   layouts are generated in families: single-action scenes for the action
   layer, and for the tactic layer one scene per tactic played under each
   strategy, with coins and enemies inserted at random. A teacher that can
-  look ahead in the simulator labels every decision. The action and tactic layers train here, in that
-  order; the tactic layer starts only after the action layer passes on
-  held-out layouts.
+  look ahead in the simulator labels every decision. The action and tactic
+  layers train here, in that order; the tactic layer starts only after the
+  action layer passes on held-out layouts.
 - **Full SMB** is the original game in the stable-retro emulator. The layers
   trained in Block SMB play it unchanged, through the Full SMB vision
   transformer, under the strategy switch set for the run.
@@ -166,8 +166,10 @@ string several actions together, because composing actions is the tactic
 layer's job. A tactic lasts until Mario lands, so a jump is one action from
 take-off to landing.
 
-A layer passes when every family wins at least 90% of its 18 held-out
-layouts. The tactic layer must also agree with the teacher on where tactics
+A layer passes when every family wins at least 90% of its held-out layouts
+(3 per difficulty by default). A tactic-layer episode is won only with its
+strategy's objective met: in time for speed run, with enough points for max
+points. The tactic layer must also agree with the teacher on where tactics
 change. The next layer starts from the passing checkpoint (`passed.pt`). In
 Full SMB the trained layers play unchanged, through the Full SMB vision
 transformer, under the strategy switch set for the run.

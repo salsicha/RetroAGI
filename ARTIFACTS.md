@@ -35,9 +35,11 @@ Use `git lfs ls-files -s` to inspect tracked artifacts and their sizes.
 Regenerate it with the graphify workflow instead of committing its cache,
 reports, or rendered graphs.
 
-Training scripts write their outputs under `data/`. When adding a generated
-dataset or checkpoint, verify that it is represented by an LFS pointer before
-committing:
+The vision transformer trainers write their checkpoints under `data/`. The
+layer trainer (`retroagi-block-smb train-layer`) writes each run under
+`artifacts/block_smb/`, which git ignores: keep those runs locally, or commit
+curated results under a stable path. When adding a generated dataset or
+checkpoint, verify that it is represented by an LFS pointer before committing:
 
 ```bash
 git add data/path/to/artifact.pth

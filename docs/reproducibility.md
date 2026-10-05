@@ -97,6 +97,15 @@ retroagi-block-smb train-layer --learner action --output artifacts/block_smb/act
 retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/tactic
 ```
 
+- **Action layer:** trains on the nine single-action families, every
+  combination of their parameters every round (10,375 layouts).
+- **Tactic layer:** trains on the 12 strategy families (one scene per tactic,
+  under speed run and under max points), with layouts drawn at random.
+
+The current runs add `--validation-layouts-per-difficulty 6 --workers 15` to
+both, and `--reward-rounds 4 --train-layouts-per-family 32` to the tactic
+layer. `retroagi-block-smb train-layer --help` lists every setting.
+
 Each run folder holds `history.json` (every round's
 scores per family), `last.pt`, `best.pt` and, once the bar is met, `passed.pt`.
 Every checkpoint records its settings, the layers it trained, and the vision

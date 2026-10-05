@@ -75,16 +75,6 @@ the strategy switch.
     to the decision layers beside the current scene.
   - **Training:** action by action. It's scored against the scene actually
     reported when each action ended.
-- **The action layer** is a transformer whose context holds:
-  - the current scene;
-  - the memory's expected scene;
-  - the tactic token;
-  - its own last 16 choices, each marked with how many decisions ago it was
-    made. In play these are its own choices; in training they're whatever
-    was actually used, including the teacher's.
-
-  So it knows what it chose before, and keeping or changing course is
-  something it learns.
 - **Strategy switch:** not a learned layer. Whoever runs the agent sets what
   the run is for and which side the goal is on (the agent can't see the
   goal):
@@ -104,10 +94,10 @@ the strategy switch.
     plant to go back into its pipe, a monster to come close enough to jump)
     are all part of it; the action layer sees from the scene which is
     needed;
-  - retreat: go back to the left. That covers backing out of a dead end,
-    keeping away from a monster, or getting back to something behind Mario:
-    a goal on the left, an enemy to stomp behind him, or the goal after a
-    jump carried him past it;
+  - retreat: go back to the left: to a goal on the left, to coins or an
+    enemy to stomp behind Mario, to the goal after a jump carried him past
+    it, or away from danger (backing out of a dead end, keeping away from a
+    monster);
   - climb forward / climb backward: go up onto something higher, to the right
     or to the left;
   - descend forward / descend backward: go down to something lower, to the
@@ -137,9 +127,18 @@ the strategy switch.
     read by the tactic layer.
   - **Training:** tactic by tactic, against the scene reported when each
     tactic actually ended.
-- **Action layer:** emits a button action (nothing, right, right + jump, left,
-  left + jump or jump) and how many frames to press it: any whole number from
-  1 to 32, for every action.
+- **Action layer:** a transformer whose context holds:
+  - the current scene;
+  - the memory's expected scene;
+  - the tactic token;
+  - its own last 16 choices, each marked with how many decisions ago it was
+    made. In play these are its own choices; in training they're whatever
+    was actually used, including the teacher's, so keeping or changing
+    course is something it learns.
+
+  It emits a button action (nothing, right, right + jump, left, left + jump
+  or jump) and how many frames to press it: any whole number from 1 to 32, for
+  every action. It decides from the scene when to jump, stomp or stand still.
 
 The executor (`retroagi/core/smb_executor.py`) takes only those two numbers
 from the action layer and presses that button action on each of those frames;
@@ -214,7 +213,7 @@ on families at its own level:
   actions is the tactic layer's job. A tactic lasts until Mario lands (in the
   air he keeps the tactic he left the ground with), so a jump is one action
   from take-off to landing. Families such as stair_climb, platform_chain or
-  stair_gap compose several actions and belong to the tactic layer.
+  stair_gap compose several actions, so they are not action families.
 - **Tactic layer:** the strategy families only, once the action layer is
   trained. Each strings several actions together, and only the tactic layer
   reads the strategy switch.
@@ -229,14 +228,16 @@ Each layout carries its plan in order: a list of segments
 (`retroagi/stages/block_smb/tactic_schedule.py`). A segment has a schedule
 stance (advance, alternate route, hold area or retreat: the teacher's own
 plan, not the tactic tokens), a direction, and optionally a route (platforms
-to stand on, in order) and forbidden platforms. It ends at a platform, at a line, after a number of
-frames, once a moving platform is crossed, or once an enemy is passed. The
-simulator follows the segments during training:
+to stand on, in order), forbidden platforms and an enemy to stomp. It ends at
+a platform, at a line, after a number of frames, once a moving platform is
+crossed, or once an enemy is passed or killed. The simulator follows the
+segments during training:
 - the goal counts only in the last segment;
 - standing on a forbidden platform, or leaving a hold area early, ends the
   episode as a loss.
 
-Three kinds of segment change their stance inside, by their teacher's rule:
+In the families no layer trains on now, three kinds of segment change their
+stance inside, by their teacher's rule:
 - moving platform: hold the area while waiting for it or riding it;
 - plant: hold the area while waiting for it to go back into its pipe;
 - monster: retreat from it, hold the area, then jump over it.
@@ -383,8 +384,11 @@ critic predicts held-out returns well enough (explained variance at least
   worth less, with a small cost for every switch so it doesn't flip back and
   forth.
 
-A layer counts as trained when every family passes the bar on held-out
-layouts. The tactic layer must also agree with the teacher on where tactics
+A layer counts as trained when every family wins at least 90% of its
+held-out layouts (`--validation-layouts-per-difficulty`, 3 per difficulty by
+default). A strategy family's episode is won only with its strategy's
+objective met: in time for speed run, with enough points for max points. The
+tactic layer must also agree with the teacher on where tactics
 change: each of its changes is matched to one of the teacher's within two
 decisions, and at least 70% must match both ways. After the tactic layer,
 the whole agent is also scored as deployed: every token is its own, under
