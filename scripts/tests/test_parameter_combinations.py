@@ -129,3 +129,11 @@ def test_a_sweep_too_large_to_make_stops_the_run_and_names_the_family():
     config = LayeredTrainConfig(learner="skill", families=("moving_bridge",))
     with pytest.raises(ValueError, match="moving_bridge"):
         combination_tasks(config, _MapPool())
+
+
+def test_learning_keeps_every_episode_of_the_latest_round():
+    from retroagi.stages.block_smb.layered_train import kept_episodes
+
+    older, latest = list(range(100)), list(range(100, 180))
+    assert kept_episodes(older, latest, capacity=50) == latest  # never cut the round
+    assert kept_episodes(older, latest, capacity=120) == older[-40:] + latest

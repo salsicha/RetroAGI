@@ -127,7 +127,7 @@ class LayeredTrainConfig:
     batch_frames: int = 8192
     learning_rate: float = 3e-4
     expectation_weight: float = 1.0  # the memory's expected scene, against imitation
-    replay_episodes: int = 6000
+    replay_episodes: int = 6000  # at least the latest round is always kept
     workers: int = 12
     lanes: int = 8  # episodes each worker plays side by side
     episode_frames: int = 600  # an episode not won by then ends as a timeout
@@ -647,6 +647,14 @@ class EpisodePool:
 
 
 # ── Learning ──────────────────────────────────────────────────────────────────
+
+
+def kept_episodes(replay, played, capacity: int) -> list:
+    """The episodes learned from: the newest ``capacity``, but never fewer than
+    the latest round, all of which is kept (a full sweep plays every
+    combination each round, in family order; cutting it would drop whole
+    families)."""
+    return (list(replay) + list(played))[-max(capacity, len(played)) :]
 
 
 def _batches(episodes: Sequence[EpisodeRecord], batch_frames: int, rng: random.Random):
@@ -1651,7 +1659,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     extra=focus,
                 )
             played = pool.play(tasks)
-            replay = (replay + played)[-config.replay_episodes :]
+            replay = kept_episodes(replay, played, config.replay_episodes)
             play_time = time.time() - started
 
             started = time.time()
