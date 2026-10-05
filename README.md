@@ -234,8 +234,8 @@ checkout to a trained agent. In short:
    retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/tactic
    ```
    `passed.pt` is the best round that met the layer's bar on every family;
-   `best.pt` is the best round overall. `retroagi-block-smb train-layer --help`
-   lists every setting.
+   `best.pt` is the best round overall (of equally good rounds, the latest).
+   `retroagi-block-smb train-layer --help` lists every setting.
 3. Examine a saved agent on fresh held-out Block SMB layouts, and play Full SMB
    with it:
    ```bash

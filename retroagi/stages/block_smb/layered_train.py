@@ -1681,10 +1681,12 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 gate_met = gate_met and ends_agree is not None and ends_agree >= config.end_gate
             layers = trained_layers + ([config.learner] if gate_met else [])
             save_layered_checkpoint(output / "last.pt", policy, config, layers, history)
-            if mean > best:
+            # Of equally good rounds the latest is kept: it has learned from
+            # more episodes, more of them its own play.
+            if mean >= best:
                 best = mean
                 save_layered_checkpoint(output / "best.pt", policy, config, layers, history)
-            if gate_met and mean > best_passed:
+            if gate_met and mean >= best_passed:
                 # The best round that met the gate: the next layer starts from it.
                 best_passed = mean
                 save_layered_checkpoint(output / "passed.pt", policy, config, layers, history)

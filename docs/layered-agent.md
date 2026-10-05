@@ -393,7 +393,8 @@ change: each of its changes is matched to one of the teacher's within two
 decisions, and at least 70% must match both ways. After the tactic layer,
 the whole agent is also scored as deployed: every token is its own, under
 each layout's strategy switch. The best round that passes is saved as
-`passed.pt`, and the next layer starts from it.
+`passed.pt` (of equally good rounds, the latest), and the next layer starts
+from it.
 
 ```bash
 retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
