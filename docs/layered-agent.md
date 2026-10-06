@@ -58,10 +58,14 @@ held category and age in both frames and decisions.
 
 Skill selects a destination at each action boundary. A timed button plan
 can end while Mario is airborne; skill can then issue a new steering target.
-Landing interrupts a plan. Thus one physical jump can contain several button
+Landing interrupts a plan when the contact detector and visible support under
+Mario's feet agree. Side contact with a ledge cannot interrupt the jump.
+Thus one physical jump can contain several button
 plans; the executor still runs only one plan at a time.
 An airborne follow-up releases the preceding jump hold instead of silently
-extending it. Visual destination tracking can finish a run before the proposed
+extending it. Separate jump plans always have a physical button release between
+them, even if landing interrupted the previous plan.
+Visual destination tracking can finish a run before the proposed
 duration expires. A local NES motion prediction calibrates jump holds when the
 requested endpoint is reachable under that model; this uses observations only,
 not the training teacher or hidden simulator state.

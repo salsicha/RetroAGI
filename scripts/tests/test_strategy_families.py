@@ -180,3 +180,28 @@ def test_speed_run_can_select_a_faster_bypass_while_max_points_selects_stomps(mo
         route = module.strategy_route(f"{strategy}_advance", scenario)
         assert route == routes[f"detour=skip|motion={motion}"][2]
         assert scenario["prefer_enemy_bypass"] == (motion == "bypass")
+
+
+def test_teacher_route_cache_does_not_reuse_routes_from_different_code(monkeypatch, tmp_path):
+    from retroagi.stages.block_smb import strategy_families as module
+
+    version = ["old"]
+    calls = []
+    monkeypatch.setattr(module, "_PLAYED", {})
+    monkeypatch.setattr(module, "_route_cache", lambda: tmp_path)
+    monkeypatch.setattr(module, "code_fingerprint", lambda: version[0])
+    monkeypatch.setattr(module, "_points_collected", lambda scenario, route: 0)
+
+    def route(scenario):
+        calls.append(version[0])
+        return [1] if version[0] == "old" else [1, 1]
+
+    monkeypatch.setattr(module, "route_actions", route)
+    scenario = {"route_tactics": {"direct": []}}
+    old = module._played_routes(scenario)
+    module._PLAYED.clear()  # reuse the disk cache in a fresh worker
+    assert module._played_routes(scenario) == old
+    assert len(calls) == 2
+    version[0] = "new"
+    assert module._played_routes(scenario) != old
+    assert calls == ["old", "old", "new", "new"]

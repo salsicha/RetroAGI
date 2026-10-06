@@ -1376,17 +1376,9 @@ def _prefix_job(job):
 
 
 def _code_fingerprint() -> str:
-    """A hash of the code that makes and checks layouts: the Block SMB stage and
-    the shared SMB modules. Any change makes new combination layouts."""
-    digest = hashlib.sha256()
-    root = Path(__file__).resolve().parents[2]
-    # The trainer, its command line and the vision models don't make layouts.
-    unused = {"layered_train.py", "cli.py", "vision.py", "vision_frames.py"}
-    for path in sorted([*root.glob("stages/block_smb/*.py"), *root.glob("core/smb_*.py")]):
-        if path.name not in unused:
-            digest.update(path.name.encode())
-            digest.update(path.read_bytes())
-    return digest.hexdigest()[:16]
+    from .layout_cache import code_fingerprint
+
+    return code_fingerprint()
 
 
 def _combination_cache() -> Path:

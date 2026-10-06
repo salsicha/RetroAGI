@@ -220,18 +220,28 @@ class AgentStep:
 
 @dataclass
 class LandingWatch:
-    """Watches the vision transformer's land detector for Mario landing, the one
-    event that ends an action early: its "feet on something" output (the ground,
-    a moving platform or an enemy) turns on after it was off. Pictures without
-    Mario change nothing."""
+    """Confirm the visual contact flag against a surface under Mario's feet.
+
+    The detector can report contact while Mario rises alongside a ledge. Merely
+    touching its side is not landing: the boxes must overlap horizontally.
+    Pictures without Mario change nothing.
+    """
 
     airborne: bool = False
 
     def landed(self, scene: SceneObservation) -> bool:
         if scene.mario.box is None:
             return False
-        landed = self.airborne and scene.mario.on_something
-        self.airborne = not scene.mario.on_something
+        x0, _, x1, feet = scene.mario.box
+        supports = [(s.x0, s.x1, s.top) for s in scene.surfaces]
+        supports.extend((b[0], b[2], b[1]) for b in scene.moving_platforms)
+        supports.extend((e.box[0], e.box[2], e.box[1]) for e in scene.enemies)
+        contact = scene.mario.on_something and any(
+            left < x1 and right > x0 and abs(top - feet) <= 4
+            for left, right, top in supports
+        )
+        landed = self.airborne and contact
+        self.airborne = not contact
         return landed
 
 

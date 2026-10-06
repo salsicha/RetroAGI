@@ -53,6 +53,7 @@ from retroagi.core.tokens import STRATEGIES, TACTICS
 
 from .action_families import DROPS, GAPS, STEPS, STOMP_SPEEDS
 from .compose import FLOOR, route_actions
+from .layout_cache import code_fingerprint
 from .tactic_schedule import segment
 
 STRATEGY_TACTIC_FAMILIES = {
@@ -330,7 +331,7 @@ def _played_routes(scenario: dict) -> dict:
     import json
     import os
 
-    key = "bypass-candidates-v1:" + json.dumps(
+    key = code_fingerprint() + ":" + json.dumps(
         {k: v for k, v in scenario.items() if k not in ("strategy", "strategy_objective")},
         sort_keys=True,
         default=str,

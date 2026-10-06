@@ -180,6 +180,17 @@ def test_a_landing_is_the_land_detector_turning_on_after_mario_was_in_the_air():
     assert watch([air, scene(mario=None, support="ground"), scene()]) == [False, False, True]
 
 
+@pytest.mark.parametrize("platform", [Surface(48, 100, 208, False), Surface(112, 200, 208, False)])
+def test_a_false_contact_flag_at_a_ledge_side_does_not_end_a_jump(platform):
+    from retroagi.core.smb_agent import LandingWatch
+
+    watch = LandingWatch()
+    assert not watch.landed(scene(support="air"))
+    assert not watch.landed(scene(surfaces=[platform], on_something=True))
+    # Keep watching for the real landing; the false flag must not disarm it.
+    assert watch.landed(scene())
+
+
 class SceneList:
     """A stand-in vision transformer that reports a given scene for each frame in turn."""
 
