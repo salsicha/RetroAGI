@@ -535,10 +535,10 @@ def sample_block_smb_monte_carlo_scenario(
         )
         fingerprint = repr((selected_family, scenario, actions))
         if fingerprint in rejected_fingerprints:
-            # Fail fast: a retry regenerated an already-rejected scenario, so
-            # further identical attempts can never rescue this sample.
+            # Skip rechecking this layout, but keep drawing: finite parameter
+            # spaces can repeat a rejected layout before producing a valid one.
             rejected["duplicate_regeneration"] += 1
-            break
+            continue
         constraints = specs[selected_family].constraints
         scenario_id = _scenario_id(split, seed, sample_index, selected_family)
         route, action_source, reachability = _verified_route(selected_family, scenario, actions)
@@ -589,7 +589,8 @@ def sample_block_smb_monte_carlo_scenario(
     reasons = ", ".join(f"{key}={value}" for key, value in sorted(rejected.items()))
     raise ValueError(
         "failed to sample a reachable Block SMB Monte Carlo scenario "
-        f"for {split}/{seed}/{sample_index}; rejected {reasons}"
+        f"for {split}/{seed}/{sample_index} (family={family}, difficulty={difficulty}); "
+        f"rejected {reasons}"
     )
 
 

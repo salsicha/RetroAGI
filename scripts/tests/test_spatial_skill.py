@@ -160,6 +160,22 @@ def test_skill_curriculum_includes_every_leftover_family():
     assert "skill_enemy_bypass" not in learner_families("action", BLOCK_SMB_MC_FAMILIES)
 
 
+def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates():
+    from collections import Counter
+
+    rejected = Counter()
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="train",
+        seed=0,
+        sample_index=0,
+        family="skill_enemy_bypass",
+        difficulty="easy",
+        rejection_counter=rejected,
+    )
+    assert rejected["duplicate_regeneration"] > 0
+    assert sample.reachability["reachable"]
+
+
 @pytest.mark.parametrize("family", ["skill_enemy_bypass", "skill_enemy_bypass_back"])
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_enemy_bypass_lands_beyond_a_live_enemy_and_stomping_fails(family, difficulty):
