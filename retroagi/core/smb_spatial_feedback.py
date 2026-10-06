@@ -2,16 +2,16 @@
 
 The network still receives only a destination. Its timed plan is a proposal:
 observable motion lets the executor stop a run at that destination and
-calibrate a grounded jump's hold against the shared NES motion model.
+check a grounded jump against terrain and moving hazards with the shared
+NES motion model. No unchecked jump launches while motion is unknown.
 """
 
 from collections import Counter, deque
 from dataclasses import dataclass, field
-from functools import lru_cache
 
 from .actions import SMBAction
-from .smb_physics import NESPlayerMotion
 from .smb_pixel_types import VISIBLE_COLUMNS
+from .smb_trajectory import VisualTracks, plan_flight
 
 
 def terrain_edges(scene):
@@ -48,51 +48,6 @@ def moving_support_offset(scene):
     return (x0 + x1) / 2 - supports[0][0]
 
 
-@lru_cache(maxsize=32768)
-def landing_for_hold(speed, direction, hold, target_y):
-    """Unobstructed first descending crossing of the requested foot height."""
-    motion = NESPlayerMotion(
-        x_speed=round(speed * 16),
-        moving=1 if speed > 0 else -1 if speed < 0 else 0,
-        facing=direction or 1,
-    )
-    x = y = 0
-    for frame in range(160):
-        dx, dy, _ = motion.advance(
-            direction=direction,
-            jump=frame < hold,
-            grounded=frame == 0,
-            y=y,
-        )
-        old_y = y
-        x, y = x + dx, y + dy
-        if frame > 0 and dy >= 0 and old_y <= target_y <= y:
-            return x
-    return None
-
-
-def jump_plan(destination, speed, proposed):
-    """Calibrate only when the local model can actually reach the destination.
-
-    Unreachable endpoints retain the network's proposal. Terrain selection
-    belongs to skill; this does not certify collisions, search the level or use
-    a teacher. Live-enemy scenes are excluded by the caller.
-    """
-    from .smb_executor import ActionPlan
-
-    direction = (destination.x > 0) - (destination.x < 0)
-    action = {1: SMBAction.RIGHT_JUMP, -1: SMBAction.LEFT_JUMP, 0: SMBAction.JUMP}[direction]
-    candidates = []
-    for hold in range(1, 33):
-        landed = landing_for_hold(speed, direction, hold, destination.y)
-        if landed is not None:
-            candidates.append((abs(landed - destination.x), abs(hold - proposed.frames), hold))
-    if not candidates:
-        return proposed
-    error, _, hold = min(candidates)
-    return ActionPlan(action, hold) if error <= 4 else proposed
-
-
 @dataclass
 class SpatialFeedback:
     previous: object = None
@@ -102,22 +57,27 @@ class SpatialFeedback:
     tracked: bool = False
     destination: object = None
     start_displacement: float = 0.0
-    start_feet: float = 0.0
-    grounded_jump: bool = False
-    calibrated: bool = False
+    tracks: VisualTracks = field(default_factory=VisualTracks)
+    flight: object = None
+    status: str = "idle"
 
     def observe(self, scene):
         self.tracked = False
+        shift = None
         if scene.mario.box is None:
             self.previous = None
             self.velocities.clear()
             self.speed = None
+            self.tracks.observe(scene, None)
             return
         if self.previous is not None and self.previous.mario.box is not None:
             shift = camera_shift(self.previous, scene)
+            if shift is None:
+                # Outside the camera-follow column, displacement is visible
+                # directly. Do not interpret a scrolling, centred Mario as rest.
+                if all(abs(s.mario.box[0] - 85) > 3 for s in (self.previous, scene)):
+                    shift = 0
             # With no landmark and a scrolling player, world speed is unknown.
-            # Away from the scrolling region an unchanged full-width floor is
-            # insufficient evidence either: retain the learned proposal.
             dx = None
             if shift is not None:
                 old = self.previous.mario.box
@@ -139,24 +99,28 @@ class SpatialFeedback:
             else:
                 self.velocities.clear()
                 self.speed = None
+        self.tracks.observe(scene, shift)
+        if self.flight is not None and shift is not None:
+            self.flight.shift(shift)
         self.previous = scene
 
     def begin(self, destination, scene, proposed):
-        from .smb_executor import ActionPlan
+        from .smb_executor import HOLD_GROUND, ActionPlan
 
+        self.flight = None
+        self.status = "unplanned"
         self.destination = destination
         self.start_displacement = self.displacement
-        self.grounded_jump = bool(
+        if destination is not None and destination.mode == "jump" and scene.mario.box is None:
+            self.status = "lost_observation"
+            return ActionPlan(HOLD_GROUND, 1)
+        grounded_jump = bool(
             destination is not None
             and destination.mode == "jump"
             and scene.mario.box is not None
             and scene.mario.support != "air"
             and scene.mario.on_something
-            # A ballistic endpoint cannot certify contact with an enemy that
-            # moves during the flight, or clearance over a live hazard.
-            and not any(e.kind != "defeated" for e in scene.enemies)
         )
-        self.calibrated = False
         if (
             destination is not None
             and scene.mario.support == "air"
@@ -170,30 +134,18 @@ class SpatialFeedback:
                 SMBAction.JUMP: SMBAction.NOOP,
             }[proposed.action]
             return ActionPlan(coast, proposed.frames)
-        if self.grounded_jump:
-            self.start_feet = scene.mario.box[3]
-            if self.speed is not None and len(self.velocities) >= 2:
-                self.calibrated = True
-                return jump_plan(destination, max(-2.5, min(2.5, self.speed)), proposed)
+        if grounded_jump:
+            if self.speed is not None and len(self.velocities) >= 2 and self.tracks.ready:
+                self.flight = plan_flight(scene, self.tracks, self.speed, destination, proposed)
+                if self.flight is not None:
+                    self.status = "checked"
+                    action = {-1: 4, 0: 5, 1: 2}[self.flight.direction]
+                    return ActionPlan(action, self.flight.hold)
+                self.status = "no_safe_trajectory"
+                return ActionPlan(HOLD_GROUND, 1)
+            self.status = "observing_motion"
+            return ActionPlan(HOLD_GROUND, 1)
         return proposed
-
-    def calibrate_launch(self, scene, plan, pressed):
-        # An episode may start at a running takeoff, before two pictures exist.
-        # Two frames provide measured horizontal speed. A low launch could be
-        # standing OR walking, so do not guess its takeoff state from height.
-        # Never recalibrate midway through the flight.
-        if (
-            self.grounded_jump
-            and not self.calibrated
-            and pressed == 2
-            and scene.mario.box is not None
-            and scene.mario.support == "air"
-        ):
-            self.calibrated = True
-            dy = scene.mario.box[3] - self.start_feet
-            if dy <= -9 and self.speed is not None and len(self.velocities) >= 2:
-                return jump_plan(self.destination, max(-2.5, min(2.5, self.speed)), plan)
-        return plan
 
     def arrived(self):
         target = self.destination

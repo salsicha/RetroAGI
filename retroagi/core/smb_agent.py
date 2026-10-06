@@ -216,6 +216,7 @@ class AgentStep:
     ended: Optional[str]
     decision: Optional[Decision]
     button: int
+    execution_status: str = "unplanned"
 
 
 @dataclass
@@ -237,8 +238,7 @@ class LandingWatch:
         supports.extend((b[0], b[2], b[1]) for b in scene.moving_platforms)
         supports.extend((e.box[0], e.box[2], e.box[1]) for e in scene.enemies)
         contact = scene.mario.on_something and any(
-            left < x1 and right > x0 and abs(top - feet) <= 4
-            for left, right, top in supports
+            left < x1 and right > x0 and abs(top - feet) <= 4 for left, right, top in supports
         )
         landed = self.airborne and contact
         self.airborne = not contact
@@ -462,9 +462,6 @@ class SMBAgents:
             landed = copy.landing.landed(scene)
             reason = None
             if not copy.executor.idle:
-                copy.executor.plan = copy.spatial.calibrate_launch(
-                    scene, copy.executor.plan, copy.executor.pressed
-                )
                 reason = (
                     "landed"
                     if landed
@@ -528,10 +525,11 @@ class SMBAgents:
                 playing[k].hidden, playing[k].cell = remembered.hidden[j], remembered.cell[j]
                 remember_choices(playing[k], decision)
                 playing[k].decisions += 1
-                playing[k].executor.start(decision.plan)
+                playing[k].executor.start(decision.plan, flight=playing[k].spatial.flight)
         steps = []
         for k, copy in enumerate(playing):
             copy.button = copy.executor.press(scenes[k])
             copy.frame += 1
-            steps.append(AgentStep(scenes[k], rows[k], ended[k], decisions[k], copy.button))
+            status = copy.executor.flight.status if copy.executor.flight else copy.spatial.status
+            steps.append(AgentStep(scenes[k], rows[k], ended[k], decisions[k], copy.button, status))
         return steps

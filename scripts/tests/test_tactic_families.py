@@ -242,6 +242,83 @@ def test_the_monster_family_needs_backing_off_jumping_in_the_tunnel_fails():
     env.close()
 
 
+@pytest.mark.parametrize("start,enemy,line", [(378, 551, 412), (363, 546, 399)])
+def test_monster_approach_wakes_offscreen_enemy_and_preserves_escape_room(start, enemy, line):
+    from retroagi.stages.block_smb.monster import (
+        APPROACH_MARGIN,
+        RETREAT_ROOM,
+        monster_choice,
+    )
+
+    env = MarioScenarioEnv()
+    try:
+        env.reset(
+            scenario={
+                "world_width": 800,
+                "mario": [start, 208],
+                "platforms": [[0, 220, 800, 20], [line + 4, 40, 151, 150]],
+                "enemies": [
+                    {
+                        "kind": "monster",
+                        "x": enemy,
+                        "y": 200,
+                        "speed": 0.6,
+                        "direction": -1,
+                        "patrol_min": start - 50,
+                        "patrol_max": 700,
+                    }
+                ],
+                "goal": [740, 200, 16, 20],
+                "tactics": [
+                    segment("advance", 1, kind="monster", keep_behind=line, past_enemy=0),
+                    segment("advance", 1),
+                ],
+            }
+        )
+        assert enemy >= env.camera_x + env.width
+        for _ in range(80):
+            stance, action, holds = monster_choice(env)
+            assert not holds  # approach must not jump into the tunnel
+            _, _, done, _, info = env.step(action)
+            assert not done and not info["death"]
+            if env.enemies[0].get("awake"):
+                break
+        assert env.enemies[0].get("awake")
+        # Even releasing the direction at this instant can stop before the lip.
+        for _ in range(40):
+            env.step(0)
+            assert env.mario["x"] + env.mario["w"] + APPROACH_MARGIN <= line
+            assert env.mario["x"] - env.camera_x - 1 >= RETREAT_ROOM
+        assert abs(env.mario["vx"]) < 0.1
+    finally:
+        env.close()
+
+
+def test_monster_approach_refuses_to_spend_missing_retreat_space():
+    from retroagi.stages.block_smb.monster import monster_choice
+
+    env = MarioScenarioEnv()
+    try:
+        env.reset(
+            scenario={
+                "world_width": 800,
+                "mario": [378, 208],
+                "platforms": [[365, 220, 435, 20]],
+                "enemies": [
+                    {"kind": "monster", "x": 551, "y": 200, "patrol_min": 365, "patrol_max": 780}
+                ],
+                "goal": [740, 200, 16, 20],
+                "tactics": [
+                    segment("advance", 1, kind="monster", keep_behind=412, past_enemy=0),
+                    segment("advance", 1),
+                ],
+            }
+        )
+        assert monster_choice(env) == ("hold_area", 0, [])
+    finally:
+        env.close()
+
+
 def test_composed_scenes_change_tactics_along_the_way():
     for family in ("chained_obstacles", "tactics_bridge_then_gap"):
         tactics = _sample(family)["tactics"]

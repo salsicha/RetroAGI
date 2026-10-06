@@ -1,6 +1,7 @@
 """Regression cases found in the all-family skill audit."""
 
 import os
+from collections import deque
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -14,7 +15,7 @@ from retroagi.core.smb_scene_labels import (
     Surface,
     scene_from_labels,
 )
-from retroagi.core.smb_spatial_feedback import SpatialFeedback, jump_plan
+from retroagi.core.smb_spatial_feedback import SpatialFeedback
 from retroagi.core.tokens import SkillToken
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
@@ -46,12 +47,10 @@ def test_reset_camera_is_already_at_its_stationary_first_frame_position():
         env.close()
 
 
-@pytest.mark.parametrize("distance,hold", [(57, 6), (65, 8), (72, 10), (80, 12), (85, 14)])
-def test_running_takeoff_reaches_the_narrow_platform_instead_of_overshooting(distance, hold):
+@pytest.mark.parametrize("distance", [57, 65, 72, 80, 85])
+def test_running_takeoff_reaches_the_narrow_platform_instead_of_overshooting(distance):
     # These commands are the verified teacher endpoints from platform_hop.
     target = SkillToken("jump", distance, -22)
-    plan = jump_plan(target, 2.5, ActionPlan(2, 26))
-    assert plan.action == 2 and plan.frames == hold
     env = MarioScenarioEnv()
     try:
         env.reset(
@@ -69,8 +68,18 @@ def test_running_takeoff_reaches_the_narrow_platform_instead_of_overshooting(dis
                 "single_jump_attempt": True,
             }
         )
+        feedback = SpatialFeedback(speed=2.5, velocities=deque([2.5, 2.5]))
+        scene = scene_from_labels(env.scene_labels())
+        feedback.observe(scene)
+        plan = feedback.begin(target, scene, ActionPlan(2, 26))
+        assert feedback.flight is not None
+        executor = SMBExecutor()
+        executor.start(plan, flight=feedback.flight)
         for f in range(100):
-            _, _, done, _, _ = env.step(2 if f < plan.frames else 1)
+            if f:
+                scene = scene_from_labels(env.scene_labels())
+                feedback.observe(scene)
+            _, _, done, _, _ = env.step(executor.press(scene))
             if done:
                 break
         assert env._goal_credited
@@ -78,9 +87,10 @@ def test_running_takeoff_reaches_the_narrow_platform_instead_of_overshooting(dis
         env.close()
 
 
-def test_execution_measures_running_takeoff_before_shortening_a_jump():
+def test_execution_measures_running_takeoff_before_launching_a_checked_jump():
     env = MarioScenarioEnv()
     feedback = SpatialFeedback()
+    executor = SMBExecutor()
     try:
         env.reset(
             scenario={
@@ -93,18 +103,23 @@ def test_execution_measures_running_takeoff_before_shortening_a_jump():
                 "single_jump_attempt": True,
             }
         )
-        scene = scene_from_labels(env.scene_labels())
-        feedback.observe(scene)
-        plan = feedback.begin(SkillToken("jump", 57, -22), scene, ActionPlan(2, 26))
+        launched = False
         for frame in range(60):
-            if frame:
-                scene = scene_from_labels(env.scene_labels())
-                feedback.observe(scene)
-                plan = feedback.calibrate_launch(scene, plan, frame)
-            _, _, done, _, _ = env.step(2 if frame < plan.frames else 1)
+            scene = scene_from_labels(env.scene_labels())
+            feedback.observe(scene)
+            if executor.idle or executor.finished:
+                executor.end("done")
+                # Preserve the physical landing point while observing motion.
+                destination = SkillToken("jump", round(122 - env.mario["x"] - 5), -22)
+                plan = feedback.begin(destination, scene, ActionPlan(2, 26))
+                executor.start(plan, flight=feedback.flight)
+                if feedback.flight:
+                    launched = True
+                    assert frame >= 2 and feedback.flight.prediction.safe
+            _, _, done, _, _ = env.step(executor.press(scene))
             if done:
                 break
-        assert plan.frames == 6
+        assert launched
         assert env._goal_credited
     finally:
         env.close()
@@ -117,14 +132,17 @@ def test_a_new_airborne_command_releases_the_previous_jump_hold():
     assert plan == ActionPlan(1, 14)
 
 
-def test_moving_enemy_contact_keeps_the_learned_hold_instead_of_a_static_arc():
+def test_moving_enemy_contact_waits_for_motion_instead_of_assuming_a_static_arc():
     feedback = SpatialFeedback(speed=-2.5)
     scene = SceneObservation(
         MarioView((160, 208, 170, 220), False, "ground", True),
         enemies=(EnemyView((100, 210, 110, 220), "walker"),),
     )
     proposal = ActionPlan(4, 32)
-    assert feedback.begin(SkillToken("jump", -60, -10), scene, proposal) is proposal
+    assert feedback.begin(SkillToken("jump", -60, -10), scene, proposal) == ActionPlan(
+        HOLD_GROUND, 1
+    )
+    assert feedback.status == "observing_motion"
 
 
 def test_bridge_carry_is_not_mistaken_for_takeoff_momentum():

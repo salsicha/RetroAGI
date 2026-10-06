@@ -6,12 +6,11 @@ The action layer gives it two numbers:
   left + jump, jump, or HOLD_GROUND;
 - for how many frames: any whole number from 1 to 32.
 
-It presses that button action on each of those frames. The action is over
-when it has pressed all of them, or earlier when the agent tells it Mario has
-landed (smb_agent watches the vision transformer's report for that); then the
-layers choose the next action. A jump is the jump button held for its frames;
-when they are pressed the layers choose again, even with Mario in the air,
-and his landing ends whatever action is running then. HOLD_GROUND instead
+Ordinary timed plans finish after their frames or an observed landing.
+A visually checked Flight owns the whole jump, including its coast after A
+is released; its frame count is only the proposed button-hold duration.
+The layers choose again after landing or an execution failure/timeout.
+HOLD_GROUND instead
 reads the current vision scene every frame and emits left, right or no buttons
 to preserve the initial horizontal offset on the supporting platform. The
 anchor persists across consecutive hold plans. No simulator state is read.
@@ -143,7 +142,7 @@ class GroundHold:
 
 @dataclass
 class SMBExecutor:
-    """Plays one ActionPlan at a time. Each frame:
+    """Plays one ActionPlan (optionally a whole checked flight) at a time. Each frame:
 
     1. if it has pressed all of the plan's frames, ``finished`` is true and the
        agent ends the plan (``end("done")``); if the agent saw Mario land, it
@@ -157,6 +156,7 @@ class SMBExecutor:
     history: list = field(default_factory=list)  # (plan, frames pressed, why it ended)
     hold: GroundHold = field(default_factory=GroundHold)
     last_button: Optional[int] = None
+    flight: object = None
 
     @property
     def idle(self) -> bool:
@@ -164,7 +164,9 @@ class SMBExecutor:
 
     @property
     def finished(self) -> bool:
-        """The plan has pressed all of its frames."""
+        """The timed plan or checked flight has finished."""
+        if self.flight is not None:
+            return self.flight.done
         return self.plan is not None and self.pressed >= self.plan.frames
 
     @property
@@ -177,10 +179,11 @@ class SMBExecutor:
         """
         return self.plan is not None and self.plan.action == HOLD_GROUND and self.pressed > 0
 
-    def start(self, plan: ActionPlan) -> None:
+    def start(self, plan: ActionPlan, flight=None) -> None:
         if not self.idle:
             raise RuntimeError("the executor is still playing an action")
         self.plan = plan
+        self.flight = flight
         self.pressed = 0
         if plan.action != HOLD_GROUND:
             self.hold = GroundHold()
@@ -190,6 +193,7 @@ class SMBExecutor:
         if self.plan is not None:
             self.history.append((self.plan, self.pressed, reason))
             self.plan = None
+            self.flight = None
 
     def press(self, scene: Optional[SceneObservation] = None) -> int:
         """The button action for this frame."""
@@ -197,7 +201,18 @@ class SMBExecutor:
             raise RuntimeError("no action to play: start a plan first")
         if self.finished:
             raise RuntimeError("the plan has pressed all of its frames: end it first")
-        button = self.hold.press(scene) if self.plan.action == HOLD_GROUND else self.plan.action
+        if self.flight is not None and self.pressed == 0 and self.last_button in SMB_JUMP_ACTIONS:
+            # Do not advance the flight model until the actual takeoff edge.
+            button = {2: 1, 4: 3, 5: 0}[self.plan.action]
+            self.last_button = button
+            return button
+        button = (
+            self.flight.press(scene)
+            if self.flight is not None
+            else self.hold.press(scene)
+            if self.plan.action == HOLD_GROUND
+            else self.plan.action
+        )
         if (
             self.pressed == 0
             and button in SMB_JUMP_ACTIONS

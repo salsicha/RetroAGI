@@ -56,19 +56,44 @@ boundary, while a new tactic is selected only when no tactic is held or the
 old one ends. Tactic memory updates on those starts. Tactic receives its
 held category and age in both frames and decisions.
 
-Skill selects a destination at each action boundary. A timed button plan
-can end while Mario is airborne; skill can then issue a new steering target.
+Skill selects a destination at each action boundary. A checked jump remains
+one executor maneuver through takeoff, button release and flight to landing.
+The proposed 1–32 frames describes the jump-button hold, not the whole flight.
 Landing interrupts a plan when the contact detector and visible support under
 Mario's feet agree. Side contact with a ledge cannot interrupt the jump.
-Thus one physical jump can contain several button
-plans; the executor still runs only one plan at a time.
-An airborne follow-up releases the preceding jump hold instead of silently
-extending it. Separate jump plans always have a physical button release between
-them, even if landing interrupted the previous plan.
+An airborne command following an interrupted or unchecked plan releases the
+preceding jump hold. Separate jumps always have a physical button release
+between them, even if landing interrupted the previous plan.
 Visual destination tracking can finish a run before the proposed
-duration expires. A local NES motion prediction calibrates jump holds when the
-requested endpoint is reachable under that model; this uses observations only,
-not the training teacher or hidden simulator state.
+duration expires.
+
+Before a grounded jump, the executor collects visual motion measurements and
+checks the full body trajectory against visible walls, ceilings, supports and
+moving hazards. It searches holds of 1–32 frames over a 96-frame horizon using
+the shared NES motion model. It forecasts tracked objects from camera-corrected
+visual motion, includes uncertainty for lethal hazards, and checks eight frames
+after arrival for an approaching enemy. Walker stomps are allowed when the
+destination identifies the predicted contact; monsters cannot be stomped.
+An unverified takeoff waits and exposes `observing_motion` or
+`no_safe_trajectory` through `AgentStep.execution_status`.
+
+During flight, observations update the trajectory check each frame. A safe
+correction may change steering or the remaining hold within the same jump;
+once released, A cannot be pressed again in that flight. If no safe continuation
+is found, the executor preserves the committed maneuver and reports
+`no_safe_continuation`, rather than treating an unrelated short landing as
+success. Missing Mario observations release buttons and end the maneuver.
+This is a bounded visual model, not a guarantee about unseen terrain, future
+enemy turns or inaccurate detections. No simulator state, teacher action,
+ViT embedding or LSTM output is added to the action network's input.
+
+The monster curriculum teacher now has an approach phase for an offscreen,
+sleeping monster. It advances only while a forward frame plus stopping distance
+stays behind the tunnel lip and leaves at least 40 pixels of supported retreat
+space inside the camera boundary. Once the monster is visible, the teacher
+returns to waiting, retreating and selecting a safe crossing. These are training
+labels for the existing tactic/skill interfaces; the runtime executor does not
+receive hidden monster activation state. Existing tactic weights are unchanged.
 
 ## Hold-ground control
 
