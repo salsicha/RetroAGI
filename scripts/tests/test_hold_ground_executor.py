@@ -55,6 +55,18 @@ def test_missing_support_releases_buttons_without_reanchoring_to_another_platfor
     assert executor.press(picture(mario=103)) == SMBAction.LEFT
 
 
+def test_separate_jump_plans_have_a_release_edge_even_after_a_landing():
+    executor = SMBExecutor()
+    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 14))
+    assert executor.press() == SMBAction.RIGHT_JUMP
+    executor.end("landed")
+    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 1))
+    assert executor.press() == SMBAction.RIGHT
+    assert not executor.finished
+    assert executor.press() == SMBAction.RIGHT_JUMP
+    assert executor.finished
+
+
 @pytest.mark.parametrize("moving,direction", [(False, 1), (True, -1), (True, 1)])
 @pytest.mark.parametrize("velocity", [-2.0, 2.0])
 def test_hold_recovers_from_drift_on_static_and_reversing_platforms(moving, direction, velocity):

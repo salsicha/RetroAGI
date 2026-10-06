@@ -37,8 +37,8 @@ import json
 import multiprocessing
 import random
 import time
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
@@ -389,7 +389,11 @@ class _Lane:
         d["used"].append(encode_choice(learner, used).numpy())
         mine = decision.chosen[learner]
         if learner == "skill":
-            d["given"].append(encode_tactic(decision.tactic).numpy())
+            d["given"].append(
+                torch.cat(
+                    (encode_tactic(decision.tactic), encode_strategy(decision.strategy))
+                ).numpy()
+            )
             labels = (
                 skill_picks(asked["skill"])
                 if asked["skill"] is not None
@@ -458,7 +462,8 @@ class _Lane:
             played_teacher=np.asarray(d["played_teacher"], bool),
             agreed=np.asarray(d["agreed"], bool),
             rewards=np.asarray(self.frames["reward"], np.float32),
-            terminal=self.end in ("goal", "death", "off_route", "missed_objective"),
+            terminal=self.end
+            in ("goal", "death", "off_route", "missed_objective", "failed_attempt"),
             explored=self.task.explore,
             picks={
                 name[len("pick_") :]: np.asarray(d[name], np.int64)
@@ -568,7 +573,13 @@ def play_episodes(
                         else (
                             "off_route"
                             if info.get("off_route")
-                            else ("missed_objective" if info.get("objective_missed") else "timeout")
+                            else (
+                                "missed_objective"
+                                if info.get("objective_missed")
+                                else "failed_attempt"
+                                if info.get("attempt_failed")
+                                else "timeout"
+                            )
                         )
                     )
                 )
@@ -621,16 +632,34 @@ class EpisodePool:
             for chunk in chunks
         ]
         records: list = [None] * len(tasks)
-        for chunk, played in zip(chunks, self.pool.map(_play_job, jobs)):
+        pending = {self.pool.submit(_play_job, job): chunk for chunk, job in zip(chunks, jobs)}
+        completed, reported = 0, time.monotonic()
+        for future in as_completed(pending):
+            chunk, played = pending[future], future.result()
             for i, record in zip(chunk, played):
                 records[i] = record
+            completed += len(chunk)
+            if time.monotonic() - reported >= 60 or completed == len(tasks):
+                print(
+                    f"[{self.config.learner}] rollouts {completed}/{len(tasks)} episodes",
+                    flush=True,
+                )
+                reported = time.monotonic()
         return records
 
     def with_scenarios(self, tasks: Sequence[EpisodeTask]) -> list[EpisodeTask]:
         """The tasks with their layouts made once (for sets played every round)."""
         order = list(range(len(tasks)))
         random.Random(len(tasks)).shuffle(order)  # slow families spread over the workers
-        made = dict(zip(order, self.pool.map(task_scenario, [tasks[i] for i in order])))
+        pending = {self.pool.submit(task_scenario, tasks[i]): i for i in order}
+        made, reported = {}, time.monotonic()
+        for future in as_completed(pending):
+            made[pending[future]] = future.result()
+            if time.monotonic() - reported >= 60 or len(made) == len(tasks):
+                print(
+                    f"[{self.config.learner}] layouts {len(made)}/{len(tasks)} prepared", flush=True
+                )
+                reported = time.monotonic()
         return [dataclasses.replace(t, scenario=made[i]) for i, t in enumerate(tasks)]
 
     def close(self) -> None:
@@ -1500,31 +1529,53 @@ def save_layered_checkpoint(path, policy, config, trained_layers, history) -> No
 def load_layered_checkpoint(path, device="cpu"):
     """A saved policy and its checkpoint; refuses one built for other inputs or tokens.
 
-    Only the tactic layer reads the strategy switch, so a checkpoint whose
-    tactic layer was never trained loads under other strategies: its tactic
-    layer and tactic memory start fresh.
+    Tactic and skill both read strategy context. An action-only checkpoint can
+    load with different strategies: tactic restarts and skill's strategy input
+    starts at zero influence. Qualified upper layers require matching strategies.
     """
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     if checkpoint["observation_layout"] != observation_layout():
         raise ValueError(f"{path} was trained on a different observation layout")
     saved, now = checkpoint["token_layout"], token_layout()
+    saved_skill = dict(saved.get("skill") or {})
+    legacy_skill = "strategy_context" not in saved_skill
+    if legacy_skill:
+        saved_skill["strategy_context"] = now["skill"]["strategy_context"]
     other_strategies = saved.get("strategies") != now["strategies"]
     if (
-        saved.get("skill") != now["skill"]
+        saved_skill != now["skill"]
         or saved.get("action_input") != now["action_input"]
         or saved.get("executor_actions") != now["executor_actions"]
         or saved.get("tactics") != now["tactics"]
-        or (other_strategies and "tactic" in checkpoint["trained_layers"])
+        or (
+            other_strategies
+            and (
+                "tactic" in checkpoint["trained_layers"]
+                or (not legacy_skill and "skill" in checkpoint["trained_layers"])
+            )
+        )
     ):
         raise ValueError(f"{path} was trained with different tokens")
     policy = LayeredSMBPolicy(PolicySettings(**checkpoint["settings"])).to(device)
     state = dict(checkpoint["state_dict"])
+    if legacy_skill:
+        # Preserve every learned tactic input exactly. New context starts at
+        # zero influence, and is learned during the next skill training run.
+        old = state["skill.above.weight"]
+        widened = policy.state_dict()["skill.above.weight"].clone().zero_()
+        widened[:, : old.shape[1]] = old
+        state["skill.above.weight"] = widened
+        checkpoint["load_migrations"] = ["skill_strategy_context_zero_initialized"]
     if other_strategies:
         fresh = policy.state_dict()
         state = {
             name: fresh[name] if name.startswith(("tactic.", "tactic_memory.")) else value
             for name, value in state.items()
         }
+        old = state["skill.above.weight"]
+        widened = fresh["skill.above.weight"].clone().zero_()
+        widened[:, : len(TACTICS)] = old[:, : len(TACTICS)]
+        state["skill.above.weight"] = widened
     policy.load_state_dict(state)
     return policy, checkpoint
 
@@ -1687,10 +1738,29 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 "by_reward": by_reward,
                 "teacher_share": share,
                 "train_success": float(np.mean([e.won for e in played])),
+                "train_families": family_success(played),
                 "agreement": float(np.mean(agreed)) if agreed else None,
                 "validation_success": mean,
                 "validation_families": per_family,
                 "validation_difficulties": family_success(validation, by_difficulty=True),
+                "validation_outcomes": {
+                    family: dict(Counter(e.end for e in validation if e.family == family))
+                    for family in per_family
+                },
+                "train_label_coverage": {
+                    family: float(
+                        np.mean(
+                            [
+                                valid
+                                for e in played
+                                if e.family == family
+                                for valid in e.labels["valid"]
+                            ]
+                        )
+                    )
+                    for family in per_family
+                    if any(e.family == family and len(e.labels["valid"]) for e in played)
+                },
                 "losses": {name: float(np.mean(values)) for name, values in totals.items()},
                 "replay_episodes": len(replay),
                 "seconds": {

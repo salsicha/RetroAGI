@@ -20,7 +20,7 @@ anchor persists across consecutive hold plans. No simulator state is read.
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .actions import SMBAction
+from .actions import SMB_JUMP_ACTIONS, SMBAction
 from .smb_pixel_types import VISIBLE_COLUMNS
 from .smb_scene_labels import SceneObservation, Surface
 
@@ -83,6 +83,12 @@ class GroundHold:
         # Mario covers part of the surface. Fall back to reported surfaces.
         moving = [Surface(b[0], b[2], b[1], True) for b in scene.moving_platforms]
         surfaces = [s for s in scene.surfaces if not s.moving or not moving] + moving
+        # A surface clipped at BOTH edges provides no horizontal landmark.
+        # Its viewport edges do not move when the camera scrolls. Treating one
+        # as a world anchor makes the controller accelerate to chase the scroll.
+        surfaces = [
+            s for s in surfaces if not (s.x0 <= VISIBLE_COLUMNS[0] and s.x1 >= VISIBLE_COLUMNS[1])
+        ]
         if self.surface is None:
             candidates = [
                 s
@@ -150,6 +156,7 @@ class SMBExecutor:
     pressed: int = 0
     history: list = field(default_factory=list)  # (plan, frames pressed, why it ended)
     hold: GroundHold = field(default_factory=GroundHold)
+    last_button: Optional[int] = None
 
     @property
     def idle(self) -> bool:
@@ -159,6 +166,16 @@ class SMBExecutor:
     def finished(self) -> bool:
         """The plan has pressed all of its frames."""
         return self.plan is not None and self.pressed >= self.plan.frames
+
+    @property
+    def reconsider(self) -> bool:
+        """Waiting must expose one-frame departure windows to the policy.
+
+        Keep the support anchor when another hold follows; only its scheduling
+        interval ends. A learned 32-frame hold must not hide a bridge or plant
+        transition for the whole interval.
+        """
+        return self.plan is not None and self.plan.action == HOLD_GROUND and self.pressed > 0
 
     def start(self, plan: ActionPlan) -> None:
         if not self.idle:
@@ -180,7 +197,21 @@ class SMBExecutor:
             raise RuntimeError("no action to play: start a plan first")
         if self.finished:
             raise RuntimeError("the plan has pressed all of its frames: end it first")
+        button = self.hold.press(scene) if self.plan.action == HOLD_GROUND else self.plan.action
+        if (
+            self.pressed == 0
+            and button in SMB_JUMP_ACTIONS
+            and self.last_button in SMB_JUMP_ACTIONS
+        ):
+            # A new jump needs a physical release edge, including when landing
+            # interrupts a held jump. This release is not one of its A frames.
+            button = {
+                SMBAction.RIGHT_JUMP: SMBAction.RIGHT,
+                SMBAction.LEFT_JUMP: SMBAction.LEFT,
+                SMBAction.JUMP: SMBAction.NOOP,
+            }[button]
+            self.last_button = int(button)
+            return int(button)
         self.pressed += 1
-        if self.plan.action == HOLD_GROUND:
-            return self.hold.press(scene)
-        return self.plan.action
+        self.last_button = int(button)
+        return int(button)

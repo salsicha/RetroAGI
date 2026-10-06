@@ -341,8 +341,7 @@ class MarioScenarioEnv:
         self.world_width = scenario.get("world_width", self.width)
         # Long composed layouts state how many frames their route may take.
         self.frame_budget = int(scenario.get("frame_budget", 320))
-        if "frame_budget" in scenario:
-            self.max_steps = max(1000, self.frame_budget)
+        self.max_steps = max(1000, self.frame_budget)
         self.motion = NESPlayerMotion()
 
         # Mario state
@@ -493,6 +492,11 @@ class MarioScenarioEnv:
         self._strategy_objective = dict(scenario.get("strategy_objective") or {})
         self._objective_missed = False
 
+        # The initial observation must use the same camera placement as step().
+        # Otherwise the first stationary frame appears to move Mario sideways.
+        self.camera_x = max(
+            0.0, min(self.mario["x"] - self.width // 3, self.world_width - self.width)
+        )
         obs = self.render()
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
         info = self._build_info(

@@ -8,13 +8,14 @@ The hierarchy is **strategy → tactic → skill → action → executor**:
 2. **Tactic:** persistent option-critic choosing advance, retreat, climb or
    descend in either direction, or hold ground. There is no direction number
    in its categorical token.
-3. **Skill:** reads the tactic, ViT scene, LSTM prediction and its last 16
+3. **Skill:** reads the tactic, strategy context, ViT scene, LSTM prediction and its last 16
    spatial commands. Chooses a run/jump/hold mode and a destination relative
    to Mario's feet.
 4. **Action:** reads only that spatial command and chooses an executor action
    and duration. It receives no ViT or LSTM input.
-5. **Executor:** holds buttons or runs the closed-loop hold-ground controller,
-   which preserves a spot relative to a moving platform using per-frame vision.
+5. **Executor:** uses per-frame vision to track destinations and hold a spot
+   relative to a moving platform. Waits are reconsidered every frame so a
+   departure window cannot disappear inside a long hold plan.
 
 Each game has its own weights for the shared vision model. Simulator state
 supplies teacher labels and scores in training, never deployed network inputs.

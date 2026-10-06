@@ -498,7 +498,7 @@ class LayeredSMBPolicy(nn.Module):
         self.tactic_memory = TacticMemory(settings)
         self.skill = _Layer(
             settings,
-            TACTIC_WIDTH,
+            TACTIC_WIDTH + STRATEGY_WIDTH,
             {"mode": len(SKILL_MODES), "x": len(SKILL_X), "y": len(SKILL_Y)},
             SKILL_WIDTH,
             choice_positions=(len(SKILL_MODES), len(SKILL_MODES) + 1),
@@ -560,9 +560,17 @@ class LayeredSMBPolicy(nn.Module):
         """Batched PolicyInput rows (src_a, src_b, src_c) -> scene tokens and their mask."""
         return self.scene(*inputs)
 
-    def run_skill(self, encoded, expected, tactic, history=None):
-        """Choose a destination from vision, memory, tactic and 16 prior choices."""
+    def run_skill(self, encoded, expected, tactic, history=None, strategy=None):
+        """Choose a destination using the tactic and its strategy context.
+
+        Training records pack both tokens together. Direct callers may pass
+        them separately; the default switch preserves the old convenience API.
+        """
         scene_tokens, present = encoded
+        if tactic.shape[-1] == TACTIC_WIDTH:
+            if strategy is None:
+                strategy = encode_strategy(DEFAULT_STRATEGY).to(tactic).expand(len(tactic), -1)
+            tactic = torch.cat((tactic, strategy), dim=-1)
         return self.skill(scene_tokens, present, expected, tactic, history)
 
     def run_action(self, destination):

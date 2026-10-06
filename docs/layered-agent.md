@@ -10,9 +10,9 @@ Three layers are learned. Strategy is an externally selected objective.
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
 | Scene memory | Encoded scene at each action boundary, previous LSTM state | Predicted scene at the next boundary |
 | Tactic | Strategy, current and predicted scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
-| Skill | Tactic, current scene, memory prediction, last 16 skill commands | Run/jump/hold mode and a relative destination `(x, y)` |
+| Skill | Tactic, strategy context, current scene, memory prediction, last 16 skill commands | Run/jump/hold mode and a relative destination `(x, y)` |
 | Action | **Only the spatial skill command** | Executor action and duration, 1–32 frames |
-| Executor | Plan; per-frame vision for landing/hold feedback | One of six emulator button combinations |
+| Executor | Proposed plan, destination, per-frame vision for local motion/landing/hold feedback | One of six emulator button combinations |
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
 `climb_backward`, `descend_forward`, `descend_backward`, and `hold_ground`.
@@ -32,6 +32,11 @@ is newest first, marked by decision age, and reset between episodes. Its
 three output heads choose movement mode and pixel coordinates. Coordinates
 are categorical bins internally; the message delivered to action is a
 spatial vector (mode one-hot plus normalized x/y), not a tactic category.
+
+Strategy context distinguishes otherwise identical inputs with conflicting
+demonstrations: the same retreat or climb tactic can require different
+destinations under speed run and max points. This context never reaches the
+action network.
 
 Action is a feed-forward network with positional features of that spatial
 vector. It cannot receive a scene, tactic, LSTM state, memory prediction, or
@@ -55,6 +60,11 @@ Skill selects a destination at each action boundary. A timed button plan
 can end while Mario is airborne; skill can then issue a new steering target.
 Landing interrupts a plan. Thus one physical jump can contain several button
 plans; the executor still runs only one plan at a time.
+An airborne follow-up releases the preceding jump hold instead of silently
+extending it. Visual destination tracking can finish a run before the proposed
+duration expires. A local NES motion prediction calibrates jump holds when the
+requested endpoint is reachable under that model; this uses observations only,
+not the training teacher or hidden simulator state.
 
 ## Hold-ground control
 
@@ -66,6 +76,10 @@ with the platform and persists across consecutive hold plans. Another action
 clears it. Remembered platform width handles clipping of an edge at the screen
 boundary. Missing/ambiguous support releases buttons rather than creating a
 new anchor. Tracking is visual and has no simulator object IDs.
+When both platform edges are clipped, there is no usable horizontal landmark;
+the controller releases buttons rather than treating the viewport edge as a
+world anchor. Consecutive holds keep their anchor, but the agent reconsiders
+whether to continue holding every frame.
 
 ## Training
 
@@ -156,6 +170,11 @@ Checkpoints store observation layout, strategy/tactic vocabularies, executor
 actions, skill coordinate schema, history length, and the action input contract.
 Older tactic-to-action checkpoints are rejected even where tensor widths
 happen to match. Retrain action, then skill, then tactic for this architecture.
+Spatial checkpoints from before strategy context are migrated by appending
+zero-initialized context weights. All existing weights, including action,
+are preserved; the new context is learned in subsequent skill training.
+Validation history includes per-family end reasons and training label coverage.
+An unsuccessful single-jump landing is a terminal failed attempt, not a timeout.
 
 ```bash
 retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action

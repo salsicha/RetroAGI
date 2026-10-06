@@ -84,7 +84,10 @@ def test_the_goal_counts_only_after_the_retreat():
     env = MarioScenarioEnv()
     env.reset(scenario=_flat(schedule, mario=(120, 208)))
     info = _run(env, 1, 400)
-    assert not env._goal_credited and not info["terminated"]
+    # Ignoring the retreat eventually scrolls its required line behind the
+    # physical camera boundary. That route is now terminal, never a goal.
+    assert not env._goal_credited and info["terminated"] and info["off_route"]
+    assert env.camera_x > 60
     env.reset(scenario=_flat(schedule, mario=(120, 208)))
     _run(env, 3, 80)
     assert tactic_schedule.current(env)["stance"] == "advance"

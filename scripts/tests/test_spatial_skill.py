@@ -169,6 +169,78 @@ def test_skill_stage_is_available_and_checkpoint_sequence_includes_it():
     )
 
 
+def test_skill_receives_strategy_context_in_runtime_and_training_records(monkeypatch):
+    from retroagi.core.smb_agent import SMBAgents
+    from retroagi.core.smb_scene_labels import scene_from_labels
+    from retroagi.core.tokens import STRATEGY_WIDTH, TACTIC_WIDTH, StrategyToken, encode_strategy
+
+    task = EpisodeTask(0, "action_walk", "train", 7, 0, 0.0, False, difficulty="easy")
+    lane = _Lane(task, 0)
+    switch = StrategyToken("max_points", 1)
+    lane.switch = switch
+
+    class Observer:
+        def observe(self, screens):
+            return [scene_from_labels(lane.env.scene_labels())]
+
+    policy = LayeredSMBPolicy().eval()
+    original = policy.run_skill
+    seen = []
+
+    def run(*args, **kwargs):
+        seen.append(kwargs["strategy"].clone())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(policy, "run_skill", run)
+    agents = SMBAgents(Observer(), policy, "cpu", switch=switch)
+    try:
+        step = agents.act([lane.screen], [0], given=_teacher_given("skill", {0: lane}))[0]
+        for key, row in zip("abc", step.rows):
+            lane.frames[key].append(row)
+        lane.note_decision("skill", step.decision)
+        assert torch.equal(seen[0][0], encode_strategy(switch))
+        recorded = lane.decisions["given"][0]
+        assert len(recorded) == TACTIC_WIDTH + STRATEGY_WIDTH
+        assert recorded[-STRATEGY_WIDTH:].tolist() == encode_strategy(switch).tolist()
+    finally:
+        lane.env.close()
+
+
+def test_legacy_checkpoint_migration_preserves_action_and_existing_skill_weights(tmp_path):
+    import copy
+    from dataclasses import asdict
+
+    from retroagi.core.smb_observer import observation_layout
+    from retroagi.core.tokens import TACTIC_WIDTH, token_layout
+    from retroagi.stages.block_smb.layered_train import load_layered_checkpoint
+
+    policy = LayeredSMBPolicy()
+    state = copy.deepcopy(policy.state_dict())
+    state["skill.above.weight"] = state["skill.above.weight"][:, :TACTIC_WIDTH].clone()
+    layout = token_layout()
+    del layout["skill"]["strategy_context"]
+    path = tmp_path / "legacy.pt"
+    torch.save(
+        {
+            "settings": asdict(policy.settings),
+            "state_dict": state,
+            "token_layout": layout,
+            "observation_layout": observation_layout(),
+            "trained_layers": ["action"],
+        },
+        path,
+    )
+    loaded, metadata = load_layered_checkpoint(path)
+    assert metadata["load_migrations"]
+    for name, value in state.items():
+        actual = loaded.state_dict()[name]
+        if name == "skill.above.weight":
+            assert torch.equal(actual[:, :TACTIC_WIDTH], value)
+            assert not actual[:, TACTIC_WIDTH:].any()
+        else:
+            assert torch.equal(actual, value), name
+
+
 def test_skill_curriculum_includes_every_leftover_family():
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert families == set(BLOCK_SMB_MC_FAMILIES)

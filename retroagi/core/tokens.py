@@ -1,4 +1,4 @@
-"""The strategy switch and the tactic token the action layer is given.
+"""Strategy context, categorical tactics, and spatial commands for action.
 
 - The strategy is a switch, set by whoever runs the agent, not chosen by a
   layer: a StrategyToken holds what the run is for and which side the goal is
@@ -18,7 +18,8 @@
     behind;
   - hold_ground: stay at the current spot on the supporting platform, moving
     with that platform until the tactic ends.
-- The skill layer reads the tactic and chooses a run/jump/hold destination.
+- The skill layer reads the tactic and strategy context and chooses a
+  run/jump/hold destination.
 - The action layer reads only that spatial command and emits an executor plan.
 
 In Block SMB each learner receives a teacher command from above. At play
@@ -145,6 +146,7 @@ def token_layout() -> dict:
         "tactics": list(TACTICS),
         "executor_actions": [action.name for action in SMB_ACTIONS] + ["HOLD_GROUND"],
         "skill": {
+            "strategy_context": "strategy_switch_v1",
             "modes": list(SKILL_MODES),
             "x": list(SKILL_X),
             "y": list(SKILL_Y),

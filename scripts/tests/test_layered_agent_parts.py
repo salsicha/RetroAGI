@@ -216,12 +216,17 @@ def test_a_landing_ends_the_action_early_and_nothing_else_does():
     assert [step.button for step in steps] == [SMBAction.RIGHT] * 6
 
 
-def test_the_agent_updates_the_hold_controller_between_policy_decisions():
+def test_the_agent_rechecks_waits_each_frame_without_losing_the_support_anchor():
     from retroagi.core.smb_agent import SMBAgents
     from retroagi.core.smb_executor import HOLD_GROUND
     from retroagi.core.smb_observer import VisionObserver
 
-    pictures = [scene(), scene(mario=(104, 192, 116, 208)), scene(mario=(96, 192, 108, 208))]
+    support = [Surface(60, 180, 208, False)]
+    pictures = [
+        scene(surfaces=support),
+        scene(mario=(104, 192, 116, 208), surfaces=support),
+        scene(mario=(96, 192, 108, 208), surfaces=support),
+    ]
     agents = SMBAgents(VisionObserver(SceneList(pictures)), LayeredSMBPolicy().eval(), "cpu")
 
     def given(copies, scenes):
@@ -230,7 +235,8 @@ def test_the_agent_updates_the_hold_controller_between_policy_decisions():
     screen = [np.zeros((240, 256, 3), np.uint8)]
     steps = [agents.act(screen, [0], given=given)[0] for _ in pictures]
     assert [step.button for step in steps] == [SMBAction.NOOP, SMBAction.LEFT, SMBAction.RIGHT]
-    assert [step.decision is not None for step in steps] == [True, False, False]
+    assert [step.decision is not None for step in steps] == [True, True, True]
+    assert [step.ended for step in steps] == [None, "hold_recheck", "hold_recheck"]
 
 
 # ── Layers ────────────────────────────────────────────────────────────────────

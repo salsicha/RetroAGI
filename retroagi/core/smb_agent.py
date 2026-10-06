@@ -3,8 +3,9 @@
 At each action boundary, memory reads the scene, the option-critic checks the
 held tactic, and skill chooses a relative destination from scene, prediction,
 tactic and its 16 previous commands. Action reads only that spatial command.
-The executor gets per-frame vision for hold-ground correction and landing
-ends a running plan early. Simulator state is never passed to these networks.
+Execution uses per-frame vision for motion, destination and hold feedback.
+Landing and destination arrival can end a plan early, and waits are rechecked
+each frame. Simulator state is never passed to these networks.
 
 Training may supply teacher tokens for selected layers; runtime playback
 uses only the policy's own choices and the externally set strategy switch.
@@ -32,6 +33,7 @@ from .layered_policy import (
 from .smb_executor import ActionPlan, SMBExecutor
 from .smb_observer import SEQ_LEN_A, SEQ_LEN_B, VisionObserver, column_codes, pack_c
 from .smb_scene_labels import SceneObservation
+from .smb_spatial_feedback import SpatialFeedback
 from .tokens import (
     DEFAULT_STRATEGY,
     SkillToken,
@@ -159,7 +161,13 @@ def decide(
         out = (
             policy.run_action(above)
             if layer == "action"
-            else policy.run_skill(encoded(), expected, above, (histories or {}).get("skill"))
+            else policy.run_skill(
+                encoded(),
+                expected,
+                above,
+                (histories or {}).get("skill"),
+                strategy=_encoded(encode_strategy, switches, device),
+            )
         )
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]
@@ -231,6 +239,7 @@ class LandingWatch:
 class _Copy:
     executor: SMBExecutor = field(default_factory=SMBExecutor)
     landing: LandingWatch = field(default_factory=LandingWatch)
+    spatial: SpatialFeedback = field(default_factory=SpatialFeedback)
     hidden: Optional[torch.Tensor] = None
     cell: Optional[torch.Tensor] = None
     button: int = NOOP
@@ -439,10 +448,24 @@ class SMBAgents:
         rows = scene_rows(scenes)
         ended = []
         for copy, scene in zip(playing, scenes):
+            copy.spatial.observe(scene)
             landed = copy.landing.landed(scene)
             reason = None
             if not copy.executor.idle:
-                reason = "landed" if landed else ("done" if copy.executor.finished else None)
+                copy.executor.plan = copy.spatial.calibrate_launch(
+                    scene, copy.executor.plan, copy.executor.pressed
+                )
+                reason = (
+                    "landed"
+                    if landed
+                    else "done"
+                    if copy.executor.finished
+                    else "hold_recheck"
+                    if copy.executor.reconsider
+                    else "arrived"
+                    if copy.spatial.arrived()
+                    else None
+                )
                 if reason is not None:
                     copy.executor.end(reason)
             ended.append(reason)
@@ -486,6 +509,11 @@ class SMBAgents:
                 tactic_steps,
             )
             for j, (k, decision) in enumerate(zip(deciding, made)):
+                given_actions = supplied.get("action")
+                destination = (
+                    None if given_actions and given_actions[j] is not None else decision.skill
+                )
+                decision.plan = playing[k].spatial.begin(destination, scenes[k], decision.plan)
                 decisions[k] = decision
                 playing[k].hidden, playing[k].cell = remembered.hidden[j], remembered.cell[j]
                 remember_choices(playing[k], decision)

@@ -226,6 +226,17 @@ def track(env) -> bool:
         seg = current(env)
         if on is not None and on in seg.get("route", ())[:1]:
             env._route_done = 1
+    # The camera is a physical left boundary. Once an overshoot has scrolled
+    # a required retreat line offscreen, repeatedly requesting that retreat
+    # can never complete it. End the failed route instead of collecting
+    # hundreds of unlabelled, unrecoverable recovery decisions.
+    seg = current(env)
+    if (
+        seg["direction"] < 0
+        and "reach_x" in seg["end"]
+        and seg["end"]["reach_x"] < env.camera_x
+    ):
+        env._off_route = True
     return env._off_route
 
 
