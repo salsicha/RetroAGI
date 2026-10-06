@@ -348,9 +348,11 @@ class _Lane:
         return env.steps - self.progressed > STALL_FRAMES
 
     def ask_teacher(self, learner: str, scene) -> dict:
-        """The teacher's tactic (and, for the action learner, its plan) here.
+        """Only compute teacher destinations when consumed or needed as labels.
 
-        Reads the simulator: training only.
+        Action evaluation still needs the teacher's spatial input. Skill
+        evaluation only needs its tactic, unless executing a teacher choice.
+        Reads simulator state for teacher inputs and supervision only.
         """
         from .teacher_tokens import teacher_plan, teacher_skill, teacher_tactic
 
@@ -361,7 +363,9 @@ class _Lane:
             "holds": (),
             "plays_teacher": self.rng.random() < self.task.teacher_share,
         }
-        if learner in ("action", "skill"):
+        if learner == "action" or (
+            learner == "skill" and (self.task.label or asked["plays_teacher"])
+        ):
             asked["action"], asked["holds"] = teacher_plan(
                 self.env, self.teacher, certify_holds=False
             )
@@ -386,9 +390,14 @@ class _Lane:
         mine = decision.chosen[learner]
         if learner == "skill":
             d["given"].append(encode_tactic(decision.tactic).numpy())
-            for head, value in skill_picks(asked["skill"]).items():
+            labels = (
+                skill_picks(asked["skill"])
+                if asked["skill"] is not None
+                else dict.fromkeys(CHOICES["skill"], 0)
+            )
+            for head, value in labels.items():
                 d[f"label_{head}"].append(value)
-            valid = asked["action"] is not None
+            valid = self.task.label and asked["action"] is not None
             d["label_valid"].append(valid)
             d["agreed"].append(valid and mine == asked["skill"])
             return

@@ -79,13 +79,22 @@ def test_new_maneuvers_are_immediate_directional_jumps_with_spatial_landings(fam
 
 
 @pytest.mark.parametrize("learner", ["action", "skill"])
-def test_teacher_collection_and_learning_use_the_new_layer_contract(learner):
+@pytest.mark.parametrize("label", [True, False])
+def test_teacher_collection_and_learning_use_the_new_layer_contract(learner, label, monkeypatch):
     from retroagi.core.smb_agent import SMBAgents
     from retroagi.core.smb_scene_labels import scene_from_labels
 
     # Exact scenes stand in for vision, while the agent still accepts only frames.
-    task = EpisodeTask(0, "action_walk", "train", 7, 0, 1.0, True, difficulty="easy")
+    task = EpisodeTask(0, "action_walk", "train", 7, 0, float(label), label, difficulty="easy")
     lane = _Lane(task, 0)
+    if learner == "skill" and not label:
+        from retroagi.stages.block_smb import teacher_tokens
+
+        def unused(*args, **kwargs):
+            raise AssertionError("skill evaluation searched for a teacher action route")
+
+        monkeypatch.setattr(teacher_tokens, "teacher_plan", unused)
+        monkeypatch.setattr(teacher_tokens, "teacher_skill", unused)
 
     class Observer:
         def observe(self, screens):
@@ -110,6 +119,13 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(learner):
             lane.frames["potential"].append(0.0)
             lane.screen, _, _, _, _ = lane.env.step(step.button)
         record = lane.record()
+        if learner == "skill" and not label:
+            assert not record.labels["valid"].any()
+            assert all(
+                len(record.labels[head]) == len(record.decision_frames)
+                for head in ("mode", "x", "y")
+            )
+            return
         if learner == "action":
             assert record.given.shape[1] == SKILL_WIDTH
 
@@ -122,6 +138,17 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(learner):
         assert losses
         sum(losses.values()).backward()
         assert any(p.grad is not None for p in getattr(policy, learner).parameters())
+    finally:
+        lane.env.close()
+
+
+def test_unlabelled_skill_teacher_execution_still_gets_a_destination():
+    task = EpisodeTask(0, "action_walk", "train", 7, 0, 1.0, False, difficulty="easy")
+    lane = _Lane(task, 0)
+    try:
+        asked = lane.ask_teacher("skill", None)
+        assert asked["plays_teacher"]
+        assert asked["skill"] is not None and asked["action"] is not None
     finally:
         lane.env.close()
 
