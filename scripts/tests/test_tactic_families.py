@@ -383,7 +383,7 @@ def _labels_along_the_route(family, difficulty="easy"):
     return made
 
 
-@pytest.mark.parametrize("family", ["retreat_recovery", "stomp_recovery"])
+@pytest.mark.parametrize("family", ["retreat_recovery"])
 def test_going_back_to_the_left_is_never_labelled_advance(family):
     made = _labels_along_the_route(family)
     left = [tactic for action, tactic in made if action in (3, 4)]

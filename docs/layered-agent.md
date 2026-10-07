@@ -163,7 +163,7 @@ round, with family-balanced losses. Rejected combinations and counts are
 recorded in `combinations.json`; enumeration is coverage of these generators,
 not all possible incoming motion or arbitrary levels.
 
-Skill uses **all 75 registered scene families**, including every leftover
+Skill uses **all 74 registered scene families**, including every leftover
 family: piranha avoidance, moving bridges, mounting/dismounting, enemy patrols,
 landing enemies, occupied platforms, recovery, route-choice clones and composed
 sequences, as well as the 17 action and 14 strategy families. Each supplies
