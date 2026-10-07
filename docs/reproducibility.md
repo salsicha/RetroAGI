@@ -100,11 +100,13 @@ retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill
 
 - **Action layer:** trains on 17 isolated maneuver families, every declared
   parameter combination every round. Inputs are spatial skill commands only.
-- **Skill layer:** trains on all 74 registered scene families, including enemy
+- **Skill layer:** trains on 70 scene families, excluding the four tactic-only
+  `tactics_` compositions and including enemy
   bypass and piranha avoidance,
   learning destinations from vision, memory, tactic and its previous 16 choices.
-- **Tactic layer:** trains on the 14 strategy families (one scene per tactic,
-  under speed run and under max points), with layouts drawn at random.
+- **Tactic layer:** trains on 18 families: the 14 strategy families (one scene per
+  tactic, under speed run and under max points) plus the four `tactics_` compositions,
+  with layouts drawn at random.
 
 Example larger runs add `--validation-layouts-per-difficulty 6 --workers 15` to
 each, and `--reward-rounds 4 --train-layouts-per-family 32` to the tactic

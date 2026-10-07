@@ -73,7 +73,9 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
     assert set(STRATEGY_TACTIC_FAMILIES.values()) == {(s, t) for s in STRATEGIES for t in TACTICS}
     assert set(STRATEGY_TACTIC_FAMILIES) <= set(BLOCK_SMB_MC_FAMILIES)
     families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
-    assert set(families) == set(STRATEGY_TACTIC_FAMILIES)  # the tactic layer trains on these only
+    compositions = {f for f in BLOCK_SMB_MC_FAMILIES if f.startswith("tactics_")}
+    assert len(compositions) == 4
+    assert set(families) == set(STRATEGY_TACTIC_FAMILIES) | compositions
     assert not set(families) & set(learner_families("action", BLOCK_SMB_MC_FAMILIES))
 
 
