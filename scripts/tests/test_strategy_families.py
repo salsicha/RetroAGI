@@ -75,7 +75,20 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
     families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
     compositions = {f for f in BLOCK_SMB_MC_FAMILIES if f.startswith("tactics_")}
     assert len(compositions) == 4
-    assert set(families) == set(STRATEGY_TACTIC_FAMILIES) | compositions
+    assert set(families) == set(STRATEGY_TACTIC_FAMILIES) | compositions | {
+        "mixed_section",
+        "chained_obstacles",
+        "chained_enemy_gauntlet",
+        "full_smb_opening_proxy",
+        "upper_route",
+        "lower_route",
+        "dead_end_retreat",
+        "monster_retreat",
+        "moving_bridge",
+        "wait_timing",
+        "piranha_avoidance",
+    }
+    assert len(families) == 29
     assert not set(families) & set(learner_families("action", BLOCK_SMB_MC_FAMILIES))
 
 

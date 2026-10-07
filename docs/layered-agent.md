@@ -163,17 +163,16 @@ round, with family-balanced losses. Rejected combinations and counts are
 recorded in `combinations.json`; enumeration is coverage of these generators,
 not all possible incoming motion or arbitrary levels.
 
-Skill uses **56 scene families**, excluding all `tactics_`, `speed_run_` and
-`max_points_` families. Its curriculum includes piranha avoidance,
-moving bridges, mounting/dismounting, enemy patrols,
-landing enemies, occupied platforms, recovery, route-choice clones and composed
-sequences, as well as the 17 action families. Each supplies
-spatial destination labels instead of button labels at the skill stage.
+Skill uses **45 scene families** for local destination selection: individual
+bridge holds/mounts/dismounts, enemy encounters, platform traversal, local
+recovery, supplied-tactic choice clones and the 17 action families. Each
+supplies spatial destination labels instead of button labels at the skill stage.
+The choice clones deliberately reuse one scene with different supplied tactics;
+they test following that input, rather than inferring a hidden assignment.
 
 Two dedicated families, `skill_enemy_bypass` and `skill_enemy_bypass_back`,
 require an immediate jump and supported landing beyond an enemy that remains
-alive. Stomping it fails the episode. The existing `piranha_avoidance` family
-covers both clearing a plant and waiting for retraction before crossing.
+alive. Stomping it fails the episode.
 
 For each strategy-route combination, the teacher evaluates both its default
 jump selection and a bypass preference that selects non-stomping holds where
@@ -181,21 +180,23 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **18 families**: 14 strategy families (each of seven tactics under
-`speed_run` and `max_points`) plus four compositions:
+Tactic uses **29 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
-- `tactics_bridge_sequence`
-- `tactics_obstacle_sequence`
-- `tactics_bridge_then_gap`
-- `tactics_mixed_sequence`
+| Group | Families |
+|---|---|
+| Strategy (14) | Each of seven tactics under `speed_run_` and `max_points_` |
+| Composed levels (8) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
+| Scene-driven routes/responses (4) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat` |
+| Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
 
-These compositions train tactic selection and termination across successive
-obstacles with the skill and action layers frozen. All 18 tactic families,
-including the strategy families, are excluded from skill training and skill
-evaluation.
+These families teach tactic selection and termination with the skill and action
+layers frozen. All 29 are excluded from skill training and skill evaluation.
+Local sequences such as `platform_chain` and `stair_gap` remain skill practice
+for successive reachable destinations; individual bridge holds, mounts and
+dismounts remain skill practice for carrying out the selected maneuver.
 
-Strategy sibling families share
-layouts but reward different routes. The hold-ground scene waits at the starting spot for 64 frames before traversing.
+Strategy sibling families share layouts but reward different routes. The
+hold-ground scene waits at the starting spot for 64 frames before traversing.
 Speed-run qualification requires finishing within the teacher-relative time
 limit; max-points qualification requires the specified points objective.
 

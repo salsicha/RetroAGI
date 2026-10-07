@@ -1,8 +1,8 @@
 """Families with an explicit plan (tactic_schedule), in four groups.
 
-The tactic layer trains exclusively on the `tactics_` compositions and the
-`speed_run_`/`max_points_` strategy families. The remaining families here
-supply skill training:
+The tactic layer trains on scene-driven route/response families, composed
+levels, timing decisions and strategy families. Clones supply skill training
+for following a supplied tactic in an otherwise identical scene:
 
 - **The scene decides the tactic**: upper_route and lower_route (an alternate route), dead_end_retreat (retreat out of a dead
   end, then an alternate route) and monster_retreat (keep away from a monster
@@ -59,6 +59,16 @@ TACTIC_FAMILIES = (
     *STRATEGY_TACTIC_FAMILIES,
 )
 NEW_FAMILIES = (*SCENE_TACTIC_FAMILIES, *CLONE_FAMILIES, *STRATEGY_TACTIC_FAMILIES)
+
+# Waiting versus proceeding is a tactic decision. Individual bridge holds,
+# mounts and dismounts remain destination-selection practice for the skill.
+TIMING_TACTIC_FAMILIES = ("moving_bridge", "wait_timing", "piranha_avoidance")
+TACTIC_TRAINING_FAMILIES = (
+    *SCENE_TACTIC_FAMILIES,
+    *COMPOSED_RECIPES,
+    *TIMING_TACTIC_FAMILIES,
+    *STRATEGY_TACTIC_FAMILIES,
+)
 
 SIMPLE_SECTIONS = ("enemy", "gap", "pipe", "stairs")
 SPECIAL_SECTIONS = ("plant", "upper_route", "lower_route", "monster", "dead_end", "bridge")

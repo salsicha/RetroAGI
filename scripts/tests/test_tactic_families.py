@@ -19,6 +19,7 @@ from retroagi.stages.block_smb.tactic_families import (
     CLONE_FAMILIES,
     LOW_CHOICE_FAMILIES,
     TACTIC_FAMILIES,
+    TACTIC_TRAINING_FAMILIES,
 )
 from retroagi.stages.block_smb.tactic_schedule import SCHEDULE_STANCES, segment
 from retroagi.stages.block_smb.teacher_tokens import (
@@ -337,7 +338,7 @@ def test_the_tactic_learner_leaves_out_the_clones():
 @pytest.mark.parametrize("learner", ["action", "skill", "tactic"])
 @pytest.mark.parametrize(
     "family",
-    [f for f in BLOCK_SMB_MC_FAMILIES if f.startswith(("tactics_", "speed_run_", "max_points_"))],
+    TACTIC_TRAINING_FAMILIES,
 )
 def test_tactic_family_tasks_belong_only_to_tactic_training(learner, split, family):
     from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, _tasks

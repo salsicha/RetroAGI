@@ -241,22 +241,24 @@ def test_legacy_checkpoint_migration_preserves_action_and_existing_skill_weights
             assert torch.equal(actual, value), name
 
 
-def test_skill_curriculum_includes_every_leftover_family():
+def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
+    from retroagi.stages.block_smb.tactic_families import TACTIC_TRAINING_FAMILIES
+
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
-    assert families == {
-        f
-        for f in BLOCK_SMB_MC_FAMILIES
-        if not f.startswith(("tactics_", "speed_run_", "max_points_"))
-    }
-    assert len(families) == 56
+    assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
+    assert len(families) == 45
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert "stomp_recovery" not in families
     assert {
-        "piranha_avoidance",
         "enemy_hop",
         "enemy_patrol",
-        "monster_retreat",
+        "bridge_wait",
+        "bridge_mount",
         "bridge_dismount",
+        "platform_chain",
+        "stair_gap",
+        "landing_enemy",
+        "enemy_on_platform",
         "choice_alternate_route",
         "skill_enemy_bypass",
         "skill_enemy_bypass_back",
