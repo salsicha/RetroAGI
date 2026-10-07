@@ -9,9 +9,6 @@ TACTICS_SEQUENCE_FAMILIES = ("tactics_bridge_sequence", "tactics_obstacle_sequen
 STRATEGY_SEQUENCE_FAMILIES = ("tactics_bridge_then_gap", "tactics_mixed_sequence")
 HIERARCHY_FAMILIES = TACTICS_SEQUENCE_FAMILIES + STRATEGY_SEQUENCE_FAMILIES
 
-# These compositions train tactic selection and termination, using frozen skills.
-TACTIC_ONLY_FAMILIES = HIERARCHY_FAMILIES
-
 FAMILY_PREREQUISITES = {
     "chained_obstacles": ("enemy_hop", "tall_pipe_jump", "enemy_patrol"),
     "chained_enemy_gauntlet": ("enemy_hop", "single_gap", "enemy_patrol", "tall_pipe_jump"),

@@ -335,8 +335,11 @@ def test_the_tactic_learner_leaves_out_the_clones():
 
 @pytest.mark.parametrize("split", ["train", "validation"])
 @pytest.mark.parametrize("learner", ["action", "skill", "tactic"])
-@pytest.mark.parametrize("family", [f for f in BLOCK_SMB_MC_FAMILIES if f.startswith("tactics_")])
-def test_tactics_composition_tasks_belong_only_to_tactic_training(learner, split, family):
+@pytest.mark.parametrize(
+    "family",
+    [f for f in BLOCK_SMB_MC_FAMILIES if f.startswith(("tactics_", "speed_run_", "max_points_"))],
+)
+def test_tactic_family_tasks_belong_only_to_tactic_training(learner, split, family):
     from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, _tasks
 
     config = LayeredTrainConfig(learner=learner, families=(family,))

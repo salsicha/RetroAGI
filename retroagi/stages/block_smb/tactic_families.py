@@ -1,8 +1,8 @@
 """Families with an explicit plan (tactic_schedule), in four groups.
 
-All four groups supply skill training except the tactic-only compositions
-whose names start with `tactics_`. Those compositions and the strategy
-families train the tactic layer:
+The tactic layer trains exclusively on the `tactics_` compositions and the
+`speed_run_`/`max_points_` strategy families. The remaining families here
+supply skill training:
 
 - **The scene decides the tactic**: upper_route and lower_route (an alternate route), dead_end_retreat (retreat out of a dead
   end, then an alternate route) and monster_retreat (keep away from a monster

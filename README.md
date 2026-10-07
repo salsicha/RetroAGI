@@ -37,11 +37,12 @@ strategy → tactic (option-critic)        │
 
 Training proceeds **action → skill → tactic**, freezing lower layers. Action
 uses 17 isolated maneuver families, including left/right jumps onto raised
-platforms and enemies and down to lower levels. Skill uses 70 scene families,
+platforms and enemies and down to lower levels. Skill uses 56 scene families,
 including piranha avoidance, recoveries, composed routes and explicit enemy
 bypass in both directions. It learns spatial destinations. Tactic learns
 strategy-dependent selection and termination across 14 strategy families plus
-four `tactics_` composition families, reserved for tactic training. The action stage
+four `tactics_` composition families. All `tactics_`, `speed_run_` and
+`max_points_` families are reserved for tactic training. The action stage
 sweeps every declared discrete parameter combination; the higher stages sample
 their scene families.
 

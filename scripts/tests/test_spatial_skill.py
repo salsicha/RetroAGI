@@ -243,8 +243,13 @@ def test_legacy_checkpoint_migration_preserves_action_and_existing_skill_weights
 
 def test_skill_curriculum_includes_every_leftover_family():
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
-    assert families == {f for f in BLOCK_SMB_MC_FAMILIES if not f.startswith("tactics_")}
-    assert len(families) == 70
+    assert families == {
+        f
+        for f in BLOCK_SMB_MC_FAMILIES
+        if not f.startswith(("tactics_", "speed_run_", "max_points_"))
+    }
+    assert len(families) == 56
+    assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert "stomp_recovery" not in families
     assert {
         "piranha_avoidance",

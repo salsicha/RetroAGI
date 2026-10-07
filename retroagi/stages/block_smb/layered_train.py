@@ -1309,21 +1309,22 @@ def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
 
     - Action layer: the single-action families (action_families), scenes that
       each need one action and nothing else.
-    - Skill layer: registered scenes except tactic-only compositions, with
-      spatial destination labels.
+    - Skill layer: registered scenes except strategy families and tactic
+      compositions, with spatial destination labels.
     - Tactic layer: the 14 strategy families (strategy_families), one scene
       per tactic played under each strategy, plus tactic-only compositions.
     """
     from .action_families import ACTION_FAMILIES
-    from .hierarchy import TACTIC_ONLY_FAMILIES
+    from .hierarchy import HIERARCHY_FAMILIES
     from .strategy_families import STRATEGY_TACTIC_FAMILIES
 
+    tactic_families = set(STRATEGY_TACTIC_FAMILIES) | set(HIERARCHY_FAMILIES)
     own = (
         ACTION_FAMILIES
         if learner == "action"
-        else set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_ONLY_FAMILIES)
+        else set(BLOCK_SMB_MC_FAMILIES) - tactic_families
         if learner == "skill"
-        else set(STRATEGY_TACTIC_FAMILIES) | set(TACTIC_ONLY_FAMILIES)
+        else tactic_families
     )
     return tuple(f for f in families if f in own)
 

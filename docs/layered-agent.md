@@ -163,11 +163,11 @@ round, with family-balanced losses. Rejected combinations and counts are
 recorded in `combinations.json`; enumeration is coverage of these generators,
 not all possible incoming motion or arbitrary levels.
 
-Skill uses **70 scene families**, excluding the four tactic-only `tactics_`
-compositions. Its curriculum includes piranha avoidance,
+Skill uses **56 scene families**, excluding all `tactics_`, `speed_run_` and
+`max_points_` families. Its curriculum includes piranha avoidance,
 moving bridges, mounting/dismounting, enemy patrols,
 landing enemies, occupied platforms, recovery, route-choice clones and composed
-sequences, as well as the 17 action and 14 strategy families. Each supplies
+sequences, as well as the 17 action families. Each supplies
 spatial destination labels instead of button labels at the skill stage.
 
 Two dedicated families, `skill_enemy_bypass` and `skill_enemy_bypass_back`,
@@ -190,8 +190,9 @@ Tactic uses **18 families**: 14 strategy families (each of seven tactics under
 - `tactics_mixed_sequence`
 
 These compositions train tactic selection and termination across successive
-obstacles with the skill and action layers frozen. They are excluded from
-skill training and skill evaluation.
+obstacles with the skill and action layers frozen. All 18 tactic families,
+including the strategy families, are excluded from skill training and skill
+evaluation.
 
 Strategy sibling families share
 layouts but reward different routes. The hold-ground scene waits at the starting spot for 64 frames before traversing.
