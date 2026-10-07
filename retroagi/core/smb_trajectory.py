@@ -353,7 +353,7 @@ class Flight:
         return int(button)
 
 
-def plan_flight(scene, tracks, speed, destination, proposed):
+def plan_flight(scene, tracks, speed, destination, proposed=None):
     box = takeoff_box(scene)
     goal = ((box[0] + box[2]) / 2 + destination.x, box[3] + destination.y)
     direction = (destination.x > 0) - (destination.x < 0)
@@ -369,7 +369,12 @@ def plan_flight(scene, tracks, speed, destination, proposed):
         )
         if prediction.safe and prediction.reached:
             candidates.append(
-                (round(prediction.error / 4), abs(hold - proposed.frames), hold, prediction)
+                (
+                    round(prediction.error / 4),
+                    abs(hold - proposed.frames) if proposed is not None else len(prediction.steps),
+                    hold,
+                    prediction,
+                )
             )
     if not candidates:
         return None

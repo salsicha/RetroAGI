@@ -26,7 +26,9 @@ def _add_layer_args(parser: argparse.ArgumentParser) -> None:
 
     for setting in dataclasses.fields(LayeredTrainConfig):
         option = "--" + setting.name.replace("_", "-")
-        if setting.name == "families":
+        if setting.name == "learner":
+            parser.add_argument(option, choices=("skill", "tactic"), default=setting.default)
+        elif setting.name == "families":
             parser.add_argument(option, nargs="+", choices=BLOCK_SMB_MC_FAMILIES)
         elif isinstance(setting.default, tuple):
             parser.add_argument(option, nargs=len(setting.default), type=float, default=None)
@@ -77,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     exam_layer.add_argument("--checkpoint", required=True)
     exam_layer.add_argument(
         "--learner",
-        choices=("action", "skill", "tactic", "deployed"),
+        choices=("skill", "tactic", "deployed"),
         default="deployed",
         help="the layer under test (the teacher gives its token from above), or the whole agent",
     )

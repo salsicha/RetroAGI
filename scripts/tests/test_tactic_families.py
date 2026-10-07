@@ -414,7 +414,7 @@ def test_the_tactic_learner_leaves_out_the_clones():
 
 
 @pytest.mark.parametrize("split", ["train", "validation"])
-@pytest.mark.parametrize("learner", ["action", "skill", "tactic"])
+@pytest.mark.parametrize("learner", ["skill", "tactic"])
 @pytest.mark.parametrize(
     "family",
     TACTIC_TRAINING_FAMILIES,
@@ -429,12 +429,14 @@ def test_tactic_family_tasks_belong_only_to_tactic_training(learner, split, fami
     assert all(task.family == family for task in tasks)
 
 
-def test_the_action_learner_trains_only_on_single_action_families():
+def test_primitive_maneuvers_are_skill_families_without_an_action_learner():
     from retroagi.stages.block_smb.action_families import ACTION_FAMILIES
     from retroagi.stages.block_smb.layered_train import learner_families
 
-    families = learner_families("action", BLOCK_SMB_MC_FAMILIES)
-    assert families == ACTION_FAMILIES and len(families) == 17
+    families = learner_families("skill", BLOCK_SMB_MC_FAMILIES)
+    assert set(ACTION_FAMILIES) <= set(families)
+    with pytest.raises(ValueError, match="unknown learned layer"):
+        learner_families("action", BLOCK_SMB_MC_FAMILIES)
     assert not set(ACTION_FAMILIES) & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
 
 

@@ -89,17 +89,14 @@ never trains on.
 
 ## 5. Train The Layers In Block SMB
 
-Each layer starts from the run below it and only after that run met its bar
-on every family (`passed.pt`). Never pass a layer whose bar was not met.
+Skill trains first with the predictive executor. Tactic then starts from a
+skill checkpoint that met its bar on every family (`passed.pt`).
 
 ```bash
-retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
-retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
+retroagi-block-smb train-layer --learner skill --output artifacts/block_smb/skill
 retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
 ```
 
-- **Action layer:** trains on 17 isolated maneuver families, every declared
-  parameter combination every round. Inputs are spatial skill commands only.
 - **Skill layer:** trains on 45 local maneuver and supplied-tactic choice
   families, learning destinations from vision, memory, tactic and its previous
   16 choices. All tactic-training families are excluded.

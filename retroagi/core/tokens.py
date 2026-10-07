@@ -1,4 +1,4 @@
-"""Strategy context, categorical tactics, and spatial commands for action.
+"""Strategy context, categorical tactics, and spatial commands for predictive control.
 
 - The strategy is a switch, set by whoever runs the agent, not chosen by a
   layer: a StrategyToken holds what the run is for and which side the goal is
@@ -20,10 +20,10 @@
     with that platform until the tactic ends.
 - The skill layer reads the tactic and strategy context and chooses a
   run/jump/hold destination.
-- The action layer reads only that spatial command and emits an executor plan.
+- The predictive executor reads that command and visual feedback to choose buttons.
 
 In Block SMB each learner receives a teacher command from above. At play
-time the skill receives the tactic and the action receives the skill command.
+time the skill receives the tactic and the executor receives the skill command.
 """
 
 from dataclasses import dataclass
@@ -153,5 +153,5 @@ def token_layout() -> dict:
             "reference": "mario_feet_relative_pixels",
             "history": 16,
         },
-        "action_input": "skill_only_v1",
+        "executor": "predictive_spatial_v1",
     }

@@ -1,8 +1,8 @@
-"""Vision-only agent: strategy -> tactic -> spatial skill -> action -> executor.
+"""Vision-only agent: strategy -> tactic -> spatial skill -> predictive executor.
 
 At each action boundary, memory reads the scene, the option-critic checks the
 held tactic, and skill chooses a relative destination from scene, prediction,
-tactic and its 16 previous commands. Action reads only that spatial command.
+tactic and its 16 previous commands. The executor receives that target directly.
 Execution uses per-frame vision for motion, destination and hold feedback.
 Landing and destination arrival can end a plan early, and waits are rechecked
 each frame. Simulator state is never passed to these networks.
@@ -39,7 +39,6 @@ from .tokens import (
     SkillToken,
     StrategyToken,
     TacticToken,
-    encode_skill,
     encode_strategy,
     encode_tactic,
     tactic_token,
@@ -68,7 +67,7 @@ class Decision:
 
     strategy: StrategyToken  # the copy's strategy switch
     tactic: Optional[TacticToken]
-    plan: ActionPlan
+    plan: Optional[ActionPlan]
     chosen: dict  # the policy's own choice at each layer it ran, before any given token
     picks: dict = field(default_factory=dict)  # layer -> its own picks (layered_policy.choose)
     log_prob: dict = field(default_factory=dict)  # layer -> log-probability of its own picks
@@ -123,11 +122,8 @@ def decide(
     scenes already encoded, when the caller has them. ``histories``: the
     skill's own previous destinations (choice_histories).
 
-    ``given["action"][i]``, when not None, replaces the policy's ActionPlan for
-    picture i: training only. When it is given for every picture the action
-    layer does not run, unless "action" is listed in ``run_given`` (to compare
-    its choice with the given one). With "action" in ``sample`` it samples its
-    choice (training by reward); otherwise it takes the most likely.
+    ``given["action"]`` can replay an exact teacher button plan in tests and
+    teacher diagnostics. Learned policies never produce button plans.
     """
     count = len(scenes)
     given = given or {}
@@ -158,16 +154,12 @@ def decide(
     scores: dict[str, tuple] = {}
 
     def run(layer: str, above) -> None:
-        out = (
-            policy.run_action(above)
-            if layer == "action"
-            else policy.run_skill(
-                encoded(),
-                expected,
-                above,
-                (histories or {}).get("skill"),
-                strategy=_encoded(encode_strategy, switches, device),
-            )
+        out = policy.run_skill(
+            encoded(),
+            expected,
+            above,
+            (histories or {}).get("skill"),
+            strategy=_encoded(encode_strategy, switches, device),
         )
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]
@@ -179,12 +171,10 @@ def decide(
         log_prob, _ = choice_log_prob(layer, out, stacked)
         scores[layer] = (log_prob.tolist(), out["value"].tolist())
 
-    if (runs("action") or "skill" in run_given) and runs("skill"):
+    if (missing("action") or "skill" in run_given) and runs("skill"):
         run("skill", _encoded(encode_tactic, tactics, device))
     destinations = replaced("skill", chosen.get("skill", [None] * count))
-    if runs("action"):
-        run("action", _encoded(encode_skill, destinations, device))
-    plans = replaced("action", chosen.get("action", [None] * count))
+    plans = replaced("action", [None] * count)
     steps = list(tactic_steps) if tactic_steps is not None else [None] * count
     decisions = []
     for i in range(count):
@@ -525,11 +515,17 @@ class SMBAgents:
                 playing[k].hidden, playing[k].cell = remembered.hidden[j], remembered.cell[j]
                 remember_choices(playing[k], decision)
                 playing[k].decisions += 1
-                playing[k].executor.start(decision.plan, flight=playing[k].spatial.flight)
+                playing[k].executor.start(
+                    decision.plan,
+                    flight=playing[k].spatial.flight,
+                    travel=playing[k].spatial.travel,
+                )
         steps = []
         for k, copy in enumerate(playing):
             copy.button = copy.executor.press(scenes[k])
+            copy.spatial.executed(copy.button, scenes[k])
             copy.frame += 1
-            status = copy.executor.flight.status if copy.executor.flight else copy.spatial.status
+            maneuver = copy.executor.flight or copy.executor.travel
+            status = maneuver.status if maneuver else copy.spatial.status
             steps.append(AgentStep(scenes[k], rows[k], ended[k], decisions[k], copy.button, status))
         return steps

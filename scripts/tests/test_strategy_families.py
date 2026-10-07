@@ -89,7 +89,6 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "piranha_avoidance",
     }
     assert len(families) == 29
-    assert not set(families) & set(learner_families("action", BLOCK_SMB_MC_FAMILIES))
 
 
 @pytest.mark.timeout(600)

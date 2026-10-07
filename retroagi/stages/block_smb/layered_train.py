@@ -7,7 +7,6 @@ reports (core.smb_observer). The simulator is read only by the teachers
 
 Layers are trained bottom-up, one at a time, with the others frozen:
 
-- action: given only the teacher's spatial command, choose the executor plan;
 - skill: given the tactic, scene, memory prediction and 16 prior spatial
   commands, choose a destination (also trains scene encoder and scene memory);
 - tactic: reading the layout's strategy switch, hold a tactic over many
@@ -51,7 +50,6 @@ from retroagi.core.actions import SMBAction
 from retroagi.core.layered_policy import (
     CHOICE_WIDTH,
     CHOICES,
-    FRAME_BINS,
     HELD_WIDTH,
     HISTORY,
     LayeredSMBPolicy,
@@ -61,7 +59,6 @@ from retroagi.core.layered_policy import (
     encode_choice,
 )
 from retroagi.core.smb_agent import SMBAgents
-from retroagi.core.smb_executor import EXECUTOR_ACTIONS, FRAME_COUNTS, ActionPlan
 from retroagi.core.smb_observer import (
     C_SPANS,
     SEQ_LEN_A,
@@ -70,11 +67,9 @@ from retroagi.core.smb_observer import (
     VisionObserver,
     observation_layout,
 )
-from retroagi.core.smb_physics import NES_JUMP_FRAMES
 from retroagi.core.tokens import (
     TACTICS,
     TacticToken,
-    encode_skill,
     encode_strategy,
     encode_tactic,
     skill_picks,
@@ -84,10 +79,10 @@ from retroagi.core.tokens import (
 from .monte_carlo import BLOCK_SMB_MC_DIFFICULTY_BINS as DIFFICULTIES
 from .monte_carlo import BLOCK_SMB_MC_FAMILIES
 
-LEARNERS = ("action", "skill", "tactic")
+LEARNERS = ("skill", "tactic")
 # The token each learner is given from above (the tactic layer reads the
 # strategy switch, which every episode sets).
-GIVEN = {"action": "skill", "skill": "tactic", "tactic": None}
+GIVEN = {"skill": "tactic", "tactic": None}
 # The C row's scene numbers (what the memory predicts), before the unused rest.
 SCENE_NUMBERS = slice(0, C_SPANS["c_reserved"][0])
 NOOP = int(SMBAction.NOOP)
@@ -95,24 +90,16 @@ NOOP = int(SMBAction.NOOP)
 
 @dataclass
 class LayeredTrainConfig:
-    learner: str = "action"
+    learner: str = "skill"
     families: tuple[str, ...] = tuple(BLOCK_SMB_MC_FAMILIES)
     rounds: int = 12
     train_layouts_per_family: int = 8
     # Extra layouts next round for a family that lost validation episodes:
     # this many times its share of losses.
     focus_layouts: int = 8
-    # The action layer trains on a full sweep: every combination of every
-    # value of its families' drawn parameters
-    # (monte_carlo.block_smb_parameter_combinations), all of them every round,
-    # each family weighing the same in learning (focus_layouts is not used).
-    # Held-out layouts are drawn at random from the same values
-    # (monte_carlo.ParameterDraws), so each is one the sweep covers. The made
-    # layouts are kept on disk (RETROAGI_COMBINATION_CACHE, else a temporary
-    # folder), keyed by the code that makes them. False: train_layouts_per_family
-    # layouts per family drawn at random instead. The tactic layer always
-    # trains on layouts drawn at random (its families' spaces are too large).
-    sweep: bool = True
+    # Optional full parameter sweep for explicitly selected small skill
+    # families. Normal skill training samples all 45 families with focus replay.
+    sweep: bool = False
     # A family and difficulty with more combinations than this is not made: the
     # run stops and names it (its parameters need a smaller space first).
     sweep_limit: int = 20_000
@@ -228,36 +215,6 @@ class EpisodeRecord:
 # ── Labels ────────────────────────────────────────────────────────────────────
 
 
-def jump_frame_label(teacher_frames: int, holds: Sequence[int]) -> int:
-    """The frame count a jump is taught: the middle of the longest run of
-    certified holds (holds the teacher tested, local_traversal.safe_jump_holds,
-    adjacent in the order it tests them), or the teacher's own hold."""
-    menu = list(NES_JUMP_FRAMES)
-    certified = sorted(menu.index(hold) for hold in holds if hold in menu)
-    if not certified:
-        return teacher_frames
-    runs, run = [], [certified[0]]
-    for index in certified[1:]:
-        if index == run[-1] + 1:
-            run.append(index)
-        else:
-            runs.append(run)
-            run = [index]
-    runs.append(run)
-    longest = max(runs, key=len)
-    return menu[longest[(len(longest) - 1) // 2]]
-
-
-def _plan_label(plan: Optional[ActionPlan], holds) -> tuple[int, int, bool]:
-    """(action, frame bin, valid) for the action learner."""
-    if plan is None:
-        return NOOP, 0, False
-    frames = plan.frames
-    # A skill command names the endpoint of this exact plan: another certified
-    # hold can land elsewhere, so do not substitute a different duration.
-    return plan.action, FRAME_COUNTS.index(frames), True
-
-
 # ── Workers ───────────────────────────────────────────────────────────────────
 
 _WORKER: dict = {}
@@ -350,8 +307,7 @@ class _Lane:
     def ask_teacher(self, learner: str, scene) -> dict:
         """Only compute teacher destinations when consumed or needed as labels.
 
-        Action evaluation still needs the teacher's spatial input. Skill
-        evaluation only needs its tactic, unless executing a teacher choice.
+        Skill evaluation only needs its tactic, unless executing a teacher choice.
         Reads simulator state for teacher inputs and supervision only.
         """
         from .teacher_tokens import teacher_plan, teacher_skill, teacher_tactic
@@ -363,9 +319,7 @@ class _Lane:
             "holds": (),
             "plays_teacher": self.rng.random() < self.task.teacher_share,
         }
-        if learner == "action" or (
-            learner == "skill" and (self.task.label or asked["plays_teacher"])
-        ):
+        if learner == "skill" and (self.task.label or asked["plays_teacher"]):
             asked["action"], asked["holds"] = teacher_plan(
                 self.env, self.teacher, certify_holds=False
             )
@@ -385,7 +339,7 @@ class _Lane:
             d[f"pick_{head}"].append(value)
         d["log_prob"].append(decision.log_prob[learner])
         d["value"].append(decision.value[learner])
-        used = decision.plan if learner == "action" else decision.skill
+        used = decision.skill
         d["used"].append(encode_choice(learner, used).numpy())
         mine = decision.chosen[learner]
         if learner == "skill":
@@ -405,13 +359,6 @@ class _Lane:
             d["label_valid"].append(valid)
             d["agreed"].append(valid and mine == asked["skill"])
             return
-        d["given"].append(encode_skill(decision.skill).numpy())
-        action, frame_bin, valid = _plan_label(asked["action"], asked["holds"])
-        d["label_action"].append(action)
-        d["label_frames"].append(frame_bin)
-        d["label_valid"].append(valid)
-        agreed = valid and (mine.action, FRAME_COUNTS.index(mine.frames)) == (action, frame_bin)
-        d["agreed"].append(bool(agreed))
 
     def _note_tactic(self, decision) -> None:
         """The tactic learner's decision: what its layer did (TacticStep), and the
@@ -862,28 +809,24 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         return {}, {}
     e, f = d["episode"], d["frame"]
     losses = {}
-    if learner == "action":
-        # The action network cannot access observations or either memory.
-        out = policy.run_action(d["given"])
-    else:
-        a, b, c, _, _, _ = _padded(episodes, device)
-        trains_memory = rl is None
-        with torch.set_grad_enabled(trains_memory):
-            state = action_memory(policy, a, b, c, d)
-            numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
-        ends = e[1:] == e[:-1]
-        if trains_memory and ends.any():
-            predicted = numbers[:-1][ends][:, SCENE_NUMBERS]
-            actual = c[e[1:][ends], f[1:][ends]][:, SCENE_NUMBERS]
-            losses["expectation"] = expectation_weight * _weighted_mean(
-                (predicted - actual).pow(2).mean(-1), d["weight"][:-1][ends]
-            )
-        out = policy.run_skill(
-            policy.encode_scene((a[e, f], b[e, f], c[e, f])),
-            expected,
-            d["given"],
-            choice_history(d["used"], e),
+    a, b, c, _, _, _ = _padded(episodes, device)
+    trains_memory = rl is None
+    with torch.set_grad_enabled(trains_memory):
+        state = action_memory(policy, a, b, c, d)
+        numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
+    ends = e[1:] == e[:-1]
+    if trains_memory and ends.any():
+        predicted = numbers[:-1][ends][:, SCENE_NUMBERS]
+        actual = c[e[1:][ends], f[1:][ends]][:, SCENE_NUMBERS]
+        losses["expectation"] = expectation_weight * _weighted_mean(
+            (predicted - actual).pow(2).mean(-1), d["weight"][:-1][ends]
         )
+    out = policy.run_skill(
+        policy.encode_scene((a[e, f], b[e, f], c[e, f])),
+        expected,
+        d["given"],
+        choice_history(d["used"], e),
+    )
     stats = {"decisions": int(len(e))}
     imitation = 1.0 if rl is None else rl.imitation_weight
     m = d["labelled"]
@@ -894,27 +837,13 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
             if name.startswith("label_")
         }
         weight = d["weight"][m]
-        if learner == "skill":
-            for head in CHOICES["skill"]:
-                losses[head] = imitation * _weighted_mean(
-                    F.cross_entropy(out[head][m], label[head], reduction="none"), weight
-                )
-                stats[f"{head}_accuracy"] = float(
-                    (out[head][m].argmax(-1) == label[head]).float().mean()
-                )
-        else:
-            losses["action"] = imitation * _weighted_mean(
-                F.cross_entropy(out["action"][m], label["action"], reduction="none"), weight
+        for head in CHOICES["skill"]:
+            losses[head] = imitation * _weighted_mean(
+                F.cross_entropy(out[head][m], label[head], reduction="none"), weight
             )
-            frames = out["frames"][m].view(-1, len(EXECUTOR_ACTIONS), FRAME_BINS)
-            chosen = frames[torch.arange(len(frames)), label["action"]]
-            losses["frames"] = imitation * _weighted_mean(
-                F.cross_entropy(chosen, label["frames"], reduction="none"), weight
+            stats[f"{head}_accuracy"] = float(
+                (out[head][m].argmax(-1) == label[head]).float().mean()
             )
-            agree = out["action"][m].argmax(-1) == label["action"]
-            stats["action_accuracy"] = float(agree.float().mean())
-            same_length = chosen.argmax(-1) == label["frames"]
-            stats["frames_accuracy"] = float(same_length.float().mean())
     x = d["explored"]
     if rl is not None and x.any():
         picks = {head: d[f"pick_{head}"][x] for head in CHOICES[learner]}
@@ -1307,24 +1236,17 @@ def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
     """The families a learner trains and is tested on. Each layer trains only on
     families at its own level:
 
-    - Action layer: the single-action families (action_families), scenes that
-      each need one action and nothing else.
     - Skill layer: local maneuvers and supplied-tactic clones, with spatial
       destination labels. Tactic-training families are excluded.
     - Tactic layer: strategy families, scene-driven route/response families,
       composed levels and waiting/proceeding decisions.
     """
-    from .action_families import ACTION_FAMILIES
     from .tactic_families import TACTIC_TRAINING_FAMILIES
 
+    if learner not in LEARNERS:
+        raise ValueError(f"unknown learned layer {learner!r}; use skill or tactic")
     tactic_families = set(TACTIC_TRAINING_FAMILIES)
-    own = (
-        ACTION_FAMILIES
-        if learner == "action"
-        else set(BLOCK_SMB_MC_FAMILIES) - tactic_families
-        if learner == "skill"
-        else tactic_families
-    )
+    own = set(BLOCK_SMB_MC_FAMILIES) - tactic_families if learner == "skill" else tactic_families
     return tuple(f for f in families if f in own)
 
 
@@ -1418,7 +1340,7 @@ def _combination_job(job):
 
 
 def combination_tasks(config, pool) -> tuple[list[EpisodeTask], dict]:
-    """The action layer's training layouts: every combination of each family's
+    """An optional skill curriculum sweep: every combination of each family's
     drawn parameters at every difficulty (monte_carlo.block_smb_parameter_
     combinations), made once by the pool's workers. Each family weighs the
     same in learning: an episode's weight is the layouts per family on average
@@ -1523,9 +1445,9 @@ def save_layered_checkpoint(path, policy, config, trained_layers, history) -> No
 def load_layered_checkpoint(path, device="cpu"):
     """A saved policy and its checkpoint; refuses one built for other inputs or tokens.
 
-    Tactic and skill both read strategy context. An action-only checkpoint can
-    load with different strategies: tactic restarts and skill's strategy input
-    starts at zero influence. Qualified upper layers require matching strategies.
+    Tactic and skill both read strategy context. Legacy spatial checkpoints
+    discard action weights; remaining learned tensors load strictly. Untrained
+    strategy inputs may migrate, while qualified layers require matching tokens.
     """
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     if checkpoint["observation_layout"] != observation_layout():
@@ -1538,7 +1460,7 @@ def load_layered_checkpoint(path, device="cpu"):
     other_strategies = saved.get("strategies") != now["strategies"]
     if (
         saved_skill != now["skill"]
-        or saved.get("action_input") != now["action_input"]
+        or saved.get("executor", "predictive_spatial_v1") != now["executor"]
         or saved.get("executor_actions") != now["executor_actions"]
         or saved.get("tactics") != now["tactics"]
         or (
@@ -1552,6 +1474,12 @@ def load_layered_checkpoint(path, device="cpu"):
         raise ValueError(f"{path} was trained with different tokens")
     policy = LayeredSMBPolicy(PolicySettings(**checkpoint["settings"])).to(device)
     state = dict(checkpoint["state_dict"])
+    if any(name.startswith("action.") for name in state):
+        if saved.get("action_input") != "skill_only_v1":
+            raise ValueError(f"{path} has an unsupported legacy action architecture")
+        state = {name: value for name, value in state.items() if not name.startswith("action.")}
+        checkpoint.setdefault("load_migrations", []).append("removed_action_network")
+    checkpoint["trained_layers"] = [n for n in checkpoint["trained_layers"] if n in LEARNERS]
     if legacy_skill:
         # Preserve every learned tactic input exactly. New context starts at
         # zero influence, and is learned during the next skill training run.
@@ -1559,7 +1487,9 @@ def load_layered_checkpoint(path, device="cpu"):
         widened = policy.state_dict()["skill.above.weight"].clone().zero_()
         widened[:, : old.shape[1]] = old
         state["skill.above.weight"] = widened
-        checkpoint["load_migrations"] = ["skill_strategy_context_zero_initialized"]
+        checkpoint.setdefault("load_migrations", []).append(
+            "skill_strategy_context_zero_initialized"
+        )
     if other_strategies:
         fresh = policy.state_dict()
         state = {
@@ -1576,6 +1506,8 @@ def load_layered_checkpoint(path, device="cpu"):
 
 def train_layer(config: LayeredTrainConfig) -> dict:
     """Train one layer of the agent in Block SMB; returns the run summary."""
+    if config.learner not in LEARNERS:
+        raise ValueError("only skill and tactic are learned layers")
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(config.seed)
@@ -1615,7 +1547,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     validation_tasks = pool.with_scenarios(
         _tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
     )
-    sweep = config.learner == "action" and config.sweep
+    sweep = config.learner == "skill" and config.sweep
     combinations: list[EpisodeTask] = []
     if sweep:
         combinations, made = combination_tasks(config, pool)

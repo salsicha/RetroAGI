@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from retroagi.core.layered_policy import LayeredSMBPolicy, choose
-from retroagi.core.tokens import SKILL_WIDTH, SKILL_X, SKILL_Y, SkillToken, encode_skill
+from retroagi.core.tokens import SKILL_X, SKILL_Y, SkillToken, encode_skill
 from retroagi.stages.block_smb.action_families import ACTION_FAMILIES
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.env_state import snapshot_env_state
@@ -78,7 +78,7 @@ def test_new_maneuvers_are_immediate_directional_jumps_with_spatial_landings(fam
         env.close()
 
 
-@pytest.mark.parametrize("learner", ["action", "skill"])
+@pytest.mark.parametrize("learner", ["skill"])
 @pytest.mark.parametrize("label", [True, False])
 def test_teacher_collection_and_learning_use_the_new_layer_contract(learner, label, monkeypatch):
     from retroagi.core.smb_agent import SMBAgents
@@ -126,14 +126,6 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(learner, lab
                 for head in ("mode", "x", "y")
             )
             return
-        if learner == "action":
-            assert record.given.shape[1] == SKILL_WIDTH
-
-            # Training is also prohibited from reading the scene/memory.
-            def forbidden(*args, **kwargs):
-                raise AssertionError("action training read vision")
-
-            policy.scene.forward = forbidden
         losses, _ = learner_losses(policy, learner, [record], 1.0, "cpu")
         assert losses
         sum(losses.values()).backward()
@@ -157,8 +149,8 @@ def test_skill_stage_is_available_and_checkpoint_sequence_includes_it():
     from retroagi.stages.block_smb.cli import build_parser
     from retroagi.stages.block_smb.layered_train import GIVEN, LEARNERS
 
-    assert LEARNERS == ("action", "skill", "tactic")
-    assert GIVEN == {"action": "skill", "skill": "tactic", "tactic": None}
+    assert LEARNERS == ("skill", "tactic")
+    assert GIVEN == {"skill": "tactic", "tactic": None}
     assert LayeredTrainConfig(learner="skill").learner == "skill"
     assert set(ACTION_FAMILIES) <= set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert (
@@ -263,7 +255,7 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
         "skill_enemy_bypass",
         "skill_enemy_bypass_back",
     } <= families
-    assert "skill_enemy_bypass" not in learner_families("action", BLOCK_SMB_MC_FAMILIES)
+    assert "skill_enemy_bypass" in families
 
 
 def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates():

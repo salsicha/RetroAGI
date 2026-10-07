@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from retroagi.core.actions import SMBAction
-from retroagi.core.layered_policy import LayeredSMBPolicy, action_plan
+from retroagi.core.layered_policy import LayeredSMBPolicy
 from retroagi.core.smb_executor import FRAME_COUNTS, ActionPlan, SMBExecutor
 from retroagi.core.smb_observer import (
     C_SPANS,
@@ -26,13 +26,11 @@ from retroagi.core.smb_scene_labels import (
     Surface,
 )
 from retroagi.core.tokens import (
-    SKILL_WIDTH,
     TACTIC_WIDTH,
     TACTICS,
     SkillToken,
     StrategyToken,
     TacticToken,
-    encode_skill,
     encode_tactic,
     tactic_token,
 )
@@ -253,20 +251,11 @@ def test_the_agent_rechecks_waits_each_frame_without_losing_the_support_anchor()
 # ── Layers ────────────────────────────────────────────────────────────────────
 
 
-def test_the_action_layer_reads_only_the_spatial_command(monkeypatch):
-    torch.manual_seed(0)
-    policy = LayeredSMBPolicy().eval()
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("action network read vision or memory")
-
-    monkeypatch.setattr(policy.scene, "forward", forbidden)
-    monkeypatch.setattr(policy.memory, "forward", forbidden)
-    with torch.no_grad():
-        out = policy.run_action(encode_skill(SkillToken("jump", 40, -24))[None])
-        other = policy.run_action(encode_skill(SkillToken("jump", -40, -24))[None])
-    assert isinstance(action_plan({name: value[0] for name, value in out.items()}), ActionPlan)
-    assert not torch.equal(out["action"], other["action"])
+def test_policy_has_no_action_network():
+    policy = LayeredSMBPolicy()
+    assert not hasattr(policy, "action")
+    assert not hasattr(policy, "run_action")
+    assert not any(name.startswith("action.") for name in policy.state_dict())
 
 
 # ── Agent and trainer pieces ──────────────────────────────────────────────────
@@ -299,27 +288,18 @@ def test_given_tokens_replace_the_policy_only_where_given():
         assert copies == [0, 1] and len(scenes) == 2
         return {"tactic": [teacher_tactic, teacher_tactic], "action": [teacher_plan, None]}
 
-    steps = agents.act(screens, [0, 1], given=given, run_given=("action",))
+    steps = agents.act(screens, [0, 1], given=given, run_given=("skill",))
     first, second = steps[0].decision, steps[1].decision
     assert first.tactic == second.tactic == teacher_tactic
     assert first.plan == teacher_plan
-    assert second.plan == second.chosen["action"]  # not given: the policy's own
-    assert "action" in first.chosen  # run anyway, to compare with the given plan
+    assert second.skill == second.chosen["skill"]
+    assert second.plan is not None
+    assert "action" not in first.chosen and "action" not in second.chosen
     assert first.tactic_step is None  # given for every copy, so the tactic layer did not run
     # Play passes nothing: every layer's token is the policy's (strategy: the default).
     agents.reset(0)
     (alone,) = agents.act(screens[:1], [0])
     assert alone.decision.strategy.kind == "speed_run" and "tactic" in alone.decision.chosen
-
-
-def test_jumps_are_taught_the_middle_of_the_longest_certified_run():
-    from retroagi.core.smb_physics import NES_JUMP_FRAMES
-    from retroagi.stages.block_smb.layered_train import jump_frame_label
-
-    menu = list(NES_JUMP_FRAMES)
-    assert jump_frame_label(menu[0], ()) == menu[0]
-    assert jump_frame_label(menu[0], (menu[2], menu[3], menu[4], menu[9])) == menu[3]
-    assert jump_frame_label(menu[0], (menu[9],)) == menu[9]
 
 
 def _record(learner: str, frames: int = 30):
@@ -329,9 +309,8 @@ def _record(learner: str, frames: int = 30):
     rng = np.random.default_rng(0)
     rows = [policy_input(scene(mario=(100 + t, 192, 112 + t, 208))) for t in range(frames)]
     decisions = np.array([0, 10, 20], np.int32)
-    width = {"action": SKILL_WIDTH, "skill": TACTIC_WIDTH, "tactic": STRATEGY_WIDTH}[learner]
+    width = {"skill": TACTIC_WIDTH, "tactic": STRATEGY_WIDTH}[learner]
     labels = {
-        "action": {"action": np.array([1, 2, 0]), "frames": np.array([3, 0, 5])},
         "skill": {
             "mode": np.array([0, 1, 2]),
             "x": np.array([280, 216, 256]),
@@ -374,7 +353,7 @@ def _record(learner: str, frames: int = 30):
     )
 
 
-@pytest.mark.parametrize("learner", ["action", "skill", "tactic"])
+@pytest.mark.parametrize("learner", ["skill", "tactic"])
 def test_training_one_layer_leaves_every_other_part_unchanged(learner):
     from retroagi.stages.block_smb.layered_train import learner_losses
 
@@ -403,7 +382,7 @@ def test_training_one_layer_leaves_every_other_part_unchanged(learner):
 def test_reward_credit_runs_back_from_the_end():
     from retroagi.stages.block_smb.layered_train import reward_advantages
 
-    record = _record("action", frames=30)
+    record = _record("skill", frames=30)
     record.rewards = np.zeros(30, np.float32)
     record.rewards[25] = 50.0  # the goal, during the last decision's plan
     record.old_value = np.zeros(3, np.float32)
@@ -420,19 +399,19 @@ def test_reward_rounds_train_from_sampled_choices():
 
     torch.manual_seed(0)
     policy = LayeredSMBPolicy()
-    record = _record("action")
+    record = _record("skill")
     record.explored = True
     record.terminal = True
     record.rewards = np.linspace(0, 1, record.frames).astype(np.float32)
     record.old_value = np.zeros(3, np.float32)
-    record.picks = {"action": np.array([1, 2, 0]), "frames": np.array([3, 0, 5])}
+    record.picks = {head: record.labels[head] for head in ("mode", "x", "y")}
     record.old_log_prob = np.full(3, -3.0, np.float32)
     record.played_teacher = np.zeros(3, bool)
     config = LayeredTrainConfig(reward_rounds=1)
-    losses, stats = learner_losses(policy, "action", [record], 1.0, "cpu", rl=config)
-    assert {"reward", "estimate", "entropy", "action", "frames"} <= set(losses)
+    losses, stats = learner_losses(policy, "skill", [record], 1.0, "cpu", rl=config)
+    assert {"reward", "estimate", "entropy", "mode", "x", "y"} <= set(losses)
     sum(losses.values()).backward()
-    assert policy.action.value.weight.grad is not None
+    assert policy.skill.value.weight.grad is not None
 
 
 # ── Position waves and the frame window ───────────────────────────────────────
@@ -874,7 +853,7 @@ def test_a_checkpoint_with_other_tokens_is_refused_unless_only_untrained_layers_
 
     older = {**token_layout(), "strategies": old_strategies}
     loaded, _ = load_layered_checkpoint(saved(older, ["action"], "action"))
-    assert torch.equal(loaded.action.network[0].weight, policy.action.network[0].weight)
+    assert torch.equal(loaded.scene.mario.weight, policy.scene.mario.weight)
     assert loaded.tactic.above.weight.shape == policy.tactic.above.weight.shape  # fresh
     with pytest.raises(ValueError, match="different tokens"):
         load_layered_checkpoint(saved(older, ["action", "tactic"], "tactic"))

@@ -1,7 +1,7 @@
 # Layered SMB agent
 
-The runtime hierarchy is **strategy → tactic → skill → action → executor**.
-Three layers are learned. Strategy is an externally selected objective.
+The runtime hierarchy is **strategy → tactic → skill → predictive executor**.
+Two layers are learned; the executor is a controller. Strategy is an externally selected objective.
 
 ## Information passed between layers
 
@@ -11,8 +11,7 @@ Three layers are learned. Strategy is an externally selected objective.
 | Scene memory | Encoded scene at each action boundary, previous LSTM state | Predicted scene at the next boundary |
 | Tactic | Strategy, current and predicted scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
 | Skill | Tactic, strategy context, current scene, memory prediction, last 16 skill commands | Run/jump/hold mode and a relative destination `(x, y)` |
-| Action | **Only the spatial skill command** | Executor action and duration, 1–32 frames |
-| Executor | Proposed plan, destination, per-frame vision for local motion/landing/hold feedback | One of six emulator button combinations |
+| Executor | Spatial destination and per-frame vision | One of six emulator button combinations |
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
 `climb_backward`, `descend_forward`, `descend_backward`, and `hold_ground`.
@@ -30,19 +29,17 @@ The skill uses a transformer with positional encoding and a context of its
 last **16 used commands**, including teacher commands during training. History
 is newest first, marked by decision age, and reset between episodes. Its
 three output heads choose movement mode and pixel coordinates. Coordinates
-are categorical bins internally; the message delivered to action is a
+are categorical bins internally; the message delivered to the executor is a
 spatial vector (mode one-hot plus normalized x/y), not a tactic category.
 
 Strategy context distinguishes otherwise identical inputs with conflicting
 demonstrations: the same retreat or climb tactic can require different
-destinations under speed run and max points. This context never reaches the
-action network.
+destinations under speed run and max points.
 
-Action is a feed-forward network with positional features of that spatial
-vector. It cannot receive a scene, tactic, LSTM state, memory prediction, or
-choice history. Its input restriction also applies during training. Spatial
-selection and obstacle interpretation belong to skill; action translates the
-requested displacement into an executor plan.
+There is no action network. The executor retains a run target and evaluates
+short acceleration/braking trajectories every frame. Jump targets use the
+terrain/hazard predictor to select the initial hold and correct the flight.
+The controller chooses the buttons and durations; the skill chooses the target.
 
 ## Memory and timing
 
@@ -58,14 +55,14 @@ held category and age in both frames and decisions.
 
 Skill selects a destination at each action boundary. A checked jump remains
 one executor maneuver through takeoff, button release and flight to landing.
-The proposed 1–32 frames describes the jump-button hold, not the whole flight.
+The selected 1–32 frames describes the jump-button hold, not the whole flight.
 Landing interrupts a plan when the contact detector and visible support under
 Mario's feet agree. Side contact with a ledge cannot interrupt the jump.
 An airborne command following an interrupted or unchecked plan releases the
 preceding jump hold. Separate jumps always have a physical button release
 between them, even if landing interrupted the previous plan.
-Visual destination tracking can finish a run before the proposed
-duration expires.
+A run completes on arrival with low residual speed, or reports a blocked path
+or timeout. Zero-distance run targets do not produce an arbitrary directional tap.
 
 Before a grounded jump, the executor collects visual motion measurements and
 checks the full body trajectory against visible walls, ceilings, supports and
@@ -79,7 +76,7 @@ stomp to that visual track. Camera motion and a patrol reversal preserve the
 association. During the jump it predicts contact with the updated enemy
 position and velocity, and searches steering and remaining hold durations
 when the current trajectory would miss. This behavior applies to any family
-requesting a stomp, without a family name or enemy ID in the action input.
+requesting a stomp, without a family name or enemy ID in the skill command.
 An ambiguous initial target retains fixed-point execution. Losing an acquired
 track reports `lost_target`, never silently selects a different enemy, and
 does not count an ordinary floor landing as completing the stomp. Actual
@@ -95,8 +92,10 @@ is found, the executor preserves the committed maneuver and reports
 `no_safe_continuation`, rather than treating an unrelated short landing as
 success. Missing Mario observations release buttons and end the maneuver.
 This is a bounded visual model, not a guarantee about unseen terrain, future
-enemy turns or inaccurate detections. No simulator state, teacher action,
-ViT embedding or LSTM output is added to the action network's input.
+enemy turns or inaccurate detections. The executor reads decoded visual geometry and its own button history, never
+simulator state or teacher trajectories. On featureless scrolling terrain it
+dead-reckons displacement from executed buttons until landmarks return; this
+model estimate is not an independent visual measurement.
 
 The monster curriculum teacher now has an approach phase for an offscreen,
 sleeping monster. It advances only while a forward frame plus stopping distance
@@ -123,17 +122,15 @@ whether to continue holding every frame.
 
 ## Training
 
-Train **action → skill → tactic**, starting each stage from a passing lower
-checkpoint. Only the stage's parameters change:
+Train **skill → tactic**. Skill can start from scratch or a compatible warm start;
+tactic requires a qualified skill checkpoint. Only the stage's parameters change:
 
-- **Action:** the destination-to-plan network. Teacher supplies spatial skill
-  commands and exact button/duration labels; scene encoder and memories stay frozen.
 - **Skill:** scene encoder, scene memory, and skill transformer. Teacher supplies
-  the tactic and spatial destinations; action stays frozen. Skill also learns
-  the scene prediction loss.
-- **Tactic:** tactic transformer and tactic memory. Skill, action, scene encoder,
-  and scene memory stay frozen. Teacher labels tactic choice/termination and
-  return targets train the critic.
+  tactic and spatial destinations. The predictive executor executes both teacher
+  and policy targets. Skill also learns the scene prediction loss.
+- **Tactic:** tactic transformer and tactic memory. Skill, scene encoder, and
+  scene memory stay frozen. Teacher labels tactic choice/termination and return
+  targets train the critic.
 
 Teacher-controlled execution decreases across imitation rounds. Reward rounds
 use sampled choices, a clipped policy-gradient objective, and an entropy bonus.
@@ -154,12 +151,9 @@ destination already under Mario at spawn or a segment transition. Backtracking
 does not reactivate a completed destination within that segment. A generated
 skill endpoint completes a movement command, not the scenario's final goal.
 
-For a specific spatial command, action supervision preserves the exact plan's
-duration. Other certified jump holds may land elsewhere and are not substituted.
-
 ## Curriculum
 
-Action uses 17 isolated maneuver families:
+Skill includes 17 isolated maneuver families (their historical `action_` names remain):
 
 | Families | Maneuver |
 |---|---|
@@ -175,11 +169,9 @@ Action uses 17 isolated maneuver families:
 
 The new jump families certify an immediate jump through its first landing,
 without accepting a walking-off route or a retry as a successful jump.
-The action stage enumerates the declared discrete parameter space (floating
-speeds at 0.01 increments). Every generated reachable layout is played each
-round, with family-balanced losses. Rejected combinations and counts are
-recorded in `combinations.json`; enumeration is coverage of these generators,
-not all possible incoming motion or arbitrary levels.
+An optional parameter sweep remains available for explicitly selected small
+skill families. Normal training samples the full skill curriculum and adds
+extra layouts for weak families.
 
 Skill uses **45 scene families** for local destination selection: individual
 bridge holds/mounts/dismounts, enemy encounters, platform traversal, local
@@ -207,7 +199,7 @@ Tactic uses **29 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 | Scene-driven routes/responses (4) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat` |
 | Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
 
-These families teach tactic selection and termination with the skill and action
+These families teach tactic selection and termination with the skill
 layers frozen. All 29 are excluded from skill training and skill evaluation.
 Local sequences such as `platform_chain` and `stair_gap` remain skill practice
 for successive reachable destinations; individual bridge holds, mounts and
@@ -228,20 +220,19 @@ generalization test. Report complete-sweep and composed-task performance
 separately from the small validation sample.
 
 Checkpoints store observation layout, strategy/tactic vocabularies, executor
-actions, skill coordinate schema, history length, and the action input contract.
-Older tactic-to-action checkpoints are rejected even where tensor widths
-happen to match. Retrain action, then skill, then tactic for this architecture.
-Spatial checkpoints from before strategy context are migrated by appending
-zero-initialized context weights. All existing weights, including action,
-are preserved; the new context is learned in subsequent skill training.
+buttons, skill coordinate schema, history length, and predictive-executor version.
+Legacy spatial checkpoints migrate by discarding `action.*` weights while
+preserving skill, tactic, scene encoder, and memories. New checkpoints contain
+no action network and list only skill/tactic as trained layers. Incompatible
+observation or token layouts are rejected. Older skill strategy-context inputs
+can still migrate with zero-initialized added context weights.
 Validation history includes per-family end reasons and training label coverage.
 An unsuccessful single-jump landing is a terminal failed attempt, not a timeout.
 
 ```bash
-retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
-retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
+retroagi-block-smb train-layer --learner skill --output artifacts/block_smb/skill
 retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
-retroagi-block-smb exam-layer --learner action --checkpoint artifacts/block_smb/action/passed.pt
+retroagi-block-smb exam-layer --learner skill --checkpoint artifacts/block_smb/skill/passed.pt
 python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
 ```
 

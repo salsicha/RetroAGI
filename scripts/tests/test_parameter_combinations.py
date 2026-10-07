@@ -111,7 +111,7 @@ def test_each_family_weighs_the_same_in_the_action_layers_training(tmp_path, mon
     from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, combination_tasks
 
     monkeypatch.setenv("RETROAGI_COMBINATION_CACHE", str(tmp_path))
-    config = LayeredTrainConfig(learner="action", families=("action_walk", "action_jump_gap"))
+    config = LayeredTrainConfig(learner="skill", families=("action_walk", "action_jump_gap"))
     tasks, made = combination_tasks(config, _MapPool())
     sizes = {f: sum(t.family == f for t in tasks) for f in config.families}
     assert sizes == {"action_walk": 177, "action_jump_gap": 165}
@@ -127,7 +127,7 @@ def test_each_family_weighs_the_same_in_the_action_layers_training(tmp_path, mon
 def test_a_sweep_too_large_to_make_stops_the_run_and_names_the_family():
     from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, combination_tasks
 
-    config = LayeredTrainConfig(learner="action", families=("action_stomp",), sweep_limit=10)
+    config = LayeredTrainConfig(learner="skill", families=("action_stomp",), sweep_limit=10)
     with pytest.raises(ValueError, match="action_stomp"):
         combination_tasks(config, _MapPool())
 

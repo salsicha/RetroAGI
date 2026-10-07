@@ -2,7 +2,7 @@
 
 A vision-based hierarchical agent for Super Mario Bros.
 
-The hierarchy is **strategy → tactic → skill → action → executor**:
+The hierarchy is **strategy → tactic → skill → predictive executor**:
 
 1. **Strategy:** externally selected `speed_run` or `max_points` objective.
 2. **Tactic:** persistent option-critic choosing advance, retreat, climb or
@@ -11,9 +11,8 @@ The hierarchy is **strategy → tactic → skill → action → executor**:
 3. **Skill:** reads the tactic, strategy context, ViT scene, LSTM prediction and its last 16
    spatial commands. Chooses a run/jump/hold mode and a destination relative
    to Mario's feet.
-4. **Action:** reads only that spatial command and chooses an executor action
-   and duration. It receives no ViT or LSTM input.
-5. **Executor:** uses per-frame vision to track destinations and hold a spot
+4. **Executor:** predicts movement, chooses buttons and jump duration, brakes
+   on arrival, tracks moving stomp targets, and holds a spot
    relative to a moving platform. Waits are reconsidered every frame so a
    departure window cannot disappear inside a long hold plan.
 
@@ -29,25 +28,23 @@ strategy → tactic (option-critic)        │
                        ↑ current scene + last 16 skill commands
                        │
                        ↓ relative spatial destination + movement mode
-                     action
-                       ↓ executor plan
-                     executor ← per-frame vision for hold/landing
+                     predictive executor ← per-frame vision + button history
                        ↓ buttons
 ```
 
-Training proceeds **action → skill → tactic**, freezing lower layers. Action
-uses 17 isolated maneuver families, including left/right jumps onto raised
-platforms and enemies and down to lower levels. Skill uses 45 scene families
-for local destination selection and following supplied tactics, including
-enemy bypass, platform traversal, individual bridge maneuvers and choice clones.
+Training proceeds **skill → tactic**, freezing lower layers. The executor has
+no learned weights. Skill uses 45 scene families for local destination selection
+and following supplied tactics. These include 17 isolated maneuvers, enemy
+bypass, platform traversal, individual bridge maneuvers and choice clones.
 Tactic uses 29 families for strategy-dependent selection and termination:
 14 strategy families, eight composed levels, four scene-driven route/response
 families and three waiting/proceeding families. These are excluded from skill
-training and evaluation. The action stage sweeps every declared discrete
-parameter combination; the higher stages sample their scene families.
+training and evaluation. Both learned stages sample their scene families; an
+optional parameter sweep supports selected small skill families.
 
-Existing checkpoints from the direct tactic-to-action architecture are
-incompatible. Train fresh action weights, then skill and tactic.
+Legacy spatial-skill checkpoints warm-start by discarding the action network
+and preserving skill, tactic, scene encoder, and memory weights. No action
+training or action checkpoint is required.
 
 See [the architecture and training guide](docs/layered-agent.md) for exact
 inputs, outputs, timing, curriculum, qualification gates and known limits.
@@ -108,8 +105,7 @@ checkout to a trained agent. In short:
    their trainers and their measurements.
 2. Train the layers in Block SMB, each starting from the run below it:
    ```bash
-   retroagi-block-smb train-layer --learner action --output artifacts/block_smb/action
-   retroagi-block-smb train-layer --learner skill --init artifacts/block_smb/action/passed.pt --output artifacts/block_smb/skill
+   retroagi-block-smb train-layer --learner skill --output artifacts/block_smb/skill
    retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
    ```
    `passed.pt` is the best round that met the layer's bar on every family;

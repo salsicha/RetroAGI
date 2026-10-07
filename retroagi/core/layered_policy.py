@@ -1,13 +1,12 @@
-"""Three learned layers: tactic, spatial skill, and destination-only action.
+"""Two learned layers: tactic and spatial skill, followed by predictive control.
 
 Vision and an LSTM scene prediction feed the skill transformer, alongside its
 categorical tactic and the last 16 spatial commands. The skill emits a run,
-jump or hold command with a destination relative to Mario's feet. Only this
-command reaches the action network; it has no scene or memory input.
+jump or hold command with a destination relative to Mario's feet. This
+command goes directly to the visual predictive executor.
 
 Tactics remain persistent options with a termination head, critic, strategy
-switch and their own recurrent context. The executor applies timed button
-plans and uses per-frame vision for closed-loop hold-ground control.
+switch and their own recurrent context. The executor chooses buttons with per-frame visual feedback.
 """
 
 import math
@@ -17,7 +16,6 @@ from typing import Mapping, Optional
 import torch
 import torch.nn as nn
 
-from .smb_executor import EXECUTOR_ACTIONS, FRAME_COUNTS, ActionPlan
 from .smb_observer import (
     _SLOT_WIDTH,
     C_SPANS,
@@ -44,15 +42,13 @@ from .tokens import (
 )
 
 # The learned layers, top-down; the strategy above them is a switch.
-LAYERS = ("tactic", "skill", "action")
+LAYERS = ("tactic", "skill")
 # The layers whose context holds their own last HISTORY choices (the tactic
 # layer has its own memory network instead).
 HISTORY_LAYERS = ("skill",)
-FRAME_BINS = len(FRAME_COUNTS)  # the action layer's frame-count choices, per action
 # Each layer's context holds its own last HISTORY choices (the ones used).
 HISTORY = 16
-ACTION_WIDTH = len(EXECUTOR_ACTIONS) + FRAME_BINS
-CHOICE_WIDTH = {"tactic": TACTIC_WIDTH, "skill": SKILL_WIDTH, "action": ACTION_WIDTH}
+CHOICE_WIDTH = {"tactic": TACTIC_WIDTH, "skill": SKILL_WIDTH}
 # A held (or just ended) tactic as numbers: one-hot tactic with a last slot for
 # "none", then how long it has been held: log(1 + actions) / log(1 + 64) and
 # log(1 + frames) / log(1 + 1024).
@@ -68,17 +64,9 @@ def held_features(stance: Optional[str], actions: int = 0, frames: int = 0) -> t
     return vector
 
 
-def encode_plan(plan: ActionPlan) -> torch.Tensor:
-    """[ACTION_WIDTH]: one-hot button action, then one-hot frame count (1 to 32)."""
-    vector = torch.zeros(ACTION_WIDTH)
-    vector[plan.action] = 1.0
-    vector[len(EXECUTOR_ACTIONS) + FRAME_COUNTS.index(plan.frames)] = 1.0
-    return vector
-
-
 def encode_choice(layer: str, choice) -> torch.Tensor:
-    """A layer's choice (token or ActionPlan) as numbers: what its history holds."""
-    return {"tactic": encode_tactic, "skill": encode_skill, "action": encode_plan}[layer](choice)
+    """A layer's token as numbers: what its history holds."""
+    return {"tactic": encode_tactic, "skill": encode_skill}[layer](choice)
 
 
 @dataclass(frozen=True)
@@ -450,43 +438,13 @@ class TacticLayer(_Layer):
         return out
 
 
-class DestinationActionLayer(nn.Module):
-    """Map a relative destination to a plan, without vision or recurrent inputs."""
-
-    def __init__(self, settings):
-        super().__init__()
-        self.waves = PositionWaves(
-            (SKILL_WIDTH - 2, SKILL_WIDTH - 1), settings.position_frequencies
-        )
-        self.network = nn.Sequential(
-            nn.Linear(SKILL_WIDTH + self.waves.extra_width(), settings.width),
-            nn.GELU(),
-            nn.Linear(settings.width, settings.width),
-            nn.GELU(),
-        )
-        self.heads = nn.ModuleDict(
-            {
-                "action": nn.Linear(settings.width, len(EXECUTOR_ACTIONS)),
-                "frames": nn.Linear(settings.width, len(EXECUTOR_ACTIONS) * FRAME_BINS),
-            }
-        )
-        self.value = nn.Linear(settings.width, 1)
-
-    def forward(self, destination):
-        hidden = self.network(self.waves(destination))
-        out = {name: head(hidden) for name, head in self.heads.items()}
-        out["value"] = self.value(hidden.detach()).squeeze(-1)
-        return out
-
-
 class LayeredSMBPolicy(nn.Module):
-    """The three layers, scene encoder and two memories.
+    """The two learned layers, scene encoder and two memories.
 
     When the executor's plan has ended: remember() steps the action memory with
     the latest picture, expect() gives its expected scene, the tactic layer
     checks its held tactic (and, when it ends, recall() steps the tactic memory
-    and the layer chooses the next), and the action layer runs (smb_agent) to
-    choose the next ActionPlan.
+    and the layer chooses the next), and the skill layer chooses the executor's next destination.
     """
 
     def __init__(self, settings: PolicySettings = PolicySettings()):
@@ -503,11 +461,9 @@ class LayeredSMBPolicy(nn.Module):
             SKILL_WIDTH,
             choice_positions=(len(SKILL_MODES), len(SKILL_MODES) + 1),
         )
-        self.action = DestinationActionLayer(settings)
 
     def parameters_of(self, layer: str):
         modules = {
-            "action": (self.action,),
             "skill": (self.scene, self.memory, self.skill),
             "tactic": (self.tactic, self.tactic_memory),
         }[layer]
@@ -573,47 +529,27 @@ class LayeredSMBPolicy(nn.Module):
             tactic = torch.cat((tactic, strategy), dim=-1)
         return self.skill(scene_tokens, present, expected, tactic, history)
 
-    def run_action(self, destination):
-        """Only the skill's spatial command reaches this network."""
-        return self.action(destination)
-
 
 # ── Choosing from the outputs ─────────────────────────────────────────────────
 #
-# Each layer's choice is a few categorical picks, named by its heads: tactic
-# (tactic; its direction follows from it) and action (action, frames: the
-# frame-count bin on the chosen action's menu). ``choose`` picks them for one picture, the most likely or
-# sampled; ``choice_log_prob`` scores picks for a batch (training).
+# Each learned layer emits categorical token fields.
 
 CHOICES = {
     "tactic": ("tactic",),
-    "action": ("action", "frames"),
     "skill": ("mode", "x", "y"),
 }
 
 
-def _distributions(layer: str, out: Mapping[str, torch.Tensor], chosen_action=None) -> dict:
-    """Batched distributions of a layer's picks; ``frames`` needs the chosen actions."""
-    found = {}
-    for head in CHOICES[layer]:
-        if head == "frames":
-            rows = out["frames"].view(-1, len(EXECUTOR_ACTIONS), FRAME_BINS)
-            index = torch.arange(rows.shape[0], device=rows.device)
-            found[head] = torch.distributions.Categorical(logits=rows[index, chosen_action])
-        else:
-            found[head] = torch.distributions.Categorical(logits=out[head])
-    return found
+def _distributions(layer: str, out: Mapping[str, torch.Tensor]) -> dict:
+    return {head: torch.distributions.Categorical(logits=out[head]) for head in CHOICES[layer]}
 
 
 def choose(layer: str, out: Mapping[str, torch.Tensor], *, sample: bool = False):
-    """One picture's raw layer outputs -> (its token or ActionPlan, the picks)."""
+    """One picture's raw layer outputs -> (its token, the picks)."""
     batched = {name: value.unsqueeze(0) for name, value in out.items()}
     picks: dict[str, int] = {}
     for head in CHOICES[layer]:
-        action = torch.tensor([picks["action"]]) if head == "frames" else None
-        if action is not None:
-            action = action.to(out["frames"].device)
-        distribution = _distributions(layer, batched, action)[head]
+        distribution = _distributions(layer, batched)[head]
         if sample:
             value = distribution.sample()
         else:
@@ -629,12 +565,12 @@ def token_from_picks(layer: str, picks: Mapping[str, int]):
         return TACTICS[picks["tactic"]]
     if layer == "skill":
         return SkillToken(SKILL_MODES[picks["mode"]], SKILL_X[picks["x"]], SKILL_Y[picks["y"]])
-    return ActionPlan(picks["action"], FRAME_COUNTS[picks["frames"]])
+    raise ValueError(f"unknown learned layer {layer!r}")
 
 
 def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[str, torch.Tensor]):
     """Log-probability [B] of batched picks under a layer's outputs, and the entropy [B]."""
-    distributions = _distributions(layer, out, picks.get("action"))
+    distributions = _distributions(layer, out)
     log_prob = entropy = 0.0
     for head in CHOICES[layer]:
         value = picks[head].long()
@@ -643,13 +579,8 @@ def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[
     return log_prob, entropy
 
 
-def action_plan(out, *, sample: bool = False) -> ActionPlan:
-    return choose("action", out, sample=sample)[0]
-
-
 __all__ = [
     "DEFAULT_STRATEGY",
-    "FRAME_BINS",
     "HELD_WIDTH",
     "LAYERS",
     "LayeredSMBPolicy",
@@ -660,7 +591,6 @@ __all__ = [
     "CHOICES",
     "TacticLayer",
     "TacticMemory",
-    "action_plan",
     "choice_log_prob",
     "choose",
     "encode_strategy",
