@@ -1,4 +1,4 @@
-"""Bounded visual jump planning. No simulator, teacher, object IDs or RAM.
+"""Bounded visual jump planning. No simulator state, teacher targets or game IDs.
 
 Predictions use observed rectangles and constant object velocity over one jump.
 They are rechecked on every picture; they are not a guarantee about unseen
@@ -57,12 +57,31 @@ class VisualTracks:
             track = Track(box, kind)
             if matches and (len(matches) == 1 or matches[1][0] - matches[0][0] > 1):
                 _, i, dx, dy = matches[0]
-                used.add(i)
                 old = self.tracks[i]
+                # Do not let observation order transfer a target identity to
+                # a neighbour when two visible objects both match this track.
+                competitors = sorted(
+                    abs(other[0] - old.box[0] + scroll) + abs(other[1] - old.box[1])
+                    for other, other_kind in objects
+                    if other_kind == kind
+                    and abs(other[0] - old.box[0] + scroll) <= 8
+                    and abs(other[1] - old.box[1]) <= 8
+                )
+                if len(competitors) > 1 and competitors[1] - competitors[0] <= 1:
+                    updated.append(track)
+                    continue
+                if abs(dx) + abs(dy) != competitors[0]:
+                    updated.append(track)
+                    continue
+                used.add(i)
                 velocity = old.velocity
                 reversed_course = velocity is not None and any(
                     abs(v) > 0.1 and delta * v < 0 for delta, v in zip((dx, dy), velocity)
                 )
+                # Preserve this visual identity across motion and reversals.
+                # Flights may hold a reference to this particular walker.
+                track = old
+                track.box = box
                 track.samples = ([] if reversed_course else old.samples) + [(dx, dy)]
                 track.samples = track.samples[-32:]
             updated.append(track)
@@ -115,9 +134,10 @@ class Prediction:
     error: float
     steps: list
     reason: str
+    target: Track | None = None
 
 
-def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False):
+def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False, target=None):
     """Sweep Mario's body through terrain and forecast object positions.
 
     Resolve wall/ceiling contacts, rather than pretending every flight is an
@@ -192,11 +212,15 @@ def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False
                     hazard.kind == "walker"
                     and dy > 0
                     and old[3] <= (now[1] + now[3]) / 2
-                    and abs(goal[1] - now[1]) <= 8
-                    and now[0] - 4 <= goal[0] <= now[2] + 4
+                    and (
+                        hazard is target
+                        if target is not None
+                        else abs(goal[1] - now[1]) <= 8 and now[0] - 4 <= goal[0] <= now[2] + 4
+                    )
                 )
                 if intended_stomp:
-                    return Prediction(True, True, abs(x + w / 2 - goal[0]), steps, "stomp")
+                    aim = (now[0] + now[2]) / 2 if target is not None else goal[0]
+                    return Prediction(True, True, abs(x + w / 2 - aim), steps, "stomp", hazard)
                 return Prediction(False, False, float("inf"), steps, "hazard")
         if landed:
             # Reaching the point a frame before an enemy arrives is not a safe
@@ -220,7 +244,9 @@ def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False
                     if overlap(arrival, enemy):
                         return Prediction(False, False, float("inf"), steps, "unsafe_arrival")
             error = abs(x + w / 2 - goal[0]) + 2 * abs(y + h - goal[1])
-            return Prediction(True, error <= POSITION_TOLERANCE, error, steps, "landed")
+            return Prediction(
+                True, target is None and error <= POSITION_TOLERANCE, error, steps, "landed"
+            )
         if y > 256:
             break
     return Prediction(False, False, float("inf"), steps, "no_visible_landing")
@@ -240,6 +266,7 @@ class Flight:
     done: bool = False
     status: str = "checked"
     released: bool = False
+    target: Track | None = None
 
     def shift(self, scroll):
         self.goal = (self.goal[0] - scroll, self.goal[1])
@@ -260,13 +287,20 @@ class Flight:
             self.direction,
             remaining,
             grounded=self.elapsed == 0,
+            target=self.target,
         )
-        if not check.safe:
+        target_visible = self.target is None or any(t is self.target for t in self.tracks.tracks)
+        if not check.safe or (self.target is not None and not check.reached):
             alternatives = []
             # Steering can change within this same maneuver. A released jump
             # stays released, including after a missing/unsafe observation.
             for direction in (-1, 0, 1):
-                for hold in {0, remaining, max(0, 32 - self.elapsed) if not self.released else 0}:
+                holds = (
+                    range(max(0, 32 - self.elapsed) + 1)
+                    if self.target is not None and not self.released and target_visible
+                    else {0, remaining, max(0, 32 - self.elapsed) if not self.released else 0}
+                )
+                for hold in holds:
                     candidate = predict(
                         scene,
                         self.tracks.tracks,
@@ -276,6 +310,7 @@ class Flight:
                         direction,
                         hold,
                         grounded=self.elapsed == 0,
+                        target=self.target,
                     )
                     if candidate.safe and candidate.reached:
                         alternatives.append(
@@ -296,6 +331,15 @@ class Flight:
                 # it lands before the approaching enemy arrives. Never choose
                 # an unrelated early landing or cut a committed jump blindly.
                 self.status = "no_safe_continuation"
+        if self.target is not None:
+            if not target_visible:
+                # A lost/ambiguous track is not a stomp and cannot be silently
+                # replaced by another enemy. Continue the physical maneuver.
+                self.status = "lost_target"
+            elif check.reason == "stomp":
+                vx, vy = self.target.velocity or (0, 0)
+                contact = translated(self.target.box, vx * len(check.steps), vy * len(check.steps))
+                self.goal = ((contact[0] + contact[2]) / 2, contact[1])
         self.prediction = check
         if check.steps:
             _, self.motion, button = check.steps[0]
@@ -330,4 +374,9 @@ def plan_flight(scene, tracks, speed, destination, proposed):
     if not candidates:
         return None
     _, _, hold, prediction = min(candidates, key=lambda c: c[:3])
-    return Flight(goal, motion, direction, hold, prediction, tracks)
+    target = prediction.target
+    if target is not None and any(c[3].target is not target for c in candidates):
+        # The spatial command does not uniquely identify an enemy. Keep the
+        # fixed-point behavior instead of locking onto an arbitrary walker.
+        target = None
+    return Flight(goal, motion, direction, hold, prediction, tracks, target=target)

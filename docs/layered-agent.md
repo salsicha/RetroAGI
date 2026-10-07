@@ -74,6 +74,17 @@ the shared NES motion model. It forecasts tracked objects from camera-corrected
 visual motion, includes uncertainty for lethal hazards, and checks eight frames
 after arrival for an approaching enemy. Walker stomps are allowed when the
 destination identifies the predicted contact; monsters cannot be stomped.
+When the accepted trajectories identify one walker, the executor binds the
+stomp to that visual track. Camera motion and a patrol reversal preserve the
+association. During the jump it predicts contact with the updated enemy
+position and velocity, and searches steering and remaining hold durations
+when the current trajectory would miss. This behavior applies to any family
+requesting a stomp, without a family name or enemy ID in the action input.
+An ambiguous initial target retains fixed-point execution. Losing an acquired
+track reports `lost_target`, never silently selects a different enemy, and
+does not count an ordinary floor landing as completing the stomp. Actual
+contact still comes from visual landing feedback and the scenario's stomp
+event; a predicted interception alone cannot complete an objective.
 An unverified takeoff waits and exposes `observing_motion` or
 `no_safe_trajectory` through `AgentStep.execution_status`.
 
@@ -135,6 +146,13 @@ state. A jump command targets the first landing/stomp; a run command targets
 the endpoint of its bounded movement. A hold command targets the current spot.
 Uncertified recovery states are not used as skill demonstrations. The teacher
 can read simulator state during training; deployed networks cannot.
+
+Scenario completion is checked every simulation frame: reaching the final
+goal ends the episode immediately once its required contact and task conditions
+are met. Intermediate route destinations are retired on arrival, including a
+destination already under Mario at spawn or a segment transition. Backtracking
+does not reactivate a completed destination within that segment. A generated
+skill endpoint completes a movement command, not the scenario's final goal.
 
 For a specific spatial command, action supervision preserves the exact plan's
 duration. Other certified jump holds may land elsewhere and are not substituted.

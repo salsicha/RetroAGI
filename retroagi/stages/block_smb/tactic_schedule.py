@@ -4,6 +4,8 @@ Every Block SMB layout carries ``scenario["tactics"]``, a list of segments
 played in order. The simulator follows it every frame (``track``):
 
 - the goal counts only once Mario is in the last segment;
+- reached route destinations are consumed immediately and never reactivated
+  by backtracking within that segment;
 - standing on a platform the current segment forbids ends the episode as a
   loss (Mario took the wrong path);
 - leaving a hold segment's area before the segment ends is also a loss.
@@ -149,6 +151,7 @@ def _begin(env) -> None:
         else 0
     )
     env._route_done = 0
+    _consume_route(env)
 
 
 _ADVANCE = None
@@ -167,6 +170,14 @@ def current(env) -> dict:
 def _support_index(env) -> Optional[int]:
     support = env.mario.get("_platform") if env.mario["on_ground"] else None
     return next((i for i, p in enumerate(env.platforms) if p is support), None)
+
+
+def _consume_route(env) -> None:
+    """Retire reached route destinations without resurrecting completed ones."""
+    on = _support_index(env)
+    route = current(env).get("route", ())
+    if on is not None and on in route:
+        env._route_done = max(env._route_done, route.index(on) + 1)
 
 
 def _over(env, seg: dict) -> bool:
@@ -200,11 +211,7 @@ def track(env) -> bool:
     (stood on a forbidden platform, or left a hold area early)."""
     seg = current(env)
     on = _support_index(env)
-    route = seg.get("route", ())
-    if on is not None and on in route:
-        # Standing on a route platform, the rest of the route starts after it
-        # (also after slipping back onto an earlier one).
-        env._route_done = route.index(on) + 1
+    _consume_route(env)
     if on is not None and on in seg.get("forbidden", ()):
         env._off_route = True
     if any(env.enemies[i]["dead"] for i in seg.get("keep_alive", ())):
@@ -222,20 +229,12 @@ def track(env) -> bool:
     while env._tactic_index < len(env._tactics) - 1 and _over(env, current(env)):
         env._tactic_index += 1
         _begin(env)
-        # The new segment's route may already be under Mario's feet.
-        seg = current(env)
-        if on is not None and on in seg.get("route", ())[:1]:
-            env._route_done = 1
     # The camera is a physical left boundary. Once an overshoot has scrolled
     # a required retreat line offscreen, repeatedly requesting that retreat
     # can never complete it. End the failed route instead of collecting
     # hundreds of unlabelled, unrecoverable recovery decisions.
     seg = current(env)
-    if (
-        seg["direction"] < 0
-        and "reach_x" in seg["end"]
-        and seg["end"]["reach_x"] < env.camera_x
-    ):
+    if seg["direction"] < 0 and "reach_x" in seg["end"] and seg["end"]["reach_x"] < env.camera_x:
         env._off_route = True
     return env._off_route
 

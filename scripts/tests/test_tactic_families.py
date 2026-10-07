@@ -138,6 +138,85 @@ def test_segments_end_in_order_and_routes_follow_the_platform_underfoot():
         segment("charge", 1)
 
 
+def test_completed_route_destinations_do_not_return_after_backtracking():
+    env = MarioScenarioEnv()
+    try:
+        env.reset(
+            scenario=_flat(
+                [segment("advance", route=[1, 2, 3])],
+                platforms=[
+                    [0, 220, 80, 20],
+                    [80, 220, 60, 20],
+                    [140, 220, 110, 20],
+                    [250, 220, 150, 20],
+                ],
+            )
+        )
+        while env.mario["x"] < 160:
+            assert not env.step(1)[2]
+        assert tactic_schedule.next_route_platform(env) == 3
+        while env.mario["x"] > 110:
+            assert not env.step(3)[2]
+        assert env.mario["_platform"] is env.platforms[1]
+        assert tactic_schedule.next_route_platform(env) == 3
+    finally:
+        env.close()
+
+
+def test_destination_under_spawn_is_consumed_before_the_first_decision():
+    env = MarioScenarioEnv()
+    try:
+        env.reset(
+            scenario=_flat(
+                [segment("advance", route=[0, 1])],
+                platforms=[[0, 220, 80, 20], [80, 220, 320, 20]],
+            )
+        )
+        assert env.steps == 0
+        assert tactic_schedule.next_route_platform(env) == 1
+    finally:
+        env.close()
+
+
+def test_segment_completion_exposes_the_next_objective_on_the_same_frame():
+    env = MarioScenarioEnv()
+    try:
+        env.reset(
+            scenario=_flat(
+                [
+                    segment("advance", route=[1], on=1),
+                    segment("advance", route=[0, 1, 2]),
+                ],
+                platforms=[[0, 220, 80, 20], [80, 220, 60, 20], [140, 220, 260, 20]],
+            )
+        )
+        while env._tactic_index == 0:
+            assert not env.step(1)[2]
+        assert env.mario["_platform"] is env.platforms[1]
+        assert tactic_schedule.next_route_platform(env) == 2
+    finally:
+        env.close()
+
+
+def test_final_destination_ends_the_scenario_on_its_first_contact_frame():
+    env = MarioScenarioEnv()
+    try:
+        scenario = _flat([segment("advance")])
+        scenario["goal"] = [60, 200, 16, 20]
+        env.reset(scenario=scenario)
+        for _ in range(100):
+            _, _, done, _, _ = env.step(1)
+            contact = env.mario["x"] + env.mario["w"] > env.goal.left
+            assert done == contact
+            if done:
+                assert env._goal_credited
+                break
+        else:
+            pytest.fail("Mario never reached the destination")
+    finally:
+        env.close()
+
+
 def test_the_monster_cannot_be_stomped_is_the_other_kind_and_wakes_on_screen():
     monster = {
         "kind": "monster",
