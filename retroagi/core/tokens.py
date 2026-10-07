@@ -153,5 +153,5 @@ def token_layout() -> dict:
             "reference": "mario_feet_relative_pixels",
             "history": 16,
         },
-        "executor": "predictive_spatial_v1",
+        "executor": "predictive_spatial_v2",
     }

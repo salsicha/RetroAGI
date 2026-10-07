@@ -1453,6 +1453,14 @@ def load_layered_checkpoint(path, device="cpu"):
     if checkpoint["observation_layout"] != observation_layout():
         raise ValueError(f"{path} was trained on a different observation layout")
     saved, now = checkpoint["token_layout"], token_layout()
+    old_executor = saved.get("executor", "predictive_spatial_v1") == "predictive_spatial_v1"
+    if old_executor:
+        # Tensor schemas are unchanged, but old fragment-target qualifications
+        # do not certify whole-maneuver execution. Keep weights for warm start.
+        checkpoint["trained_layers"] = []
+        checkpoint.setdefault("load_migrations", []).append(
+            "maneuver_targets_require_requalification"
+        )
     saved_skill = dict(saved.get("skill") or {})
     legacy_skill = "strategy_context" not in saved_skill
     if legacy_skill:
@@ -1460,7 +1468,7 @@ def load_layered_checkpoint(path, device="cpu"):
     other_strategies = saved.get("strategies") != now["strategies"]
     if (
         saved_skill != now["skill"]
-        or saved.get("executor", "predictive_spatial_v1") != now["executor"]
+        or (not old_executor and saved.get("executor") != now["executor"])
         or saved.get("executor_actions") != now["executor_actions"]
         or saved.get("tactics") != now["tactics"]
         or (

@@ -327,30 +327,81 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Skill
     """A spatial destination for the next maneuver, from the teacher's rollout.
 
     A jump targets its landing/stomp, not its takeoff or a hidden object ID.
-    Run targets the end of the next bounded movement. The probe is restored
-    exactly; only this resulting command reaches an action learner.
+    Runs end at an objective, support transition or bounded travel waypoint.
+    An upcoming jump includes its approach in the same destination. The probe
+    is restored exactly; only the spatial command reaches the executor.
     """
     from retroagi.core.smb_coaching import probe_state
 
-    if plan is not None and plan.action == HOLD_GROUND:
+    if plan is not None and (
+        plan.action == HOLD_GROUND or (plan.action == SMBAction.NOOP and env.mario["on_ground"])
+    ):
         return SkillToken("hold", 0, 0)
     start_x = env.mario["x"] + env.mario["w"] / 2
     start_y = env.mario["y"] + env.mario["h"]
     route = _remembered_route(env, state) if plan is not None else None
     mode = "jump" if plan is not None and plan.action in SMB_JUMP_ACTIONS else "run"
     if route:
+        from .tactic_schedule import _support_index
+
         with probe_state(env):
             airborne = not env.mario["on_ground"]
-            limit = 160 if mode == "jump" else plan.frames
-            for action in route[:limit]:
+            mark = (env._tactic_index, env._route_done)
+            support = _support_index(env)
+            platforms = [p["rect"].copy() for p in env.platforms]
+            riding = (
+                support is not None
+                and env.platforms[support].get("moving")
+                and env.mario["x"] >= platforms[support].left + 4
+            )
+            for index, action in enumerate(route[:160]):
+                # Label a whole maneuver, including its approach, rather than
+                # an acceleration fragment whose endpoint assumes momentum.
+                # A ride/wait starts a new command. Passive platform carry
+                # must not become a ground waypoint that chases world motion.
+                if mode == "run" and index and action == SMBAction.NOOP and not riding:
+                    break
+                if action in SMB_JUMP_ACTIONS:
+                    mode = "jump"
                 _, _, done, _, _ = env.step(action)
                 airborne = airborne or not env.mario["on_ground"]
-                if done or (
-                    mode == "jump" and airborne and (env.mario["on_ground"] or env.stomped)
-                ):
+                landed = airborne and (env.mario["on_ground"] or env.stomped)
+                objective = (env._tactic_index, env._route_done) != mark
+                on = _support_index(env)
+                boarded = (
+                    on != support
+                    and on is not None
+                    and env.platforms[on].get("moving")
+                    and env.mario["x"] >= env.platforms[on]["rect"].left + 4
+                    and env.mario["x"] + env.mario["w"] <= env.platforms[on]["rect"].right - 4
+                )
+                dismounted = (
+                    support is not None
+                    and env.platforms[support].get("moving")
+                    and on is not None
+                    and not env.platforms[on].get("moving")
+                    and env.mario["x"] >= env.platforms[on]["rect"].left + 4
+                    and env.mario["x"] + env.mario["w"] <= env.platforms[on]["rect"].right - 4
+                )
+                if done or landed or objective or boarded or dismounted:
                     break
+                if mode == "run" and index >= 63 and not riding:
+                    # A barely overlapping collision box is not a stable
+                    # waypoint. Finish stepping onto the support before the
+                    # executor brakes or vision chooses the wrong support.
+                    if on is not None and (
+                        env.mario["x"] >= env.platforms[on]["rect"].left + 4
+                        and env.mario["x"] + env.mario["w"] <= env.platforms[on]["rect"].right - 4
+                    ):
+                        break
             x = env.mario["x"] + env.mario["w"] / 2 - start_x
             y = env.mario["y"] + env.mario["h"] - start_y
+            on = _support_index(env)
+            if mode == "run" and on is not None and env.platforms[on].get("moving"):
+                # Express the landing/boarding point on the support as seen
+                # NOW. Runtime tracks that visual support; no IDs are passed.
+                x -= env.platforms[on]["rect"].left - platforms[on].left
+                y -= env.platforms[on]["rect"].top - platforms[on].top
     else:
         # Unlabelled recovery state: provide a local destination so collection
         # can continue, but do not treat it as a certified skill demonstration.

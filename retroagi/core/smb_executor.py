@@ -76,6 +76,9 @@ class GroundHold:
             return int(SMBAction.NOOP)
         x0, _, x1, feet = scene.mario.box
         center = (x0 + x1) / 2
+        from .smb_spatial_feedback import moving_support
+
+        on_moving = moving_support(scene) is not None
         # Compact moving-platform boxes preserve the platform edges even where
         # Mario covers part of the surface. Fall back to reported surfaces.
         moving = [Surface(b[0], b[2], b[1], True) for b in scene.moving_platforms]
@@ -90,10 +93,7 @@ class GroundHold:
             candidates = [
                 s
                 for s in surfaces
-                if s.x0 < x1
-                and s.x1 > x0
-                and abs(s.top - feet) <= 4
-                and s.moving == (scene.mario.support == "moving_platform")
+                if s.x0 < x1 and s.x1 > x0 and abs(s.top - feet) <= 4 and s.moving == on_moving
             ]
             if scene.mario.support == "air" or not candidates:
                 return int(SMBAction.NOOP)

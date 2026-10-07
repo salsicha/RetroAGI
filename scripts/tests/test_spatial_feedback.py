@@ -206,3 +206,20 @@ def test_scrolling_past_a_required_retreat_ends_the_unrecoverable_episode():
         assert not env._goal_credited
     finally:
         env.close()
+
+
+def test_clipped_bridge_uses_its_visible_edge_for_player_relative_speed():
+    from retroagi.core.smb_scene_labels import MarioView, SceneObservation, Surface
+
+    feedback = SpatialFeedback()
+    # The left edge stays clipped at column 8 while the bridge carries Mario left.
+    for right, player in [(65, 40), (63, 38), (61, 36), (59, 34), (57, 32)]:
+        scene = SceneObservation(
+            MarioView((player, 208, player + 10, 220), True, "moving_platform", True),
+            moving_platforms=((8, 220, right, 232),),
+            surfaces=(Surface(8, right, 220, True),),
+        )
+        feedback.observe(scene)
+        feedback.executed(0, scene)
+    assert feedback.speed == 0
+    assert feedback.motion.x_speed == 0

@@ -22,6 +22,9 @@ def terrain_edges(scene):
         if not s.moving
         for x in (s.x0, s.x1)
         if VISIBLE_COLUMNS[0] < x < VISIBLE_COLUMNS[1]
+        # A moving platform can occlude a floor edge; that apparent static
+        # endpoint moves with the bridge and cannot measure camera scroll.
+        and not any(abs(x - edge) <= 4 for b in scene.moving_platforms for edge in (b[0], b[2]))
     ]
 
 
@@ -36,16 +39,34 @@ def camera_shift(before, after):
     return min(counts, key=lambda shift: (-counts[shift], abs(shift)))
 
 
-def moving_support_offset(scene):
-    if scene.mario.box is None or scene.mario.support != "moving_platform":
+def moving_support(scene):
+    """Resolve support geometrically when the classifier calls a bridge ground."""
+    if scene.mario.box is None or scene.mario.support == "air":
         return None
     x0, _, x1, feet = scene.mario.box
     supports = [
-        b for b in scene.moving_platforms if b[0] < x1 and b[2] > x0 and abs(b[1] - feet) <= 4
+        b
+        for b in scene.moving_platforms
+        if b[0] < x1 + 2 and b[2] > x0 - 2 and abs(b[1] - feet) <= 4
     ]
     if len(supports) != 1:
         return None
-    return (x0 + x1) / 2 - supports[0][0]
+    support = supports[0]
+    # A shore to the right takes support at the dismount overlap.
+    if any(
+        not s.moving and s.x0 >= support[0] and s.x0 < x1 and s.x1 > x0 and abs(s.top - feet) <= 4
+        for s in scene.surfaces
+    ):
+        return None
+    return support
+
+
+def moving_support_offset(scene):
+    support = moving_support(scene)
+    if support is None:
+        return None
+    x0, _, x1, _ = scene.mario.box
+    return (x0 + x1) / 2 - support[0]
 
 
 @dataclass
@@ -75,6 +96,7 @@ class SpatialFeedback:
             jump=button in (2, 4, 5),
             grounded=scene.mario.on_something and scene.mario.support != "air",
             y=scene.mario.box[1],
+            run=direction > 0,
         )
 
     def observe(self, scene):
@@ -109,17 +131,24 @@ class SpatialFeedback:
                     self.tracked = True
                 else:
                     dx = None
-            old_offset, offset = moving_support_offset(self.previous), moving_support_offset(scene)
-            if old_offset is not None and offset is not None:
-                # The bridge carries position, not NES takeoff momentum.
-                # Measure Mario relative to it, even if no static edge is visible.
-                dx = offset - old_offset
+            before_support, support = moving_support(self.previous), moving_support(scene)
+            if before_support is not None and support is not None:
+                # Use the visible opposite edge when the bridge is clipped;
+                # a viewport boundary cannot measure support-relative velocity.
+                edge = 2 if min(before_support[0], support[0]) <= VISIBLE_COLUMNS[0] else 0
+                old, now = self.previous.mario.box, scene.mario.box
+                dx = (now[0] + now[2] - old[0] - old[2]) / 2
+                dx -= support[edge] - before_support[edge]
+            elif (before_support is None) != (support is None):
+                # Do not mix carried world displacement into player momentum.
+                self.velocities.clear()
+                dx = None
             if dx is not None and abs(dx) <= 6:
                 self.velocities.append(dx)
                 self.speed = sum(self.velocities) / len(self.velocities)
                 # Keep fractional physics through ordinary pixel quantization;
                 # correct substantial disagreement (e.g. a wall or changed speed).
-                if abs(self.speed - self.motion.x_speed / 16) > 0.75:
+                if len(self.velocities) >= 4 and abs(self.speed - self.motion.x_speed / 16) > 0.75:
                     self.motion.x_speed = round(self.speed * 16)
                     self.motion.moving = (self.speed > 0) - (self.speed < 0)
             else:
@@ -186,7 +215,14 @@ class SpatialFeedback:
         if grounded_jump:
             if self.speed is not None and len(self.velocities) >= 2 and self.tracks.ready:
                 speed = self.speed if proposed is not None else self.motion.x_speed / 16
-                self.flight = plan_flight(scene, self.tracks, speed, destination, proposed)
+                self.flight = plan_flight(
+                    scene,
+                    self.tracks,
+                    speed,
+                    destination,
+                    proposed,
+                    motion=self.motion if proposed is None else None,
+                )
                 if self.flight is not None:
                     self.status = "checked"
                     action = {-1: 4, 0: 5, 1: 2}[self.flight.direction]

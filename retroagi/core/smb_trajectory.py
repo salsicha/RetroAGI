@@ -100,6 +100,13 @@ def geometry(scene, tracks):
     # block boxes. Their shared edge exposes the step's vertical face.
     surfaces = [s for s in scene.surfaces if not s.moving]
     for surface in surfaces:
+        # Explicit block/pipe boxes already provide the underside. Extending
+        # a floating ledge down to an adjacent step invents a low ceiling.
+        if any(
+            abs(rect[1] - surface.top) <= 1 and rect[0] < surface.x1 and rect[2] > surface.x0
+            for rect, _ in solids
+        ):
+            continue
         lower = [
             s.top
             for s in surfaces
@@ -137,7 +144,9 @@ class Prediction:
     target: Track | None = None
 
 
-def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False, target=None):
+def predict(
+    scene, tracks, motion, box, goal, direction, hold, *, grounded=False, target=None, approach=0
+):
     """Sweep Mario's body through terrain and forecast object positions.
 
     Resolve wall/ceiling contacts, rather than pretending every flight is an
@@ -149,10 +158,14 @@ def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False
     steps = []
     w, h = box[2] - box[0], box[3] - box[1]
     x, y = box[:2]
-    for frame in range(HORIZON):
+    for frame in range(HORIZON + approach):
         old = (x, y, x + w, y + h)
-        jump = frame < hold
-        dx, dy, _ = motion.advance(direction=direction, jump=jump, grounded=grounded, y=y)
+        if frame == approach and approach and not grounded:
+            return Prediction(False, False, float("inf"), steps, "lost_takeoff_support")
+        jump = approach <= frame < approach + hold
+        dx, dy, _ = motion.advance(
+            direction=direction, jump=jump, grounded=grounded, y=y, run=direction > 0
+        )
         grounded = False
         x += dx
         for rect, velocity in solids:
@@ -177,6 +190,8 @@ def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False
                 y = r[1] - h
                 landed = True
                 motion.vertical_contact()
+                if frame < approach:
+                    x += velocity[0]
                 break
         body = (x, y, x + w, y + h)
         button = {
@@ -222,6 +237,11 @@ def predict(scene, tracks, motion, box, goal, direction, hold, *, grounded=False
                     aim = (now[0] + now[2]) / 2 if target is not None else goal[0]
                     return Prediction(True, True, abs(x + w / 2 - aim), steps, "stomp", hazard)
                 return Prediction(False, False, float("inf"), steps, "hazard")
+        if frame < approach:
+            if not landed:
+                return Prediction(False, False, float("inf"), steps, "unsafe_approach")
+            grounded = True
+            continue
         if landed:
             # Reaching the point a frame before an enemy arrives is not a safe
             # arrival. Include residual momentum and a short reaction window;
@@ -267,6 +287,7 @@ class Flight:
     status: str = "checked"
     released: bool = False
     target: Track | None = None
+    approach: int = 0
 
     def shift(self, scroll):
         self.goal = (self.goal[0] - scroll, self.goal[1])
@@ -276,8 +297,10 @@ class Flight:
             self.released = True
             self.done, self.status = True, "lost_observation"
             return int(SMBAction.NOOP)
-        remaining = max(0, self.hold - self.elapsed) if not self.released else 0
-        box = takeoff_box(scene) if self.elapsed == 0 else scene.mario.box
+        approach = max(0, self.approach - self.elapsed)
+        airborne_frames = max(0, self.elapsed - self.approach)
+        remaining = max(0, self.hold - airborne_frames) if not self.released else 0
+        box = takeoff_box(scene) if self.elapsed <= self.approach else scene.mario.box
         check = predict(
             scene,
             self.tracks.tracks,
@@ -286,8 +309,9 @@ class Flight:
             self.goal,
             self.direction,
             remaining,
-            grounded=self.elapsed == 0,
+            grounded=self.elapsed <= self.approach,
             target=self.target,
+            approach=approach,
         )
         target_visible = self.target is None or any(t is self.target for t in self.tracks.tracks)
         if not check.safe or (self.target is not None and not check.reached):
@@ -296,9 +320,9 @@ class Flight:
             # stays released, including after a missing/unsafe observation.
             for direction in (-1, 0, 1):
                 holds = (
-                    range(max(0, 32 - self.elapsed) + 1)
+                    range(max(0, 32 - airborne_frames) + 1)
                     if self.target is not None and not self.released and target_visible
-                    else {0, remaining, max(0, 32 - self.elapsed) if not self.released else 0}
+                    else {0, remaining, max(0, 32 - airborne_frames) if not self.released else 0}
                 )
                 for hold in holds:
                     candidate = predict(
@@ -309,8 +333,9 @@ class Flight:
                         self.goal,
                         direction,
                         hold,
-                        grounded=self.elapsed == 0,
+                        grounded=self.elapsed <= self.approach,
                         target=self.target,
+                        approach=approach,
                     )
                     if candidate.safe and candidate.reached:
                         alternatives.append(
@@ -324,7 +349,7 @@ class Flight:
                         )
             if alternatives:
                 _, _, self.direction, remaining, check = min(alternatives, key=lambda a: a[:4])
-                self.hold = self.elapsed + remaining
+                self.hold = airborne_frames + remaining
                 self.status = "steering_correction"
             else:
                 # A short emergency drop can look collision-free only because
@@ -348,40 +373,61 @@ class Flight:
         if not remaining:
             self.released = True
         self.elapsed += 1
-        if self.elapsed >= HORIZON:
+        if self.elapsed >= HORIZON + self.approach:
             self.done, self.status = True, "flight_timeout"
         return int(button)
 
 
-def plan_flight(scene, tracks, speed, destination, proposed=None):
+def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None):
     box = takeoff_box(scene)
     goal = ((box[0] + box[2]) / 2 + destination.x, box[3] + destination.y)
     direction = (destination.x > 0) - (destination.x < 0)
-    motion = NESPlayerMotion(
-        x_speed=round(speed * 16),
-        moving=(speed > 0) - (speed < 0),
-        facing=1 if scene.mario.facing_right else -1,
+    motion = (
+        copy(motion)
+        if motion is not None
+        else NESPlayerMotion(
+            x_speed=round(speed * 16),
+            moving=(speed > 0) - (speed < 0),
+            facing=1 if scene.mario.facing_right else -1,
+        )
     )
     candidates = []
-    for hold in range(1, 33):
-        prediction = predict(
-            scene, tracks.tracks, motion, box, goal, direction, hold, grounded=True
-        )
-        if prediction.safe and prediction.reached:
-            candidates.append(
-                (
-                    round(prediction.error / 4),
-                    abs(hold - proposed.frames) if proposed is not None else len(prediction.steps),
-                    hold,
-                    prediction,
-                )
+    # Exact legacy proposals still describe an immediate jump. Destination
+    # commands may include a bounded, collision-checked run-up to that landing.
+    delays = (0,) if proposed is not None else (0, *range(4, 65, 4))
+    for delay in delays:
+        for hold in range(1, 33):
+            prediction = predict(
+                scene,
+                tracks.tracks,
+                motion,
+                box,
+                goal,
+                direction,
+                hold,
+                grounded=True,
+                approach=delay,
             )
+            if prediction.safe and prediction.reached:
+                candidates.append(
+                    (
+                        round(prediction.error / 4),
+                        abs(hold - proposed.frames)
+                        if proposed is not None
+                        else len(prediction.steps),
+                        delay,
+                        hold,
+                        prediction,
+                    )
+                )
+        # Prefer an immediately reachable jump; do not add an unnecessary
+        # approach after finding a safe takeoff from the current position.
+        if candidates:
+            break
     if not candidates:
         return None
-    _, _, hold, prediction = min(candidates, key=lambda c: c[:3])
+    _, _, delay, hold, prediction = min(candidates, key=lambda c: c[:4])
     target = prediction.target
-    if target is not None and any(c[3].target is not target for c in candidates):
-        # The spatial command does not uniquely identify an enemy. Keep the
-        # fixed-point behavior instead of locking onto an arbitrary walker.
+    if target is not None and any(c[4].target is not target for c in candidates):
         target = None
-    return Flight(goal, motion, direction, hold, prediction, tracks, target=target)
+    return Flight(goal, motion, direction, hold, prediction, tracks, target=target, approach=delay)

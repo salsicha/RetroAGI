@@ -344,3 +344,23 @@ def test_actual_monster_crossing_is_one_jump_and_survives_with_visual_feedback(g
             assert info["death"]
     finally:
         env.close()
+
+
+def test_floating_ledge_does_not_extend_down_to_an_adjacent_lower_step():
+    from retroagi.core.smb_trajectory import geometry
+
+    scene = SceneObservation(
+        MarioView((70, 208, 80, 220), True, "ground", True),
+        blocks=(BlockView((79, 160, 119, 170), "brick"),),
+        surfaces=(
+            Surface(50, 119, 220, False),
+            Surface(79, 119, 160, False),
+            Surface(119, 147, 190, False),
+            Surface(147, 248, 160, False),
+        ),
+    )
+    solids, _ = geometry(scene, [])
+    assert ((79, 160, 119, 170), (0, 0)) in solids
+    assert ((79, 160, 119, 190), (0, 0)) not in solids
+    flight = plan_flight(scene, VisualTracks(), 0, SkillToken("jump", 40, -30))
+    assert flight is not None and flight.prediction.reached

@@ -12,7 +12,7 @@ from retroagi.core.tokens import SkillToken
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
 
-@pytest.mark.parametrize("distance", [-60, 0, 60, 160])
+@pytest.mark.parametrize("distance", [-60, -2, -1, 0, 1, 2, 60, 160])
 def test_direct_run_target_is_held_until_arrival_and_brakes(distance):
     env = MarioScenarioEnv()
     try:
@@ -39,7 +39,9 @@ def test_direct_run_target_is_held_until_arrival_and_brakes(distance):
             if step.execution_status == "arrived":
                 break
         assert steps[-1].execution_status == "arrived"
-        assert abs(env.mario["x"] - (start + distance)) <= 2
+        assert abs(env.mario["x"] - (start + distance)) <= 1
+        if abs(distance) in (1, 2):
+            assert env.mario["x"] == start + distance
         assert abs(env.mario["vx"]) <= 0.3
         assert sum(s.decision is not None for s in steps) == 1
         assert not hasattr(agent.policy, "action")
@@ -112,7 +114,8 @@ def test_legacy_checkpoint_discards_only_action_weights(tmp_path):
         source,
     )
     loaded, metadata = load_layered_checkpoint(source)
-    assert metadata["trained_layers"] == ["skill"]
+    assert metadata["trained_layers"] == []
+    assert "maneuver_targets_require_requalification" in metadata["load_migrations"]
     assert "removed_action_network" in metadata["load_migrations"]
     for name, value in policy.state_dict().items():
         assert torch.equal(value, loaded.state_dict()[name])
@@ -121,7 +124,7 @@ def test_legacy_checkpoint_discards_only_action_weights(tmp_path):
     save_layered_checkpoint(output, loaded, config, ["skill"], [])
     reloaded, saved = load_layered_checkpoint(output)
     assert "action_input" not in saved["token_layout"]
-    assert saved["token_layout"]["executor"] == "predictive_spatial_v1"
+    assert saved["token_layout"]["executor"] == "predictive_spatial_v2"
     assert not any(name.startswith("action.") for name in reloaded.state_dict())
 
 
@@ -141,3 +144,135 @@ def test_uncertain_visual_contact_always_returns_an_executable_control():
     plan = feedback.begin(SkillToken("jump", 40, 0), scene)
     assert plan is not None and plan.action == 6
     assert feedback.status == "observing_support"
+
+
+@pytest.mark.parametrize("buttons", [[3] * 32, [1] * 24 + [3] * 24, [3] * 20 + [0] * 20])
+def test_execution_motion_matches_actual_left_right_and_release_physics(buttons):
+    from retroagi.core.smb_spatial_feedback import SpatialFeedback
+
+    env = MarioScenarioEnv()
+    try:
+        env.reset(
+            scenario={"world_width": 400, "mario": [140, 208], "platforms": [[0, 220, 400, 20]]}
+        )
+        feedback = SpatialFeedback()
+        for button in buttons:
+            scene = scene_from_labels(env.scene_labels())
+            feedback.observe(scene)
+            feedback.executed(button, scene)
+            env.step(button)
+            assert feedback.motion.x_speed == env.motion.x_speed
+            assert feedback.motion.x_fraction == env.motion.x_fraction
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("family", ["enemy_gap", "low_choice_alternate_route", "tall_pipe_jump"])
+def test_teacher_targets_include_the_approach_and_executor_reaches_first_landing(family):
+    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+    from retroagi.stages.block_smb.teacher_tokens import (
+        episode_teacher,
+        teacher_plan,
+        teacher_skill,
+    )
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=0, sample_index=100, family=family, difficulty="easy"
+    )
+    env = MarioScenarioEnv()
+    try:
+        screen, _ = env.reset(scenario=sample.scenario)
+        teacher = episode_teacher(sample.scenario)
+        plan, _ = teacher_plan(env, teacher, certify_holds=False)
+        assert plan.action == 1  # The certified maneuver starts by accelerating.
+        target = teacher_skill(env, teacher, plan)
+        assert target.mode == "jump"  # The label describes its landing, not that acceleration.
+        goal_x = env.mario["x"] + env.mario["w"] / 2 + target.x
+        goal_y = env.mario["y"] + env.mario["h"] + target.y
+
+        class Observer:
+            def observe(self, screens):
+                return [scene_from_labels(env.scene_labels())]
+
+        agents = SMBAgents(Observer(), LayeredSMBPolicy().eval(), "cpu")
+        buttons = []
+        airborne = False
+        approach = 0
+        for _ in range(180):
+            step = agents.act([screen], [0], given=lambda copies, scenes: {"skill": [target]})[0]
+            if agents.copies[0].spatial.flight:
+                approach = max(approach, agents.copies[0].spatial.flight.approach)
+            buttons.append(step.button)
+            screen, _, done, _, info = env.step(step.button)
+            assert not info.get("death")
+            airborne |= not env.mario["on_ground"]
+            if airborne and (env.mario["on_ground"] or env.stomped):
+                break
+            assert not done
+        assert airborne
+        assert approach > 0
+        error = abs(env.mario["x"] + env.mario["w"] / 2 - goal_x)
+        error += 2 * abs(env.mario["y"] + env.mario["h"] - goal_y)
+        assert error <= 8
+        jumps = [i for i, b in enumerate(buttons) if b in (2, 4, 5)]
+        assert jumps == list(range(jumps[0], jumps[-1] + 1))
+    finally:
+        env.close()
+
+
+def test_occluded_floor_edge_is_not_camera_scroll_and_bridge_support_uses_geometry():
+    from retroagi.core.smb_scene_labels import MarioView, SceneObservation, Surface
+    from retroagi.core.smb_spatial_feedback import camera_shift, moving_support_offset
+
+    def scene(edge, mario):
+        return SceneObservation(
+            MarioView((mario, 208, mario + 10, 220), True, "ground", True),
+            moving_platforms=((edge, 220, edge + 100, 232),),
+            surfaces=(Surface(8, edge, 220, False), Surface(edge, edge + 100, 220, True)),
+        )
+
+    before, after = scene(80, 85), scene(78, 83)
+    assert camera_shift(before, after) is None
+    assert moving_support_offset(before) == moving_support_offset(after) == 10
+
+
+@pytest.mark.parametrize("sample_index", [100, 101])
+def test_teacher_destinations_board_ride_and_dismount_a_moving_bridge(sample_index):
+    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+    from retroagi.stages.block_smb.teacher_tokens import (
+        episode_teacher,
+        teacher_plan,
+        teacher_skill,
+    )
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation",
+        seed=0,
+        sample_index=sample_index,
+        family="bridge_wait",
+        difficulty="easy",
+    )
+    env = MarioScenarioEnv()
+    try:
+        screen, _ = env.reset(scenario=sample.scenario)
+        teacher = episode_teacher(sample.scenario)
+
+        class Observer:
+            def observe(self, screens):
+                return [scene_from_labels(env.scene_labels())]
+
+        def given(copies, scenes):
+            plan, _ = teacher_plan(env, teacher, certify_holds=False)
+            return {"skill": [teacher_skill(env, teacher, plan)]}
+
+        agents = SMBAgents(Observer(), LayeredSMBPolicy().eval(), "cpu")
+        for _ in range(600):
+            teacher.observe_frame(env)
+            step = agents.act([screen], [0], given=given)[0]
+            screen, _, done, _, info = env.step(step.button)
+            assert not info.get("death")
+            if done:
+                break
+        assert env._goal_credited
+    finally:
+        env.close()

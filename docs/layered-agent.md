@@ -54,7 +54,9 @@ old one ends. Tactic memory updates on those starts. Tactic receives its
 held category and age in both frames and decisions.
 
 Skill selects a destination at each action boundary. A checked jump remains
-one executor maneuver through takeoff, button release and flight to landing.
+one executor maneuver through any required run-up, takeoff, button release and
+flight to landing. The skill supplies the landing point; the executor searches
+collision-checked approaches of up to 64 frames when an immediate jump cannot reach it.
 The selected 1–32 frames describes the jump-button hold, not the whole flight.
 Landing interrupts a plan when the contact detector and visible support under
 Mario's feet agree. Side contact with a ledge cannot interrupt the jump.
@@ -62,7 +64,13 @@ An airborne command following an interrupted or unchecked plan releases the
 preceding jump hold. Separate jumps always have a physical button release
 between them, even if landing interrupted the previous plan.
 A run completes on arrival with low residual speed, or reports a blocked path
-or timeout. Zero-distance run targets do not produce an arbitrary directional tap.
+or timeout. Arrival requires less than one pixel of error; one-pixel requests
+must produce actual progress. Dense acceleration candidates and passive braking
+avoid small-target stalls. Zero-distance targets remain stationary. Ground
+prediction projects platform support and carry, binds points on moving supports
+to their visual tracks, and hands boarding back to skill before chasing an old
+shore waypoint. Geometric support resolves bridge/ground classification errors;
+bridge-occluded floor edges are excluded from camera-motion estimates.
 
 Before a grounded jump, the executor collects visual motion measurements and
 checks the full body trajectory against visible walls, ceilings, supports and
@@ -140,7 +148,12 @@ scene/memory modules and update only the selected layer.
 
 The spatial teacher probes the certified route and restores the simulator
 state. A jump command targets the first landing/stomp; a run command targets
-the endpoint of its bounded movement. A hold command targets the current spot.
+the endpoint of a complete bounded maneuver or reached objective. Acceleration
+before a jump belongs to that jump's landing label, rather than a short run
+label that loses momentum. Boarding targets use the support's current position,
+so passive carry does not become a world destination. A hold targets the current
+spot. Executor v2 checkpoints use these semantics; older weights can warm-start
+training but their previous skill/tactic qualifications are cleared.
 Uncertified recovery states are not used as skill demonstrations. The teacher
 can read simulator state during training; deployed networks cannot.
 
