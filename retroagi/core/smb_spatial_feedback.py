@@ -155,9 +155,17 @@ class SpatialFeedback:
                 # Once initialized, retain four-sample filtering so pixel
                 # quantization does not overwrite fractional acceleration.
                 samples_needed = 4 if self.motion_ready else 2
-                if (
-                    len(self.velocities) >= samples_needed
-                    and abs(self.speed - self.motion.x_speed / 16) > 0.75
+                takeoff_bucket_changed = (
+                    scene.mario.on_something
+                    and scene.mario.support != "air"
+                    and self.previous.mario.support == "air"
+                    and len(self.velocities) == 4
+                    and max(self.velocities) - min(self.velocities) <= 1
+                    and sum(abs(self.speed * 16) >= n for n in (9, 16, 25, 28))
+                    != sum(abs(self.motion.x_speed) >= n for n in (9, 16, 25, 28))
+                )
+                if len(self.velocities) >= samples_needed and (
+                    abs(self.speed - self.motion.x_speed / 16) >= 0.75 or takeoff_bucket_changed
                 ):
                     self.motion.x_speed = round(self.speed * 16)
                     self.motion.moving = (self.speed > 0) - (self.speed < 0)
@@ -243,7 +251,7 @@ class SpatialFeedback:
                 if self.flight is not None:
                     self.status = "checked"
                     action = {-1: 4, 0: 5, 1: 2}[self.flight.direction]
-                    return ActionPlan(action, self.flight.hold)
+                    return ActionPlan(action, max(1, self.flight.hold))
                 self.status = "no_safe_trajectory"
                 return ActionPlan(HOLD_GROUND, 1)
             self.status = "observing_motion"

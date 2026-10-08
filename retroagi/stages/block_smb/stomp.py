@@ -4,6 +4,8 @@ from typing import Any
 
 import pygame
 
+from retroagi.core.smb_collision import stomp_contact
+
 
 def stomp_collision_geometry(mario: pygame.Rect, enemy: pygame.Rect, vy: float) -> dict[str, Any]:
     """Use the same integer rectangles and approach test as the physics engine."""
@@ -12,9 +14,7 @@ def stomp_collision_geometry(mario: pygame.Rect, enemy: pygame.Rect, vy: float) 
     gap = (
         float(mario.left - enemy.right)
         if mario.left >= enemy.right
-        else float(mario.right - enemy.left)
-        if mario.right <= enemy.left
-        else 0.0
+        else float(mario.right - enemy.left) if mario.right <= enemy.left else 0.0
     )
     return {
         "mario_rect": list(mario),
@@ -22,5 +22,11 @@ def stomp_collision_geometry(mario: pygame.Rect, enemy: pygame.Rect, vy: float) 
         "vertical_velocity": float(vy),
         "contact_window": bool(contact_window),
         "horizontal_gap": gap,
-        "stomp": bool(mario.colliderect(enemy) and vy > 0 and previous_bottom <= enemy.centery),
+        "stomp": bool(
+            stomp_contact(
+                (mario.left, mario.top, mario.right, mario.bottom),
+                (enemy.left, enemy.top, enemy.right, enemy.bottom),
+                vy,
+            )
+        ),
     }

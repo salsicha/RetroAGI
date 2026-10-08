@@ -1,6 +1,6 @@
 """Bounded visual jump planning. No simulator state, teacher targets or game IDs.
 
-Predictions use observed rectangles and constant object velocity over one jump.
+Predictions use observed rectangles, velocity and witnessed patrol reversals.
 They are rechecked on every picture; they are not a guarantee about unseen
 terrain, future enemy turns, or errors in the vision model.
 """
@@ -9,6 +9,7 @@ from copy import copy
 from dataclasses import dataclass, field
 
 from .actions import SMBAction
+from .smb_collision import stomp_contact, walker_body
 from .smb_physics import NESPlayerMotion
 
 HORIZON = 96
@@ -28,12 +29,28 @@ class Track:
     box: tuple
     kind: str
     samples: list = field(default_factory=list)
+    turns: list = field(default_factory=list)
+    horizontal_speeds: list = field(default_factory=list)
+
+    def forecast(self, frames):
+        vx, vy = self.velocity or (0, 0)
+        x = self.box[0] + vx * frames
+        if len(self.turns) >= 2:
+            low, high = min(self.turns), max(self.turns)
+            width = high - low
+            if width > 2:
+                phase = (x - low) % (2 * width)
+                x = low + (phase if phase <= width else 2 * width - phase)
+        return translated(self.box, x - self.box[0], vy * frames)
 
     @property
     def velocity(self):
         if not self.samples:
             return None
-        return tuple(sum(s[k] for s in self.samples) / len(self.samples) for k in (0, 1))
+        vx, vy = tuple(sum(s[k] for s in self.samples) / len(self.samples) for k in (0, 1))
+        if vx and self.kind == "walker" and self.horizontal_speeds:
+            vx = (1 if vx > 0 else -1) * sum(self.horizontal_speeds) / len(self.horizontal_speeds)
+        return vx, vy
 
 
 @dataclass
@@ -81,9 +98,16 @@ class VisualTracks:
                 # Preserve this visual identity across motion and reversals.
                 # Flights may hold a reference to this particular walker.
                 track = old
+                track.turns = [x - scroll for x in track.turns]
+                if reversed_course and kind == "walker" and velocity[0] * dx < 0:
+                    track.turns = (track.turns + [old.box[0] - scroll])[-4:]
                 track.box = box
                 track.samples = ([] if reversed_course else old.samples) + [(dx, dy)]
                 track.samples = track.samples[-32:]
+                # A turn changes direction, not patrol speed. Keep magnitude
+                # evidence instead of forecasting a whole jump from two rounded
+                # pixel displacements immediately after a reversal.
+                track.horizontal_speeds = (track.horizontal_speeds + [abs(dx)])[-32:]
             updated.append(track)
         self.tracks = updated
 
@@ -145,7 +169,18 @@ class Prediction:
 
 
 def predict(
-    scene, tracks, motion, box, goal, direction, hold, *, grounded=False, target=None, approach=0
+    scene,
+    tracks,
+    motion,
+    box,
+    goal,
+    direction,
+    hold,
+    *,
+    grounded=False,
+    target=None,
+    approach=0,
+    approach_direction=None,
 ):
     """Sweep Mario's body through terrain and forecast object positions.
 
@@ -163,8 +198,11 @@ def predict(
         if frame == approach and approach and not grounded:
             return Prediction(False, False, float("inf"), steps, "lost_takeoff_support")
         jump = approach <= frame < approach + hold
+        control = (
+            approach_direction if frame < approach and approach_direction is not None else direction
+        )
         dx, dy, _ = motion.advance(
-            direction=direction, jump=jump, grounded=grounded, y=y, run=direction > 0
+            direction=control, jump=jump, grounded=grounded, y=y, run=control > 0
         )
         grounded = False
         x += dx
@@ -201,12 +239,15 @@ def predict(
             (-1, False): 3,
             (1, False): 1,
             (0, False): 0,
-        }[direction, jump]
+        }[control, jump]
         steps.append((body, copy(motion), button))
         for hazard in hazards:
             vx, vy = hazard.velocity or (0, 0)
-            now = translated(hazard.box, vx * (frame + 1), vy * (frame + 1))
-            before = translated(hazard.box, vx * frame, vy * frame)
+            now = hazard.forecast(frame + 1)
+            before = hazard.forecast(frame)
+            if hazard.kind == "walker":
+                now, before = walker_body(now), walker_body(before)
+            vx, vy = now[0] - before[0], now[1] - before[1]
             # Sub-frame relative sweeps also catch a fast hazard crossing the
             # body between pictures. A pixel of clearance for lethal objects.
             margin = 0 if hazard.kind == "walker" else 1 + (frame + 1) / max(1, len(hazard.samples))
@@ -222,11 +263,14 @@ def predict(
                 )
                 for t in (0.25, 0.5, 0.75, 1.0)
             )
+            # Walkers use the engine's discrete contact test. A swept near miss
+            # cannot certify a stomp that never overlaps at a physical frame.
+            if hazard.kind == "walker":
+                collision = overlap(body, now)
             if collision:
                 intended_stomp = (
                     hazard.kind == "walker"
-                    and dy > 0
-                    and old[3] <= (now[1] + now[3]) / 2
+                    and stomp_contact(body, now, motion.y_speed + motion.y_force / 256)
                     and (
                         hazard is target
                         if target is not None
@@ -235,7 +279,18 @@ def predict(
                 )
                 if intended_stomp:
                     aim = (now[0] + now[2]) / 2 if target is not None else goal[0]
-                    return Prediction(True, True, abs(x + w / 2 - aim), steps, "stomp", hazard)
+                    error = abs(x + w / 2 - aim)
+                    # A forecast that just grazes a sprite edge is brittle to
+                    # rounded pixels and subpixel patrol phase. Aim for overlap
+                    # through at least half the smaller physical body.
+                    return Prediction(
+                        True,
+                        error <= min(w, now[2] - now[0]) / 2,
+                        error,
+                        steps,
+                        "stomp",
+                        hazard,
+                    )
                 return Prediction(False, False, float("inf"), steps, "hazard")
         if frame < approach:
             if not landed:
@@ -253,7 +308,9 @@ def predict(
                     margin = (
                         0 if hazard.kind == "walker" else 1 + time / max(1, len(hazard.samples))
                     )
-                    enemy = translated(hazard.box, vx * time, vy * time)
+                    enemy = hazard.forecast(time)
+                    if hazard.kind == "walker":
+                        enemy = walker_body(enemy)
                     enemy = (
                         enemy[0] - margin,
                         enemy[1] - margin,
@@ -288,6 +345,8 @@ class Flight:
     released: bool = False
     target: Track | None = None
     approach: int = 0
+    approach_direction: int | None = None
+    seeking: bool = False
 
     def shift(self, scroll):
         self.goal = (self.goal[0] - scroll, self.goal[1])
@@ -297,6 +356,8 @@ class Flight:
             self.released = True
             self.done, self.status = True, "lost_observation"
             return int(SMBAction.NOOP)
+        if self.seeking:
+            return self.approach_press(scene)
         if (
             self.approach
             and self.elapsed <= self.approach
@@ -328,16 +389,17 @@ class Flight:
             grounded=grounded,
             target=self.target,
             approach=approach,
+            approach_direction=self.approach_direction,
         )
         target_visible = self.target is None or any(t is self.target for t in self.tracks.tracks)
-        if not check.safe or (self.target is not None and not check.reached):
+        if not check.safe or not check.reached:
             alternatives = []
             # Steering can change within this same maneuver. A released jump
             # stays released, including after a missing/unsafe observation.
             for direction in (-1, 0, 1):
                 holds = (
                     range(max(0, 32 - airborne_frames) + 1)
-                    if self.target is not None and not self.released and target_visible
+                    if not self.released and target_visible
                     else {0, remaining, max(0, 32 - airborne_frames) if not self.released else 0}
                 )
                 for hold in holds:
@@ -352,6 +414,7 @@ class Flight:
                         grounded=grounded,
                         target=self.target,
                         approach=approach,
+                        approach_direction=self.approach_direction,
                     )
                     if candidate.safe and candidate.reached:
                         alternatives.append(
@@ -378,8 +441,7 @@ class Flight:
                 # replaced by another enemy. Continue the physical maneuver.
                 self.status = "lost_target"
             elif check.reason == "stomp":
-                vx, vy = self.target.velocity or (0, 0)
-                contact = translated(self.target.box, vx * len(check.steps), vy * len(check.steps))
+                contact = self.target.forecast(len(check.steps))
                 self.goal = ((contact[0] + contact[2]) / 2, contact[1])
         self.prediction = check
         if check.steps:
@@ -393,8 +455,94 @@ class Flight:
             self.done, self.status = True, "flight_timeout"
         return int(button)
 
+    def approach_press(self, scene):
+        """Retain the destination while making a short, braking-safe approach."""
+        from .tokens import SkillToken
 
-def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None):
+        box = takeoff_box(scene)
+        if self.target is not None and not any(t is self.target for t in self.tracks.tracks):
+            self.done, self.status = True, "lost_target"
+            return 0
+        if not scene.mario.on_something or scene.mario.support == "air":
+            self.done, self.status = True, "lost_takeoff_support"
+            return 0
+        destination = SkillToken(
+            "jump", self.goal[0] - (box[0] + box[2]) / 2, self.goal[1] - box[3]
+        )
+        flight = plan_flight(
+            scene,
+            self.tracks,
+            self.motion.x_speed / 16,
+            destination,
+            motion=self.motion,
+            allow_approach=False,
+            target=self.target,
+        )
+        if flight is not None:
+            self.__dict__.update(flight.__dict__)
+            return self.press(scene)
+        direction = (destination.x > 0) - (destination.x < 0)
+        options = []
+        for control in dict.fromkeys((direction, 0, -direction)):
+            motion = copy(self.motion)
+            x, y, right, feet = box
+            width = right - x
+            steps = []
+            safe = True
+            solids, tops = geometry(scene, self.tracks.tracks)
+            # Accelerate for at most four frames, then prove a stop on visible
+            # support. Reobserve after just the first physical frame.
+            for frame in range(32):
+                command = control if frame < 4 else 0
+                dx, _, _ = motion.advance(
+                    direction=command, jump=False, grounded=True, y=y, run=command > 0
+                )
+                x += dx
+                body = (x, y, x + width, feet)
+                support = any(
+                    r[0] < x + width and r[2] > x and abs(r[1] - feet) <= 1
+                    for r, velocity in tops
+                    if velocity == (0, 0)
+                )
+                blocked = any(overlap(body, r) for r, _ in solids)
+                danger = any(
+                    overlap(body, (r[0] - 8, r[1], r[2] + 8, r[3]))
+                    for t in self.tracks.tracks
+                    if t.kind != "platform"
+                    for r in [t.forecast(frame + 1)]
+                )
+                if not support or blocked or danger:
+                    safe = False
+                    break
+                steps.append((body, copy(motion), {-1: 3, 0: 0, 1: 1}[command]))
+            if safe and steps:
+                options.append((abs(self.goal[0] - x - width / 2), control == 0, steps))
+        self.elapsed += 1
+        if self.elapsed >= 96:
+            self.done, self.status = True, "approach_timeout"
+            return 0
+        if not options:
+            self.status = "waiting_for_intercept"
+            self.motion.advance(direction=0, jump=False, grounded=True, y=box[1], run=False)
+            return 0
+        _, _, steps = min(options, key=lambda v: v[:2])
+        _, self.motion, button = steps[0]
+        self.prediction = Prediction(True, False, abs(destination.x), steps, "approaching")
+        self.status = "approaching_target" if button else "waiting_for_intercept"
+        return button
+
+
+def plan_flight(
+    scene,
+    tracks,
+    speed,
+    destination,
+    proposed=None,
+    *,
+    motion=None,
+    allow_approach=True,
+    target=None,
+):
     box = takeoff_box(scene)
     goal = ((box[0] + box[2]) / 2 + destination.x, box[3] + destination.y)
     direction = (destination.x > 0) - (destination.x < 0)
@@ -407,43 +555,101 @@ def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None
             facing=1 if scene.mario.facing_right else -1,
         )
     )
-    candidates = []
-    # Exact legacy proposals still describe an immediate jump. Destination
-    # commands may include a bounded, collision-checked run-up to that landing.
-    delays = (0,) if proposed is not None else (0, *range(4, 65, 4))
-    for delay in delays:
-        for hold in range(1, 33):
-            prediction = predict(
-                scene,
-                tracks.tracks,
-                motion,
-                box,
-                goal,
-                direction,
-                hold,
-                grounded=True,
-                approach=delay,
-            )
-            if prediction.safe and prediction.reached:
-                candidates.append(
-                    (
-                        round(prediction.error / 4),
-                        abs(hold - proposed.frames)
-                        if proposed is not None
-                        else len(prediction.steps),
-                        delay,
-                        hold,
-                        prediction,
-                    )
+    # Try the direct approach first; only expand to reversing maneuvers when
+    # it cannot reach the destination. The landing delta is not the run-up.
+    if target is None:
+        possible = [
+            t
+            for t in tracks.tracks
+            if t.kind == "walker"
+            and abs(goal[1] - t.box[1]) <= 8
+            and min(t.box[0], t.forecast(HORIZON)[0]) - 8
+            <= goal[0]
+            <= max(t.box[2], t.forecast(HORIZON)[2]) + 8
+        ]
+        if len(possible) == 1:
+            target = possible[0]
+    moving_intercept = target is not None and abs((target.velocity or (0, 0))[0]) > 0.1
+    # For moving targets, advance the approach one observed frame at a time;
+    # do not repeatedly enumerate long run-ups against an uncertain forecast.
+    delays = (0,) if proposed is not None or moving_intercept else (0, *range(4, 65, 4))
+    maneuvers = [(direction, direction)]
+    if moving_intercept:
+        maneuvers += [(d, d) for d in (0, -direction) if d != direction]
+    if proposed is None and not moving_intercept:
+        maneuvers += [(d, -d) for d in (direction, -direction) if d]
+    for flight_direction, approach_direction in maneuvers:
+        for delay in delays:
+            if flight_direction != approach_direction and not delay:
+                continue
+            candidates = []
+            for hold in range(1, 33):
+                prediction = predict(
+                    scene,
+                    tracks.tracks,
+                    motion,
+                    box,
+                    goal,
+                    flight_direction,
+                    hold,
+                    grounded=True,
+                    approach=delay,
+                    approach_direction=approach_direction,
+                    target=target,
                 )
-        # Prefer an immediately reachable jump; do not add an unnecessary
-        # approach after finding a safe takeoff from the current position.
-        if candidates:
-            break
-    if not candidates:
-        return None
-    _, _, delay, hold, prediction = min(candidates, key=lambda c: c[:4])
-    target = prediction.target
-    if target is not None and any(c[4].target is not target for c in candidates):
-        target = None
-    return Flight(goal, motion, direction, hold, prediction, tracks, target=target, approach=delay)
+                contact = target.forecast(len(prediction.steps)) if target is not None else None
+                uncertain_intercept = (
+                    moving_intercept
+                    and len(target.turns) < 2
+                    and abs((contact[0] + contact[2]) / 2 - goal[0]) > POSITION_TOLERANCE
+                )
+                if prediction.safe and prediction.reached and not uncertain_intercept:
+                    candidates.append(
+                        (
+                            round(prediction.error / 4),
+                            (
+                                abs(hold - proposed.frames)
+                                if proposed is not None
+                                else len(prediction.steps)
+                            ),
+                            hold,
+                            prediction,
+                        )
+                    )
+            if candidates:
+                _, _, hold, prediction = min(candidates, key=lambda c: c[:3])
+                target = prediction.target
+                if target is not None and any(c[3].target is not target for c in candidates):
+                    target = None
+                return Flight(
+                    goal,
+                    motion,
+                    flight_direction,
+                    hold,
+                    prediction,
+                    tracks,
+                    target=target,
+                    approach=delay,
+                    approach_direction=approach_direction,
+                )
+    if (
+        proposed is None
+        and allow_approach
+        and any(
+            t.kind == "walker"
+            and abs(goal[1] - t.box[1]) <= 8
+            and t.box[0] - 64 <= goal[0] <= t.box[2] + 64
+            for t in tracks.tracks
+        )
+    ):
+        return Flight(
+            goal,
+            motion,
+            direction,
+            0,
+            Prediction(False, False, float("inf"), [], "approaching"),
+            tracks,
+            target=target,
+            seeking=True,
+        )
+    return None

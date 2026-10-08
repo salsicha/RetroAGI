@@ -3,7 +3,7 @@
 from copy import copy
 from dataclasses import dataclass
 
-from .smb_trajectory import overlap, predict, translated
+from .smb_trajectory import overlap, predict
 
 
 @dataclass
@@ -152,10 +152,7 @@ class GroundMove:
                     for hazard in self.feedback.tracks.tracks:
                         if hazard.kind == "platform":
                             continue
-                        vx, vy = hazard.velocity or (0, 0)
-                        if overlap(
-                            body, translated(hazard.box, vx * (frame + 1), vy * (frame + 1))
-                        ):
+                        if overlap(body, hazard.forecast(frame + 1)):
                             safe = False
                             break
                     if not safe:
