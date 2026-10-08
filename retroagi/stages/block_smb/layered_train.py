@@ -53,7 +53,6 @@ from retroagi.core.layered_policy import (
     HELD_WIDTH,
     HISTORY,
     MEMORY_INTERVAL,
-    PLATFORM_HORIZONS,
     LayeredSMBPolicy,
     MemoryState,
     PolicySettings,
@@ -195,6 +194,8 @@ class EpisodeRecord:
     played_teacher: np.ndarray  # [D] bool
     agreed: np.ndarray  # [D] bool, the policy chose what the teacher would have
     platform_observations: Optional[np.ndarray] = None  # [T,3,3]: identity, world x/y
+    final_src_c: Optional[np.ndarray] = None  # Observed completed final action endpoint only
+    final_platform_observations: Optional[np.ndarray] = None
     camera_positions: Optional[np.ndarray] = None  # [T] cumulative visual scroll
     rewards: Optional[np.ndarray] = None  # [T] float32, the reward after each frame
     terminal: bool = False  # ended by death or the goal (not a timeout)
@@ -292,6 +293,8 @@ class _Lane:
         # and the side its goal is on (set by whoever runs the agent).
         self.switch = teacher_strategy(self.teacher)
         self.rng = random.Random(task.index * 7919 + task.sample_index)
+        self.final_src_c = None
+        self.final_platform_observations = None
         self.goal = 0.0
         self.end = ""
         self.frames: dict[str, list] = defaultdict(list)
@@ -415,6 +418,8 @@ class _Lane:
             agreed=np.asarray(d["agreed"], bool),
             platform_observations=np.asarray(self.frames["platforms"], np.float32),
             camera_positions=np.asarray(self.frames["camera"], np.float32),
+            final_src_c=self.final_src_c,
+            final_platform_observations=self.final_platform_observations,
             rewards=np.asarray(self.frames["reward"], np.float32),
             terminal=self.end
             in ("goal", "death", "off_route", "missed_objective", "failed_attempt"),
@@ -465,6 +470,16 @@ def _potential(env) -> float:
     return float(weight * env._prev_goal_distance)
 
 
+def observed_platforms(scene, spatial):
+    """Visual identities and camera-corrected coordinates, never simulator IDs."""
+    observed = np.zeros((3, 3), np.float32)
+    for slot, box in enumerate(packed_lists(scene)["moving_platforms"]):
+        matches = [t for t in spatial.tracks.tracks if t.kind == "platform" and t.box == box]
+        if len(matches) == 1 and 8 < box[0] and box[2] < 248:
+            observed[slot] = (matches[0].identity, box[0] + spatial.camera_position, box[1])
+    return observed
+
+
 @torch.no_grad()
 def play_episodes(
     observer: VisionObserver,
@@ -509,14 +524,7 @@ def play_episodes(
             for name, value in zip("abc", step.rows):
                 lane.frames[name].append(value)
             spatial = agents.copies[lane.copy].spatial
-            observed = np.zeros((3, 3), np.float32)
-            for slot, box in enumerate(packed_lists(step.scene)["moving_platforms"]):
-                matches = [
-                    t for t in spatial.tracks.tracks if t.kind == "platform" and t.box == box
-                ]
-                if len(matches) == 1 and 8 < box[0] and box[2] < 248:
-                    observed[slot] = (matches[0].identity, box[0] + spatial.camera_position, box[1])
-            lane.frames["platforms"].append(observed)
+            lane.frames["platforms"].append(observed_platforms(step.scene, spatial))
             lane.frames["camera"].append(spatial.camera_position)
             if step.decision is not None and learner is not None:
                 lane.note_decision(learner, step.decision)
@@ -545,6 +553,16 @@ def play_episodes(
                         )
                     )
                 )
+                # Observe the final state only as a target, after the last button.
+                # A time-budget cutoff is censored, unless the executor also ended.
+                executor = agents.copies[lane.copy].executor
+                if terminated or executor.finished or executor.reconsider:
+                    final_scene = observer.observe([lane.screen])[0]
+                    spatial.observe(final_scene)
+                    from retroagi.core.smb_observer import pack_c
+
+                    lane.final_src_c = pack_c(final_scene).astype(np.float16)
+                    lane.final_platform_observations = observed_platforms(final_scene, spatial)
                 done[lane.task.index] = lane.record()
                 lane.env.close()
                 del playing[lane.copy]
@@ -799,41 +817,120 @@ def action_memory(policy, a, b, c, d, episodes=None, return_all=False):
     return states[e, position]
 
 
-def platform_prediction_loss(policy, states, ticks, episodes):
-    """Timed platform supervision from future tracked visual observations only."""
-    entries, targets, visible = [], [], []
+def action_end_targets(ticks, episodes):
+    """(episode, memory tick, current frame, observed next action-end frame).
+
+    All ticks within one action point to the same endpoint. Frame counts are
+    actual physical elapsed time, including approach, flight and release frames.
+    An unfinished final action at an episode cutoff supplies no endpoint label.
+    """
+    pairs = []
     for i, (episode, ts) in enumerate(zip(episodes, ticks)):
+        decisions = np.asarray(episode.decision_frames)
+        for j, frame in enumerate(ts):
+            following = np.searchsorted(decisions, frame, side="right")
+            if following < len(decisions):
+                end = int(decisions[following])
+            elif episode.final_src_c is not None:
+                end = episode.frames
+            else:
+                continue
+            pairs.append((i, j, frame, end))
+    return pairs
+
+
+def action_duration_summary(episodes):
+    """Measured completed command durations; censored tails are not short actions."""
+    durations = []
+    for episode in episodes:
+        boundaries = list(episode.decision_frames)
+        if episode.final_src_c is not None and boundaries:
+            boundaries.append(episode.frames)
+        durations.extend(int(value) for value in np.diff(boundaries))
+    return {
+        "completed": len(durations),
+        "max_frames": max(durations, default=0),
+        "over_64_frames": sum(value > 64 for value in durations),
+    }
+
+
+def endpoint_prediction_losses(policy, states, ticks, episodes, expectation_weight):
+    """Joint next-action endpoint scene, duration and tracked platform targets."""
+    pairs = action_end_targets(ticks, episodes)
+    if not pairs:
+        return {}, {}
+    indices = tuple(torch.tensor([p[k] for p in pairs], device=states.device) for k in (0, 1))
+    hidden = states[indices]
+    target_frames = torch.tensor(
+        [end - frame for _, _, frame, end in pairs], device=states.device, dtype=states.dtype
+    )
+    actual = np.stack(
+        [
+            episodes[i].src_c[end] if end < episodes[i].frames else episodes[i].final_src_c
+            for i, _, _, end in pairs
+        ]
+    )
+    actual = torch.tensor(actual, device=states.device, dtype=states.dtype)
+    weights = torch.tensor(
+        [getattr(episodes[i], "weight", 1.0) for i, _, _, _ in pairs],
+        device=states.device,
+        dtype=states.dtype,
+    )
+    numbers = policy.memory.expected_scene(hidden)
+    duration = policy.memory.action_end(hidden)
+    losses = {
+        "expectation": expectation_weight
+        * _weighted_mean(
+            (numbers[:, SCENE_NUMBERS] - actual[:, SCENE_NUMBERS]).square().mean(-1), weights
+        )
+    }
+    # Scaling changes optimization units, not which durations are representable.
+    time_loss = (
+        0.5 * ((duration["frames"] - target_frames) / duration["sigma"]).square()
+        + (duration["sigma"] / 32).log()
+    )
+    losses["end_duration"] = 0.1 * _weighted_mean(time_loss, weights)
+    stats = {
+        "end_duration_error_frames": float(
+            (duration["frames"] - target_frames).detach().abs().mean()
+        ),
+        "end_duration_targets": len(pairs),
+        "max_end_duration_frames": float(target_frames.max()),
+    }
+    entries, targets, visible = [], [], []
+    for k, (i, _, frame, end) in enumerate(pairs):
+        episode = episodes[i]
         observations = episode.platform_observations
         if observations is None or len(observations) != episode.frames:
             continue
-        for j, frame in enumerate(ts):
-            for slot, (identity, x, y) in enumerate(observations[frame]):
-                if not identity:
-                    continue
-                for h, horizon in enumerate(PLATFORM_HORIZONS):
-                    if frame + horizon >= episode.frames:
-                        continue  # Do not label terminal/padded frames as observations.
-                    future = observations[frame + horizon]
-                    match = future[future[:, 0] == identity]
-                    entries.append((i, j, slot, h))
-                    visible.append(len(match) == 1)
-                    targets.append(match[0, 1:] - (x, y) if len(match) == 1 else (0, 0))
-    if not entries:
-        return None, {}
-    forecast = policy.memory.platforms(states)
-    index = tuple(
-        torch.tensor([entry[k] for entry in entries], device=states.device) for k in range(4)
-    )
-    mean, sigma, logit = (forecast[name][index] for name in ("displacement", "sigma", "visible"))
-    target = torch.tensor(np.asarray(targets), device=states.device, dtype=states.dtype)
-    mask = torch.tensor(visible, device=states.device)
-    loss = F.binary_cross_entropy_with_logits(logit, mask.float())
-    stats = {"platform_targets": len(entries)}
-    if mask.any():
-        error = mean[mask] - target[mask]
-        loss = loss + ((error / sigma[mask]).square() / 2 + sigma[mask].log()).mean()
-        stats["platform_error_pixels"] = error.detach().abs().mean().item()
-    return loss * 0.05, stats
+        future = observations[end] if end < episode.frames else episode.final_platform_observations
+        if future is None:
+            continue
+        for slot, (identity, x, y) in enumerate(observations[frame]):
+            if not identity:
+                continue
+            match = future[future[:, 0] == identity]
+            entries.append((k, slot))
+            visible.append(len(match) == 1)
+            targets.append(match[0, 1:] - (x, y) if len(match) == 1 else (0, 0))
+    if entries:
+        forecast = policy.memory.platforms(hidden)
+        index = tuple(
+            torch.tensor([entry[k] for entry in entries], device=states.device) for k in (0, 1)
+        )
+        mean, sigma, logit = (
+            forecast[name][index] for name in ("displacement", "sigma", "visible")
+        )
+        target = torch.tensor(np.asarray(targets), device=states.device, dtype=states.dtype)
+        mask = torch.tensor(visible, device=states.device)
+        loss = F.binary_cross_entropy_with_logits(logit, mask.float())
+        stats["platform_targets"] = len(entries)
+        if mask.any():
+            error = mean[mask] - target[mask]
+            loss = loss + ((error / sigma[mask]).square() / 2 + sigma[mask].log()).mean()
+            stats["platform_error_pixels"] = error.detach().abs().mean().item()
+        losses["platform_prediction"] = loss * 0.05
+    return losses, stats
 
 
 def choice_history(used, episode):
@@ -885,13 +982,6 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     with torch.set_grad_enabled(trains_memory):
         state, memory_states, memory_ticks = action_memory(policy, a, b, c, d, episodes, True)
         numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
-    ends = e[1:] == e[:-1]
-    if trains_memory and ends.any():
-        predicted = numbers[:-1][ends][:, SCENE_NUMBERS]
-        actual = c[e[1:][ends], f[1:][ends]][:, SCENE_NUMBERS]
-        losses["expectation"] = expectation_weight * _weighted_mean(
-            (predicted - actual).pow(2).mean(-1), d["weight"][:-1][ends]
-        )
     out = policy.run_skill(
         policy.encode_scene((a[e, f], b[e, f], c[e, f])),
         expected,
@@ -900,12 +990,11 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     )
     stats = {"decisions": int(len(e))}
     if trains_memory:
-        forecast_loss, forecast_stats = platform_prediction_loss(
-            policy, memory_states, memory_ticks, episodes
+        endpoint_losses, endpoint_stats = endpoint_prediction_losses(
+            policy, memory_states, memory_ticks, episodes, expectation_weight
         )
-        if forecast_loss is not None:
-            losses["platform_prediction"] = forecast_loss
-            stats.update(forecast_stats)
+        losses.update(endpoint_losses)
+        stats.update(endpoint_stats)
     imitation = 1.0 if rl is None else rl.imitation_weight
     m = d["labelled"]
     if m.any() and imitation > 0:
@@ -1506,7 +1595,7 @@ def _file_digest(path) -> str:
 def save_layered_checkpoint(path, policy, config, trained_layers, history) -> None:
     torch.save(
         {
-            "memory_version": 2,
+            "memory_version": 3,
             "settings": asdict(policy.settings),
             "state_dict": policy.state_dict(),
             "observation_layout": observation_layout(),
@@ -1587,10 +1676,8 @@ def load_layered_checkpoint(path, device="cpu"):
         widened = fresh["skill.above.weight"].clone().zero_()
         widened[:, : len(TACTICS)] = old[:, : len(TACTICS)]
         state["skill.above.weight"] = widened
+    fresh = policy.state_dict()
     if "memory.platform_prediction.weight" not in state:
-        # Preserve learned layers but explicitly invalidate old qualifications.
-        # Only newly introduced readouts are initialized; all other keys remain strict.
-        fresh = policy.state_dict()
         for name in (
             "memory.timing.weight",
             "memory.platform_prediction.weight",
@@ -1599,6 +1686,21 @@ def load_layered_checkpoint(path, device="cpu"):
             state[name] = fresh[name]
         checkpoint["trained_layers"] = []
         checkpoint.setdefault("load_migrations", []).append("timed_memory_requires_requalification")
+    if "memory.end_duration.weight" not in state:
+        # Fixed-horizon readouts have no next-action endpoint semantics. Reset
+        # those readouts, preserving the shared LSTM, scene, skill and tactics.
+        for name in (
+            "memory.platform_prediction.weight",
+            "memory.platform_prediction.bias",
+            "memory.end_duration.weight",
+            "memory.end_duration.bias",
+            "memory.end_time_embedding.weight",
+        ):
+            state[name] = fresh[name]
+        checkpoint["trained_layers"] = []
+        checkpoint.setdefault("load_migrations", []).append(
+            "action_endpoint_requires_requalification"
+        )
     policy.load_state_dict(state)
     return policy, checkpoint
 
@@ -1786,7 +1888,16 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     for family in per_family
                     if any(e.family == family and len(e.labels["valid"]) for e in played)
                 },
-                "losses": {name: float(np.mean(values)) for name, values in totals.items()},
+                "action_durations": {
+                    "train": action_duration_summary(played),
+                    "validation": action_duration_summary(validation),
+                },
+                "losses": {
+                    name: float(
+                        max(values) if name == "max_end_duration_frames" else np.mean(values)
+                    )
+                    for name, values in totals.items()
+                },
                 "replay_episodes": len(replay),
                 "seconds": {
                     "play": round(play_time, 1),

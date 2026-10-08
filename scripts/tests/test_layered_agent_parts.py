@@ -586,6 +586,12 @@ def _held_agents(end_bias: float, copies: int = 1, pictures=None):
     torch.manual_seed(0)
     policy = LayeredSMBPolicy().eval()
     policy.tactic.heads["end"].bias.data.fill_(end_bias)
+    # These tests exercise tactic persistence on a static fake scene. Force a
+    # one-frame hold so action boundaries do not depend on random skill weights.
+    with torch.no_grad():
+        policy.skill.heads["mode"].weight.zero_()
+        policy.skill.heads["mode"].bias.fill_(-20)
+        policy.skill.heads["mode"].bias[2] = 20
     vision = SceneList(pictures) if pictures is not None else SceneEcho(scene())
     return SMBAgents(VisionObserver(vision), policy, "cpu", copies)
 

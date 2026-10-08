@@ -49,7 +49,6 @@ HISTORY_LAYERS = ("skill",)
 # Each layer's context holds its own last HISTORY choices (the ones used).
 HISTORY = 16
 MEMORY_INTERVAL = 4
-PLATFORM_HORIZONS = (16, 32, 64)
 CHOICE_WIDTH = {"tactic": TACTIC_WIDTH, "skill": SKILL_WIDTH}
 # A held (or just ended) tactic as numbers: one-hot tactic with a last slot for
 # "none", then how long it has been held: log(1 + actions) / log(1 + 64) and
@@ -213,8 +212,8 @@ class MemoryState:
 class Memory(nn.Module):
     """One scene LSTM, refreshed every four frames and at skill decisions.
 
-    Besides its next-decision scene expectation, the same hidden state predicts
-    platform world displacements at explicitly timed future horizons. No second
+    The same hidden state predicts the next action endpoint: its scene,
+    platform world displacements, and remaining duration in physical frames. No second
     recurrent model is used. Elapsed time and observed camera scroll distinguish
     object motion from camera motion and irregular decision intervals.
     """
@@ -226,7 +225,7 @@ class Memory(nn.Module):
         self.timing = nn.Linear(2, settings.width, bias=False)
         nn.init.zeros_(self.timing.weight)
         self.platform_prediction = nn.Linear(
-            settings.memory_width, SCENE_SLOTS["moving_platforms"] * len(PLATFORM_HORIZONS) * 5
+            settings.memory_width, SCENE_SLOTS["moving_platforms"] * 5
         )
         nn.init.zeros_(self.platform_prediction.weight)
         with torch.no_grad():
@@ -234,6 +233,11 @@ class Memory(nn.Module):
             bias.zero_()
             bias[:, 2:4] = math.log(32)  # Untrained forecasts must not authorize transfers.
             bias[:, 4] = -2
+        self.end_time_embedding = nn.Linear(2, settings.width, bias=False)
+        nn.init.zeros_(self.end_time_embedding.weight)
+        self.end_duration = nn.Linear(settings.memory_width, 2)
+        nn.init.zeros_(self.end_duration.weight)
+        nn.init.constant_(self.end_duration.bias, math.log(math.expm1(31 / 32)))
         self.expectation = nn.Sequential(
             nn.Linear(settings.memory_width, settings.memory_width * 2),
             nn.GELU(),
@@ -263,18 +267,28 @@ class Memory(nn.Module):
         hidden, _ = self.cell(scene_summaries)
         return hidden
 
-    def platforms(self, hidden):
-        """Displacement in pixels from the current box, with explicit frame offsets.
+    def action_end(self, hidden):
+        """Predict time until the next action ends, not a preselected horizon.
 
-        Dimensions: [..., current visual platform slot, horizon, (x,y)].
-        Sigma is uncertainty in pixels; visibility is a logit for continued
-        visual identity. Displacements are independent of Mario's future path.
+        Positive continuous frame count and uncertainty, with no upper duration
+        cap. Round only at consumption if an integer frame index is needed.
+        """
+        values = 1 + torch.nn.functional.softplus(self.end_duration(hidden)) * 32
+        return {"frames": values[..., 0], "sigma": values[..., 1]}
+
+    def platforms(self, hidden):
+        """Platform displacement at the SAME predicted next-action endpoint.
+
+        Dimensions: [..., current platform slot, (x,y)]. The duration output is
+        shared with the next-scene prediction; this is not a multi-horizon head.
         """
         raw = self.platform_prediction(hidden).view(
-            *hidden.shape[:-1], SCENE_SLOTS["moving_platforms"], len(PLATFORM_HORIZONS), 5
+            *hidden.shape[:-1], SCENE_SLOTS["moving_platforms"], 5
         )
+        endpoint = self.action_end(hidden)
         return {
-            "frames": PLATFORM_HORIZONS,
+            "frames": endpoint["frames"],
+            "frame_sigma": endpoint["sigma"],
             "displacement": raw[..., :2] * 64,
             "sigma": raw[..., 2:4].clamp(0, math.log(64)).exp(),
             "visible": raw[..., 4],
@@ -516,7 +530,12 @@ class LayeredSMBPolicy(nn.Module):
         """The memory's expected scene at the end of the coming action: its C row
         numbers and its encoding for the decision layers."""
         numbers = self.memory.expected_scene(state.hidden)
-        return numbers, self.scene.expected(numbers)
+        tokens, present = self.scene.expected(numbers)
+        endpoint = self.memory.action_end(state.hidden)
+        timing = torch.stack((endpoint["frames"], endpoint["sigma"]), dim=-1)
+        tokens = tokens.clone()
+        tokens[:, 0] += self.memory.end_time_embedding(torch.log1p(timing / 32))
+        return numbers, (tokens, present)
 
     def recall(self, now, ended, action_memory, state: Optional[MemoryState]) -> MemoryState:
         """Step the tactic memory when a tactic starts.

@@ -503,6 +503,8 @@ class SMBAgents:
             )
             remembered_all = self.policy.remember(now_all, prior, timing)
             forecasts = self.policy.memory.platforms(remembered_all.hidden)
+            end_frames = forecasts["frames"].cpu().tolist()
+            end_sigma = forecasts["frame_sigma"].cpu().tolist()
             displacement = forecasts["displacement"].cpu().tolist()
             uncertainty = forecasts["sigma"].cpu().tolist()
             visibility = forecasts["visible"].sigmoid().cpu().tolist()
@@ -520,14 +522,17 @@ class SMBAgents:
                     if len(matches) == 1:
                         track = matches[0]
                         track.forecast_age = 0
+                        vx, vy = track.velocity or (0, 0)
+                        # Timing uncertainty also makes the predicted endpoint
+                        # uncertain in space for a moving platform.
+                        sigma = max(uncertainty[j][slot]) + max(abs(vx), abs(vy)) * end_sigma[j]
                         track.distant = [
                             (
-                                h,
-                                *displacement[j][slot][i],
-                                max(uncertainty[j][slot][i]),
-                                visibility[j][slot][i],
+                                float(end_frames[j]),
+                                *displacement[j][slot],
+                                sigma,
+                                visibility[j][slot],
                             )
-                            for i, h in enumerate(forecasts["frames"])
                         ]
         decisions: list[Optional[Decision]] = [None] * len(playing)
         if deciding:

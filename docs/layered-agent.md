@@ -8,7 +8,7 @@ Two layers are learned; the executor is a controller. Strategy is an externally 
 | Component | Inputs | Output |
 |---|---|---|
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
-| Scene memory | Encoded scene every four frames and at decisions, elapsed time, visual camera shift, previous LSTM state | Next-boundary scene plus timed platform forecasts |
+| Scene memory | Encoded scene every four frames and at decisions, elapsed time, visual camera shift, previous LSTM state | Next-boundary scene plus jointly predicted action-end time and platform positions |
 | Tactic | Strategy, current and predicted scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
 | Skill | Tactic, strategy context, current scene, memory prediction, last 16 skill commands | Run/jump/hold mode and a relative destination `(x, y)` |
 | Executor | Spatial destination and per-frame vision | One of six emulator button combinations |
@@ -48,14 +48,23 @@ Elapsed frames and observed camera displacement accompany the scene summary.
 Its next-boundary scene prediction is re-encoded for skill and tactic; this
 expectation is made before choosing the command, so it is not action-conditioned.
 
-A readout from that same LSTM predicts each currently visible platform's world
-displacement at **16, 32 and 64 frames**. Every output carries its explicit
-frame offset, uncertainty in pixels, and confidence that the visual track will
-remain available. These are specified prediction horizons, not learned command
-durations. There is no separate recurrent motion predictor. Training matches
-future observations by visual track identity, compensates camera scroll, and
-masks clipped, missing, terminal and padded position targets. The timed loss
-trains this readout and the shared LSTM during skill imitation training.
+The same LSTM jointly predicts **the next action's end scene and how many physical
+frames remain until that end**. Its platform readout predicts displacement at
+that same endpoint, with spatial uncertainty and track-visibility confidence.
+Both skill and tactic receive the predicted timing with the expected scene.
+Duration is a learned positive continuous output with its own uncertainty, not
+a choice among preset horizons. It has no 64-frame cap: saved action traces
+already contain 168-frame commands, ground execution permits 192 frames, and
+jump-button hold length does not include the whole approach and flight.
+
+At a decision, the label is the state and elapsed time at the next decision.
+Periodic memory ticks within that action are trained toward the same endpoint
+with the remaining duration. A completed terminal action also supplies its
+final observed state, even when no next decision is made. Unfinished actions
+cut off by the episode budget are censored, not taught as completed actions.
+Platform labels follow visual identity and compensate camera motion. Missing
+or clipped identities have no position target. No separate motion predictor
+is used. Timing uncertainty contributes to the executor's spatial uncertainty.
 
 Ground movement uses **eight-frame model-predictive control**: simulate candidate
 button sequences, apply only the first button, then observe and replan. A
@@ -63,9 +72,8 @@ terminal braking-distance cost accounts for momentum without extrapolating
 platform positions 48 frames ahead. Boarding completes only at a stable interior
 target; platform-relative commands retain their visual platform identity and
 cannot finish by returning to a different surface. Partial boarding remains
-possible when overlap is increasing. A confident LSTM forecast at a horizon
-appropriate to the destination can trigger reconsideration of a closing shore
-transfer. It cannot override missing immediate support. Forecasts are aged and
+possible when overlap is increasing. A confident LSTM forecast at the predicted
+action endpoint can trigger reconsideration of a closing shore transfer. It cannot override missing immediate support. Forecasts are aged and
 rebased with observations and expire when their time or visual identity is lost.
 Untrained or uncertain forecasts do not authorize transfers. Jump trajectory
 planning remains the existing terrain/hazard flight controller.
@@ -162,7 +170,7 @@ tactic requires a qualified skill checkpoint. Only the stage's parameters change
 
 - **Skill:** scene encoder, scene memory, and skill transformer. Teacher supplies
   tactic and spatial destinations. The predictive executor executes both teacher
-  and policy targets. Skill also learns next-scene and timed platform prediction losses.
+  and policy targets. Skill also learns next-action-end scene, duration and platform prediction losses.
 - **Tactic:** tactic transformer and tactic memory. Skill, scene encoder, and
   scene memory stay frozen. Teacher labels tactic choice/termination and return
   targets train the critic.

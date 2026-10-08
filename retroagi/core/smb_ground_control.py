@@ -150,11 +150,7 @@ class GroundMove:
         distant_closed = False
         if shore_goal is not None:
             support_track = next((t for t in platforms if t.box == support_box), None)
-            forecast = (
-                support_track.distant_forecast(max(MPC_FRAMES + 1, min(64, abs(remaining) / 2.5)))
-                if support_track
-                else None
-            )
+            forecast = support_track.distant_forecast(MPC_FRAMES + 1) if support_track else None
             if forecast is not None:
                 _, future_box, uncertainty = forecast
                 gap_now = max(shore_goal.x0 - support_box[2], support_box[0] - shore_goal.x1, 0)
