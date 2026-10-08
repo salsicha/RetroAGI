@@ -131,3 +131,42 @@ def test_slow_approaching_walker_needs_overlap_margin_before_the_floor_landing()
         SkillToken("jump", 89, -9),
     )
     assert stomped
+
+
+@pytest.mark.parametrize(
+    "goal,scroll,box",
+    [
+        ((106, 210), 0, (40, 208, 51, 220)),  # Odd-width visual detection.
+        ((106, 210), 0.25, (40, 208, 50, 220)),  # Fractional camera correction.
+        ((106, 210.5), 0, (40, 208, 50, 220)),  # Fractional tracked landing.
+        ((350, 210), 0, (40, 208, 50, 220)),  # Relative offset beyond token range.
+        ((-250, 210), 0, (40, 208, 50, 220)),
+    ],
+)
+def test_approach_replanning_preserves_continuous_goal(goal, scroll, box):
+    from retroagi.core.smb_physics import NESPlayerMotion
+    from retroagi.core.smb_scene_labels import MarioView, SceneObservation, Surface
+    from retroagi.core.smb_trajectory import Flight, Prediction, VisualTracks
+
+    scene = SceneObservation(
+        MarioView(box, True, "ground", True), surfaces=(Surface(8, 248, 220, False),)
+    )
+    flight = Flight(
+        goal,
+        NESPlayerMotion(),
+        1,
+        0,
+        Prediction(False, False, float("inf"), [], "approaching"),
+        VisualTracks(),
+        seeking=True,
+    )
+    flight.shift(scroll)
+    expected = (goal[0] - scroll, goal[1])
+    assert flight.press(scene) in (0, 1, 2, 3, 4, 5)
+    assert flight.goal == expected
+
+
+def test_skill_token_still_rejects_fractional_and_out_of_range_destinations():
+    for x, y in [(0.5, 0), (0, 0.5), (257, 0), (0, 241)]:
+        with pytest.raises(ValueError, match="integer pixels"):
+            SkillToken("jump", x, y)

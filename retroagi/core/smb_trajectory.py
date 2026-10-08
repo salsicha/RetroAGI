@@ -457,8 +457,6 @@ class Flight:
 
     def approach_press(self, scene):
         """Retain the destination while making a short, braking-safe approach."""
-        from .tokens import SkillToken
-
         box = takeoff_box(scene)
         if self.target is not None and not any(t is self.target for t in self.tracks.tracks):
             self.done, self.status = True, "lost_target"
@@ -466,22 +464,23 @@ class Flight:
         if not scene.mario.on_something or scene.mario.support == "air":
             self.done, self.status = True, "lost_takeoff_support"
             return 0
-        destination = SkillToken(
-            "jump", self.goal[0] - (box[0] + box[2]) / 2, self.goal[1] - box[3]
-        )
-        flight = plan_flight(
+        # The skill token was decoded once, at the start of this maneuver.
+        # Vision and scroll corrections can make the retained goal fractional
+        # or move it outside the token's local range. Keep that exact goal in
+        # controller coordinates instead of encoding another discrete token.
+        remaining = self.goal[0] - (box[0] + box[2]) / 2
+        flight = _plan_to_goal(
             scene,
             self.tracks,
-            self.motion.x_speed / 16,
-            destination,
-            motion=self.motion,
+            self.motion,
+            self.goal,
             allow_approach=False,
             target=self.target,
         )
         if flight is not None:
             self.__dict__.update(flight.__dict__)
             return self.press(scene)
-        direction = (destination.x > 0) - (destination.x < 0)
+        direction = (remaining > 0) - (remaining < 0)
         options = []
         for control in dict.fromkeys((direction, 0, -direction)):
             motion = copy(self.motion)
@@ -527,7 +526,7 @@ class Flight:
             return 0
         _, _, steps = min(options, key=lambda v: v[:2])
         _, self.motion, button = steps[0]
-        self.prediction = Prediction(True, False, abs(destination.x), steps, "approaching")
+        self.prediction = Prediction(True, False, abs(remaining), steps, "approaching")
         self.status = "approaching_target" if button else "waiting_for_intercept"
         return button
 
@@ -545,7 +544,6 @@ def plan_flight(
 ):
     box = takeoff_box(scene)
     goal = ((box[0] + box[2]) / 2 + destination.x, box[3] + destination.y)
-    direction = (destination.x > 0) - (destination.x < 0)
     motion = (
         copy(motion)
         if motion is not None
@@ -555,6 +553,17 @@ def plan_flight(
             facing=1 if scene.mario.facing_right else -1,
         )
     )
+    return _plan_to_goal(
+        scene, tracks, motion, goal, proposed, allow_approach=allow_approach, target=target
+    )
+
+
+def _plan_to_goal(scene, tracks, motion, goal, proposed=None, *, allow_approach=True, target=None):
+    """Plan to a retained screen-space goal without quantizing controller state."""
+    box = takeoff_box(scene)
+    remaining = goal[0] - (box[0] + box[2]) / 2
+    direction = (remaining > 0) - (remaining < 0)
+    motion = copy(motion)
     # Try the direct approach first; only expand to reversing maneuvers when
     # it cannot reach the destination. The landing delta is not the run-up.
     if target is None:
