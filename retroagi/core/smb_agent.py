@@ -1,6 +1,6 @@
 """Vision-only agent: strategy -> tactic -> spatial skill -> predictive executor.
 
-At each action boundary, memory reads the scene, the option-critic checks the
+Scene memory updates regularly during execution. At each action boundary the option-critic checks the
 held tactic, and skill chooses a relative destination from scene, prediction,
 tactic and its 16 previous commands. The executor receives that target directly.
 Execution uses per-frame vision for motion, destination and hold feedback.
@@ -23,6 +23,7 @@ from .layered_policy import (
     CHOICES,
     HISTORY,
     HISTORY_LAYERS,
+    MEMORY_INTERVAL,
     LayeredSMBPolicy,
     MemoryState,
     choice_log_prob,
@@ -250,6 +251,8 @@ class _Copy:
     held_since: tuple[int, int] = (0, 0)  # (decisions, frames) when it started
     decisions: int = 0  # decisions made this episode
     frame: int = 0  # frames played this episode
+    memory_frame: int = -1
+    memory_camera: float = 0.0
     tactic_hidden: Optional[torch.Tensor] = None  # the tactic memory
     tactic_cell: Optional[torch.Tensor] = None
 
@@ -370,9 +373,11 @@ class SMBAgents:
 
         # Where a tactic starts, the tactic memory steps.
         started = [
-            (starting[i].held is None or given_tactics[i].stance != starting[i].held)
-            if given_tactics[i] is not None
-            else own_end[i]
+            (
+                (starting[i].held is None or given_tactics[i].stance != starting[i].held)
+                if given_tactics[i] is not None
+                else own_end[i]
+            )
             for i in range(count)
         ]
         stepping = [i for i in range(count) if started[i]]
@@ -455,18 +460,75 @@ class SMBAgents:
                 reason = (
                     "landed"
                     if landed
-                    else "done"
-                    if copy.executor.finished
-                    else "hold_recheck"
-                    if copy.executor.reconsider
-                    else "arrived"
-                    if copy.spatial.arrived()
-                    else None
+                    else (
+                        "done"
+                        if copy.executor.finished
+                        else (
+                            "hold_recheck"
+                            if copy.executor.reconsider
+                            else "arrived" if copy.spatial.arrived() else None
+                        )
+                    )
                 )
                 if reason is not None:
                     copy.executor.end(reason)
             ended.append(reason)
         deciding = [k for k, copy in enumerate(playing) if copy.executor.idle]
+        # Memory observes motion during execution as well as at decisions.
+        refreshing = [
+            k
+            for k, copy in enumerate(playing)
+            if copy.frame % MEMORY_INTERVAL == 0 or k in deciding
+        ]
+        encoded = {}
+        if refreshing:
+            from .smb_observer import packed_lists
+
+            now_all = self.policy.encode_scene(
+                stack_rows([rows[k] for k in refreshing], self.device)
+            )
+            prior = MemoryState(
+                torch.stack([playing[k].hidden for k in refreshing]),
+                torch.stack([playing[k].cell for k in refreshing]),
+            )
+            timing = torch.tensor(
+                [
+                    [
+                        (playing[k].frame - max(0, playing[k].memory_frame)) / 32,
+                        (playing[k].spatial.camera_position - playing[k].memory_camera) / 256,
+                    ]
+                    for k in refreshing
+                ],
+                device=self.device,
+            )
+            remembered_all = self.policy.remember(now_all, prior, timing)
+            forecasts = self.policy.memory.platforms(remembered_all.hidden)
+            displacement = forecasts["displacement"].cpu().tolist()
+            uncertainty = forecasts["sigma"].cpu().tolist()
+            visibility = forecasts["visible"].sigmoid().cpu().tolist()
+            for j, k in enumerate(refreshing):
+                copy = playing[k]
+                copy.hidden, copy.cell = remembered_all.hidden[j], remembered_all.cell[j]
+                copy.memory_frame, copy.memory_camera = copy.frame, copy.spatial.camera_position
+                encoded[k] = tuple(value[j : j + 1] for value in now_all)
+                for slot, box in enumerate(packed_lists(scenes[k])["moving_platforms"]):
+                    matches = [
+                        t
+                        for t in copy.spatial.tracks.tracks
+                        if t.kind == "platform" and t.box == box
+                    ]
+                    if len(matches) == 1:
+                        track = matches[0]
+                        track.forecast_age = 0
+                        track.distant = [
+                            (
+                                h,
+                                *displacement[j][slot][i],
+                                max(uncertainty[j][slot][i]),
+                                visibility[j][slot][i],
+                            )
+                            for i, h in enumerate(forecasts["frames"])
+                        ]
         decisions: list[Optional[Decision]] = [None] * len(playing)
         if deciding:
             starting = [playing[k] for k in deciding]
@@ -484,8 +546,10 @@ class SMBAgents:
             )
             now = expected = None
             if needs_context:
-                now = self.policy.encode_scene(stack_rows(picked_rows, self.device))
-                remembered = self.policy.remember(now, remembered)
+                now = tuple(
+                    torch.cat([encoded[k][i] for k in deciding])
+                    for i in range(len(encoded[deciding[0]]))
+                )
                 _, expected = self.policy.expect(remembered)
             tactics, tactic_steps = self._tactics(
                 starting, now, expected, remembered.hidden, extra, run_given, sample

@@ -52,6 +52,8 @@ from retroagi.core.layered_policy import (
     CHOICES,
     HELD_WIDTH,
     HISTORY,
+    MEMORY_INTERVAL,
+    PLATFORM_HORIZONS,
     LayeredSMBPolicy,
     MemoryState,
     PolicySettings,
@@ -66,6 +68,7 @@ from retroagi.core.smb_observer import (
     SEQ_LEN_C,
     VisionObserver,
     observation_layout,
+    packed_lists,
 )
 from retroagi.core.tokens import (
     TACTICS,
@@ -191,6 +194,8 @@ class EpisodeRecord:
     labels: dict  # name -> [D] arrays, with "valid" [D] bool
     played_teacher: np.ndarray  # [D] bool
     agreed: np.ndarray  # [D] bool, the policy chose what the teacher would have
+    platform_observations: Optional[np.ndarray] = None  # [T,3,3]: identity, world x/y
+    camera_positions: Optional[np.ndarray] = None  # [T] cumulative visual scroll
     rewards: Optional[np.ndarray] = None  # [T] float32, the reward after each frame
     terminal: bool = False  # ended by death or the goal (not a timeout)
     explored: bool = False  # the learner sampled its choices
@@ -408,6 +413,8 @@ class _Lane:
             labels=labels,
             played_teacher=np.asarray(d["played_teacher"], bool),
             agreed=np.asarray(d["agreed"], bool),
+            platform_observations=np.asarray(self.frames["platforms"], np.float32),
+            camera_positions=np.asarray(self.frames["camera"], np.float32),
             rewards=np.asarray(self.frames["reward"], np.float32),
             terminal=self.end
             in ("goal", "death", "off_route", "missed_objective", "failed_attempt"),
@@ -501,6 +508,16 @@ def play_episodes(
         for lane, step in zip(live, steps):
             for name, value in zip("abc", step.rows):
                 lane.frames[name].append(value)
+            spatial = agents.copies[lane.copy].spatial
+            observed = np.zeros((3, 3), np.float32)
+            for slot, box in enumerate(packed_lists(step.scene)["moving_platforms"]):
+                matches = [
+                    t for t in spatial.tracks.tracks if t.kind == "platform" and t.box == box
+                ]
+                if len(matches) == 1 and 8 < box[0] and box[2] < 248:
+                    observed[slot] = (matches[0].identity, box[0] + spatial.camera_position, box[1])
+            lane.frames["platforms"].append(observed)
+            lane.frames["camera"].append(spatial.camera_position)
             if step.decision is not None and learner is not None:
                 lane.note_decision(learner, step.decision)
             lane.frames["button"].append(step.button)
@@ -523,9 +540,7 @@ def play_episodes(
                             else (
                                 "missed_objective"
                                 if info.get("objective_missed")
-                                else "failed_attempt"
-                                if info.get("attempt_failed")
-                                else "timeout"
+                                else "failed_attempt" if info.get("attempt_failed") else "timeout"
                             )
                         )
                     )
@@ -730,9 +745,11 @@ def _decisions(
     return {
         name: torch.as_tensor(
             np.concatenate(values),
-            dtype=torch.float32
-            if name in floats
-            else (torch.bool if name in ("labelled", "explored") else torch.long),
+            dtype=(
+                torch.float32
+                if name in floats
+                else (torch.bool if name in ("labelled", "explored") else torch.long)
+            ),
             device=device,
         )
         for name, values in parts.items()
@@ -744,25 +761,79 @@ def _weighted_mean(values, weights):
     return (values * weights).sum() / weights.sum().clamp_min(1e-12)
 
 
-def action_memory(policy, a, b, c, d):
-    """Replay the memory over every action of a batch of episodes.
+def action_memory(policy, a, b, c, d, episodes=None, return_all=False):
+    """Replay precisely the runtime memory ticks: every four frames plus decisions.
 
-    At each decision (an action's start), before anything decides, the memory
-    takes the latest picture: the summary of that frame's encoded scene. It is
-    never told the action.
-    Returns, per decision, the memory's state after that step, from which it
-    predicts the scene at the action's end.
+    Future observations are only loss targets, never recurrent inputs at earlier
+    frames. Both elapsed frames and camera displacement match online updates.
     """
     e, f = d["episode"], d["frame"]
-    summaries = policy.scene(a[e, f], b[e, f], c[e, f])[0][:, 0]
-    # Arrange the decisions of each episode in order: [episodes, actions, width].
-    count = int(e.max()) + 1
-    per_episode = torch.bincount(e, minlength=count)
-    first = torch.cumsum(per_episode, 0) - per_episode
-    position = torch.arange(len(e), device=e.device) - first[e]
-    window = summaries.new_zeros(count, int(per_episode.max()), summaries.shape[-1])
-    window[e, position] = summaries
-    return policy.memory.sequence(window)[e, position]
+    counts = (
+        [episode.frames for episode in episodes] if episodes is not None else [a.shape[1]] * len(a)
+    )
+    ticks = [
+        sorted(set(range(0, length, MEMORY_INTERVAL)) | set(f[e == i].tolist()))
+        for i, length in enumerate(counts)
+    ]
+    ei = torch.tensor([i for i, ts in enumerate(ticks) for _ in ts], device=a.device)
+    fi = torch.tensor([t for ts in ticks for t in ts], device=a.device)
+    summaries = policy.scene(a[ei, fi], b[ei, fi], c[ei, fi])[0][:, 0]
+    window = summaries.new_zeros(len(ticks), max(map(len, ticks)), summaries.shape[-1])
+    timing = summaries.new_zeros(*window.shape[:2], 2)
+    position = torch.empty_like(f)
+    cursor = 0
+    for i, ts in enumerate(ticks):
+        window[i, : len(ts)] = summaries[cursor : cursor + len(ts)]
+        cursor += len(ts)
+        timing[i, : len(ts), 0] = torch.tensor(np.diff([0, *ts]), device=a.device) / 32
+        camera = episodes[i].camera_positions if episodes is not None else None
+        if camera is not None and len(camera):
+            timing[i, : len(ts), 1] = (
+                torch.tensor(np.diff(np.r_[0, camera[ts]]), device=a.device) / 256
+            )
+        indices = {t: j for j, t in enumerate(ts)}
+        position[e == i] = torch.tensor([indices[t] for t in f[e == i].tolist()], device=a.device)
+    states = policy.memory.sequence(window, timing)
+    if return_all:
+        return states[e, position], states, ticks
+    return states[e, position]
+
+
+def platform_prediction_loss(policy, states, ticks, episodes):
+    """Timed platform supervision from future tracked visual observations only."""
+    entries, targets, visible = [], [], []
+    for i, (episode, ts) in enumerate(zip(episodes, ticks)):
+        observations = episode.platform_observations
+        if observations is None or len(observations) != episode.frames:
+            continue
+        for j, frame in enumerate(ts):
+            for slot, (identity, x, y) in enumerate(observations[frame]):
+                if not identity:
+                    continue
+                for h, horizon in enumerate(PLATFORM_HORIZONS):
+                    if frame + horizon >= episode.frames:
+                        continue  # Do not label terminal/padded frames as observations.
+                    future = observations[frame + horizon]
+                    match = future[future[:, 0] == identity]
+                    entries.append((i, j, slot, h))
+                    visible.append(len(match) == 1)
+                    targets.append(match[0, 1:] - (x, y) if len(match) == 1 else (0, 0))
+    if not entries:
+        return None, {}
+    forecast = policy.memory.platforms(states)
+    index = tuple(
+        torch.tensor([entry[k] for entry in entries], device=states.device) for k in range(4)
+    )
+    mean, sigma, logit = (forecast[name][index] for name in ("displacement", "sigma", "visible"))
+    target = torch.tensor(np.asarray(targets), device=states.device, dtype=states.dtype)
+    mask = torch.tensor(visible, device=states.device)
+    loss = F.binary_cross_entropy_with_logits(logit, mask.float())
+    stats = {"platform_targets": len(entries)}
+    if mask.any():
+        error = mean[mask] - target[mask]
+        loss = loss + ((error / sigma[mask]).square() / 2 + sigma[mask].log()).mean()
+        stats["platform_error_pixels"] = error.detach().abs().mean().item()
+    return loss * 0.05, stats
 
 
 def choice_history(used, episode):
@@ -812,7 +883,7 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     a, b, c, _, _, _ = _padded(episodes, device)
     trains_memory = rl is None
     with torch.set_grad_enabled(trains_memory):
-        state = action_memory(policy, a, b, c, d)
+        state, memory_states, memory_ticks = action_memory(policy, a, b, c, d, episodes, True)
         numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
     ends = e[1:] == e[:-1]
     if trains_memory and ends.any():
@@ -828,6 +899,13 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         choice_history(d["used"], e),
     )
     stats = {"decisions": int(len(e))}
+    if trains_memory:
+        forecast_loss, forecast_stats = platform_prediction_loss(
+            policy, memory_states, memory_ticks, episodes
+        )
+        if forecast_loss is not None:
+            losses["platform_prediction"] = forecast_loss
+            stats.update(forecast_stats)
     imitation = 1.0 if rl is None else rl.imitation_weight
     m = d["labelled"]
     if m.any() and imitation > 0:
@@ -925,9 +1003,9 @@ def tactic_batch(episodes: Sequence[EpisodeRecord], config, device):
     return {
         name: torch.as_tensor(
             np.concatenate(values),
-            dtype=torch.float32
-            if name in floats
-            else (torch.bool if name in flags else torch.long),
+            dtype=(
+                torch.float32 if name in floats else (torch.bool if name in flags else torch.long)
+            ),
             device=device,
         )
         for name, values in parts.items()
@@ -990,7 +1068,7 @@ def tactic_forward(policy, episodes, config, device, memory_grad: bool):
     e, f = d["episode"], d["frame"]
     with torch.no_grad():
         encoded = policy.scene(a[e, f], b[e, f], c[e, f])
-        action_state = action_memory(policy, a, b, c, d)
+        action_state = action_memory(policy, a, b, c, d, episodes)
         _, expected = policy.expect(MemoryState(action_state, torch.zeros_like(action_state)))
     held = held_rows(d["held"], d["actions"], d["frames"])
     with torch.set_grad_enabled(memory_grad and torch.is_grad_enabled()):
@@ -1428,6 +1506,7 @@ def _file_digest(path) -> str:
 def save_layered_checkpoint(path, policy, config, trained_layers, history) -> None:
     torch.save(
         {
+            "memory_version": 2,
             "settings": asdict(policy.settings),
             "state_dict": policy.state_dict(),
             "observation_layout": observation_layout(),
@@ -1508,6 +1587,18 @@ def load_layered_checkpoint(path, device="cpu"):
         widened = fresh["skill.above.weight"].clone().zero_()
         widened[:, : len(TACTICS)] = old[:, : len(TACTICS)]
         state["skill.above.weight"] = widened
+    if "memory.platform_prediction.weight" not in state:
+        # Preserve learned layers but explicitly invalidate old qualifications.
+        # Only newly introduced readouts are initialized; all other keys remain strict.
+        fresh = policy.state_dict()
+        for name in (
+            "memory.timing.weight",
+            "memory.platform_prediction.weight",
+            "memory.platform_prediction.bias",
+        ):
+            state[name] = fresh[name]
+        checkpoint["trained_layers"] = []
+        checkpoint.setdefault("load_migrations", []).append("timed_memory_requires_requalification")
     policy.load_state_dict(state)
     return policy, checkpoint
 

@@ -465,9 +465,10 @@ def test_replaying_an_episode_gives_the_memory_play_gave():
     starts = [0, 1, 5, 9]  # the frames on which actions started
     with torch.no_grad():
         state, played = None, []
-        for t in starts:
+        for t in sorted(set(starts) | set(range(0, len(frames), 4))):
             state = policy.remember(policy.encode_scene(frames[t]), state)
-            played.append(state.hidden[0])
+            if t in starts:
+                played.append(state.hidden[0])
         a, b, c = (torch.cat([r[i] for r in frames]).unsqueeze(0) for i in range(3))
         d = {
             "episode": torch.zeros(len(starts), dtype=torch.long),

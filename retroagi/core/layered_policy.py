@@ -48,6 +48,8 @@ LAYERS = ("tactic", "skill")
 HISTORY_LAYERS = ("skill",)
 # Each layer's context holds its own last HISTORY choices (the ones used).
 HISTORY = 16
+MEMORY_INTERVAL = 4
+PLATFORM_HORIZONS = (16, 32, 64)
 CHOICE_WIDTH = {"tactic": TACTIC_WIDTH, "skill": SKILL_WIDTH}
 # A held (or just ended) tactic as numbers: one-hot tactic with a last slot for
 # "none", then how long it has been held: log(1 + actions) / log(1 + 64) and
@@ -209,21 +211,29 @@ class MemoryState:
 
 
 class Memory(nn.Module):
-    """A long short-term memory network that steps once per action, from vision only.
+    """One scene LSTM, refreshed every four frames and at skill decisions.
 
-    At the start of each action, before anything decides, it takes the latest
-    picture's scene (the scene encoder's summary of the frame the action starts
-    on) and updates its state, which carries everything earlier. It is never
-    told what Mario will do. From that state its expectation part predicts the world when the coming
-    action ends: the scene numbers (smb_observer C row) the vision transformer
-    will report on that frame. That expected scene is what the decision layers
-    read beside the current one.
+    Besides its next-decision scene expectation, the same hidden state predicts
+    platform world displacements at explicitly timed future horizons. No second
+    recurrent model is used. Elapsed time and observed camera scroll distinguish
+    object motion from camera motion and irregular decision intervals.
     """
 
     def __init__(self, settings: PolicySettings):
         super().__init__()
         self.width = settings.memory_width
         self.cell = nn.LSTM(settings.width, settings.memory_width, batch_first=True)
+        self.timing = nn.Linear(2, settings.width, bias=False)
+        nn.init.zeros_(self.timing.weight)
+        self.platform_prediction = nn.Linear(
+            settings.memory_width, SCENE_SLOTS["moving_platforms"] * len(PLATFORM_HORIZONS) * 5
+        )
+        nn.init.zeros_(self.platform_prediction.weight)
+        with torch.no_grad():
+            bias = self.platform_prediction.bias.view(-1, 5)
+            bias.zero_()
+            bias[:, 2:4] = math.log(32)  # Untrained forecasts must not authorize transfers.
+            bias[:, 4] = -2
         self.expectation = nn.Sequential(
             nn.Linear(settings.memory_width, settings.memory_width * 2),
             nn.GELU(),
@@ -234,20 +244,41 @@ class Memory(nn.Module):
         zeros = torch.zeros(batch, self.width, device=device)
         return MemoryState(zeros, zeros.clone())
 
-    def forward(self, scene_summary, state: MemoryState) -> MemoryState:
-        """One action's start: scene_summary [B, width]."""
+    def forward(self, scene_summary, state: MemoryState, timing=None) -> MemoryState:
+        """One observation tick: scene_summary [B, width], optional elapsed/scroll."""
+        if timing is not None:
+            scene_summary = scene_summary + self.timing(timing)
         _, (hidden, cell) = self.cell(
             scene_summary.unsqueeze(1), (state.hidden.unsqueeze(0), state.cell.unsqueeze(0))
         )
         return MemoryState(hidden[0], cell[0])
 
-    def sequence(self, scene_summaries) -> torch.Tensor:
-        """Every action of whole episodes from their start: scene_summaries
+    def sequence(self, scene_summaries, timing=None) -> torch.Tensor:
+        """Every memory tick of whole episodes from their start: scene_summaries
         [B, K, width]. Returns the state after each action's start, [B, K,
         memory_width]. Padding after an episode's last action does not change
         its earlier steps."""
+        if timing is not None:
+            scene_summaries = scene_summaries + self.timing(timing)
         hidden, _ = self.cell(scene_summaries)
         return hidden
+
+    def platforms(self, hidden):
+        """Displacement in pixels from the current box, with explicit frame offsets.
+
+        Dimensions: [..., current visual platform slot, horizon, (x,y)].
+        Sigma is uncertainty in pixels; visibility is a logit for continued
+        visual identity. Displacements are independent of Mario's future path.
+        """
+        raw = self.platform_prediction(hidden).view(
+            *hidden.shape[:-1], SCENE_SLOTS["moving_platforms"], len(PLATFORM_HORIZONS), 5
+        )
+        return {
+            "frames": PLATFORM_HORIZONS,
+            "displacement": raw[..., :2] * 64,
+            "sigma": raw[..., 2:4].clamp(0, math.log(64)).exp(),
+            "visible": raw[..., 4],
+        }
 
     def expected_scene(self, hidden) -> torch.Tensor:
         """[..., memory_width] -> the scene numbers expected when the action ends."""
@@ -441,8 +472,8 @@ class TacticLayer(_Layer):
 class LayeredSMBPolicy(nn.Module):
     """The two learned layers, scene encoder and two memories.
 
-    When the executor's plan has ended: remember() steps the action memory with
-    the latest picture, expect() gives its expected scene, the tactic layer
+    remember() steps scene memory periodically and at decisions. When the
+    executor's plan ends, expect() gives its expected scene, the tactic layer
     checks its held tactic (and, when it ends, recall() steps the tactic memory
     and the layer chooses the next), and the skill layer chooses the executor's next destination.
     """
@@ -469,8 +500,8 @@ class LayeredSMBPolicy(nn.Module):
         }[layer]
         return [p for module in modules for p in module.parameters()]
 
-    def remember(self, now, state: Optional[MemoryState]) -> MemoryState:
-        """Step the memory at the start of an action, before anything decides.
+    def remember(self, now, state: Optional[MemoryState], timing=None) -> MemoryState:
+        """Step scene memory on a periodic observation or decision boundary.
 
         ``now``: the encoded scene (encode_scene) of the frame the action starts
         on; the memory takes its summary token. ``state``: the memory after the
@@ -479,7 +510,7 @@ class LayeredSMBPolicy(nn.Module):
         summary = now[0][:, 0]
         if state is None:
             state = self.memory.initial(summary.shape[0], summary.device)
-        return self.memory(summary, state)
+        return self.memory(summary, state, timing)
 
     def expect(self, state: MemoryState):
         """The memory's expected scene at the end of the coming action: its C row

@@ -31,6 +31,24 @@ class Track:
     samples: list = field(default_factory=list)
     turns: list = field(default_factory=list)
     horizontal_speeds: list = field(default_factory=list)
+    identity: int = 0
+    distant: list = field(default_factory=list)
+    forecast_age: int = 0
+
+    def distant_forecast(self, frames):
+        """A timed LSTM endpoint, rebased by actual observations; never extrapolated."""
+        usable = [
+            p
+            for p in self.distant
+            if p[0] - self.forecast_age >= frames
+            and p[0] > self.forecast_age
+            and p[3] <= 4
+            and p[4] >= 0.8
+        ]
+        if not usable:
+            return None
+        horizon, dx, dy, sigma, visible = min(usable)
+        return horizon - self.forecast_age, translated(self.box, dx, dy), sigma
 
     def forecast(self, frames):
         vx, vy = self.velocity or (0, 0)
@@ -56,6 +74,7 @@ class Track:
 @dataclass
 class VisualTracks:
     tracks: list = field(default_factory=list)
+    next_identity: int = 1
 
     def observe(self, scene, scroll):
         objects = [(e.box, e.kind) for e in scene.enemies if e.kind != "defeated"]
@@ -71,7 +90,8 @@ class VisualTracks:
                     if abs(dx) <= 8 and abs(dy) <= 8:
                         matches.append((abs(dx) + abs(dy), i, dx, dy))
             matches.sort()
-            track = Track(box, kind)
+            track = Track(box, kind, identity=self.next_identity)
+            self.next_identity += 1
             if matches and (len(matches) == 1 or matches[1][0] - matches[0][0] > 1):
                 _, i, dx, dy = matches[0]
                 old = self.tracks[i]
@@ -101,6 +121,11 @@ class VisualTracks:
                 track.turns = [x - scroll for x in track.turns]
                 if reversed_course and kind == "walker" and velocity[0] * dx < 0:
                     track.turns = (track.turns + [old.box[0] - scroll])[-4:]
+                track.distant = [
+                    (h, px - dx, py - dy, sigma, visible)
+                    for h, px, py, sigma, visible in track.distant
+                ]
+                track.forecast_age += 1
                 track.box = box
                 track.samples = ([] if reversed_course else old.samples) + [(dx, dy)]
                 track.samples = track.samples[-32:]

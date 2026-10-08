@@ -85,6 +85,7 @@ class SpatialFeedback:
     motion: NESPlayerMotion = field(default_factory=NESPlayerMotion)
     predicted_dx: float | None = None
     motion_ready: bool = False
+    camera_position: float = 0.0
 
     def executed(self, button, scene):
         """Propagate the actual button history, including release and braking."""
@@ -179,6 +180,8 @@ class SpatialFeedback:
             else:
                 self.velocities.clear()
                 self.speed = None
+        if shift is not None:
+            self.camera_position += shift
         self.tracks.observe(scene, shift)
         if self.flight is not None and shift is not None:
             self.flight.shift(shift)
