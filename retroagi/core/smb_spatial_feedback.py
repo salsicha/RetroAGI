@@ -84,11 +84,13 @@ class SpatialFeedback:
     travel: object = None
     motion: NESPlayerMotion = field(default_factory=NESPlayerMotion)
     predicted_dx: float | None = None
+    motion_ready: bool = False
 
     def executed(self, button, scene):
         """Propagate the actual button history, including release and braking."""
         if scene.mario.box is None:
             self.predicted_dx = None
+            self.motion_ready = False
             return
         direction = 1 if button in (1, 2) else -1 if button in (3, 4) else 0
         self.predicted_dx, _, _ = self.motion.advance(
@@ -107,6 +109,7 @@ class SpatialFeedback:
             self.velocities.clear()
             self.speed = None
             self.predicted_dx = None
+            self.motion_ready = False
             self.tracks.observe(scene, None)
             return
         if self.previous is not None and self.previous.mario.box is not None:
@@ -148,9 +151,23 @@ class SpatialFeedback:
                 self.speed = sum(self.velocities) / len(self.velocities)
                 # Keep fractional physics through ordinary pixel quantization;
                 # correct substantial disagreement (e.g. a wall or changed speed).
-                if len(self.velocities) >= 4 and abs(self.speed - self.motion.x_speed / 16) > 0.75:
+                # Bootstrap unknown spawn momentum before a jump may plan.
+                # Once initialized, retain four-sample filtering so pixel
+                # quantization does not overwrite fractional acceleration.
+                samples_needed = 4 if self.motion_ready else 2
+                if (
+                    len(self.velocities) >= samples_needed
+                    and abs(self.speed - self.motion.x_speed / 16) > 0.75
+                ):
                     self.motion.x_speed = round(self.speed * 16)
                     self.motion.moving = (self.speed > 0) - (self.speed < 0)
+                    if self.flight is not None:
+                        # Flight owns a copy of the physical state; correcting
+                        # only this tracker leaves its next prediction stale.
+                        self.flight.motion.x_speed = self.motion.x_speed
+                        self.flight.motion.moving = self.motion.moving
+                if len(self.velocities) >= 2:
+                    self.motion_ready = True
             else:
                 self.velocities.clear()
                 self.speed = None

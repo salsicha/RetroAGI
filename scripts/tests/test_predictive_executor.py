@@ -167,6 +167,53 @@ def test_execution_motion_matches_actual_left_right_and_release_physics(buttons)
         env.close()
 
 
+@pytest.mark.parametrize("family", ["platform_hop", "pit_leap"])
+@pytest.mark.parametrize("difficulty,sample_index", [("easy", 100), ("medium", 103), ("hard", 106)])
+def test_destination_only_jump_initializes_running_spawn_motion(family, difficulty, sample_index):
+    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=0, sample_index=sample_index, family=family, difficulty=difficulty
+    )
+    env = MarioScenarioEnv()
+    try:
+        screen, _ = env.reset(scenario=sample.scenario)
+        assert env.mario["vx"] == 2.5
+
+        class Observer:
+            def observe(self, screens):
+                return [scene_from_labels(env.scene_labels())]
+
+        agents = SMBAgents(Observer(), LayeredSMBPolicy().eval(), "cpu")
+
+        def given(copies, scenes):
+            return {
+                "skill": [
+                    SkillToken(
+                        "jump",
+                        round(env.goal.centerx - env.mario["x"] - env.mario["w"] / 2),
+                        round(env.goal.bottom - env.mario["y"] - env.mario["h"]),
+                    )
+                ]
+            }
+
+        launched = False
+        for _ in range(120):
+            step = agents.act([screen], [0], given=given)[0]
+            if step.button in (2, 4, 5) and not launched:
+                launched = True
+                feedback = agents.copies[0].spatial
+                assert feedback.motion_ready
+                assert abs(feedback.flight.motion.x_speed / 16 - env.mario["vx"]) < 0.75
+                assert env.mario["on_ground"]
+            screen, _, done, truncated, _ = env.step(step.button)
+            if done or truncated:
+                break
+        assert launched and env._goal_credited
+    finally:
+        env.close()
+
+
 @pytest.mark.parametrize("family", ["enemy_gap", "low_choice_alternate_route", "tall_pipe_jump"])
 def test_teacher_targets_include_the_approach_and_executor_reaches_first_landing(family):
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario

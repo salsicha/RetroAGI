@@ -15,7 +15,14 @@ from retroagi.core.smb_scene_labels import (
     scene_from_labels,
 )
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import Track, VisualTracks, plan_flight, predict
+from retroagi.core.smb_trajectory import (
+    Flight,
+    Prediction,
+    Track,
+    VisualTracks,
+    plan_flight,
+    predict,
+)
 from retroagi.core.tokens import SkillToken
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
@@ -26,6 +33,49 @@ def tunnel_scene(enemy=60):
         enemies=(EnemyView((enemy, 200, enemy + 16, 220), "other"),),
         blocks=(BlockView((64, 40, 215, 190), "brick"),),
         surfaces=(Surface(8, 248, 220, False), Surface(64, 215, 40, False)),
+    )
+
+
+@pytest.mark.parametrize("elapsed", [3, 4])
+def test_run_up_cannot_press_jump_after_losing_observed_support(elapsed):
+    flight = Flight(
+        (150, 198),
+        NESPlayerMotion(),
+        1,
+        12,
+        Prediction(True, True, 0, [], "landed"),
+        VisualTracks(),
+        approach=4,
+        elapsed=elapsed,
+    )
+    airborne = SceneObservation(MarioView((95, 210, 105, 222), True, "air", False))
+    assert flight.press(airborne) == 1
+    assert flight.released and not flight.done
+    assert flight.approach == 0
+    assert flight.goal == (150, 198)
+    assert not flight.motion.previous_jump
+    assert flight.press(airborne) not in (2, 4, 5)
+
+
+def test_visual_speed_correction_updates_active_flight_without_resetting_vertical_motion():
+    feedback = SpatialFeedback(motion_ready=True)
+    flight = Flight(
+        (150, 198),
+        NESPlayerMotion(y_speed=-3, y_force=71, previous_jump=True),
+        1,
+        12,
+        Prediction(True, True, 0, [], "landed"),
+        VisualTracks(),
+    )
+    feedback.flight = flight
+    for x in [40, 42, 45, 47, 50]:
+        feedback.observe(SceneObservation(MarioView((x, 150, x + 10, 162), True, "air", False)))
+    assert feedback.motion.x_speed == flight.motion.x_speed == 40
+    assert flight.motion.moving == 1
+    assert (flight.motion.y_speed, flight.motion.y_force, flight.motion.previous_jump) == (
+        -3,
+        71,
+        True,
     )
 
 

@@ -74,7 +74,12 @@ bridge-occluded floor edges are excluded from camera-motion estimates.
 
 Before a grounded jump, the executor collects visual motion measurements and
 checks the full body trajectory against visible walls, ceilings, supports and
-moving hazards. It searches holds of 1–32 frames over a 96-frame horizon using
+moving hazards. Two observed displacements initialize unknown starting momentum
+before planning; later corrections use four samples to avoid replacing fractional
+acceleration with pixel rounding. Horizontal corrections also update an active
+flight's motion model. A run-up checks observed support; losing it cancels the
+planned jump press while retaining airborne steering toward the landing target.
+It searches holds of 1–32 frames over a 96-frame horizon using
 the shared NES motion model. It forecasts tracked objects from camera-corrected
 visual motion, includes uncertainty for lethal hazards, and checks eight frames
 after arrival for an approaching enemy. Walker stomps are allowed when the

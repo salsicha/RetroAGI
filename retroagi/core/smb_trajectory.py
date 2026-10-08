@@ -297,7 +297,23 @@ class Flight:
             self.released = True
             self.done, self.status = True, "lost_observation"
             return int(SMBAction.NOOP)
+        if (
+            self.approach
+            and self.elapsed <= self.approach
+            and (not scene.mario.on_something or scene.mario.support == "air")
+        ):
+            # A scheduled takeoff cannot create ground contact. Cancel the
+            # run-up/jump press, but retain airborne steering to the destination.
+            # Dropping the maneuver here would discard its landing target.
+            self.released = True
+            self.approach = 0
+            self.status = "lost_takeoff_support"
         approach = max(0, self.approach - self.elapsed)
+        grounded = (
+            self.elapsed <= self.approach
+            and scene.mario.on_something
+            and scene.mario.support != "air"
+        )
         airborne_frames = max(0, self.elapsed - self.approach)
         remaining = max(0, self.hold - airborne_frames) if not self.released else 0
         box = takeoff_box(scene) if self.elapsed <= self.approach else scene.mario.box
@@ -309,7 +325,7 @@ class Flight:
             self.goal,
             self.direction,
             remaining,
-            grounded=self.elapsed <= self.approach,
+            grounded=grounded,
             target=self.target,
             approach=approach,
         )
@@ -333,7 +349,7 @@ class Flight:
                         self.goal,
                         direction,
                         hold,
-                        grounded=self.elapsed <= self.approach,
+                        grounded=grounded,
                         target=self.target,
                         approach=approach,
                     )
