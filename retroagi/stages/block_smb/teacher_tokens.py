@@ -328,7 +328,7 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Skill
 
     A jump targets its landing/stomp, not its takeoff or a hidden object ID.
     Runs end at an objective, support transition or bounded travel waypoint.
-    An upcoming jump includes its approach in the same destination. The probe
+    An upcoming jump's run-up is a separate supported waypoint. The probe
     is restored exactly; only the spatial command reaches the executor.
     """
     from retroagi.core.smb_coaching import probe_state
@@ -355,14 +355,15 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Skill
                 and env.mario["x"] >= platforms[support].left + 4
             )
             for index, action in enumerate(route[:160]):
-                # Label a whole maneuver, including its approach, rather than
-                # an acceleration fragment whose endpoint assumes momentum.
+                # Label one supported run waypoint or the first jump landing.
                 # A ride/wait starts a new command. Passive platform carry
                 # must not become a ground waypoint that chases world motion.
                 if mode == "run" and index and action == SMBAction.NOOP and not riding:
                     break
-                if action in SMB_JUMP_ACTIONS:
-                    mode = "jump"
+                if mode == "run" and action in SMB_JUMP_ACTIONS:
+                    # The skill owns clearance/approach decisions. The executor
+                    # must not infer an obstacle and invent a reverse run-up.
+                    break
                 _, _, done, _, _ = env.step(action)
                 airborne = airborne or not env.mario["on_ground"]
                 landed = airborne and (env.mario["on_ground"] or env.stomped)
@@ -397,7 +398,14 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Skill
             x = env.mario["x"] + env.mario["w"] / 2 - start_x
             y = env.mario["y"] + env.mario["h"] - start_y
             on = _support_index(env)
-            if mode == "run" and on is not None and env.platforms[on].get("moving"):
+            if on is not None:
+                # Supervise points on the actual support, including its edges,
+                # rather than the outside foot center of a grazing contact.
+                rect = env.platforms[on]["rect"]
+                half = min(env.mario["w"] / 2, rect.width / 2)
+                center = max(rect.left + half, min(rect.right - half, start_x + x))
+                x, y = center - start_x, rect.top - start_y
+            if on is not None and env.platforms[on].get("moving"):
                 # Express the landing/boarding point on the support as seen
                 # NOW. Runtime tracks that visual support; no IDs are passed.
                 x -= env.platforms[on]["rect"].left - platforms[on].left

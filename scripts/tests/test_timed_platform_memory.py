@@ -191,7 +191,7 @@ def test_old_checkpoint_migrates_only_new_memory_readouts(tmp_path):
         assert torch.equal(loaded.state_dict()[name], weight)
 
 
-def test_confident_distant_forecast_requests_transfer_reconsideration_near_edge():
+def test_distant_forecast_does_not_veto_a_requested_transfer():
     from collections import deque
 
     from retroagi.core.smb_ground_control import GroundMove
@@ -214,8 +214,7 @@ def test_confident_distant_forecast_requests_transfer_reconsideration_near_edge(
         move = GroundMove(feedback, 40, 0, 220)
         move.press(scene)
         statuses.append(move.status)
-    assert statuses[0] == "transfer_recheck"
-    assert statuses[1] == "running"
+    assert statuses == ["running", "running"]
 
 
 def test_boarding_request_moves_onto_platform_instead_of_braking_back_to_shore():

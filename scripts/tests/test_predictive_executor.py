@@ -124,7 +124,7 @@ def test_legacy_checkpoint_discards_only_action_weights(tmp_path):
     save_layered_checkpoint(output, loaded, config, ["skill"], [])
     reloaded, saved = load_layered_checkpoint(output)
     assert "action_input" not in saved["token_layout"]
-    assert saved["token_layout"]["executor"] == "predictive_spatial_v2"
+    assert saved["token_layout"]["executor"] == "goal_following_v1"
     assert not any(name.startswith("action.") for name in reloaded.state_dict())
 
 
@@ -215,7 +215,7 @@ def test_destination_only_jump_initializes_running_spawn_motion(family, difficul
 
 
 @pytest.mark.parametrize("family", ["enemy_gap", "low_choice_alternate_route", "tall_pipe_jump"])
-def test_teacher_targets_include_the_approach_and_executor_reaches_first_landing(family):
+def test_teacher_owns_approach_waypoints_before_the_jump(family):
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
     from retroagi.stages.block_smb.teacher_tokens import (
         episode_teacher,
@@ -228,41 +228,24 @@ def test_teacher_targets_include_the_approach_and_executor_reaches_first_landing
     )
     env = MarioScenarioEnv()
     try:
-        screen, _ = env.reset(scenario=sample.scenario)
+        env.reset(scenario=sample.scenario)
         teacher = episode_teacher(sample.scenario)
         plan, _ = teacher_plan(env, teacher, certify_holds=False)
-        assert plan.action == 1  # The certified maneuver starts by accelerating.
+        assert plan.action == 1
         target = teacher_skill(env, teacher, plan)
-        assert target.mode == "jump"  # The label describes its landing, not that acceleration.
+        assert target.mode == "run"
         goal_x = env.mario["x"] + env.mario["w"] / 2 + target.x
         goal_y = env.mario["y"] + env.mario["h"] + target.y
-
-        class Observer:
-            def observe(self, screens):
-                return [scene_from_labels(env.scene_labels())]
-
-        agents = SMBAgents(Observer(), LayeredSMBPolicy().eval(), "cpu")
-        buttons = []
-        airborne = False
-        approach = 0
-        for _ in range(180):
-            step = agents.act([screen], [0], given=lambda copies, scenes: {"skill": [target]})[0]
-            if agents.copies[0].spatial.flight:
-                approach = max(approach, agents.copies[0].spatial.flight.approach)
-            buttons.append(step.button)
-            screen, _, done, _, info = env.step(step.button)
-            assert not info.get("death")
-            airborne |= not env.mario["on_ground"]
-            if airborne and (env.mario["on_ground"] or env.stomped):
+        assert any(
+            p["rect"].left <= goal_x <= p["rect"].right and p["rect"].top == goal_y
+            for p in env.platforms
+        )
+        for action in sample.oracle["actions"]:
+            if action in (2, 4, 5):
                 break
-            assert not done
-        assert airborne
-        assert approach > 0
-        error = abs(env.mario["x"] + env.mario["w"] / 2 - goal_x)
-        error += 2 * abs(env.mario["y"] + env.mario["h"] - goal_y)
-        assert error <= 8
-        jumps = [i for i, b in enumerate(buttons) if b in (2, 4, 5)]
-        assert jumps == list(range(jumps[0], jumps[-1] + 1))
+            env.step(action)
+        plan, _ = teacher_plan(env, teacher, certify_holds=False)
+        assert teacher_skill(env, teacher, plan).mode == "jump"
     finally:
         env.close()
 

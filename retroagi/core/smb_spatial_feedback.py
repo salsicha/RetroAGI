@@ -86,6 +86,49 @@ class SpatialFeedback:
     predicted_dx: float | None = None
     motion_ready: bool = False
     camera_position: float = 0.0
+    start_feet: float = 0.0
+    observed_frames: int = 0
+    positions: deque = field(default_factory=lambda: deque(maxlen=24))
+
+    @property
+    def stalled(self):
+        return (
+            self.destination is not None
+            and self.destination.mode != "hold"
+            and len(self.positions) == self.positions.maxlen
+            and all(
+                max(p[k] for p in self.positions) - min(p[k] for p in self.positions) <= 2
+                for k in (0, 1)
+            )
+        )
+
+    def report(self, scene):
+        """Measured command outcome for skill, never a judgement of goal safety."""
+        from .tokens import EXECUTION_WIDTH
+
+        if self.destination is None or scene.mario.box is None:
+            return [0.0] * EXECUTION_WIDTH
+        box = scene.mario.box
+        dx = self.displacement - self.start_displacement
+        dy = box[3] - self.start_feet
+        rx, ry = self.destination.x - dx, self.destination.y - dy
+        if self.destination.mode == "hold":
+            rx = ry = 0.0
+        elif self.flight is not None:
+            rx = self.flight.goal[0] - (box[0] + box[2]) / 2
+            ry = self.flight.goal[1] - box[3]
+        elif self.travel is not None and self.travel.target is not None:
+            rx = self.travel.target.box[0] + self.travel.target_offset - (box[0] + box[2]) / 2
+        return [
+            1.0,
+            float(self.stalled),
+            float(abs(rx) <= 4 and abs(ry) <= 4),
+            min(self.observed_frames / 192, 1.0),
+            dx / 256,
+            dy / 240,
+            rx / 256,
+            ry / 240,
+        ]
 
     def executed(self, button, scene):
         """Propagate the actual button history, including release and braking."""
@@ -185,6 +228,9 @@ class SpatialFeedback:
         self.tracks.observe(scene, shift)
         if self.flight is not None and shift is not None:
             self.flight.shift(shift)
+        if self.destination is not None:
+            self.observed_frames += 1
+            self.positions.append((self.displacement, scene.mario.box[3]))
         self.previous = scene
 
     def begin(self, destination, scene, proposed=None):
@@ -195,6 +241,9 @@ class SpatialFeedback:
         self.status = "unplanned"
         self.destination = destination
         self.start_displacement = self.displacement
+        self.start_feet = scene.mario.box[3] if scene.mario.box else 0.0
+        self.observed_frames = 0
+        self.positions.clear()
         if destination is None:
             if proposed is None:
                 raise ValueError("the executor needs a destination")
@@ -241,7 +290,7 @@ class SpatialFeedback:
             )
             return ActionPlan(coast, proposed.frames if proposed is not None else 1)
         if grounded_jump:
-            if self.speed is not None and len(self.velocities) >= 2 and self.tracks.ready:
+            if self.speed is not None and len(self.velocities) >= 2:
                 speed = self.speed if proposed is not None else self.motion.x_speed / 16
                 self.flight = plan_flight(
                     scene,
@@ -251,12 +300,9 @@ class SpatialFeedback:
                     proposed,
                     motion=self.motion if proposed is None else None,
                 )
-                if self.flight is not None:
-                    self.status = "checked"
-                    action = {-1: 4, 0: 5, 1: 2}[self.flight.direction]
-                    return ActionPlan(action, max(1, self.flight.hold))
-                self.status = "no_safe_trajectory"
-                return ActionPlan(HOLD_GROUND, 1)
+                self.status = "attempting"
+                action = {-1: 4, 0: 5, 1: 2}[self.flight.direction]
+                return ActionPlan(action, max(1, self.flight.hold))
             self.status = "observing_motion"
             return ActionPlan(HOLD_GROUND, 1)
         if proposed is None:

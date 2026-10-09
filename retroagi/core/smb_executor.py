@@ -5,7 +5,7 @@ ground or flight controller. This object owns that maneuver and emits its button
 ActionPlan is an internal control record, also used for exact teacher playback.
 
 Ordinary timed plans finish after their frames or an observed landing.
-A visually checked Flight owns the whole jump, including its coast after A
+A destination-following Flight owns the whole jump, including its coast after A
 is released; its frame count is only the proposed button-hold duration.
 The layers choose again after landing or an execution failure/timeout.
 HOLD_GROUND instead
@@ -140,7 +140,7 @@ class GroundHold:
 
 @dataclass
 class SMBExecutor:
-    """Plays one ActionPlan (optionally a whole checked flight) at a time. Each frame:
+    """Plays one ActionPlan (optionally a whole flight) at a time. Each frame:
 
     1. if it has pressed all of the plan's frames, ``finished`` is true and the
        agent ends the plan (``end("done")``); if the agent saw Mario land, it
@@ -163,7 +163,7 @@ class SMBExecutor:
 
     @property
     def finished(self) -> bool:
-        """The timed plan or checked flight has finished."""
+        """The timed plan or flight has finished."""
         if self.flight is not None:
             return self.flight.done
         if self.travel is not None:
@@ -212,11 +212,11 @@ class SMBExecutor:
         button = (
             self.flight.press(scene)
             if self.flight is not None
-            else self.travel.press(scene)
-            if self.travel is not None
-            else self.hold.press(scene)
-            if self.plan.action == HOLD_GROUND
-            else self.plan.action
+            else (
+                self.travel.press(scene)
+                if self.travel is not None
+                else self.hold.press(scene) if self.plan.action == HOLD_GROUND else self.plan.action
+            )
         )
         if (
             self.pressed == 0

@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
+import numpy as np
 import pytest
 import torch
 
@@ -103,6 +104,7 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(learner, lab
     policy = LayeredSMBPolicy().eval()
     agent = SMBAgents(Observer(), policy, "cpu")
     given = _teacher_given(learner, {0: lane})
+    feedback = []
     try:
         for _ in range(3):
             lane.teacher.observe_frame(lane.env)
@@ -111,6 +113,7 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(learner, lab
                 lane.frames[key].append(row)
             if step.decision:
                 lane.note_decision(learner, step.decision)
+                feedback.append(step.decision.execution_feedback)
                 assert step.decision.skill is not None
                 assert ("skill" in step.decision.chosen) == (learner == "skill")
                 assert step.decision.tactic_step is None
@@ -119,6 +122,8 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(learner, lab
             lane.frames["potential"].append(0.0)
             lane.screen, _, _, _, _ = lane.env.step(step.button)
         record = lane.record()
+        if learner == "skill":
+            assert np.allclose(record.execution_feedback, feedback)
         if learner == "skill" and not label:
             assert not record.labels["valid"].any()
             assert all(
@@ -306,8 +311,21 @@ def test_route_skill_ends_on_first_destination_without_a_tactic_sequence(
     try:
         env.reset(scenario=scenario)
         state = episode_teacher(scenario)
+        checked_jump = False
         for i, button in enumerate(sample.oracle["actions"]):
             state.observe_frame(env)
+            if i == 0 or (button in (2, 4, 5) and not checked_jump):
+                plan, _ = teacher_plan(env, state, certify_holds=False)
+                goal = teacher_skill(env, state, plan)
+                gx = env.mario["x"] + env.mario["w"] / 2 + goal.x
+                gy = env.mario["y"] + env.mario["h"] + goal.y
+                half = env.mario["w"] / 2
+                assert any(
+                    p["rect"].left + half <= gx <= p["rect"].right - half
+                    and abs(gy - p["rect"].top) <= 1
+                    for p in env.platforms
+                ), (family, difficulty, goal)
+                checked_jump |= button in (2, 4, 5)
             assert teacher_tactic(env, state).stance == tactic
             done = env.step(button)[2]
             if _support_index(env) == target:

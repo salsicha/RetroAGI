@@ -47,6 +47,17 @@ SKILL_MODES = ("run", "jump", "hold")
 SKILL_X = tuple(range(-256, 257))
 SKILL_Y = tuple(range(-240, 241))
 SKILL_WIDTH = len(SKILL_MODES) + 2
+EXECUTION_FEEDBACK = (
+    "present",
+    "no_progress",
+    "arrived",
+    "elapsed",
+    "moved_x",
+    "moved_y",
+    "remaining_x",
+    "remaining_y",
+)
+EXECUTION_WIDTH = len(EXECUTION_FEEDBACK)
 
 
 @dataclass(frozen=True)
@@ -147,11 +158,12 @@ def token_layout() -> dict:
         "executor_actions": [action.name for action in SMB_ACTIONS] + ["HOLD_GROUND"],
         "skill": {
             "strategy_context": "strategy_switch_v1",
+            "execution_feedback": list(EXECUTION_FEEDBACK),
             "modes": list(SKILL_MODES),
             "x": list(SKILL_X),
             "y": list(SKILL_Y),
             "reference": "mario_feet_relative_pixels",
             "history": 16,
         },
-        "executor": "predictive_spatial_v2",
+        "executor": "goal_following_v1",
     }

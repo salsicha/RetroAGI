@@ -10,7 +10,7 @@ Two layers are learned; the executor is a controller. Strategy is an externally 
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
 | Scene memory | Encoded scene every four frames and at decisions, elapsed time, visual camera shift, previous LSTM state | Next-boundary scene plus jointly predicted action-end time and platform positions |
 | Tactic | Strategy, current and predicted scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
-| Skill | Tactic, strategy context, current scene, memory prediction, last 16 skill commands | Run/jump/hold mode and a relative destination `(x, y)` |
+| Skill | Tactic, strategy context, current scene, memory prediction, last 16 skill commands, measured execution feedback | Run/jump/hold mode and a relative destination `(x, y)` |
 | Executor | Spatial destination and per-frame vision | One of six emulator button combinations |
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
@@ -38,7 +38,7 @@ destinations under speed run and max points.
 
 There is no action network. The executor retains a run target and evaluates
 short acceleration/braking trajectories every frame. Jump targets use the
-terrain/hazard predictor to select the initial hold and correct the flight.
+Mario motion model to select the initial hold and correct the flight.
 The controller chooses the buttons and durations; the skill chooses the target.
 
 ## Memory and timing
@@ -64,81 +64,52 @@ final observed state, even when no next decision is made. Unfinished actions
 cut off by the episode budget are censored, not taught as completed actions.
 Platform labels follow visual identity and compensate camera motion. Missing
 or clipped identities have no position target. No separate motion predictor
-is used. Timing uncertainty contributes to the executor's spatial uncertainty.
+is used. These predictions inform the learned destination selection.
 
-Ground movement uses **eight-frame model-predictive control**: simulate candidate
-button sequences, apply only the first button, then observe and replan. A
-terminal braking-distance cost accounts for momentum without extrapolating
-platform positions 48 frames ahead. Boarding completes only at a stable interior
-target; platform-relative commands retain their visual platform identity and
-cannot finish by returning to a different surface. Partial boarding remains
-possible when overlap is increasing. A confident LSTM forecast at the predicted
-action endpoint can trigger reconsideration of a closing shore transfer. It cannot override missing immediate support. Forecasts are aged and
-rebased with observations and expire when their time or visual identity is lost.
-Untrained or uncertain forecasts do not authorize transfers. Jump trajectory
-planning remains the existing terrain/hazard flight controller.
+Ground movement uses **eight-frame model-predictive control**: simulate Mario's
+response to candidate button sequences, apply only the first button, then observe
+and replan. A terminal braking-distance cost accounts for momentum. The executor
+does not reconstruct terrain, simulate collisions or hazards, prevent walking off
+edges, or reject a requested destination as unsafe. Choosing a supported landing
+and any necessary clearance waypoint belongs to skill.
 
 Tactic remains an option-critic: termination is checked at each action
 boundary, while a new tactic is selected only when no tactic is held or the
 old one ends. Tactic memory updates on those starts. Tactic receives its
 held category and age in both frames and decisions.
 
-Skill selects a destination at each action boundary. A checked jump remains
-one executor maneuver through any required run-up, takeoff, button release and
-flight to landing. The skill supplies the landing point; the executor searches
-collision-checked approaches of up to 64 frames when an immediate jump cannot reach it.
-The selected 1–32 frames describes the jump-button hold, not the whole flight.
-Landing interrupts a plan when the contact detector and visible support under
-Mario's feet agree. Side contact with a ledge cannot interrupt the jump.
-An airborne command following an interrupted or unchecked plan releases the
-preceding jump hold. Separate jumps always have a physical button release
-between them, even if landing interrupted the previous plan.
-A run completes on arrival with low residual speed, or reports a blocked path
-or timeout. Arrival requires less than one pixel of error; one-pixel requests
-must produce actual progress. Dense acceleration candidates and passive braking
-avoid small-target stalls. Zero-distance targets remain stationary. Ground
-prediction projects platform support and carry, binds points on moving supports
-to their visual tracks, and hands boarding back to skill before chasing an old
-shore waypoint. Geometric support resolves bridge/ground classification errors;
-bridge-occluded floor edges are excluded from camera-motion estimates.
+Skill selects a destination at each action boundary. A jump remains one executor
+maneuver through approach, takeoff, button release, and landing. The controller
+searches jump holds of 1–32 frames and approaches of 0, 4, 8, …, 64 frames using
+Mario's button-response model. It never retries the approach search with
+individual frame durations. Crossing the requested height on descent scores a
+candidate's position error; it does not certify a safe path or supported landing.
+When no candidate reaches the point, the controller executes its closest attempt.
+The flight model has a 96-frame horizon plus approach time and contains no
+terrain or hazard simulation.
 
-Before a grounded jump, the executor collects visual motion measurements and
-checks the full body trajectory against visible walls, ceilings, supports and
-moving hazards. Two observed displacements initialize unknown starting momentum
-before planning; later corrections use four samples to avoid replacing fractional
-acceleration with pixel rounding. Horizontal corrections also update an active
-flight's motion model. A run-up checks observed support; losing it cancels the
-planned jump press while retaining airborne steering toward the landing target.
-It searches holds of 1–32 frames over a 96-frame horizon using
-the shared NES motion model. It forecasts tracked objects from camera-corrected
-visual motion, includes uncertainty for lethal hazards, and checks eight frames
-after arrival for an approaching enemy. Walker stomps are allowed when the
-destination identifies the predicted contact; monsters cannot be stomped.
-When the accepted trajectories identify one walker, the executor binds the
-stomp to that visual track. Camera motion and a patrol reversal preserve the
-association. During the jump it predicts contact with the updated enemy
-position and velocity, and searches steering and remaining hold durations
-when the current trajectory would miss. This behavior applies to any family
-requesting a stomp, without a family name or enemy ID in the skill command.
-An ambiguous initial target retains fixed-point execution. Losing an acquired
-track reports `lost_target`, never silently selects a different enemy, and
-does not count an ordinary floor landing as completing the stomp. Actual
-contact still comes from visual landing feedback and the scenario's stomp
-event; a predicted interception alone cannot complete an objective.
-An unverified takeoff waits and exposes `observing_motion` or
-`no_safe_trajectory` through `AgentStep.execution_status`.
+Per-frame observations correct Mario's motion estimate and steering. Two visual
+displacements initialize momentum; subsequent corrections filter four samples.
+Once A is released, it cannot be pressed again in the same flight. Separate jumps
+have a physical button release between them. Visual contact after takeoff ends
+the flight without reconstructing collision geometry. A run completes on arrival
+with low residual speed or after 192 frames. Missing Mario observations release
+buttons and end execution.
 
-During flight, observations update the trajectory check each frame. A safe
-correction may change steering or the remaining hold within the same jump;
-once released, A cannot be pressed again in that flight. If no safe continuation
-is found, the executor preserves the committed maneuver and reports
-`no_safe_continuation`, rather than treating an unrelated short landing as
-success. Missing Mario observations release buttons and end the maneuver.
-This is a bounded visual model, not a guarantee about unseen terrain, future
-enemy turns or inaccurate detections. The executor reads decoded visual geometry and its own button history, never
-simulator state or teacher trajectories. On featureless scrolling terrain it
-dead-reckons displacement from executed buttons until landmarks return; this
-model estimate is not an independent visual measurement.
+A destination on a uniquely identified moving platform or walker follows that
+observed identity and its requested offset. Losing the identity retains the last
+point; it never silently acquires a different object. No handwritten patrol or
+hazard forecast changes the command. Camera motion is estimated from observed
+landmarks; featureless scrolling uses Mario's button-response displacement until
+landmarks return. This dead reckoning cannot independently verify progress.
+
+If observed displacement remains within two pixels in both axes for 24 frames,
+an active movement ends with `no_progress`. Skill receives eight explicit values:
+feedback present, no progress, arrival, elapsed time, horizontal/vertical
+displacement, and horizontal/vertical distance remaining. Training records the
+same feedback supplied during execution. This lets skill learn to choose another
+destination after a failed attempt. The controller does not invent a new target.
+Hold commands retain their separate platform-relative controller.
 
 The monster curriculum teacher now has an approach phase for an offscreen,
 sleeping monster. It advances only while a forward frame plus stopping distance
@@ -182,13 +153,15 @@ once the critic meets its readiness threshold. Reward rounds freeze shared
 scene/memory modules and update only the selected layer.
 
 The spatial teacher probes the certified route and restores the simulator
-state. A jump command targets the first landing/stomp; a run command targets
-the endpoint of a complete bounded maneuver or reached objective. Acceleration
-before a jump belongs to that jump's landing label, rather than a short run
-label that loses momentum. Boarding targets use the support's current position,
-so passive carry does not become a world destination. A hold targets the current
-spot. Executor v2 checkpoints use these semantics; older weights can warm-start
-training but their previous skill/tactic qualifications are cleared.
+state. A jump targets the first landing/stomp. A run targets its bounded endpoint
+or reached objective, stopping before the next jump in the demonstration. This
+provides explicit approach waypoints, including clearance around overhead ledges.
+Supported target centers are clamped within the observed-in-training support's
+edges with room for Mario's width. Moving-support targets use the support's
+current pose, so passive carry does not become a fixed world destination.
+A hold targets the current spot. `goal_following_v1` checkpoints include execution
+feedback. Older weights can warm-start with zero influence from the new feedback
+inputs; previous skill/tactic qualifications are cleared and must be earned again.
 Uncertified recovery states are not used as skill demonstrations. The teacher
 can read simulator state during training; deployed networks cannot.
 

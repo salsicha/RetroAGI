@@ -70,6 +70,7 @@ from retroagi.core.smb_observer import (
     packed_lists,
 )
 from retroagi.core.tokens import (
+    EXECUTION_WIDTH,
     TACTICS,
     TacticToken,
     encode_strategy,
@@ -193,6 +194,7 @@ class EpisodeRecord:
     labels: dict  # name -> [D] arrays, with "valid" [D] bool
     played_teacher: np.ndarray  # [D] bool
     agreed: np.ndarray  # [D] bool, the policy chose what the teacher would have
+    execution_feedback: Optional[np.ndarray] = None  # [D,8], measured prior command outcome
     platform_observations: Optional[np.ndarray] = None  # [T,3,3]: identity, world x/y
     final_src_c: Optional[np.ndarray] = None  # Observed completed final action endpoint only
     final_platform_observations: Optional[np.ndarray] = None
@@ -351,6 +353,7 @@ class _Lane:
         d["used"].append(encode_choice(learner, used).numpy())
         mine = decision.chosen[learner]
         if learner == "skill":
+            d["execution_feedback"].append(decision.execution_feedback)
             d["given"].append(
                 torch.cat(
                     (encode_tactic(decision.tactic), encode_strategy(decision.strategy))
@@ -416,6 +419,9 @@ class _Lane:
             labels=labels,
             played_teacher=np.asarray(d["played_teacher"], bool),
             agreed=np.asarray(d["agreed"], bool),
+            execution_feedback=(
+                np.asarray(d["execution_feedback"], np.float32) if d["execution_feedback"] else None
+            ),
             platform_observations=np.asarray(self.frames["platforms"], np.float32),
             camera_positions=np.asarray(self.frames["camera"], np.float32),
             final_src_c=self.final_src_c,
@@ -738,6 +744,11 @@ def _decisions(
         parts["episode"].append(np.full(count, i))
         parts["frame"].append(e.decision_frames)
         parts["given"].append(e.given)
+        parts["execution_feedback"].append(
+            e.execution_feedback
+            if e.execution_feedback is not None
+            else np.zeros((count, EXECUTION_WIDTH), np.float32)
+        )
         parts["labelled"].append(e.labels["valid"].astype(bool))
         parts["explored"].append(np.full(count, e.explored) & ~e.played_teacher)
         parts["weight"].append(np.full(count, e.weight, np.float32))
@@ -759,7 +770,15 @@ def _decisions(
             parts[f"pick_{head}"].append(value)
     if not parts:
         return None
-    floats = ("given", "advantage", "return", "old_log_prob", "used", "weight")
+    floats = (
+        "given",
+        "advantage",
+        "return",
+        "old_log_prob",
+        "used",
+        "weight",
+        "execution_feedback",
+    )
     return {
         name: torch.as_tensor(
             np.concatenate(values),
@@ -987,6 +1006,7 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         expected,
         d["given"],
         choice_history(d["used"], e),
+        feedback=d["execution_feedback"],
     )
     stats = {"decisions": int(len(e))}
     if trains_memory:
@@ -1621,16 +1641,23 @@ def load_layered_checkpoint(path, device="cpu"):
     if checkpoint["observation_layout"] != observation_layout():
         raise ValueError(f"{path} was trained on a different observation layout")
     saved, now = checkpoint["token_layout"], token_layout()
-    old_executor = saved.get("executor", "predictive_spatial_v1") == "predictive_spatial_v1"
+    old_executor = saved.get("executor", "predictive_spatial_v1") in (
+        "predictive_spatial_v1",
+        "predictive_spatial_v2",
+    )
     if old_executor:
-        # Tensor schemas are unchanged, but old fragment-target qualifications
-        # do not certify whole-maneuver execution. Keep weights for warm start.
+        # Old qualifications do not certify the changed executor and target
+        # semantics. Preserve compatible weights only as a warm start.
         checkpoint["trained_layers"] = []
         checkpoint.setdefault("load_migrations", []).append(
             "maneuver_targets_require_requalification"
         )
     saved_skill = dict(saved.get("skill") or {})
     legacy_skill = "strategy_context" not in saved_skill
+    legacy_feedback = "execution_feedback" not in saved_skill
+    if legacy_feedback:
+        saved_skill["execution_feedback"] = now["skill"]["execution_feedback"]
+        checkpoint["trained_layers"] = []
     if legacy_skill:
         saved_skill["strategy_context"] = now["skill"]["strategy_context"]
     other_strategies = saved.get("strategies") != now["strategies"]
@@ -1656,16 +1683,14 @@ def load_layered_checkpoint(path, device="cpu"):
         state = {name: value for name, value in state.items() if not name.startswith("action.")}
         checkpoint.setdefault("load_migrations", []).append("removed_action_network")
     checkpoint["trained_layers"] = [n for n in checkpoint["trained_layers"] if n in LEARNERS]
-    if legacy_skill:
+    if legacy_skill or legacy_feedback:
         # Preserve every learned tactic input exactly. New context starts at
         # zero influence, and is learned during the next skill training run.
         old = state["skill.above.weight"]
         widened = policy.state_dict()["skill.above.weight"].clone().zero_()
         widened[:, : old.shape[1]] = old
         state["skill.above.weight"] = widened
-        checkpoint.setdefault("load_migrations", []).append(
-            "skill_strategy_context_zero_initialized"
-        )
+        checkpoint.setdefault("load_migrations", []).append("skill_context_zero_initialized")
     if other_strategies:
         fresh = policy.state_dict()
         state = {

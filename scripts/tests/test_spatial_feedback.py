@@ -87,7 +87,7 @@ def test_running_takeoff_reaches_the_narrow_platform_instead_of_overshooting(dis
         env.close()
 
 
-def test_execution_measures_running_takeoff_before_launching_a_checked_jump():
+def test_execution_measures_running_takeoff_before_launching_a_jump():
     env = MarioScenarioEnv()
     feedback = SpatialFeedback()
     executor = SMBExecutor()
@@ -115,7 +115,7 @@ def test_execution_measures_running_takeoff_before_launching_a_checked_jump():
                 executor.start(plan, flight=feedback.flight)
                 if feedback.flight:
                     launched = True
-                    assert frame >= 2 and feedback.flight.prediction.safe
+                    assert frame >= 2 and feedback.flight.prediction.steps
             _, _, done, _, _ = env.step(executor.press(scene))
             if done:
                 break

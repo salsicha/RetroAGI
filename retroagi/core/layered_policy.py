@@ -28,6 +28,7 @@ from .smb_observer import (
 )
 from .tokens import (
     DEFAULT_STRATEGY,
+    EXECUTION_WIDTH,
     SKILL_MODES,
     SKILL_WIDTH,
     SKILL_X,
@@ -501,7 +502,7 @@ class LayeredSMBPolicy(nn.Module):
         self.tactic_memory = TacticMemory(settings)
         self.skill = _Layer(
             settings,
-            TACTIC_WIDTH + STRATEGY_WIDTH,
+            TACTIC_WIDTH + STRATEGY_WIDTH + EXECUTION_WIDTH,
             {"mode": len(SKILL_MODES), "x": len(SKILL_X), "y": len(SKILL_Y)},
             SKILL_WIDTH,
             choice_positions=(len(SKILL_MODES), len(SKILL_MODES) + 1),
@@ -566,7 +567,7 @@ class LayeredSMBPolicy(nn.Module):
         """Batched PolicyInput rows (src_a, src_b, src_c) -> scene tokens and their mask."""
         return self.scene(*inputs)
 
-    def run_skill(self, encoded, expected, tactic, history=None, strategy=None):
+    def run_skill(self, encoded, expected, tactic, history=None, strategy=None, feedback=None):
         """Choose a destination using the tactic and its strategy context.
 
         Training records pack both tokens together. Direct callers may pass
@@ -577,6 +578,9 @@ class LayeredSMBPolicy(nn.Module):
             if strategy is None:
                 strategy = encode_strategy(DEFAULT_STRATEGY).to(tactic).expand(len(tactic), -1)
             tactic = torch.cat((tactic, strategy), dim=-1)
+        if feedback is None:
+            feedback = tactic.new_zeros((len(tactic), EXECUTION_WIDTH))
+        tactic = torch.cat((tactic, feedback), dim=-1)
         return self.skill(scene_tokens, present, expected, tactic, history)
 
 

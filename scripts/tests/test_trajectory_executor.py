@@ -1,112 +1,87 @@
-"""Visual controller safety and actual closed-loop motion, independent of weights."""
+"""The executor attempts destinations independently of terrain/hazard safety."""
 
-from collections import deque
+from dataclasses import replace
 
 import pytest
 
-from retroagi.core.smb_executor import ActionPlan, SMBExecutor
-from retroagi.core.smb_physics import NESPlayerMotion
+from retroagi.core.smb_executor import SMBExecutor
 from retroagi.core.smb_scene_labels import (
     BlockView,
     EnemyView,
     MarioView,
     SceneObservation,
     Surface,
-    scene_from_labels,
 )
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import (
-    Flight,
-    Prediction,
-    Track,
-    VisualTracks,
-    plan_flight,
-    predict,
-)
+from retroagi.core.smb_trajectory import APPROACH_FRAMES, Track, VisualTracks, plan_flight
 from retroagi.core.tokens import SkillToken
-from retroagi.stages.block_smb.env import MarioScenarioEnv
 
 
-def tunnel_scene(enemy=60):
+def plain_scene():
     return SceneObservation(
-        MarioView((19, 208, 29, 220), False, "ground", True),
-        enemies=(EnemyView((enemy, 200, enemy + 16, 220), "other"),),
-        blocks=(BlockView((64, 40, 215, 190), "brick"),),
-        surfaces=(Surface(8, 248, 220, False), Surface(64, 215, 40, False)),
+        MarioView((40, 208, 50, 220), True, "ground", True), surfaces=(Surface(8, 248, 220, False),)
     )
 
 
-@pytest.mark.parametrize("elapsed", [3, 4])
-def test_run_up_cannot_press_jump_after_losing_observed_support(elapsed):
-    flight = Flight(
-        (150, 198),
-        NESPlayerMotion(),
-        1,
-        12,
-        Prediction(True, True, 0, [], "landed"),
-        VisualTracks(),
-        approach=4,
-        elapsed=elapsed,
-    )
-    airborne = SceneObservation(MarioView((95, 210, 105, 222), True, "air", False))
-    assert flight.press(airborne) == 1
-    assert flight.released and not flight.done
-    assert flight.approach == 0
-    assert flight.goal == (150, 198)
-    assert not flight.motion.previous_jump
-    assert flight.press(airborne) not in (2, 4, 5)
-
-
-def test_visual_speed_correction_updates_active_flight_without_resetting_vertical_motion():
-    feedback = SpatialFeedback(motion_ready=True)
-    flight = Flight(
-        (150, 198),
-        NESPlayerMotion(y_speed=-3, y_force=71, previous_jump=True),
-        1,
-        12,
-        Prediction(True, True, 0, [], "landed"),
-        VisualTracks(),
-    )
-    feedback.flight = flight
-    for x in [40, 42, 45, 47, 50]:
-        feedback.observe(SceneObservation(MarioView((x, 150, x + 10, 162), True, "air", False)))
-    assert feedback.motion.x_speed == flight.motion.x_speed == 40
-    assert flight.motion.moving == 1
-    assert (flight.motion.y_speed, flight.motion.y_force, flight.motion.previous_jump) == (
-        -3,
-        71,
-        True,
-    )
-
-
-def test_identical_destination_needs_a_longer_initial_hold_to_clear_the_monster():
-    scene = tunnel_scene()
-    tracks = VisualTracks([Track(scene.enemies[0].box, "other", [(-0.53, 0)] * 32)])
-    short = predict(
+def test_obstacles_hazards_and_missing_support_cannot_veto_or_change_a_jump():
+    scene = plain_scene()
+    blocked = replace(
         scene,
-        tracks.tracks,
-        NESPlayerMotion(facing=-1),
-        scene.mario.box,
-        (61, 220),
-        1,
-        18,
-        grounded=True,
+        surfaces=(),
+        blocks=(BlockView((50, 120, 200, 230), "brick"),),
+        enemies=(EnemyView((50, 200, 66, 220), "other"),),
     )
-    assert not short.safe and short.reason == "hazard"
-    flight = plan_flight(scene, tracks, 0, SkillToken("jump", 37, 0), ActionPlan(2, 18))
-    assert flight is not None
-    assert flight.hold > 18 and flight.prediction.reached
+    plans = []
+    for picture in (scene, blocked):
+        tracks = VisualTracks([Track((50, 200, 66, 220), "other")])
+        flight = plan_flight(picture, tracks, 0, SkillToken("jump", 60, 0))
+        plans.append((flight.hold, flight.direction, flight.approach, flight.approach_direction))
+        assert flight.press(picture) in (1, 2, 3, 4, 5)
+    assert plans[0] == plans[1]
 
 
-def test_full_body_clearance_blocks_a_jump_under_a_low_ceiling():
-    scene = SceneObservation(
-        MarioView((40, 208, 50, 220), True, "ground", True),
-        blocks=(BlockView((20, 175, 120, 195), "brick"),),
-        surfaces=(Surface(8, 248, 220, False), Surface(20, 120, 175, False)),
-    )
-    assert (
-        plan_flight(scene, VisualTracks(), 0, SkillToken("jump", 40, 0), ActionPlan(2, 32)) is None
-    )
+@pytest.mark.parametrize("goal", [SkillToken("jump", 256, -240), SkillToken("jump", -200, -100)])
+def test_unreachable_destinations_still_get_an_executable_attempt_on_coarse_grid(goal):
+    flight = plan_flight(plain_scene(), VisualTracks(), 0, goal)
+    assert flight.approach in APPROACH_FRAMES
+    assert APPROACH_FRAMES == tuple(range(0, 65, 4))
+    assert flight.prediction.steps
+    assert flight.press(plain_scene()) in (1, 2, 3, 4, 5)
+
+
+def test_losing_vision_releases_buttons_and_reports_failure():
+    flight = plan_flight(plain_scene(), VisualTracks(), 0, SkillToken("jump", 40, 0))
+    assert flight.press(SceneObservation(MarioView(None, False, "air", False))) == 0
+    assert flight.done and flight.status == "lost_observation"
+
+
+def test_new_jump_has_a_physical_release_edge():
+    flight = plan_flight(plain_scene(), VisualTracks(), 0, SkillToken("jump", 40, 0))
+    feedback = SpatialFeedback()
+    feedback.motion_ready = True
+    feedback.velocities.extend([0, 0])
+    feedback.speed = 0
+    plan = feedback.begin(SkillToken("jump", 40, 0), plain_scene())
+    executor = SMBExecutor(last_button=2)
+    executor.start(plan, flight=flight)
+    assert executor.press(plain_scene()) not in (2, 4, 5)
+    assert flight.elapsed == 0
+    executor.press(plain_scene())
+    assert flight.elapsed == 1
+
+
+def test_moving_goal_tracks_only_the_requested_object():
+    scene = plain_scene()
+    target = Track((80, 190, 90, 200), "walker")
+    flight = plan_flight(scene, VisualTracks([target]), 0, SkillToken("jump", 40, -30))
+    assert flight.target is target
+    target.box = (83, 190, 93, 200)
+    flight.press(scene)
+    assert flight.goal == (88, 190)
+    neighbour = Track((83, 190, 93, 200), "walker")
+    flight.tracks.tracks = [neighbour]
+    flight.press(scene)
+    assert flight.target is None and flight.goal == (88, 190)
 
 
 def test_scroll_does_not_create_enemy_velocity_and_ambiguous_tracks_are_unknown():
@@ -128,14 +103,6 @@ def test_reversing_hazard_discards_the_old_direction_before_the_next_prediction(
     assert not tracks.ready
 
 
-def walker_scene(*positions):
-    return SceneObservation(
-        MarioView((40, 208, 50, 220), True, "ground", True),
-        enemies=tuple(EnemyView((x, 210, x + 10, 220), "walker") for x in positions),
-        surfaces=(Surface(8, 248, 220, False),),
-    )
-
-
 def test_target_identity_survives_scroll_and_reversal_but_not_ambiguity():
     tracks = VisualTracks()
     tracks.observe(walker_scene(70), 0)
@@ -149,268 +116,18 @@ def test_target_identity_survives_scroll_and_reversal_but_not_ambiguity():
     assert not tracks.ready
 
 
-def test_stomp_target_cannot_transfer_to_a_neighbour_or_count_a_floor_landing():
-    scene = walker_scene(65)
-    target = Track(scene.enemies[0].box, "walker", [(0, 0)] * 4)
-    # Same geometry is not the same identity after an ambiguous/lost track.
-    neighbour = Track(target.box, "walker", [(0, 0)] * 4)
-    prediction = predict(
-        scene,
-        [neighbour],
-        NESPlayerMotion(),
-        scene.mario.box,
-        (70, 210),
-        1,
-        12,
-        grounded=True,
-        target=target,
+def tunnel_scene(enemy=60):
+    return SceneObservation(
+        MarioView((19, 208, 29, 220), False, "ground", True),
+        enemies=(EnemyView((enemy, 200, enemy + 16, 220), "other"),),
+        blocks=(BlockView((64, 40, 215, 190), "brick"),),
+        surfaces=(Surface(8, 248, 220, False), Surface(64, 215, 40, False)),
     )
-    assert not prediction.reached
-    floor = predict(
-        walker_scene(),
-        [],
-        NESPlayerMotion(),
-        scene.mario.box,
-        (70, 220),
-        1,
-        12,
-        grounded=True,
-        target=target,
-    )
-    assert floor.safe and not floor.reached
 
 
-def test_losing_the_bound_target_reports_loss_without_retargeting():
-    scene = walker_scene(65)
-    tracks = VisualTracks([Track(scene.enemies[0].box, "walker", [(0, 0)] * 4)])
-    flight = plan_flight(scene, tracks, 0, SkillToken("jump", 25, -10), ActionPlan(2, 12))
-    assert flight is not None and flight.target is tracks.tracks[0]
-    target = flight.target
-    tracks.observe(walker_scene(), 0)
-    flight.press(walker_scene())
-    assert flight.status == "lost_target" and flight.target is target
-    assert not flight.prediction.reached
-
-
-def test_destination_beyond_an_enemy_remains_a_bypass():
-    scene = walker_scene(65)
-    tracks = VisualTracks([Track(scene.enemies[0].box, "walker", [(0, 0)] * 4)])
-    flight = plan_flight(scene, tracks, 2.5, SkillToken("jump", 80, 0), ActionPlan(2, 18))
-    assert flight is not None and flight.target is None
-    assert flight.prediction.reason == "landed"
-
-
-@pytest.mark.parametrize("distance", [35, 40, 45])
-@pytest.mark.parametrize("tracking", [False, True])
-def test_reversing_stomp_target_is_intercepted_in_the_original_jump(distance, tracking):
-    env = MarioScenarioEnv()
-    try:
-        env.reset(
-            scenario={
-                "world_width": 340,
-                "mario": [40, 208],
-                "platforms": [[0, 220, 340, 20]],
-                "enemies": [[65, 206, 37, 68.6, 0.6, 1]],
-                "goal_on_stomp": True,
-                "goal": [63, 186, 16, 20],
-            }
-        )
-        feedback = SpatialFeedback()
-        for _ in range(3):
-            feedback.observe(scene_from_labels(env.scene_labels()))
-            env.step(0)
-        scene = scene_from_labels(env.scene_labels())
-        feedback.observe(scene)
-        flight = plan_flight(
-            scene, feedback.tracks, 0, SkillToken("jump", distance, -14), ActionPlan(2, 12)
-        )
-        assert flight is not None and flight.target is feedback.tracks.tracks[0]
-        feedback.flight = flight
-        original_goal = flight.goal
-        if not tracking:
-            flight.target = None  # Counterfactual: keep the old fixed contact point.
-        executor = SMBExecutor()
-        executor.start(ActionPlan(2, flight.hold), flight=flight)
-        buttons, directions = [], []
-        for frame in range(90):
-            if frame:
-                scene = scene_from_labels(env.scene_labels())
-                feedback.observe(scene)
-            if executor.finished:
-                break
-            buttons.append(executor.press(scene))
-            _, _, done, _, _ = env.step(buttons[-1])
-            directions.append(env.enemies[0]["direction"])
-            if done or (frame > 0 and env.mario["on_ground"]):
-                break
-        assert 1 in directions and -1 in directions
-        assert env._goal_credited == tracking
-        if tracking:
-            assert flight.goal != original_goal
-            jumping = [i for i, button in enumerate(buttons) if button in (2, 4, 5)]
-            assert jumping == list(range(len(jumping)))
-            assert executor.flight is flight
-    finally:
-        env.close()
-
-
-def test_unknown_takeoff_speed_never_bypasses_the_clearance_check():
-    scene = SceneObservation(
+def walker_scene(*positions):
+    return SceneObservation(
         MarioView((40, 208, 50, 220), True, "ground", True),
-        blocks=(BlockView((20, 175, 120, 195), "brick"),),
+        enemies=tuple(EnemyView((x, 210, x + 10, 220), "walker") for x in positions),
         surfaces=(Surface(8, 248, 220, False),),
     )
-    feedback = SpatialFeedback()
-    feedback.observe(scene)
-    assert feedback.begin(SkillToken("jump", 40, 0), scene, ActionPlan(2, 32)).action == 6
-    assert feedback.status == "observing_motion"
-
-
-def test_ground_contact_corrects_platform_pixels_merged_into_marios_feet():
-    scene = SceneObservation(
-        MarioView((92, 168, 102, 187), True, "ground", True),
-        surfaces=(Surface(8, 104, 180, False), Surface(123, 248, 220, False)),
-    )
-    flight = plan_flight(scene, VisualTracks(), 0, SkillToken("jump", 47, 40), ActionPlan(2, 18))
-    assert flight is not None and flight.goal == (144, 220)
-    assert flight.prediction.safe and flight.prediction.reached
-
-
-def test_raised_ground_face_needs_clearance_even_without_a_block_detection():
-    scene = SceneObservation(
-        MarioView((95, 208, 105, 220), True, "ground", True),
-        surfaces=(
-            Surface(8, 40, 220, False),
-            Surface(40, 88, 166, False),
-            Surface(88, 208, 220, False),
-        ),
-    )
-    flight = plan_flight(scene, VisualTracks(), 0, SkillToken("jump", -17, -54), ActionPlan(4, 24))
-    assert flight is not None and flight.hold > 15
-    assert flight.prediction.reached
-
-
-def test_landing_just_before_a_lethal_hazard_arrives_is_rejected():
-    scene = tunnel_scene()
-    tracks = [Track(scene.enemies[0].box, "other", [(-0.53, 0)] * 32)]
-    prediction = predict(
-        scene, tracks, NESPlayerMotion(facing=-1), scene.mario.box, (49, 220), 1, 2, grounded=True
-    )
-    assert not prediction.safe
-
-
-def test_lost_vision_releases_buttons_and_reports_the_failed_execution():
-    scene = tunnel_scene()
-    tracks = VisualTracks([Track(scene.enemies[0].box, "other", [(-0.53, 0)] * 32)])
-    flight = plan_flight(scene, tracks, 0, SkillToken("jump", 37, 0), ActionPlan(2, 18))
-    assert flight.press(None) == 0
-    assert flight.done and flight.status == "lost_observation"
-
-
-def test_missing_mario_cannot_start_an_unchecked_jump():
-    feedback = SpatialFeedback()
-    scene = SceneObservation(MarioView(None, True, "air", False))
-    plan = feedback.begin(SkillToken("jump", 40, 0), scene, ActionPlan(2, 18))
-    executor = SMBExecutor()
-    executor.start(plan, flight=feedback.flight)
-    assert executor.press(scene) == 0 and feedback.status == "lost_observation"
-
-
-def test_new_flight_release_edge_does_not_advance_its_takeoff_model():
-    scene = tunnel_scene()
-    tracks = VisualTracks([Track(scene.enemies[0].box, "other", [(-0.53, 0)] * 32)])
-    flight = plan_flight(scene, tracks, 0, SkillToken("jump", 37, 0), ActionPlan(2, 18))
-    executor = SMBExecutor(last_button=2)
-    executor.start(ActionPlan(2, flight.hold), flight=flight)
-    assert executor.press(scene) == 1
-    assert flight.elapsed == executor.pressed == 0
-    assert executor.press(scene) == 2
-    assert flight.elapsed == executor.pressed == 1
-
-
-def test_uncertified_destination_is_reported_and_does_not_launch():
-    scene = tunnel_scene()
-    feedback = SpatialFeedback(speed=0, velocities=deque([0, 0]))
-    feedback.tracks = VisualTracks([Track(scene.enemies[0].box, "other", [(-0.53, 0)] * 32)])
-    plan = feedback.begin(SkillToken("jump", 200, -180), scene, ActionPlan(2, 32))
-    assert plan.action == 6 and feedback.flight is None
-    assert feedback.status == "no_safe_trajectory"
-
-
-@pytest.mark.parametrize("guarded", [False, True])
-def test_actual_monster_crossing_is_one_jump_and_survives_with_visual_feedback(guarded):
-    env = MarioScenarioEnv()
-    try:
-        env.reset(
-            scenario={
-                "world_width": 414,
-                "mario": [67, 208],
-                "platforms": [[0, 220, 414, 20], [112, 40, 151, 150]],
-                "enemies": [
-                    {
-                        "kind": "monster",
-                        "x": 127,
-                        "y": 200,
-                        "patrol_min": 44,
-                        "patrol_max": 295,
-                        "speed": 0.53,
-                        "direction": -1,
-                    }
-                ],
-            }
-        )
-        feedback = SpatialFeedback()
-        for _ in range(32):
-            feedback.observe(scene_from_labels(env.scene_labels()))
-            env.step(0)
-        executor = SMBExecutor()
-        airborne = False
-        buttons = []
-        info = {}
-        for frame in range(100):
-            scene = scene_from_labels(env.scene_labels())
-            feedback.observe(scene)
-            if guarded:
-                if executor.idle or executor.finished or executor.reconsider:
-                    executor.end("recheck")
-                    plan = feedback.begin(SkillToken("jump", 37, 0), scene, ActionPlan(2, 18))
-                    executor.start(plan, flight=feedback.flight)
-                button = executor.press(scene)
-            else:
-                button = 2 if frame < 18 else 1
-            buttons.append(button)
-            _, _, done, _, info = env.step(button)
-            airborne |= not env.mario["on_ground"]
-            if done or (airborne and env.mario["on_ground"]):
-                break
-        if guarded:
-            assert not info["death"] and airborne and env.mario["on_ground"]
-            assert env.mario["x"] >= env.enemies[0]["x"] + env.enemies[0]["w"]
-            jumps = [i for i, b in enumerate(buttons) if b in (2, 4, 5)]
-            assert 18 < len(jumps) <= 32
-            assert jumps == list(range(jumps[0], jumps[-1] + 1))
-            assert executor.pressed > executor.plan.frames  # coast belongs to this same flight
-        else:
-            assert info["death"]
-    finally:
-        env.close()
-
-
-def test_floating_ledge_does_not_extend_down_to_an_adjacent_lower_step():
-    from retroagi.core.smb_trajectory import geometry
-
-    scene = SceneObservation(
-        MarioView((70, 208, 80, 220), True, "ground", True),
-        blocks=(BlockView((79, 160, 119, 170), "brick"),),
-        surfaces=(
-            Surface(50, 119, 220, False),
-            Surface(79, 119, 160, False),
-            Surface(119, 147, 190, False),
-            Surface(147, 248, 160, False),
-        ),
-    )
-    solids, _ = geometry(scene, [])
-    assert ((79, 160, 119, 170), (0, 0)) in solids
-    assert ((79, 160, 119, 190), (0, 0)) not in solids
-    flight = plan_flight(scene, VisualTracks(), 0, SkillToken("jump", 40, -30))
-    assert flight is not None and flight.prediction.reached

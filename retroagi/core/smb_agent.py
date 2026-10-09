@@ -37,6 +37,7 @@ from .smb_scene_labels import SceneObservation
 from .smb_spatial_feedback import SpatialFeedback
 from .tokens import (
     DEFAULT_STRATEGY,
+    EXECUTION_WIDTH,
     SkillToken,
     StrategyToken,
     TacticToken,
@@ -75,6 +76,7 @@ class Decision:
     value: dict = field(default_factory=dict)  # layer -> its estimate of the return to come
     tactic_step: Optional[TacticStep] = None  # when the tactic layer ran
     skill: Optional[SkillToken] = None
+    execution_feedback: list = field(default_factory=lambda: [0.0] * EXECUTION_WIDTH)
 
 
 def scene_rows(scenes: Sequence[SceneObservation]) -> list[tuple]:
@@ -114,6 +116,7 @@ def decide(
     encoded_scene=None,
     histories: Optional[Mapping[str, tuple]] = None,
     tactic_steps: Optional[Sequence[Optional[TacticStep]]] = None,
+    execution_feedback=None,
 ) -> list[Decision]:
     """Skill destinations and action plans for pictures under ``tactics``
     (each held by the tactic layer, or given).
@@ -161,6 +164,7 @@ def decide(
             above,
             (histories or {}).get("skill"),
             strategy=_encoded(encode_strategy, switches, device),
+            feedback=execution_feedback,
         )
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]
@@ -193,6 +197,11 @@ def decide(
                 value={layer: values[1][i] for layer, values in scores.items()},
                 tactic_step=steps[i],
                 skill=destinations[i],
+                execution_feedback=(
+                    execution_feedback[i].tolist()
+                    if execution_feedback is not None
+                    else [0.0] * EXECUTION_WIDTH
+                ),
             )
         )
     return decisions
@@ -212,25 +221,14 @@ class AgentStep:
 
 @dataclass
 class LandingWatch:
-    """Confirm the visual contact flag against a surface under Mario's feet.
-
-    The detector can report contact while Mario rises alongside a ledge. Merely
-    touching its side is not landing: the boxes must overlap horizontally.
-    Pictures without Mario change nothing.
-    """
+    """Use vision's contact signal; the executor does not rebuild terrain contacts."""
 
     airborne: bool = False
 
     def landed(self, scene: SceneObservation) -> bool:
         if scene.mario.box is None:
             return False
-        x0, _, x1, feet = scene.mario.box
-        supports = [(s.x0, s.x1, s.top) for s in scene.surfaces]
-        supports.extend((b[0], b[2], b[1]) for b in scene.moving_platforms)
-        supports.extend((e.box[0], e.box[2], e.box[1]) for e in scene.enemies)
-        contact = scene.mario.on_something and any(
-            left < x1 and right > x0 and abs(top - feet) <= 4 for left, right, top in supports
-        )
+        contact = scene.mario.on_something
         landed = self.airborne and contact
         self.airborne = not contact
         return landed
@@ -470,6 +468,8 @@ class SMBAgents:
                         )
                     )
                 )
+                if copy.spatial.stalled:
+                    reason = "no_progress"
                 if reason is not None:
                     copy.executor.end(reason)
             ended.append(reason)
@@ -573,6 +573,10 @@ class SMBAgents:
                 now,
                 choice_histories(starting, self.device),
                 tactic_steps,
+                torch.tensor(
+                    [copy.spatial.report(scene) for copy, scene in zip(starting, picked)],
+                    device=self.device,
+                ),
             )
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 given_actions = supplied.get("action")
