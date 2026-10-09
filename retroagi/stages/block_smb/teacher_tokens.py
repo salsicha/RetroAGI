@@ -337,6 +337,12 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Skill
         plan.action == HOLD_GROUND or (plan.action == SMBAction.NOOP and env.mario["on_ground"])
     ):
         return SkillToken("hold", 0, 0)
+    if plan is not None:
+        from .spatial_teacher import gap_destination
+
+        gap = gap_destination(env)
+        if gap is not None:
+            return gap
     start_x = env.mario["x"] + env.mario["w"] / 2
     start_y = env.mario["y"] + env.mario["h"]
     route = _remembered_route(env, state) if plan is not None else None

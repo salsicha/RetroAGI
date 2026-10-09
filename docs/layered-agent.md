@@ -158,6 +158,12 @@ The spatial teacher probes the certified route and restores the simulator
 state. A jump targets the first landing/stomp. A run targets its bounded endpoint
 or reached objective, stopping before the next jump in the demonstration. This
 provides explicit approach waypoints, including clearance around overhead ledges.
+For static gap crossings and descents without live enemies, the spatial teacher
+uses a supported takeoff waypoint near the edge and an inset landing point.
+This accounts for the ground controller braking at a run destination, instead
+of copying the takeoff of an uninterrupted button sequence. The teacher supplies
+the preparation run separately from the jump and avoids zero-distance approach
+loops. Immediate-jump action lessons keep their original contract.
 Supported target centers are clamped within the observed-in-training support's
 edges with room for Mario's width. Moving-support targets use the support's
 current pose, so passive carry does not become a fixed world destination.
@@ -196,12 +202,12 @@ An optional parameter sweep remains available for explicitly selected small
 skill families. Normal training samples the full skill curriculum and adds
 extra layouts for weak families.
 
-Skill uses **50 scene families** for local destination selection: individual
-bridge holds/mounts/dismounts, enemy encounters, platform traversal, local
-recovery, supplied-tactic choice clones and the 17 action families. Each
-supplies spatial destination labels instead of button labels at the skill stage.
-The choice clones deliberately reuse one scene with different supplied tactics;
-they test following that input, rather than inferring a hidden assignment.
+Skill uses **37 scene families** for destination selection under one supplied
+tactic: local enemy encounters, platform maneuvers, holding a spot and 16 of the
+17 action families. Each supplies spatial destination labels instead of button
+labels at the skill stage. Any family that changes tactics within an episode
+belongs to tactic training, regardless of its name or number of written schedule
+segments. This includes changes produced dynamically by the teacher.
 
 `choice_alternate_route` and `low_choice_alternate_route` belong to tactics.
 Their local maneuvers have separate skill families:
@@ -215,6 +221,8 @@ Their local maneuvers have separate skill families:
 | `skill_lower_descent` | Descend forward | Lower floor beneath the raised route |
 | `skill_lower_step_climb` | Climb forward | Step leading out of the lower route |
 | `skill_lower_exit_climb` | Climb forward | Upper exit ledge from the step |
+| `skill_upper_gap_entry` | Advance | First raised ledge across the first gap |
+| `skill_upper_gap_exit` | Advance | Far raised ledge across the second gap |
 
 Each starts at its own maneuver, carries one local route destination, and ends
 on supported arrival there. It does not require completing the rest of the level.
@@ -231,6 +239,12 @@ to tactic lessons such as `wait_timing`, where a moving platform provides an
 observable reason to proceed. Repeated movement commands share stall history,
 including zero-distance requests, so their next skill decision receives no-progress
 feedback. Deliberate holds reset that history.
+The full two-gap `low_choice_advance` route belongs to tactics; its two crossings
+are separate skill lessons above. A new movement attempt gets its own observation
+window before old stall history can cancel it, while completed zero-distance
+requests still report failure. Supervised decisions following no-progress feedback
+receive three times the imitation weight so corrective targets are not overwhelmed
+by easy approach labels.
 
 Stomp destinations refer to the enemy's current center and top; the executor
 tracks that visible target as it moves. While jump remains pressed, flight
@@ -251,7 +265,7 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **31 families**, defined by `TACTIC_TRAINING_FAMILIES`:
+Tactic uses **46 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
@@ -259,13 +273,15 @@ Tactic uses **31 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 | Composed levels (8) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
 | Scene-driven routes/responses (4) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat` |
 | Alternate routes (2) | `choice_alternate_route`, `low_choice_alternate_route`, under `max_points` with visible points on the required path |
+| Raised route (1) | `low_choice_advance`, under `speed_run`, preserving the upper path through two gaps |
 | Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
+| Additional tactic switches (14) | `choice_retreat`, `choice_advance`, `stair_climb`, `platform_chain`, `enemy_gap`, `enemy_patrol`, `retreat_recovery`, `tall_pipe_jump`, `bridge_wait`, `bridge_mount`, `bridge_dismount`, `stair_gap`, `enemy_on_platform`, `action_climb` |
 
-These families teach tactic selection and termination with the skill
-layers frozen. All 31 are excluded from skill training and skill evaluation.
-Local sequences such as `platform_chain` and `stair_gap` remain skill practice
-for successive reachable destinations; individual bridge holds, mounts and
-dismounts remain skill practice for carrying out the selected maneuver.
+These families teach tactic selection and termination with the skill layer
+frozen. All 46 are excluded from skill training and skill evaluation. For
+example, `choice_retreat` retreats then advances; bridge phases alternate
+holding and advancing; `platform_chain` can change from advance to retreat
+for the final landing. Local skill lessons must finish under one supplied tactic.
 
 Strategy sibling families share layouts but reward different routes. The
 hold-ground scene waits at the starting spot for 64 frames before traversing.

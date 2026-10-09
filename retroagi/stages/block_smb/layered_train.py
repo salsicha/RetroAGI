@@ -1024,6 +1024,10 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
             if name.startswith("label_")
         }
         weight = d["weight"][m]
+        # Teach a useful next destination at failed commands, instead of letting
+        # the many easy approach decisions drown out the stall-repair examples.
+        stalled = d["execution_feedback"][m, 1] > 0.5
+        weight = weight * torch.where(stalled, 3.0, 1.0)
         for head in CHOICES["skill"]:
             losses[head] = imitation * _weighted_mean(
                 F.cross_entropy(out[head][m], label[head], reduction="none"), weight
@@ -1423,10 +1427,10 @@ def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
     """The families a learner trains and is tested on. Each layer trains only on
     families at its own level:
 
-    - Skill layer: local maneuvers and supplied-tactic clones, with spatial
-      destination labels. Tactic-training families are excluded.
+    - Skill layer: local maneuvers under one supplied tactic, with spatial
+      destination labels. Families that switch tactics are excluded.
     - Tactic layer: strategy families, scene-driven route/response families,
-      composed levels and waiting/proceeding decisions.
+      composed levels, waiting/proceeding decisions and within-episode tactic switches.
     """
     from .tactic_families import TACTIC_TRAINING_FAMILIES
 

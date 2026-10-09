@@ -468,7 +468,13 @@ class SMBAgents:
                         )
                     )
                 )
-                if copy.spatial.stalled:
+                if copy.spatial.stalled and (
+                    reason is not None
+                    or copy.spatial.observed_frames >= copy.spatial.positions.maxlen
+                ):
+                    # Preserve prior stall feedback for the new decision, but
+                    # let a new movement attempt accelerate before cancelling
+                    # it against the previous command's stationary history.
                     reason = "no_progress"
                 if reason is not None:
                     copy.executor.end(reason)

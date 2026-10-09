@@ -1,27 +1,12 @@
-"""Families with an explicit plan (tactic_schedule), in four groups.
+"""Scenario generators and curriculum ownership for tactics.
 
-The tactic layer trains on scene-driven route/response families, composed
-levels, timing decisions and strategy families. Clones supply skill training
-for following a supplied tactic in an otherwise identical scene:
-
-- **The scene decides the tactic**: upper_route and lower_route (an alternate route), dead_end_retreat (retreat out of a dead
-  end, then an alternate route) and monster_retreat (keep away from a monster
-  that cannot be stomped, then jump over it).
-- **Composed scenes** (compose.py), whose tactics change along the way: the
-  chained and sequence families, rebuilt from sections.
-- **Clones**: sibling families that play the very same layouts (the layout
-  depends only on the sample's seed) and differ only in their plans. They
-  teach the skill layer different destination choices in the same scene.
-  A sibling loses its episode when Mario does not follow its plan (a
-  forbidden platform, leaving a hold area early; the goal counts only once the
-  retreat is done). Every sibling's route is checked on each layout, so a
-  layout one sibling cannot finish is redrawn for all of them.
-- **Strategy families** (strategy_families): the tactic layer's families,
-  one scene per tactic played under each strategy.
-
-choice_alternate_route is a complete max-points route with a visible upper-path
-coin, not a supplied-tactic clone. Its four local maneuvers are separate skill
-families, each ending on its destination support.
+Tactic training includes complete routes, strategy objectives, waiting/proceeding
+choices and every family whose teacher changes tactics within an episode.
+Sibling choice layouts share geometry but differ in their required routes;
+choice_hold_area is the local, fixed-tactic skill among those siblings.
+The route skill families end on one destination support instead of completing
+an entire route. Generator membership (TACTIC_FAMILIES) is distinct from
+learner membership (TACTIC_TRAINING_FAMILIES).
 """
 
 from __future__ import annotations
@@ -55,7 +40,7 @@ STANDALONE = {
 # Clones: siblings on the same layouts that differ only in their tactics.
 CHOICE_FAMILIES = ("choice_advance", "choice_hold_area", "choice_retreat")
 LOW_CHOICE_FAMILIES = ("low_choice_advance",)
-CLONE_FAMILIES = ("choice_advance", "choice_retreat", *LOW_CHOICE_FAMILIES)
+CLONE_FAMILIES = ("choice_advance", "choice_retreat")
 # This complete route is selected for visible upper-path coins under max_points.
 # Its individual maneuvers live in skill_families.ROUTE_SKILL_FAMILIES.
 ROUTE_CHOICE_FAMILIES = ("choice_alternate_route", "low_choice_alternate_route")
@@ -63,6 +48,7 @@ TACTIC_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
     *COMPOSED_RECIPES,
     *CLONE_FAMILIES,
+    *LOW_CHOICE_FAMILIES,
     "choice_hold_area",
     *ROUTE_CHOICE_FAMILIES,
     *STRATEGY_TACTIC_FAMILIES,
@@ -70,20 +56,41 @@ TACTIC_FAMILIES = (
 NEW_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
     *CLONE_FAMILIES,
+    *LOW_CHOICE_FAMILIES,
     "choice_hold_area",
     *ROUTE_CHOICE_FAMILIES,
     *STRATEGY_TACTIC_FAMILIES,
 )
 
-# Waiting versus proceeding is a tactic decision. Individual bridge holds,
-# mounts and dismounts remain destination-selection practice for the skill.
+# Waiting versus proceeding is a tactic decision.
 TIMING_TACTIC_FAMILIES = ("moving_bridge", "wait_timing", "piranha_avoidance")
+# A skill episode follows one supplied tactic throughout. These legacy names
+# conceal switches in teacher_tactic (including bridge phases and a final
+# approach/retreat after a landing), even with a single written schedule segment.
+MULTI_TACTIC_FAMILIES = (
+    "choice_retreat",
+    "choice_advance",
+    "stair_climb",
+    "platform_chain",
+    "enemy_gap",
+    "enemy_patrol",
+    "retreat_recovery",
+    "tall_pipe_jump",
+    "bridge_wait",
+    "bridge_mount",
+    "bridge_dismount",
+    "stair_gap",
+    "enemy_on_platform",
+    "action_climb",
+)
 TACTIC_TRAINING_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
     *ROUTE_CHOICE_FAMILIES,
+    *LOW_CHOICE_FAMILIES,
     *COMPOSED_RECIPES,
     *TIMING_TACTIC_FAMILIES,
     *STRATEGY_TACTIC_FAMILIES,
+    *MULTI_TACTIC_FAMILIES,
 )
 
 SIMPLE_SECTIONS = ("enemy", "gap", "pipe", "stairs")
@@ -222,6 +229,8 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
             scenario["goal"] = [far, FLOOR - 20, 24, 20]
     elif family in LOW_CHOICE_FAMILIES:
         scenario, params = _low_choice_layout(rng, difficulty)
+        scenario["tactics"] = params.pop("schedules")[family]
+        scenario["strategy"] = "speed_run"
     elif family in STRATEGY_TACTIC_FAMILIES:
         strategy, tactic = STRATEGY_TACTIC_FAMILIES[family]
         scenario, params = strategy_scene(rng, difficulty, tactic)

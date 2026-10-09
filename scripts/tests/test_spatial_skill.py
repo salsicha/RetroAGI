@@ -157,7 +157,9 @@ def test_skill_stage_is_available_and_checkpoint_sequence_includes_it():
     assert LEARNERS == ("skill", "tactic")
     assert GIVEN == {"skill": "tactic", "tactic": None}
     assert LayeredTrainConfig(learner="skill").learner == "skill"
-    assert set(ACTION_FAMILIES) <= set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
+    assert set(ACTION_FAMILIES) - {"action_climb"} <= set(
+        learner_families("skill", BLOCK_SMB_MC_FAMILIES)
+    )
     assert (
         build_parser()
         .parse_args(["exam-layer", "--checkpoint", "some.pt", "--learner", "skill"])
@@ -243,19 +245,14 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
 
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
-    assert len(families) == 50
+    assert len(families) == 37
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert "stomp_recovery" not in families
     assert {
         "enemy_hop",
-        "enemy_patrol",
-        "bridge_wait",
-        "bridge_mount",
-        "bridge_dismount",
-        "platform_chain",
-        "stair_gap",
+        "enemy_stomp",
+        "action_wait",
         "landing_enemy",
-        "enemy_on_platform",
         "skill_overhead_climb",
         "skill_raised_climb",
         "skill_gap_descent",

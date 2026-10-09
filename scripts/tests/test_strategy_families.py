@@ -67,6 +67,7 @@ def _played(scenario, actions):
 
 def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strategy():
     from retroagi.stages.block_smb.layered_train import learner_families
+    from retroagi.stages.block_smb.tactic_families import MULTI_TACTIC_FAMILIES
 
     assert STRATEGIES == ("speed_run", "max_points")
     assert len(STRATEGY_TACTIC_FAMILIES) == 14
@@ -75,7 +76,9 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
     families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
     compositions = {f for f in BLOCK_SMB_MC_FAMILIES if f.startswith("tactics_")}
     assert len(compositions) == 4
-    assert set(families) == set(STRATEGY_TACTIC_FAMILIES) | compositions | {
+    assert set(families) == set(STRATEGY_TACTIC_FAMILIES) | compositions | set(
+        MULTI_TACTIC_FAMILIES
+    ) | {
         "mixed_section",
         "chained_obstacles",
         "chained_enemy_gauntlet",
@@ -89,8 +92,9 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "piranha_avoidance",
         "choice_alternate_route",
         "low_choice_alternate_route",
+        "low_choice_advance",
     }
-    assert len(families) == 31
+    assert len(families) == 46
 
 
 @pytest.mark.timeout(600)

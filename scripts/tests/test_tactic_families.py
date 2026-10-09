@@ -435,11 +435,11 @@ def test_composed_scenes_change_tactics_along_the_way():
         assert len({(seg["stance"], seg["kind"]) for seg in tactics}) >= 2
 
 
-def test_the_tactic_learner_leaves_out_the_clones():
+def test_choice_routes_with_tactic_switches_belong_to_tactics():
     from retroagi.stages.block_smb.layered_train import learner_families
 
     families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
-    assert not set(CLONE_FAMILIES) & set(families)
+    assert set(CLONE_FAMILIES) <= set(families)
 
 
 @pytest.mark.parametrize("split", ["train", "validation"])
@@ -463,10 +463,12 @@ def test_primitive_maneuvers_are_skill_families_without_an_action_learner():
     from retroagi.stages.block_smb.layered_train import learner_families
 
     families = learner_families("skill", BLOCK_SMB_MC_FAMILIES)
-    assert set(ACTION_FAMILIES) <= set(families)
+    assert set(ACTION_FAMILIES) - {"action_climb"} <= set(families)
     with pytest.raises(ValueError, match="unknown learned layer"):
         learner_families("action", BLOCK_SMB_MC_FAMILIES)
-    assert not set(ACTION_FAMILIES) & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
+    assert set(ACTION_FAMILIES) & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES)) == {
+        "action_climb"
+    }
 
 
 @pytest.mark.timeout(300)

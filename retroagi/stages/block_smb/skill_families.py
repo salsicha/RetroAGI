@@ -19,11 +19,13 @@ LOW_ROUTE_SKILL_FAMILIES = (
     "skill_lower_step_climb",
     "skill_lower_exit_climb",
 )
+UPPER_GAP_SKILL_FAMILIES = ("skill_upper_gap_entry", "skill_upper_gap_exit")
 SKILL_FAMILIES = (
     "skill_enemy_bypass",
     "skill_enemy_bypass_back",
     *ROUTE_SKILL_FAMILIES,
     *LOW_ROUTE_SKILL_FAMILIES,
+    *UPPER_GAP_SKILL_FAMILIES,
 )
 
 
@@ -69,7 +71,7 @@ def _route_skill_scenario(family, rng, difficulty):
 def skill_family_scenario(family, rng, difficulty):
     if family in ROUTE_SKILL_FAMILIES:
         return _route_skill_scenario(family, rng, difficulty)
-    if family in LOW_ROUTE_SKILL_FAMILIES:
+    if family in LOW_ROUTE_SKILL_FAMILIES + UPPER_GAP_SKILL_FAMILIES:
         from .tactic_families import _low_choice_layout
 
         scenario, params = _low_choice_layout(rng, difficulty)
@@ -78,6 +80,8 @@ def skill_family_scenario(family, rng, difficulty):
             "skill_lower_descent": (0, 3),
             "skill_lower_step_climb": (3, 4),
             "skill_lower_exit_climb": (4, 2),
+            "skill_upper_gap_entry": (0, 1),
+            "skill_upper_gap_exit": (1, 2),
         }[family]
         sx, sy, sw, _ = scenario["platforms"][source]
         if source:
@@ -86,7 +90,14 @@ def skill_family_scenario(family, rng, difficulty):
         scenario.update(
             coins=[],
             goal=[x, y - 20, w, 20],
-            tactics=[segment("advance", 1, route=[target])],
+            tactics=[
+                segment(
+                    "advance",
+                    1,
+                    route=[target],
+                    forbidden=[3, 4] if family in UPPER_GAP_SKILL_FAMILIES else [],
+                )
+            ],
             frame_budget=240,
         )
         params.update(source_platform=source, target_platform=target, difficulty_bin=difficulty)
