@@ -7,6 +7,7 @@ import pytest
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
 from retroagi.stages.block_smb.controller_teacher import (
+    descent_destination,
     destination,
     route_available,
     teacher_target,
@@ -135,5 +136,43 @@ def test_monster_teacher_retreats_out_of_low_tunnel_before_jumping():
         assert result.safe
         mario = result.snapshot["mario"]
         assert mario["x"] + mario["w"] <= scenario["tactics"][0]["keep_behind"]
+    finally:
+        env.close()
+
+
+def test_descent_preparation_progress_needs_a_successful_following_jump(monkeypatch):
+    from types import SimpleNamespace
+
+    from retroagi.stages.block_smb import controller_teacher as teacher
+
+    scenario = sample("action_jump_down_back")
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        state = episode_teacher(scenario)
+        target = teacher_target(env)
+        before = snapshot_env_state(env)
+        # A supported step made progress but did not reach its requested point.
+        env.mario["x"] -= 1
+        after = snapshot_env_state(env)
+        scene = scene_from_labels(env.scene_labels())
+        teacher.restore_env_state(env, before)
+        monkeypatch.setattr(
+            teacher,
+            "_trial",
+            lambda *args, **kwargs: teacher.Result(
+                progress=1, snapshot=after, spatial=SimpleNamespace(previous=scene)
+            ),
+        )
+        jumps = []
+
+        def failed_jump(env, state, goal, target):
+            jumps.append(goal)
+            return teacher.Result(safe=True, reached=True, won=False)
+
+        monkeypatch.setattr(teacher, "trial", failed_jump)
+        assert descent_destination(env, state, target) is None
+        assert jumps and all(goal.mode == "jump" for goal in jumps)
+        assert snapshot_env_state(env) == before
     finally:
         env.close()

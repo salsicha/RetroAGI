@@ -251,11 +251,62 @@ def destination(env, state, proposal):
         if value > score and (result.advanced or result.progress > 0 or airborne):
             best, score = goal, value
     if best is None:
+        descent = descent_destination(env, state, target)
+        if descent is not None:
+            return descent
         hold = SkillToken("hold", 0, 0)
         if any(p.get("moving") for p in env.platforms) or any(not e["dead"] for e in env.enemies):
             if trial(env, state, hold, target).safe:
                 return hold
     return best
+
+
+def descent_destination(env, state, target):
+    """Certify a supported edge preparation and its following downward jump.
+
+    A contact correction can end a run before its requested point. That is a
+    usable preparation only if Mario remains supported and a replayed next
+    jump finishes the objective. Never label an interrupted run on progress
+    alone or substitute a policy decision for the missing destination.
+    """
+    m = env.mario
+    support = m.get("_platform")
+    if (
+        not m["on_ground"]
+        or support is None
+        or support.get("moving")
+        or not getattr(env, "_action_jump_direction", 0)
+        or target.kind != "gap"
+        or target.platform_index is None
+        or any(not e["dead"] for e in env.enemies)
+    ):
+        return None
+    source, far = support["rect"], env.platforms[target.platform_index]["rect"]
+    if far.top <= source.top or env.platforms[target.platform_index].get("moving"):
+        return None
+    half = m["w"] / 2
+    # Two pixels of body overlap still support Mario at either takeoff edge.
+    takeoff = source.right + half - 2 if target.direction > 0 else source.left - half + 2
+    goal = SkillToken("run", round(takeoff - m["x"] - half), 0)
+    result = _trial(env, state, goal, target, save=True, visual=state.visual_observer is not None)
+    if result.snapshot is None or result.progress <= 0 or result.clearance < 8:
+        return None
+    with probe_state(env):
+        restore_env_state(env, result.snapshot)
+        m = env.mario
+        overlap = min(m["x"] + m["w"], source.right) - max(m["x"], source.left)
+        if not m["on_ground"] or overlap < 2 or not route_available(env):
+            return None
+        following = copy(state)
+        following.execution, following.controller = result.spatial, result.controller
+        following.scene = result.spatial.previous
+        lo, hi = far.left + half + 2, far.right - half - 2
+        for x in (hi if target.direction < 0 else lo, (lo + hi) / 2, lo, hi):
+            jump = SkillToken("jump", round(x - m["x"] - half), round(far.top - source.top))
+            outcome = trial(env, following, jump, target)
+            if outcome.won:
+                return goal
+    return None
 
 
 def closes_on_enemy(env, target, goal, result):

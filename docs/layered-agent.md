@@ -339,6 +339,13 @@ motion rather than assuming that the next tactic's direction is already
 achievable. When the production vision model is available, accepted jump
 proposals are also replayed through it, including intermediate jumps.
 
+For isolated downward jumps, a visual contact correction can interrupt edge
+preparation before its waypoint is reached. If ordinary destinations fail,
+the teacher can certify a run toward a takeoff with at least two pixels of
+body support, followed by a jump that completes the objective. It replays both
+steps and checks actual support after preparation; progress alone never
+qualifies this fallback. The skill still issues the run and jump separately.
+
 Teacher-only checks preserve unfinished route destinations behind the
 forward-only camera, keep point-scoring objectives active until their rewards
 are collected, and avoid ending under a low ceiling beside an approaching

@@ -185,6 +185,8 @@ def test_retreating_enemy_teacher_finishes_inside_training_budget():
     [
         ("action_jump_down_back", "validation", 2, "easy"),
         ("action_jump_down", "train", 5, "medium"),
+        ("action_jump_down_back", "train", 1004, "medium"),
+        ("action_jump_down_back", "train", 1007, "medium"),
     ],
 )
 def test_ledge_teacher_never_falls_back_to_policy(family, split, index, difficulty, tmp_path):
