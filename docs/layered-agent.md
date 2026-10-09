@@ -348,6 +348,24 @@ and retreat use separate destinations. None of these checks is an executor veto
 or a policy input. The executor and its four-frame initial duration search are
 unchanged.
 
+Before any learning, `train-layer` qualifies the exact held-out layouts through
+the production episode pipeline. It also qualifies each round's prepared
+training layouts before updating weights. These checks use the same episode
+budget and 400-frame progress timeout as learner episodes, production vision,
+and spatial teacher destinations. Every episode must finish with valid teacher
+labels throughout. A failure stops the run and saves its layout and outcome in
+`teacher_qualification/`; it never redraws the layout or enlarges its budget.
+This applies to both skill and tactic training, with teacher destinations used
+to qualify tactic layouts independently of the learned skill. The first fully
+teacher-driven skill round reuses these demonstrations. Qualification covers
+the sampled layouts, not all possible layouts or learner-created states.
+
+When approaching a moving stomp target that is travelling away, the teacher
+measures relative progress over the complete run command. Tiny stop/start
+waypoints that merely match the enemy's travel are rejected as demonstrations;
+the teacher selects an approach that actually closes the distance. This avoids
+spending the episode budget following an enemy without reaching jumping range.
+
 Speed-run deadlines are measured with the spatial teacher and production ViT,
 with the existing ten-percent timing allowance. The original button-route
 search budget stays fixed during that measurement. Route

@@ -182,6 +182,13 @@ def candidates(env, target, proposal):
             hi,
             lo - 2,
             hi + 2,
+            # The foot center may reach the support's edge. Restricting it
+            # to whole-body insets can omit the only usable takeoff waypoint
+            # when vision slightly offsets Mario near a ledge.
+            r.left + 2,
+            r.right - 2,
+            r.left,
+            r.right,
             (lo + hi) / 2,
             max(lo, min(hi, env.goal.centerx)),
             max(lo, min(hi, target.center)),
@@ -223,6 +230,7 @@ def destination(env, state, proposal):
         if result.won or (
             result.safe
             and result.clearance >= 8
+            and closes_on_enemy(env, target, proposal, result)
             and (proposal.mode != "hold" or _waiting(env, state))
         ):
             return proposal
@@ -233,7 +241,11 @@ def destination(env, state, proposal):
         result = trial(env, state, goal, target)
         if result.won:
             return goal
-        if not result.safe or result.clearance < 8:
+        if (
+            not result.safe
+            or result.clearance < 8
+            or not closes_on_enemy(env, target, goal, result)
+        ):
             continue
         value = (100 if result.advanced else result.progress) / max(1, result.frames)
         if value > score and (result.advanced or result.progress > 0 or airborne):
@@ -244,6 +256,28 @@ def destination(env, state, proposal):
             if trial(env, state, hold, target).safe:
                 return hold
     return best
+
+
+def closes_on_enemy(env, target, goal, result):
+    """A stopped approach must gain on a retreating stomp target.
+
+    A button-route waypoint can move only as far as the enemy moves while
+    Mario accelerates and brakes. Such commands are individually safe but
+    repeat indefinitely without bringing the enemy into jumping range.
+    Measure relative progress through the real controller before teaching it.
+    """
+    if (
+        goal.mode != "run"
+        or target.kind != "stomp"
+        or target.enemy_index is None
+        or not env.mario["on_ground"]
+        or result.advanced
+    ):
+        return True
+    enemy = env.enemies[target.enemy_index]
+    if enemy["dead"] or enemy["speed"] <= 0 or enemy["direction"] != target.direction:
+        return True
+    return result.progress >= max(2.0, 0.1 * result.frames)
 
 
 def mount_destination(env, state, target):

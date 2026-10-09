@@ -600,7 +600,7 @@ class EpisodePool:
         self.version += 1
 
     def play(
-        self, tasks: Sequence[EpisodeTask], *, as_deployed: bool = False
+        self, tasks: Sequence[EpisodeTask], *, as_deployed: bool = False, teacher_only: bool = False
     ) -> list[EpisodeRecord]:
         """Play the tasks for the learner, or (``as_deployed``) with no teacher at all.
 
@@ -608,6 +608,9 @@ class EpisodePool:
         families mix and every worker stays busy to the end; the records come
         back in the tasks' order.
         """
+        if teacher_only and as_deployed:
+            raise ValueError("teacher qualification cannot run as a deployed policy")
+        learner = "skill" if teacher_only else (None if as_deployed else self.config.learner)
         order = list(range(len(tasks)))
         random.Random(self.version).shuffle(order)
         size = self.config.lanes
@@ -616,7 +619,7 @@ class EpisodePool:
             (
                 str(self.weights),
                 self.version,
-                None if as_deployed else self.config.learner,
+                learner,
                 self.config.lanes,
                 [tasks[i] for i in chunk],
             )
@@ -642,8 +645,11 @@ class EpisodePool:
         """The tasks with their layouts made once (for sets played every round)."""
         order = list(range(len(tasks)))
         random.Random(len(tasks)).shuffle(order)  # slow families spread over the workers
-        pending = {self.pool.submit(task_scenario, tasks[i]): i for i in order}
-        made, reported = {}, time.monotonic()
+        pending = {
+            self.pool.submit(task_scenario, tasks[i]): i for i in order if tasks[i].scenario is None
+        }
+        made = {i: task.scenario for i, task in enumerate(tasks) if task.scenario is not None}
+        reported = time.monotonic()
         for future in as_completed(pending):
             made[pending[future]] = future.result()
             if time.monotonic() - reported >= 60 or len(made) == len(tasks):
@@ -1804,6 +1810,12 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     tactic = config.learner == "tactic"
     critic_ready = False  # the tactic critic predicts held-out returns well enough
     try:
+        from .teacher_qualification import qualify_teachers
+
+        pool.publish(policy)
+        qualify_teachers(
+            pool, validation_tasks, output / "teacher_qualification" / "validation.json"
+        )
         for round_index in range(config.rounds + config.reward_rounds):
             started = time.time()
             # Imitation rounds, the teacher's share shrinking; then reward rounds,
@@ -1843,7 +1855,17 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     explore=by_reward,
                     extra=focus,
                 )
-            played = pool.play(tasks)
+            tasks = pool.with_scenarios(tasks)
+            demonstrated = qualify_teachers(
+                pool, tasks, output / "teacher_qualification" / f"train_{round_index:02d}.json"
+            )
+            # Round zero already plays only the teacher. Reuse the exact
+            # qualified records instead of executing those episodes twice.
+            played = (
+                demonstrated
+                if config.learner == "skill" and share == 1.0 and not by_reward
+                else pool.play(tasks)
+            )
             replay = kept_episodes(replay, played, config.replay_episodes)
             play_time = time.time() - started
 
