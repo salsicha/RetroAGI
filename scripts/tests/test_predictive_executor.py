@@ -124,7 +124,7 @@ def test_legacy_checkpoint_discards_only_action_weights(tmp_path):
     save_layered_checkpoint(output, loaded, config, ["skill"], [])
     reloaded, saved = load_layered_checkpoint(output)
     assert "action_input" not in saved["token_layout"]
-    assert saved["token_layout"]["executor"] == "goal_following_v1"
+    assert saved["token_layout"]["executor"] == "goal_following_v2"
     assert not any(name.startswith("action.") for name in reloaded.state_dict())
 
 
@@ -169,7 +169,7 @@ def test_execution_motion_matches_actual_left_right_and_release_physics(buttons)
 
 @pytest.mark.parametrize("family", ["platform_hop", "pit_leap"])
 @pytest.mark.parametrize("difficulty,sample_index", [("easy", 100), ("medium", 103), ("hard", 106)])
-def test_destination_only_jump_initializes_running_spawn_motion(family, difficulty, sample_index):
+def test_immediate_jump_uses_motion_observed_during_prior_running(family, difficulty, sample_index):
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 
     sample = sample_block_smb_monte_carlo_scenario(
@@ -197,13 +197,21 @@ def test_destination_only_jump_initializes_running_spawn_motion(family, difficul
                 ]
             }
 
+        # An explicit prior run supplies observed momentum. The jump itself
+        # must not wait to collect it or add further preparation.
+        for _ in range(2):
+            feedback = agents.copies[0].spatial
+            scene = scene_from_labels(env.scene_labels())
+            feedback.observe(scene)
+            feedback.executed(1, scene)
+            screen, *_ = env.step(1)
         launched = False
-        for _ in range(120):
+        for frame in range(120):
             step = agents.act([screen], [0], given=given)[0]
             if step.button in (2, 4, 5) and not launched:
                 launched = True
                 feedback = agents.copies[0].spatial
-                assert feedback.motion_ready
+                assert frame == 0 and feedback.motion_ready
                 assert abs(feedback.flight.motion.x_speed / 16 - env.mario["vx"]) < 0.75
                 assert env.mario["on_ground"]
             screen, _, done, truncated, _ = env.step(step.button)
@@ -304,5 +312,52 @@ def test_teacher_destinations_board_ride_and_dismount_a_moving_bridge(sample_ind
             if done:
                 break
         assert env._goal_credited
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("difficulty,sample_index", [("easy", 100), ("medium", 104), ("hard", 108)])
+def test_bridge_mount_jumps_on_request_without_running_off_starting_ledge(difficulty, sample_index):
+    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+    from retroagi.stages.block_smb.teacher_tokens import (
+        episode_teacher,
+        teacher_plan,
+        teacher_skill,
+    )
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation",
+        seed=0,
+        sample_index=sample_index,
+        family="bridge_mount",
+        difficulty=difficulty,
+    )
+    env = MarioScenarioEnv()
+    try:
+        screen, _ = env.reset(scenario=sample.scenario)
+        teacher = episode_teacher(sample.scenario)
+
+        class Observer:
+            def observe(self, screens):
+                return [scene_from_labels(env.scene_labels())]
+
+        agents = SMBAgents(Observer(), LayeredSMBPolicy().eval(), "cpu")
+
+        def given(copies, scenes):
+            plan, _ = teacher_plan(env, teacher, certify_holds=False)
+            return {"skill": [teacher_skill(env, teacher, plan)]}
+
+        launched = False
+        for _ in range(180):
+            teacher.observe_frame(env)
+            step = agents.act([screen], [0], given=given)[0]
+            if step.decision and step.decision.skill.mode == "jump":
+                assert step.button in (2, 4, 5)
+                assert env.mario["on_ground"]
+                launched = True
+            screen, _, done, truncated, _ = env.step(step.button)
+            if done or truncated:
+                break
+        assert launched and env._goal_credited
     finally:
         env.close()

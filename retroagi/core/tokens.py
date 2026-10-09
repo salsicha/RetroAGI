@@ -66,6 +66,7 @@ class SkillToken:
 
     Hold anchors the current spot on the supporting platform; x/y are ignored.
     Run/jump coordinates describe the destination, not a button duration.
+    Jump starts takeoff now; preparation requires a separate run command.
     """
 
     mode: str
@@ -165,5 +166,5 @@ def token_layout() -> dict:
             "reference": "mario_feet_relative_pixels",
             "history": 16,
         },
-        "executor": "goal_following_v1",
+        "executor": "goal_following_v2",
     }

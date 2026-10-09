@@ -265,7 +265,7 @@ def test_every_family_states_its_schedule_and_every_schedule_stance_has_families
 
 
 def test_clones_play_the_same_layouts_and_only_their_tactics_differ():
-    for group in (CHOICE_FAMILIES, LOW_CHOICE_FAMILIES):
+    for group in (("choice_advance", "choice_retreat"), LOW_CHOICE_FAMILIES):
         layouts = {family: _sample(family, index=3) for family in group}
         first = layouts[group[0]]
         for family, scenario in layouts.items():
@@ -277,7 +277,7 @@ def test_clones_play_the_same_layouts_and_only_their_tactics_differ():
 
 def test_in_the_clones_the_schedule_decides_the_first_tactic():
     first = {}
-    for family in CHOICE_FAMILIES + LOW_CHOICE_FAMILIES:
+    for family in CHOICE_FAMILIES + LOW_CHOICE_FAMILIES + ("low_choice_alternate_route",):
         scenario = _sample(family, index=3)
         env = MarioScenarioEnv()
         env.reset(scenario=scenario, seed=0)

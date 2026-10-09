@@ -349,6 +349,7 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Skill
             mark = (env._tactic_index, env._route_done)
             support = _support_index(env)
             platforms = [p["rect"].copy() for p in env.platforms]
+            enemies = [dict(e) for e in env.enemies]
             riding = (
                 support is not None
                 and env.platforms[support].get("moving")
@@ -410,6 +411,13 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Skill
                 # NOW. Runtime tracks that visual support; no IDs are passed.
                 x -= env.platforms[on]["rect"].left - platforms[on].left
                 y -= env.platforms[on]["rect"].top - platforms[on].top
+            stomped = [i for i, e in enumerate(env.enemies) if e["dead"] and not enemies[i]["dead"]]
+            if env.stomped and len(stomped) == 1:
+                # A moving destination has one meaning: a point on the target
+                # as seen now. Runtime follows that point's observed identity.
+                enemy = enemies[stomped[0]]
+                x = enemy["x"] + enemy["w"] / 2 - start_x
+                y = enemy["y"] - start_y
     else:
         # Unlabelled recovery state: provide a local destination so collection
         # can continue, but do not treat it as a certified skill demonstration.

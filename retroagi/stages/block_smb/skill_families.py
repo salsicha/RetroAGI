@@ -14,7 +14,17 @@ ROUTE_SKILL_FAMILIES = (
     "skill_gap_descent",
     "skill_ledge_descent",
 )
-SKILL_FAMILIES = ("skill_enemy_bypass", "skill_enemy_bypass_back", *ROUTE_SKILL_FAMILIES)
+LOW_ROUTE_SKILL_FAMILIES = (
+    "skill_lower_descent",
+    "skill_lower_step_climb",
+    "skill_lower_exit_climb",
+)
+SKILL_FAMILIES = (
+    "skill_enemy_bypass",
+    "skill_enemy_bypass_back",
+    *ROUTE_SKILL_FAMILIES,
+    *LOW_ROUTE_SKILL_FAMILIES,
+)
 
 
 def _route_skill_scenario(family, rng, difficulty):
@@ -59,6 +69,28 @@ def _route_skill_scenario(family, rng, difficulty):
 def skill_family_scenario(family, rng, difficulty):
     if family in ROUTE_SKILL_FAMILIES:
         return _route_skill_scenario(family, rng, difficulty)
+    if family in LOW_ROUTE_SKILL_FAMILIES:
+        from .tactic_families import _low_choice_layout
+
+        scenario, params = _low_choice_layout(rng, difficulty)
+        params.pop("schedules")
+        source, target = {
+            "skill_lower_descent": (0, 3),
+            "skill_lower_step_climb": (3, 4),
+            "skill_lower_exit_climb": (4, 2),
+        }[family]
+        sx, sy, sw, _ = scenario["platforms"][source]
+        if source:
+            scenario["mario"] = [sx + rng.randint(3, max(3, min(sw - 16, 24))), sy - 16]
+        x, y, w, _ = scenario["platforms"][target]
+        scenario.update(
+            coins=[],
+            goal=[x, y - 20, w, 20],
+            tactics=[segment("advance", 1, route=[target])],
+            frame_budget=240,
+        )
+        params.update(source_platform=source, target_platform=target, difficulty_bin=difficulty)
+        return scenario, params, []
     side = -1 if family.endswith("back") else 1
     distance = rng.randint(24, 32)
     speed = rng.choice({"easy": (0.0,), "medium": (0.2, 0.4), "hard": (0.4, 0.6)}[difficulty])

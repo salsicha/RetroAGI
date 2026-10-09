@@ -16,8 +16,9 @@ object (Mario, enemy, coin, power-up, moving platform) is a group of touching
 pixels of its type (objects_from_types), and surfaces, gaps, blocks and pipes
 come from structure_from_types. Only Mario's facing, his support, whether his
 feet are on something (the landing signal) and each
-enemy's kind are read from its other outputs. So the scene differs from the
-truth only where the types differ, or where two objects of one type touch
+enemy's kind are read from its other outputs. Contact predictions also require
+visible support or an enemy beneath his feet; side contact cannot establish
+a landing. Type errors and touching objects can still distort the scene
 (the truth keeps them apart; one group of pixels cannot).
 
 Boxes are (x0, y0, x1, y1) in screen pixels, with x1 and y1 one past the last
@@ -541,16 +542,31 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
     scenes = []
     for b in range(types.shape[0]):
         objects = objects_from_types(types[b], kind_probability[b])
+        structure = structure_from_types(types[b])
+        box = objects.pop("mario")
+        # Resolve contradictory vision heads here, before any policy/controller
+        # consumes contact. Side contact is not support beneath Mario's feet.
+        surfaces = [(s.x0, s.x1, s.top) for s in structure["surfaces"]]
+        surfaces += [(b[0], b[2], b[1]) for b in objects["moving_platforms"]]
+        standing = box is not None and any(
+            left < box[2] and right > box[0] and abs(top - box[3]) <= 1
+            for left, right, top in surfaces
+        )
+        stomping = box is not None and any(
+            e.box[0] < box[2] and e.box[2] > box[0] and abs(e.box[1] - box[3]) <= 4
+            for e in objects["enemies"]
+        )
+        contact = bool(on_something[b]) and (standing or stomping)
         scenes.append(
             SceneObservation(
                 mario=MarioView(
-                    box=objects.pop("mario"),
+                    box=box,
                     facing_right=bool(facing[b]),
-                    support=SUPPORTS[int(support[b])],
-                    on_something=bool(on_something[b]),
+                    support=SUPPORTS[int(support[b])] if contact and standing else "air",
+                    on_something=contact,
                 ),
                 **objects,
-                **structure_from_types(types[b]),
+                **structure,
             )
         )
     return scenes

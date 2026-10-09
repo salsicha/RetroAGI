@@ -150,6 +150,7 @@ class SpatialFeedback:
         shift = None
         if scene.mario.box is None:
             self.previous = None
+            self.positions.clear()
             self.velocities.clear()
             self.speed = None
             self.predicted_dx = None
@@ -189,6 +190,11 @@ class SpatialFeedback:
             elif (before_support is None) != (support is None):
                 # Do not mix carried world displacement into player momentum.
                 self.velocities.clear()
+                dx = None
+            old, now = self.previous.mario.box, scene.mario.box
+            if abs((now[2] - now[0]) - (old[2] - old[0])) > 1:
+                # A changing visual silhouette moves its center without player
+                # motion. Do not turn that deformation into a velocity reversal.
                 dx = None
             if dx is not None and abs(dx) <= 6:
                 self.velocities.append(dx)
@@ -239,11 +245,18 @@ class SpatialFeedback:
         self.flight = None
         self.travel = None
         self.status = "unplanned"
+        previous_destination = self.destination
         self.destination = destination
         self.start_displacement = self.displacement
         self.start_feet = scene.mario.box[3] if scene.mario.box else 0.0
         self.observed_frames = 0
-        self.positions.clear()
+        if (
+            destination is None
+            or destination.mode == "hold"
+            or previous_destination is None
+            or previous_destination.mode == "hold"
+        ):
+            self.positions.clear()
         if destination is None:
             if proposed is None:
                 raise ValueError("the executor needs a destination")
@@ -290,21 +303,24 @@ class SpatialFeedback:
             )
             return ActionPlan(coast, proposed.frames if proposed is not None else 1)
         if grounded_jump:
-            if self.speed is not None and len(self.velocities) >= 2:
-                speed = self.speed if proposed is not None else self.motion.x_speed / 16
-                self.flight = plan_flight(
-                    scene,
-                    self.tracks,
-                    speed,
-                    destination,
-                    proposed,
-                    motion=self.motion if proposed is None else None,
-                )
-                self.status = "attempting"
-                action = {-1: 4, 0: 5, 1: 2}[self.flight.direction]
-                return ActionPlan(action, max(1, self.flight.hold))
-            self.status = "observing_motion"
-            return ActionPlan(HOLD_GROUND, 1)
+            # Use the motion estimate already available; a jump request must
+            # not insert waiting frames to collect additional observations.
+            speed = (
+                self.speed
+                if proposed is not None and self.speed is not None
+                else self.motion.x_speed / 16
+            )
+            self.flight = plan_flight(
+                scene,
+                self.tracks,
+                speed,
+                destination,
+                proposed,
+                motion=self.motion if proposed is None else None,
+            )
+            self.status = "attempting"
+            action = {-1: 4, 0: 5, 1: 2}[self.flight.direction]
+            return ActionPlan(action, max(1, self.flight.hold))
         if proposed is None:
             self.status = "observing_support"
             return ActionPlan(HOLD_GROUND, 1)

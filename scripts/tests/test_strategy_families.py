@@ -87,8 +87,10 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "moving_bridge",
         "wait_timing",
         "piranha_avoidance",
+        "choice_alternate_route",
+        "low_choice_alternate_route",
     }
-    assert len(families) == 29
+    assert len(families) == 31
 
 
 @pytest.mark.timeout(600)

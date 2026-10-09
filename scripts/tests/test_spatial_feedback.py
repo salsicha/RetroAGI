@@ -87,42 +87,17 @@ def test_running_takeoff_reaches_the_narrow_platform_instead_of_overshooting(dis
         env.close()
 
 
-def test_execution_measures_running_takeoff_before_launching_a_jump():
-    env = MarioScenarioEnv()
-    feedback = SpatialFeedback()
+@pytest.mark.parametrize("speed", [None, 2.5, -2.5])
+def test_jump_takes_off_on_first_observation_without_waiting_for_motion(speed):
+    feedback = SpatialFeedback(speed=speed)
+    scene = SceneObservation(MarioView((60, 208, 70, 220), True, "ground", True))
+    feedback.observe(scene)
+    plan = feedback.begin(SkillToken("jump", 150, -22), scene)
     executor = SMBExecutor()
-    try:
-        env.reset(
-            scenario={
-                "mario": [60, 208],
-                "world_width": 380,
-                "mario_velocity": [2.5, 0],
-                "platforms": [[0, 220, 90, 20], [112, 198, 24, 10], [158, 220, 222, 20]],
-                "goal": [116, 178, 16, 20],
-                "goal_requires_support": True,
-                "single_jump_attempt": True,
-            }
-        )
-        launched = False
-        for frame in range(60):
-            scene = scene_from_labels(env.scene_labels())
-            feedback.observe(scene)
-            if executor.idle or executor.finished:
-                executor.end("done")
-                # Preserve the physical landing point while observing motion.
-                destination = SkillToken("jump", round(122 - env.mario["x"] - 5), -22)
-                plan = feedback.begin(destination, scene, ActionPlan(2, 26))
-                executor.start(plan, flight=feedback.flight)
-                if feedback.flight:
-                    launched = True
-                    assert frame >= 2 and feedback.flight.prediction.steps
-            _, _, done, _, _ = env.step(executor.press(scene))
-            if done:
-                break
-        assert launched
-        assert env._goal_credited
-    finally:
-        env.close()
+    executor.start(plan, flight=feedback.flight)
+    assert feedback.flight is not None
+    assert executor.press(scene) in (2, 4, 5)
+    assert feedback.flight.elapsed == 1
 
 
 def test_a_new_airborne_command_releases_the_previous_jump_hold():
@@ -132,17 +107,18 @@ def test_a_new_airborne_command_releases_the_previous_jump_hold():
     assert plan == ActionPlan(1, 14)
 
 
-def test_moving_enemy_contact_waits_for_motion_instead_of_assuming_a_static_arc():
+def test_moving_enemy_jump_does_not_wait_for_target_motion():
     feedback = SpatialFeedback(speed=-2.5)
     scene = SceneObservation(
         MarioView((160, 208, 170, 220), False, "ground", True),
         enemies=(EnemyView((100, 210, 110, 220), "walker"),),
     )
     proposal = ActionPlan(4, 32)
-    assert feedback.begin(SkillToken("jump", -60, -10), scene, proposal) == ActionPlan(
-        HOLD_GROUND, 1
-    )
-    assert feedback.status == "observing_motion"
+    plan = feedback.begin(SkillToken("jump", -60, -10), scene, proposal)
+    executor = SMBExecutor()
+    executor.start(plan, flight=feedback.flight)
+    assert executor.press(scene) in (2, 4, 5)
+    assert feedback.status == "attempting"
 
 
 def test_bridge_carry_is_not_mistaken_for_takeoff_momentum():

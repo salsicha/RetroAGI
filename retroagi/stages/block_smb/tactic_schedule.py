@@ -35,7 +35,7 @@ A segment is a dictionary:
 - ``end``: when the segment is over, one of
   ``{"on": i}`` standing on platform i,
   ``{"reach_x": x}`` Mario's left edge at or past x in the segment's direction,
-  ``{"frames": n}`` n frames after it began,
+  ``{"frames": n}`` n frames after it began (also a final hold lesson's goal gate),
   ``{"bridge_crossed": True}`` the moving platform has been crossed,
   ``{"past_enemy": i}`` standing beyond enemy i, the way the segment goes
   (or the enemy is defeated),
@@ -108,8 +108,9 @@ def check_schedule(schedule: list, platform_count: int, enemy_count: int) -> Non
     for i, seg in enumerate(schedule):
         check_segment(seg)
         last = i == len(schedule) - 1
-        if ("goal" in seg["end"]) != last:
-            raise ValueError("only the last segment, and always it, ends at the goal")
+        timed_hold = last and seg["stance"] == "hold_area" and "frames" in seg["end"]
+        if not timed_hold and ("goal" in seg["end"]) != last:
+            raise ValueError("only the last segment ends at the goal or completes a timed hold")
         for index in (*seg.get("route", ()), *seg.get("forbidden", ()), *seg.get("avoid", ())):
             if not 0 <= index < platform_count:
                 raise ValueError(f"platform {index} is not in the layout")
@@ -251,7 +252,10 @@ def in_kind(env, kind: str) -> bool:
 
 def goal_allowed(env) -> bool:
     """The goal counts only in the last segment."""
-    return env._tactic_index == len(env._tactics) - 1
+    if env._tactic_index != len(env._tactics) - 1:
+        return False
+    seg = current(env)
+    return not (seg["stance"] == "hold_area" and "frames" in seg["end"]) or _over(env, seg)
 
 
 def next_route_platform(env) -> Optional[int]:

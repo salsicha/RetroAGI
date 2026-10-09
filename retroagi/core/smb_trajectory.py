@@ -10,8 +10,7 @@ from dataclasses import dataclass, field
 from .smb_physics import NESPlayerMotion
 
 HORIZON = 96
-POSITION_TOLERANCE = 8
-APPROACH_FRAMES = (0, *range(4, 65, 4))
+POSITION_TOLERANCE = 1
 
 
 def translated(box, dx=0, dy=0):
@@ -132,8 +131,6 @@ def predict(
     *,
     grounded=False,
     target=None,
-    approach=0,
-    approach_direction=None,
 ):
     """Predict self-motion to the requested height, without testing world objects.
 
@@ -146,20 +143,18 @@ def predict(
     width, height = right - x, feet - y
     steps, best = [], float("inf")
     previous_feet = feet
-    for frame in range(HORIZON + approach):
-        preparing = frame < approach
-        jump = approach <= frame < approach + hold
-        control = approach_direction if preparing and approach_direction is not None else direction
+    for frame in range(HORIZON):
+        jump = frame < hold
+        control = direction
         dx, dy, _ = motion.advance(
             direction=control,
             jump=jump,
-            grounded=grounded and (preparing or frame == approach),
+            grounded=grounded and frame == 0,
             y=y,
             run=control > 0,
         )
         x += dx
-        if not preparing:
-            y += dy
+        y += dy
         body = (x, y, x + width, y + height)
         button = {
             (-1, True): 4,
@@ -170,8 +165,6 @@ def predict(
             (1, False): 1,
         }[control, jump]
         steps.append((body, copy(motion), button))
-        if preparing:
-            continue
         error = abs(x + width / 2 - goal[0]) + 2 * abs(y + height - goal[1])
         best = min(best, error)
         if dy >= 0 and previous_feet <= goal[1] <= y + height:
@@ -196,8 +189,6 @@ class Flight:
     released: bool = False
     target: Track | None = None
     target_offset: tuple = (0, 0)
-    approach: int = 0
-    approach_direction: int | None = None
 
     def shift(self, scroll):
         self.goal = (self.goal[0] - scroll, self.goal[1])
@@ -219,13 +210,8 @@ class Flight:
                 self.target = None
                 self.status = "lost_target"
         observed_ground = scene.mario.on_something and scene.mario.support != "air"
-        if self.elapsed < self.approach and not observed_ground:
-            self.approach = 0
-            self.released = True
-        delay = max(0, self.approach - self.elapsed)
-        airborne = max(0, self.elapsed - self.approach)
-        remaining = 0 if self.released else max(0, self.hold - airborne)
-        grounded = observed_ground and self.elapsed <= self.approach
+        remaining = 0 if self.released else max(0, self.hold - self.elapsed)
+        grounded = observed_ground and self.elapsed == 0
         check = predict(
             scene,
             [],
@@ -235,12 +221,14 @@ class Flight:
             self.direction,
             remaining,
             grounded=grounded,
-            approach=delay,
-            approach_direction=self.approach_direction,
         )
-        if not delay and not check.reached:
+        if not check.reached:
             options = []
-            holds = (0,) if self.released else ((remaining,) if grounded else (remaining, 0))
+            holds = (
+                (0,)
+                if self.released
+                else ((remaining,) if grounded else tuple(range(max(0, 32 - self.elapsed) + 1)))
+            )
             for direction in (-1, 0, 1):
                 for hold in set(holds):
                     candidate = predict(
@@ -264,69 +252,36 @@ class Flight:
                         )
                     )
             _, _, _, self.direction, remaining, check = min(options, key=lambda x: x[:5])
-            self.hold = airborne + remaining
-        if not remaining and not delay:
+            self.hold = self.elapsed + remaining
+        if not remaining:
             self.released = True
         self.prediction = check
         _, self.motion, button = check.steps[0]
         self.elapsed += 1
-        if self.elapsed >= HORIZON + self.approach:
+        if self.elapsed >= HORIZON:
             self.done, self.status = True, "flight_timeout"
         return button
 
 
 def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None):
-    """Always attempt the goal. Approach durations stay on the four-frame grid."""
+    """Choose an immediate takeoff; skill must request any preparation as a run."""
     box = scene.mario.box
     goal = ((box[0] + box[2]) / 2 + destination.x, box[3] + destination.y)
     motion = copy(motion) if motion is not None else NESPlayerMotion(x_speed=round(speed * 16))
     direction = (destination.x > 0) - (destination.x < 0)
     candidates = []
-    chosen = None
-    delays = (0,) if proposed is not None else APPROACH_FRAMES
-    maneuvers = [(direction, direction)]
-    if proposed is None:
-        maneuvers += [(d, -d) for d in (direction, -direction) if d]
-    for flight_direction, approach_direction in maneuvers:
-        for delay in delays:
-            group = []
-            if flight_direction != approach_direction and not delay:
-                continue
-            for hold in range(1, 33):
-                prediction = predict(
-                    scene,
-                    [],
-                    motion,
-                    box,
-                    goal,
-                    flight_direction,
-                    hold,
-                    grounded=True,
-                    approach=delay,
-                    approach_direction=approach_direction,
-                )
-                group.append(
-                    (
-                        not prediction.reached,
-                        round(prediction.error / 4),
-                        len(prediction.steps) + delay * 0.1,
-                        hold,
-                        flight_direction,
-                        approach_direction,
-                        delay,
-                        prediction,
-                    )
-                )
-            candidates.extend(group)
-            reached = [c for c in group if c[0] is False]
-            if reached:
-                chosen = min(reached, key=lambda c: c[:7])
-                break
-        if chosen is not None:
-            break
-    _, _, _, hold, direction, approach_direction, delay, prediction = chosen or min(
-        candidates, key=lambda c: c[:7]
-    )
+    for hold in range(1, 33):
+        prediction = predict(scene, [], motion, box, goal, direction, hold, grounded=True)
+        candidates.append(
+            (
+                not prediction.reached,
+                round(prediction.error / 4),
+                len(prediction.steps),
+                hold,
+                prediction,
+            )
+        )
+    _, _, _, hold, prediction = min(candidates, key=lambda c: c[:4])
     targets = [
         t
         for t in tracks.tracks
@@ -349,6 +304,4 @@ def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None
         tracks,
         target=target,
         target_offset=offset,
-        approach=delay,
-        approach_direction=approach_direction,
     )

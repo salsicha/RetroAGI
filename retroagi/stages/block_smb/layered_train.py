@@ -1644,6 +1644,7 @@ def load_layered_checkpoint(path, device="cpu"):
     old_executor = saved.get("executor", "predictive_spatial_v1") in (
         "predictive_spatial_v1",
         "predictive_spatial_v2",
+        "goal_following_v1",
     )
     if old_executor:
         # Old qualifications do not certify the changed executor and target

@@ -13,7 +13,7 @@ from retroagi.core.smb_scene_labels import (
     Surface,
 )
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import APPROACH_FRAMES, Track, VisualTracks, plan_flight
+from retroagi.core.smb_trajectory import Track, VisualTracks, plan_flight
 from retroagi.core.tokens import SkillToken
 
 
@@ -35,18 +35,16 @@ def test_obstacles_hazards_and_missing_support_cannot_veto_or_change_a_jump():
     for picture in (scene, blocked):
         tracks = VisualTracks([Track((50, 200, 66, 220), "other")])
         flight = plan_flight(picture, tracks, 0, SkillToken("jump", 60, 0))
-        plans.append((flight.hold, flight.direction, flight.approach, flight.approach_direction))
-        assert flight.press(picture) in (1, 2, 3, 4, 5)
+        plans.append((flight.hold, flight.direction))
+        assert flight.press(picture) in (2, 4, 5)
     assert plans[0] == plans[1]
 
 
 @pytest.mark.parametrize("goal", [SkillToken("jump", 256, -240), SkillToken("jump", -200, -100)])
-def test_unreachable_destinations_still_get_an_executable_attempt_on_coarse_grid(goal):
+def test_unreachable_destinations_still_take_off_immediately(goal):
     flight = plan_flight(plain_scene(), VisualTracks(), 0, goal)
-    assert flight.approach in APPROACH_FRAMES
-    assert APPROACH_FRAMES == tuple(range(0, 65, 4))
     assert flight.prediction.steps
-    assert flight.press(plain_scene()) in (1, 2, 3, 4, 5)
+    assert flight.press(plain_scene()) in (2, 4, 5)
 
 
 def test_losing_vision_releases_buttons_and_reports_failure():

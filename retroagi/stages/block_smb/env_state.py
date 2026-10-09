@@ -21,6 +21,7 @@ def snapshot_env_state(env: MarioScenarioEnv) -> dict[str, Any]:
     mario["_platform"] = None
     mutable_flags = (
         "_goal_credited",
+        "stomped",
         "_stomp_credited",
         "_bridge_boarded",
         "_bridge_crossed",

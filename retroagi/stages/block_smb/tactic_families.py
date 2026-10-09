@@ -54,21 +54,23 @@ STANDALONE = {
 }
 # Clones: siblings on the same layouts that differ only in their tactics.
 CHOICE_FAMILIES = ("choice_advance", "choice_hold_area", "choice_retreat")
-LOW_CHOICE_FAMILIES = ("low_choice_advance", "low_choice_alternate_route")
-CLONE_FAMILIES = CHOICE_FAMILIES + LOW_CHOICE_FAMILIES
+LOW_CHOICE_FAMILIES = ("low_choice_advance",)
+CLONE_FAMILIES = ("choice_advance", "choice_retreat", *LOW_CHOICE_FAMILIES)
 # This complete route is selected for visible upper-path coins under max_points.
 # Its individual maneuvers live in skill_families.ROUTE_SKILL_FAMILIES.
-ROUTE_CHOICE_FAMILIES = ("choice_alternate_route",)
+ROUTE_CHOICE_FAMILIES = ("choice_alternate_route", "low_choice_alternate_route")
 TACTIC_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
     *COMPOSED_RECIPES,
     *CLONE_FAMILIES,
+    "choice_hold_area",
     *ROUTE_CHOICE_FAMILIES,
     *STRATEGY_TACTIC_FAMILIES,
 )
 NEW_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
     *CLONE_FAMILIES,
+    "choice_hold_area",
     *ROUTE_CHOICE_FAMILIES,
     *STRATEGY_TACTIC_FAMILIES,
 )
@@ -198,8 +200,26 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
             segment("alternate_route", 1, route=[2, 3, 4], forbidden=[1], on=4),
             segment("advance", 1),
         ]
+    elif family == "low_choice_alternate_route":
+        scenario, params = _low_choice_layout(rng, difficulty)
+        schedules = params.pop("schedules")
+        scenario["tactics"] = schedules[family]
+        # Visible points on the lower path justify choosing it under max_points.
+        edge = scenario["platforms"][3][0]
+        scenario["coins"] = [[edge + 22, FLOOR - 20, 10, 10]]
+        scenario["strategy"] = "max_points"
+        scenario["strategy_objective"] = {"points": len(scenario["coins"])}
     elif family in CHOICE_FAMILIES:
         scenario, params = _choice_layout(rng, difficulty)
+        if family == "choice_hold_area":
+            params.pop("schedules")
+            spawn = scenario["mario"][0]
+            scenario["tactics"] = [segment("hold_area", 1, area=1, frames=params["hold_frames"])]
+            scenario["goal"] = [spawn - 2, FLOOR - 20, 14, 20]
+            scenario["coins"] = []
+        elif family == "choice_advance":
+            far = scenario["platforms"][1][0]
+            scenario["goal"] = [far, FLOOR - 20, 24, 20]
     elif family in LOW_CHOICE_FAMILIES:
         scenario, params = _low_choice_layout(rng, difficulty)
     elif family in STRATEGY_TACTIC_FAMILIES:
@@ -210,7 +230,9 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
         recipe = STANDALONE.get(family) or COMPOSED_RECIPES[family] or mixed_recipe(rng)
         scenario, params = compose(rng, difficulty, recipe)
     if family in CLONE_FAMILIES:
-        scenario["sibling_tactics"] = params.pop("schedules")
+        scenario["sibling_tactics"] = {
+            k: v for k, v in params.pop("schedules").items() if k in CLONE_FAMILIES
+        }
         scenario["tactics"] = scenario["sibling_tactics"][family]
     params["difficulty_bin"] = difficulty
     return scenario, params, []

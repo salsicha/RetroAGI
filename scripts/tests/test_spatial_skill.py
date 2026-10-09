@@ -243,7 +243,7 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
 
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
-    assert len(families) == 48
+    assert len(families) == 50
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert "stomp_recovery" not in families
     assert {

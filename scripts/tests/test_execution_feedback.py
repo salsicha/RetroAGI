@@ -120,3 +120,23 @@ def test_feedback_migration_keeps_old_weights_and_clears_qualification(tmp_path)
     for k, v in state.items():
         if k != "skill.above.weight":
             assert torch.equal(v, loaded.state_dict()[k])
+
+
+def test_runup_executor_checkpoint_requires_requalification_without_changing_weights(tmp_path):
+    policy = LayeredSMBPolicy()
+    layout = token_layout()
+    layout["executor"] = "goal_following_v1"
+    path = tmp_path / "runup.pt"
+    torch.save(
+        dict(
+            settings=asdict(policy.settings),
+            state_dict=policy.state_dict(),
+            token_layout=layout,
+            observation_layout=observation_layout(),
+            trained_layers=["skill", "tactic"],
+        ),
+        path,
+    )
+    loaded, metadata = load_layered_checkpoint(path)
+    assert metadata["trained_layers"] == []
+    assert all(torch.equal(v, loaded.state_dict()[k]) for k, v in policy.state_dict().items())

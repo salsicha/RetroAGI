@@ -55,7 +55,7 @@ Both skill and tactic receive the predicted timing with the expected scene.
 Duration is a learned positive continuous output with its own uncertainty, not
 a choice among preset horizons. It has no 64-frame cap: saved action traces
 already contain 168-frame commands, ground execution permits 192 frames, and
-jump-button hold length does not include the whole approach and flight.
+jump-button hold length does not include the whole flight.
 
 At a decision, the label is the state and elapsed time at the next decision.
 Periodic memory ticks within that action are trained toward the same endpoint
@@ -78,20 +78,22 @@ boundary, while a new tactic is selected only when no tactic is held or the
 old one ends. Tactic memory updates on those starts. Tactic receives its
 held category and age in both frames and decisions.
 
-Skill selects a destination at each action boundary. A jump remains one executor
-maneuver through approach, takeoff, button release, and landing. The controller
-searches jump holds of 1–32 frames and approaches of 0, 4, 8, …, 64 frames using
-Mario's button-response model. It never retries the approach search with
-individual frame durations. Crossing the requested height on descent scores a
-candidate's position error; it does not certify a safe path or supported landing.
-When no candidate reaches the point, the controller executes its closest attempt.
-The flight model has a 96-frame horizon plus approach time and contains no
-terrain or hazard simulation.
+Skill selects a destination at each action boundary. **Jump means take off now**;
+any acceleration, positioning or clearance preparation is a separate skill-issued
+`run` target. The controller searches jump holds of 1–32 frames using Mario's
+button-response model, without inserting a run-up or waiting for motion samples.
+It uses the current motion estimate, or its initialized estimate when no history
+is available. Crossing the requested height on descent scores position error;
+it does not certify a safe path or supported landing. When no candidate reaches
+the point, the controller executes its closest immediate jump attempt. The flight
+model has a 96-frame horizon and contains no terrain or hazard simulation.
 
-Per-frame observations correct Mario's motion estimate and steering. Two visual
-displacements initialize momentum; subsequent corrections filter four samples.
+Per-frame observations correct Mario's motion estimate and steering. Subsequent
+measurements refine the initial estimate without postponing takeoff.
 Once A is released, it cannot be pressed again in the same flight. Separate jumps
-have a physical button release between them. Visual contact after takeoff ends
+have a physical button release between them; if A is still down, this necessary
+release frame precedes the new takeoff. An airborne request releases A and steers,
+rather than starting another jump in midair. Visual contact after takeoff ends
 the flight without reconstructing collision geometry. A run completes on arrival
 with low residual speed or after 192 frames. Missing Mario observations release
 buttons and end execution.
@@ -159,9 +161,9 @@ provides explicit approach waypoints, including clearance around overhead ledges
 Supported target centers are clamped within the observed-in-training support's
 edges with room for Mario's width. Moving-support targets use the support's
 current pose, so passive carry does not become a fixed world destination.
-A hold targets the current spot. `goal_following_v1` checkpoints include execution
-feedback. Older weights can warm-start with zero influence from the new feedback
-inputs; previous skill/tactic qualifications are cleared and must be earned again.
+A hold targets the current spot. `goal_following_v2` checkpoints use immediate takeoff. Older executor checkpoints
+can warm-start, but their skill/tactic qualifications are cleared. Checkpoints
+without execution feedback initialize its new inputs with zero influence.
 Uncertified recovery states are not used as skill demonstrations. The teacher
 can read simulator state during training; deployed networks cannot.
 
@@ -194,15 +196,15 @@ An optional parameter sweep remains available for explicitly selected small
 skill families. Normal training samples the full skill curriculum and adds
 extra layouts for weak families.
 
-Skill uses **48 scene families** for local destination selection: individual
+Skill uses **50 scene families** for local destination selection: individual
 bridge holds/mounts/dismounts, enemy encounters, platform traversal, local
 recovery, supplied-tactic choice clones and the 17 action families. Each
 supplies spatial destination labels instead of button labels at the skill stage.
 The choice clones deliberately reuse one scene with different supplied tactics;
 they test following that input, rather than inferring a hidden assignment.
 
-`choice_alternate_route` belongs to tactics. Its four local maneuvers have
-separate skill families:
+`choice_alternate_route` and `low_choice_alternate_route` belong to tactics.
+Their local maneuvers have separate skill families:
 
 | Skill family | Supplied tactic | Local destination |
 |---|---|---|
@@ -210,6 +212,9 @@ separate skill families:
 | `skill_raised_climb` | Climb forward | Next higher ledge |
 | `skill_gap_descent` | Descend forward | Lower raised platform across the gap |
 | `skill_ledge_descent` | Descend forward | Floor beyond the last ledge |
+| `skill_lower_descent` | Descend forward | Lower floor beneath the raised route |
+| `skill_lower_step_climb` | Climb forward | Step leading out of the lower route |
+| `skill_lower_exit_climb` | Climb forward | Upper exit ledge from the step |
 
 Each starts at its own maneuver, carries one local route destination, and ends
 on supported arrival there. It does not require completing the rest of the level.
@@ -218,6 +223,23 @@ coin, which must be collected before finishing. That strategy input distinguishe
 it from the direct `speed_run` choice instead of asking tactics to infer a hidden
 route assignment from identical inputs. Executor limitations still affect these
 local tasks; splitting the curriculum does not change execution behavior.
+
+The lower full route likewise has a visible lower-floor coin and a `max_points`
+objective. `choice_advance` finishes at its first supported far-side landing.
+`choice_hold_area` only holds until its timed completion; departure timing belongs
+to tactic lessons such as `wait_timing`, where a moving platform provides an
+observable reason to proceed. Repeated movement commands share stall history,
+including zero-distance requests, so their next skill decision receives no-progress
+feedback. Deliberate holds reset that history.
+
+Stomp destinations refer to the enemy's current center and top; the executor
+tracks that visible target as it moves. While jump remains pressed, flight
+feedback can extend or shorten its hold up to 32 total frames. After release it
+cannot press jump again during the same flight. Vision decoding checks contact
+predictions against the visible feet/support relationship before policies or
+controllers consume them.
+Changes in Mario's detected width are excluded from velocity corrections so a
+changing silhouette cannot turn a leftward jump into an apparent rightward drift.
 
 Two dedicated families, `skill_enemy_bypass` and `skill_enemy_bypass_back`,
 require an immediate jump and supported landing beyond an enemy that remains
@@ -229,18 +251,18 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **30 families**, defined by `TACTIC_TRAINING_FAMILIES`:
+Tactic uses **31 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
 | Strategy (14) | Each of seven tactics under `speed_run_` and `max_points_` |
 | Composed levels (8) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
 | Scene-driven routes/responses (4) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat` |
-| Alternate route (1) | `choice_alternate_route`, under `max_points` with visible upper-path points |
+| Alternate routes (2) | `choice_alternate_route`, `low_choice_alternate_route`, under `max_points` with visible points on the required path |
 | Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
 
 These families teach tactic selection and termination with the skill
-layers frozen. All 30 are excluded from skill training and skill evaluation.
+layers frozen. All 31 are excluded from skill training and skill evaluation.
 Local sequences such as `platform_chain` and `stair_gap` remain skill practice
 for successive reachable destinations; individual bridge holds, mounts and
 dismounts remain skill practice for carrying out the selected maneuver.
