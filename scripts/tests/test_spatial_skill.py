@@ -238,7 +238,7 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
 
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
-    assert len(families) == 45
+    assert len(families) == 48
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert "stomp_recovery" not in families
     assert {
@@ -251,11 +251,15 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
         "stair_gap",
         "landing_enemy",
         "enemy_on_platform",
-        "choice_alternate_route",
+        "skill_overhead_climb",
+        "skill_raised_climb",
+        "skill_gap_descent",
+        "skill_ledge_descent",
         "skill_enemy_bypass",
         "skill_enemy_bypass_back",
     } <= families
     assert "skill_enemy_bypass" in families
+    assert "choice_alternate_route" not in families
 
 
 def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates():
@@ -272,6 +276,49 @@ def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates():
     )
     assert rejected["duplicate_regeneration"] > 0
     assert sample.reachability["reachable"]
+
+
+@pytest.mark.parametrize(
+    "family,tactic",
+    [
+        ("skill_overhead_climb", "climb_forward"),
+        ("skill_raised_climb", "climb_forward"),
+        ("skill_gap_descent", "descend_forward"),
+        ("skill_ledge_descent", "descend_forward"),
+    ],
+)
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_route_skill_ends_on_first_destination_without_a_tactic_sequence(
+    family, tactic, difficulty
+):
+    from retroagi.stages.block_smb.tactic_schedule import _support_index
+    from retroagi.stages.block_smb.teacher_tokens import teacher_tactic
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=2026100801, sample_index=0, family=family, difficulty=difficulty
+    )
+    scenario = sample.scenario
+    target = sample.parameters["target_platform"]
+    assert len(scenario["tactics"]) == 1
+    assert scenario["tactics"][0]["route"] == [target]
+    assert not scenario["coins"]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        state = episode_teacher(scenario)
+        for i, button in enumerate(sample.oracle["actions"]):
+            state.observe_frame(env)
+            assert teacher_tactic(env, state).stance == tactic
+            done = env.step(button)[2]
+            if _support_index(env) == target:
+                assert done and env._goal_credited
+                assert i == len(sample.oracle["actions"]) - 1
+                break
+            assert not done
+        else:
+            pytest.fail("local maneuver never reached its destination")
+    finally:
+        env.close()
 
 
 @pytest.mark.parametrize("family", ["skill_enemy_bypass", "skill_enemy_bypass_back"])

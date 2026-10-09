@@ -288,11 +288,40 @@ def test_in_the_clones_the_schedule_decides_the_first_tactic():
         first[family] = (tactic.stance, plan.action if plan else None)
         env.close()
     assert first["choice_advance"][0] == "advance"
-    assert first["choice_alternate_route"][0] == "climb_forward"
     assert first["choice_hold_area"] == ("hold_ground", HOLD_GROUND)
     assert first["choice_retreat"][0] == "retreat"
     assert first["low_choice_advance"][0] == "advance"
     assert first["low_choice_alternate_route"][0] == "descend_forward"
+
+
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_alternate_route_has_observable_strategy_and_collects_upper_path_points(difficulty):
+    from retroagi.stages.block_smb.monte_carlo import block_smb_monte_carlo_metadata
+    from retroagi.stages.block_smb.teacher_tokens import teacher_strategy
+
+    scenario = _sample("choice_alternate_route", difficulty=difficulty)
+    direct = _sample("choice_advance", difficulty=difficulty)
+    assert "choice_alternate_route" in TACTIC_TRAINING_FAMILIES
+    assert "choice_alternate_route" not in CLONE_FAMILIES
+    assert scenario["coins"]
+    assert teacher_strategy(episode_teacher(scenario)).kind == "max_points"
+    assert teacher_strategy(episode_teacher(direct)).kind == "speed_run"
+    assert scenario["strategy_objective"]["points"] > 0
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        state = episode_teacher(scenario)
+        tactics = set()
+        for button in block_smb_monte_carlo_metadata(scenario)["oracle"]["actions"]:
+            state.observe_frame(env)
+            tactics.add(teacher_tactic(env, state).stance)
+            if env.step(button)[2]:
+                break
+        assert env._goal_credited
+        assert env.points() >= scenario["strategy_objective"]["points"]
+        assert {"climb_forward", "descend_forward", "advance"} <= tactics
+    finally:
+        env.close()
 
 
 def test_the_monster_family_needs_backing_off_jumping_in_the_tunnel_fails():

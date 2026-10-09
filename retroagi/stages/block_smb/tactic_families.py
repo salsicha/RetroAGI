@@ -18,6 +18,10 @@ for following a supplied tactic in an otherwise identical scene:
   layout one sibling cannot finish is redrawn for all of them.
 - **Strategy families** (strategy_families): the tactic layer's families,
   one scene per tactic played under each strategy.
+
+choice_alternate_route is a complete max-points route with a visible upper-path
+coin, not a supplied-tactic clone. Its four local maneuvers are separate skill
+families, each ending on its destination support.
 """
 
 from __future__ import annotations
@@ -49,22 +53,32 @@ STANDALONE = {
     "monster_retreat": [("monster", {"inside": True})],
 }
 # Clones: siblings on the same layouts that differ only in their tactics.
-CHOICE_FAMILIES = ("choice_advance", "choice_alternate_route", "choice_hold_area", "choice_retreat")
+CHOICE_FAMILIES = ("choice_advance", "choice_hold_area", "choice_retreat")
 LOW_CHOICE_FAMILIES = ("low_choice_advance", "low_choice_alternate_route")
 CLONE_FAMILIES = CHOICE_FAMILIES + LOW_CHOICE_FAMILIES
+# This complete route is selected for visible upper-path coins under max_points.
+# Its individual maneuvers live in skill_families.ROUTE_SKILL_FAMILIES.
+ROUTE_CHOICE_FAMILIES = ("choice_alternate_route",)
 TACTIC_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
     *COMPOSED_RECIPES,
     *CLONE_FAMILIES,
+    *ROUTE_CHOICE_FAMILIES,
     *STRATEGY_TACTIC_FAMILIES,
 )
-NEW_FAMILIES = (*SCENE_TACTIC_FAMILIES, *CLONE_FAMILIES, *STRATEGY_TACTIC_FAMILIES)
+NEW_FAMILIES = (
+    *SCENE_TACTIC_FAMILIES,
+    *CLONE_FAMILIES,
+    *ROUTE_CHOICE_FAMILIES,
+    *STRATEGY_TACTIC_FAMILIES,
+)
 
 # Waiting versus proceeding is a tactic decision. Individual bridge holds,
 # mounts and dismounts remain destination-selection practice for the skill.
 TIMING_TACTIC_FAMILIES = ("moving_bridge", "wait_timing", "piranha_avoidance")
 TACTIC_TRAINING_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
+    *ROUTE_CHOICE_FAMILIES,
     *COMPOSED_RECIPES,
     *TIMING_TACTIC_FAMILIES,
     *STRATEGY_TACTIC_FAMILIES,
@@ -115,10 +129,6 @@ def _choice_layout(rng: random.Random, difficulty: str) -> tuple[dict, dict]:
     raised = [2, 3, 4]
     schedules = {
         "choice_advance": [segment("advance", 1, forbidden=raised)],
-        "choice_alternate_route": [
-            segment("alternate_route", 1, route=raised, forbidden=[1], on=4),
-            segment("advance", 1),
-        ],
         "choice_hold_area": [
             segment("hold_area", 1, area=16, frames=hold),
             segment("advance", 1, forbidden=raised),
@@ -177,7 +187,18 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
 
     The route is the teacher's, worked out on the finished layout (family_route).
     """
-    if family in CHOICE_FAMILIES:
+    if family == "choice_alternate_route":
+        scenario, params = _choice_layout(rng, difficulty)
+        params.pop("schedules")
+        # Unlike a supplied-tactic clone, route choice needs an observable
+        # reason. The upper-path coin and max_points switch provide it.
+        scenario["strategy"] = "max_points"
+        scenario["strategy_objective"] = {"points": len(scenario["coins"])}
+        scenario["tactics"] = [
+            segment("alternate_route", 1, route=[2, 3, 4], forbidden=[1], on=4),
+            segment("advance", 1),
+        ]
+    elif family in CHOICE_FAMILIES:
         scenario, params = _choice_layout(rng, difficulty)
     elif family in LOW_CHOICE_FAMILIES:
         scenario, params = _low_choice_layout(rng, difficulty)

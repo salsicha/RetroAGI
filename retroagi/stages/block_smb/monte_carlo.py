@@ -17,7 +17,7 @@ from .action_families import ACTION_FAMILIES, action_family_scenario
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
 from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES
-from .skill_families import SKILL_FAMILIES, skill_family_scenario
+from .skill_families import ROUTE_SKILL_FAMILIES, SKILL_FAMILIES, skill_family_scenario
 from .tactic_families import NEW_FAMILIES, TACTIC_FAMILIES, family_route, tactic_family_scenario
 from .tactic_schedule import segment
 from .transfer_failure_families import (
@@ -417,7 +417,11 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
     for family in SKILL_FAMILIES:
         schemas[family] = {
             "difficulty_bin": list(BLOCK_SMB_MC_DIFFICULTY_BINS),
-            "objective": "land past the enemy without killing it",
+            "objective": (
+                "reach one local platform destination under a supplied climb or descent tactic"
+                if family in ROUTE_SKILL_FAMILIES
+                else "land past the enemy without killing it"
+            ),
         }
     for family in ACTION_FAMILIES:
         schemas[family] = {

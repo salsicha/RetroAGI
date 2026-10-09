@@ -100,7 +100,7 @@ class LayeredTrainConfig:
     # this many times its share of losses.
     focus_layouts: int = 8
     # Optional full parameter sweep for explicitly selected small skill
-    # families. Normal skill training samples all 45 families with focus replay.
+    # families. Normal skill training samples all skill families with focus replay.
     sweep: bool = False
     # A family and difficulty with more combinations than this is not made: the
     # run stops and names it (its parameters need a smaller space first).

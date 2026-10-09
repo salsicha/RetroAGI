@@ -221,12 +221,30 @@ An optional parameter sweep remains available for explicitly selected small
 skill families. Normal training samples the full skill curriculum and adds
 extra layouts for weak families.
 
-Skill uses **45 scene families** for local destination selection: individual
+Skill uses **48 scene families** for local destination selection: individual
 bridge holds/mounts/dismounts, enemy encounters, platform traversal, local
 recovery, supplied-tactic choice clones and the 17 action families. Each
 supplies spatial destination labels instead of button labels at the skill stage.
 The choice clones deliberately reuse one scene with different supplied tactics;
 they test following that input, rather than inferring a hidden assignment.
+
+`choice_alternate_route` belongs to tactics. Its four local maneuvers have
+separate skill families:
+
+| Skill family | Supplied tactic | Local destination |
+|---|---|---|
+| `skill_overhead_climb` | Climb forward | First overhead ledge, including any required reverse approach |
+| `skill_raised_climb` | Climb forward | Next higher ledge |
+| `skill_gap_descent` | Descend forward | Lower raised platform across the gap |
+| `skill_ledge_descent` | Descend forward | Floor beyond the last ledge |
+
+Each starts at its own maneuver, carries one local route destination, and ends
+on supported arrival there. It does not require completing the rest of the level.
+The full `choice_alternate_route` uses `max_points` and a visible upper-path
+coin, which must be collected before finishing. That strategy input distinguishes
+it from the direct `speed_run` choice instead of asking tactics to infer a hidden
+route assignment from identical inputs. Executor limitations still affect these
+local tasks; splitting the curriculum does not change execution behavior.
 
 Two dedicated families, `skill_enemy_bypass` and `skill_enemy_bypass_back`,
 require an immediate jump and supported landing beyond an enemy that remains
@@ -238,17 +256,18 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **29 families**, defined by `TACTIC_TRAINING_FAMILIES`:
+Tactic uses **30 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
 | Strategy (14) | Each of seven tactics under `speed_run_` and `max_points_` |
 | Composed levels (8) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
 | Scene-driven routes/responses (4) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat` |
+| Alternate route (1) | `choice_alternate_route`, under `max_points` with visible upper-path points |
 | Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
 
 These families teach tactic selection and termination with the skill
-layers frozen. All 29 are excluded from skill training and skill evaluation.
+layers frozen. All 30 are excluded from skill training and skill evaluation.
 Local sequences such as `platform_chain` and `stair_gap` remain skill practice
 for successive reachable destinations; individual bridge holds, mounts and
 dismounts remain skill practice for carrying out the selected maneuver.
