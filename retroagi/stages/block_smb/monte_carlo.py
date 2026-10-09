@@ -292,7 +292,7 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
         "tall_pipe_jump": {
             "pipe_x": [180, 180],
             "pipe_width": [30, 30],
-            "pipe_height": [56, 68],
+            "pipe_height": [56, 64],
             "goal_x": [266, 276],
         },
         "pipe_mount": {
@@ -570,6 +570,10 @@ def sample_block_smb_monte_carlo_scenario(
             ),
         )
         if bool(reachability.get("reachable", False)):
+            if selected_family.startswith("speed_run_"):
+                from .teacher_replay import calibrate_budget
+
+                calibrate_budget(sample.scenario, selected_family)
             if rejection_counter is not None:
                 rejection_counter.update(rejected)
             return sample
@@ -1941,11 +1945,11 @@ def _tall_pipe_jump(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     # A single tall pipe that must be jumped over/onto to reach the goal
-    # beyond it. Heights climb with difficulty and stay jumpable: with a full
-    # run-up, a single held jump mounts the whole 56-68px band under honest
-    # jump-cut physics (the old two-phase script relied on the buffered
-    # full-jump quirk and was retired with it).
-    pipe_h = {"easy": 58, "medium": 62, "hard": 66}[difficulty] + rng.randint(-2, 2)
+    # beyond it. A spatial run ends at its destination before the separate
+    # immediate jump, so this lesson must be reachable from rest. The old
+    # 65-68px band relied on a continuous button-route run-up that the spatial
+    # command contract cannot express. Match pipe_mount's supported ceiling.
+    pipe_h = rng.randint(*{"easy": (56, 60), "medium": (60, 62), "hard": (63, 64)}[difficulty])
     pipe_x, pipe_w = 180, 30
     goal_x = rng.randint(266, 276)
     scenario = {

@@ -1,10 +1,8 @@
 """Teachers for the layered agent in Block SMB. Training only.
 
-At each decision point of a training episode these say what each layer
-should emit: the strategy, the tactic token and the action plan. They read
-the simulator's own state, which is allowed only for teaching. A policy never
-receives anything from here, except, while the action layer is being trained,
-the explicit tactic token.
+At each decision point these provide the strategy, tactic and spatial skill
+labels. They read simulator state only for teaching. The learner receives
+ordinary tokens; its observations and the executor remain vision based.
 
 - strategy: the one the layout is played for (a strategy family names it;
   every other layout is a speed run), toward the side the goal was on when
@@ -28,9 +26,10 @@ the explicit tactic token.
   Forward is right, the level's way: a move to the left is retreat,
   climb_backward or descend_backward, never advance. A move lasts until
   Mario lands: in the air he keeps the tactic he left the ground with;
-- action: the first segment of the coached route from the current state
-  (policy_recovery.coached_suffix), as an action and a frame count on the
-  executor's menu; for a jump, also every certified hold (safe_jump_holds).
+- skill: a destination certified through the production controller. A coached
+  button route can propose it; failed proposals are replaced with supported
+  destinations. The legacy action-plan helper remains available to button
+  route tests, including certified jump holds.
 """
 
 import copy
@@ -67,6 +66,10 @@ class TeacherState:
     observer: object = None  # EnemyObservationHistory, fed every frame by observe_frame
     history: object = None  # its latest features
     notes: dict = field(default_factory=dict)
+    execution: object = None  # current spatial feedback, training-only probe input
+    scene: object = None
+    controller: object = None
+    visual_observer: object = None
 
     def observe_frame(self, env) -> None:
         """Call once per frame: the plant and enemy teachers need the history."""
@@ -175,7 +178,9 @@ def _move(env, state: TeacherState, stance: str, direction: int) -> tuple[str, i
     # ground with (a jump, a climb, a drop).
     held = state.notes.get("ground_move")
     if env.mario["on_ground"] or held is None:
-        objective = training_target(env)
+        from .controller_teacher import teacher_target
+
+        objective = teacher_target(env)
         way = int(objective.direction) if objective.direction in (-1, 1) else direction
         state.notes["ground_move"] = (_objective_move(env, objective), way)
     return state.notes["ground_move"]
@@ -205,6 +210,22 @@ def tactic_of_move(move: str, direction: int) -> str:
 
 def teacher_tactic(env, state: TeacherState) -> TacticToken:
     """The tactic here (see the module notes)."""
+    if tactic_schedule.current(env)["kind"] == "monster" and env.mario["on_ground"]:
+        from .controller_teacher import monster_destination
+
+        goal = monster_destination(env, state)
+        if goal is not None:
+            return tactic_token(
+                "hold_ground" if goal.mode == "hold" else "advance" if goal.x >= 0 else "retreat"
+            )
+    if tactic_schedule.current(env)["kind"] == "plant":
+        from .controller_teacher import plant_destination
+
+        goal = plant_destination(env, state)
+        if goal is not None:
+            return tactic_token(
+                "hold_ground" if goal.mode == "hold" else "advance" if goal.x >= 0 else "retreat"
+            )
     stance, direction = schedule_stance(env, state)
     return tactic_token(tactic_of_move(*_move(env, state, stance, direction)))
 
@@ -249,7 +270,7 @@ def _remembered_route(env, state: TeacherState) -> Optional[list[int]]:
     return None
 
 
-def _remember_route(env, state: TeacherState, route: list[int]) -> None:
+def _remember_route(env, state: TeacherState, route: list[int], *, complete=True) -> None:
     """Keep a route with the state before each of its frames (replayed, then restored)."""
     from retroagi.core.smb_coaching import probe_state
 
@@ -259,6 +280,7 @@ def _remember_route(env, state: TeacherState, route: list[int]) -> None:
             fingerprints.append(_fingerprint(env))
             env.step(action)
     state.notes["route"] = (env.steps, list(route), fingerprints)
+    state.notes["route_complete"] = complete
 
 
 def teacher_plan(
@@ -266,31 +288,48 @@ def teacher_plan(
 ) -> tuple[Optional[ActionPlan], tuple[int, ...]]:
     """The coached route's next action and frame count, and every certified jump hold.
 
-    Returns (None, ()) when no coached route reaches the goal from here. While
-    the episode follows the last route frame for frame (the simulator is
-    deterministic), the rest of that route is used instead of a new search.
+    With duration certification, returns (None, ()) when no button route
+    reaches the goal. In plant layouts, spatial teaching may request a local
+    maneuver prefix; teacher_skill certifies its destination through the
+    production controller. A prefix is never reused as a complete route.
     """
     from retroagi.core.smb_coaching import probe_state, training_target
 
     from .local_traversal import safe_jump_holds
     from .policy_recovery import coached_suffix
 
+    if not certify_holds and tactic_schedule.current(env)["kind"] in ("plant", "monster"):
+        return None, ()
+    if not certify_holds:
+        from .controller_teacher import teacher_target
+
+        # Reward collection replaces the route's terminal target. Its button
+        # proposal would be discarded by the spatial teacher, so do not spend
+        # a full route search computing an unused label.
+        if teacher_target(env) != training_target(env):
+            return None, ()
     route = _remembered_route(env, state)
+    if certify_holds and not state.notes.get("route_complete", True):
+        route = None
     if route is None and env.steps == 0 and state.notes.get("initial_route"):
         route = list(state.notes["initial_route"])
         _remember_route(env, state, route)
     if route is None:
         # The coached route plays itself forward in the simulator; put it back after.
+        prefix = not certify_holds and any(
+            enemy.get("kind") == "piranha_plant" for enemy in env.enemies
+        )
         with probe_state(env):
             route = coached_suffix(
                 env,
-                max_frames=env.frame_budget,
+                max_frames=state.notes.get("route_budget", env.frame_budget),
                 observation_history=copy.deepcopy(state.observer) if state.observer else None,
+                prefix=prefix,
             )
         if not route:
             state.notes.pop("route", None)
             return None, ()
-        _remember_route(env, state, route)
+        _remember_route(env, state, route, complete=not prefix)
     plan = _first_plan(route)
     if plan.action == SMBAction.NOOP and teacher_tactic(env, state).stance == "hold_ground":
         plan = ActionPlan(HOLD_GROUND, plan.frames)
@@ -316,22 +355,39 @@ def episode_teacher(scenario) -> TeacherState:
         direction=direction,
         strategy=scenario.get("strategy") or DEFAULT_STRATEGY.kind,
         notes={
+            "route_budget": scenario.get("teacher_route_budget", scenario.get("frame_budget", 320)),
             "initial_route": block_smb_monte_carlo_metadata(scenario)
             .get("oracle", {})
-            .get("actions")
+            .get("actions"),
         },
     )
 
 
-def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> SkillToken:
+def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Optional[SkillToken]:
+    from .controller_teacher import destination
+
+    proposal = _route_skill(env, state, plan)
+    if state.family == "enemy_patrol":
+        return proposal
+    return destination(env, state, proposal if plan is not None else None)
+
+
+def _route_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Optional[SkillToken]:
     """A spatial destination for the next maneuver, from the teacher's rollout.
 
     A jump targets its landing/stomp, not its takeoff or a hidden object ID.
     Runs end at an objective, support transition or bounded travel waypoint.
     An upcoming jump's run-up is a separate supported waypoint. The probe
     is restored exactly; only the spatial command reaches the executor.
+    Patrol uses controller-certified destinations directly and returns None
+    when none is certified; that state must not receive an imitation label.
     """
     from retroagi.core.smb_coaching import probe_state
+
+    if state.family == "enemy_patrol":
+        from .patrol_teacher import destination
+
+        return destination(env, state.execution, state.scene)
 
     if plan is not None and (
         plan.action == HOLD_GROUND or (plan.action == SMBAction.NOOP and env.mario["on_ground"])

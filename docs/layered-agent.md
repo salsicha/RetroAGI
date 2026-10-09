@@ -164,6 +164,16 @@ This accounts for the ground controller braking at a run destination, instead
 of copying the takeoff of an uninterrupted button sequence. The teacher supplies
 the preparation run separately from the jump and avoids zero-distance approach
 loops. Immediate-jump action lessons keep their original contract.
+The `enemy_patrol` spatial teacher certifies candidate run, stomp and bypass
+destinations through a copy of the existing executor, initialized with the
+current execution feedback. Simulator probes include actual braking, enemy
+motion and the first landing or stomp; a missed destination or collision is not
+a certified label. Candidate endpoints stay on the supported floor or a live
+enemy. After a stomp, the next run targets floor height rather than Mario's
+airborne height. The teacher selects a progressing command with separation
+from surviving enemies, or a command that completes the existing level goal.
+These checks are confined to training; the runtime executor has no new hazard
+veto, collision model or search behavior.
 Supported target centers are clamped within the observed-in-training support's
 edges with room for Mario's width. Moving-support targets use the support's
 current pose, so passive carry does not become a fixed world destination.
@@ -316,3 +326,43 @@ python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb
 
 Full SMB uses the same policy/executor with its own vision weights. Passing
 Block SMB tests alone does not establish transfer or learned-vision robustness.
+
+Spatial teacher certification applies to both skill and tactic layouts. A
+button route is a proposal source: each destination is replayed through the
+same ground and flight controllers used by the agent. The teacher labels a
+command only when that execution reaches a supported destination, a required
+contact, a route milestone, or the final goal. Failed proposals are repaired
+with supported platform positions and edges. Raised landings can use a
+separately certified run waypoint followed by an immediate jump from that
+stopped position. Airborne commands account for the current post-contact
+motion rather than assuming that the next tactic's direction is already
+achievable. When the production vision model is available, accepted jump
+proposals are also replayed through it, including intermediate jumps.
+
+Teacher-only checks preserve unfinished route destinations behind the
+forward-only camera, keep point-scoring objectives active until their rewards
+are collected, and avoid ending under a low ceiling beside an approaching
+enemy or over a hidden plant's mouth. Pipe landings also need room to brake
+outside the plant. Monster jumps must complete the crossing; approach, waiting
+and retreat use separate destinations. None of these checks is an executor veto
+or a policy input. The executor and its four-frame initial duration search are
+unchanged.
+
+Speed-run deadlines are measured with the spatial teacher and production ViT,
+with the existing ten-percent timing allowance. The original button-route
+search budget stays fixed during that measurement. Route
+requirements, required points, and bypass-versus-stomp success rules remain
+intact. The tall-pipe family now uses 56–64 pixel heights: its former 65–68 pixel
+range depended on a continuous running takeoff, whereas a spatial run ends at
+its destination before the immediate jump. Strategy spawns leave one pixel
+above their intended support before settling, preventing a lower floor from
+embedding Mario inside a shallow ledge. A failed reference is reported as an
+error rather than silently redrawing that layout. There are no stomp-recovery
+families in either curriculum.
+
+Vision decoding resolves contradictory contact outputs before the controller
+receives them. A visible surface exactly beneath Mario's feet establishes
+standing even if the contact classifier says airborne. Near-contact predictions
+still need both the classifier and supporting geometry; side contact cannot
+establish a landing. This prevents valid jump goals from turning into horizontal
+air-control requests while Mario is actually standing on a ledge.

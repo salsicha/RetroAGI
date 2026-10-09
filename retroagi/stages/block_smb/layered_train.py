@@ -330,9 +330,10 @@ class _Lane:
             "plays_teacher": self.rng.random() < self.task.teacher_share,
         }
         if learner == "skill" and (self.task.label or asked["plays_teacher"]):
-            asked["action"], asked["holds"] = teacher_plan(
-                self.env, self.teacher, certify_holds=False
-            )
+            if self.teacher.family != "enemy_patrol":
+                asked["action"], asked["holds"] = teacher_plan(
+                    self.env, self.teacher, certify_holds=False
+                )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
         self.asked = asked
         return asked
@@ -366,7 +367,7 @@ class _Lane:
             )
             for head, value in labels.items():
                 d[f"label_{head}"].append(value)
-            valid = self.task.label and asked["action"] is not None
+            valid = self.task.label and asked["skill"] is not None
             d["label_valid"].append(valid)
             d["agreed"].append(valid and mine == asked["skill"])
             return
@@ -448,7 +449,7 @@ class _Lane:
         )
 
 
-def _teacher_given(learner: str, lanes: dict):
+def _teacher_given(learner: str, lanes: dict, agents=None):
     """For the deciding copies: the teacher's token for the layer above the
     learner (none for the tactic learner, which reads the strategy switch), and
     the teacher's own choice for the learner where it plays the teacher this
@@ -458,6 +459,10 @@ def _teacher_given(learner: str, lanes: dict):
     def given(copies, scenes):
         tokens = {learner: [], **({above: []} if above else {})}
         for copy, scene in zip(copies, scenes):
+            lanes[copy].teacher.execution = agents.copies[copy].spatial if agents else None
+            lanes[copy].teacher.controller = agents.copies[copy].executor if agents else None
+            lanes[copy].teacher.scene = scene
+            lanes[copy].teacher.visual_observer = agents.observer if agents else None
             asked = lanes[copy].ask_teacher(learner, scene)
             if above:
                 tokens[above].append(asked[above])
@@ -509,7 +514,7 @@ def play_episodes(
     pending = list(tasks)
     playing: dict[int, _Lane] = {}
     done: dict[int, EpisodeRecord] = {}
-    given = _teacher_given(learner, playing) if learner is not None else None
+    given = _teacher_given(learner, playing, agents) if learner is not None else None
     while pending or playing:
         for copy in range(lanes):
             if copy not in playing and pending:

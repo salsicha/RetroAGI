@@ -81,12 +81,15 @@ def test_new_maneuvers_are_immediate_directional_jumps_with_spatial_landings(fam
 
 @pytest.mark.parametrize("learner", ["skill"])
 @pytest.mark.parametrize("label", [True, False])
-def test_teacher_collection_and_learning_use_the_new_layer_contract(learner, label, monkeypatch):
+@pytest.mark.parametrize("family", ["action_walk", "enemy_patrol"])
+def test_teacher_collection_and_learning_use_the_new_layer_contract(
+    learner, label, family, monkeypatch
+):
     from retroagi.core.smb_agent import SMBAgents
     from retroagi.core.smb_scene_labels import scene_from_labels
 
     # Exact scenes stand in for vision, while the agent still accepts only frames.
-    task = EpisodeTask(0, "action_walk", "train", 7, 0, float(label), label, difficulty="easy")
+    task = EpisodeTask(0, family, "train", 7, 0, float(label), label, difficulty="easy")
     lane = _Lane(task, 0)
     if learner == "skill" and not label:
         from retroagi.stages.block_smb import teacher_tokens
@@ -247,7 +250,7 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
     assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
     assert len(families) == 37
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
-    assert "stomp_recovery" not in families
+    assert not any("stomp" in name and "recovery" in name for name in BLOCK_SMB_MC_FAMILIES)
     assert {
         "enemy_hop",
         "enemy_stomp",

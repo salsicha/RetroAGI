@@ -76,10 +76,10 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                 )
                 self.assertEqual(sample.family, "tall_pipe_jump")
                 pipe_height = int(sample.parameters["pipe_height"])
-                # Taller than the other single-pipe families' typical max (~60)
-                # yet under the ~68px jump-height ceiling so the oracle clears it.
+                # Reachable after the spatial run has stopped, rather than
+                # relying on the button oracle's continuous running takeoff.
                 self.assertGreaterEqual(pipe_height, 56)
-                self.assertLessEqual(pipe_height, 68)
+                self.assertLessEqual(pipe_height, 64)
                 self.assertTrue(sample.reachability["reachable"])
                 reachability = validate_block_smb_monte_carlo_oracle(
                     sample.scenario,

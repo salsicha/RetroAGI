@@ -34,7 +34,9 @@ def interior_hold(valid, menu=NES_JUMP_FRAMES):
     return run[len(run) // 2]
 
 
-def coached_suffix(env, *, max_frames=320, release_state=None, observation_history=None):
+def coached_suffix(
+    env, *, max_frames=320, release_state=None, observation_history=None, prefix=False
+):
     """The teacher's route from here to the goal, following the layout's tactics.
 
     Plants that can always be cleared are certified against their full height
@@ -51,13 +53,14 @@ def coached_suffix(env, *, max_frames=320, release_state=None, observation_histo
     from .piranha import conservative_suffix, has_plants
     from .piranha_tactics import timed_plant
 
-    if has_plants(env) and timed_plant(env) is None:
+    if not prefix and has_plants(env) and timed_plant(env) is None:
         return conservative_suffix(env, max_frames=max_frames, release_state=release_state)
     return _coached_suffix(
         env,
         max_frames=max_frames,
         release_state=release_state,
         observation_history=observation_history,
+        prefix=prefix,
     )
 
 
@@ -81,6 +84,7 @@ def _coached_suffix(
     hold_variant=0,
     robust_takeoff=False,
     observation_history=None,
+    prefix=False,
 ):
     """Complete from a decision state; never used by policy playback.
 
@@ -235,6 +239,10 @@ def _coached_suffix(
                 action = 3 if direction > 0 else 1
             else:
                 action = 1 if direction > 0 else 3
+        if prefix and actions and action in (2, 4, 5) and not airborne and not remaining:
+            break
+        was_airborne = not env.mario["on_ground"]
+        before_mark = (env._tactic_index, env._route_done)
         _, _, done, truncated, info = env.step(action)
         release.observe(env, action, info)
         actions.append(action)
@@ -243,7 +251,17 @@ def _coached_suffix(
             airborne = True
         if done or truncated:
             break
-    if not env._goal_credited:
+        if prefix and (
+            action == 0
+            and env.mario["on_ground"]
+            or was_airborne
+            and (env.mario["on_ground"] or env.stomped)
+            or before_mark != (env._tactic_index, env._route_done)
+            or len(actions) >= 64
+            and env.mario["on_ground"]
+        ):
+            break
+    if not prefix and not env._goal_credited:
         return None
     return actions
 

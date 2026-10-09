@@ -256,7 +256,11 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
     world = main["world"]
     scenario = {
         "world_width": world,
-        "mario": [main["x0"], ground - 16],
+        # Leave one pixel above the intended support before spawn settling.
+        # On an eight-pixel ledge, exact contact also put the lower floor
+        # inside the settling window; its earlier list position embedded
+        # Mario in the ledge and allowed a sideways collision to skip the level.
+        "mario": [main["x0"], ground - 17],
         "platforms": platforms,
         "coins": coins,
         "enemies": enemies,
@@ -331,10 +335,14 @@ def _played_routes(scenario: dict) -> dict:
     import json
     import os
 
-    key = code_fingerprint() + ":" + json.dumps(
-        {k: v for k, v in scenario.items() if k not in ("strategy", "strategy_objective")},
-        sort_keys=True,
-        default=str,
+    key = (
+        code_fingerprint()
+        + ":"
+        + json.dumps(
+            {k: v for k, v in scenario.items() if k not in ("strategy", "strategy_objective")},
+            sort_keys=True,
+            default=str,
+        )
     )
     if key in _PLAYED:
         return _PLAYED[key]

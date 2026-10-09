@@ -110,34 +110,37 @@ def test_siblings_share_layouts_and_each_strategy_takes_its_best_route(tactic):
         order = STRATEGY_ORDER[scenario["strategy"]]
         assert scenario["strategy_route"] == min(results, key=lambda c: order(*results[c]))
     fastest, richest = results[fast["strategy_route"]], results[rich["strategy_route"]]
-    assert fast["strategy_objective"] == {"deadline": int(fastest[0] * 1.1)}
+    reference = fast["strategy_reference"]
+    assert reference["execution"] == "spatial" and reference["vision_sha256"]
+    assert fast["strategy_objective"] == {"deadline": int(reference["frames"] * 1.1)}
     assert richest[1] > fastest[1]  # max points gathers more than speed run
     assert fastest[1] < rich["strategy_objective"]["points"] <= richest[1]
 
 
 @pytest.mark.timeout(600)
-def test_the_teacher_wins_with_the_strategys_objective_and_teaches_the_scenes_tactic():
-    for family, (strategy, tactic) in STRATEGY_TACTIC_FAMILIES.items():
-        if strategy != "speed_run":
-            continue
-        sample = _sample(family, index=1, difficulty="easy")
-        scenario = sample.scenario
-        assert teacher_strategy(episode_teacher(scenario)).kind == "speed_run"
-        env = MarioScenarioEnv()
-        env.reset(scenario=scenario, seed=0)
-        env.render = lambda: None
-        teacher = episode_teacher(scenario)
-        route, t, labels = list(sample.oracle["actions"]), 0, set()
-        while t < len(route) and not env._goal_credited:
-            teacher.observe_frame(env)
-            plan = _first_plan(route[t:])
-            labels.add(teacher_tactic(env, teacher).stance)
-            for action in route[t : t + plan.frames]:
-                env.step(action)
-            t += plan.frames
-        assert env._goal_credited and not env._objective_missed, family
-        assert tactic in labels, (family, labels)
-        env.close()
+@pytest.mark.parametrize(
+    "family", [f for f in STRATEGY_TACTIC_FAMILIES if f.startswith("speed_run_")]
+)
+def test_the_teacher_wins_with_the_strategys_objective_and_teaches_the_scenes_tactic(family):
+    _, tactic = STRATEGY_TACTIC_FAMILIES[family]
+    sample = _sample(family, index=1, difficulty="easy")
+    scenario = sample.scenario
+    assert teacher_strategy(episode_teacher(scenario)).kind == "speed_run"
+    env = MarioScenarioEnv()
+    env.reset(scenario=scenario, seed=0)
+    env.render = lambda: None
+    teacher = episode_teacher(scenario)
+    route, t, labels = list(sample.oracle["actions"]), 0, set()
+    while t < len(route) and not env._goal_credited:
+        teacher.observe_frame(env)
+        plan = _first_plan(route[t:])
+        labels.add(teacher_tactic(env, teacher).stance)
+        for action in route[t : t + plan.frames]:
+            env.step(action)
+        t += plan.frames
+    assert env._goal_credited and not env._objective_missed, family
+    assert tactic in labels, (family, labels)
+    env.close()
 
 
 def test_finishing_after_the_deadline_misses_the_objective():
@@ -147,6 +150,28 @@ def test_finishing_after_the_deadline_misses_the_objective():
     scenario["strategy_objective"] = {"deadline": 400}
     info, _, _ = _played(scenario, [1] * 400)
     assert not info["objective_missed"] and info["reward_terms"]["goal"] > 50
+
+
+@pytest.mark.parametrize("tactic,seed", [("descend_forward", 15), ("descend_backward", 31)])
+def test_shallow_descent_spawns_on_the_ledge_without_a_collision_shortcut(tactic, seed):
+    import random
+
+    from retroagi.stages.block_smb.monte_carlo import _finish_layout
+    from retroagi.stages.block_smb.strategy_families import strategy_scene
+
+    scenario, parameters = strategy_scene(random.Random(seed), "easy", tactic)
+    assert parameters["drop_height"] == 8
+    _finish_layout(f"speed_run_{tactic}", scenario, parameters)
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        assert env.mario["y"] + env.mario["h"] == 212
+        x = env.mario["x"]
+        env.step(4)
+        assert abs(env.mario["x"] - x) <= 3
+        assert not env._goal_credited
+    finally:
+        env.close()
 
 
 def test_reaching_the_goal_without_the_points_misses_the_objective():

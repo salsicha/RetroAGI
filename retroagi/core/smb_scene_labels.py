@@ -16,9 +16,10 @@ object (Mario, enemy, coin, power-up, moving platform) is a group of touching
 pixels of its type (objects_from_types), and surfaces, gaps, blocks and pipes
 come from structure_from_types. Only Mario's facing, his support, whether his
 feet are on something (the landing signal) and each
-enemy's kind are read from its other outputs. Contact predictions also require
-visible support or an enemy beneath his feet; side contact cannot establish
-a landing. Type errors and touching objects can still distort the scene
+enemy's kind are read from its other outputs. Exact visual support beneath
+his feet establishes standing even when the contact head disagrees. Other
+contact predictions require nearby support or an enemy beneath his feet;
+side contact cannot establish a landing. Type errors and touching objects can still distort the scene
 (the truth keeps them apart; one group of pixels cannot).
 
 Boxes are (x0, y0, x1, y1) in screen pixels, with x1 and y1 one past the last
@@ -556,13 +557,19 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
             e.box[0] < box[2] and e.box[2] > box[0] and abs(e.box[1] - box[3]) <= 4
             for e in objects["enemies"]
         )
-        contact = bool(on_something[b]) and (standing or stomping)
+        exact_support = box is not None and any(
+            left < box[2] and right > box[0] and top == box[3] for left, right, top in surfaces
+        )
+        contact = exact_support or bool(on_something[b]) and (standing or stomping)
+        support_kind = SUPPORTS[int(support[b])] if contact and standing else "air"
+        if exact_support and support_kind == "air":
+            support_kind = mario_support(types[b], box, True)
         scenes.append(
             SceneObservation(
                 mario=MarioView(
                     box=box,
                     facing_right=bool(facing[b]),
-                    support=SUPPORTS[int(support[b])] if contact and standing else "air",
+                    support=support_kind,
                     on_something=contact,
                 ),
                 **objects,

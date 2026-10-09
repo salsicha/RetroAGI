@@ -142,7 +142,11 @@ def test_changing_mario_silhouette_does_not_reverse_observed_momentum():
 
 
 @pytest.mark.parametrize("standing", [False, True])
-def test_vision_contact_head_cannot_call_the_side_of_a_ledge_ground(standing):
+@pytest.mark.parametrize("contact_prediction", [False, True])
+@pytest.mark.parametrize("support_prediction", ["air", "ground"])
+def test_vision_contact_resolves_surface_and_side_of_ledge(
+    standing, contact_prediction, support_prediction
+):
     env = MarioScenarioEnv()
     try:
         env.reset(
@@ -160,8 +164,12 @@ def test_vision_contact_head_cannot_call_the_side_of_a_ledge_ground(standing):
             ]
             * 20.0,
             "facing_logits": one(torch.as_tensor(targets["facing"]), 2)[None].float() * 20,
-            "support_logits": torch.tensor([[0.0, 20.0, 0.0]]),
-            "on_something_logits": torch.tensor([[0.0, 20.0]]),
+            "support_logits": torch.tensor(
+                [[20.0, 0.0, 0.0]] if support_prediction == "air" else [[0.0, 20.0, 0.0]]
+            ),
+            "on_something_logits": torch.tensor(
+                [[0.0, 20.0]] if contact_prediction else [[20.0, 0.0]]
+            ),
         }
         scene = decode_scene(heads)[0]
         assert scene.mario.on_something == standing
