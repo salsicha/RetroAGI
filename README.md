@@ -58,7 +58,9 @@ and preserving skill, tactic, scene encoder, and memory weights. No action
 training or action checkpoint is required.
 
 See [the architecture and training guide](docs/layered-agent.md) for exact
-inputs, outputs, timing, curriculum, qualification gates and known limits.
+inputs, outputs, timing, curriculum, qualification gates and known limits,
+and [design decisions](docs/design-decisions.md) for what was decided, why,
+and what is still to be built.
 
 ## Project Layout
 

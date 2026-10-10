@@ -3,6 +3,13 @@
 The runtime hierarchy is **strategy → tactic → skill → predictive executor**.
 Two layers are learned; the executor is a controller. Strategy is an externally selected objective.
 
+Decisions behind this design, with their reasons and status, are listed in
+[design decisions](design-decisions.md). Pending: the pit and enemy families
+must teach room on both sides of the threat, start Mario close to it, bound
+the landing with further obstacles and vary enough that no single value is
+learned; the policies must be regularized. Skill training is on hold until
+that is built.
+
 ## Information passed between layers
 
 | Component | Inputs | Output |

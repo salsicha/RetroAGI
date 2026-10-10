@@ -152,3 +152,12 @@ def test_landing_enemy_layouts_that_look_alike_get_the_same_first_move():
         on_ground = result["commands"][1]["skill"]  # the first after landing
         first.append(on_ground["mode"])
     assert first.count(max(set(first), key=first.count)) >= 5, first
+
+
+def test_a_jump_moved_to_the_same_place_stays_within_the_command_range():
+    from retroagi.core.tokens import SkillToken
+    from retroagi.stages.block_smb.controller_teacher import _shifted
+
+    assert _shifted(SkillToken("jump", 72, 0), 16) == SkillToken("jump", 56, 0)
+    assert _shifted(SkillToken("jump", -250, -10), 12) == SkillToken("jump", -256, -10)
+    assert _shifted(SkillToken("jump", 250, 0), -12) == SkillToken("jump", 256, 0)

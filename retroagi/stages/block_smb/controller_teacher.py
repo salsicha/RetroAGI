@@ -19,7 +19,7 @@ from retroagi.core.smb_coaching import probe_state, training_target
 from retroagi.core.smb_executor import SMBExecutor
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.tokens import SkillToken
+from retroagi.core.tokens import SKILL_X, SKILL_Y, SkillToken
 
 from . import tactic_schedule
 from .env_state import restore_env_state, snapshot_env_state
@@ -630,12 +630,19 @@ def _waiting_helps(env, state, target, waiting, jump, result) -> bool:
         following.execution, following.controller = moved.spatial, moved.controller
         following.scene = moved.spatial.previous
         shift = env.mario["x"] - start
-        for g in dict.fromkeys((SkillToken("jump", round(jump.x - shift), jump.y), jump)):
+        for g in dict.fromkeys((_shifted(jump, shift), jump)):
             r = _trial(env, following, g, target)
             works = r.won or (r.safe and r.clearance >= 8)
             if works and _move_kind(env, r) == "pass" and r.margin >= result.margin + 4:
                 return True
     return False
+
+
+def _shifted(jump, shift):
+    """The jump to the same place after Mario moved ``shift`` pixels (clamped
+    to the command range)."""
+    x = max(SKILL_X[0], min(SKILL_X[-1], round(jump.x - shift)))
+    return SkillToken("jump", x, jump.y)
 
 
 def _better_takeoff(env, state, target, jump, result):
@@ -658,8 +665,7 @@ def _better_takeoff(env, state, target, jump, result):
             following.execution, following.controller = moved.spatial, moved.controller
             following.scene = moved.spatial.previous
             shift = env.mario["x"] - start
-            same_place = SkillToken("jump", round(jump.x - shift), jump.y)
-            for g in dict.fromkeys((same_place, jump)):
+            for g in dict.fromkeys((_shifted(jump, shift), jump)):
                 r = _trial(env, following, g, target)
                 if _works(r, result) and r.margin >= margin:
                     best, margin = run, r.margin
@@ -764,9 +770,9 @@ def mount_destination(env, state, target):
     def landing_jumps(cx, here):
         found = []
         for x in landings:
-            goal = SkillToken("jump", round(x - cx), round(rect.top - feet))
-            if abs(goal.x) > 128:
+            if abs(round(x - cx)) > 128 or abs(round(rect.top - feet)) > SKILL_Y[-1]:
                 continue
+            goal = SkillToken("jump", round(x - cx), round(rect.top - feet))
             result = _trial(env, here, goal, target)
             if result.won or (result.safe and result.advanced):
                 found.append((_rank(goal, result), goal))
