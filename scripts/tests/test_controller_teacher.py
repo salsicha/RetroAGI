@@ -176,3 +176,21 @@ def test_descent_preparation_progress_needs_a_successful_following_jump(monkeypa
         assert snapshot_env_state(env) == before
     finally:
         env.close()
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("index", [1, 2])
+def test_run_up_is_followed_by_the_jump_it_was_screened_with(index):
+    """A screened run-up then jump is certified with the same jump moved
+    along the floor (its hold and steering), not one aimed at where that jump
+    lands from here: these raised platforms are beyond a standing jump's reach
+    from where Mario starts and within it after a run-up."""
+    scenario = sample_block_smb_monte_carlo_scenario(
+        split="train",
+        seed=0,
+        sample_index=index,
+        family="skill_raised_climb",
+        difficulty="medium",
+        calibrate_deadline=False,
+    ).scenario
+    assert replay(scenario, family="skill_raised_climb")["won"]

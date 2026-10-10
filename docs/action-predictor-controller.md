@@ -49,21 +49,50 @@ get there.
 ## 1. Actions
 
 An action is a verb and the object it is aimed at, one of the objects the
-vision sees (a surface, an enemy, the edge of a gap). Proposed verbs:
+vision sees (a surface, an enemy, the edge of a gap). The verbs
+(`core/action_tokens.py`):
 
 | Verb | Object | Meaning |
 |---|---|---|
-| run to | a surface | walk or run along the floor to a point on it |
-| step off | an edge | walk off a ledge onto what is below |
+| hold | none | stay put (also on a moving platform) |
+| run to | a surface | walk or run along a floor to a point on it, or off its end onto a lower one |
+| approach | what the next jump is aimed at | run up to the takeoff of the jump that follows |
 | land on | a surface | jump onto a platform, step or floor |
 | jump over | an enemy or a gap | jump past it |
 | stomp | an enemy | jump onto it |
-| hold | none | stay put (also on a moving platform) |
+| back away | an enemy | run away from it, away from the goal's side |
+
+The object is named by a pointer to one of the scene encoder's object tokens
+(a list and a slot of `smb_observer.packed_lists`: 60 slots). Each verb only
+applies to some kinds of object (stomp to enemies, land on to surfaces);
+others are masked.
 
 The skill keeps its transformer; its output heads become a verb choice and a
 pointer that picks one of its scene tokens. It no longer outputs x and y.
-Each verb only applies to some kinds of object (stomp to enemies, land on to
-surfaces); others are masked.
+
+**The teacher's actions** (`stages/block_smb/teacher_actions.py`, training
+labels only). Each command the teacher chooses is named by what its trial
+did:
+
+- a jump that kills an enemy stomps it;
+- one that ends on the other side of an enemy that stays alive jumps over it;
+- any other jump lands on the surface it ends on;
+- a run before a planned jump approaches what that jump is aimed at;
+- a run away from the goal's side with an enemy within 96 pixels backs away
+  from the nearest one;
+- any other run runs to the surface it ends on.
+
+The simulator's object is matched to the slot the vision reports: an enemy
+by its box's middle (within 12 pixels), a surface by its top (within 3
+pixels) under the point (a point beyond the visible window is matched at its
+edge). Every jump Mario can make at a decision (the teacher's jump table) is
+named the same way; jumps naming the same action are versions of it, and
+the action's outcome is the safe version with the most room.
+
+An outcome is measured from Mario's feet at the decision (pixels): where
+they end, where the action's object is then (an enemy's middle and top, a
+surface's left edge and top, moved by their own rules), how many frames it
+takes, and whether Mario survives and wins.
 
 ## 2. The action-conditioned predictor
 
@@ -194,6 +223,7 @@ work out later:
 
 1. Define the verbs and the action encoding; make the teacher emit an action
    (verb and object) for each choice, and the outcome of every action tried.
+   Done for jumps (2026-10-10); runs are labelled for the chosen run only.
 2. Build the predictor; train it on the teacher's outcomes; measure its error
    in pixels and frames on held-out layouts.
 3. Build the target tracker; train it on logged object positions; measure

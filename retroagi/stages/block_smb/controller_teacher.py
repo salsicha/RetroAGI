@@ -352,6 +352,8 @@ class JumpOption:
     command: SkillToken
     result: Result
     members: list
+    hold: int = 0
+    direction: int = 0
 
 
 def _landing_heights(env, feet):
@@ -484,7 +486,7 @@ def _jump_table(env, state, target, memo, directions=(-1, 0, 1), lands_on=None, 
                     else:
                         command = first
                 memo[key] = (
-                    JumpOption(command, result, members)
+                    JumpOption(command, result, members, hold, direction)
                     if _describes(env, command, result)
                     else None
                 )
@@ -1007,8 +1009,8 @@ def _crossing_wanted(env, target, lip, direction):
 
 def _certify(env, state, target, direction, travel, wait, option, check):
     """Certify a screened plan by trials: from here, a run of ``travel``
-    pixels toward ``direction`` (or a hold, for a wait), then the jump to the
-    same place as ``option``. ``check(jump result)`` must hold for the jump.
+    pixels toward ``direction`` (or a hold, for a wait), then ``option``'s
+    jump from where that leaves Mario (_same_jump), as the screen assumed. ``check(jump result)`` must hold for the jump.
     Returns (first command, its result, the jump's result) or None."""
     if not travel and not wait:
         confirmed = trial(env, state, option.command, target)
@@ -1019,13 +1021,14 @@ def _certify(env, state, target, direction, travel, wait, option, check):
     moved = _trial(env, state, first, target, save=True)
     if not moved.safe or moved.snapshot is None:
         return None
-    start = env.mario["x"]
     with probe_state(env):
         restore_env_state(env, moved.snapshot)
         following = copy(state)
         following.execution, following.controller = moved.spatial, moved.controller
         following.scene = moved.spatial.previous
-        jump = _shifted(option.command, env.mario["x"] - start)
+        jump = _same_jump(env, following, option)
+        if jump is None:
+            return None
         landed = trial(env, following, jump, target)
         stop = env.mario["x"]
     if not _works_now(landed) or not check(landed):
@@ -1095,6 +1098,22 @@ def _best_certified(
     if later is not None:
         _commit(state, later)
         return later[0], later[1]
+    return None
+
+
+def _same_jump(env, state, option):
+    """The command for ``option``'s jump (the same hold and steering) from
+    where Mario stands now: the screen moved its path along the floor, so it
+    lands where that moved path does, and is taught as the destination of
+    this jump nearest that landing (as _jump_table aims it). None when no
+    destination makes this jump from here."""
+    for hold, members, landing, _ in _jump_groups(env, state, {}, option.direction):
+        if hold == option.hold:
+            return (
+                _nearest(members, landing[1], landing[2])
+                if landing
+                else members[len(members) // 2]
+            )
     return None
 
 
