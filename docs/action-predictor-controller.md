@@ -267,6 +267,14 @@ work out later:
    executor until the controller takes actions (step 5). Old checkpoints
    load with the new heads untrained.
 5. Make the controller reach targets and re-plan on updated ones, fast
-   enough for training.
+   enough for training. Wired (2026-10-10, `core/action_controller.py`):
+   `SMBAgents(predictor=, tracker=)` executes the skill's own action at the
+   predictor's end state (in the verb's mode), binds an action on an enemy
+   or moving platform to its visual identity (Mario's predicted end from the
+   object's predicted point), steps the tracker every frame, and when the
+   object leaves its forecast moves the destination: a flight plans the
+   rest of its jump again (`Flight.replan`), a run moves where it stops.
+   Without the two models the agent plays exactly as before. Checked with
+   untrained models only (wiring), and on a synthetic turning walker.
 6. Document the adaptation network's design (details later).
 7. Validate the teaching on every layout, then train.

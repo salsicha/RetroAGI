@@ -809,6 +809,9 @@ CHOICES = {
     "tactic": ("tactic",),
     "skill": ("mode", "x", "y"),
 }
+# The skill's action heads (SkillLayer.action_outputs): the verb, then the
+# pointer (an object slot, 0 for the first: scene token POINTER_START).
+ACTION_HEADS = ("verb", "pointer")
 
 
 def _distributions(layer: str, out: Mapping[str, torch.Tensor]) -> dict:
@@ -823,6 +826,10 @@ def choose(layer: str, out: Mapping[str, torch.Tensor], *, sample: bool = False)
     """
     if "picks" in out:
         picks = {head: int(out["picks"][head]) for head in CHOICES[layer]}
+        # The skill's action (a verb and its object) rides along.
+        for head in ACTION_HEADS:
+            if head in out["picks"]:
+                picks[head] = int(out["picks"][head])
         return token_from_picks(layer, picks), picks
     batched = {name: value.unsqueeze(0) for name, value in out.items()}
     picks: dict[str, int] = {}
