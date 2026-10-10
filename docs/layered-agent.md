@@ -363,6 +363,26 @@ motion rather than assuming that the next tactic's direction is already
 achievable. When the production vision model is available, accepted jump
 proposals are also replayed through it, including intermediate jumps.
 
+The teacher does not stop at the first command that works. Among the commands
+that make the same move, it labels the one with the most **margin**: during
+the replay it measures the closest Mario's box comes to every enemy he does not
+stomp, and, when he ends standing, his distance from the nearer edge of that
+platform. The margin is the smaller of the two. Two commands make the same
+move when they end on the same platform, kill the same enemies, reach the same
+route mark and leave Mario on the same side of every other enemy. A jump that
+lands back on its own platform must also make at least as much progress, so
+the shortest hop, which always stays farthest from enemies, is not taught in
+place of a real approach. Margins within two pixels count as equal. Then the
+label is the destination in the middle of the unbroken range of destinations
+that work. For example, every standing jump from 50 to 96 pixels ahead passes
+a walker the same way while 48 lands on it, so the bypass label is 72, not 50.
+Raised landings try the platform's middle and quarter points first. When Mario
+stands on the ground and a jump passes within 48 pixels of an enemy, the
+teacher also tries short runs of 4 to 24 pixels first. It labels the run when
+the same jump afterwards passes at least 4 pixels farther from the enemy. The
+patrol, plant and monster teachers rank their working commands the same way.
+Lessons whose point is one immediate jump keep their takeoff.
+
 For isolated downward jumps, a visual contact correction can interrupt edge
 preparation before its waypoint is reached. If ordinary destinations fail,
 the teacher can certify a run toward a takeoff with at least two pixels of

@@ -3,7 +3,9 @@
 Button-route takeoff positions assume uninterrupted acceleration. A spatial run
 ends with braking, so its waypoint must leave a jump reachable from low speed.
 These labels belong to the teacher; the runtime executor still attempts whatever
-destination the skill requests.
+destination the skill requests. The landing given here is a proposal: the
+teacher labels the version of the jump that lands farthest from the far
+platform's edges (controller_teacher._with_margin).
 """
 
 from retroagi.core.smb_coaching import training_target
