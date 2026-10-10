@@ -463,12 +463,10 @@ def test_primitive_maneuvers_are_skill_families_without_an_action_learner():
     from retroagi.stages.block_smb.layered_train import learner_families
 
     families = learner_families("skill", BLOCK_SMB_MC_FAMILIES)
-    assert set(ACTION_FAMILIES) - {"action_climb"} <= set(families)
+    assert set(ACTION_FAMILIES) <= set(families)
     with pytest.raises(ValueError, match="unknown learned layer"):
         learner_families("action", BLOCK_SMB_MC_FAMILIES)
-    assert set(ACTION_FAMILIES) & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES)) == {
-        "action_climb"
-    }
+    assert not set(ACTION_FAMILIES) & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
 
 
 @pytest.mark.timeout(300)

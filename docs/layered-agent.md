@@ -206,15 +206,18 @@ Skill includes 17 isolated maneuver families (their historical `action_` names r
 | `action_stomp_up`, `action_stomp_up_back` | Jump onto an enemy on a raised platform right/left |
 | `action_wait` | Preserve a spot on a moving platform |
 
+A climb completes on a supported landing anywhere on the step: a tall step's
+landing can be at its near edge, and walking on from there would be a second
+move under another tactic.
 The new jump families certify an immediate jump through its first landing,
 without accepting a walking-off route or a retry as a successful jump.
 An optional parameter sweep remains available for explicitly selected small
 skill families. Normal training samples the full skill curriculum and adds
 extra layouts for weak families.
 
-Skill uses **37 scene families** for destination selection under one supplied
-tactic: local enemy encounters, platform maneuvers, holding a spot and 16 of the
-17 action families. Each supplies spatial destination labels instead of button
+Skill uses **38 scene families** for destination selection under one supplied
+tactic: local enemy encounters, platform maneuvers, holding a spot and all 17
+action families. Each supplies spatial destination labels instead of button
 labels at the skill stage. Any family that changes tactics within an episode
 belongs to tactic training, regardless of its name or number of written schedule
 segments. This includes changes produced dynamically by the teacher.
@@ -275,7 +278,7 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **46 families**, defined by `TACTIC_TRAINING_FAMILIES`:
+Tactic uses **45 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
@@ -285,10 +288,10 @@ Tactic uses **46 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 | Alternate routes (2) | `choice_alternate_route`, `low_choice_alternate_route`, under `max_points` with visible points on the required path |
 | Raised route (1) | `low_choice_advance`, under `speed_run`, preserving the upper path through two gaps |
 | Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
-| Additional tactic switches (14) | `choice_retreat`, `choice_advance`, `stair_climb`, `platform_chain`, `enemy_gap`, `enemy_patrol`, `retreat_recovery`, `tall_pipe_jump`, `bridge_wait`, `bridge_mount`, `bridge_dismount`, `stair_gap`, `enemy_on_platform`, `action_climb` |
+| Additional tactic switches (13) | `choice_retreat`, `choice_advance`, `stair_climb`, `platform_chain`, `enemy_gap`, `enemy_patrol`, `retreat_recovery`, `tall_pipe_jump`, `bridge_wait`, `bridge_mount`, `bridge_dismount`, `stair_gap`, `enemy_on_platform` |
 
 These families teach tactic selection and termination with the skill layer
-frozen. All 46 are excluded from skill training and skill evaluation. For
+frozen. All 45 are excluded from skill training and skill evaluation. For
 example, `choice_retreat` retreats then advances; bridge phases alternate
 holding and advancing; `platform_chain` can change from advance to retreat
 for the final landing. Local skill lessons must finish under one supplied tactic.

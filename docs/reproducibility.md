@@ -97,12 +97,13 @@ retroagi-block-smb train-layer --learner skill --output artifacts/block_smb/skil
 retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
 ```
 
-- **Skill layer:** trains on 45 local maneuver and supplied-tactic choice
-  families, learning destinations from vision, memory, tactic and its previous
-  16 choices. All tactic-training families are excluded.
-- **Tactic layer:** trains on 29 families: 14 strategy families, eight composed
-  levels, four scene-driven route/response families and three waiting/proceeding
-  families, with layouts drawn at random. The complete grouping is documented
+- **Skill layer:** trains on 38 local maneuver families, each under one
+  supplied tactic, learning destinations from vision, memory, tactic and its
+  previous 16 choices. All tactic-training families are excluded.
+- **Tactic layer:** trains on 45 families: 14 strategy families, eight composed
+  levels, four scene-driven route/response families, three alternate-route
+  families, three waiting/proceeding families and 13 families whose tactic
+  changes partway through, with layouts drawn at random. The complete grouping is documented
   in [the layered agent guide](layered-agent.md).
 
 Example larger runs add `--validation-layouts-per-difficulty 6 --workers 15` to

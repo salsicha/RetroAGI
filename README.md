@@ -33,14 +33,25 @@ strategy → tactic (option-critic)        │
 ```
 
 Training proceeds **skill → tactic**, freezing lower layers. The executor has
-no learned weights. Skill uses 45 scene families for local destination selection
-and following supplied tactics. These include 17 isolated maneuvers, enemy
-bypass, platform traversal, individual bridge maneuvers and choice clones.
-Tactic uses 29 families for strategy-dependent selection and termination:
-14 strategy families, eight composed levels, four scene-driven route/response
-families and three waiting/proceeding families. These are excluded from skill
-training and evaluation. Both learned stages sample their scene families; an
-optional parameter sweep supports selected small skill families.
+no learned weights. Every family belongs to exactly one stage:
+
+- **Skill: 38 families**, each played under one supplied tactic from start to
+  finish: the 17 isolated maneuvers (walk, jump a gap, climb a step, jump onto
+  a raised platform, walk off a ledge, jump down and stomp, each right and
+  left, plus stomping an enemy on a raised platform both ways and holding a
+  spot on a moving platform), two enemy-bypass families, nine local route
+  maneuvers, and ten older local families (flat runs, single gaps, enemy hops
+  and stomps, pipe and stomp mounts, pit leaps, platform hops, landing on an
+  enemy, holding an area).
+- **Tactic: 45 families**, for strategy-dependent selection and termination:
+  14 strategy families (seven tactics under each strategy), eight composed
+  levels, four scene-driven route/response families, three alternate-route
+  families, three waiting/proceeding families, and 13 families whose tactic
+  changes partway through. These are excluded from skill training and
+  evaluation.
+
+Both learned stages sample their scene families; an optional parameter sweep
+supports selected small skill families.
 
 Legacy spatial-skill checkpoints warm-start by discarding the action network
 and preserving skill, tactic, scene encoder, and memory weights. No action
@@ -59,9 +70,12 @@ retroagi/
     smb_scene_labels.py          # true objects for training labels
     smb_observer.py              # turns a screen into the report the layers read
     tokens.py                    # strategy, tactics and spatial skill commands
-    layered_policy.py            # tactic, skill, action and their memories
-    smb_agent.py                 # the agent: screens in, button actions out
-    smb_executor.py              # plays an action for its frames
+    layered_policy.py            # the tactic and skill layers and their memories
+    smb_agent.py                 # the agent: screens in, buttons out
+    smb_executor.py              # turns a skill command into buttons, frame by frame
+    smb_ground_control.py        # run commands: 8-frame predictive control with braking
+    smb_trajectory.py            # jump commands: hold-length search and flight correction
+    smb_spatial_feedback.py      # tracks the command's target and reports its progress
     smb_physics.py               # Mario's NES motion, shared by both games
   stages/
     block_smb/                   # the Block SMB game, layout families, teachers

@@ -112,7 +112,10 @@ def action_climb(rng, difficulty: str):
         "world_width": step + 48 + 80,
         "mario": [step - MARIO_WIDTH - distance, STANDING],
         "platforms": [[0, FLOOR, step + 128, 20], [step, FLOOR - height, 48, height]],
-        "goal": [step + 8, FLOOR - height - 20, 32, 20],
+        # Landing anywhere on the step completes the climb: a tall step's
+        # landing can be at its near edge, and walking on from there would be
+        # a second move (advance) in a one-tactic lesson.
+        "goal": [step, FLOOR - height - 20, 48, 20],
         "goal_requires_support": True,
     }
     parameters = {"step_height": height, "step_distance": distance, "difficulty_bin": difficulty}
@@ -128,7 +131,7 @@ def action_climb_back(rng, difficulty: str):
         "world_width": world,
         "mario": [step + width + distance, STANDING],
         "platforms": [[0, FLOOR, world, 20], [step, FLOOR - height, width, height]],
-        "goal": [step + 8, FLOOR - height - 20, 32, 20],
+        "goal": [step, FLOOR - height - 20, width, 20],  # anywhere on the step
         "goal_requires_support": True,
     }
     parameters = {"step_height": height, "step_distance": distance, "difficulty_bin": difficulty}

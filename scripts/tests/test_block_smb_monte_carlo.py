@@ -203,12 +203,17 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
 
     @pytest.mark.timeout(900)
     def test_parameter_sweep_covers_every_family_and_difficulty(self):
+        # Coverage and reachability only. Measuring each speed-run deadline
+        # replays the spatial teacher through the vision model on the CPU,
+        # minutes per layout (an hour for some); test_strategy_families
+        # checks the measured deadlines.
         with ProcessPoolExecutor(8) as pool:
             sample_set = sample_block_smb_monte_carlo_parameter_sweep(
                 split="validation",
                 seed=42,
                 repeats_per_difficulty=1,
                 executor=pool,
+                calibrate_deadlines=False,
             )
         manifest = sample_set.manifest()
 

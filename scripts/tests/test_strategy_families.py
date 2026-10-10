@@ -94,7 +94,7 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "low_choice_alternate_route",
         "low_choice_advance",
     }
-    assert len(families) == 46
+    assert len(families) == 45
 
 
 @pytest.mark.timeout(600)

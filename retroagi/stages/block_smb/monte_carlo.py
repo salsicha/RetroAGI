@@ -489,11 +489,16 @@ def sample_block_smb_monte_carlo_scenario(
     family_weights: Optional[Mapping[str, float]] = None,
     max_rejections: int = 32,
     rejection_counter: Optional[Counter[str]] = None,
+    calibrate_deadline: bool = True,
 ) -> BlockSMBScenarioSample:
     """Sample one replayable layout whose route completes it.
 
     When ``rejection_counter`` is provided, every rejected attempt (including
     attempts preceding an eventual success) is tallied into it by reason.
+    A speed-run layout's deadline is measured by replaying the spatial teacher
+    through the vision model on the CPU (teacher_replay.calibrate_budget),
+    minutes per layout; ``calibrate_deadline=False`` keeps the deadline from
+    the teacher's button route, for uses that need no deadline (coverage).
     """
 
     if split not in BLOCK_SMB_MC_SPLITS:
@@ -570,7 +575,7 @@ def sample_block_smb_monte_carlo_scenario(
             ),
         )
         if bool(reachability.get("reachable", False)):
-            if selected_family.startswith("speed_run_"):
+            if calibrate_deadline and selected_family.startswith("speed_run_"):
                 from .teacher_replay import calibrate_budget
 
                 calibrate_budget(sample.scenario, selected_family)
@@ -597,11 +602,13 @@ def sample_block_smb_monte_carlo_parameter_sweep(
     families: Optional[Iterable[str]] = None,
     max_rejections: int = 32,
     executor: Any = None,
+    calibrate_deadlines: bool = True,
 ) -> BlockSMBMonteCarloSampleSet:
     """Return a deterministic family x difficulty Monte Carlo sweep.
 
     Layouts are independent, so an ``executor`` with an order-preserving
     ``map`` may generate them concurrently with identical results.
+    ``calibrate_deadlines``: see sample_block_smb_monte_carlo_scenario.
     """
 
     if split not in BLOCK_SMB_MC_SPLITS:
@@ -618,7 +625,7 @@ def sample_block_smb_monte_carlo_parameter_sweep(
         raise ValueError(f"unknown Block SMB Monte Carlo family {unknown!r}; expected {choices}")
 
     specs = [
-        (split, seed, family, difficulty, repeat, max_rejections)
+        (split, seed, family, difficulty, repeat, max_rejections, calibrate_deadlines)
         for family in selected_families
         for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS
         for repeat in range(int(repeats_per_difficulty))
@@ -643,7 +650,7 @@ def sample_block_smb_monte_carlo_parameter_sweep(
 
 
 def _sweep_sample(spec):
-    sample_index, split, seed, family, difficulty, repeat, max_rejections = spec
+    sample_index, split, seed, family, difficulty, repeat, max_rejections, calibrate = spec
     rejected: Counter[str] = Counter()
     candidate = sample_block_smb_monte_carlo_scenario(
         split=split,
@@ -653,6 +660,7 @@ def _sweep_sample(spec):
         difficulty=difficulty,
         max_rejections=max_rejections,
         rejection_counter=rejected,
+        calibrate_deadline=calibrate,
     )
     return _with_sweep_metadata(candidate, repeat=repeat), rejected
 

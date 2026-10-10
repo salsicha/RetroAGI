@@ -160,9 +160,7 @@ def test_skill_stage_is_available_and_checkpoint_sequence_includes_it():
     assert LEARNERS == ("skill", "tactic")
     assert GIVEN == {"skill": "tactic", "tactic": None}
     assert LayeredTrainConfig(learner="skill").learner == "skill"
-    assert set(ACTION_FAMILIES) - {"action_climb"} <= set(
-        learner_families("skill", BLOCK_SMB_MC_FAMILIES)
-    )
+    assert set(ACTION_FAMILIES) <= set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert (
         build_parser()
         .parse_args(["exam-layer", "--checkpoint", "some.pt", "--learner", "skill"])
@@ -248,7 +246,7 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
 
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
-    assert len(families) == 37
+    assert len(families) == 38
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert not any("stomp" in name and "recovery" in name for name in BLOCK_SMB_MC_FAMILIES)
     assert {

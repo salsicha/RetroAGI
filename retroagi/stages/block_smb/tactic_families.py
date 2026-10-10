@@ -81,7 +81,6 @@ MULTI_TACTIC_FAMILIES = (
     "bridge_dismount",
     "stair_gap",
     "enemy_on_platform",
-    "action_climb",
 )
 TACTIC_TRAINING_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,

@@ -44,7 +44,6 @@ def test_switching_demonstrations_belong_to_tactics(family):
     witnesses = {
         "enemy_patrol": ("medium", 104),
         "retreat_recovery": ("easy", 101),
-        "action_climb": ("hard", 106),
     }
     difficulty, index = witnesses.get(family, ("easy", 100))
     assert len(played_tactics(family, difficulty, index)) > 1
