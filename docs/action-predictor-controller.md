@@ -198,6 +198,31 @@ work out later:
 - how it is trained (Block SMB layouts with varied physics);
 - how often it updates (per frame, per action).
 
+**Proposed design (to confirm).**
+
+- *What it adapts:* the groups of constants of Mario's motion model
+  (`NESPlayerMotion`): ground acceleration and top speeds, braking and
+  skidding, the jump's starting speed for each running speed, gravity while
+  A is held and after, steering in the air, and the fastest fall.
+- *Inputs:* the last 32 frames of what the controller predicted Mario would
+  do with the buttons it pressed against what vision then showed (his
+  movement per frame, the camera's scroll removed), with the buttons, whether
+  he was on the ground, and the parameter values in use. Nothing about the
+  world: the errors carry the physics.
+- *Network:* a small recurrent network (a GRU of about 32 units) over that
+  window, giving one bounded correction per group (a factor between 0.5
+  and 1.5) and how sure it is; a correction is applied only when sure, and
+  smoothed over time so the controller never sees a jump in its model.
+- *When:* at action boundaries (never during a flight, whose plan was made
+  with the old model), and only after enough frames of each kind of motion
+  have been seen (a group with no new evidence keeps its value).
+- *Training:* Block SMB layouts played with varied physics (ice, water, low
+  gravity, faster running: each episode draws a variant), where the true
+  parameters are known: the target is the variant's parameters, and the
+  loss is also the controller's own prediction error over the next window
+  with the corrected model. Held-out variants test it.
+- *Test:* Full SMB's water levels, whose physics differ from the rest.
+
 ## 5. Teacher and training
 
 - **Labels.** The teacher labels the action it chooses (the move choice by
@@ -276,5 +301,6 @@ work out later:
    rest of its jump again (`Flight.replan`), a run moves where it stops.
    Without the two models the agent plays exactly as before. Checked with
    untrained models only (wiring), and on a synthetic turning walker.
-6. Document the adaptation network's design (details later).
+6. Document the adaptation network's design (details later). Proposed in
+   section 4 (2026-10-10), to confirm.
 7. Validate the teaching on every layout, then train.
