@@ -133,10 +133,13 @@ def skill_family_scenario(family, rng, difficulty):
     side = -1 if family.endswith("back") else 1
     speed = rng.choice({"easy": (0.0,), "medium": (0.2, 0.4), "hard": (0.4, 0.6)}[difficulty])
     walks = rng.choice((-1, 1)) if speed else -1
-    # From Mario's front to the enemy: right next to it up to 40 pixels, but
+    # From Mario's front to the enemy: right next to it up to 27 pixels, but
     # not so close that an enemy walking toward him reaches him while he
-    # watches it before his first decision.
-    distance = start_distance(rng, 40)
+    # watches it before his first decision. The landing room starts past the
+    # enemy, 19 pixels plus this distance from Mario's middle: farther than
+    # 27, it would begin beyond a jump from a standstill (50 pixels, 4 to
+    # spare), and no single jump could land in it.
+    distance = start_distance(rng, int(standing_reach(0)) - 19 - 4)
     if walks < 0:
         distance = max(distance, math.ceil(speed * WATCH_FRAMES) + 4)
     start = rng.randint(40, 90)
