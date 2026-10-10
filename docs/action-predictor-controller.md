@@ -257,6 +257,15 @@ work out later:
    pixels off, against 26 for steady motion) and its check notices a turn
    within 4 frames. Not yet trained on played episodes.
 4. Give the skill verb and pointer heads; train it on the teacher's actions.
+   Built (2026-10-10): `SkillLayer` chooses a verb (verbs with nothing in
+   view to aim at are excluded), then a pointer reading the verb (the
+   decision token scored against each object's scene token after the
+   blocks; absent objects and kinds the verb cannot aim at excluded). Every
+   labelled skill decision also records the teacher's action
+   (`label_verb`, `label_pointer`, `label_action_valid`), taught with cross
+   entropy beside the old mode, x and y heads, which still drive the
+   executor until the controller takes actions (step 5). Old checkpoints
+   load with the new heads untrained.
 5. Make the controller reach targets and re-plan on updated ones, fast
    enough for training.
 6. Document the adaptation network's design (details later).

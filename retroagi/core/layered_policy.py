@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .action_tokens import POINTER_TOKENS, VERBS, allowed_lists, pointer_index
 from .smb_observer import (
     _SLOT_WIDTH,
     C_SPANS,
@@ -324,6 +325,8 @@ def _forecast_readout(width, slots):
 
 # Where the enemy slots sit among the scene tokens: after the summary and Mario.
 ENEMY_TOKENS = slice(2, 2 + SCENE_SLOTS["enemies"])
+# The first object slot's scene token (action_tokens.pointer_index).
+POINTER_START = 2
 FORECAST_WIDTH = 5
 
 
@@ -473,6 +476,47 @@ class SkillLayer(_Layer):
         self.given_mode_and_x = _Given(
             width, len(SKILL_MODES) + 1 + self.chosen_x_waves.extra_width()
         )
+        # The action (docs/action-predictor-controller.md): a verb, then the
+        # object it is aimed at, read from the verb: the decision token
+        # (adjusted by the verb) scored against each object's scene token.
+        self.verb = nn.Linear(width, len(VERBS))
+        self.given_verb = _Given(width, len(VERBS))
+        self.pointer_query = nn.Linear(width, width)
+        self.pointer_key = nn.Linear(width, width)
+        allowed = torch.zeros(len(VERBS), POINTER_TOKENS, dtype=torch.bool)
+        for v, verb in enumerate(VERBS):
+            for name in allowed_lists(verb):
+                start = pointer_index((name, 0)) - POINTER_START
+                allowed[v, start : start + SCENE_SLOTS[name]] = True
+        self.register_buffer("allowed", allowed, persistent=False)
+
+    def pointer_logits(self, decision, objects, present, verb):
+        """The pointer's logits [B, POINTER_TOKENS] over the object tokens
+        ``objects`` [B, POINTER_TOKENS, width] (the scene's, after the
+        blocks), for the chosen verbs [B]: absent objects, and kinds the verb
+        cannot aim at, are excluded (hold aims at nothing: all excluded)."""
+        chosen = F.one_hot(verb.long(), len(VERBS)).to(decision.dtype)
+        query = self.pointer_query(self.given_verb(decision, chosen))
+        logits = torch.einsum("bw,bnw->bn", query, self.pointer_key(objects))
+        logits = logits / math.sqrt(query.shape[-1])
+        usable = present & self.allowed[verb.long()]
+        return logits.masked_fill(~usable, -1e4)
+
+    def action_outputs(self, decision, objects, present, picks=None, sample=False):
+        """The verb's logits (a verb with nothing in view it can aim at is
+        excluded), and the pointer's for the verb in ``picks`` (or the one
+        chosen now); with the picks used."""
+        usable = (present[:, None, :] & self.allowed[None]).any(-1)
+        usable[:, VERBS.index("hold")] = True
+        verb_logits = self.verb(decision).masked_fill(~usable, -1e4)
+        verb = picks["verb"] if picks is not None else _pick(verb_logits, sample)
+        pointer_logits = self.pointer_logits(decision, objects, present, verb)
+        pointer = (
+            picks["pointer"]
+            if picks is not None and "pointer" in picks
+            else _pick(pointer_logits, sample)
+        )
+        return {"verb": verb_logits, "pointer": pointer_logits}, {"verb": verb, "pointer": pointer}
 
     def x_logits(self, decision, mode):
         """x's logits [B, len(SKILL_X)] for the chosen modes [B] (indices)."""
@@ -502,7 +546,7 @@ class SkillLayer(_Layer):
         ``picks`` as index tensors [B] with mode and x, on those: teaching with
         the teacher's choice, or scoring the layer's own); "picks", the index
         tensors used; "decision", the decision token; and the value estimate."""
-        decision, _ = self.encode(scene_tokens, present, expected, above, history)
+        decision, seen = self.encode(scene_tokens, present, expected, above, history)
         if picks is None:
             mode_logits = self.heads["mode"](decision)
             mode = _pick(mode_logits, sample)
@@ -513,6 +557,16 @@ class SkillLayer(_Layer):
             out = {"mode": mode_logits, "x": x_logits, "y": y_logits}
         else:
             out = self.heads_given(decision, picks)
+        objects = slice(POINTER_START, POINTER_START + POINTER_TOKENS)
+        action, chosen = self.action_outputs(
+            decision,
+            seen[:, objects],
+            present[:, objects],
+            picks if "verb" in picks else None,
+            sample,
+        )
+        out.update(action)
+        picks = {**picks, **chosen}
         out["picks"] = picks
         out["decision"] = decision
         out["value"] = self.value(decision.detach()).squeeze(-1)

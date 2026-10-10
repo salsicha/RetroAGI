@@ -46,6 +46,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from retroagi.core.action_tokens import VERBS, pointer_index
 from retroagi.core.actions import SMBAction
 from retroagi.core.layered_policy import (
     CHOICE_WIDTH,
@@ -53,6 +54,7 @@ from retroagi.core.layered_policy import (
     HELD_WIDTH,
     HISTORY,
     MEMORY_INTERVAL,
+    POINTER_START,
     LayeredSMBPolicy,
     MemoryState,
     PolicySettings,
@@ -361,6 +363,12 @@ class _Lane:
                     self.env, self.teacher, certify_holds=False
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
+            if self.task.label and asked["skill"] is not None:
+                from .teacher_actions import teacher_action
+
+                # The same choice as an action: a verb aimed at a reported
+                # object (None when its object is not reported).
+                asked["action_label"] = teacher_action(self.env, self.teacher, asked["skill"])
             if self.task.record_actions and self.task.label and asked["skill"] is not None:
                 from .teacher_actions import action_rows
 
@@ -404,6 +412,14 @@ class _Lane:
                 d[f"label_{head}"].append(value)
             valid = self.task.label and asked["skill"] is not None
             d["label_valid"].append(valid)
+            action = asked.get("action_label")
+            d["label_action_valid"].append(valid and action is not None)
+            d["label_verb"].append(VERBS.index(action.verb) if action is not None else 0)
+            d["label_pointer"].append(
+                pointer_index(action.target) - POINTER_START
+                if action is not None and action.target is not None
+                else 0
+            )
             d["agreed"].append(valid and mine == asked["skill"])
             return
 
@@ -1135,6 +1151,10 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         )
         for head in ("mode", "x")
     }
+    # The pointer is read with the teacher's verb where it named an action.
+    acted = m & d["label_action_valid"].bool() if "label_action_valid" in d else None
+    if acted is not None:
+        teaching["verb"] = torch.where(acted, d["label_verb"].long(), 0)
     out = policy.run_skill(
         policy.encode_scene((a[e, f], b[e, f], c[e, f])),
         expected,
@@ -1174,6 +1194,23 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
             stats[f"{head}_accuracy"] = float(
                 (out[head][m].argmax(-1) == label[head]).float().mean()
             )
+    if acted is not None and acted.any() and imitation > 0:
+        # The action: its verb, and (except hold, which aims at nothing) the
+        # object it is aimed at among those in view.
+        weight = d["weight"][acted]
+        verb = d["label_verb"][acted].long()
+        losses["verb"] = imitation * _weighted_mean(
+            F.cross_entropy(out["verb"][acted], verb, reduction="none"), weight
+        )
+        stats["verb_accuracy"] = float((out["verb"][acted].argmax(-1) == verb).float().mean())
+        aimed = verb != VERBS.index("hold")
+        if aimed.any():
+            pointer = d["label_pointer"][acted][aimed].long()
+            logits = out["pointer"][acted][aimed]
+            losses["pointer"] = imitation * _weighted_mean(
+                F.cross_entropy(logits, pointer, reduction="none"), weight[aimed]
+            )
+            stats["pointer_accuracy"] = float((logits.argmax(-1) == pointer).float().mean())
     x = d["explored"]
     if rl is not None and x.any():
         picks = {head: d[f"pick_{head}"][x] for head in CHOICES[learner]}
@@ -1993,6 +2030,15 @@ def load_layered_checkpoint(path, device="cpu"):
             if name.startswith(("skill.given_mode.", "skill.given_mode_and_x.")):
                 state[name] = fresh[name]
         checkpoint.setdefault("load_migrations", []).append("skill_ordered_choice_zero_initialized")
+    if "skill.verb.weight" not in state:
+        # The skill's action heads (a verb and the object it is aimed at) are
+        # new: they start untrained; every other output is unchanged.
+        for name in fresh:
+            if name.startswith(
+                ("skill.verb.", "skill.given_verb.", "skill.pointer_query.", "skill.pointer_key.")
+            ):
+                state[name] = fresh[name]
+        checkpoint.setdefault("load_migrations", []).append("skill_action_heads_initialized")
     policy.load_state_dict(state)
     return policy, checkpoint
 
