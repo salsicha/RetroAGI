@@ -149,6 +149,48 @@ def test_targets_decode_back_to_the_exact_scene():
     assert decode_scene(heads)[0] == scene_from_labels(truth_labels)
 
 
+def _decoded(types, *, airborne_heads=True):
+    """Decode hand-drawn pixel types with every other head saying "in the air"."""
+    one = torch.nn.functional.one_hot
+    flag = 0 if airborne_heads else 1
+    heads = {
+        "pixel_logits": one(torch.as_tensor(types).long(), 10).permute(2, 0, 1)[None] * 20.0,
+        "kind_logits": torch.zeros(1, 4, *types.shape),
+        "facing_logits": one(torch.tensor(1), 2)[None].float() * 20,
+        "support_logits": one(torch.tensor(flag), 3)[None].float() * 20,
+        "on_something_logits": one(torch.tensor(flag), 2)[None].float() * 20,
+    }
+    return decode_scene(heads)[0].mario
+
+
+def test_support_pixels_read_as_mario_below_his_feet_mean_he_stands_on_it():
+    # A thin brick ledge (top row 180) with Mario standing near its right end.
+    # As the vision transformer did there, a few brick pixels just under his
+    # feet are read as Mario and join his body: his box sinks 5 rows.
+    types = np.zeros((240, 256), np.uint8)
+    types[180:192, 8:104] = B
+    types[168:180, 95:105] = M
+    types[181:185, 94:96] = M
+    mario = _decoded(types)
+    assert mario.box == (94, 168, 105, 180)  # his feet are on the ledge
+    assert mario.on_something and mario.support == "ground"
+    # Deeper than SINK_ROWS, it is not a misread support row: no change.
+    types[181:188, 94:96] = M
+    assert _decoded(types).box[3] == 188 and not _decoded(types).on_something
+    # A short blob dipping into a platform is not a standing Mario: a coin on a
+    # floating platform was once read as Mario this way (9 rows, 2 below).
+    blob = np.zeros((240, 256), np.uint8)
+    blob[185:195, 88:136] = B
+    blob[178:187, 90:100] = M
+    assert not _decoded(blob).on_something
+    # Beside a step (barely covering it) is side contact, not standing.
+    side = np.zeros((240, 256), np.uint8)
+    side[200:220, 100:148] = B
+    side[190:204, 89:101] = M
+    beside = _decoded(side)
+    assert beside.box == (89, 190, 101, 204) and not beside.on_something
+
+
 # ── Block SMB draws exactly what is reported ─────────────────────────────────
 
 

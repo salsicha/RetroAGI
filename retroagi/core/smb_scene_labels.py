@@ -17,7 +17,9 @@ pixels of its type (objects_from_types), and surfaces, gaps, blocks and pipes
 come from structure_from_types. Only Mario's facing, his support, whether his
 feet are on something (the landing signal) and each
 enemy's kind are read from its other outputs. Exact visual support beneath
-his feet establishes standing even when the contact head disagrees. Other
+his feet establishes standing even when the contact head disagrees. A box
+that sinks at most SINK_ROWS rows into a surface he mostly covers is support
+read as Mario: its bottom is raised to the surface, where he stands. Other
 contact predictions require nearby support or an enemy beneath his feet;
 side contact cannot establish a landing. Type errors and touching objects can still distort the scene
 (the truth keeps them apart; one group of pixels cannot).
@@ -525,6 +527,27 @@ def scene_targets(labels: SceneLabels) -> dict[str, np.ndarray]:
     }
 
 
+# Mario cannot be inside solid support. When his found box reaches at most
+# SINK_ROWS rows below the top of a surface he mostly covers, with at least
+# BODY_ROWS of him above it, those rows are support pixels read as Mario (seen
+# on thin brick ledges): his feet are on that surface. A shorter blob there is
+# not a standing Mario (a coin read as Mario was one).
+SINK_ROWS = 6
+BODY_ROWS = 8
+
+
+def _feet_on_support(box, surfaces):
+    """Mario's box with its bottom raised to the top of a surface it sank into."""
+    if box is None:
+        return box
+    width = box[2] - box[0]
+    for left, right, top in surfaces:
+        cover = min(right, box[2]) - max(left, box[0])
+        if 2 * cover >= width and box[1] + BODY_ROWS <= top < box[3] <= top + SINK_ROWS:
+            return (box[0], box[1], box[2], top)
+    return box
+
+
 def decode_scene(heads: Mapping[str, "object"]) -> list:
     """SceneObservations from a vision transformer's raw heads (batched tensors).
 
@@ -549,6 +572,7 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
         # consumes contact. Side contact is not support beneath Mario's feet.
         surfaces = [(s.x0, s.x1, s.top) for s in structure["surfaces"]]
         surfaces += [(b[0], b[2], b[1]) for b in objects["moving_platforms"]]
+        box = _feet_on_support(box, surfaces)
         standing = box is not None and any(
             left < box[2] and right > box[0] and abs(top - box[3]) <= 1
             for left, right, top in surfaces

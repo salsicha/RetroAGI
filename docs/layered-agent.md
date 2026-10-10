@@ -390,7 +390,14 @@ families in either curriculum.
 
 Vision decoding resolves contradictory contact outputs before the controller
 receives them. A visible surface exactly beneath Mario's feet establishes
-standing even if the contact classifier says airborne. Near-contact predictions
+standing even if the contact classifier says airborne. Mario cannot be inside
+solid support: when his found box reaches at most six rows below the top of a
+surface he mostly covers, those rows are support pixels read as Mario (seen on
+thin brick ledges), so his feet are placed on that surface and he stands.
+Without this, a standing Mario read as airborne left the ground controller
+waiting for a landing that never came. On 27,632 held-out frames it cut
+standing-read-as-airborne errors from 111 to 62, with one new airborne frame
+read as standing. Near-contact predictions
 still need both the classifier and supporting geometry; side contact cannot
 establish a landing. This prevents valid jump goals from turning into horizontal
 air-control requests while Mario is actually standing on a ledge.

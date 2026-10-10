@@ -54,9 +54,17 @@ class FamilyLayout:
 
 
 def family_layouts(split: str, seed: int, repeats: int, executor: Any = None) -> list:
-    """Every family at every difficulty, ``repeats`` layouts each, with teacher routes."""
+    """Every family at every difficulty, ``repeats`` layouts each, with teacher routes.
+
+    Frames need no speed-run deadline, so its measurement (minutes per layout)
+    is skipped.
+    """
     sweep = sample_block_smb_monte_carlo_parameter_sweep(
-        split=split, seed=seed, repeats_per_difficulty=repeats, executor=executor
+        split=split,
+        seed=seed,
+        repeats_per_difficulty=repeats,
+        executor=executor,
+        calibrate_deadlines=False,
     )
     return [
         FamilyLayout(
