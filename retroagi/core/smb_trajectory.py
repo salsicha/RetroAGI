@@ -41,6 +41,16 @@ class Track:
         horizon, dx, dy, sigma, visible = min(usable)
         return horizon - self.forecast_age, translated(self.box, dx, dy), sigma
 
+    def landing_box(self):
+        """Where a walker will be when the coming action (this jump) ends: its
+        memory forecast once trusted (rebased by what has since been seen),
+        else where it is now."""
+        if self.kind == "walker":
+            forecast = self.distant_forecast(1)
+            if forecast is not None:
+                return forecast[1]
+        return self.box
+
     @property
     def velocity(self):
         if not self.samples:
@@ -200,7 +210,7 @@ class Flight:
             return 0
         if self.target is not None:
             if any(t is self.target for t in self.tracks.tracks):
-                b = self.target.box
+                b = self.target.landing_box()
                 self.goal = (
                     (b[0] + b[2]) / 2 + self.target_offset[0],
                     b[1] + self.target_offset[1],
@@ -263,12 +273,8 @@ class Flight:
         return button
 
 
-def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None):
-    """Choose an immediate takeoff; skill must request any preparation as a run."""
-    box = scene.mario.box
-    goal = ((box[0] + box[2]) / 2 + destination.x, box[3] + destination.y)
-    motion = copy(motion) if motion is not None else NESPlayerMotion(x_speed=round(speed * 16))
-    direction = (destination.x > 0) - (destination.x < 0)
+def _best_hold(scene, motion, box, goal, direction):
+    """The jump-button hold (1-32 frames) whose predicted flight best reaches ``goal``."""
     candidates = []
     for hold in range(1, 33):
         prediction = predict(scene, [], motion, box, goal, direction, hold, grounded=True)
@@ -282,6 +288,15 @@ def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None
             )
         )
     _, _, _, hold, prediction = min(candidates, key=lambda c: c[:4])
+    return hold, prediction
+
+
+def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None):
+    """Choose an immediate takeoff; skill must request any preparation as a run."""
+    box = scene.mario.box
+    goal = ((box[0] + box[2]) / 2 + destination.x, box[3] + destination.y)
+    motion = copy(motion) if motion is not None else NESPlayerMotion(x_speed=round(speed * 16))
+    direction = (destination.x > 0) - (destination.x < 0)
     targets = [
         t
         for t in tracks.tracks
@@ -295,6 +310,12 @@ def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None
         if target
         else (0, 0)
     )
+    if target is not None:
+        # A walker's landing is planned where the memory forecasts it will be
+        # when this jump ends (Track.landing_box), not where it stands now.
+        b = target.landing_box()
+        goal = ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
+    hold, prediction = _best_hold(scene, motion, box, goal, direction)
     return Flight(
         goal,
         motion,

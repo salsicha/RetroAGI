@@ -11,6 +11,7 @@ Training may supply teacher tokens for selected layers; runtime playback
 uses only the policy's own choices and the externally set strategy switch.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -117,6 +118,7 @@ def decide(
     histories: Optional[Mapping[str, tuple]] = None,
     tactic_steps: Optional[Sequence[Optional[TacticStep]]] = None,
     execution_feedback=None,
+    memory=None,
 ) -> list[Decision]:
     """Skill destinations and action plans for pictures under ``tactics``
     (each held by the tactic layer, or given).
@@ -124,7 +126,8 @@ def decide(
     ``expected``: the action memory's expected scene at the end of the coming
     action, encoded (LayeredSMBPolicy.expect). ``encoded_scene``: the pictures'
     scenes already encoded, when the caller has them. ``histories``: the
-    skill's own previous destinations (choice_histories).
+    skill's own previous destinations (choice_histories). ``memory``: the scene
+    memory's hidden state, whose enemy forecasts the skill reads.
 
     ``given["action"]`` can replay an exact teacher button plan in tests and
     teacher diagnostics. Learned policies never produce button plans.
@@ -165,6 +168,7 @@ def decide(
             (histories or {}).get("skill"),
             strategy=_encoded(encode_strategy, switches, device),
             feedback=execution_feedback,
+            memory=memory,
         )
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]
@@ -251,6 +255,10 @@ class _Copy:
     frame: int = 0  # frames played this episode
     memory_frame: int = -1
     memory_camera: float = 0.0
+    # Pre-episode frames still to watch (prefilled history): the agent observes
+    # them, its memory and tracks update, but it decides nothing and presses
+    # nothing until they are over.
+    watch: int = 0
     tactic_hidden: Optional[torch.Tensor] = None  # the tactic memory
     tactic_cell: Optional[torch.Tensor] = None
 
@@ -296,9 +304,10 @@ class SMBAgents:
         for index in range(copies):
             self.reset(index)
 
-    def reset(self, copy: int, switch: Optional[StrategyToken] = None) -> None:
+    def reset(self, copy: int, switch: Optional[StrategyToken] = None, watch: int = 0) -> None:
         """Start a new episode for one copy: empty memories, no plan, no tactic,
-        and its strategy switch (``switch``, else the agents' own)."""
+        and its strategy switch (``switch``, else the agents' own). ``watch``:
+        pre-episode frames to observe before the first decision."""
         zeros = torch.zeros(self.policy.memory.width, device=self.device)
         tactic = torch.zeros(self.policy.tactic_memory.width, device=self.device)
         self.copies[copy] = _Copy(
@@ -307,6 +316,7 @@ class SMBAgents:
             switch=switch or self.switch,
             tactic_hidden=tactic,
             tactic_cell=tactic.clone(),
+            watch=watch,
         )
 
     @torch.no_grad()
@@ -464,7 +474,9 @@ class SMBAgents:
                         else (
                             "hold_recheck"
                             if copy.executor.reconsider
-                            else "arrived" if copy.spatial.arrived() else None
+                            else "arrived"
+                            if copy.spatial.arrived()
+                            else None
                         )
                     )
                 )
@@ -479,7 +491,7 @@ class SMBAgents:
                 if reason is not None:
                     copy.executor.end(reason)
             ended.append(reason)
-        deciding = [k for k, copy in enumerate(playing) if copy.executor.idle]
+        deciding = [k for k, copy in enumerate(playing) if copy.executor.idle and not copy.watch]
         # Memory observes motion during execution as well as at decisions.
         refreshing = [
             k
@@ -508,6 +520,10 @@ class SMBAgents:
                 device=self.device,
             )
             remembered_all = self.policy.remember(now_all, prior, timing)
+            enemy_forecasts = {
+                name: value.cpu().tolist()
+                for name, value in self.policy.memory.enemies(remembered_all.hidden).items()
+            }
             forecasts = self.policy.memory.platforms(remembered_all.hidden)
             end_frames = forecasts["frames"].cpu().tolist()
             end_sigma = forecasts["frame_sigma"].cpu().tolist()
@@ -538,6 +554,28 @@ class SMBAgents:
                                 *displacement[j][slot],
                                 sigma,
                                 visibility[j][slot],
+                            )
+                        ]
+                for slot, enemy in enumerate(packed_lists(scenes[k])["enemies"]):
+                    matches = [
+                        t
+                        for t in copy.spatial.tracks.tracks
+                        if t.kind == enemy.kind and t.box == enemy.box
+                    ]
+                    if len(matches) == 1:
+                        track = matches[0]
+                        track.forecast_age = 0
+                        vx, vy = track.velocity or (0, 0)
+                        f = enemy_forecasts
+                        sigma = (
+                            max(f["sigma"][j][slot]) + max(abs(vx), abs(vy)) * f["frame_sigma"][j]
+                        )
+                        track.distant = [
+                            (
+                                float(f["frames"][j]),
+                                *f["displacement"][j][slot],
+                                sigma,
+                                1 / (1 + math.exp(-f["visible"][j][slot])),
                             )
                         ]
         decisions: list[Optional[Decision]] = [None] * len(playing)
@@ -583,6 +621,7 @@ class SMBAgents:
                     [copy.spatial.report(scene) for copy, scene in zip(starting, picked)],
                     device=self.device,
                 ),
+                memory=remembered.hidden,
             )
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 given_actions = supplied.get("action")
@@ -601,7 +640,11 @@ class SMBAgents:
                 )
         steps = []
         for k, copy in enumerate(playing):
-            copy.button = copy.executor.press(scenes[k])
+            if copy.watch:
+                copy.watch -= 1
+                copy.button = NOOP
+            else:
+                copy.button = copy.executor.press(scenes[k])
             copy.spatial.executed(copy.button, scenes[k])
             copy.frame += 1
             maneuver = copy.executor.flight or copy.executor.travel

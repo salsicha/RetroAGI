@@ -229,6 +229,8 @@ class MarioScenarioEnv:
                     tracked, but the goal does not require it)
     tactics       : the layout's tactic segments, in order (tactic_schedule;
                     training only: teacher tokens, route rules, success)
+    watch_frames  : pre-episode frames the world runs while Mario stands; their
+                    pictures (watched_screens) are for the agent to watch first
     strategy      : the strategy the layout is played for (STRATEGY_REWARDS),
                     with "strategy_objective": {"deadline": frames} (the goal
                     counts only until then) or {"points": count} (only with at
@@ -292,6 +294,8 @@ class MarioScenarioEnv:
         self._strategy = None  # the strategy a layout is played for (STRATEGY_REWARDS)
         self._strategy_objective = {}
         self._objective_missed = False
+        self.watched_screens = []  # pre-episode pictures (reset, "watch_frames")
+        self.watched_labels = []  # ... and their true labels, for teachers only
         self.camera_x = 0.0
         self.score = 0
         self.steps = 0
@@ -498,6 +502,20 @@ class MarioScenarioEnv:
             0.0, min(self.mario["x"] - self.width // 3, self.world_width - self.width)
         )
         obs = self.render()
+        # Pre-episode frames (scenario "watch_frames"): the world runs while
+        # Mario stands, and their pictures are kept for the agent to watch
+        # (prefilled history), so its first decision has seen how things move.
+        # The episode, its frame count and its routes start after them.
+        self.watched_screens, self.watched_labels = [], []
+        for _ in range(int(scenario.get("watch_frames", 0) or 0)):
+            self.watched_screens.append(obs)
+            self.watched_labels.append(self.scene_labels())  # training-only truth
+            obs, _, done, truncated, _ = self.step(0)
+            if done or truncated:
+                raise ValueError("the pre-episode frames ended the episode")
+        if self.watched_screens:
+            self.steps = 0
+            tactic_schedule._begin(self)
         _, reward_terms = self._finalize_reward_terms(self.reward_config.zero_terms())
         info = self._build_info(
             reward_terms=reward_terms,

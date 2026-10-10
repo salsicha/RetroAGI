@@ -8,9 +8,9 @@ Two layers are learned; the executor is a controller. Strategy is an externally 
 | Component | Inputs | Output |
 |---|---|---|
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
-| Scene memory | Encoded scene every four frames and at decisions, elapsed time, visual camera shift, previous LSTM state | Next-boundary scene plus jointly predicted action-end time and platform positions |
+| Scene memory | Encoded scene every four frames and at decisions, elapsed time, visual camera shift, previous LSTM state | Next-boundary scene plus jointly predicted action-end time, platform positions and enemy positions |
 | Tactic | Strategy, current and predicted scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
-| Skill | Tactic, strategy context, current scene, memory prediction, last 16 skill commands, measured execution feedback | Run/jump/hold mode and a relative destination `(x, y)` |
+| Skill | Tactic, strategy context, current scene, memory prediction (including each enemy's forecast position), last 16 skill commands, measured execution feedback | Run/jump/hold mode and a relative destination `(x, y)` |
 | Executor | Spatial destination and per-frame vision | One of six emulator button combinations |
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
@@ -52,6 +52,16 @@ The same LSTM jointly predicts **the next action's end scene and how many physic
 frames remain until that end**. Its platform readout predicts displacement at
 that same endpoint, with spatial uncertainty and track-visibility confidence.
 Both skill and tactic receive the predicted timing with the expected scene.
+
+Its enemy readout forecasts, for each enemy seen now, where that enemy will be
+when the next action ends, with spatial uncertainty and the chance it is still
+seen; it is trained like the platform readout, from vision's tracks of each
+enemy. The skill reads each enemy's forecast added to that enemy's scene
+token, so a stomp or bypass landing is chosen from where the enemy will be,
+not where it stands. When the skill's jump targets a walking enemy, the
+controller plans the first landing at the forecast position and keeps
+re-aiming at the forecast, rebased by what vision sees, during the flight.
+Untrained forecasts (wide uncertainty or unlikely visibility) are ignored.
 Duration is a learned positive continuous output with its own uncertainty, not
 a choice among preset horizons. It has no 64-frame cap: saved action traces
 already contain 168-frame commands, ground execution permits 192 frames, and
@@ -271,6 +281,17 @@ changing silhouette cannot turn a leftward jump into an apparent rightward drift
 Two dedicated families, `skill_enemy_bypass` and `skill_enemy_bypass_back`,
 require an immediate jump and supported landing beyond an enemy that remains
 alive. Stomping it fails the episode.
+
+One picture cannot show an enemy's speed or direction, and at the first
+decision of an episode the memory has seen only one. In `enemy_stomp` and both
+bypass families the right landing depends on exactly that (a standing enemy
+needs a longer jump than one walking toward Mario; an approaching enemy needs
+a short approach, a retreating one a long chase). These layouts therefore
+start with 12 pre-episode frames (`watch_frames`): the simulator runs them at
+reset while Mario stands, and the agent watches their pictures, its memory
+stepping every four frames and its tracks measuring each enemy's motion, but
+decides nothing. The episode, its routes and its frame budget start after
+them.
 
 For each strategy-route combination, the teacher evaluates both its default
 jump selection and a bypass preference that selects non-stomping holds where

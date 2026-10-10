@@ -17,7 +17,12 @@ from .action_families import ACTION_FAMILIES, action_family_scenario
 from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
 from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES
-from .skill_families import ROUTE_SKILL_FAMILIES, SKILL_FAMILIES, skill_family_scenario
+from .skill_families import (
+    ROUTE_SKILL_FAMILIES,
+    SKILL_FAMILIES,
+    WATCH_FRAMES,
+    skill_family_scenario,
+)
 from .tactic_families import NEW_FAMILIES, TACTIC_FAMILIES, family_route, tactic_family_scenario
 from .tactic_schedule import segment
 from .transfer_failure_families import (
@@ -1562,6 +1567,9 @@ def _enemy_stomp(
         "goal": [334, 200, 16, 20],
         "require_stomp_before_goal": True,
         "reward_goal_distance_shaping": 2.0,
+        # Watched before the first decision: the enemy's speed and direction
+        # cannot be seen in one picture (skill_families.WATCH_FRAMES).
+        "watch_frames": WATCH_FRAMES,
     }
     # A walk-then-jump guess; the sampler verifies it in the finished layout
     # and otherwise takes the local search's route. The engine requires the

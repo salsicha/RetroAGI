@@ -30,6 +30,16 @@ def replay(
     state.family = family or state.family
     state.visual_observer = observer
     spatial, executor, landing = SpatialFeedback(), SMBExecutor(), LandingWatch()
+    # Watch the pre-episode pictures first, as the agent does.
+    watched = (
+        observer.observe(env.watched_screens)
+        if observer is not None and env.watched_screens
+        else [scene_from_labels(labels) for labels in env.watched_labels]
+    )
+    for scene in watched:
+        spatial.observe(scene)
+        landing.landed(scene)
+        spatial.executed(0, scene)
     actions, commands = [], []
     limit = max_frames or env.max_steps
     try:

@@ -214,8 +214,8 @@ class Memory(nn.Module):
     """One scene LSTM, refreshed every four frames and at skill decisions.
 
     The same hidden state predicts the next action endpoint: its scene,
-    platform world displacements, and remaining duration in physical frames. No second
-    recurrent model is used. Elapsed time and observed camera scroll distinguish
+    platform and enemy world displacements, and remaining duration in physical
+    frames. No second recurrent model is used. Elapsed time and observed camera scroll distinguish
     object motion from camera motion and irregular decision intervals.
     """
 
@@ -225,15 +225,11 @@ class Memory(nn.Module):
         self.cell = nn.LSTM(settings.width, settings.memory_width, batch_first=True)
         self.timing = nn.Linear(2, settings.width, bias=False)
         nn.init.zeros_(self.timing.weight)
-        self.platform_prediction = nn.Linear(
-            settings.memory_width, SCENE_SLOTS["moving_platforms"] * 5
+        self.platform_prediction = _forecast_readout(
+            settings.memory_width, SCENE_SLOTS["moving_platforms"]
         )
-        nn.init.zeros_(self.platform_prediction.weight)
-        with torch.no_grad():
-            bias = self.platform_prediction.bias.view(-1, 5)
-            bias.zero_()
-            bias[:, 2:4] = math.log(32)  # Untrained forecasts must not authorize transfers.
-            bias[:, 4] = -2
+        # Where each enemy seen now will be when the next action ends.
+        self.enemy_prediction = _forecast_readout(settings.memory_width, SCENE_SLOTS["enemies"])
         self.end_time_embedding = nn.Linear(2, settings.width, bias=False)
         nn.init.zeros_(self.end_time_embedding.weight)
         self.end_duration = nn.Linear(settings.memory_width, 2)
@@ -283,9 +279,14 @@ class Memory(nn.Module):
         Dimensions: [..., current platform slot, (x,y)]. The duration output is
         shared with the next-scene prediction; this is not a multi-horizon head.
         """
-        raw = self.platform_prediction(hidden).view(
-            *hidden.shape[:-1], SCENE_SLOTS["moving_platforms"], 5
-        )
+        return self._forecast(self.platform_prediction, SCENE_SLOTS["moving_platforms"], hidden)
+
+    def enemies(self, hidden):
+        """Each enemy's displacement at the same next-action endpoint, as platforms."""
+        return self._forecast(self.enemy_prediction, SCENE_SLOTS["enemies"], hidden)
+
+    def _forecast(self, readout, slots, hidden):
+        raw = readout(hidden).view(*hidden.shape[:-1], slots, 5)
         endpoint = self.action_end(hidden)
         return {
             "frames": endpoint["frames"],
@@ -298,6 +299,40 @@ class Memory(nn.Module):
     def expected_scene(self, hidden) -> torch.Tensor:
         """[..., memory_width] -> the scene numbers expected when the action ends."""
         return self.expectation(hidden)
+
+
+def _forecast_readout(width, slots):
+    """Per slot: displacement (x, y), log uncertainty (x, y), visibility logit.
+
+    Starts at no displacement, 32-pixel uncertainty and unlikely visibility:
+    an untrained forecast is never confident enough to be used.
+    """
+    readout = nn.Linear(width, slots * 5)
+    nn.init.zeros_(readout.weight)
+    with torch.no_grad():
+        bias = readout.bias.view(-1, 5)
+        bias.zero_()
+        bias[:, 2:4] = math.log(32)
+        bias[:, 4] = -2
+    return readout
+
+
+# Where the enemy slots sit among the scene tokens: after the summary and Mario.
+ENEMY_TOKENS = slice(2, 2 + SCENE_SLOTS["enemies"])
+FORECAST_WIDTH = 5
+
+
+def forecast_features(forecast):
+    """[..., slots, FORECAST_WIDTH] numbers from a memory forecast: displacement
+    and uncertainty in screen widths, and the chance the object is still seen."""
+    return torch.cat(
+        (
+            forecast["displacement"] / 64,
+            forecast["sigma"] / 64,
+            forecast["visible"].sigmoid().unsqueeze(-1),
+        ),
+        dim=-1,
+    )
 
 
 # ── Layers ────────────────────────────────────────────────────────────────────
@@ -507,6 +542,11 @@ class LayeredSMBPolicy(nn.Module):
             SKILL_WIDTH,
             choice_positions=(len(SKILL_MODES), len(SKILL_MODES) + 1),
         )
+        # Each enemy's forecast (where it will be when the next action ends) is
+        # added to that enemy's scene token. Starts with no influence.
+        self.skill.forecast = nn.Linear(FORECAST_WIDTH, settings.width)
+        nn.init.zeros_(self.skill.forecast.weight)
+        nn.init.zeros_(self.skill.forecast.bias)
 
     def parameters_of(self, layer: str):
         modules = {
@@ -567,13 +607,23 @@ class LayeredSMBPolicy(nn.Module):
         """Batched PolicyInput rows (src_a, src_b, src_c) -> scene tokens and their mask."""
         return self.scene(*inputs)
 
-    def run_skill(self, encoded, expected, tactic, history=None, strategy=None, feedback=None):
+    def run_skill(
+        self, encoded, expected, tactic, history=None, strategy=None, feedback=None, memory=None
+    ):
         """Choose a destination using the tactic and its strategy context.
 
         Training records pack both tokens together. Direct callers may pass
         them separately; the default switch preserves the old convenience API.
+        ``memory``: the scene memory's hidden state at the decision [B, memory
+        width]; each enemy's forecast is then added to its scene token.
         """
         scene_tokens, present = encoded
+        if memory is not None:
+            features = forecast_features(self.memory.enemies(memory)).detach()
+            scene_tokens = scene_tokens.clone()
+            scene_tokens[:, ENEMY_TOKENS] = scene_tokens[:, ENEMY_TOKENS] + self.skill.forecast(
+                features
+            )
         if tactic.shape[-1] == TACTIC_WIDTH:
             if strategy is None:
                 strategy = encode_strategy(DEFAULT_STRATEGY).to(tactic).expand(len(tactic), -1)

@@ -20,6 +20,12 @@ LOW_ROUTE_SKILL_FAMILIES = (
     "skill_lower_exit_climb",
 )
 UPPER_GAP_SKILL_FAMILIES = ("skill_upper_gap_entry", "skill_upper_gap_exit")
+# Pre-episode frames the agent watches before its first decision in the enemy
+# families (env "watch_frames"): its memory steps every 4 frames, so by the
+# first decision it has seen the enemy move, and its forecast of where the
+# enemy will be when the next action ends can tell a standing enemy from a
+# walking one, and which way it walks.
+WATCH_FRAMES = 12
 SKILL_FAMILIES = (
     "skill_enemy_bypass",
     "skill_enemy_bypass_back",
@@ -117,6 +123,7 @@ def skill_family_scenario(family, rng, difficulty):
         "action_jump_direction": 1,
         "strategy": "speed_run",
         "prefer_enemy_bypass": True,
+        "watch_frames": WATCH_FRAMES,
     }
     if side < 0:
         scenario = _mirror(scenario)
