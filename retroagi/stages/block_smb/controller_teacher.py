@@ -354,6 +354,13 @@ class JumpOption:
     members: list
     hold: int = 0
     direction: int = 0
+    # The jump's predicted path with nothing in its way (world boxes, the
+    # start first): what the same jump does from elsewhere on the floor.
+    free_path: Optional[list] = None
+    # Whether ``command`` names where the jump ends from here (_describes):
+    # only then can it be taught from here; one that hits something on its
+    # way may still be made from elsewhere on the floor (_takeoff_search).
+    described: bool = True
 
 
 def _landing_heights(env, feet):
@@ -413,8 +420,9 @@ def _table_trial(env, state, goal, target, memo):
 def _jump_groups(env, state, memo, direction):
     """The jumps Mario can make toward ``direction`` from here, before any
     trial: [(hold, the destinations that make it, its predicted landing,
-    how high it rises)] (_path_landing of the executor's own predicted path,
-    or None; the rise in pixels above Mario's feet)."""
+    how high it rises, its predicted path)] (_path_landing of the executor's
+    own predicted path, or None; the rise in pixels above Mario's feet; the
+    path in world boxes, the start first, with nothing in its way)."""
     key = ("groups", direction)
     if key in memo:
         return memo[key]
@@ -429,7 +437,12 @@ def _jump_groups(env, state, memo, direction):
     ):
         return groups_out
     spatial = state.execution
-    motion = copy(spatial.motion if spatial is not None else env.motion)
+    # Before vision has seen Mario's speed (one picture cannot show it), the
+    # executor takes off with no speed and plans the rest of the jump again
+    # once it has (Flight.replan): the jump made is the one his true speed
+    # gives, which the simulator knows (training labels only).
+    known = spatial is not None and spatial.motion_ready
+    motion = copy(spatial.motion if known else env.motion)
     tracks = spatial.tracks if spatial is not None else VisualTracks()
     box = scene.mario.box
     start = _body(env)
@@ -449,11 +462,21 @@ def _jump_groups(env, state, memo, direction):
     for hold, members in sorted(groups.items()):
         world = [tuple(start[k] + b[k] - box[k] for k in range(4)) for b in paths[hold - 1]]
         rise = start[3] - min(b[3] for b in world) if world else 0
-        groups_out.append((hold, members, _path_landing([start, *world], rects), rise))
+        free = [start, *world]
+        groups_out.append((hold, members, _path_landing(free, rects), rise, free))
     return groups_out
 
 
-def _jump_table(env, state, target, memo, directions=(-1, 0, 1), lands_on=None, rise=None):
+def _jump_table(
+    env,
+    state,
+    target,
+    memo,
+    directions=(-1, 0, 1),
+    lands_on=None,
+    rise=None,
+    described_only=True,
+):
     """Every jump Mario can make from here, each tried once: [JumpOption].
 
     Every destination within REACH pixels (each pixel in x) at every height a
@@ -461,11 +484,13 @@ def _jump_table(env, state, target, memo, directions=(-1, 0, 1), lands_on=None, 
     jumps nothing maps to cannot be commanded. Empty unless Mario stands.
     ``lands_on``: only the jumps predicted (before trying them) to land on
     one of these platforms (indices); ``rise``: only those rising at least
-    this many pixels; for searches that need no other.
+    this many pixels; for searches that need no other. With
+    ``described_only`` (the default), only the jumps a destination names
+    from here (JumpOption.described).
     """
     table = []
     for direction in directions:
-        for hold, members, landing, height in _jump_groups(env, state, memo, direction):
+        for hold, members, landing, height, free in _jump_groups(env, state, memo, direction):
             if lands_on is not None and (landing is None or landing[3] not in lands_on):
                 continue
             if rise is not None and height < rise:
@@ -485,14 +510,29 @@ def _jump_table(env, state, target, memo, directions=(-1, 0, 1), lands_on=None, 
                         result = aimed
                     else:
                         command = first
-                memo[key] = (
-                    JumpOption(command, result, members, hold, direction)
-                    if _describes(env, command, result)
-                    else None
+                memo[key] = JumpOption(
+                    command,
+                    result,
+                    members,
+                    hold,
+                    direction,
+                    free,
+                    _describes(env, command, result),
                 )
-            if memo[key] is not None:
+            if memo[key].described or not described_only:
                 table.append(memo[key])
     return table
+
+
+def _landing_point(env, result) -> tuple:
+    """Where a jump's trial ends, from Mario's feet (pixels): for a stomp, the
+    point on the top of the enemy it came down on (the trial ends at the
+    kill, inside the enemy's box by as far as Mario fell that frame)."""
+    killed = result.outcome[2] if result.outcome else ()
+    if killed:
+        feet = env.mario["y"] + env.mario["h"]
+        return result.end_dx, min(env.enemies[i]["y"] for i in killed) - feet
+    return result.end_dx, result.end_dy
 
 
 def _describes(env, command, result) -> bool:
@@ -500,14 +540,15 @@ def _describes(env, command, result) -> bool:
     2 in height of the landing (for a stomp, the point on the enemy). A jump
     that no such command makes is not taught: its label would name a point
     it does not reach (a climb labelled as a jump to the floor's height)."""
-    return abs(command.x - result.end_dx) <= 4 and abs(command.y - result.end_dy) <= 2
+    x, y = _landing_point(env, result)
+    return abs(command.x - x) <= 4 and abs(command.y - y) <= 2
 
 
 def _aim(env, result, members):
     """The destination taught for a jump: of the destinations that make it,
     the one nearest where it lands (for a stomp, where it lands on the enemy,
     which a walking enemy has moved to)."""
-    return _nearest(members, result.end_dx, result.end_dy)
+    return _nearest(members, *_landing_point(env, result))
 
 
 def _enemy_paths(env, frames):
@@ -553,15 +594,22 @@ def _run_frames(motion, distance):
     return frames
 
 
-def _screen(env, path, shift, delay, enemies, lips, rects):
+def _screen(env, path, shift, delay, enemies, lips, rects, solid=()):
     """A recorded path (world boxes, the start first) moved ``shift`` pixels
     along x and started ``delay`` frames later: (distances, landing platform
-    index, killed enemies), or None when it hits an enemy or ends without
-    landing. Distances use the keys of Result.distances."""
+    index, killed enemies), or None when it hits an enemy, passes through
+    one of the ``solid`` rects (a predicted path with nothing in its way,
+    which the real jump would bump into) or ends without landing. Distances
+    use the keys of Result.distances."""
     distances, killed = {}, set()
     before = path[0][3]
     for t, (x0, y0, x1, y1) in enumerate(path):
         x0, x1 = x0 + shift, x1 + shift
+        landing = t and y1 >= before
+        for r in solid:
+            inside = x1 > r.left and x0 < r.right and y1 > r.top and y0 < r.bottom
+            if inside and not (landing and before <= r.top):
+                return None
         for lx, ly in lips:
             d = math.hypot(max(lx - x1, x0 - lx, 0), max(ly - y1, y0 - ly, 0))
             if d < distances.get(("pit", lx, ly), 999.0):
@@ -620,7 +668,7 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
     needed. Returns [(room key, travel, wait, option, screened distances)],
     the most room first (equal room: the shortest travel, then wait).
     """
-    table = _jump_table(env, state, target, memo, (direction,), rise=rise)
+    table = _jump_table(env, state, target, memo, (direction,), rise=rise, described_only=False)
     if not table:
         return []
     m = env.mario
@@ -629,6 +677,8 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
         return []
     start = _body(env)
     rects = [p["rect"] for p in env.platforms]
+    # What a moved jump path must not pass through (moving platforms move).
+    solid = [p["rect"] for p in env.platforms if not p.get("moving")]
     lips = _pit_lips(env)
     horizon = 400
     enemies = _enemy_paths(env, horizon)
@@ -646,10 +696,18 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
         if walked is None:
             continue
         for option in table:
-            path = option.result.path
+            # From here, the jump's trial (it may hit things on its way), if
+            # its destination names it; moved along the floor, its free path
+            # (the trial's bumps would be in the wrong place). Certification
+            # tries it for real.
+            if not shift and not option.described:
+                continue
+            path = option.result.path if not shift else option.free_path
             if not path:
                 continue
-            screened = _screen(env, path, shift, frames, enemies, lips, rects)
+            screened = _screen(
+                env, path, shift, frames, enemies, lips, rects, solid if shift else ()
+            )
             if screened is None:
                 continue
             distances, landing, killed = screened
@@ -810,13 +868,20 @@ def destination(env, state, proposal):
     mount = mount_destination(env, state, target)
     if mount is not None:
         return mount
+    # Under speed run a stomp is the last resort: any other move that wins
+    # or advances is taught first (the strategy picks stomp or pass;
+    # _choose_move). Under max points the ranking alone decides.
+    speed_run = getattr(state, "strategy", "speed_run") != "max_points"
     if proposal is not None:
         result = trial(env, state, proposal, target)
-        if result.won or (
-            result.safe
-            and result.clearance >= 8
-            and closes_on_enemy(env, target, proposal, result)
-            and (proposal.mode != "hold" or _waiting(env, state))
+        if not (speed_run and _move_kind(env, result) == "stomp") and (
+            result.won
+            or (
+                result.safe
+                and result.clearance >= 8
+                and closes_on_enemy(env, target, proposal, result)
+                and (proposal.mode != "hold" or _waiting(env, state))
+            )
         ):
             return _with_margin(env, state, target, proposal, result)
     # Rank every jump Mario can make and the screened runs (_jump_table,
@@ -827,10 +892,11 @@ def destination(env, state, proposal):
     options = [(o.command, o.result) for o in _jump_table(env, state, target, memo)]
     options += _run_options(env, state, target, memo)
     for goal, result in options:
-        if goal == proposal:
+        if goal == proposal and not (speed_run and _move_kind(env, result) == "stomp"):
             continue
+        last = speed_run and _move_kind(env, result) == "stomp"
         if result.won:
-            winners.append((_rank(goal, result), goal))
+            winners.append((last, _rank(goal, result), goal))
         elif (
             result.safe
             and result.clearance >= 8
@@ -838,15 +904,22 @@ def destination(env, state, proposal):
             and (result.advanced or result.progress > 0 or airborne)
         ):
             value = (100 if result.advanced else result.progress) / max(1, result.frames)
-            progressing.append(((value, result.margin), goal))
-    for _, goal in sorted(winners, key=lambda w: w[0], reverse=True):
-        confirmed = trial(env, state, goal, target)
-        if confirmed.won:
-            return _with_margin(env, state, target, goal, confirmed, memo)
-    for _, goal in sorted(progressing, key=lambda p: p[0], reverse=True):
+            progressing.append((last, (value, result.margin), goal))
+    ordered = [
+        (kind, goal)
+        for stomps in (False, True)
+        for kind, entries in (("win", winners), ("advance", progressing))
+        for last, _, goal in sorted(
+            (e for e in entries if e[0] == stomps), key=lambda e: e[1], reverse=True
+        )
+    ]
+    for kind, goal in ordered:
         result = trial(env, state, goal, target)
+        if kind == "win" and result.won:
+            return _with_margin(env, state, target, goal, result, memo)
         if (
-            result.safe
+            kind == "advance"
+            and result.safe
             and result.clearance >= 8
             and closes_on_enemy(env, target, goal, result)
             and (result.advanced or result.progress > 0 or airborne)
@@ -1026,10 +1099,19 @@ def _certify(env, state, target, direction, travel, wait, option, check):
         following = copy(state)
         following.execution, following.controller = moved.spatial, moved.controller
         following.scene = moved.spatial.previous
-        jump = _same_jump(env, following, option)
-        if jump is None:
+        found = _same_jump(env, following, option)
+        if found is None:
             return None
+        jump, members = found
         landed = trial(env, following, jump, target)
+        if not _describes(env, jump, landed):
+            # Taught as the destination of this jump nearest where it really
+            # lands, if one names it; else the plan cannot be taught.
+            aimed = _aim(env, landed, members)
+            again = trial(env, following, aimed, target) if aimed != jump else landed
+            if again.outcome != landed.outcome or not _describes(env, aimed, again):
+                return None
+            jump, landed = aimed, again
         stop = env.mario["x"]
     if not _works_now(landed) or not check(landed):
         return None
@@ -1103,17 +1185,16 @@ def _best_certified(
 
 def _same_jump(env, state, option):
     """The command for ``option``'s jump (the same hold and steering) from
-    where Mario stands now: the screen moved its path along the floor, so it
-    lands where that moved path does, and is taught as the destination of
-    this jump nearest that landing (as _jump_table aims it). None when no
-    destination makes this jump from here."""
-    for hold, members, landing, _ in _jump_groups(env, state, {}, option.direction):
+    where Mario stands now, and every destination that makes it: the screen
+    moved its path along the floor, so it lands where that moved path does,
+    and is commanded as the destination of this jump nearest that predicted
+    landing. None when no destination makes this jump from here."""
+    for hold, members, landing, _, _ in _jump_groups(env, state, {}, option.direction):
         if hold == option.hold:
-            return (
-                _nearest(members, landing[1], landing[2])
-                if landing
-                else members[len(members) // 2]
+            first = (
+                _nearest(members, landing[1], landing[2]) if landing else members[len(members) // 2]
             )
+            return first, members
     return None
 
 

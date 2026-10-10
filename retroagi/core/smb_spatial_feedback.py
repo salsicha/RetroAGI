@@ -7,6 +7,7 @@ select the buttons; no learned action network or duration proposal is needed.
 from collections import Counter, deque
 from dataclasses import dataclass, field
 
+from . import smb_trajectory
 from .actions import SMBAction
 from .smb_ground_control import GroundMove
 from .smb_physics import NESPlayerMotion
@@ -219,11 +220,15 @@ class SpatialFeedback:
                 ):
                     self.motion.x_speed = round(self.speed * 16)
                     self.motion.moving = (self.speed > 0) - (self.speed < 0)
-                    if self.flight is not None:
+                    if self.flight is not None and smb_trajectory.REPLAN_IN_FLIGHT:
                         # Flight owns a copy of the physical state; correcting
                         # only this tracker leaves its next prediction stale.
                         self.flight.motion.x_speed = self.motion.x_speed
                         self.flight.motion.moving = self.motion.moving
+                    elif self.flight is not None and not self.flight.done:
+                        # An open-loop flight planned with the wrong speed (a
+                        # takeoff before it was seen) plans its rest again.
+                        self.flight.replan(scene, self.motion)
                 if len(self.velocities) >= 2:
                     self.motion_ready = True
             else:

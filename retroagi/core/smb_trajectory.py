@@ -207,6 +207,8 @@ class Flight:
     released: bool = False
     target: Track | None = None
     target_offset: tuple = (0, 0)
+    # The frame of the flight its prediction starts at (replan moves it).
+    planned_at: int = 0
 
     def shift(self, scroll):
         self.goal = (self.goal[0] - scroll, self.goal[1])
@@ -282,12 +284,43 @@ class Flight:
             self.done, self.status = True, "flight_timeout"
         return button
 
+    def replan(self, scene, motion):
+        """Choose the steering and the rest of the hold again from where vision
+        shows Mario now, with ``motion`` his motion now, then play that plan
+        open loop. For a flight planned with a motion that turned out wrong:
+        a takeoff before Mario's speed had been seen (one picture cannot show
+        it), corrected once two frames have."""
+        if scene is None or scene.mario.box is None:
+            return
+        remaining = 0 if self.released else max(0, self.hold - self.elapsed)
+        holds = (0,) if self.released else range(max(0, 32 - self.elapsed) + 1)
+        options = []
+        for direction in (-1, 0, 1):
+            for hold in holds:
+                candidate = predict(scene, [], motion, scene.mario.box, self.goal, direction, hold)
+                options.append(
+                    (
+                        candidate.error,
+                        direction != self.direction,
+                        hold != remaining,
+                        direction,
+                        hold,
+                        candidate,
+                    )
+                )
+        _, _, _, self.direction, remaining, self.prediction = min(options, key=lambda x: x[:5])
+        self.hold = self.elapsed + remaining
+        self.planned_at = self.elapsed
+        self.motion = copy(motion)
+        if not remaining:
+            self.released = True
+
     def _planned_button(self):
         """The takeoff plan's button for this frame (open loop): the chosen hold
         and steering, then steering toward the goal with the button released."""
         steps = self.prediction.steps
-        if self.elapsed < len(steps):
-            button = steps[self.elapsed][2]
+        if self.elapsed - self.planned_at < len(steps):
+            button = steps[self.elapsed - self.planned_at][2]
         else:
             button = {-1: 3, 0: 0, 1: 1}[self.direction]
         self.elapsed += 1

@@ -155,6 +155,15 @@ Recommended architecture:
   position every frame; from frame t, predict its positions up to 96 frames
   later (the simulator's truth where vision loses an object's identity).
 
+Built as described: a 48-unit GRU; play records every frame's tracked
+objects (`EpisodeTask.record_objects`: visual identity, kind, box in world
+pixels, the ends of the surface under it, Mario's position), and
+`ObjectTracker` keeps one recurrent state per identity at play, answers
+where an object will be any number of frames ahead (read between the
+horizons), and reports a change when the object is outside three
+uncertainties of the forecast made 4 frames before (forecasts made before
+its movement was seen are not checked).
+
 Not chosen: the scene memory itself (scene-wide, stepped every 4 frames and
 at decisions, trained for one moment: too heavy to run every frame and a
 different job); a fixed window of recent frames instead of a recurrent state
@@ -171,6 +180,10 @@ sends an updated target, it re-plans from where Mario is. Re-predicting
 Mario's path every frame during a flight (`smb_trajectory.REPLAN_IN_FLIGHT`,
 off for Block SMB training today) is needed only for that re-planning, and
 must be made faster first (it was half the cost of every teacher trial).
+Today a flight re-plans once (`Flight.replan`) when vision corrects Mario's
+speed during it: a jump made before his speed was seen (one picture cannot
+show it; `pit_leap` and `platform_hop` start him running) plays the rest of
+its jump for the speed he really has.
 
 **Adaptive.** Its motion model of Mario has parameters: acceleration,
 friction, gravity, jump forces, air control, now fixed NES constants. A
@@ -238,7 +251,11 @@ work out later:
    in pixels and frames on held-out layouts. Built (2026-10-10); a smoke test
    on three episodes learns; not yet trained at scale.
 3. Build the target tracker; train it on logged object positions; measure
-   its error at each time ahead and how fast it notices a change.
+   its error at each time ahead and how fast it notices a change. Built
+   (2026-10-10, `core/target_tracker.py`, `stages/block_smb/tracker_train.py`):
+   on synthetic walkers it learns where they turn (64 frames ahead: 5 to 8
+   pixels off, against 26 for steady motion) and its check notices a turn
+   within 4 frames. Not yet trained on played episodes.
 4. Give the skill verb and pointer heads; train it on the teacher's actions.
 5. Make the controller reach targets and re-plan on updated ones, fast
    enough for training.

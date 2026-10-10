@@ -197,11 +197,15 @@ def object_point(env, thing, frames=0):
 
 def action_outcome(env, result, thing=None) -> dict:
     """What an action reached (pixels from Mario's feet now; x right, y
-    down): where his feet ended, where its object (``thing``) was then, in
-    how many frames, and whether he survived and won."""
+    down): where his feet ended (for a stomp, on the enemy's top), where its
+    object (``thing``) was then, in how many frames, and whether he survived
+    and won."""
+    from .controller_teacher import _landing_point
+
+    dx, dy = _landing_point(env, result)
     out = {
-        "dx": float(result.end_dx),
-        "dy": float(result.end_dy),
+        "dx": float(dx),
+        "dy": float(dy),
         "frames": int(result.frames),
         "safe": bool(result.safe),
         "won": bool(result.won),

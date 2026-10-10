@@ -67,9 +67,17 @@ def _layer_config(config: PredictorConfig, saved: dict) -> lt.LayeredTrainConfig
 
 
 def collect(pool, tasks: Sequence[lt.EpisodeTask]) -> list:
-    """The teacher's episodes on ``tasks``, with its actions recorded."""
+    """The teacher's episodes on ``tasks``, with its actions recorded (and
+    every frame's tracked objects, the target tracker's data)."""
     demonstrations = [
-        dataclasses.replace(t, teacher_share=1.0, label=True, explore=False, record_actions=True)
+        dataclasses.replace(
+            t,
+            teacher_share=1.0,
+            label=True,
+            explore=False,
+            record_actions=True,
+            record_objects=True,
+        )
         for t in pool.with_scenarios(tasks)
     ]
     return pool.play(demonstrations, teacher_only=True)

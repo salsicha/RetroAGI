@@ -195,6 +195,14 @@ def _low_choice_layout(
         ledge = 40
     step = rng.randint(20, 40) if vary else 28
     step_top = 190 + (rng.randint(-6, 6) if vary else 0)
+    if second - step < 24:
+        # The lower floor before the step lies under the floating ledge (no
+        # takeoff with Mario's head clear of it). The jumps that clear the
+        # step without hitting the ledge's underside (50 pixels above the
+        # floor) rise 31 pixels (a 4-frame hold); the next a jump can be
+        # commanded with rises 39. So the step is at most 28 pixels high:
+        # the teacher's 2 pixels above its top, and 1 to spare.
+        step_top = max(step_top, 192)
     middle = edge + first
     far = middle + ledge + second
     width = far + 120

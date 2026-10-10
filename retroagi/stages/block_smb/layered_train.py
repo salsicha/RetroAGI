@@ -183,6 +183,9 @@ class EpisodeTask:
     # jump it could make, as actions with their outcomes (the action
     # predictor's data; teacher_actions.action_rows). Slow: off in training.
     record_actions: bool = False
+    # Record every frame's tracked enemies and moving platforms
+    # (core/target_tracker.object_rows): the target tracker's data.
+    record_objects: bool = False
 
 
 @dataclass
@@ -229,6 +232,9 @@ class EpisodeRecord:
     # [D, ACTIONS_PER_DECISION, len(ACTION_RECORD)] (core/action_predictor),
     # with EpisodeTask.record_actions; else None.
     actions: Optional[np.ndarray] = None
+    # [T, OBJECT_SLOTS, len(OBJECT_ROW)] (core/target_tracker), with
+    # EpisodeTask.record_objects; else None.
+    objects: Optional[np.ndarray] = None
 
     @property
     def frames(self) -> int:
@@ -473,6 +479,9 @@ class _Lane:
             potentials=np.asarray(self.frames["potential"], np.float32),
             weight=self.task.weight,
             actions=np.asarray(d["actions"], np.float32) if self.task.record_actions else None,
+            objects=(
+                np.asarray(self.frames["objects"], np.float32) if self.task.record_objects else None
+            ),
             tactic={
                 name[len("tactic_") :]: np.asarray(d[name])
                 for name in d
@@ -581,6 +590,10 @@ def play_episodes(
             lane.frames["platforms"].append(observed_platforms(step.scene, spatial))
             lane.frames["enemies"].append(observed_enemies(step.scene, spatial))
             lane.frames["camera"].append(spatial.camera_position)
+            if lane.task.record_objects:
+                from retroagi.core.target_tracker import object_rows
+
+                lane.frames["objects"].append(object_rows(step.scene, spatial))
             if lane.watching:
                 # A pre-episode picture, already played by the simulator at reset.
                 lane.watching.pop(0)
