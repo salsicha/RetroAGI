@@ -257,3 +257,26 @@ def tried_actions(env, state, target=None) -> list:
             }
         )
     return out
+
+
+def action_rows(env, state, command):
+    """The teacher's choice and every jump it could make here, as records for
+    the action predictor: [ACTIONS_PER_DECISION, len(ACTION_RECORD)] numbers
+    (core/action_predictor), the choice first (when its object is reported),
+    padded with verb -1."""
+    from retroagi.core.action_predictor import ACTIONS_PER_DECISION, action_record, empty_records
+
+    rows = empty_records()
+    count = 0
+    chosen = teacher_example(env, state, command)
+    if chosen is not None:
+        rows[0] = action_record(chosen["action"], chosen["outcome"], True)
+        count = 1
+    for tried in tried_actions(env, state):
+        if count == ACTIONS_PER_DECISION:
+            break
+        if chosen is not None and tried["action"] == chosen["action"]:
+            continue
+        rows[count] = action_record(tried["action"], tried["outcome"], False)
+        count += 1
+    return rows

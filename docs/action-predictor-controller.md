@@ -104,9 +104,15 @@ Told the action, it predicts that action's successful end:
 - the chance that the action succeeds, and the uncertainty of each.
 
 It reads the scene memory's state (vision only, as now) and the encoded
-action (the verb and the chosen object's token). It may be a readout of the
-scene memory, as the platform and enemy forecasts are now, or a separate
-network; to decide.
+action (the verb and the chosen object's token). Built as a separate small
+network (`core/action_predictor.py`) reading a trained policy's scene encoder
+and memory, which stay fixed: its query is the verb, the chosen object's
+scene token (and, for an enemy, the memory's forecast of where it will be)
+and the memory's state; it attends over the whole scene, so other threats
+count. It outputs each quantity with an uncertainty (a normal likelihood is
+its loss) and the chance of survival. Trained by
+`stages/block_smb/predictor_train.py` on the teacher's episodes played through
+the production pipeline with `EpisodeTask.record_actions`.
 
 **Training data comes from the teacher's trials.** At every decision the
 dense teacher already tries every jump Mario can make and screens every run,
@@ -209,7 +215,11 @@ work out later:
 
 1. The verb list, and how a run-up before a jump is expressed (its own verb,
    or part of "land on" and "jump over", with the controller placing the
-   takeoff).
+   takeoff). A run along the floor Mario stands on has no end its object
+   decides: the teacher runs 8 pixels to wait for an enemy and 196 to the
+   goal, both "run to" that floor, so the predictor can only learn a mean
+   (36 pixels off in the first test). The run's end must come from an object
+   (a gap's edge, an enemy, the end of the floor) or a further choice.
 2. Whether the predictor is a readout of the scene memory or its own network.
 3. Whether the skill reads the predicted outcomes of its candidate actions
    (choosing by predicted success and room) or only the scene.
@@ -225,7 +235,8 @@ work out later:
    (verb and object) for each choice, and the outcome of every action tried.
    Done for jumps (2026-10-10); runs are labelled for the chosen run only.
 2. Build the predictor; train it on the teacher's outcomes; measure its error
-   in pixels and frames on held-out layouts.
+   in pixels and frames on held-out layouts. Built (2026-10-10); a smoke test
+   on three episodes learns; not yet trained at scale.
 3. Build the target tracker; train it on logged object positions; measure
    its error at each time ahead and how fast it notices a change.
 4. Give the skill verb and pointer heads; train it on the teacher's actions.

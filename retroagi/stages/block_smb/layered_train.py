@@ -179,6 +179,10 @@ class EpisodeTask:
     difficulty: Optional[str] = None  # easy, medium or hard (None: the split's own mix)
     explore: bool = False  # the learner samples its choices (reward rounds)
     weight: float = 1.0  # how much its decisions count in learning
+    # Record, at each labelled skill decision, the teacher's choice and every
+    # jump it could make, as actions with their outcomes (the action
+    # predictor's data; teacher_actions.action_rows). Slow: off in training.
+    record_actions: bool = False
 
 
 @dataclass
@@ -222,6 +226,9 @@ class EpisodeRecord:
     # "started", "used" (tactic index), "own_end", "end_probability".
     tactic: dict = field(default_factory=dict)
     weight: float = 1.0  # how much its decisions count in learning (EpisodeTask.weight)
+    # [D, ACTIONS_PER_DECISION, len(ACTION_RECORD)] (core/action_predictor),
+    # with EpisodeTask.record_actions; else None.
+    actions: Optional[np.ndarray] = None
 
     @property
     def frames(self) -> int:
@@ -348,6 +355,10 @@ class _Lane:
                     self.env, self.teacher, certify_holds=False
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
+            if self.task.record_actions and self.task.label and asked["skill"] is not None:
+                from .teacher_actions import action_rows
+
+                asked["actions"] = action_rows(self.env, self.teacher, asked["skill"])
         self.asked = asked
         return asked
 
@@ -367,6 +378,11 @@ class _Lane:
         d["used"].append(encode_choice(learner, used).numpy())
         mine = decision.chosen[learner]
         if learner == "skill":
+            if self.task.record_actions:
+                from retroagi.core.action_predictor import empty_records
+
+                found = asked.get("actions")
+                d["actions"].append(found if found is not None else empty_records())
             d["execution_feedback"].append(decision.execution_feedback)
             d["given"].append(
                 torch.cat(
@@ -456,6 +472,7 @@ class _Lane:
             used=_rows(d["used"], count),
             potentials=np.asarray(self.frames["potential"], np.float32),
             weight=self.task.weight,
+            actions=np.asarray(d["actions"], np.float32) if self.task.record_actions else None,
             tactic={
                 name[len("tactic_") :]: np.asarray(d[name])
                 for name in d
