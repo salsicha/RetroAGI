@@ -8,7 +8,10 @@ outside this profile and must not be advertised as supported.
 
 from dataclasses import dataclass
 
-NES_JUMP_FRAMES = (1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 32)
+# Every jump-button hold the executor can press (1 to 32 frames). Route
+# searches try each: a sparser menu, kept from an older executor, would make
+# the teacher's routes and proposals pick from a few holds only.
+NES_JUMP_FRAMES = tuple(range(1, 33))
 
 
 @dataclass

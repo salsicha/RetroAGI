@@ -372,6 +372,12 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Optio
     return destination(env, state, proposal if plan is not None else None)
 
 
+# A run label follows the route until its next event (a jump, a wait, a
+# landing, the objective) or this many frames. A shorter cap (it was 64) made
+# every long run the same distance (104 pixels from a standstill).
+RUN_LABEL_FRAMES = 160
+
+
 def _route_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Optional[SkillToken]:
     """A spatial destination for the next maneuver, from the teacher's rollout.
 
@@ -449,7 +455,7 @@ def _route_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Option
                 )
                 if done or landed or objective or boarded or dismounted:
                     break
-                if mode == "run" and index >= 63 and not riding:
+                if mode == "run" and index >= RUN_LABEL_FRAMES - 1 and not riding:
                     # A barely overlapping collision box is not a stable
                     # waypoint. Finish stepping onto the support before the
                     # executor brakes or vision chooses the wrong support.

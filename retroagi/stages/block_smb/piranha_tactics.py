@@ -16,8 +16,9 @@ DEPARTURE_REACH = 65
 TIMED_PLANT_HEIGHT = 80
 TIMED_RISE_FRAMES = range(12, 21)
 # A run-up needs only one safe continuation; long holds cross the pipe.
-RUN_ON_FRAMES = range(2, 42, 2)
-RUN_ON_HOLDS = (32, 26, 20, 14)
+# Every run-on length (frames) and every hold, the longest first.
+RUN_ON_FRAMES = range(1, 42)
+RUN_ON_HOLDS = tuple(range(32, 0, -1))
 # Faster than NES running, so pruning by it never drops a feasible crossing.
 RUNNER_TOP_SPEED = 3.0
 

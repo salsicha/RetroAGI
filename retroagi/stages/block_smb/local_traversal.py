@@ -514,8 +514,9 @@ def safe_jump_holds(
 
 # Beyond any single jump's horizontal reach, including an approaching enemy.
 TAKEOFF_PROBE_DISTANCE = 128
-# A window this wide leaves the interior hold two or three holds of margin.
-ROBUST_TAKEOFF_HOLDS = 6
+# A window this wide leaves the interior hold four to six frames of margin
+# (12 of the 32 holds; it was 6 of a 16-hold menu in steps of 2 frames).
+ROBUST_TAKEOFF_HOLDS = 12
 
 
 def takeoff_timing_actions(env, *, plant_history=None) -> list[bool] | None:

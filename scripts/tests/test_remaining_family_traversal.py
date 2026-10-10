@@ -36,7 +36,7 @@ def test_counterfactual_labels_preserve_state_and_require_real_landing(family):
         before = snapshot_env_state(env)
         valid = safe_jump_holds(env, local_objective(env), 1)
         assert snapshot_env_state(env) == before
-        assert valid and len(valid) < 16
+        assert valid and len(valid) < 32  # not every hold works
         assert not env._goal_credited and not env._attempt_failed
         for hold in (min(valid), max(valid)):
             env.reset(scenario=item.scenario)

@@ -1,20 +1,18 @@
 """The spatial teacher labels the working command with the most margin.
 
 Among the commands that make the same move, it teaches the one that keeps
-Mario farthest from enemies and lands him farthest from a platform's edges.
-When several commands give the very same jump, it takes the middle of the
-range of destinations that work.
+Mario farthest from every enemy and pit edge, before, during and after a
+jump, and lands him farthest from a platform's edges. A jump is labelled
+where it lands.
 """
 
 import os
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from types import SimpleNamespace
-
 import pytest
 
-from retroagi.stages.block_smb.controller_teacher import Result, _command_room, _rank, _works
+from retroagi.stages.block_smb.controller_teacher import Result, _distance_key, _rank, _works
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 from retroagi.stages.block_smb.teacher_replay import replay
@@ -43,23 +41,34 @@ def test_margin_is_the_tighter_of_the_enemy_gap_and_the_edge_margin():
     assert Result(enemy_gap=7.0).margin == 7.0  # not standing: no edge margin
 
 
-def test_room_is_largest_in_the_middle_of_the_working_destinations():
-    # 48 stomps the enemy (another move); 50 to 96 all pass it the same way.
-    tested = [(48, False), (50, True), (64, True), (72, True), (96, True), (32, False)]
-    found = [(SimpleNamespace(x=x), SimpleNamespace()) for x, works in tested if works]
-    _command_room(found, tested)
-    room = {g.x: r.room for g, r in found}
-    # The range runs from halfway between 48 and 50 to the last tested, 96.
-    assert room == {50: 1.0, 64: 15.0, 72: 23.0, 96: 0.0}
-    # With equal margins (the very same jump), the middle ranks first.
-    same_jump = [Result(enemy_gap=0.0, frames=53) for _ in found]
-    for result, (_, r) in zip(same_jump, found):
-        result.room = r.room
-    best = max(zip(found, same_jump), key=lambda v: _rank(v[0][0], v[1]))
-    assert best[0][0].x == 72
-    # A margin larger by 2 pixels or more still comes first.
-    wider = Result(enemy_gap=2.0, frames=53)
-    assert _rank(None, wider) > _rank(None, best[1])
+def test_threats_are_compared_from_the_closest_up():
+    # Both start 2 pixels from a pit edge (shared); the second lands farther
+    # from the next pit, so it ranks first although their closest threat ties.
+    near = Result(distances={("pit", 100, 220): 2.0, ("pit", 140, 220): 6.0})
+    far = Result(distances={("pit", 100, 220): 2.0, ("pit", 140, 220): 20.0})
+    assert _distance_key(far) > _distance_key(near)
+    assert near.margin == far.margin == 2.0
+    # Distances within 2 pixels tie; beyond 64 pixels they no longer count.
+    assert _distance_key(Result(distances={"a": 30.0})) == _distance_key(
+        Result(distances={"a": 31.0})
+    )
+    assert _distance_key(Result(distances={"a": 70.0})) == _distance_key(
+        Result(distances={"a": 90.0})
+    )
+
+
+def test_a_jump_is_labelled_where_it_lands():
+    from types import SimpleNamespace
+
+    # Equal room: the destination nearest where Mario lands ranks first, not
+    # one far beyond his reach that gives the same jump.
+    landing = Result(distances={"a": 20.0}, frames=50, end_dx=51.0)
+    near, beyond = (
+        (SimpleNamespace(x=52), Result(**vars(landing))),
+        (SimpleNamespace(x=72), Result(**vars(landing))),
+    )
+    near[1].aim_error, beyond[1].aim_error = abs(52 - 51.0), abs(72 - 51.0)
+    assert _rank(*near) > _rank(*beyond)
 
 
 def test_a_shorter_hop_is_not_a_version_of_a_longer_one():
@@ -75,30 +84,28 @@ def test_a_shorter_hop_is_not_a_version_of_a_longer_one():
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize("index", [0, 1])
-def test_a_bypass_jump_is_taught_far_from_the_destinations_that_stomp(index):
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_a_bypass_jump_lands_between_the_enemy_and_what_follows_it(index):
     scenario = sample("skill_enemy_bypass", index)
-    cx, _, enemies = start(scenario)
+    cx, _, _ = start(scenario)
     result = replay(scenario, family="skill_enemy_bypass")
-    assert result["won"]
+    assert result["won"] and result["points"] == 0  # passed, not stomped
     jump = result["commands"][0]["skill"]
-    assert jump["mode"] == "jump"
-    # Destinations up to about the enemy's far side stomp it; the label is
-    # well past them.
-    far_side = enemies[0][1] - cx
-    assert jump["x"] >= far_side + 16, (jump, enemies, cx)
+    left, _, width, _ = scenario["goal"]
+    assert jump["mode"] == "jump" and left <= cx + jump["x"] <= left + width, (jump, scenario)
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.parametrize("index", [0, 1])
-def test_a_platform_jump_lands_in_the_middle_of_the_platform(index):
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_a_platform_jump_keeps_away_from_the_platform_edges(index):
     scenario = sample("action_platform_up", index)
     cx, rects, _ = start(scenario)
     result = replay(scenario, family="action_platform_up")
     assert result["won"]
     jump = result["commands"][0]["skill"]
     platform = next(r for r in rects if r.top < 220)
-    assert abs(cx + jump["x"] - platform.centerx) <= 4, (jump, platform, cx)
+    landing = cx + jump["x"]
+    assert min(landing - platform.left, platform.right - landing) >= 8, (jump, platform, cx)
 
 
 # ── Stomp or pass: the strategy decides, and the teacher follows it ───────────
@@ -141,17 +148,13 @@ def test_under_max_points_the_teacher_stomps():
     assert result["won"] and result["points"] >= 1
 
 
-@pytest.mark.timeout(600)
-def test_landing_enemy_layouts_that_look_alike_get_the_same_first_move():
-    # The walker patrols the whole visible floor, so no hidden turnaround
-    # decides between waiting, jumping over and stomping.
-    first = []
-    for index in range(6):
-        result = replay(train_sample("landing_enemy", index, "hard"), family="landing_enemy")
-        assert result["won"]
-        on_ground = result["commands"][1]["skill"]  # the first after landing
-        first.append(on_ground["mode"])
-    assert first.count(max(set(first), key=first.count)) >= 5, first
+def test_landing_enemy_walkers_patrol_the_floor_they_stand_on():
+    # No hidden turnaround: each walker turns only at a visible floor edge.
+    for index in range(4):
+        scenario = train_sample("landing_enemy", index, "hard")
+        floors = scenario["platforms"]
+        for x, y, low, high, *_ in scenario["enemies"]:
+            assert any(low == fx and high == fx + fw - 10 for fx, _, fw, _ in floors), scenario
 
 
 def test_a_jump_moved_to_the_same_place_stays_within_the_command_range():

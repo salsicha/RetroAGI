@@ -62,7 +62,8 @@ def test_every_layout_has_a_route_verified_under_nes_physics(family):
     assert sample.scenario == draw().scenario
     if family == "enemy_stomp":
         width = sample.scenario["world_width"]
-        assert all(enemy[2:4] == [0, width] for enemy in sample.scenario["enemies"])
+        # The whole floor, its body still on it when it turns.
+        assert all(enemy[2:4] == [0, width - 10] for enemy in sample.scenario["enemies"])
         assert sample.scenario["task_objective"] == "stomp"
     if family == "pit_leap":
         assert sample.scenario["mario_velocity"] == [2.5, 0.0]

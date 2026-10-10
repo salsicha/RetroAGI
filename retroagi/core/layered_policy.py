@@ -84,6 +84,9 @@ class PolicySettings:
     # Each position number also enters as sine and cosine waves of this many
     # wavelengths, halving from 512 pixels (8 waves: down to 4 pixels).
     position_frequencies: int = 8
+    # Dropout in the decision layers' transformer blocks (skill and tactic),
+    # active only while training: it keeps them from leaning on single inputs.
+    decision_dropout: float = 0.1
 
 
 # ── Scene encoder ─────────────────────────────────────────────────────────────
@@ -368,7 +371,12 @@ class _Layer(nn.Module):
         self.above = nn.Linear(above_width, width) if above_width else None
         self.query = nn.Parameter(torch.zeros(1, 1, width))
         layer = nn.TransformerEncoderLayer(
-            width, settings.heads, width * 2, dropout=0.0, batch_first=True, norm_first=True
+            width,
+            settings.heads,
+            width * 2,
+            dropout=settings.decision_dropout,
+            batch_first=True,
+            norm_first=True,
         )
         self.blocks = nn.TransformerEncoder(layer, settings.layer_depth, enable_nested_tensor=False)
         self.norm = nn.LayerNorm(width)

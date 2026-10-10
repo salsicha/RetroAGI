@@ -10,6 +10,12 @@ from dataclasses import dataclass, field
 from .smb_physics import NESPlayerMotion
 
 HORIZON = 96
+# Whether a flight re-predicts its path every frame (searching the steering and
+# the remaining hold that best reach the goal from what vision now shows). Off
+# for Block SMB training (user decision 2026-10-10): a flight then plays the
+# hold and steering chosen at takeoff (_best_hold), then keeps steering toward
+# the goal. The per-frame search was half the cost of every teacher trial.
+REPLAN_IN_FLIGHT = False
 POSITION_TOLERANCE = 1
 
 
@@ -174,7 +180,9 @@ def predict(
             (0, False): 0,
             (1, False): 1,
         }[control, jump]
-        steps.append((body, copy(motion), button))
+        # Only the first step's motion is read (Flight.press); copying every
+        # step's dominated the cost of a prediction.
+        steps.append((body, copy(motion) if frame == 0 else None, button))
         error = abs(x + width / 2 - goal[0]) + 2 * abs(y + height - goal[1])
         best = min(best, error)
         if dy >= 0 and previous_feet <= goal[1] <= y + height:
@@ -208,6 +216,8 @@ class Flight:
             self.released = True
             self.done, self.status = True, "lost_observation"
             return 0
+        if not REPLAN_IN_FLIGHT:
+            return self._planned_button()
         if self.target is not None:
             if any(t is self.target for t in self.tracks.tracks):
                 b = self.target.landing_box()
@@ -272,6 +282,21 @@ class Flight:
             self.done, self.status = True, "flight_timeout"
         return button
 
+    def _planned_button(self):
+        """The takeoff plan's button for this frame (open loop): the chosen hold
+        and steering, then steering toward the goal with the button released."""
+        steps = self.prediction.steps
+        if self.elapsed < len(steps):
+            button = steps[self.elapsed][2]
+        else:
+            button = {-1: 3, 0: 0, 1: 1}[self.direction]
+        self.elapsed += 1
+        if self.elapsed >= self.hold:
+            self.released = True
+        if self.elapsed >= HORIZON:
+            self.done, self.status = True, "flight_timeout"
+        return button
+
 
 def _best_hold(scene, motion, box, goal, direction):
     """The jump-button hold (1-32 frames) whose predicted flight best reaches ``goal``."""
@@ -289,6 +314,70 @@ def _best_hold(scene, motion, box, goal, direction):
         )
     _, _, _, hold, prediction = min(candidates, key=lambda c: c[:4])
     return hold, prediction
+
+
+def hold_paths(scene, motion, box, direction):
+    """Mario's predicted body box (x0, y0, x1, y1) every frame of the jump
+    horizon for each hold of 1 to 32 frames, steering ``direction``: a list
+    of 32 arrays [frames, 4], the path of a jump replayed open loop."""
+    import numpy as np
+
+    far = (0.0, -1e9)  # never crossed: the whole horizon
+    return [
+        np.array(
+            [
+                b
+                for b, _, _ in predict(
+                    scene, [], motion, box, far, direction, hold, grounded=True
+                ).steps
+            ],
+            dtype=float,
+        )
+        for hold in range(1, 33)
+    ]
+
+
+def best_holds(scene, motion, box, goals, direction, paths=None):
+    """_best_hold for many goals at once: [(hold, reached, error)] in the order
+    of ``goals`` ((x, y) points), exactly as _best_hold would choose each
+    (``paths``: hold_paths for the same start, if already predicted).
+
+    A hold's predicted path does not depend on the goal (predict reads the
+    goal only to stop at its height and to score the attempt), so each of the
+    32 paths is predicted once and scored for every goal.
+    """
+    import numpy as np
+
+    gx = np.array([g[0] for g in goals], dtype=float)
+    gy = np.array([g[1] for g in goals], dtype=float)
+    keys, chosen = [], []
+    paths = paths if paths is not None else hold_paths(scene, motion, box, direction)
+    for hold, bodies in enumerate(paths, start=1):
+        steps = bodies
+        center = (bodies[:, 0] + bodies[:, 2]) / 2
+        feet = bodies[:, 3]
+        tops = np.concatenate(([box[1]], bodies[:, 1]))
+        dy = np.diff(tops)
+        before = np.concatenate(([box[3]], feet[:-1]))
+        error = np.abs(center[:, None] - gx[None, :]) + 2 * np.abs(feet[:, None] - gy[None, :])
+        crossing = (
+            (dy[:, None] >= 0) & (before[:, None] <= gy[None, :]) & (gy[None, :] <= feet[:, None])
+        )
+        crossed = crossing.any(axis=0)
+        first = np.where(crossed, crossing.argmax(axis=0), len(steps) - 1)
+        at = error[first, np.arange(len(goals))]
+        best_so_far = np.minimum.accumulate(error, axis=0)[first, np.arange(len(goals))]
+        reached = crossed & (at <= POSITION_TOLERANCE)
+        score = np.where(crossed, at, best_so_far)
+        length = np.where(crossed, first + 1, len(steps))
+        keys.append(np.stack([~reached, np.round(score / 4), length, np.full(len(goals), hold)]))
+        chosen.append((reached, score))
+    keys = np.stack(keys)  # [hold, 4, goal]
+    out = []
+    for g in range(len(goals)):
+        k = min(range(32), key=lambda h: tuple(keys[h, :, g]))
+        out.append((k + 1, bool(chosen[k][0][g]), float(chosen[k][1][g])))
+    return out
 
 
 def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None):

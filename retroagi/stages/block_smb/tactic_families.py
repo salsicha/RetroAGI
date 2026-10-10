@@ -103,12 +103,14 @@ def mixed_recipe(rng: random.Random) -> list:
     return parts
 
 
-def _choice_layout(rng: random.Random, difficulty: str) -> tuple[dict, dict]:
+def _choice_layout(rng: random.Random, difficulty: str, vary: bool = False) -> tuple[dict, dict]:
     """A floor with a jumpable pit ahead, a raised path above it, room behind.
 
     Platforms: 0 the floor before the pit, 1 the floor after it, 2-4 the
     raised path (2 over the near floor, 3 above the pit's near edge, 4 over
-    the far floor).
+    the far floor). With ``vary``, the raised platforms' places, widths and
+    heights also vary (by up to 6, 8 and 4 pixels), so the moves between
+    them are different distances in each scene.
     """
     tier = ("easy", "medium", "hard").index(difficulty)
     pit_x = rng.randint(150, 170)
@@ -116,15 +118,28 @@ def _choice_layout(rng: random.Random, difficulty: str) -> tuple[dict, dict]:
     far = pit_x + pit
     width = far + 160
     spawn = rng.randint(60, 76)
+
+    def jiggle(x, top, wide):
+        if not vary:
+            return [x, top, wide, 10]
+        # Small enough that each move stays within a jump from a standstill
+        # (the teacher's run-ups stop before a jump).
+        return [
+            x + rng.randint(-6, 6),
+            top + rng.randint(-4, 4),
+            wide + rng.randint(-8, 8),
+            10,
+        ]
+
     scenario = {
         "world_width": width,
         "mario": [spawn, FLOOR - 16],
         "platforms": [
             [0, FLOOR, pit_x, 20],
             [far, FLOOR, width - far, 20],
-            [pit_x - 84, 176, 40, 10],
-            [pit_x - 28, 132, 44, 10],
-            [far + 20, 172, 40, 10],
+            jiggle(pit_x - 84, 176, 40),
+            jiggle(pit_x - 28, 132, 44),
+            jiggle(far + 20, 172, 40),
         ],
         "coins": [[pit_x - 16, 112, 10, 10]],
         "goal": [width - 32, FLOOR - 20, 16, 20],
@@ -151,28 +166,47 @@ def _choice_layout(rng: random.Random, difficulty: str) -> tuple[dict, dict]:
     return scenario, {"schedules": schedules, **params}
 
 
-def _low_choice_layout(rng: random.Random, difficulty: str) -> tuple[dict, dict]:
+def _low_choice_layout(
+    rng: random.Random, difficulty: str, vary: bool = False
+) -> tuple[dict, dict]:
     """A raised ledge path with jumpable gaps over a walkable lower floor.
 
     Platforms: 0 the starting ledge, 1 the floating ledge between the gaps,
     2 the far ledge (the goal is on it), 3 the lower floor, 4 a step from it.
+    With ``vary``, the gaps (by up to 6 pixels more), the floating ledge's
+    width (28 to 60), the step's width and height and the ledge's edge vary
+    more, so the moves are different distances in each scene.
     """
     tier = ("easy", "medium", "hard").index(difficulty)
-    edge = rng.randint(120, 140)
-    first = (28, 34, 40)[tier] + rng.randint(-2, 2)
-    second = (28, 34, 40)[tier] + rng.randint(-2, 2)
+    spread = 6 if vary else 2
+    edge = rng.randint(104, 152) if vary else rng.randint(120, 140)
+    # With ``vary``, the gaps are up to 6 pixels narrower as well as wider,
+    # so that most landings stay within a standing jump's reach.
+    narrower = 6 if vary else 0
+    first = (28, 34, 40)[tier] - narrower + rng.randint(-spread, spread)
+    second = (28, 34, 40)[tier] - narrower + rng.randint(-spread, spread)
+    if vary:
+        from .threat_variety import reachable_span, standing_reach
+
+        # The floating ledge's middle usually within a standing jump from the
+        # starting ledge's edge.
+        ledge = reachable_span(rng, 20, 60, 2 * (standing_reach(0) - 10 - first))
+    else:
+        ledge = 40
+    step = rng.randint(20, 40) if vary else 28
+    step_top = 190 + (rng.randint(-6, 6) if vary else 0)
     middle = edge + first
-    far = middle + 40 + second
+    far = middle + ledge + second
     width = far + 120
     scenario = {
         "world_width": width,
         "mario": [rng.randint(40, 60), 160 - 16],
         "platforms": [
             [0, 160, edge, 60],
-            [middle, 160, 40, 10],
+            [middle, 160, ledge, 10],
             [far, 160, 120, 60],
             [edge, FLOOR, far - edge, 20],
-            [far - 28, 190, 28, 30],
+            [far - step, step_top, step, FLOOR - step_top],
         ],
         "coins": [[middle + 15, 130, 10, 10]],
         "goal": [width - 32, 140, 16, 20],

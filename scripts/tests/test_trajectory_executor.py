@@ -68,7 +68,11 @@ def test_new_jump_has_a_physical_release_edge():
     assert flight.elapsed == 1
 
 
-def test_moving_goal_tracks_only_the_requested_object():
+def test_moving_goal_tracks_only_the_requested_object(monkeypatch):
+    # In-flight re-aiming exists for when re-prediction is on (Full SMB play).
+    from retroagi.core import smb_trajectory
+
+    monkeypatch.setattr(smb_trajectory, "REPLAN_IN_FLIGHT", True)
     scene = plain_scene()
     target = Track((80, 190, 90, 200), "walker")
     flight = plan_flight(scene, VisualTracks([target]), 0, SkillToken("jump", 40, -30))
@@ -129,3 +133,17 @@ def walker_scene(*positions):
         enemies=tuple(EnemyView((x, 210, x + 10, 220), "walker") for x in positions),
         surfaces=(Surface(8, 248, 220, False),),
     )
+
+
+def test_with_re_prediction_off_a_flight_plays_its_takeoff_plan():
+    # Block SMB training: the hold and steering are set at takeoff; a moving
+    # target does not change the buttons.
+    scene = plain_scene()
+    target = Track((80, 190, 90, 200), "walker")
+    flight = plan_flight(scene, VisualTracks([target]), 0, SkillToken("jump", 40, -30))
+    planned = [step[2] for step in flight.prediction.steps]
+    target.box = (95, 190, 105, 200)
+    pressed = [flight.press(scene) for _ in range(len(planned) + 3)]
+    assert pressed[: len(planned)] == planned
+    assert pressed[len(planned) :] == [1, 1, 1]  # then keep steering, button released
+    assert flight.released

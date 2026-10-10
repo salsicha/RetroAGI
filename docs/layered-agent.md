@@ -4,11 +4,13 @@ The runtime hierarchy is **strategy → tactic → skill → predictive executor
 Two layers are learned; the executor is a controller. Strategy is an externally selected objective.
 
 Decisions behind this design, with their reasons and status, are listed in
-[design decisions](design-decisions.md). Pending: the pit and enemy families
-must teach room on both sides of the threat, start Mario close to it, bound
-the landing with further obstacles and vary enough that no single value is
-learned; the policies must be regularized. Skill training is on hold until
-that is built.
+[design decisions](design-decisions.md). Approved and being built
+(2026-10-10): the skill
+chooses an action aimed at an object, an action-conditioned predictor gives
+its end state, a target tracker says where its target will be, and an
+adaptive predictive controller reaches it; see
+[action-predictor-controller.md](action-predictor-controller.md). Skill
+training on the current design is on hold.
 
 ## Information passed between layers
 
@@ -118,8 +120,17 @@ it does not certify a safe path or supported landing. When no candidate reaches
 the point, the controller executes its closest immediate jump attempt. The flight
 model has a 96-frame horizon and contains no terrain or hazard simulation.
 
-Per-frame observations correct Mario's motion estimate and steering. Subsequent
-measurements refine the initial estimate without postponing takeoff.
+**In-flight re-prediction is off for Block SMB training**
+(`smb_trajectory.REPLAN_IN_FLIGHT`, 2026-10-10). With it on, each frame of a
+flight re-predicts the path from what vision shows and re-chooses the
+steering and the remaining hold: that corrects the motion estimate, and
+re-aims a jump at a walking enemy (a stomp) or a moving platform at where it
+is forecast to be. Off, a flight plays the hold and steering chosen at
+takeoff, then keeps steering toward the goal. Holding a spot on a moving
+platform is the separate hold controller and is unaffected. The per-frame
+search was half the cost of every teacher trial; with it off, a jump is set
+entirely at takeoff by its steering and hold, which lets the teacher try
+every jump Mario can make (below).
 Once A is released, it cannot be pressed again in the same flight. Separate jumps
 have a physical button release between them; if A is still down, this necessary
 release frame precedes the new takeoff. An airborne request releases A and steers,
@@ -180,6 +191,20 @@ tactic requires a qualified skill checkpoint. Only the stage's parameters change
 
 Teacher-controlled execution decreases across imitation rounds. Reward rounds
 use sampled choices, a clipped policy-gradient objective, and an entropy bonus.
+
+**No single values.** No family may teach, and no policy may learn, one
+destination for everything. Teacher qualification (before learning and before
+every round) fails a skill family whose labels collapse: one destination x,
+counting values within 2 pixels as one, covering more than 40% of a command
+mode's labels (at least 6 of them). After every round, the learner's own
+choices on held-out layouts are checked the same way, family by family; a
+family where the learner's most common value is above 40% and more than 20
+points above the teacher's share for that family collapses, and a round with
+a collapsed family cannot pass the gate (the round line lists it). The
+decision layers are regularized: dropout of 0.1 in the skill and tactic
+transformers while training (`PolicySettings.decision_dropout`), weight
+decay 0.05 (`LayeredTrainConfig.weight_decay`), and the two-pixel spread of
+the x and y targets.
 Tactic reward updates additionally use the option-critic termination objective
 once the critic meets its readiness threshold. Reward rounds freeze shared
 scene/memory modules and update only the selected layer.
@@ -221,6 +246,22 @@ does not reactivate a completed destination within that segment. A generated
 skill endpoint completes a movement command, not the scenario's final goal.
 
 ## Curriculum
+
+**Variety around pits and enemies** (`stages/block_smb/threat_variety.py`).
+Every family that teaches jumping over or past a pit or an enemy starts Mario
+at varied distances from it, right next to it in about 40% of layouts (as in
+Full SMB, where he can end up beside one), and follows it with a second pit
+or enemy at a varied distance. The landing is then bounded, so the policy
+learns to keep away from every threat during a jump, not the longest jump.
+A following pit is cut into the landing floor (leaving at least 32 pixels of
+floor past it); a following enemy stands or walks either way at up to 0.6
+pixels per frame. Every enemy patrols exactly the platform it stands on, so it
+turns only at an edge the vision can see. Single-jump lessons take the floor
+between the two threats as their goal; longer lessons continue past both.
+The isolated maneuvers, route lessons and older families also vary where
+Mario starts and the size and place of what he jumps onto (steps, raised
+platforms, pipes, the route platforms' widths, heights and places), so the
+right destination is a different distance in each scene.
 
 Skill includes 17 isolated maneuver families (their historical `action_` names remain):
 
@@ -384,24 +425,63 @@ achievable. When the production vision model is available, accepted jump
 proposals are also replayed through it, including intermediate jumps.
 
 The teacher does not stop at the first command that works. Among the commands
-that make the same move, it labels the one with the most **margin**: during
-the replay it measures the closest Mario's box comes to every enemy he does not
-stomp, and, when he ends standing, his distance from the nearer edge of that
-platform. The margin is the smaller of the two. Two commands make the same
-move when they end on the same platform, kill the same enemies, reach the same
-route mark and leave Mario on the same side of every other enemy. A jump that
-lands back on its own platform must also make at least as much progress, so
-the shortest hop, which always stays farthest from enemies, is not taught in
-place of a real approach. Margins within two pixels count as equal. Then the
-label is the destination in the middle of the unbroken range of destinations
-that work. For example, every standing jump from 50 to 96 pixels ahead passes
-a walker the same way while 48 lands on it, so the bypass label is 72, not 50.
-Raised landings try the platform's middle and quarter points first. When Mario
-stands on the ground and a jump passes within 48 pixels of an enemy, the
-teacher also tries short runs of 4 to 24 pixels first. It labels the run when
-the same jump afterwards passes at least 4 pixels farther from the enemy. The
-patrol, plant and monster teachers rank their working commands the same way.
+that make the same move, it labels the one with the most **room**: during the
+replay it measures, for every threat separately, the closest Mario's body
+comes to it: each enemy he does not stomp, and each **pit edge** (the top
+corner of a platform with nothing he may stand on beyond it; a platform the
+lesson forbids counts as a pit). When he ends standing it also measures his
+distance from the nearer edge of that platform. These cover the threat before
+a jump (where he takes off), during it and after it (where he lands), and the
+next pit or enemy as well as the one he jumps over. Commands are compared by
+their closest threat, then their next closest, and so on, in two-pixel steps
+up to 64 pixels: a threat they all share, such as the pit edge Mario starts
+beside, does not hide the others. Two commands make the same move when they
+end on the same platform, kill the same enemies, reach the same route mark
+and leave Mario on the same side of every other enemy. A jump that lands back
+on its own platform must also make at least as much progress, so the shortest
+hop is not taught in place of a real approach. Among equal room, the label is
+the destination where the jump actually lands (for a stomp, the enemy's
+middle). Destinations beyond Mario's reach all give the same longest jump;
+labelling the middle of them taught one value, 72 pixels, for every such
+jump. When no tested destination is within 3 pixels of the landing, the
+landing point itself is tried and used if it makes the same move.
+
+**No teacher picks from a sparse list.** Every destination is considered:
+
+- **Jumps.** A jump is set at takeoff by its steering (left, none, right) and
+  how long the button is held (1 to 32 frames). Every destination within 128
+  pixels, each pixel in x, at the height of every platform and enemy top,
+  maps to one of these few dozen jumps by the executor's own takeoff rule
+  (`smb_trajectory.best_holds`, an exact copy of its choice for many
+  destinations at once). The teacher tries each jump once (the jump table);
+  the label for a jump is, of the destinations that make it, the one nearest
+  where it lands (for a stomp, the enemy's middle top).
+- **Runs.** Every pixel Mario can walk to within 128 pixels is screened (where
+  it ends, the progress it makes, its room) and the best six are tried. In
+  the air, steering to every pixel within 32 pixels is tried.
+- **Takeoffs and waits.** Running first (every length from 8 pixels up to the
+  pit's edge, 24 pixels before a jump past an enemy, 32 pixels or holding
+  still before a jump over one, 48 back to 128 forward below a raised
+  platform) followed by every jump is screened: each jump's measured path is
+  moved along the floor, the enemies moved by their patrol rule. The best are
+  certified by trials. Running or waiting first is taught only when it gives
+  at least 4 more pixels of room than jumping now, and no run shorter than 8
+  pixels is taught: an enemy walking away, or a re-estimated takeoff, would
+  otherwise have it asked again and again, a pixel at a time.
+- **Routes.** The button routes behind the teacher's first proposal, and the
+  sampler's check that a layout can be won, try every hold from 1 to 32
+  frames (an older executor could play only 16 of them) and, for timing a
+  plant, every run-on length.
+
+The patrol, plant and monster teachers draw on the same jumps and runs.
 Lessons whose point is one immediate jump keep their takeoff.
+
+A run label follows the teacher's route until its next event (a jump, a
+wait, a landing, the objective), up to 160 frames; a 64-frame limit made
+every long run on flat ground the same 104 pixels. A proposed run of less
+than 8 pixels on the ground is not taught: it is the route's run-up before a
+jump, which a run that brakes on arrival never completes, so it was asked
+again, a few pixels shorter each time. Every jump and run is ranked instead.
 
 The move itself is chosen by the strategy when Mario stands on the ground with
 a live enemy within 128 pixels ahead at about his height. Under max points, a

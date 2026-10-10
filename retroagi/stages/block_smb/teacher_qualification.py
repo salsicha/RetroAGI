@@ -12,7 +12,7 @@ def qualify_teachers(pool, tasks, report_path):
     budget, or separate replay loop is allowed. Even for tactic training the
     skill destinations come from the teacher, rather than the learned skill.
     """
-    from .layered_train import STALL_FRAMES
+    from .layered_train import STALL_FRAMES, label_collapse
 
     if any(task.scenario is None for task in tasks):
         raise ValueError("teacher qualification requires the actual prepared layouts")
@@ -41,20 +41,40 @@ def qualify_teachers(pool, tasks, report_path):
             row["scenario"] = task.scenario
         rows.append(row)
     failures = [row for row in rows if not row["passed"]]
+    # No family may teach the skill one value: a destination (within two
+    # pixels) covering most of a mode's labels (layered_train.label_collapse).
+    learner = getattr(getattr(pool, "config", None), "learner", None)
+    collapsed = label_collapse(records, "skill") if learner == "skill" else {}
     report = {
         "execution": "training_episode_pipeline",
         "stall_frames": STALL_FRAMES,
         "total": len(rows),
         "passed": len(rows) - len(failures),
-        "all_passed": not failures,
+        "labels_collapsed": {
+            family: {kind: list(v) for kind, v in kinds.items()}
+            for family, kinds in collapsed.items()
+        },
+        "all_passed": not failures and not collapsed,
         "episodes": rows,
     }
     path = Path(report_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2) + "\n")
     print(
-        f"[teacher qualification] {report['passed']}/{report['total']} passed: {path}", flush=True
+        f"[teacher qualification] {report['passed']}/{report['total']} passed"
+        f"{', labels collapse in ' + ', '.join(sorted(collapsed)) if collapsed else ''}: {path}",
+        flush=True,
     )
+    if collapsed:
+        raise RuntimeError(
+            "Teacher labels collapse on one value in: "
+            + "; ".join(
+                f"{family} {kind} {v[0]} {v[1]:.0%} of {v[2]}"
+                for family, kinds in collapsed.items()
+                for kind, v in kinds.items()
+            )
+            + f". Details: {path}"
+        )
     if failures:
         examples = ", ".join(
             f"{row['family']}[{row['sample_index']}] {row['end']} at {row['frames']} frames"

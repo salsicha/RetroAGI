@@ -25,6 +25,7 @@ from .skill_families import (
 )
 from .tactic_families import NEW_FAMILIES, TACTIC_FAMILIES, family_route, tactic_family_scenario
 from .tactic_schedule import segment
+from .threat_variety import fit_patrols, follow_up, reachable_span, standing_reach, start_distance
 from .transfer_failure_families import (
     TRANSFER_FAILURE_FAMILIES,
     TRANSFER_FAILURE_SCHEMAS,
@@ -211,8 +212,9 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
     }
     schemas = {
         "flat_run": {
-            "world_width": [256, 320],
-            "goal_distance": [200, 240],
+            "world_width": [256, 256],
+            "spawn_x": [16, 120],
+            "goal_distance": [48, 216],
             "coin_spacing": [80, 150],
         },
         "single_gap": {
@@ -301,17 +303,20 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
             "goal_x": [266, 276],
         },
         "pipe_mount": {
-            "pipe_x": [120, 120],
-            "pipe_width": [30, 30],
+            "pipe_x": [104, 136],
+            "pipe_width": [24, 40],
             "pipe_height": [42, 64],
-            "spawn_distance": [30, 30],
+            "spawn_distance": [12, 40],
             "goal": "on the pipe top",
             "a_level_action": [2, 2],
         },
         "pit_leap": {
             "gap_width": [40, 66],
             "edge_x": [100, 100],
-            "goal": "on the far ledge",
+            "run_in": [4, 30],
+            "then": ["pit", "enemy"],
+            "landing_room": [18, 88],
+            "goal": "on the far ledge, before the second pit or enemy",
             "a_level_action": [2, 2],
         },
         "stomp_mount": {
@@ -325,7 +330,9 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
         },
         "platform_hop": {
             "pit_width": [68, 110],
-            "platform_width": [24, 24],
+            "platform_width": [16, 40],
+            "platform_top": [190, 206],
+            "run_in": [4, 40],
             "platform_speed": [0.3, 0.3],
             "goal": "on the far ledge via the moving platform",
             "a_level_action": [2, 2],
@@ -340,7 +347,13 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
     }
     schemas.update(
         {
-            "single_gap": {"gap_x": [94, 108], "gap_width": [38, 57]},
+            "single_gap": {
+                "gap_x": [94, 108],
+                "gap_width": [24, 56],
+                "spawn_x": [16, 98],
+                "then": ["pit", "enemy"],
+                "landing_room": [16, 80],
+            },
             "stair_climb": {
                 "step_count": [3, 3],
                 "step_width": [36, 42],
@@ -351,7 +364,13 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
                 "gap_spacing": [22, 38],
                 "platform_tops": [116, 220],
             },
-            "enemy_hop": {"enemy_x": [94, 130], "enemy_count": [1, 1]},
+            "enemy_hop": {
+                "enemy_x": [88, 136],
+                "spawn_x": [16, 126],
+                "enemy_count": [1, 2],
+                "then": ["pit", "enemy"],
+                "landing_room": [16, 80],
+            },
             "enemy_patrol": {
                 "enemy_count": [2, 2],
                 "patrol_offset": [-8, 8],
@@ -1176,10 +1195,9 @@ def _finish_layout(family, scenario, params):
         # Patrol limits are not observable. Short, invisible limits made
         # identical observed motion require incompatible jump holds (and, in
         # landing_enemy, a wait, a jump over or a stomp at 1-pixel differences
-        # of distance); use the visible floor span, so no turnaround happens
-        # mid-approach.
-        for enemy in scenario["enemies"]:
-            enemy[2], enemy[3] = 0, scenario["world_width"]
+        # of distance); use the visible span of the floor each enemy walks
+        # on, so no turnaround happens mid-approach.
+        fit_patrols(scenario)
         params.update(patrol_halfwidth=None, enemy_motion="floor_span")
     if family in ("pit_leap", "platform_hop"):
         # The duration-isolation task begins at a real running takeoff: the
@@ -1330,18 +1348,21 @@ def _pad(actions: list[int], max_steps: int = DEFAULT_BLOCK_SMB_MC_MAX_STEPS) ->
 def _flat_run(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    goal_x = rng.randint(224, 232)
+    # Mario's start and the goal's place vary, so the run is a different
+    # length in each scene.
+    spawn = rng.randint(16, 120)
+    goal_x = rng.randint(spawn + 48, 232)
     coin_x = rng.randint(110, 150)
     scenario = {
         "world_width": 256,
-        "mario": [20, 200],
+        "mario": [spawn, 200],
         "platforms": [[0, 220, 256, 20]],
         "coins": [[coin_x, 200, 10, 10]],
         "goal": [goal_x, 200, 16, 20],
     }
     return (
         scenario,
-        {"goal_x": goal_x, "coin_x": coin_x, "difficulty_bin": difficulty},
+        {"spawn_x": spawn, "goal_x": goal_x, "coin_x": coin_x, "difficulty_bin": difficulty},
         _right_actions(),
     )
 
@@ -1350,20 +1371,37 @@ def _single_gap(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     first_width = rng.randint(94, 108)
-    gap_width = {"easy": 40, "medium": 48, "hard": 56}[difficulty] + rng.randint(-2, 1)
+    gap_width = rng.randint(*{"easy": (24, 40), "medium": (36, 48), "hard": (44, 56)}[difficulty])
     coin_x = rng.randint(112, 128)
     landing_x = first_width + gap_width
+    world = landing_x + 200
+    # Mario starts right at the pit when a jump from a standstill clears it,
+    # otherwise anywhere that leaves room to run up.
+    if gap_width <= 38:
+        spawn = first_width - 10 - start_distance(rng, 80)
+    else:
+        spawn = rng.randint(16, first_width - 10 - 40)
     scenario = {
-        "world_width": 256,
-        "mario": [20, 200],
-        "platforms": [[0, 220, first_width, 20], [landing_x, 220, 256 - landing_x, 20]],
+        "world_width": world,
+        "mario": [max(16, spawn), 200],
+        "platforms": [[0, 220, first_width, 20], [landing_x, 220, world - landing_x, 20]],
         "coins": [[coin_x, 160, 10, 10]],
-        "goal": [220, 200, 16, 20],
+        "goal": [world - 36, 200, 16, 20],
     }
+    # A second pit or an enemy follows the first pit at a varied distance.
+    kind, room, detail = follow_up(rng, scenario, 1, landing_x, 1, window=(32, 80))
     actions = _pad([1] * max(0, 10 + round((first_width - 100) / 3)) + [2] * 16 + [1])
     return (
         scenario,
-        {"gap_x": first_width, "gap_width": gap_width, "difficulty_bin": difficulty},
+        {
+            "gap_x": first_width,
+            "gap_width": gap_width,
+            "spawn_x": scenario["mario"][0],
+            "then": kind,
+            "landing_room": room,
+            "then_size": detail,
+            "difficulty_bin": difficulty,
+        },
         actions,
     )
 
@@ -1462,18 +1500,33 @@ def _moving_bridge(
 def _enemy_hop(
     rng: random.Random, difficulty: str
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
-    enemy_x = {"easy": 96, "medium": 112, "hard": 128}[difficulty] + rng.randint(-2, 2)
+    enemy_x = {"easy": 96, "medium": 112, "hard": 128}[difficulty] + rng.randint(-8, 8)
     coin_x = rng.randint(140, 152)
+    world = 360
+    # Mario starts anywhere from right next to the standing enemy to the
+    # floor's start; a second pit or enemy follows it at a varied distance.
+    spawn = max(16, enemy_x - 10 - start_distance(rng, enemy_x - 26))
     scenario = {
-        "world_width": 256,
-        "mario": [20, 200],
-        "platforms": [[0, 220, 256, 20]],
+        "world_width": world,
+        "mario": [spawn, 200],
+        "platforms": [[0, 220, world, 20]],
         "enemies": [[enemy_x, 206, enemy_x, enemy_x, 0]],
         "coins": [[coin_x, 190, 10, 10]],
-        "goal": [230, 200, 16, 20],
+        "goal": [world - 36, 200, 16, 20],
     }
+    kind, room, detail = follow_up(rng, scenario, 0, enemy_x + 14, 1, window=(32, 80))
+    # The first enemy stands still (its patrol is its own spot).
+    scenario["enemies"][0][2] = scenario["enemies"][0][3] = enemy_x
     actions = _pad([1] * max(0, 20 + round((enemy_x - 106) / 3)) + [2] * 16 + [1])
-    return scenario, {"enemy_x": enemy_x, "difficulty_bin": difficulty}, actions
+    params = {
+        "enemy_x": enemy_x,
+        "spawn_x": spawn,
+        "then": kind,
+        "landing_room": room,
+        "then_size": detail,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, params, actions
 
 
 def _enemy_patrol(
@@ -1761,8 +1814,14 @@ def _pipe_mount(
         # forced-A rollouts jump immediately, so the hard band stops at 64.
         "hard": rng.randint(60, 64),
     }[difficulty]
-    pipe_x, pipe_width = 120, 30
-    spawn_distance = 30
+    # The pipe's place and width, and how far Mario starts from it, vary.
+    pipe_x, pipe_width = rng.randint(104, 136), rng.randint(24, 40)
+    # Usually close enough that the pipe top's middle is within a standing
+    # jump's reach (threat_variety.reachable_span).
+    # (From Mario's left edge to the pipe: at least his width and 2 pixels.)
+    spawn_distance = reachable_span(
+        rng, 12, 40, standing_reach(pipe_height) - 3 - pipe_width / 2 + 5
+    )
     goal_x = pipe_x
     scenario = {
         "world_width": 256,
@@ -1826,19 +1885,24 @@ def _pit_leap(
     # undershoot back onto the near ledge ends the episode as a failure
     # instead of devolving into hop chains.
     far_x = edge_x + gap_width
+    # Mario runs in from 4 to 30 pixels before the edge; a second pit or an
+    # enemy past the far edge bounds the landing, and the goal is the floor
+    # between them.
+    run_in = rng.randint(4, 30)
     scenario = {
-        "world_width": 320,
-        "mario": [edge_x - 30, 200],
+        "world_width": 360,
+        "mario": [edge_x - 10 - run_in, 200],
         "platforms": [
             [0, 220, edge_x, 20],
-            [far_x, 220, 320 - far_x, 20],
+            [far_x, 220, 360 - far_x, 20],
         ],
         "coins": [],
-        "goal": [far_x, 200, 320 - far_x - 4, 20],
         "reward_goal_distance_shaping": 2.0,
         "goal_requires_support": True,
         "single_jump_attempt": True,
     }
+    kind, room, detail = follow_up(rng, scenario, 1, far_x, 1, window=(36, 88))
+    scenario["goal"] = [far_x, 200, room, 20]
     oracle_hold = _verified_isolation_hold(scenario)
     actions = _pad([2] * oracle_hold + [1] * 40)
     return (
@@ -1846,6 +1910,10 @@ def _pit_leap(
         {
             "gap_width": gap_width,
             "edge_x": edge_x,
+            "run_in": run_in,
+            "then": kind,
+            "landing_room": room,
+            "then_size": detail,
             "a_level_action": 2,
             "single_jump": True,
             "difficulty_bin": difficulty,
@@ -1866,7 +1934,8 @@ def _stomp_mount(
     }[difficulty]
     direction = rng.choice((-1, 1)) if enemy_speed else 1
     turn_frames = rng.randint(6, 12) if enemy_speed else 0
-    enemy_x = 40 + enemy_distance
+    mario_x = rng.randint(24, 72)
+    enemy_x = mario_x + enemy_distance
     to_boundary = enemy_speed * turn_frames
     if direction > 0:
         patrol_max = enemy_x + to_boundary
@@ -1876,7 +1945,7 @@ def _stomp_mount(
         patrol_max = patrol_min + 2 * patrol_halfwidth
     scenario = {
         "world_width": 340,
-        "mario": [40, 200],
+        "mario": [mario_x, 200],
         "platforms": [[0, 220, 340, 20]],
         "enemies": [[enemy_x, 206, patrol_min, patrol_max, enemy_speed, direction]],
         "coins": [],
@@ -1902,6 +1971,7 @@ def _stomp_mount(
     return (
         scenario,
         {
+            "mario_x": mario_x,
             "enemy_distance": enemy_distance,
             "enemy_x": enemy_x,
             "enemy_speed": enemy_speed,
@@ -1931,18 +2001,24 @@ def _platform_hop(
         "hard": rng.randint(102, 110),
     }[difficulty]
     edge_x = 90
-    platform_width = 24
-    platform_x = edge_x + (pit_width - platform_width) // 2
+    # The platform's size, height and place over the pit vary, and so does
+    # where Mario runs in from: the landing is a different distance away in
+    # each scene, always with pits on both sides.
+    platform_width = rng.randint(16, 40)
+    platform_top = rng.randint(190, 206)
+    shift = rng.randint(-(pit_width - platform_width) // 4, (pit_width - platform_width) // 4)
+    platform_x = edge_x + (pit_width - platform_width) // 2 + shift
+    run_in = rng.randint(4, 40)
     scenario = {
         "world_width": 380,
-        "mario": [edge_x - 30, 200],
+        "mario": [edge_x - 10 - run_in, 200],
         "platforms": [
             [0, 220, edge_x, 20],
-            [platform_x, 198, platform_width, 10],
+            [platform_x, platform_top, platform_width, 10],
             [edge_x + pit_width, 220, 380 - edge_x - pit_width, 20],
         ],
         "coins": [],
-        "goal": [platform_x + 4, 178, 16, 20],
+        "goal": [platform_x + 2, platform_top - 20, platform_width - 4, 20],
         "reward_goal_distance_shaping": 2.0,
         "goal_requires_support": True,
         "single_jump_attempt": True,
@@ -1958,6 +2034,8 @@ def _platform_hop(
             "pit_width": pit_width,
             "platform_width": platform_width,
             "platform_x": platform_x,
+            "platform_top": platform_top,
+            "run_in": run_in,
             "a_level_action": 2,
             "single_jump": True,
             "difficulty_bin": difficulty,

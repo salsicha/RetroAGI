@@ -72,6 +72,7 @@ from retroagi.core.smb_observer import (
 )
 from retroagi.core.tokens import (
     EXECUTION_WIDTH,
+    SKILL_MODES,
     SKILL_X,
     SKILL_Y,
     TACTICS,
@@ -118,6 +119,8 @@ class LayeredTrainConfig:
     epochs_per_round: int = 8
     batch_frames: int = 8192
     learning_rate: float = 3e-4
+    # Weight decay of the optimizer (AdamW), regularizing the learned layers.
+    weight_decay: float = 0.05
     expectation_weight: float = 1.0  # the memory's expected scene, against imitation
     replay_episodes: int = 6000  # at least the latest round is always kept
     workers: int = 12
@@ -1718,6 +1721,103 @@ def combination_tasks(config, pool) -> tuple[list[EpisodeTask], dict]:
     return tasks, summary
 
 
+# A family's choices collapse on one value when that value covers more than
+# COLLAPSE_SHARE of them (destinations within COLLAPSE_PIXELS count as one
+# value), with at least COLLAPSE_MIN choices.
+COLLAPSE_SHARE = 0.4
+COLLAPSE_PIXELS = 2
+COLLAPSE_MIN = 6
+
+
+def top_share(values) -> tuple:
+    """(value, share) of the most common of ``values``: destination x pixels
+    (or (x, y) pairs), where values within COLLAPSE_PIXELS count as one, or
+    plain choices such as tactic names."""
+    if not values:
+        return None, 0.0
+
+    def same(v, w):
+        if isinstance(v, tuple):
+            return all(abs(a - b) <= COLLAPSE_PIXELS for a, b in zip(v, w))
+        if isinstance(v, (int, float)):
+            return abs(v - w) <= COLLAPSE_PIXELS
+        return v == w
+
+    best, count = None, 0
+    for v in set(values):
+        n = sum(1 for w in values if same(v, w))
+        if n > count:
+            best, count = v, n
+    return best, count / len(values)
+
+
+def _choices(episode, learner: str, source: str) -> dict:
+    """An episode's choices by kind: each skill destination's x by mode (run,
+    jump; a hold has no destination; y is mostly the height of the floor it
+    lands on), or tactic names. ``source``: "picks" (the learner's own) or
+    "labels" (the teacher's, where valid)."""
+    out: dict = defaultdict(list)
+    if source == "labels":
+        valid = episode.labels.get("valid")
+        if valid is None or not len(valid):
+            return out
+        rows = {
+            name: np.asarray(episode.labels[name])[np.asarray(valid, bool)]
+            for name in episode.labels
+            if name != "valid"
+        }
+    else:
+        rows = {name: np.asarray(value) for name, value in episode.picks.items()}
+    if learner == "tactic":
+        out["tactic"] = [TACTICS[int(i)] for i in rows.get("tactic", ())]
+        return out
+    for mode, x, y in zip(rows.get("mode", ()), rows.get("x", ()), rows.get("y", ())):
+        name = SKILL_MODES[int(mode)]
+        if name != "hold":
+            out[name].append(SKILL_X[int(x)])
+    return out
+
+
+def label_collapse(episodes, learner: str, source: str = "labels") -> dict:
+    """Per family, the kinds of choice that collapse on one value: {family:
+    {kind: (value, share, count)}} (top_share; at least COLLAPSE_MIN)."""
+    gathered: dict = defaultdict(lambda: defaultdict(list))
+    for e in episodes:
+        for kind, values in _choices(e, learner, source).items():
+            gathered[e.family][kind].extend(values)
+    found: dict = {}
+    for family, kinds in gathered.items():
+        for kind, values in kinds.items():
+            value, share = top_share(values)
+            if len(values) >= COLLAPSE_MIN and share > COLLAPSE_SHARE:
+                found.setdefault(family, {})[kind] = (value, round(share, 3), len(values))
+    return found
+
+
+def output_collapse(validation, played, learner: str) -> dict:
+    """Families where the learner's own choices on held-out layouts collapse on
+    one value much more than the teacher's labels in this round's training
+    episodes do: {family: {kind: (value, own share, teacher share)}}. The
+    learner collapses where its share is above COLLAPSE_SHARE and more than 0.2
+    above the teacher's."""
+    teacher: dict = defaultdict(lambda: defaultdict(list))
+    for e in played:
+        for kind, values in _choices(e, learner, "labels").items():
+            teacher[e.family][kind].extend(values)
+    own: dict = defaultdict(lambda: defaultdict(list))
+    for e in validation:
+        for kind, values in _choices(e, learner, "picks").items():
+            own[e.family][kind].extend(values)
+    found: dict = {}
+    for family, kinds in own.items():
+        for kind, values in kinds.items():
+            value, share = top_share(values)
+            _, taught = top_share(teacher[family][kind])
+            if len(values) >= COLLAPSE_MIN and share > COLLAPSE_SHARE and share > taught + 0.2:
+                found.setdefault(family, {})[kind] = (value, round(share, 3), round(taught, 3))
+    return found
+
+
 def family_success(episodes: Sequence[EpisodeRecord], by_difficulty: bool = False) -> dict:
     """Share of episodes won per family (or per family and difficulty)."""
     wins = defaultdict(list)
@@ -1905,7 +2005,9 @@ def train_layer(config: LayeredTrainConfig) -> dict:
         return parameters
 
     learning = learn_only(policy.parameters_of(config.learner))
-    optimizer = torch.optim.AdamW(learning, lr=config.learning_rate)
+    optimizer = torch.optim.AdamW(
+        learning, lr=config.learning_rate, weight_decay=config.weight_decay
+    )
     pool = EpisodePool(config, policy.settings)
     validation_tasks = pool.with_scenarios(
         _tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
@@ -1945,7 +2047,9 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             by_reward = round_index >= config.rounds
             if by_reward and round_index == config.rounds:
                 learning = learn_only(list(getattr(policy, config.learner).parameters()))
-                optimizer = torch.optim.AdamW(learning, lr=config.reward_learning_rate)
+                optimizer = torch.optim.AdamW(
+                    learning, lr=config.reward_learning_rate, weight_decay=config.weight_decay
+                )
             fraction = min(1.0, round_index / max(1, config.rounds - 1))
             share = (
                 0.0
@@ -2038,6 +2142,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             }
             mean = float(np.mean(list(per_family.values())))
             agreed = [bool(x) for e in played for x in e.agreed[e.labels["valid"].astype(bool)]]
+            collapsed = output_collapse(validation, played, config.learner)
             entry = {
                 "round": round_index,
                 "by_reward": by_reward,
@@ -2077,6 +2182,11 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     for name, values in totals.items()
                 },
                 "replay_episodes": len(replay),
+                # Families whose own held-out choices collapse on one value.
+                "collapsed": {
+                    family: {kind: list(v) for kind, v in kinds.items()}
+                    for family, kinds in collapsed.items()
+                },
                 "seconds": {
                     "play": round(play_time, 1),
                     "learn": round(learn_time, 1),
@@ -2104,7 +2214,10 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 entry["deployed_validation_families"] = deployed
             history.append(entry)
             print(_round_line(config.learner, entry), flush=True)
-            gate_met = all(value >= config.family_gate for value in per_family.values())
+            # The gate also needs no family whose choices collapse on one value.
+            gate_met = not collapsed and all(
+                value >= config.family_gate for value in per_family.values()
+            )
             if tactic:
                 gate_met = gate_met and ends_agree is not None and ends_agree >= config.end_gate
             layers = trained_layers + ([config.learner] if gate_met else [])
@@ -2134,6 +2247,13 @@ def _round_line(learner: str, entry: dict) -> str:
         tactic = (
             f", tactic changes agree {ends if ends is None else round(ends, 3)}, "
             f"critic explains {explained if explained is None else round(explained, 3)}"
+        )
+    collapsed = entry.get("collapsed") or {}
+    if collapsed:
+        tactic += "; COLLAPSED " + ", ".join(
+            f"{family} {kind} {tuple(v[0]) if isinstance(v[0], (list, tuple)) else v[0]} {v[1]:.0%} (teacher {v[2]:.0%})"
+            for family, kinds in collapsed.items()
+            for kind, v in kinds.items()
         )
     return (
         f"[{learner}] round {entry['round']:02d} teacher share {entry['teacher_share']:.2f}: "

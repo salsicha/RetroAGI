@@ -66,7 +66,21 @@ def test_hold_skill_finishes_at_timer_without_a_departure_or_gap_crossing():
 
 
 def test_stomp_label_anchors_the_current_enemy_and_restores_probe_contact():
-    scenario = sample("action_stomp_up_back", "hard")
+    # The first held-out layout whose enemy walks.
+    scenario = next(
+        s
+        for s in (
+            sample_block_smb_monte_carlo_scenario(
+                split="validation",
+                seed=0,
+                sample_index=i,
+                family="action_stomp_up_back",
+                difficulty="hard",
+            ).scenario
+            for i in range(40)
+        )
+        if s["enemies"][0][4] > 0
+    )
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=scenario)
@@ -77,8 +91,12 @@ def test_stomp_label_anchors_the_current_enemy_and_restores_probe_contact():
         before = (env.steps, env.mario["x"], env.mario["y"], env.stomped)
         goal = teacher_skill(env, teacher, plan)
         assert goal.mode == "jump" and enemy["speed"] > 0
-        assert abs(env.mario["x"] + env.mario["w"] / 2 + goal.x - enemy["x"] - enemy["w"] / 2) <= 1
-        assert abs(env.mario["y"] + env.mario["h"] + goal.y - enemy["y"]) <= 1
+        # Labelled where it lands: on the walking enemy, where it has walked
+        # to by then (within its travel during the jump), at its top.
+        travel = enemy["speed"] * 64
+        middle = env.mario["x"] + env.mario["w"] / 2 + goal.x
+        assert enemy["x"] - travel - 4 <= middle <= enemy["x"] + enemy["w"] + travel + 4
+        assert abs(env.mario["y"] + env.mario["h"] + goal.y - enemy["y"]) <= 2
         assert before == (env.steps, env.mario["x"], env.mario["y"], env.stomped)
         assert env.enemies[0]["x"] == enemy["x"] and not env.enemies[0]["dead"]
     finally:

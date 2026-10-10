@@ -1,6 +1,6 @@
 """Patrol destinations certified through the real controller, training only."""
 
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 
 from retroagi.core.smb_agent import LandingWatch
@@ -10,7 +10,7 @@ from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
 from retroagi.core.tokens import SkillToken
 
-from .controller_teacher import _box_gaps, _measured
+from .controller_teacher import _measured, _Watch
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,9 @@ class Trial:
     frames: int
     clearance: float = 0
     won: bool = False
-    margin: float = 999.0  # controller_teacher.Result.margin: enemy gap and edge margin
+    margin: float = (
+        999.0  # controller_teacher.Result.margin: the closest enemy, pit edge or landing edge
+    )
 
 
 def rollout(env, destination, feedback=None, scene=None):
@@ -42,18 +44,18 @@ def rollout(env, destination, feedback=None, scene=None):
         start_x, start_step = env.mario["x"], env.steps
         alive = [i for i, e in enumerate(env.enemies) if not e["dead"]]
         mark = env._tactic_index, env._route_done
-        gaps: dict = {}
-        _box_gaps(env, gaps)
+        watch = _Watch(env)
 
         def margin():
-            enemy_gap, edge, _ = _measured(env, gaps, alive, mark)
-            return min(enemy_gap, 999.0 if edge is None else edge)
+            # The closest threat: enemy, pit edge or landing edge.
+            enemy_gap, edge, _, distances = _measured(env, watch, alive, mark)
+            return min([enemy_gap, *distances.values()])
 
         for _ in range(160):
             button = executor.press(scene)
             spatial.executed(button, scene)
             _, _, done, truncated, _ = env.step(button)
-            _box_gaps(env, gaps)
+            watch.observe(env)
             if done or truncated:
                 return Trial(
                     env._goal_credited,
@@ -90,27 +92,55 @@ def rollout(env, destination, feedback=None, scene=None):
 
 
 def destination(env, feedback=None, scene=None):
-    """Choose a progressing approach, stomp or bypass on the patrol's flat floor."""
+    """Choose a progressing approach, stomp or bypass on the patrol's flat floor.
+
+    Every destination is considered: a run to the goal and to every pixel
+    from MIN_RUN to 64 ahead, and every jump Mario can make (each destination
+    from 1 to 96 pixels ahead, at the floor's height and on each enemy ahead,
+    maps to one jump by the executor's takeoff rule; each jump is tried once).
+    """
+    from collections import defaultdict
+
+    from retroagi.core.smb_trajectory import VisualTracks, best_holds, hold_paths
+
+    from .controller_teacher import MIN_RUN, _nearest, _path_landing, _plan_goal
+
     m = env.mario
     grounded = m["on_ground"]
     center, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
-    floor_y = env.platforms[0]["rect"].top - feet
-    candidates = [SkillToken("run", round(env.goal.centerx - center), round(floor_y))]
-    candidates += [SkillToken("run", x, round(floor_y)) for x in (8, 16, 24, 32, 48, 64)]
+    floor = env.platforms[0]["rect"]
+    floor_y = round(floor.top - feet)
+    inset = m["w"] / 2 + 2
+    candidates = [SkillToken("run", round(env.goal.centerx - center), floor_y)]
+    candidates += [SkillToken("run", x, floor_y) for x in range(MIN_RUN, 65)]
     if not grounded:
         # A visual contact can end the preceding command just before physical
         # touchdown. Finishing that descent is useful even with little x travel.
-        candidates.append(SkillToken("run", 4, round(floor_y)))
-    if grounded:
-        candidates += [SkillToken("jump", x, 0) for x in range(32, 97, 8)]
-        candidates += [
-            SkillToken("jump", round(e["x"] + e["w"] / 2 - center), round(e["y"] - feet))
-            for e in env.enemies
-            if not e["dead"] and e["x"] > m["x"]
-        ]
+        candidates += [SkillToken("run", x, floor_y) for x in range(1, MIN_RUN)]
+    if grounded and scene is not None and scene.mario.box is not None:
+        box = scene.mario.box
+        motion = copy(feedback.motion if feedback is not None else env.motion)
+        tracks = feedback.tracks if feedback is not None else VisualTracks()
+        heights = {floor_y} | {
+            round(e["y"] - feet) for e in env.enemies if not e["dead"] and e["x"] > m["x"]
+        }
+        destinations = [(x, y) for y in sorted(heights) for x in range(1, 97)]
+        paths = hold_paths(scene, motion, box, 1)
+        goals = [_plan_goal(tracks, box, x, y) for x, y in destinations]
+        groups = defaultdict(list)
+        for (x, y), (hold, _, _) in zip(
+            destinations, best_holds(scene, motion, box, goals, 1, paths)
+        ):
+            groups[hold].append(SkillToken("jump", x, y))
+        start = (m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"])
+        rects = [p["rect"] for p in env.platforms]
+        for hold, members in groups.items():
+            world = [tuple(start[k] + b[k] - box[k] for k in range(4)) for b in paths[hold - 1]]
+            landing = _path_landing([start, *world], rects)
+            candidates.append(
+                _nearest(members, landing[1], landing[2]) if landing else members[len(members) // 2]
+            )
     best, score = None, float("-inf")
-    floor = env.platforms[0]["rect"]
-    inset = m["w"] / 2 + 2
     candidates = [
         c
         for c in candidates

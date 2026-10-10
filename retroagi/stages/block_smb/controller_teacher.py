@@ -3,13 +3,18 @@
 Every candidate goes through the unmodified ground/flight controllers. Hidden
 geometry is used only to propose labels and score simulator trials.
 
-Among the commands that work, the teacher labels the one with the most margin
-(Result.margin): the farthest Mario stays from every enemy he does not stomp,
-and, where he comes to stand on a platform, the farthest from its edges. A
-command that only just works is not taught when a safer one does the same.
+Among the commands that work, the teacher labels the one with the most room
+(Result.distances): the farthest Mario stays from every enemy he does not
+stomp and from every pit edge, before, during and after a jump, and, where he
+comes to stand on a platform, the farthest from its edges. Commands are
+compared by their closest threat, then their next closest, and so on, so a
+threat they all share (the pit edge Mario starts beside) does not hide the
+others. A command that only just works is not taught when a safer one does
+the same.
 """
 
 import math
+from collections import defaultdict
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from typing import Optional
@@ -19,6 +24,7 @@ from retroagi.core.smb_coaching import probe_state, training_target
 from retroagi.core.smb_executor import SMBExecutor
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
+from retroagi.core.smb_trajectory import VisualTracks, best_holds, hold_paths
 from retroagi.core.tokens import SKILL_X, SKILL_Y, SkillToken
 
 from . import tactic_schedule
@@ -42,6 +48,16 @@ class Result:
     # edge of the platform he ended standing on (None when not standing).
     enemy_gap: float = 999.0
     edge_margin: Optional[float] = None
+    # Every threat's closest distance over the trial (pixels): each enemy he
+    # did not kill ("enemy", index), each pit edge ("pit", x, y), and the
+    # nearer edge of the platform he ended on ("landing",).
+    distances: dict = field(default_factory=dict)
+    # Where Mario's feet ended, from where they started (pixels; x right, y down).
+    end_dx: float = 0.0
+    end_dy: float = 0.0
+    # With record=True: Mario's body (x0, y0, x1, y1) before the first frame
+    # and after every frame, in world pixels.
+    path: list = field(default_factory=list)
     # What the command achieved: the goal, the platform he ended on, the
     # enemies it killed, the route mark reached and which side of each other
     # enemy he ended on. Commands with the same outcome are versions of the
@@ -50,8 +66,68 @@ class Result:
 
     @property
     def margin(self) -> float:
-        """The tighter of the enemy gap and the edge margin."""
-        return min(self.enemy_gap, 999.0 if self.edge_margin is None else self.edge_margin)
+        """The closest threat: enemy, pit edge or landing edge (pixels)."""
+        values = [self.enemy_gap, *self.distances.values()]
+        if self.edge_margin is not None:
+            values.append(self.edge_margin)
+        return min(values)
+
+
+# Distances beyond this many pixels no longer matter when comparing commands.
+FAR = 64
+
+
+def _distance_key(result) -> tuple:
+    """A command's threats from the closest up, in 2-pixel steps (at most FAR
+    pixels): comparing these tuples prefers the command whose closest threat
+    is farthest, then its next closest, and so on."""
+    values = sorted(min(FAR, d) // 2 for d in result.distances.values())
+    if not values:
+        values = [min(FAR, result.margin) // 2]
+    return tuple(int(v) for v in values[:12]) + (FAR // 2,) * max(0, 12 - len(values))
+
+
+def _pit_lips(env) -> list:
+    """The top corners of platforms past which Mario would fall into a pit:
+    no platform he may stand on is beside or below that edge (the lesson's
+    forbidden platforms count as pits; the world's ends are walls)."""
+    forbidden = set(tactic_schedule.current(env).get("forbidden", ()))
+    rects = [p["rect"] for p in env.platforms]
+    lips = []
+    for i, r in enumerate(rects):
+        for x, outside in ((r.left, r.left - 1), (r.right, r.right)):
+            if outside < 0 or outside >= env.world_width:
+                continue
+            caught = any(
+                j != i
+                and j not in forbidden
+                and q.left <= outside < q.right
+                and q.bottom > r.top - 2
+                for j, q in enumerate(rects)
+            )
+            if not caught:
+                lips.append((x, r.top))
+    return lips
+
+
+class _Watch:
+    """The closest Mario's body comes, over a trial, to each live enemy and to
+    each pit edge (pixels)."""
+
+    def __init__(self, env):
+        self.enemies: dict = {}
+        self.pits: dict = {}
+        self._lips = None if any(p.get("moving") for p in env.platforms) else _pit_lips(env)
+        self.observe(env)
+
+    def observe(self, env):
+        _box_gaps(env, self.enemies)
+        m = env.mario
+        for lx, ly in self._lips if self._lips is not None else _pit_lips(env):
+            dx = max(lx - (m["x"] + m["w"]), m["x"] - lx, 0)
+            dy = max(ly - (m["y"] + m["h"]), m["y"] - ly, 0)
+            key = ("pit", lx, ly)
+            self.pits[key] = min(self.pits.get(key, 999.0), math.hypot(dx, dy))
 
 
 def _box_gaps(env, gaps):
@@ -65,9 +141,11 @@ def _box_gaps(env, gaps):
         gaps[i] = min(gaps.get(i, 999.0), math.hypot(dx, dy))
 
 
-def _measured(env, gaps, alive, mark):
-    """(enemy_gap, edge_margin, outcome) at the end of a trial."""
+def _measured(env, watch, alive, mark):
+    """(enemy_gap, edge_margin, outcome, distances) at the end of a trial
+    (``watch``: its _Watch)."""
     killed = frozenset(i for i in alive if env.enemies[i]["dead"])
+    gaps = watch.enemies
     enemy_gap = min((g for i, g in gaps.items() if i not in killed), default=999.0)
     m = env.mario
     support = m.get("_platform") if m["on_ground"] else None
@@ -83,7 +161,11 @@ def _measured(env, gaps, alive, mark):
     )
     mark = env._tactic_index, env._route_done
     outcome = (bool(env._goal_credited), index, killed, mark, sides)
-    return enemy_gap, edge, outcome
+    distances = {("enemy", i): g for i, g in gaps.items() if i not in killed}
+    distances.update(watch.pits)
+    if edge is not None:
+        distances[("landing",)] = edge
+    return enemy_gap, edge, outcome, distances
 
 
 def distance(env, target):
@@ -116,7 +198,7 @@ def trial(env, state, goal, target, *, save=False):
     return result
 
 
-def _trial(env, state, goal, target, *, save=False, visual=False):
+def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
     def render():
         return type(env).render(env)
 
@@ -144,15 +226,17 @@ def _trial(env, state, goal, target, *, save=False, visual=False):
         points = env.points()
         x, feet = env.mario["x"], env.mario["y"] + env.mario["h"]
         alive = [i for i, e in enumerate(env.enemies) if not e["dead"]]
-        gaps: dict = {}
-        _box_gaps(env, gaps)
+        watch = _Watch(env)
+        path = [_body(env)] if record else []
         for _ in range(192):
             button = executor.press(scene)
             spatial.executed(button, scene)
             _, _, done, truncated, _ = env.step(button)
-            _box_gaps(env, gaps)
+            watch.observe(env)
+            if record:
+                path.append(_body(env))
             if done or truncated:
-                enemy_gap, edge, outcome = _measured(env, gaps, alive, mark)
+                enemy_gap, edge, outcome, distances = _measured(env, watch, alive, mark)
                 return Result(
                     safe=env._goal_credited,
                     won=env._goal_credited,
@@ -160,6 +244,10 @@ def _trial(env, state, goal, target, *, save=False, visual=False):
                     enemy_gap=enemy_gap,
                     edge_margin=edge,
                     outcome=outcome,
+                    distances=distances,
+                    end_dx=env.mario["x"] - x,
+                    end_dy=env.mario["y"] + env.mario["h"] - feet,
+                    path=path,
                 )
             if visual or unsettled_contact:
                 scene = observer.observe([render()])[0]
@@ -197,7 +285,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False):
                     if target.kind == "stomp" and target.enemy_index is not None
                     else target.reached(env)
                 )
-                enemy_gap, edge, outcome = _measured(env, gaps, alive, mark)
+                enemy_gap, edge, outcome, distances = _measured(env, watch, alive, mark)
                 return Result(
                     safe=bool(
                         route_available(env)
@@ -218,65 +306,478 @@ def _trial(env, state, goal, target, *, save=False, visual=False):
                     enemy_gap=enemy_gap,
                     edge_margin=edge,
                     outcome=outcome,
+                    distances=distances,
+                    end_dx=env.mario["x"] - x,
+                    end_dy=env.mario["y"] + env.mario["h"] - feet,
+                    path=path,
                 )
         return Result(frames=192)
 
 
-def candidates(env, target, proposal):
+def _body(env):
     m = env.mario
-    cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
-    side = target.direction
-    seg = tactic_schedule.current(env)
-    forbidden = set(seg.get("forbidden", ())) | set(seg.get("avoid", ()))
-    choices = []
+    return (m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"])
 
-    def point(mode, x, y):
-        if abs(x - cx) <= 256 and abs(y - feet) <= 240:
-            choices.append(SkillToken(mode, round(x - cx), round(y - feet)))
 
-    if proposal is not None:
-        choices.append(proposal)
+# ── Dense search (training labels only) ───────────────────────────────────────
+#
+# No teacher picks a destination from a sparse list. A jump, replayed open loop
+# (smb_trajectory.REPLAN_IN_FLIGHT off), is set at takeoff by its steering and
+# how long the button is held. Every destination within REACH pixels, at every
+# height a jump can land at, maps to one of these few dozen jumps by the
+# executor's own rule (smb_trajectory.best_holds), so trying each jump once
+# evaluates every destination (_jump_table). Runs, takeoffs and waits are
+# screened at every pixel: a jump path measured once is moved along the floor,
+# the enemies moved by their patrol rule, and the best are certified by trials.
+
+REACH = 128
+# Screened options certified by a trial, best first.
+CERTIFY = 6
+# No run shorter than this is proposed by the general search (_run_options):
+# such a run creeps. A run-up or wait before a jump can be any length: the
+# jump is remembered and taken at the next decision (_commit), so it is not
+# re-planned a pixel at a time.
+MIN_RUN = 8
+# Running first must give the jump this much more room than jumping now.
+GAIN = 4
+
+
+@dataclass
+class JumpOption:
+    """One jump Mario can make from where he stands: the command taught for it
+    (the destination of this jump nearest where it lands; for a stomp, the
+    enemy's middle), its trial with the path, and every destination that
+    makes this very jump."""
+
+    command: SkillToken
+    result: Result
+    members: list
+
+
+def _landing_heights(env, feet):
+    """Every height a jump can land at, from Mario's feet: the platforms' and
+    the live enemies' tops (pixels)."""
+    tops = {round(p["rect"].top - feet) for p in env.platforms}
+    tops |= {round(e["y"] - feet) for e in env.enemies if not e["dead"] and e["h"] > 0}
+    return sorted(t for t in tops if SKILL_Y[0] <= t <= SKILL_Y[-1])
+
+
+def _plan_goal(tracks, box, x, y):
+    """The point a jump to (x, y) from Mario's feet aims at: plan_flight's
+    rule (a walker under it is aimed at where it is forecast to be)."""
+    goal = ((box[0] + box[2]) / 2 + x, box[3] + y)
+    targets = [
+        t
+        for t in tracks.tracks
+        if t.kind in ("walker", "platform")
+        and t.box[0] - 4 <= goal[0] <= t.box[2] + 4
+        and abs(goal[1] - t.box[1]) <= 4
+    ]
+    if len(targets) != 1:
+        return goal
+    t = targets[0]
+    offset = (goal[0] - (t.box[0] + t.box[2]) / 2, goal[1] - t.box[1])
+    b = t.landing_box()
+    return ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
+
+
+def _path_landing(path, rects):
+    """Where a body following ``path`` (world boxes, the start first) first
+    comes down onto a platform's top: (frame, its middle's x displacement,
+    the top's height from the start's feet, the platform's index), or None."""
+    for t in range(1, len(path)):
+        x0, _, x1, y1 = path[t]
+        before = path[t - 1][3]
+        if y1 < before:
+            continue
+        for index, r in enumerate(rects):
+            if before <= r.top <= y1 and x1 > r.left and x0 < r.right:
+                middle = (x0 + x1) / 2 - (path[0][0] + path[0][2]) / 2
+                return t, middle, r.top - path[0][3], index
+    return None
+
+
+def _nearest(members, x, y):
+    return min(members, key=lambda g: (abs(g.x - x) + 2 * abs(g.y - y), abs(g.x), g.x))
+
+
+def _table_trial(env, state, goal, target, memo):
+    key = ("recorded", goal)
+    if key not in memo:
+        memo[key] = memo[goal] = _trial(env, state, goal, target, record=True)
+    return memo[key]
+
+
+def _jump_groups(env, state, memo, direction):
+    """The jumps Mario can make toward ``direction`` from here, before any
+    trial: [(hold, the destinations that make it, its predicted landing,
+    how high it rises)] (_path_landing of the executor's own predicted path,
+    or None; the rise in pixels above Mario's feet)."""
+    key = ("groups", direction)
+    if key in memo:
+        return memo[key]
+    groups_out = memo[key] = []
+    m = env.mario
+    scene = state.scene or scene_from_labels(env.scene_labels())
+    if (
+        not m["on_ground"]
+        or scene.mario.box is None
+        or scene.mario.support == "air"
+        or not scene.mario.on_something
+    ):
+        return groups_out
+    spatial = state.execution
+    motion = copy(spatial.motion if spatial is not None else env.motion)
+    tracks = spatial.tracks if spatial is not None else VisualTracks()
+    box = scene.mario.box
+    start = _body(env)
+    rects = [p["rect"] for p in env.platforms]
+    heights = _landing_heights(env, start[3])
+    xs = [0] if direction == 0 else range(direction, direction * (REACH + 1), direction)
+    destinations = [(x, y) for y in heights for x in xs]
+    if not destinations:
+        return groups_out
+    paths = hold_paths(scene, motion, box, direction)
+    goals = [_plan_goal(tracks, box, x, y) for x, y in destinations]
+    groups = defaultdict(list)
+    for (x, y), (hold, _, _) in zip(
+        destinations, best_holds(scene, motion, box, goals, direction, paths)
+    ):
+        groups[hold].append(SkillToken("jump", x, y))
+    for hold, members in sorted(groups.items()):
+        world = [tuple(start[k] + b[k] - box[k] for k in range(4)) for b in paths[hold - 1]]
+        rise = start[3] - min(b[3] for b in world) if world else 0
+        groups_out.append((hold, members, _path_landing([start, *world], rects), rise))
+    return groups_out
+
+
+def _jump_table(env, state, target, memo, directions=(-1, 0, 1), lands_on=None, rise=None):
+    """Every jump Mario can make from here, each tried once: [JumpOption].
+
+    Every destination within REACH pixels (each pixel in x) at every height a
+    jump can land at maps to its jump by the executor's own takeoff rule; the
+    jumps nothing maps to cannot be commanded. Empty unless Mario stands.
+    ``lands_on``: only the jumps predicted (before trying them) to land on
+    one of these platforms (indices); ``rise``: only those rising at least
+    this many pixels; for searches that need no other.
+    """
+    table = []
+    for direction in directions:
+        for hold, members, landing, height in _jump_groups(env, state, memo, direction):
+            if lands_on is not None and (landing is None or landing[3] not in lands_on):
+                continue
+            if rise is not None and height < rise:
+                continue
+            key = ("option", direction, hold)
+            if key not in memo:
+                first = (
+                    _nearest(members, landing[1], landing[2])
+                    if landing
+                    else members[len(members) // 2]
+                )
+                result = _table_trial(env, state, first, target, memo)
+                command = _aim(env, result, members)
+                if command != first:
+                    aimed = _table_trial(env, state, command, target, memo)
+                    if aimed.outcome == result.outcome:
+                        result = aimed
+                    else:
+                        command = first
+                memo[key] = (
+                    JumpOption(command, result, members)
+                    if _describes(env, command, result)
+                    else None
+                )
+            if memo[key] is not None:
+                table.append(memo[key])
+    return table
+
+
+def _describes(env, command, result) -> bool:
+    """Whether ``command`` names where its jump ends: within 4 pixels in x and
+    2 in height of the landing (for a stomp, the point on the enemy). A jump
+    that no such command makes is not taught: its label would name a point
+    it does not reach (a climb labelled as a jump to the floor's height)."""
+    return abs(command.x - result.end_dx) <= 4 and abs(command.y - result.end_dy) <= 2
+
+
+def _aim(env, result, members):
+    """The destination taught for a jump: of the destinations that make it,
+    the one nearest where it lands (for a stomp, where it lands on the enemy,
+    which a walking enemy has moved to)."""
+    return _nearest(members, result.end_dx, result.end_dy)
+
+
+def _enemy_paths(env, frames):
+    """Each live enemy's box (world pixels) for each of the next ``frames``
+    frames by its patrol rule (env._update_enemy): {index: [box]}."""
+    out = {}
+    for i, e in enumerate(env.enemies):
+        if e["dead"] or e["h"] <= 0:
+            continue
+        x, d = e["x"], e["direction"]
+        moves = e.get("kind") != "piranha_plant" and (e.get("kind") != "monster" or e.get("awake"))
+        boxes = []
+        for _ in range(frames + 1):
+            boxes.append((x, e["y"], x + e["w"], e["y"] + e["h"]))
+            if moves:
+                x += e["speed"] * d
+                if x <= e["patrol_min"]:
+                    x, d = e["patrol_min"], 1
+                elif x >= e["patrol_max"]:
+                    x, d = e["patrol_max"], -1
+        out[i] = boxes
+    return out
+
+
+def _run_frames(motion, distance):
+    """Frames a run of ``distance`` pixels takes from ``motion`` (accelerating,
+    then braking to stop there), by the NES motion model."""
+    from retroagi.core.smb_ground_control import stopping_distance
+
+    motion = copy(motion)
+    direction = 1 if distance > 0 else -1
+    moved, frames = 0.0, 0
+    while frames < 300:
+        left = abs(distance) - moved
+        brake = left <= abs(stopping_distance(motion)) + 1
+        if brake and motion.x_speed == 0:
+            break
+        dx, _, _ = motion.advance(
+            direction=0 if brake else direction, jump=False, grounded=True, y=0, run=True
+        )
+        moved += dx * direction
+        frames += 1
+    return frames
+
+
+def _screen(env, path, shift, delay, enemies, lips, rects):
+    """A recorded path (world boxes, the start first) moved ``shift`` pixels
+    along x and started ``delay`` frames later: (distances, landing platform
+    index, killed enemies), or None when it hits an enemy or ends without
+    landing. Distances use the keys of Result.distances."""
+    distances, killed = {}, set()
+    before = path[0][3]
+    for t, (x0, y0, x1, y1) in enumerate(path):
+        x0, x1 = x0 + shift, x1 + shift
+        for lx, ly in lips:
+            d = math.hypot(max(lx - x1, x0 - lx, 0), max(ly - y1, y0 - ly, 0))
+            if d < distances.get(("pit", lx, ly), 999.0):
+                distances[("pit", lx, ly)] = d
+        for i, boxes in enemies.items():
+            if i in killed:
+                continue
+            ex0, ey0, ex1, ey1 = boxes[min(delay + t, len(boxes) - 1)]
+            dx, dy = max(ex0 - x1, x0 - ex1, 0), max(ey0 - y1, y0 - ey1, 0)
+            if dx == 0 and dy == 0:
+                if t and y1 >= before and before <= ey0 + 2:
+                    killed.add(i)  # coming down onto it: a stomp
+                    continue
+                return None
+            d = math.hypot(dx, dy)
+            if d < distances.get(("enemy", i), 999.0):
+                distances[("enemy", i)] = d
+        if t and y1 >= before:
+            for index, r in enumerate(rects):
+                if before <= r.top <= y1 and x1 > r.left and x0 < r.right:
+                    distances[("landing",)] = min(x0 - r.left, r.right - x1)
+                    for i in killed:
+                        distances.pop(("enemy", i), None)
+                    return distances, index, killed
+        before = y1
+    return None
+
+
+def _run_path(start, travel, frames):
+    """Mario's body along a run of ``travel`` pixels over ``frames`` frames
+    (moving evenly), the start first."""
+    frames = max(1, frames)
+    return [
+        (start[0] + travel * t / frames, start[1], start[2] + travel * t / frames, start[3])
+        for t in range(frames + 1)
+    ]
+
+
+def _combine(*parts):
+    """Each threat's closest distance over several steps."""
+    out = {}
+    for distances in parts:
+        for key, value in distances.items():
+            out[key] = min(out.get(key, 999.0), value)
+    return out
+
+
+def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, waits=(), rise=None):
+    """Every travel in ``travels`` (pixels toward ``direction``, negative:
+    back; 0: from here) followed by every jump toward ``direction`` of the
+    table, and every wait of ``waits`` frames in place followed by every jump:
+    screened, the jump paths moved along the floor and the enemies moved by
+    their patrol rule.
+
+    ``wanted(option, landing index, killed)``: the jumps that do what is
+    needed. Returns [(room key, travel, wait, option, screened distances)],
+    the most room first (equal room: the shortest travel, then wait).
+    """
+    table = _jump_table(env, state, target, memo, (direction,), rise=rise)
+    if not table:
+        return []
+    m = env.mario
+    support = m.get("_platform")
+    if support is None:
+        return []
+    start = _body(env)
+    rects = [p["rect"] for p in env.platforms]
+    lips = _pit_lips(env)
+    horizon = 400
+    enemies = _enemy_paths(env, horizon)
+    floor = support["rect"]
+    found = []
+    options = [(t, 0) for t in travels] + [(0, w) for w in waits]
+    for travel, wait in options:
+        shift = travel * direction
+        if not (floor.left <= start[0] + shift and start[2] + shift <= floor.right):
+            continue
+        frames = (_run_frames(env.motion, shift) if travel else 0) + wait
+        if frames >= horizon:
+            continue
+        walked = _screen_walk(_run_path(start, shift, frames), enemies, lips) if frames else {}
+        if walked is None:
+            continue
+        for option in table:
+            path = option.result.path
+            if not path:
+                continue
+            screened = _screen(env, path, shift, frames, enemies, lips, rects)
+            if screened is None:
+                continue
+            distances, landing, killed = screened
+            if not wanted(option, landing, killed):
+                continue
+            total = _combine(walked, distances)
+            screened_result = Result(distances=total)
+            key = _distance_key(screened_result)
+            exact = _exact_key(screened_result)
+            found.append((key, exact, -abs(travel), -wait, travel, wait, option, total))
+    # The most room in 2-pixel steps, then exactly; then the shortest travel.
+    found.sort(key=lambda f: f[:4], reverse=True)
+    return [(f[0], f[4], f[5], f[6], f[7]) for f in found]
+
+
+def _screen_walk(path, enemies, lips):
+    """Distances along a walk (no landing), or None when it meets an enemy."""
+    distances = {}
+    for t, (x0, y0, x1, y1) in enumerate(path):
+        for lx, ly in lips:
+            d = math.hypot(max(lx - x1, x0 - lx, 0), max(ly - y1, y0 - ly, 0))
+            distances[("pit", lx, ly)] = min(distances.get(("pit", lx, ly), 999.0), d)
+        for i, boxes in enemies.items():
+            ex0, ey0, ex1, ey1 = boxes[min(t, len(boxes) - 1)]
+            dx, dy = max(ex0 - x1, x0 - ex1, 0), max(ey0 - y1, y0 - ey1, 0)
+            if dx == 0 and dy == 0:
+                return None
+            d = math.hypot(dx, dy)
+            distances[("enemy", i)] = min(distances.get(("enemy", i), 999.0), d)
+    return distances
+
+
+def _run_options(env, state, target, memo):
+    """Runs to every pixel Mario can walk to within REACH pixels, screened by
+    where they end (in the goal first, then the most progress toward the
+    target per frame, then the most room), the best CERTIFY tried:
+    [(command, result)]."""
+    m = env.mario
+    if not m["on_ground"]:
+        return _air_options(env, state, target, memo)
+    support = m.get("_platform")
+    if support is None:
+        return []
+    start = _body(env)
+    cx, feet, half = (start[0] + start[2]) / 2, start[3], m["w"] / 2
+    floor = support["rect"]
+    lips = _pit_lips(env)
+    enemies = _enemy_paths(env, 300)
+    forbidden = set(tactic_schedule.current(env).get("forbidden", ()))
+    before = distance(env, target)
+    screened = []
     for i, p in enumerate(env.platforms):
         r = p["rect"]
-        if i in forbidden or r.width < m["w"] + 4 or r.right < cx - 128 or r.left > cx + 192:
+        # The floor he stands on, and lower floors within 64 pixels of its
+        # ends that he can walk off onto.
+        if i in forbidden or p.get("moving"):
             continue
-        lo, hi = r.left + m["w"] / 2 + 2, r.right - m["w"] / 2 - 2
-        points = [
-            max(lo, min(hi, cx + side * d))
-            for d in (4, 8, 16, 24, 32, 48, 72, 96, -24, -48, -72, -96)
-        ]
-        points += [
-            lo,
-            hi,
-            lo - 2,
-            hi + 2,
-            # The foot center may reach the support's edge. Restricting it
-            # to whole-body insets can omit the only usable takeoff waypoint
-            # when vision slightly offsets Mario near a ledge.
-            r.left + 2,
-            r.right - 2,
-            r.left,
-            r.right,
-            (lo + hi) / 2,
-            max(lo, min(hi, env.goal.centerx)),
-            max(lo, min(hi, target.center)),
-        ]
-        if not m["on_ground"]:
-            points += [max(lo, min(hi, cx + d)) for d in range(-32, 33, 4)]
-        for x in points:
-            if abs(x - cx) <= 128:
-                point("run", x, r.top)
-            if m["on_ground"] and abs(x - cx) <= 128 and -88 <= r.top - feet <= 160:
-                point("jump", x, r.top)
-    for e in env.enemies:
-        if e["dead"] or e["h"] <= 0 or e.get("kind") in ("monster", "piranha_plant"):
+        if r is not floor and (
+            r.top <= floor.top + 2 or r.left >= floor.right + 64 or r.right <= floor.left - 64
+        ):
             continue
-        if abs(e["x"] - cx) <= 128 and m["on_ground"]:
-            for x in (e["x"] + e["w"] / 2, e["x"] + 2, e["x"] + e["w"] - 2):
-                point("jump", x, e["y"])
-    # Preserve the current hold anchor while waiting for a moving destination.
-    choices.append(SkillToken("hold", 0, 0))
-    return list(dict.fromkeys(choices))
+        for x in range(
+            round(max(r.left + half, cx - REACH)), round(min(r.right - half, cx + REACH)) + 1
+        ):
+            dx = round(x - cx)
+            if abs(dx) < MIN_RUN:
+                continue
+            on_floor = r is floor
+            if on_floor:
+                frames = _run_frames(env.motion, dx)
+                walk = _screen_walk(_run_path(start, dx, frames), enemies, lips)
+                if walk is None:
+                    continue
+            else:
+                frames = abs(dx)  # an estimate: the fall is screened by its trial
+                walk = {}
+            body = (x - half, r.top - m["h"], x + half, r.top)
+            goal_in = env.goal is not None and env.goal.colliderect(
+                type(env.goal)(body[0], body[1], body[2] - body[0], body[3] - body[1])
+            )
+            progress = before - _distance_at(env, target, x, r.top)
+            room = min(
+                [d for d in walk.values()] + [x - half - r.left, r.right - x - half], default=999.0
+            )
+            screened.append(
+                (
+                    (goal_in, progress / max(1, frames), min(64, room) // 2),
+                    SkillToken("run", dx, round(r.top - feet)),
+                )
+            )
+    screened.sort(key=lambda s: s[0], reverse=True)
+    out = []
+    for _, goal in screened[:CERTIFY]:
+        if goal not in memo:
+            memo[goal] = _trial(env, state, goal, target)
+        out.append((goal, memo[goal]))
+    return out
+
+
+def _air_options(env, state, target, memo):
+    """In the air, steering to every pixel within 32 of where Mario is, at the
+    height of the floor below that point, each tried: [(command, result)]."""
+    m = env.mario
+    cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
+    out = []
+    for dx in range(-32, 33):
+        x = cx + dx
+        below = [
+            p["rect"].top
+            for p in env.platforms
+            if p["rect"].left <= x <= p["rect"].right and p["rect"].top >= feet - 2
+        ]
+        if not below:
+            continue
+        goal = SkillToken("run", dx, max(SKILL_Y[0], min(SKILL_Y[-1], round(min(below) - feet))))
+        if goal not in memo:
+            memo[goal] = _trial(env, state, goal, target)
+        out.append((goal, memo[goal]))
+    return out
+
+
+def _distance_at(env, target, x, feet):
+    """distance() for Mario's feet at (x, feet)."""
+    m = env.mario
+    saved = m["x"], m["y"]
+    m["x"], m["y"] = x - m["w"] / 2, feet - m["h"]
+    try:
+        return distance(env, target)
+    finally:
+        m["x"], m["y"] = saved
 
 
 def destination(env, state, proposal):
@@ -288,7 +789,21 @@ def destination(env, state, proposal):
             return plant
     target = teacher_target(env)
     airborne = not env.mario["on_ground"]
+    committed = _committed(env, state, target)
+    if committed is not None:
+        return committed
     if target != training_target(env):
+        proposal = None
+    if (
+        proposal is not None
+        and proposal.mode == "run"
+        and not airborne
+        and abs(proposal.x) < 8
+        and abs(proposal.y) < 8
+    ):
+        # A creep: the button route's run-up before a jump, which a run that
+        # brakes on arrival never completes (it would be asked again, a few
+        # pixels shorter each time). The candidates are ranked instead.
         proposal = None
     mount = mount_destination(env, state, target)
     if mount is not None:
@@ -302,14 +817,16 @@ def destination(env, state, proposal):
             and (proposal.mode != "hold" or _waiting(env, state))
         ):
             return _with_margin(env, state, target, proposal, result)
-    # Rank every candidate on label-only trials; confirm in order through the
-    # full trial (which replays jumps through vision when it is available).
-    # The label-only trials are kept for the margin search that follows.
+    # Rank every jump Mario can make and the screened runs (_jump_table,
+    # _run_options: every destination considered) on label-only trials;
+    # confirm in order through the full trial (which replays jumps through
+    # vision when it is available). The trials are kept for the margin search.
     winners, progressing, memo = [], [], {}
-    for goal in candidates(env, target, proposal):
-        if goal == proposal or goal.mode == "hold":
+    options = [(o.command, o.result) for o in _jump_table(env, state, target, memo)]
+    options += _run_options(env, state, target, memo)
+    for goal, result in options:
+        if goal == proposal:
             continue
-        result = memo[goal] = _trial(env, state, goal, target)
         if result.won:
             winners.append((_rank(goal, result), goal))
         elif (
@@ -343,15 +860,23 @@ def destination(env, state, proposal):
     return None
 
 
+def _exact_key(result) -> tuple:
+    """The threats' exact distances from the closest up (at most FAR pixels):
+    the tie-break after _distance_key, so that among commands with equal room
+    in 2-pixel steps the one with the most room wins, not the shortest."""
+    values = sorted(min(FAR, d) for d in result.distances.values())
+    return tuple(values[:12]) + (float(FAR),) * max(0, 12 - len(values))
+
+
 def _rank(goal, result):
-    """Larger is better among versions of one move: the most margin (in 2-pixel
-    steps, so near-equal margins tie), then the destination farthest from one
-    that fails, then (for a stomp) a landing nearest the enemy's middle, then
-    the quickest."""
+    """Larger is better among versions of one move: the most room from every
+    threat (_distance_key: the closest first, in 2-pixel steps), then the
+    destination nearest where it lands (for a stomp, the enemy's middle), then
+    the exact room, then the quickest."""
     return (
-        math.floor(result.margin / 2),
-        getattr(result, "room", 0.0),
+        _distance_key(result),
         -getattr(result, "aim_error", 0.0),
+        _exact_key(result),
         -result.frames,
     )
 
@@ -387,94 +912,38 @@ def _is_hop(env, result):
 
 
 def _versions(env, state, target, goal, result, memo=None):
-    """Every jump that makes the same move as ``goal`` (same landing platform,
-    same enemies killed, same route mark), with its label-only trial.
-    ``memo`` holds label-only trials already run from this same state."""
+    """Every jump that makes the same move as ``goal`` (_works: the same
+    landing platform, enemies killed, route mark and sides), of every jump
+    Mario can make from here (_jump_table), with its trial."""
     memo = {} if memo is None else memo
-    found = [(goal, result)]
-    tested = [(goal.x, True)]
-    cx = env.mario["x"] + env.mario["w"] / 2
     hop = _is_hop(env, result)
-    _, support, killed, _, _ = result.outcome
-    if killed:
-        e = env.enemies[min(killed)]
-        span = (e["x"] - 8, e["x"] + e["w"] + 8)
-    elif support is not None:
-        r = env.platforms[support]["rect"]
-        span = (r.left - 4, r.right + 4)
-    else:
-        span = (-1e9, 1e9)
-    for other in candidates(env, target, None):
-        # Only jumps that can make the same move: the same direction, the same
-        # height, aimed at the same platform or enemy.
-        if (
-            other.mode != "jump"
-            or other == goal
-            or abs(other.y - goal.y) > 2
-            or (other.x > 0) != (goal.x > 0)
-            or not span[0] <= cx + other.x <= span[1]
-        ):
-            continue
-        if other not in memo:
-            memo[other] = _trial(env, state, other, target)
-        trial_result = memo[other]
-        works = _works(trial_result, result, hop)
-        tested.append((other.x, works))
-        if works:
-            found.append((other, trial_result))
-    _command_room(found, tested)
+    direction = (goal.x > 0) - (goal.x < 0)
+    found = [(goal, result)]
+    support, killed = (result.outcome[1], result.outcome[2]) if result.outcome else (None, None)
+    lands_on = {support} if support is not None and not killed else None
+    for option in _jump_table(env, state, target, memo, (direction,), lands_on=lands_on):
+        if option.command != goal and _works(option.result, result, hop):
+            found.append((option.command, option.result))
     for g, r in found:
-        if r.outcome and r.outcome[2]:
-            # A stomp: aim at the middle of the enemy it kills.
-            e = env.enemies[min(r.outcome[2])]
-            middle = e["x"] + e["w"] / 2 - (env.mario["x"] + env.mario["w"] / 2)
-            r.aim_error = abs(g.x - middle)
+        # Aim where it lands (for a stomp, on the enemy where it has walked to).
+        r.aim_error = abs(g.x - r.end_dx)
     return found
-
-
-def _command_room(found, tested):
-    """Set each version's room: how far its destination x is from the nearer
-    end of the unbroken range of tested destinations that work.
-
-    Several destinations often give the very same jump (a standing jump can
-    only go so far). Then the margin ties, and the label is taken from the
-    middle of the working range, so a skill output a few pixels off still
-    makes the same move. A range ends halfway to the nearest destination that
-    fails, or at the last one tested.
-    """
-    xs = sorted({x for x, _ in tested})
-    works = {x: all(w for t, w in tested if t == x) for x in xs}
-    room = {}
-    i = 0
-    while i < len(xs):
-        if not works[xs[i]]:
-            i += 1
-            continue
-        j = i
-        while j + 1 < len(xs) and works[xs[j + 1]]:
-            j += 1
-        left = (xs[i] + xs[i - 1]) / 2 if i > 0 else xs[i]
-        right = (xs[j] + xs[j + 1]) / 2 if j + 1 < len(xs) else xs[j]
-        for x in xs[i : j + 1]:
-            room[x] = min(x - left, right - x)
-        i = j + 1
-    for g, r in found:
-        r.room = room.get(g.x, 0.0)
 
 
 def _with_margin(env, state, target, goal, result, memo=None):
     """The chosen move's version with the most margin (training labels only).
 
     First the move itself is chosen where an enemy is near ahead
-    (_choose_move). A jump is then replaced by the jump that does the same
-    thing while staying farthest from enemies and landing farthest from the
-    platform's edges. On the ground, a jump that passes an enemy also gets a
-    better takeoff when a short run first gives it at least 4 more pixels of
-    margin. Runs and holds keep the plan: a run's job is often to reach an
-    edge for a takeoff.
+    (_choose_move), and the takeoff before a pit ahead (_pit_takeoff). A jump
+    is then replaced by the jump that does the same thing while keeping the
+    most room from every threat (_versions: every jump Mario can make from
+    here). On the ground, a jump that passes within 48 pixels of an enemy is
+    taught after a run toward it when one gives the same jump at least 4 more
+    pixels of room (_better_takeoff).
     """
     memo = {} if memo is None else memo
     goal, result = _choose_move(env, state, target, goal, result, memo)
+    goal, result = _pit_takeoff(env, state, target, goal, result, memo)
     if goal.mode != "jump" or not result.outcome:
         return goal
     if getattr(env, "_action_jump_direction", 0) or not env.mario["on_ground"]:
@@ -497,10 +966,159 @@ def _with_margin(env, state, target, goal, result, memo=None):
     if chosen is None:
         return goal
     if takeoff:
-        run = _better_takeoff(env, state, target, *chosen)
+        run = _better_takeoff(env, state, target, *chosen, memo)
         if run is not None:
             return run
     return chosen[0]
+
+
+def _pit_ahead(env, direction):
+    """The x of the pit edge the floor Mario stands on ends at, within 96
+    pixels ahead (``direction``: 1 right, -1 left), or None."""
+    m = env.mario
+    support = m.get("_platform") if m["on_ground"] else None
+    if support is None or support.get("moving"):
+        return None
+    r = support["rect"]
+    x = r.right if direction > 0 else r.left
+    if not 0 <= (x - (m["x"] + m["w"] / 2)) * direction <= 96:
+        return None
+    return x if (x, r.top) in _pit_lips(env) else None
+
+
+def _works_now(r):
+    return r.won or (r.safe and r.clearance >= 8 and (r.advanced or r.progress > 0))
+
+
+def _crossing_wanted(env, target, lip, direction):
+    """Whether a screened jump ends past the pit edge at ``lip``: on the
+    target's platform when the target is one."""
+    rects = [p["rect"] for p in env.platforms]
+
+    def wanted(option, landing, killed):
+        if landing is None:
+            return False
+        if target.platform_index is not None:
+            return landing == target.platform_index
+        return (rects[landing].centerx - lip) * direction > 0
+
+    return wanted
+
+
+def _certify(env, state, target, direction, travel, wait, option, check):
+    """Certify a screened plan by trials: from here, a run of ``travel``
+    pixels toward ``direction`` (or a hold, for a wait), then the jump to the
+    same place as ``option``. ``check(jump result)`` must hold for the jump.
+    Returns (first command, its result, the jump's result) or None."""
+    if not travel and not wait:
+        confirmed = trial(env, state, option.command, target)
+        if not _works_now(confirmed) or not check(confirmed):
+            return None
+        return option.command, confirmed, confirmed, None
+    first = SkillToken("run", travel * direction, 0) if travel else SkillToken("hold", 0, 0)
+    moved = _trial(env, state, first, target, save=True)
+    if not moved.safe or moved.snapshot is None:
+        return None
+    start = env.mario["x"]
+    with probe_state(env):
+        restore_env_state(env, moved.snapshot)
+        following = copy(state)
+        following.execution, following.controller = moved.spatial, moved.controller
+        following.scene = moved.spatial.previous
+        jump = _shifted(option.command, env.mario["x"] - start)
+        landed = trial(env, following, jump, target)
+        stop = env.mario["x"]
+    if not _works_now(landed) or not check(landed):
+        return None
+    combined = Result(**{**vars(moved), "distances": _combine(moved.distances, landed.distances)})
+    return first, combined, landed, (jump, stop)
+
+
+def _pit_takeoff(env, state, target, goal, result, memo):
+    """Where to take off over a pit ahead (training labels only): jump now, or
+    first run toward it and stop anywhere up to its edge (every pixel within
+    48 pixels of it), followed by any jump Mario can make from there, whichever
+    keeps the most room from every threat before, during and after the jump
+    (_takeoff_search; equal room prefers the shorter run). Returns (command,
+    its result).
+
+    It applies on the ground when the floor Mario stands on ends at a pit
+    within 96 pixels ahead and the target lies beyond it, except in lessons
+    that are one given jump.
+    """
+    if (
+        not env.mario["on_ground"]
+        or getattr(env, "_action_jump_direction", 0)
+        or goal.mode == "hold"
+        or not result.outcome
+    ):
+        return goal, result
+    direction = target.direction
+    lip = _pit_ahead(env, direction)
+    if lip is None or (target.center - lip) * direction <= 0:
+        return goal, result
+    m = env.mario
+    front = (lip - (m["x"] + m["w"] if direction > 0 else m["x"])) * direction
+    travels = [0] + [t for t in range(1, math.floor(front) + 1) if front - t <= 48]
+    wanted = _crossing_wanted(env, target, lip, direction)
+
+    def check(r):
+        index = r.outcome[1] if r.outcome else None
+        return r.won or (index is not None and wanted(None, index, set()))
+
+    best = _best_certified(env, state, target, memo, direction, travels, wanted, check)
+    return best if best is not None else (goal, result)
+
+
+def _best_certified(
+    env, state, target, memo, direction, travels, wanted, check, waits=(), rise=None
+):
+    """The best screened plan (_takeoff_search) that trials certify, as (first
+    command, its result): jumping now when it works, unless running or waiting
+    first gives at least GAIN more pixels of room (so a takeoff is not moved
+    a little at a time). None when nothing certifies."""
+    now, later, tried = None, None, 0
+    for _, travel, wait, option, _ in _takeoff_search(
+        env, state, target, memo, direction, travels, wanted, waits=waits, rise=rise
+    ):
+        if (now is not None and later is not None) or tried >= 2 * CERTIFY:
+            break
+        if not travel and not wait:
+            if now is None:
+                tried += 1
+                now = _certify(env, state, target, direction, 0, 0, option, check)
+        elif later is None:
+            tried += 1
+            later = _certify(env, state, target, direction, travel, wait, option, check)
+    if now is not None and (later is None or later[1].margin < now[1].margin + GAIN):
+        return now[0], now[1]
+    if later is not None:
+        _commit(state, later)
+        return later[0], later[1]
+    return None
+
+
+def _commit(state, certified):
+    """Remember the jump that follows a taught run-up or wait (certified by
+    _certify), to take it at the next decision (_committed)."""
+    first, _, _, plan = certified
+    if plan is not None:
+        state.notes["planned_jump"] = (first, *plan)
+
+
+def _committed(env, state, target):
+    """The jump remembered after the run-up or wait just executed (_commit),
+    moved by how far Mario actually went, if it still works; else None."""
+    planned = state.notes.pop("planned_jump", None)
+    if planned is None or not env.mario["on_ground"]:
+        return None
+    first, jump, stop = planned
+    spatial = getattr(state, "execution", None)
+    if spatial is None or spatial.destination != first:
+        return None  # what was executed was not the planned run-up
+    jump = _shifted(jump, env.mario["x"] - stop)
+    result = trial(env, state, jump, target)
+    return jump if _works_now(result) else None
 
 
 def _enemy_ahead(env, direction) -> bool:
@@ -539,10 +1157,10 @@ def _choose_move(env, state, target, goal, result, memo):
     It applies on the ground with a live enemy near ahead, except in lessons
     that are one given jump. Under max points (kills score), a stomp that works
     now is taught over any other move. Under speed run, a jump over is taught
-    over waiting, unless the waiting command lets the same jump pass with at
+    over waiting, unless the waiting command lets a jump over pass with at
     least 4 more pixels of margin; and over a stomp. Where no jump over works
-    now, a short wait after which one works is taught over a stomp. Which of
-    these works is decided by trials, so scenes that look alike get the same
+    now, a wait after which one works is taught over a stomp. Every jump Mario
+    can make is tried (_jump_table), so scenes that look alike get the same
     move.
     """
     if (
@@ -563,78 +1181,87 @@ def _choose_move(env, state, target, goal, result, memo):
         if not (confirmed.won or confirmed.safe and confirmed.clearance >= 8):
             continue
         if kind == "other" and not max_points:
-            if _waiting_helps(env, state, target, goal, g, confirmed):
+            if _waiting_helps(env, state, target, goal, confirmed, memo):
                 return goal, result
         return g, confirmed
     if kind == "stomp" and not max_points:
-        wait = _wait_to_pass(env, state, target)
+        wait = _wait_to_pass(env, state, target, memo)
         if wait is not None:
             return wait
     return goal, result
 
 
 def _jumps_that(env, state, target, kind, memo, direction=None):
-    """Jumps toward the target (label-only trials, kept in ``memo``) that work
-    and do ``kind`` to an enemy ("stomp" or "pass", _move_kind)."""
+    """Of every jump Mario can make toward ``direction`` (the target's by
+    default), those that work and do ``kind`` to an enemy ("stomp" or
+    "pass", _move_kind): [(command, result)]."""
     direction = target.direction if direction is None else direction
-    found = []
-    for other in candidates(env, target, None):
-        if other.mode != "jump" or other.x == 0 or (other.x > 0) != (direction > 0):
-            continue
-        if other not in memo:
-            memo[other] = _trial(env, state, other, target)
-        r = memo[other]
-        works = r.won or (r.safe and r.clearance >= 8 and (r.advanced or r.progress > 0))
-        if works and _move_kind(env, r) == kind:
-            found.append((other, r))
-    return found
+    return [
+        (option.command, option.result)
+        for option in _jump_table(env, state, target, memo, (direction,))
+        if _works_now(option.result) and _move_kind(env, option.result) == kind
+    ]
 
 
-def _wait_to_pass(env, state, target):
-    """A wait (holding still, or a step of 4 to 32 pixels toward the target)
-    after which a jump over the enemy works: the one whose jump over then keeps
-    the most margin (in 2-pixel steps; the shorter wait on ties), as (command,
-    its result); or None."""
-    best, best_rank = None, None
-    waits = [SkillToken("hold", 0, 0)]
-    waits += [SkillToken("run", d * target.direction, 0) for d in (4, 8, 16, 24, 32)]
-    for order, wait in enumerate(waits):
-        moved = _trial(env, state, wait, target, save=True)
-        if not moved.safe or moved.snapshot is None or moved.enemy_gap < 8:
-            continue
-        with probe_state(env):
-            restore_env_state(env, moved.snapshot)
-            following = copy(state)
-            following.execution, following.controller = moved.spatial, moved.controller
-            following.scene = moved.spatial.previous
-            passes = _jumps_that(env, following, target, "pass", {})
-        if passes:
-            margin = max(min(r.margin, moved.enemy_gap) for _, r in passes)
-            rank = (math.floor(margin / 2), -order)
-            if best_rank is None or rank > best_rank:
-                best, best_rank = (wait, moved), rank
-    return best
+def _pass_wanted(env, kind="pass"):
+    """Whether a screened jump passes (or stomps, for ``kind`` "stomp") an
+    enemy: judged by the jump's own trial from here, and a stomp must kill."""
+
+    def wanted(option, landing, killed):
+        if landing is None:
+            return False
+        if kind == "stomp":
+            return bool(killed)
+        return not killed and _move_kind(env, option.result) == "pass"
+
+    return wanted
 
 
-def _waiting_helps(env, state, target, waiting, jump, result) -> bool:
-    """Whether, after the ``waiting`` command, a jump over the enemy (to the
-    same place, or with the same reach) passes with at least 4 more pixels of
-    margin than ``jump`` does now."""
-    moved = _trial(env, state, waiting, target, save=True)
-    if not moved.safe or moved.snapshot is None:
+def _wait_to_pass(env, state, target, memo):
+    """A wait (holding still, or a run of any length up to 32 pixels toward
+    the target) after which a jump over the enemy works: the one whose jump
+    over keeps the most room, screened at every pixel and certified by trials
+    (equal room: the shorter wait), as (command, its result); or None."""
+    direction = target.direction
+    held = _trial(env, state, SkillToken("hold", 0, 0), target)
+    waits = (held.frames,) if held.safe else ()
+    wanted = _pass_wanted(env)
+
+    def check(r):
+        return _move_kind(env, r) == "pass" or r.won
+
+    for _, travel, wait, option, _ in _takeoff_search(
+        env, state, target, memo, direction, list(range(1, 33)), wanted, waits=waits
+    )[:CERTIFY]:
+        certified = _certify(env, state, target, direction, travel, wait, option, check)
+        if certified is not None and certified[1].enemy_gap >= 8:
+            _commit(state, certified)
+            return certified[0], certified[1]
+    return None
+
+
+def _waiting_helps(env, state, target, waiting, result, memo) -> bool:
+    """Whether, after the ``waiting`` command (a run or a hold), a jump over
+    the enemy passes with at least 4 more pixels of margin than ``result``
+    (passing now): screened for every jump Mario can make, the best certified."""
+    direction = target.direction
+    if waiting.mode == "run" and (waiting.x > 0) == (direction > 0) and waiting.x:
+        travels, waits = [abs(waiting.x)], ()
+    elif waiting.mode == "hold":
+        held = _trial(env, state, waiting, target)
+        travels, waits = [], ((held.frames,) if held.safe else ())
+    else:
         return False
-    start = env.mario["x"]
-    with probe_state(env):
-        restore_env_state(env, moved.snapshot)
-        following = copy(state)
-        following.execution, following.controller = moved.spatial, moved.controller
-        following.scene = moved.spatial.previous
-        shift = env.mario["x"] - start
-        for g in dict.fromkeys((_shifted(jump, shift), jump)):
-            r = _trial(env, following, g, target)
-            works = r.won or (r.safe and r.clearance >= 8)
-            if works and _move_kind(env, r) == "pass" and r.margin >= result.margin + 4:
-                return True
+
+    def check(r):
+        return _move_kind(env, r) == "pass" or r.won
+
+    for _, travel, wait, option, _ in _takeoff_search(
+        env, state, target, memo, direction, travels, _pass_wanted(env), waits=waits
+    )[:CERTIFY]:
+        certified = _certify(env, state, target, direction, travel, wait, option, check)
+        if certified is not None:
+            return certified[2].margin >= result.margin + 4
     return False
 
 
@@ -645,31 +1272,29 @@ def _shifted(jump, shift):
     return SkillToken("jump", x, jump.y)
 
 
-def _better_takeoff(env, state, target, jump, result):
-    """A short run toward the jump after which the same jump passes the enemy
-    with at least 4 more pixels of margin, or None.
+def _better_takeoff(env, state, target, jump, result, memo):
+    """A run toward the jump (any length up to 24 pixels) after which a jump
+    making the same move passes the enemy with at least 4 more pixels of
+    margin: screened at every pixel and certified by trials; or None."""
+    direction = 1 if jump.x > 0 else -1
+    kind = _move_kind(env, result)
 
-    After each run it tries the jump to the same place and the jump with the
-    same reach from the new takeoff."""
-    side = 1 if jump.x > 0 else -1
-    best, margin = None, result.margin + 4
-    start = env.mario["x"]
-    for travel in (4, 8, 16, 24):
-        run = SkillToken("run", side * travel, 0)
-        moved = _trial(env, state, run, target, save=True)
-        if not moved.safe or moved.snapshot is None or moved.enemy_gap < 8:
-            continue
-        with probe_state(env):
-            restore_env_state(env, moved.snapshot)
-            following = copy(state)
-            following.execution, following.controller = moved.spatial, moved.controller
-            following.scene = moved.spatial.previous
-            shift = env.mario["x"] - start
-            for g in dict.fromkeys((_shifted(jump, shift), jump)):
-                r = _trial(env, following, g, target)
-                if _works(r, result) and r.margin >= margin:
-                    best, margin = run, r.margin
-    return best
+    def wanted(option, landing, killed):
+        return landing is not None and not killed and _move_kind(env, option.result) == kind
+
+    def check(r):
+        return _move_kind(env, r) == kind or r.won
+
+    for _, travel, wait, option, total in _takeoff_search(
+        env, state, target, memo, direction, list(range(1, 25)), wanted
+    )[:CERTIFY]:
+        if min(total.values(), default=999.0) < result.margin + GAIN:
+            break  # screened best-first: nothing further gains enough
+        certified = _certify(env, state, target, direction, travel, wait, option, check)
+        if certified is not None and certified[1].margin >= result.margin + GAIN:
+            _commit(state, certified)
+            return certified[0]
+    return None
 
 
 def descent_destination(env, state, target):
@@ -711,11 +1336,9 @@ def descent_destination(env, state, target):
         following = copy(state)
         following.execution, following.controller = result.spatial, result.controller
         following.scene = result.spatial.previous
-        lo, hi = far.left + half + 2, far.right - half - 2
-        for x in (hi if target.direction < 0 else lo, (lo + hi) / 2, lo, hi):
-            jump = SkillToken("jump", round(x - m["x"] - half), round(far.top - source.top))
-            outcome = trial(env, following, jump, target)
-            if outcome.won:
+        # Of every jump Mario can make from there, one that finishes.
+        for option in _jump_table(env, following, target, {}, (target.direction,)):
+            if option.result.won and trial(env, following, option.command, target).won:
                 return goal
     return None
 
@@ -743,7 +1366,13 @@ def closes_on_enemy(env, target, goal, result):
 
 
 def mount_destination(env, state, target):
-    """Certify the takeoff location as well as the raised landing destination."""
+    """Certify the takeoff location as well as the raised landing destination.
+
+    Every jump Mario can make onto the raised platform, from where he stands
+    or after a run along his floor to any point (every pixel, forward or back:
+    a takeoff under an overhead ledge must first move clear of it), is
+    screened, and the one keeping the most room is certified and taught.
+    """
     m = env.mario
     if not m["on_ground"] or target.platform_index is None or target.kind != "mount":
         return None
@@ -752,71 +1381,30 @@ def mount_destination(env, state, target):
     if rect.top >= feet - 2 or rect.top < feet - 88:
         return None
     side = target.direction
-    lo, hi = rect.left + half + 2, rect.right - half - 2
-    # Landings across the platform, the middle first: the one farthest from
-    # its edges that works is taught.
-    landings = list(
-        dict.fromkeys(
-            (
-                (lo + hi) / 2,
-                lo + (hi - lo) * 0.25,
-                lo + (hi - lo) * 0.75,
-                lo if side > 0 else hi,
-                hi if side > 0 else lo,
-            )
+    memo = {}
+
+    def wanted(option, landing, killed):
+        return landing == target.platform_index
+
+    def check(r):
+        return r.won or (
+            r.safe and r.advanced and r.outcome and r.outcome[1] == target.platform_index
         )
-    )
 
-    def landing_jumps(cx, here):
-        found = []
-        for x in landings:
-            if abs(round(x - cx)) > 128 or abs(round(rect.top - feet)) > SKILL_Y[-1]:
-                continue
-            goal = SkillToken("jump", round(x - cx), round(rect.top - feet))
-            result = _trial(env, here, goal, target)
-            if result.won or (result.safe and result.advanced):
-                found.append((_rank(goal, result), goal))
-        return sorted(found, key=lambda f: f[0], reverse=True)
-
-    for _, goal in landing_jumps(center, state):
-        result = trial(env, state, goal, target)
-        if result.won or (result.safe and result.advanced):
-            return goal
     support = env.mario.get("_platform")
-    if support is None or support.get("moving"):
-        return None
-    source = support["rect"]
-    # Ground waypoints must be supported and allow a jump from rest, including
-    # the clearance needed to rise beside an overhead ledge before moving over it.
-    edge = rect.left if side > 0 else rect.right
-    takeoffs = [edge - side * (half + margin) for margin in (4, 12, 20, 28)]
-    takeoffs += [source.right - half - 2 if side > 0 else source.left + half + 2]
-    # The takeoff whose following jump lands farthest from the platform's edges.
-    best, best_rank = None, None
-    for x in dict.fromkeys(takeoffs):
-        if (
-            not source.left + half + 2 <= x <= source.right - half - 2
-            or abs(x - center) < 2
-            or abs(x - center) > 128
-        ):
-            continue
-        goal = SkillToken("run", round(x - center), 0)
-        result = trial(env, state, goal, target, save=True)
-        if not result.safe or result.snapshot is None:
-            continue
-        with probe_state(env):
-            restore_env_state(env, result.snapshot)
-            following = copy(state)
-            following.execution, following.controller = result.spatial, result.controller
-            following.scene = result.spatial.previous
-            cx = env.mario["x"] + env.mario["w"] / 2
-            for rank, jump in landing_jumps(cx, following):
-                confirmed = trial(env, following, jump, target)
-                if confirmed.won or (confirmed.safe and confirmed.advanced):
-                    if best_rank is None or rank > best_rank:
-                        best, best_rank = goal, rank
-                    break
-    return best
+    travels = [0]
+    if support is not None and not support.get("moving"):
+        source = support["rect"]
+        travels += [
+            t
+            for t in range(-48, REACH + 1)
+            if t and source.left + half + 2 <= center + t * side <= source.right - half - 2
+        ]
+    # Only jumps rising above the platform's top can land on it.
+    best = _best_certified(
+        env, state, target, memo, side, travels, wanted, check, rise=feet - rect.top + 2
+    )
+    return best[0] if best is not None else None
 
 
 def _waiting(env, state):
@@ -963,7 +1551,6 @@ def plant_destination(env, state):
         return cached[1]
     target = teacher_target(env)
     m = env.mario
-    cx, feet, half = m["x"] + m["w"] / 2, m["y"] + m["h"], m["w"] / 2
     plant = next(
         (e for e in env.enemies if e.get("kind") == "piranha_plant" and e["x"] + e["w"] >= m["x"]),
         None,
@@ -982,41 +1569,26 @@ def plant_destination(env, state):
     )
     if pipe is None:
         return None
-    goals = []
-    far = pipe.right + half + 8
-    floor = next(
-        (
-            p["rect"]
-            for p in env.platforms
-            if p["rect"].left <= far <= p["rect"].right and p["rect"].top > pipe.top
-        ),
-        None,
-    )
-    if floor is not None and abs(far - cx) <= 128:
-        goals.extend(
-            [
-                SkillToken(
-                    "jump" if m["on_ground"] else "run", round(far - cx), round(floor.top - feet)
-                )
-            ]
-        )
-        if feet <= pipe.top + 2:
-            goals.append(SkillToken("run", round(far - cx), round(floor.top - feet)))
-    if m["on_ground"] and cx < pipe.right - half and abs(pipe.right - half - cx) <= 128:
-        goals.append(SkillToken("jump", round(pipe.right - half - cx), round(pipe.top - feet)))
-    if m["on_ground"] and feet > pipe.top + 2 and abs(pipe.left + half - cx) <= 128:
-        goals.append(SkillToken("jump", round(pipe.left + half - cx), round(pipe.top - feet)))
-    support = m.get("_platform")
-    if support is not None and feet > pipe.top + 2 and cx < pipe.left - half - 2:
-        approach = min(cx + 96, pipe.left - half - 2)
-        goals.append(SkillToken("run", round(approach - cx), 0))
-    # Of the crossings that work, the one passing farthest from the plant.
-    working = []
-    for goal in goals:
-        result = _trial(env, state, goal, target)
-        if result.won or result.safe and result.clearance >= 8:
-            working.append((_rank(goal, result), goal))
-    for _, goal in sorted(working, key=lambda w: w[0], reverse=True):
+    # Every jump Mario can make that ends on the pipe's top or past it, and
+    # the screened runs (every pixel he can walk to), certified by trials: of
+    # the crossings that work, the one passing farthest from the plant.
+    memo = {}
+    options = []
+    if m["on_ground"]:
+        for option in _jump_table(env, state, target, memo, (target.direction,)):
+            index = option.result.outcome[1] if option.result.outcome else None
+            ends = env.platforms[index]["rect"] if index is not None else None
+            if option.result.won or (
+                ends is not None and (ends == pipe or ends.left >= pipe.right - 2)
+            ):
+                options.append((option.command, option.result))
+    options += _run_options(env, state, target, memo)
+    working = [
+        (_rank(goal, result), goal)
+        for goal, result in options
+        if result.won or result.safe and result.clearance >= 8
+    ]
+    for _, goal in sorted(working, key=lambda w: w[0], reverse=True)[:CERTIFY]:
         result = trial(env, state, goal, target)
         if result.won or result.safe and result.clearance >= 8:
             state.notes["plant_destination"] = (env.steps, goal)
@@ -1067,17 +1639,18 @@ def monster_destination(env, state):
     line = segment.get("keep_behind", floor.right if side > 0 else floor.left)
     near_opening = (enemy["x"] - line) * side <= 16
     if gap < 96 and near_opening:
-        # Of the jumps that clear the monster, the one passing farthest from it.
+        # Of every jump Mario can make that clears the monster onto his floor,
+        # the one passing farthest from it.
         working = []
-        for travel in (48, 64, 80, 96, 112, 128, 32):
-            offset = side * travel
-            if not supported(offset):
+        for option in _jump_table(env, state, target, {}, (side,)):
+            result = option.result
+            index = result.outcome[1] if result.outcome else None
+            if not (result.won or (result.safe and result.advanced and result.clearance >= 8)):
                 continue
-            goal = SkillToken("jump", offset, 0)
-            result = _trial(env, state, goal, target)
-            if result.won or (result.safe and result.advanced and result.clearance >= 8):
-                working.append((_rank(goal, result), goal))
-        for _, goal in sorted(working, key=lambda w: w[0], reverse=True):
+            if not result.won and (index is None or env.platforms[index] is not support):
+                continue
+            working.append((_rank(option.command, result), option.command))
+        for _, goal in sorted(working, key=lambda w: w[0], reverse=True)[:CERTIFY]:
             result = trial(env, state, goal, target)
             if result.won or (result.safe and result.advanced and result.clearance >= 8):
                 return remember(goal)
@@ -1098,10 +1671,23 @@ def monster_destination(env, state):
                 return remember(goal)
     coming = enemy["direction"] == -side and enemy["speed"] > 0
     if (coming and gap < 40) or (center + side * half - line) * side > -8:
-        for travel in (24, 16, 32, 48, 64, 80, 96, 8):
+        # Back away: every retreat of 8 to 96 pixels, screened by how far it
+        # keeps from the monster as it comes (its patrol rule), the best
+        # certified by trials.
+        enemies = _enemy_paths(env, 300)
+        lips = _pit_lips(env)
+        start = _body(env)
+        screened = []
+        for travel in range(8, 97):
             offset = -side * travel
             if not supported(offset) or center + offset < env.camera_x + half + 2:
                 continue
+            walked = _screen_walk(
+                _run_path(start, offset, _run_frames(env.motion, offset)), enemies, lips
+            )
+            if walked is not None:
+                screened.append((_distance_key(Result(distances=walked)), -travel, offset))
+        for _, _, offset in sorted(screened, reverse=True)[:CERTIFY]:
             goal = SkillToken("run", offset, 0)
             result = trial(env, state, goal, target)
             if result.safe and result.clearance >= 8:

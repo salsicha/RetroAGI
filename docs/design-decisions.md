@@ -20,7 +20,115 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
-## 2026-10-10 — Pit and enemy families: room on both sides, enough variety (decided, not yet built)
+## 2026-10-10 — Actions, an action-conditioned predictor, a target tracker and an adaptive controller (approved; being built)
+
+The user proposed, and the plan in
+[action-predictor-controller.md](action-predictor-controller.md) describes,
+a redesign: the skill chooses an action (a verb aimed at an object it sees);
+the scene memory, told that action, predicts its successful end state; the
+predictive controller computes the buttons and durations to reach it and
+re-plans when its target is updated. The controller does not model or track
+the world: a small object-centred target tracker (a recurrent network shared
+by all objects, run every frame) predicts where each target will be at a given
+time, senses when the world departs from its prediction, and sends only the
+updated target. The controller is to be adaptive: a further deep network will
+update the parameters of its motion model of Mario from sensed changes in how
+he moves (details to be worked out later).
+
+Why: the skill now has to output exact pixel destinations, the source of the
+single values, value lists and imprecise run lengths found on 2026-10-09 and
+10; and the scene memory predicts the next action's end without being told
+the action.
+
+Status: approved 2026-10-10; being built. The current teacher and family work
+(below) was checked in first as a checkpoint, with tests still failing (listed
+in its commit); skill training on the current design is not started.
+
+## 2026-10-10 — Full SMB training: checkpoints every 500 pixels (decided, for later)
+
+When the agent is trained on Full SMB levels, it is optimized for one of the
+two strategies: the most points, or the least time. A level being learned gets
+a checkpoint roughly every 500 pixels, and the time taken (speed run) or the
+points scored (max points) at each checkpoint are what training uses, rather
+than only the level's end.
+
+Status: a note for the Full SMB training stage; nothing is built yet.
+
+## 2026-10-10 — No teacher picks from a sparse list (built; being validated)
+
+Decided: no teacher picks a destination from a fixed sparse list. A list
+that is used must cover every value in the range.
+
+Built:
+
+- **Jumps:** every destination within 128 pixels, each pixel in x at the
+  height of every platform and enemy top, is evaluated. With the flight
+  replayed open loop (next entry) a jump is set at takeoff by its steering
+  and button hold, and every destination maps to one of a few dozen jumps by
+  the executor's own rule (`smb_trajectory.best_holds`, checked exact against
+  the executor on 1,440 destinations). Each jump is tried once; its label is
+  the destination making it that is nearest where it lands.
+- **Runs, takeoffs and waits:** screened at every pixel (measured jump paths
+  moved along the floor, enemies moved by their patrol rule), the best
+  certified by trials. No run shorter than 8 pixels is taught, and running or
+  waiting first only when it gives at least 4 more pixels of room: a 1-pixel
+  run was otherwise taught again and again while an enemy walked away.
+- **Routes:** every jump hold from 1 to 32 frames (an older executor could
+  press only 16) and every plant run-on length.
+
+Replaces the old candidate list (4, 8, 16, 24, 32, 48, 72, 96 pixels and a
+few platform points), the takeoff stops (2, 6, 12, 20, 32), the waits (4 to
+32 by 8), the monster jumps (48 to 128 by 16) and the patrol teacher's lists.
+
+## 2026-10-10 — The executor's in-flight re-prediction is off for Block SMB (built)
+
+Each frame of a flight used to re-predict Mario's path and re-choose the
+steering and remaining hold: it corrected the motion estimate and re-aimed a
+stomp at a walking enemy, or a landing at a moving platform, where it is
+forecast to be. Off (`smb_trajectory.REPLAN_IN_FLIGHT`), a flight plays the
+hold and steering chosen at takeoff and keeps steering toward the goal;
+stomps and moving-platform landings are aimed once, at takeoff, at the
+forecast position. Holding a spot on a moving platform is a separate
+controller and unchanged. It was half the cost of every teacher trial; Full
+SMB play may turn it back on.
+
+## 2026-10-10 — No family teaches, and no policy learns, one value (built)
+
+Teacher qualification (before learning and before every round) fails a skill
+family whose labels collapse: one destination x (within 2 pixels) covering
+more than 40% of a command mode's labels. After every round, the learner's
+own held-out choices are checked the same way, family by family; a round
+with a family whose most common value is above 40% and more than 20 points
+above the teacher's share cannot pass the gate. The decision layers are
+regularized: dropout 0.1, weight decay 0.05, and the two-pixel spread of the
+x and y targets.
+
+## 2026-10-10 — Formal validation of the families (proposed)
+
+The collapse checks catch one dominant value but not a short list of values
+unrelated to the scene. Proposed, as one audit gating training:
+
+1. **A specification per family:** its parameters and ranges, the visible
+   quantities that decide the answer, the expected label as a function of
+   them (for a jump into a window between two threats: about its middle,
+   limited by reach), and what must not decide it (hidden quantities).
+2. **Teacher verification:** the label is the best of every destination
+   (now built, above); near-identical visible scenes get near-identical
+   labels; exact relations hold (a mirrored layout gives the mirrored
+   label; moving the second threat 16 pixels farther moves the landing
+   forward by at most 8, never back); label response curves are smooth
+   except where the move changes.
+3. **Data validation:** a constant predictor must be badly wrong (the label
+   varies) while a simple model of the visible quantities is right to about
+   2 to 3 pixels (the label is a learnable function of what the agent sees);
+   parameters sampled to cover every range and combination evenly.
+4. **Policy validation:** pixel error against the teacher on held-out
+   layouts, and the policy's destination responding like the teacher's when
+   one parameter is changed (a policy that memorized values does not).
+
+Status: proposed; the collapse checks above are its first part.
+
+## 2026-10-10 — Pit and enemy families: room on both sides, enough variety (built; being validated)
 
 Decided:
 
@@ -94,7 +202,17 @@ Findings:
   optimizer's default weight decay (0.01), and the two-pixel spread of the x
   and y targets (below).
 
-Status: not built. Skill training is on hold until it is.
+Status: built (2026-10-10), being validated; skill training is on hold
+until the teacher wins every layout it can use. The teacher now measures
+every pit edge as a threat (before, during and after a jump), compares
+commands by their closest threat first, labels a jump where it lands and
+chooses the takeoff before a pit. The pit and enemy families start Mario at
+varied distances (right next to the threat in about 40% of layouts) and
+follow the threat with a second pit or enemy at a varied distance
+(`threat_variety.py`); 24 of 38 skill families collapsed on one destination
+before (survey above) and were given variety: varied starts, platform and
+step sizes and places, route platform geometry, and bounded landings. The
+regularization and collapse checks are in the entry above.
 
 ## 2026-10-10 — Validate the teaching on every layout before training (skill families pass; 11 tactic layouts lost)
 

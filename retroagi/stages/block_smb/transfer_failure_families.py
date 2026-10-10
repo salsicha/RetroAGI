@@ -5,6 +5,8 @@ held-out action traces. Like every family, they run on the NES motion model and
 the shared SMB observation.
 """
 
+from .threat_variety import follow_up
+
 TRANSFER_FAILURE_FAMILIES = ("stair_gap", "landing_enemy", "enemy_on_platform", "piranha_avoidance")
 
 TRANSFER_FAILURE_SCHEMAS = {
@@ -75,21 +77,33 @@ def transfer_failure_scenario(family, rng, difficulty):
             landing_width=landing_width,
         )
     elif family == "landing_enemy":
-        spawn_x = rng.randint(40, 56)
-        drop = (24, 18, 12)[tier] + rng.randint(0, 4)
-        distance = (86, 70, 58)[tier] + rng.randint(-4, 4)
+        spawn_x = rng.randint(24, 96)
+        drop = (24, 18, 12)[tier] + rng.randint(0, 6)
+        distance = (86, 70, 58)[tier] + rng.randint(-10, 10)
         enemy_x = spawn_x + distance
         speed = (0.2, 0.4, 0.6)[tier]
+        world = 400
         scenario = {
-            "world_width": 288,
+            "world_width": world,
             # More than eight pixels above support avoids the spawn-grounding
             # snap. The policy must first finish this real airborne descent.
             "mario": [spawn_x, 204 - drop],
-            "platforms": [[0, 220, 288, 20]],
+            "platforms": [[0, 220, world, 20]],
             "enemies": [[enemy_x, 206, enemy_x - 16, enemy_x + 16, speed, -1]],
-            "goal": [260, 204, 16, 16],
+            "goal": [world - 28, 204, 16, 16],
         }
-        params.update(spawn_drop=drop, enemy_distance=distance, enemy_speed=speed)
+        # A second pit or enemy past the approaching enemy, at a varied
+        # distance (threat_variety).
+        kind, room, detail = follow_up(rng, scenario, 0, enemy_x + 14, 1, window=(40, 96))
+        params.update(
+            spawn_x=spawn_x,
+            spawn_drop=drop,
+            enemy_distance=distance,
+            enemy_speed=speed,
+            then=kind,
+            landing_room=room,
+            then_size=detail,
+        )
     elif family == "enemy_on_platform":
         height = (30, 40, 48)[tier] + rng.randint(-2, 2)
         left = rng.randint(112, 124)

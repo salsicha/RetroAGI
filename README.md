@@ -60,7 +60,10 @@ training or action checkpoint is required.
 See [the architecture and training guide](docs/layered-agent.md) for exact
 inputs, outputs, timing, curriculum, qualification gates and known limits,
 and [design decisions](docs/design-decisions.md) for what was decided, why,
-and what is still to be built.
+and what is still to be built. A redesign is approved and being built: the
+skill chooses an action, a predictor gives its end state, a target tracker
+says where its target will be and an adaptive controller reaches it
+([plan](docs/action-predictor-controller.md)).
 
 ## Project Layout
 
