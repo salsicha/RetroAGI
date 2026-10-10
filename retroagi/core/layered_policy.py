@@ -2,8 +2,9 @@
 
 Vision and an LSTM scene prediction feed the skill transformer, alongside its
 categorical tactic and the last 16 spatial commands. The skill emits a run,
-jump or hold command with a destination relative to Mario's feet. This
-command goes directly to the visual predictive executor.
+jump or hold command with a destination relative to Mario's feet, chosen in
+order: the mode, then the destination's x knowing the mode, then its y knowing
+both. This command goes directly to the visual predictive executor.
 
 Tactics remain persistent options with a termination head, critic, strategy
 switch and their own recurrent context. The executor chooses buttons with per-frame visual feedback.
@@ -15,6 +16,7 @@ from typing import Mapping, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .smb_observer import (
     _SLOT_WIDTH,
@@ -414,6 +416,101 @@ class _Layer(nn.Module):
         return out
 
 
+class _Given(nn.Module):
+    """The decision token adjusted by what the layer has already chosen: the
+    token plus a small network of (token, chosen). It starts as the token
+    unchanged (its last weights are zero)."""
+
+    def __init__(self, width: int, given_width: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(width + given_width, width), nn.GELU(), nn.Linear(width, width)
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, decision, given):
+        return decision + self.net(torch.cat((decision, given), dim=-1))
+
+
+def _pick(logits, sample: bool):
+    """[B] indices: sampled from the logits, or the most likely."""
+    if sample:
+        return torch.distributions.Categorical(logits=logits).sample()
+    return logits.argmax(-1)
+
+
+class SkillLayer(_Layer):
+    """The skill layer: it chooses its command in order.
+
+    First the mode (run, jump or hold); then the destination's x, reading the
+    chosen mode; then its y, reading the mode and x. Choosing the three apart
+    could pair one command's mode with another's x (a run to where a jump over
+    an enemy lands), or one command's x with another's y (a stomp's x with a
+    jump over's height).
+    """
+
+    def __init__(self, settings: PolicySettings, above_width: int):
+        super().__init__(
+            settings,
+            above_width,
+            {"mode": len(SKILL_MODES), "x": len(SKILL_X), "y": len(SKILL_Y)},
+            SKILL_WIDTH,
+            choice_positions=(len(SKILL_MODES), len(SKILL_MODES) + 1),
+        )
+        width = settings.width
+        # The chosen x as a position number (x / 256) with its waves.
+        self.chosen_x_waves = PositionWaves((len(SKILL_MODES),), settings.position_frequencies)
+        self.given_mode = _Given(width, len(SKILL_MODES))
+        self.given_mode_and_x = _Given(
+            width, len(SKILL_MODES) + 1 + self.chosen_x_waves.extra_width()
+        )
+
+    def x_logits(self, decision, mode):
+        """x's logits [B, len(SKILL_X)] for the chosen modes [B] (indices)."""
+        chosen = F.one_hot(mode.long(), len(SKILL_MODES)).to(decision.dtype)
+        return self.heads["x"](self.given_mode(decision, chosen))
+
+    def y_logits(self, decision, mode, x):
+        """y's logits [B, len(SKILL_Y)] for the chosen modes and x [B] (indices)."""
+        chosen = F.one_hot(mode.long(), len(SKILL_MODES)).to(decision.dtype)
+        pixels = (x.to(decision.dtype) + SKILL_X[0]).unsqueeze(-1) / 256
+        numbers = self.chosen_x_waves(torch.cat((chosen, pixels), dim=-1))
+        return self.heads["y"](self.given_mode_and_x(decision, numbers))
+
+    def heads_given(self, decision, picks) -> dict:
+        """The outputs read from ``decision`` [B, width] with the mode and x of
+        ``picks`` (index tensors [B]) as already chosen: logits of every head."""
+        return {
+            "mode": self.heads["mode"](decision),
+            "x": self.x_logits(decision, picks["mode"]),
+            "y": self.y_logits(decision, picks["mode"], picks["x"]),
+        }
+
+    def forward(
+        self, scene_tokens, present, expected, above=None, history=None, picks=None, sample=False
+    ) -> dict[str, torch.Tensor]:
+        """Logits of each head, conditioned on the picks it chose (or, given
+        ``picks`` as index tensors [B] with mode and x, on those: teaching with
+        the teacher's choice, or scoring the layer's own); "picks", the index
+        tensors used; "decision", the decision token; and the value estimate."""
+        decision, _ = self.encode(scene_tokens, present, expected, above, history)
+        if picks is None:
+            mode_logits = self.heads["mode"](decision)
+            mode = _pick(mode_logits, sample)
+            x_logits = self.x_logits(decision, mode)
+            x = _pick(x_logits, sample)
+            y_logits = self.y_logits(decision, mode, x)
+            picks = {"mode": mode, "x": x, "y": _pick(y_logits, sample)}
+            out = {"mode": mode_logits, "x": x_logits, "y": y_logits}
+        else:
+            out = self.heads_given(decision, picks)
+        out["picks"] = picks
+        out["decision"] = decision
+        out["value"] = self.value(decision.detach()).squeeze(-1)
+        return out
+
+
 class TacticMemory(nn.Module):
     """The tactic layer's own long short-term memory network: it steps once per
     tactic, when a tactic starts (at an episode's start, and whenever the held
@@ -535,13 +632,7 @@ class LayeredSMBPolicy(nn.Module):
         self.memory = Memory(settings)
         self.tactic = TacticLayer(settings)
         self.tactic_memory = TacticMemory(settings)
-        self.skill = _Layer(
-            settings,
-            TACTIC_WIDTH + STRATEGY_WIDTH + EXECUTION_WIDTH,
-            {"mode": len(SKILL_MODES), "x": len(SKILL_X), "y": len(SKILL_Y)},
-            SKILL_WIDTH,
-            choice_positions=(len(SKILL_MODES), len(SKILL_MODES) + 1),
-        )
+        self.skill = SkillLayer(settings, TACTIC_WIDTH + STRATEGY_WIDTH + EXECUTION_WIDTH)
         # Each enemy's forecast (where it will be when the next action ends) is
         # added to that enemy's scene token. Starts with no influence.
         self.skill.forecast = nn.Linear(FORECAST_WIDTH, settings.width)
@@ -608,7 +699,16 @@ class LayeredSMBPolicy(nn.Module):
         return self.scene(*inputs)
 
     def run_skill(
-        self, encoded, expected, tactic, history=None, strategy=None, feedback=None, memory=None
+        self,
+        encoded,
+        expected,
+        tactic,
+        history=None,
+        strategy=None,
+        feedback=None,
+        memory=None,
+        picks=None,
+        sample=False,
     ):
         """Choose a destination using the tactic and its strategy context.
 
@@ -616,6 +716,9 @@ class LayeredSMBPolicy(nn.Module):
         them separately; the default switch preserves the old convenience API.
         ``memory``: the scene memory's hidden state at the decision [B, memory
         width]; each enemy's forecast is then added to its scene token.
+        ``picks``: the mode and x (index tensors [B]) to read as chosen, instead
+        of choosing them (most likely, or sampled when ``sample``); see
+        SkillLayer.
         """
         scene_tokens, present = encoded
         if memory is not None:
@@ -631,7 +734,9 @@ class LayeredSMBPolicy(nn.Module):
         if feedback is None:
             feedback = tactic.new_zeros((len(tactic), EXECUTION_WIDTH))
         tactic = torch.cat((tactic, feedback), dim=-1)
-        return self.skill(scene_tokens, present, expected, tactic, history)
+        return self.skill(
+            scene_tokens, present, expected, tactic, history, picks=picks, sample=sample
+        )
 
 
 # ── Choosing from the outputs ─────────────────────────────────────────────────
@@ -649,7 +754,14 @@ def _distributions(layer: str, out: Mapping[str, torch.Tensor]) -> dict:
 
 
 def choose(layer: str, out: Mapping[str, torch.Tensor], *, sample: bool = False):
-    """One picture's raw layer outputs -> (its token, the picks)."""
+    """One picture's raw layer outputs -> (its token, the picks).
+
+    A layer that chose in order (the skill: its outputs carry "picks") has
+    already chosen; those picks are its choice.
+    """
+    if "picks" in out:
+        picks = {head: int(out["picks"][head]) for head in CHOICES[layer]}
+        return token_from_picks(layer, picks), picks
     batched = {name: value.unsqueeze(0) for name, value in out.items()}
     picks: dict[str, int] = {}
     for head in CHOICES[layer]:
@@ -673,7 +785,12 @@ def token_from_picks(layer: str, picks: Mapping[str, int]):
 
 
 def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[str, torch.Tensor]):
-    """Log-probability [B] of batched picks under a layer's outputs, and the entropy [B]."""
+    """Log-probability [B] of batched picks under a layer's outputs, and the entropy [B].
+
+    For the skill, ``out`` must be read with these picks as chosen (each
+    head's logits are then conditional on the heads before it, and the sum is
+    the whole command's log-probability).
+    """
     distributions = _distributions(layer, out)
     log_prob = entropy = 0.0
     for head in CHOICES[layer]:
@@ -692,6 +809,7 @@ __all__ = [
     "MemoryState",
     "PolicySettings",
     "SceneEncoder",
+    "SkillLayer",
     "CHOICES",
     "TacticLayer",
     "TacticMemory",

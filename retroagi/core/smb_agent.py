@@ -95,7 +95,10 @@ def stack_rows(rows: Sequence[tuple], device):
 
 
 def _one(out: Mapping[str, torch.Tensor], index: int) -> dict:
-    return {name: value[index] for name, value in out.items()}
+    return {
+        name: _one(value, index) if isinstance(value, Mapping) else value[index]
+        for name, value in out.items()
+    }
 
 
 def _encoded(encode, tokens, device) -> torch.Tensor:
@@ -169,6 +172,7 @@ def decide(
             strategy=_encoded(encode_strategy, switches, device),
             feedback=execution_feedback,
             memory=memory,
+            sample=layer in sample,
         )
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]

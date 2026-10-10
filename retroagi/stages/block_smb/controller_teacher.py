@@ -465,12 +465,16 @@ def _command_room(found, tested):
 def _with_margin(env, state, target, goal, result, memo=None):
     """The chosen move's version with the most margin (training labels only).
 
-    A jump is replaced by the jump that does the same thing while staying
-    farthest from enemies and landing farthest from the platform's edges. On
-    the ground, a jump that passes an enemy also gets a better takeoff when a
-    short run first gives it at least 4 more pixels of margin. Runs and holds
-    keep the plan: a run's job is often to reach an edge for a takeoff.
+    First the move itself is chosen where an enemy is near ahead
+    (_choose_move). A jump is then replaced by the jump that does the same
+    thing while staying farthest from enemies and landing farthest from the
+    platform's edges. On the ground, a jump that passes an enemy also gets a
+    better takeoff when a short run first gives it at least 4 more pixels of
+    margin. Runs and holds keep the plan: a run's job is often to reach an
+    edge for a takeoff.
     """
+    memo = {} if memo is None else memo
+    goal, result = _choose_move(env, state, target, goal, result, memo)
     if goal.mode != "jump" or not result.outcome:
         return goal
     if getattr(env, "_action_jump_direction", 0) or not env.mario["on_ground"]:
@@ -497,6 +501,141 @@ def _with_margin(env, state, target, goal, result, memo=None):
         if run is not None:
             return run
     return chosen[0]
+
+
+def _enemy_ahead(env, direction) -> bool:
+    """Whether a live enemy Mario could jump over or onto is within 128 pixels
+    ahead (``direction``: 1 right, -1 left) at about his height."""
+    m = env.mario
+    cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
+    for e in env.enemies:
+        if e["dead"] or e["h"] <= 0 or e.get("kind") in ("monster", "piranha_plant"):
+            continue
+        ahead = (e["x"] + e["w"] / 2 - cx) * direction
+        if 0 < ahead <= 128 and abs(e["y"] + e["h"] - feet) <= 32:
+            return True
+    return False
+
+
+def _move_kind(env, result) -> str:
+    """What a command (its label-only trial from the current state) does to
+    enemies: "stomp" (it kills one), "pass" (Mario ends on the other side of an
+    enemy that stays alive) or "other"."""
+    if not result.outcome:
+        return "other"
+    killed, sides = result.outcome[2], result.outcome[4]
+    if killed:
+        return "stomp"
+    cx = env.mario["x"] + env.mario["w"] / 2
+    alive = [e for e in env.enemies if not e["dead"]]
+    now = tuple(cx < e["x"] + e["w"] / 2 for e in alive)
+    return "pass" if sides != now else "other"
+
+
+def _choose_move(env, state, target, goal, result, memo):
+    """Choose between stomping an enemy, jumping over it and waiting first
+    (training labels only). Returns (command, its result).
+
+    It applies on the ground with a live enemy near ahead, except in lessons
+    that are one given jump. Under max points (kills score), a stomp that works
+    now is taught over any other move. Under speed run, a jump over is taught
+    over waiting, unless the waiting command lets the same jump pass with at
+    least 4 more pixels of margin; and over a stomp. Where no jump over works
+    now, a short wait after which one works is taught over a stomp. Which of
+    these works is decided by trials, so scenes that look alike get the same
+    move.
+    """
+    if (
+        not env.mario["on_ground"]
+        or getattr(env, "_action_jump_direction", 0)
+        or (result.won and goal.mode != "jump")
+        or not _enemy_ahead(env, target.direction)
+    ):
+        return goal, result
+    kind = _move_kind(env, result)
+    max_points = getattr(state, "strategy", "speed_run") == "max_points"
+    if kind == ("stomp" if max_points else "pass"):
+        return goal, result
+    wanted = "stomp" if max_points else "pass"
+    working = _jumps_that(env, state, target, wanted, memo)
+    for g, r in sorted(working, key=lambda v: _rank(*v), reverse=True):
+        confirmed = trial(env, state, g, target)
+        if not (confirmed.won or confirmed.safe and confirmed.clearance >= 8):
+            continue
+        if kind == "other" and not max_points:
+            if _waiting_helps(env, state, target, goal, g, confirmed):
+                return goal, result
+        return g, confirmed
+    if kind == "stomp" and not max_points:
+        wait = _wait_to_pass(env, state, target)
+        if wait is not None:
+            return wait
+    return goal, result
+
+
+def _jumps_that(env, state, target, kind, memo, direction=None):
+    """Jumps toward the target (label-only trials, kept in ``memo``) that work
+    and do ``kind`` to an enemy ("stomp" or "pass", _move_kind)."""
+    direction = target.direction if direction is None else direction
+    found = []
+    for other in candidates(env, target, None):
+        if other.mode != "jump" or other.x == 0 or (other.x > 0) != (direction > 0):
+            continue
+        if other not in memo:
+            memo[other] = _trial(env, state, other, target)
+        r = memo[other]
+        works = r.won or (r.safe and r.clearance >= 8 and (r.advanced or r.progress > 0))
+        if works and _move_kind(env, r) == kind:
+            found.append((other, r))
+    return found
+
+
+def _wait_to_pass(env, state, target):
+    """A wait (holding still, or a step of 4 to 32 pixels toward the target)
+    after which a jump over the enemy works: the one whose jump over then keeps
+    the most margin (in 2-pixel steps; the shorter wait on ties), as (command,
+    its result); or None."""
+    best, best_rank = None, None
+    waits = [SkillToken("hold", 0, 0)]
+    waits += [SkillToken("run", d * target.direction, 0) for d in (4, 8, 16, 24, 32)]
+    for order, wait in enumerate(waits):
+        moved = _trial(env, state, wait, target, save=True)
+        if not moved.safe or moved.snapshot is None or moved.enemy_gap < 8:
+            continue
+        with probe_state(env):
+            restore_env_state(env, moved.snapshot)
+            following = copy(state)
+            following.execution, following.controller = moved.spatial, moved.controller
+            following.scene = moved.spatial.previous
+            passes = _jumps_that(env, following, target, "pass", {})
+        if passes:
+            margin = max(min(r.margin, moved.enemy_gap) for _, r in passes)
+            rank = (math.floor(margin / 2), -order)
+            if best_rank is None or rank > best_rank:
+                best, best_rank = (wait, moved), rank
+    return best
+
+
+def _waiting_helps(env, state, target, waiting, jump, result) -> bool:
+    """Whether, after the ``waiting`` command, a jump over the enemy (to the
+    same place, or with the same reach) passes with at least 4 more pixels of
+    margin than ``jump`` does now."""
+    moved = _trial(env, state, waiting, target, save=True)
+    if not moved.safe or moved.snapshot is None:
+        return False
+    start = env.mario["x"]
+    with probe_state(env):
+        restore_env_state(env, moved.snapshot)
+        following = copy(state)
+        following.execution, following.controller = moved.spatial, moved.controller
+        following.scene = moved.spatial.previous
+        shift = env.mario["x"] - start
+        for g in dict.fromkeys((SkillToken("jump", round(jump.x - shift), jump.y), jump)):
+            r = _trial(env, following, g, target)
+            works = r.won or (r.safe and r.clearance >= 8)
+            if works and _move_kind(env, r) == "pass" and r.margin >= result.margin + 4:
+                return True
+    return False
 
 
 def _better_takeoff(env, state, target, jump, result):

@@ -99,3 +99,56 @@ def test_a_platform_jump_lands_in_the_middle_of_the_platform(index):
     jump = result["commands"][0]["skill"]
     platform = next(r for r in rects if r.top < 220)
     assert abs(cx + jump["x"] - platform.centerx) <= 4, (jump, platform, cx)
+
+
+# ── Stomp or pass: the strategy decides, and the teacher follows it ───────────
+
+
+def test_lessons_that_must_stomp_are_played_for_points():
+    must_stomp = ("enemy_stomp", "stomp_mount", "action_stomp", "action_stomp_back")
+    passing = ("skill_enemy_bypass", "skill_enemy_bypass_back", "landing_enemy", "enemy_hop")
+    for family in must_stomp:
+        assert sample(family, 0)["strategy"] == "max_points", family
+    for family in passing:
+        assert sample(family, 0).get("strategy", "speed_run") == "speed_run", family
+
+
+def train_sample(family, index, difficulty):
+    return sample_block_smb_monte_carlo_scenario(
+        split="train", seed=0, sample_index=index, family=family, difficulty=difficulty
+    ).scenario
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    "family,index,difficulty",
+    [("landing_enemy", 8, "hard"), ("landing_enemy", 9, "hard"), ("enemy_hop", 0, "medium")],
+)
+def test_under_speed_run_the_teacher_passes_an_enemy_it_once_stomped(family, index, difficulty):
+    scenario = train_sample(family, index, difficulty)
+    coins = len(scenario.get("coins", []))
+    result = replay(scenario, family=family)
+    assert result["won"]
+    # No kill: the points are at most the coins.
+    commands = [c["skill"] for c in result["commands"]]
+    assert result["points"] <= coins and not any(c["y"] == -10 for c in commands), commands
+
+
+@pytest.mark.timeout(300)
+def test_under_max_points_the_teacher_stomps():
+    scenario = train_sample("enemy_stomp", 0, "medium")
+    result = replay(scenario, family="enemy_stomp")
+    assert result["won"] and result["points"] >= 1
+
+
+@pytest.mark.timeout(600)
+def test_landing_enemy_layouts_that_look_alike_get_the_same_first_move():
+    # The walker patrols the whole visible floor, so no hidden turnaround
+    # decides between waiting, jumping over and stomping.
+    first = []
+    for index in range(6):
+        result = replay(train_sample("landing_enemy", index, "hard"), family="landing_enemy")
+        assert result["won"]
+        on_ground = result["commands"][1]["skill"]  # the first after landing
+        first.append(on_ground["mode"])
+    assert first.count(max(set(first), key=first.count)) >= 5, first

@@ -72,6 +72,8 @@ from retroagi.core.smb_observer import (
 )
 from retroagi.core.tokens import (
     EXECUTION_WIDTH,
+    SKILL_X,
+    SKILL_Y,
     TACTICS,
     TacticToken,
     encode_strategy,
@@ -841,6 +843,33 @@ def _weighted_mean(values, weights):
     return (values * weights).sum() / weights.sum().clamp_min(1e-12)
 
 
+# The skill's destination is taught with a loss that grows with its pixel
+# error. The target is spread over nearby pixels as a bell curve of this
+# width (so a pick 1 pixel off is nearly as good as the label), and the
+# expected distance between the pick and the label is added, in units of this
+# many pixels (so 57 pixels off costs far more than 14).
+POSITION_SPREAD_PIXELS = 2.0
+POSITION_DISTANCE_PIXELS = 32.0
+POSITIONS = {
+    "x": torch.tensor(SKILL_X, dtype=torch.float32),
+    "y": torch.tensor(SKILL_Y, dtype=torch.float32),
+}
+
+
+def position_loss(logits, label, head: str):
+    """[N]: the loss of a destination's x or y logits [N, bins] for label
+    indices [N]: the divergence from a bell curve around the label
+    (POSITION_SPREAD_PIXELS), plus the expected distance in pixels from the
+    label divided by POSITION_DISTANCE_PIXELS."""
+    pixels = POSITIONS[head].to(logits.device)
+    offsets = pixels[None, :] - pixels[label][:, None]
+    target = torch.softmax(-0.5 * (offsets / POSITION_SPREAD_PIXELS) ** 2, dim=-1)
+    log_p = logits.float().log_softmax(-1)
+    spread = (target * (target.clamp_min(1e-12).log() - log_p)).sum(-1)
+    distance = (log_p.exp() * offsets.abs()).sum(-1) / POSITION_DISTANCE_PIXELS
+    return spread + distance
+
+
 def action_memory(policy, a, b, c, d, episodes=None, return_all=False):
     """Replay precisely the runtime memory ticks: every four frames plus decisions.
 
@@ -1062,6 +1091,17 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     with torch.set_grad_enabled(trains_memory):
         state, memory_states, memory_ticks = action_memory(policy, a, b, c, d, episodes, True)
         numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
+    # x and y are read with the mode and x already chosen: the teacher's where
+    # it labelled the decision (teaching), the learner's own elsewhere.
+    m = d["labelled"]
+    teaching = {
+        head: (
+            torch.where(m, d[f"label_{head}"].long(), d[f"pick_{head}"].long())
+            if f"pick_{head}" in d
+            else d[f"label_{head}"].long()
+        )
+        for head in ("mode", "x")
+    }
     out = policy.run_skill(
         policy.encode_scene((a[e, f], b[e, f], c[e, f])),
         expected,
@@ -1069,6 +1109,7 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         choice_history(d["used"], e),
         feedback=d["execution_feedback"],
         memory=state,
+        picks=teaching,
     )
     stats = {"decisions": int(len(e))}
     if trains_memory:
@@ -1078,7 +1119,6 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         losses.update(endpoint_losses)
         stats.update(endpoint_stats)
     imitation = 1.0 if rl is None else rl.imitation_weight
-    m = d["labelled"]
     if m.any() and imitation > 0:
         label = {
             name[len("label_") :]: value[m]
@@ -1091,16 +1131,22 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         stalled = d["execution_feedback"][m, 1] > 0.5
         weight = weight * torch.where(stalled, 3.0, 1.0)
         for head in CHOICES["skill"]:
-            losses[head] = imitation * _weighted_mean(
-                F.cross_entropy(out[head][m], label[head], reduction="none"), weight
-            )
+            if head == "mode":
+                each = F.cross_entropy(out[head][m], label[head], reduction="none")
+            else:
+                each = position_loss(out[head][m], label[head], head)
+                picked = out[head][m].argmax(-1)
+                stats[f"{head}_error_pixels"] = float((picked - label[head]).abs().float().mean())
+            losses[head] = imitation * _weighted_mean(each, weight)
             stats[f"{head}_accuracy"] = float(
                 (out[head][m].argmax(-1) == label[head]).float().mean()
             )
     x = d["explored"]
     if rl is not None and x.any():
         picks = {head: d[f"pick_{head}"][x] for head in CHOICES[learner]}
-        log_prob, entropy = choice_log_prob(learner, {k: v[x] for k, v in out.items()}, picks)
+        # Read with the learner's own picks as chosen, as it chose them.
+        own = policy.skill.heads_given(out["decision"][x], picks)
+        log_prob, entropy = choice_log_prob(learner, own, picks)
         advantage = d["advantage"][x]
         advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-6)
         ratio = torch.exp(log_prob - d["old_log_prob"][x])
@@ -1515,12 +1561,18 @@ def _tasks(
 ):
     """Training tasks: ``layouts`` per family (plus ``extra``), each layout's
     difficulty drawn by config.difficulty_weights. Held-out tasks: ``layouts``
-    per family at each difficulty."""
+    per family at each difficulty.
+
+    Each family draws its difficulties from its own random sequence, so a
+    family's layouts in a round are the same whatever extra layouts the other
+    families get, and its extra layouts follow its usual ones: every layout a
+    round can use is known in advance (and can be qualified before training).
+    """
     tasks = []
-    rng = random.Random(f"{config.seed}|{split}|{round_index}")
     for family in learner_families(config.learner, config.families):
         if split == "train":
             count = layouts + (extra or {}).get(family, 0)
+            rng = random.Random(f"{config.seed}|{split}|{round_index}|{family}")
             difficulties = rng.choices(DIFFICULTIES, weights=config.difficulty_weights, k=count)
         else:
             difficulties = [d for d in DIFFICULTIES for _ in range(layouts)]
@@ -1804,6 +1856,13 @@ def load_layered_checkpoint(path, device="cpu"):
         checkpoint.setdefault("load_migrations", []).append(
             "action_endpoint_requires_requalification"
         )
+    if "skill.given_mode.net.0.weight" not in state:
+        # The skill's x reading its chosen mode, and y reading both, start with
+        # no influence: the same outputs as the skill that chose them apart.
+        for name in fresh:
+            if name.startswith(("skill.given_mode.", "skill.given_mode_and_x.")):
+                state[name] = fresh[name]
+        checkpoint.setdefault("load_migrations", []).append("skill_ordered_choice_zero_initialized")
     policy.load_state_dict(state)
     return policy, checkpoint
 

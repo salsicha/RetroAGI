@@ -9,8 +9,8 @@ The hierarchy is **strategy → tactic → skill → predictive executor**:
    descend in either direction, or hold ground. There is no direction number
    in its categorical token.
 3. **Skill:** reads the tactic, strategy context, ViT scene, LSTM prediction and its last 16
-   spatial commands. Chooses a run/jump/hold mode and a destination relative
-   to Mario's feet.
+   spatial commands. Chooses a run/jump/hold mode, then a destination
+   relative to Mario's feet knowing that mode (x, then y knowing x).
 4. **Executor:** predicts movement, chooses buttons and jump duration, brakes
    on arrival, tracks moving stomp targets, and holds a spot
    relative to a moving platform. Waits are reconsidered every frame so a

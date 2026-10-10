@@ -28,13 +28,26 @@ movement or airborne steering after a timed jump-button plan has ended.
 The skill uses a transformer with positional encoding and a context of its
 last **16 used commands**, including teacher commands during training. History
 is newest first, marked by decision age, and reset between episodes. Its
-three output heads choose movement mode and pixel coordinates. Coordinates
-are categorical bins internally; the message delivered to the executor is a
-spatial vector (mode one-hot plus normalized x/y), not a tactic category.
+three output heads choose the command **in order**: the movement mode first,
+then the destination's x reading the chosen mode, then its y reading the mode
+and x. Choosing them apart let one command's mode be paired with another's x
+(a run to where a jump over an enemy lands: Mario runs into it) or one
+command's x with another's y (a stomp's x at ground height: Mario jumps over
+the enemy he should stomp). Coordinates are categorical one-pixel bins
+internally; the message delivered to the executor is a spatial vector (mode
+one-hot plus normalized x/y), not a tactic category. In training, x is read
+with the teacher's mode and y with the teacher's mode and x. x and y are
+taught with a loss that grows with the pixel error: the target is spread over
+nearby pixels as a two-pixel bell curve, and the expected distance from the
+label (in units of 32 pixels) is added, so a destination one pixel off is
+nearly as good as the label while one 57 pixels off is expensive.
 
 Strategy context distinguishes otherwise identical inputs with conflicting
 demonstrations: the same retreat or climb tactic can require different
-destinations under speed run and max points.
+destinations under speed run and max points. It also tells a stomp from a
+jump over: every lesson that must stomp an enemy is played under max points
+(kills score), and under speed run the teacher jumps over an enemy whenever
+that works (see the spatial teacher below).
 
 There is no action network. The executor retains a run target and evaluates
 short acceleration/braking trajectories every frame. Jump targets use the
@@ -383,6 +396,21 @@ the same jump afterwards passes at least 4 pixels farther from the enemy. The
 patrol, plant and monster teachers rank their working commands the same way.
 Lessons whose point is one immediate jump keep their takeoff.
 
+The move itself is chosen by the strategy when Mario stands on the ground with
+a live enemy within 128 pixels ahead at about his height. Under max points, a
+stomp that works now is taught over any other move. Under speed run, a jump
+over the enemy is taught over a stomp, and passing now over waiting, unless
+the waiting command lets the same jump pass with at least 4 more pixels of
+margin. Where no jump over works now, the teacher tries waiting first:
+holding still, or a step of 4 to 32 pixels toward the target. It takes the
+wait after which a jump over keeps the most margin; only if none works does it
+stomp. In enemy_hop, for example, Mario stops 48 pixels from a standing
+Goomba, where every jump from rest lands on it; the teacher now steps 32
+pixels closer and jumps over it. The landing_enemy walker, like enemy_stomp's,
+patrols the whole visible floor: with short hidden patrol ends it turned
+around while Mario was in the air, so 1-pixel differences of distance decided
+between waiting, jumping over and stomping.
+
 For isolated downward jumps, a visual contact correction can interrupt edge
 preparation before its waypoint is reached. If ordinary destinations fail,
 the teacher can certify a run toward a takeoff with at least two pixels of
@@ -401,7 +429,11 @@ unchanged.
 
 Before any learning, `train-layer` qualifies the exact held-out layouts through
 the production episode pipeline. It also qualifies each round's prepared
-training layouts before updating weights. These checks use the same episode
+training layouts before updating weights. Each family draws its training
+difficulties from its own random sequence, and a weak family's extra layouts
+follow its usual ones, so every layout a round can use (at most
+`train_layouts_per_family + focus_layouts` per family) is known in advance
+and can be qualified before a run starts. These checks use the same episode
 budget and 400-frame progress timeout as learner episodes, production vision,
 and spatial teacher destinations. Every episode must finish with valid teacher
 labels throughout. A failure stops the run and saves its layout and outcome in

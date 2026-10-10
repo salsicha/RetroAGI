@@ -1172,10 +1172,12 @@ def _finish_layout(family, scenario, params):
     body is 12 tall, so its feet stay where they were authored.
     """
     scenario["mario"][1] += 4
-    if family == "enemy_stomp":
+    if family in ("enemy_stomp", "landing_enemy"):
         # Patrol limits are not observable. Short, invisible limits made
-        # identical observed motion require incompatible jump holds; use the
-        # visible floor span, so no turnaround happens mid-approach.
+        # identical observed motion require incompatible jump holds (and, in
+        # landing_enemy, a wait, a jump over or a stomp at 1-pixel differences
+        # of distance); use the visible floor span, so no turnaround happens
+        # mid-approach.
         for enemy in scenario["enemies"]:
             enemy[2], enemy[3] = 0, scenario["world_width"]
         params.update(patrol_halfwidth=None, enemy_motion="floor_span")
@@ -1185,6 +1187,13 @@ def _finish_layout(family, scenario, params):
         scenario["mario_velocity"] = [2.5, 0.0]
     if family in ("enemy_stomp", "stomp_mount"):
         scenario["task_objective"] = "stomp"
+    if (
+        scenario.get("goal_on_stomp") or scenario.get("require_stomp_before_goal")
+    ) and "strategy" not in scenario:
+        # A lesson that must stomp is played for points (max points pays for
+        # kills). Under speed run the teacher jumps over an enemy it can pass,
+        # so the strategy switch is how the skill tells a stomp from a pass.
+        scenario["strategy"] = "max_points"
     if family == "retreat_recovery":
         scenario["task_direction"] = -1
 
