@@ -755,7 +755,27 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
             found.append((key, exact, -abs(travel), -wait, travel, wait, option, total))
     # The most room in 2-pixel steps, then exactly; then the shortest travel.
     found.sort(key=lambda f: f[:4], reverse=True)
+    _middle_of_equal_runs(found)
     return [(f[0], f[4], f[5], f[6], f[7]) for f in found]
+
+
+def _middle_of_equal_runs(found):
+    """Where run-ups of several lengths keep the same, most room, put first
+    the one in the middle of the unbroken range of them (beginning at the
+    shortest), as equal landing destinations are: the shortest alone taught
+    a run back of exactly MIN_RUN in most scenes where the room stopped
+    growing after it. ``found``: _takeoff_search's entries, sorted."""
+    if not found or not found[0][4] or found[0][5]:
+        return
+    best, start = found[0][:2], found[0][4]
+    equal = {f[4] for f in found if f[:2] == best and not f[5]}
+    side = 1 if start > 0 else -1
+    end = start
+    while end + side in equal:
+        end += side
+    middle = start + (end - start) // 2
+    first = next(i for i, f in enumerate(found) if f[:2] == best and f[4] == middle and not f[5])
+    found.insert(0, found.pop(first))
 
 
 def _screen_walk(path, enemies, lips):
@@ -934,8 +954,13 @@ def destination(env, state, proposal):
         # The proposal stays a candidate: it may have been passed over only
         # for being a stomp under speed run or a mere hop, ranked last here.
         last = speed_run and _move_kind(env, result) == "stomp"
+        # A move away from the target's side goes against the tactic: it
+        # comes after every move toward it, stomps included (a jump back off
+        # a ledge reached the route's floor first, under the ledge, where a
+        # walker then trapped Mario).
+        back = goal.mode != "hold" and goal.x * target.direction < 0
         if result.won:
-            winners.append((last, _rank(goal, result), goal))
+            winners.append(((back, last), _rank(goal, result), goal))
         elif (
             result.safe
             and result.clearance >= 8
@@ -945,10 +970,11 @@ def destination(env, state, proposal):
             value = (100 if result.advanced else result.progress) / max(1, result.frames)
             # A mere hop advances only after every other move that does.
             hop = goal.mode == "jump" and _mere_hop(env, result)
-            progressing.append(((last, hop), (value, result.margin), goal))
-    winners = [((last, False), rank, goal) for last, rank, goal in winners]
+            progressing.append(((back, last, hop), (value, result.margin), goal))
+    winners = [((back, last, False), rank, goal) for (back, last), rank, goal in winners]
     ordered = [
         (kind, goal)
+        for backward in (False, True)
         for stomps in (False, True)
         for kind, entries, hops in (
             ("win", winners, False),
@@ -956,7 +982,9 @@ def destination(env, state, proposal):
             ("advance", progressing, True),
         )
         for _, _, goal in sorted(
-            (e for e in entries if e[0] == (stomps, hops)), key=lambda e: e[1], reverse=True
+            (e for e in entries if e[0] == (backward, stomps, hops)),
+            key=lambda e: e[1],
+            reverse=True,
         )
     ]
     for kind, goal in ordered:

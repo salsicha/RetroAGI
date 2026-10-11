@@ -119,3 +119,37 @@ def test_a_stomp_seen_a_frame_early_by_vision_still_counts():
         assert result.won and 0 in result.outcome[2]
     finally:
         env.close()
+
+
+def test_equal_room_run_ups_take_the_middle_of_their_range():
+    from retroagi.stages.block_smb.controller_teacher import _middle_of_equal_runs
+
+    def entry(room, travel, wait=0):
+        return ((room,), (float(room),), -abs(travel), -wait, travel, wait, None, {})
+
+    # Run-ups back of 8 to 10 pixels keep the most room (12 is not next to
+    # them): the middle, 9, comes first rather than the shortest.
+    found = [entry(5, -8), entry(5, -9), entry(5, -10), entry(5, -12), entry(4, 0)]
+    _middle_of_equal_runs(found)
+    assert [f[4] for f in found] == [-9, -8, -10, -12, 0]
+    # Jumping from here keeping the most room stays first.
+    found = [entry(5, 0), entry(5, 8), entry(5, 9)]
+    _middle_of_equal_runs(found)
+    assert found[0][4] == 0
+
+
+def test_under_advance_the_teacher_does_not_jump_back_off_a_ledge_into_a_trap():
+    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+    from retroagi.stages.block_smb.teacher_replay import replay
+
+    # A walker comes along the floor below the ledge; jumping back off the
+    # ledge reached the route's floor first but left Mario under the ledge.
+    scenario = sample_block_smb_monte_carlo_scenario(
+        split="train",
+        seed=2026100909,
+        sample_index=4013,
+        family="skill_ledge_descent",
+        difficulty="hard",
+    ).scenario
+    result = replay(scenario, family="skill_ledge_descent")
+    assert result["won"] and result["commands"][0]["skill"]["x"] > 0

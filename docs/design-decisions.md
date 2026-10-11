@@ -67,6 +67,27 @@ The second attempt's round 0 lost two more:
   command. A trial now plays on, as the episode does, until the simulator
   lands Mario or makes the stomp (`SETTLE_FRAMES`, at most 4 frames).
 
+The third attempt lost one layout in round 3 and one in round 4, and round
+4's labels concentrated:
+
+- **Judging the walker's approach as the slide's** (round 3, `enemy_hop`):
+  after a stomp's bounce every landing was 12 pixels from a walker coming
+  toward Mario, which the brake check counted against the landing, so the
+  teacher had no command in the air. The check now holds the enemies where
+  they stand (above).
+- **A jump back off the ledge** (round 4, `skill_ledge_descent`): the jump
+  back reached the route's floor first, under the ledge, where the walker
+  then trapped Mario. A move away from the target's side goes against the
+  tactic; it now ranks after every move toward it, stomps included (here the
+  teacher stomps the walker from the ledge).
+- **Run-ups of exactly 8 pixels** (round 4: 4 of its 6 runs back): where
+  run-ups of several lengths keep the same, most room, the shortest was
+  taken, the 8-pixel minimum wherever the room stopped growing after it.
+  The middle of the unbroken range of equal run-ups is now taken, as for
+  equal landing destinations (`_middle_of_equal_runs`).
+
+The teacher wins 246 of 246 fresh layouts of the 41 skill families with these.
+
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
 A share of one value within a family can be physics (a pit nearly as wide as
