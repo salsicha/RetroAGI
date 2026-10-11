@@ -304,7 +304,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                     safe=bool(
                         route_available(env)
                         and not boxed_with_enemy(env, clearance)
-                        and bounce_lands_clear(env)
+                        and bounce_lands_clear(env, spatial, executor)
                         and stop_safe(env, spatial, executor)
                         and landed
                         and (reached or advanced or objective or env.stomped)
@@ -1732,16 +1732,33 @@ def on_plant_mouth(env):
     )
 
 
-def bounce_lands_clear(env):
-    """After a stomp, the bounce comes down (played out with no buttons) at
-    least 8 pixels from every live enemy, or wins first. Steering in the
-    air moves that landing only a few pixels: a stomp made as a walker
-    arrived left every landing 6 pixels from it, and no command after."""
-    if not env.stomped or env.mario["on_ground"]:
+def bounce_lands_clear(env, spatial, executor):
+    """After a stomp, the bounce comes down at least 8 pixels from every live
+    enemy, or wins first: played out as the next decision plays it, a run to
+    the floor below through the executor (in the air, every run command came
+    down at the same place). A stomp made as a walker arrived left every
+    landing a few pixels from it, and no command after; played out with no
+    buttons, the bounce had stomped the walker too and looked clear."""
+    m = env.mario
+    if not env.stomped or m["on_ground"]:
         return True
+    feet = m["y"] + m["h"]
+    below = [
+        p["rect"].top
+        for p in env.platforms
+        if p["rect"].left < m["x"] + m["w"] and p["rect"].right > m["x"] and p["rect"].top >= feet
+    ]
+    run = SkillToken("run", 0, round(min(below) - feet) if below else 0)
     with probe_state(env):
+        feedback = deepcopy(spatial)
+        control = SMBExecutor(last_button=executor.last_button)
+        scene = scene_from_labels(env.scene_labels())
+        plan = feedback.begin(run, scene)
+        control.start(plan, flight=feedback.flight, travel=feedback.travel)
         for _ in range(64):
-            _, _, done, truncated, _ = env.step(0)
+            button = control.press(scene)
+            feedback.executed(button, scene)
+            _, _, done, truncated, _ = env.step(button)
             if done or truncated:
                 return bool(env._goal_credited)
             m = env.mario
@@ -1752,6 +1769,8 @@ def bounce_lands_clear(env):
                     for e in env.enemies
                     if not e["dead"] and e["h"] > 0 and abs(e["y"] + e["h"] - feet) < 20
                 )
+            scene = scene_from_labels(env.scene_labels())
+            feedback.observe(scene)
     return True
 
 

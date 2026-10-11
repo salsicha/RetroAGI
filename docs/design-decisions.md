@@ -119,6 +119,20 @@ lost:
   only changes of more than a pixel (`SpatialFeedback.observe`). This is the
   agent's own executor: it played the same way.
 
+The final attempt's round 3 lost three:
+
+- **The bounce judged with no buttons** (`enemy_hop`, twice): played out
+  with no buttons, the bounce stomped the arriving walker too and looked
+  clear; the next command, a run in the air, came down beside it. The
+  bounce is now played out through the executor, as a run to the floor
+  below (every run command in the air came down at the same place).
+- **A walker pacing a 30-pixel raised platform** (`action_stomp_up`): only
+  the longest jump stomped it, and no destination aimed at it makes the
+  executor choose that jump (the executor's aim at a moving target on a
+  raised platform). A layout of an action family with an enemy is now
+  kept only if the teacher wins it (`monte_carlo._teacher_wins`, on the
+  true scene); about 15 seconds per layout, made in parallel.
+
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
 A share of one value within a family can be physics (a pit nearly as wide as

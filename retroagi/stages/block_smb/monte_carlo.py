@@ -1278,6 +1278,17 @@ def _route_lesson_fault(scenario, actions) -> Optional[str]:
         env.close()
 
 
+def _teacher_wins(family, scenario) -> bool:
+    """Whether the teacher, through the executor (on the true scene), wins
+    the layout: an action lesson with an enemy must be one it can teach. A
+    walker pacing a narrow raised platform could be stomped only by the
+    longest jump, which no destination aimed at it makes; the teacher landed
+    beside it instead, where it had no next command."""
+    from .teacher_replay import replay
+
+    return bool(replay(copy.deepcopy(dict(scenario)), family=family)["won"])
+
+
 def _verified_route(family, scenario, authored_actions):
     """The first route that completes the layout: (actions, source, reachability).
 
@@ -1299,6 +1310,10 @@ def _verified_route(family, scenario, authored_actions):
         fault = _route_lesson_fault(scenario, authored_actions) if family in ROUTE_LESSONS else None
         if fault is not None:
             return None, fault, None
+        if family in ACTION_FAMILIES and scenario.get("enemies") and not _teacher_wins(
+            family, scenario
+        ):
+            return None, "teacher_cannot_aim", None
         return list(authored_actions), "tactic_teacher", result
     candidates = [list(authored_actions)]
     if family == "platform_hop":
