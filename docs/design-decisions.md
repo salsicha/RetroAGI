@@ -80,6 +80,47 @@ Replaces the old candidate list (4, 8, 16, 24, 32, 48, 72, 96 pixels and a
 few platform points), the takeoff stops (2, 6, 12, 20, 32), the waits (4 to
 32 by 8), the monster jumps (48 to 128 by 16) and the patrol teacher's lists.
 
+## 2026-10-10 — Why the longest jump dominates some families, and the room rule (built; being measured)
+
+A census of 24 layouts per skill family (`artifacts/block_smb/action_census_20261010`)
+still found single values. Each has a cause:
+
+- **The longest jump.** With a run-up allowed, the jump keeping the most
+  room past a pit of width g (from both of its edges and from what follows)
+  covers g plus the landing room R, up to the longest jump J (50 pixels on
+  level ground): it is g + R when R is at most J - g, else the longest. Most
+  rooms were wider than J - g, so most labels were the longest jump. The
+  room is now drawn by `threat_variety.best_jump_room`: evenly up to J - g in
+  85% of layouts (each then best landed by a different jump), anywhere up to
+  its widest in the rest. Applied to `action_jump_gap` (and its backward
+  version) and to the floating ledge of the upper gap families.
+- **Run-ups of 1 to 3 pixels** (93% of `stomp_mount`'s runs): the teacher no
+  longer plans a run-up shorter than 8 pixels (`MIN_RUN`, as its other runs).
+- **Hops of 13 pixels toward an enemy** (49 to 85% of four enemy families'
+  jumps): the button route proposed them, and per frame a short hop
+  progresses faster than a short run, which brakes. A hop that lands back
+  on Mario's platform passing and stomping nothing is now taught only when
+  no other move advances.
+- **A forced jump.** Under the floating ledge only one jump climbs the step
+  of `skill_lower_step_climb`; 60% of layouts now leave 24 pixels of floor
+  before the step clear of the ledge.
+
+The census also measures, for the actions of the redesign, the share of the
+most common object slot per verb (structural: a jump-gap lesson's landing is
+always "the second surface") and of the most common outcome per verb (what
+the action predictor would learn).
+
+Second census (`action_census_20261010b`, with these changes): every family
+won all 24 layouts; six collapses are gone (the backward gap jump, the lower
+step climb and exit, the enemy-stomp hops, the two creeping run-ups). What
+remains is mostly boundary values: run-ups now gather at the 8-pixel minimum
+(`pipe_mount` backs up 8 in 79%; two enemy families approach 9 to 10), and
+the longest jump is forced where the pit is nearly as wide as it (hard gaps
+of 31 to 40 pixels) or where a following enemy walks away and widens the
+room (`action_jump_gap` 71% at 50). A share of one value is then physics,
+not a shortcut; the formal validation proposed below (labels explained by
+the visible quantities) is the right test for it.
+
 ## 2026-10-10 — The executor's in-flight re-prediction is off for Block SMB (built)
 
 Each frame of a flight used to re-predict Mario's path and re-choose the
@@ -90,7 +131,10 @@ hold and steering chosen at takeoff and keeps steering toward the goal;
 stomps and moving-platform landings are aimed once, at takeoff, at the
 forecast position. Holding a spot on a moving platform is a separate
 controller and unchanged. It was half the cost of every teacher trial; Full
-SMB play may turn it back on.
+SMB play may turn it back on. Exception (2026-10-10): when vision corrects
+Mario's speed during a flight (a jump made before his speed was seen: one
+picture cannot show it), the flight plans its rest again once
+(`Flight.replan`).
 
 ## 2026-10-10 — No family teaches, and no policy learns, one value (built)
 

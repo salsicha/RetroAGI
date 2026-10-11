@@ -1810,9 +1810,11 @@ def _pipe_mount(
     pipe_height = {
         "easy": rng.randint(42, 48),
         "medium": rng.randint(52, 58),
-        # 65+ cannot be mounted by an immediate jump from the fixed spawn, and
-        # forced-A rollouts jump immediately, so the hard band stops at 64.
-        "hard": rng.randint(60, 64),
+        # The highest jump rises 66 pixels, and a jump's hold and steering
+        # are set at its takeoff: above 61, a landing on the top is within
+        # about 3 pixels of its edge and some layouts have no jump the
+        # teacher can teach, so the hard band stops at 61.
+        "hard": rng.randint(59, 61),
     }[difficulty]
     # The pipe's place and width, and how far Mario starts from it, vary.
     pipe_x, pipe_width = rng.randint(104, 136), rng.randint(24, 40)

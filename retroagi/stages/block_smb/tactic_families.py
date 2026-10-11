@@ -186,14 +186,20 @@ def _low_choice_layout(
     first = (28, 34, 40)[tier] - narrower + rng.randint(-spread, spread)
     second = (28, 34, 40)[tier] - narrower + rng.randint(-spread, spread)
     if vary:
-        from .threat_variety import reachable_span, standing_reach
+        from .threat_variety import best_jump_room, standing_reach
 
-        # The floating ledge's middle usually within a standing jump from the
-        # starting ledge's edge.
-        ledge = reachable_span(rng, 20, 60, 2 * (standing_reach(0) - 10 - first))
+        # The floating ledge is the landing room past the first gap: drawn so
+        # that the jump keeping the most room from both gaps (covering the
+        # gap and the ledge) is spread over every jump that clears the gap.
+        ledge = best_jump_room(rng, 20, 60, standing_reach(0) - first)
     else:
         ledge = 40
     step = rng.randint(20, 40) if vary else 28
+    if vary and rng.random() < 0.6:
+        # Under the floating ledge only one jump climbs the step (the ledge
+        # blocks higher ones), so most layouts leave 24 pixels of floor
+        # before the step clear of the ledge, where every climbing jump fits.
+        step = max(20, min(step, second - 24))
     step_top = 190 + (rng.randint(-6, 6) if vary else 0)
     if second - step < 24:
         # The lower floor before the step lies under the floating ledge (no

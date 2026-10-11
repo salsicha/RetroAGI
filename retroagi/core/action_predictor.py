@@ -130,9 +130,13 @@ class ActionPredictor(nn.Module):
 
 def outcome_loss(predicted, records):
     """The predictor's loss on actions ``records`` [N, len(ACTION_RECORD)]:
-    whether each was survived (all), and how the survived ones ended (a normal
-    likelihood in each field's unit; an object's place only where the action
-    has one). Returns (loss, stats with mean errors in pixels and frames)."""
+    whether each was survived (all), and how the survived ones ended (an
+    object's place only where the action has one): the squared error of each
+    field in its unit, and its uncertainty as a normal likelihood around the
+    predicted value held fixed (fitting the uncertainty alone would let a
+    wide one excuse a poor value: the first predictor under-fitted its own
+    training data by 20 pixels). Returns (loss, stats with mean errors in
+    pixels and frames)."""
     safe = records[:, COLUMN["safe"]] > 0.5
     loss = F.binary_cross_entropy_with_logits(predicted["success"], safe.float())
     stats = {
@@ -144,7 +148,9 @@ def outcome_loss(predicted, records):
         target = records[safe][:, [COLUMN[name] for name in OUTCOME_FIELDS]]
         mean, sigma = predicted["mean"][safe], predicted["sigma"][safe]
         scale = mean.new_tensor(OUTCOME_SCALE)
-        each = 0.5 * ((mean - target) / sigma).square() + (sigma / scale).log()
+        fit = ((mean - target) / scale).square()
+        spread = 0.5 * ((mean.detach() - target) / sigma).square() + (sigma / scale).log()
+        each = fit + spread
         weight = torch.ones_like(each)
         weight[:, 2:4] = records[safe][:, COLUMN["has_object"], None]
         loss = loss + (each * weight).sum() / weight.sum().clamp_min(1)

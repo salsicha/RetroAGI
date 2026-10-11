@@ -9,8 +9,9 @@ One small recurrent network (a GRU) is shared by every tracked enemy and
 moving platform and stepped once per frame for each. Per frame and object it
 reads, from vision only:
 
-- whether the object is seen, and how it moved since it was last seen
-  (pixels per frame, the camera's scroll removed);
+- whether the object is seen, how it moved since it was last seen and on
+  average over its last SMOOTH_FRAMES sightings (pixels per frame, the
+  camera's scroll removed);
 - its kind (walker, plant, other enemy, moving platform);
 - its surroundings: how far its middle is from each end of the surface it
   stands on (a walker turns at a ledge or a wall);
@@ -20,7 +21,7 @@ Its recurrent state carries what one picture cannot show: direction, speed,
 and where a plant or platform is in its cycle. It outputs, for each of
 TRACKER_HORIZONS frames ahead, the object's displacement from where it is
 now (x, y), an uncertainty for each, and the chance that it is still seen.
-The displacement is a correction to steady motion (its latest movement
+The displacement is a correction to steady motion (its average movement
 continued), so an untrained tracker predicts steady motion.
 """
 
@@ -56,8 +57,14 @@ OBJECT_ROW = (
     "mario_feet",
 )
 ROW = {name: i for i, name in enumerate(OBJECT_ROW)}
+# The steady motion a forecast corrects: an object's movement per frame
+# averaged over its last SMOOTH_FRAMES sightings. Boxes move by whole pixels,
+# so a walker at 0.3 pixels per frame moves 0 or 1 between two frames: its
+# last movement continued for 64 frames was 21 pixels off on average, the
+# average over 16 sightings 3.
+SMOOTH_FRAMES = 16
 # The tracker's input per object and frame (track_inputs).
-TRACK_INPUT = 1 + 2 + len(OBJECT_KINDS) + 3 + 2
+TRACK_INPUT = 1 + 2 + 2 + len(OBJECT_KINDS) + 3 + 2
 
 
 def _visible(box) -> bool:
@@ -110,19 +117,27 @@ def _point(row):
     return np.array(((row[ROW["x0"]] + row[ROW["x1"]]) / 2, row[ROW["y0"]]), np.float32)
 
 
-def track_inputs(row, previous, gap: int) -> np.ndarray:
+def _move(row, previous, gap):
+    """Movement per frame since the object was last seen (pixels)."""
+    return (_point(row) - _point(previous)) / gap
+
+
+def track_inputs(row, previous, gap: int, average=None) -> np.ndarray:
     """[TRACK_INPUT] for one object at one frame: ``row`` (None: not seen this
     frame), ``previous`` its row when last seen (None: never), ``gap`` the
-    frames since then."""
+    frames since then, ``average`` its average movement per frame (None:
+    unknown)."""
     out = np.zeros(TRACK_INPUT, np.float32)
     if row is None:
         return out
     out[0] = 1.0
     if previous is not None and gap > 0:
-        out[1:3] = (_point(row) - _point(previous)) / gap / 2
+        out[1:3] = _move(row, previous, gap) / 2
+    if average is not None:
+        out[3:5] = np.asarray(average) / 2
     kind = int(row[ROW["kind"]])
-    out[3 + kind] = 1.0
-    k = 3 + len(OBJECT_KINDS)
+    out[5 + kind] = 1.0
+    k = 5 + len(OBJECT_KINDS)
     if row[ROW["supported"]]:
         middle = (row[ROW["x0"]] + row[ROW["x1"]]) / 2
         out[k] = 1.0
@@ -157,7 +172,7 @@ class TargetTracker(nn.Module):
         return self.cell(inputs, hidden)
 
     def forecast(self, states, velocity):
-        """From states [..., width] and each object's latest movement velocity
+        """From states [..., width] and each object's average movement velocity
         [..., 2] (pixels per frame): {"displacement", "sigma"} [...,
         horizons, 2] in pixels and "visible" [..., horizons] logits."""
         raw = self.head(states).view(*states.shape[:-1], len(TRACKER_HORIZONS), 5)
@@ -219,6 +234,7 @@ class ObjectTracker:
         self.hidden: dict = {}
         self.last: dict = {}  # identity -> (row, frame) when last seen
         self.velocity: dict = defaultdict(lambda: np.zeros(2, np.float32))
+        self.moves: dict = defaultdict(lambda: deque(maxlen=SMOOTH_FRAMES))
         self.forecasts: dict = defaultdict(lambda: deque(maxlen=self.CHECK_LAG + 1))
         self.frame = 0
 
@@ -234,11 +250,13 @@ class ObjectTracker:
         for i in identities:
             row = seen.get(i)
             previous, when = self.last.get(i, (None, self.frame))
-            features = track_inputs(row, previous, self.frame - when)
-            if row is not None and previous is not None:
-                self.velocity[i] = features[1:3] * 2
+            average = None
+            if row is not None and previous is not None and self.frame > when:
+                self.moves[i].append(_move(row, previous, self.frame - when))
+                average = np.mean(self.moves[i], axis=0)
+                self.velocity[i] = average.astype(np.float32)
                 moving.add(i)
-            inputs.append(features)
+            inputs.append(track_inputs(row, previous, self.frame - when, average))
         hidden = torch.stack(
             [
                 self.hidden.get(i, torch.zeros(self.model.width, device=self.device))
@@ -269,7 +287,7 @@ class ObjectTracker:
         for i in [
             i for i, (_, when) in self.last.items() if self.frame - when > TRACKER_HORIZONS[-1]
         ]:
-            for store in (self.hidden, self.last, self.velocity, self.forecasts):
+            for store in (self.hidden, self.last, self.velocity, self.moves, self.forecasts):
                 store.pop(i, None)
         self.frame += 1
 
@@ -304,7 +322,7 @@ class ObjectTracker:
 def track_examples(objects: np.ndarray):
     """Training sequences from one episode's object rows [T, OBJECT_SLOTS,
     len(OBJECT_ROW)]: for each visual identity, from its first to its last
-    sighting, (inputs [L, TRACK_INPUT], latest velocity [L, 2], targets [L,
+    sighting, (inputs [L, TRACK_INPUT], average velocity [L, 2], targets [L,
     horizons, 2], seen [L, horizons], known [L, horizons], valid [L]):
     ``known`` marks the horizons within the episode, ``valid`` the frames it
     is seen (a forecast is made from those)."""
@@ -325,14 +343,18 @@ def track_examples(objects: np.ndarray):
         known = np.zeros((length, len(TRACKER_HORIZONS)), bool)
         valid = np.zeros(length, bool)
         previous, when, moving = None, first, np.zeros(2, np.float32)
+        moves = deque(maxlen=SMOOTH_FRAMES)
         for k, t in enumerate(range(first, last + 1)):
             row = seen_at.get(t)
-            inputs[k] = track_inputs(row, previous, t - when)
             if row is None:
                 velocity[k] = moving
                 continue
+            average = None
             if previous is not None:
-                moving = inputs[k, 1:3] * 2
+                moves.append(_move(row, previous, t - when))
+                average = np.mean(moves, axis=0)
+                moving = average.astype(np.float32)
+            inputs[k] = track_inputs(row, previous, t - when, average)
             velocity[k] = moving
             valid[k] = True
             here = _point(row)

@@ -33,7 +33,13 @@ route under the layout's tactics replaces the authored actions
 from typing import Any
 
 from .tactic_schedule import segment
-from .threat_variety import follow_up, reachable_span, standing_reach, start_distance
+from .threat_variety import (
+    best_jump_room,
+    follow_up,
+    reachable_span,
+    standing_reach,
+    start_distance,
+)
 
 FLOOR = 220
 MARIO_WIDTH = 10
@@ -105,10 +111,11 @@ def action_jump_gap(rng, difficulty: str, world=None, edges=(96, 136)):
         "goal_requires_support": True,
     }
     # A second pit or an enemy bounds the landing; the goal is the floor
-    # between the two threats, its middle usually within a standing jump.
-    # The teacher may first walk up to the edge (2 pixels short of it).
-    reach = edge - min(distance, 2) - MARIO_WIDTH / 2 + standing_reach(0) - 3
-    room = reachable_span(rng, 16, 80, 2 * (reach - far))
+    # between the two threats. The teacher may first walk to the best
+    # takeoff, and then the jump keeping the most room from both pits and
+    # what follows covers the pit and the room: the room's width is drawn
+    # so that this jump is spread over every jump that clears the pit.
+    room = best_jump_room(rng, 16, 80, standing_reach(0) - width)
     kind, room, detail = follow_up(rng, scenario, 1, far, 1, window=(room, room))
     scenario["goal"] = [far, STANDING, room, 20]
     parameters = {

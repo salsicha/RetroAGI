@@ -96,6 +96,28 @@ def standing_reach(rise):
 REACHABLE = 0.75
 
 
+# The share of layouts whose landing room is drawn anywhere up to its
+# widest: there the longest jump keeps the most room, as it often does in a
+# level. In the rest the room's width decides which jump keeps the most.
+WIDE_ROOM = 0.15
+
+
+def best_jump_room(rng, low, high, slack):
+    """The width of a landing room bounded by a following pit or enemy, such
+    that the jump keeping the most room from every threat (the teacher's
+    choice) lands at varied distances, not mostly at the longest jump.
+
+    ``slack``: the widest room in which a shorter jump than the longest
+    still keeps the most room (past a pit of width g that Mario may walk up
+    to, the jump with the most room covers g plus the room's width, so the
+    slack is the longest jump less g). Most rooms are drawn evenly from
+    ``low`` up to the slack; WIDE_ROOM of them anywhere up to ``high``.
+    """
+    if rng.random() < WIDE_ROOM:
+        return rng.randint(low, high)
+    return rng.randint(low, max(low, min(high, int(slack))))
+
+
 def reachable_span(rng, low, high, ceiling):
     """A size between ``low`` and ``high``, kept at most ``ceiling`` (so that
     the best landing is within a standstill jump's reach) in about REACHABLE

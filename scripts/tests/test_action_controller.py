@@ -55,10 +55,11 @@ def test_a_turned_walker_moves_the_runs_destination():
             moved.append((frame, found))
     assert moved and 12 <= moved[0][0] <= 18
     frame, (dx, dy) = moved[0]
-    # Steady motion before the turn put the walker ahead at frame 30; now it
-    # is forecast behind where it is, and Mario's end is on its top.
-    seen_x = 140 + 12 - (frame + 1 - 12) + 8
-    assert dx < seen_x - (MARIO[0] + MARIO[2]) / 2
+    # Steady motion before the turn put the walker's middle at 141 + 30 + 8
+    # at frame 30; since it turned, its average movement (an untrained
+    # tracker continues that) has slowed: the destination moves back.
+    before_turn = 141 + 30 + 8 - (MARIO[0] + MARIO[2]) / 2
+    assert dx < before_turn - 2
     assert abs(dy - (196 - MARIO[3])) < 1e-3
     apply((dx, dy), scene(), spatial)
     assert spatial.travel.distance == dx and spatial.travel.target is None

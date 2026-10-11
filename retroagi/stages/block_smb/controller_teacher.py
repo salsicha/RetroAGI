@@ -535,6 +535,12 @@ def _landing_point(env, result) -> tuple:
     return result.end_dx, result.end_dy
 
 
+def _named(members, dx, dy) -> bool:
+    """Whether one of a jump's destinations names a landing at (dx, dy), as
+    closely as _describes requires."""
+    return any(abs(g.x - dx) <= 4 and abs(g.y - dy) <= 2 for g in members)
+
+
 def _describes(env, command, result) -> bool:
     """Whether ``command`` names where its jump ends: within 4 pixels in x and
     2 in height of the landing (for a stomp, the point on the enemy). A jump
@@ -597,10 +603,11 @@ def _run_frames(motion, distance):
 def _screen(env, path, shift, delay, enemies, lips, rects, solid=()):
     """A recorded path (world boxes, the start first) moved ``shift`` pixels
     along x and started ``delay`` frames later: (distances, landing platform
-    index, killed enemies), or None when it hits an enemy, passes through
-    one of the ``solid`` rects (a predicted path with nothing in its way,
-    which the real jump would bump into) or ends without landing. Distances
-    use the keys of Result.distances."""
+    index, killed enemies, where it lands from its start: (middle's x, the
+    top's height)), or None when it hits an enemy, passes through one of
+    the ``solid`` rects (a predicted path with nothing in its way, which the
+    real jump would bump into) or ends without landing. Distances use the
+    keys of Result.distances."""
     distances, killed = {}, set()
     before = path[0][3]
     for t, (x0, y0, x1, y1) in enumerate(path):
@@ -633,7 +640,8 @@ def _screen(env, path, shift, delay, enemies, lips, rects, solid=()):
                     distances[("landing",)] = min(x0 - r.left, r.right - x1)
                     for i in killed:
                         distances.pop(("enemy", i), None)
-                    return distances, index, killed
+                    middle = (x0 + x1) / 2 - shift - (path[0][0] + path[0][2]) / 2
+                    return distances, index, killed, (middle, r.top - path[0][3])
         before = y1
     return None
 
@@ -667,6 +675,10 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
     ``wanted(option, landing index, killed)``: the jumps that do what is
     needed. Returns [(room key, travel, wait, option, screened distances)],
     the most room first (equal room: the shortest travel, then wait).
+
+    A travel shorter than MIN_RUN is not a run-up: it would be taught as a
+    creep (a run of a pixel or two, then a hop) that gains a few pixels of
+    room; the jump from here, or a real run-up, is taught instead.
     """
     table = _jump_table(env, state, target, memo, (direction,), rise=rise, described_only=False)
     if not table:
@@ -684,7 +696,7 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
     enemies = _enemy_paths(env, horizon)
     floor = support["rect"]
     found = []
-    options = [(t, 0) for t in travels] + [(0, w) for w in waits]
+    options = [(t, 0) for t in travels if not 0 < abs(t) < MIN_RUN] + [(0, w) for w in waits]
     for travel, wait in options:
         shift = travel * direction
         if not (floor.left <= start[0] + shift and start[2] + shift <= floor.right):
@@ -710,8 +722,14 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
             )
             if screened is None:
                 continue
-            distances, landing, killed = screened
+            distances, landing, killed, (dx, dy) = screened
             if not wanted(option, landing, killed):
+                continue
+            if shift and not killed and not _named(option.members, dx, dy):
+                # No destination names where this jump lands from there (the
+                # executor makes another jump for that point): it cannot be
+                # taught. Which destinations make which jump does not depend
+                # on where on the floor Mario stands.
                 continue
             total = _combine(walked, distances)
             screened_result = Result(distances=total)
@@ -874,13 +892,17 @@ def destination(env, state, proposal):
     speed_run = getattr(state, "strategy", "speed_run") != "max_points"
     if proposal is not None:
         result = trial(env, state, proposal, target)
-        if not (speed_run and _move_kind(env, result) == "stomp") and (
-            result.won
-            or (
-                result.safe
-                and result.clearance >= 8
-                and closes_on_enemy(env, target, proposal, result)
-                and (proposal.mode != "hold" or _waiting(env, state))
+        if (
+            not (speed_run and _move_kind(env, result) == "stomp")
+            and not (proposal.mode == "jump" and _mere_hop(env, result))
+            and (
+                result.won
+                or (
+                    result.safe
+                    and result.clearance >= 8
+                    and closes_on_enemy(env, target, proposal, result)
+                    and (proposal.mode != "hold" or _waiting(env, state))
+                )
             )
         ):
             return _with_margin(env, state, target, proposal, result)
@@ -892,8 +914,8 @@ def destination(env, state, proposal):
     options = [(o.command, o.result) for o in _jump_table(env, state, target, memo)]
     options += _run_options(env, state, target, memo)
     for goal, result in options:
-        if goal == proposal and not (speed_run and _move_kind(env, result) == "stomp"):
-            continue
+        # The proposal stays a candidate: it may have been passed over only
+        # for being a stomp under speed run or a mere hop, ranked last here.
         last = speed_run and _move_kind(env, result) == "stomp"
         if result.won:
             winners.append((last, _rank(goal, result), goal))
@@ -904,13 +926,20 @@ def destination(env, state, proposal):
             and (result.advanced or result.progress > 0 or airborne)
         ):
             value = (100 if result.advanced else result.progress) / max(1, result.frames)
-            progressing.append((last, (value, result.margin), goal))
+            # A mere hop advances only after every other move that does.
+            hop = goal.mode == "jump" and _mere_hop(env, result)
+            progressing.append(((last, hop), (value, result.margin), goal))
+    winners = [((last, False), rank, goal) for last, rank, goal in winners]
     ordered = [
         (kind, goal)
         for stomps in (False, True)
-        for kind, entries in (("win", winners), ("advance", progressing))
-        for last, _, goal in sorted(
-            (e for e in entries if e[0] == stomps), key=lambda e: e[1], reverse=True
+        for kind, entries, hops in (
+            ("win", winners, False),
+            ("advance", progressing, False),
+            ("advance", progressing, True),
+        )
+        for _, _, goal in sorted(
+            (e for e in entries if e[0] == (stomps, hops)), key=lambda e: e[1], reverse=True
         )
     ]
     for kind, goal in ordered:
@@ -984,6 +1013,14 @@ def _is_hop(env, result):
         and support == start
         and mark == (env._tactic_index, env._route_done)
     )
+
+
+def _mere_hop(env, result) -> bool:
+    """A jump that lands back where Mario stands, passing and stomping
+    nothing: only a little progress, which a run makes as well. (The button
+    route proposes such hops toward an enemy, and per frame a short hop
+    progresses faster than a short run, which brakes.)"""
+    return bool(result.outcome) and _is_hop(env, result) and _move_kind(env, result) == "other"
 
 
 def _versions(env, state, target, goal, result, memo=None):
@@ -1343,7 +1380,10 @@ def _wait_to_pass(env, state, target, memo):
 def _waiting_helps(env, state, target, waiting, result, memo) -> bool:
     """Whether, after the ``waiting`` command (a run or a hold), a jump over
     the enemy passes with at least 4 more pixels of margin than ``result``
-    (passing now): screened for every jump Mario can make, the best certified."""
+    (passing now): screened for every jump Mario can make, the best certified.
+    When it does, that jump is remembered (_commit) and taken after the wait:
+    weighed afresh at every decision, waiting could win again and again (a
+    walker walking away was trailed by ever shorter runs and hops)."""
     direction = target.direction
     if waiting.mode == "run" and (waiting.x > 0) == (direction > 0) and waiting.x:
         travels, waits = [abs(waiting.x)], ()
@@ -1361,7 +1401,10 @@ def _waiting_helps(env, state, target, waiting, result, memo) -> bool:
     )[:CERTIFY]:
         certified = _certify(env, state, target, direction, travel, wait, option, check)
         if certified is not None:
-            return certified[2].margin >= result.margin + 4
+            helps = certified[2].margin >= result.margin + 4
+            if helps:
+                _commit(state, certified)
+            return helps
     return False
 
 
