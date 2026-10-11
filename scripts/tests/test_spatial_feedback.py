@@ -199,3 +199,19 @@ def test_clipped_bridge_uses_its_visible_edge_for_player_relative_speed():
         feedback.executed(0, scene)
     assert feedback.speed == 0
     assert feedback.motion.x_speed == 0
+
+
+def test_a_one_pixel_wobble_of_the_seen_box_is_not_speed():
+    # Mario stands still; the box's left edge reads one pixel further left in
+    # two pictures (its width 11, not 10). Its middle moved half a pixel and
+    # back: no speed, and no correction of the motion.
+    feedback = SpatialFeedback()
+    for x0 in (146, 146, 146, 145, 145, 146, 146, 146):
+        feedback.observe(
+            SceneObservation(
+                MarioView((x0, 208, 156, 220), True, "ground", True),
+                surfaces=(Surface(8, 248, 220, False),),
+            )
+        )
+    assert feedback.speed == 0
+    assert feedback.motion.x_speed == 0

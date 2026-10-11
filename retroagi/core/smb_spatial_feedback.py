@@ -195,9 +195,12 @@ class SpatialFeedback:
                 self.velocities.clear()
                 dx = None
             old, now = self.previous.mario.box, scene.mario.box
-            if abs((now[2] - now[0]) - (old[2] - old[0])) > 1:
+            if (now[2] - now[0]) != (old[2] - old[0]):
                 # A changing visual silhouette moves its center without player
-                # motion. Do not turn that deformation into a velocity reversal.
+                # motion. Do not turn that deformation into a velocity reversal
+                # (a 1-pixel wobble of the seen box's left edge read as drift
+                # to the right while Mario moved left, and the flight then
+                # held its jump 7 frames too long).
                 dx = None
             if dx is not None and abs(dx) <= 6:
                 self.velocities.append(dx)

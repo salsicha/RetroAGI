@@ -108,6 +108,14 @@ lost:
   Action families with an enemy now start with the 12 watched frames that
   `enemy_stomp` has; the teacher then stomps at once. All 108 sampled
   layouts of the six action families with enemies are won.
+- **A 1-pixel wobble read as speed** (`action_stomp_up_back`, under vision
+  only): the seen box's left edge read a pixel further out in two pictures,
+  so its middle moved half a pixel and back; Mario's speed was estimated
+  as drifting right while he moved left, and the flight, planning its rest
+  again from that speed, held the jump 7 frames too long and overshot the
+  enemy. Speed samples now skip any change of the seen box's width, not
+  only changes of more than a pixel (`SpatialFeedback.observe`). This is the
+  agent's own executor: it played the same way.
 
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
