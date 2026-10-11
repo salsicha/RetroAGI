@@ -153,11 +153,19 @@ def collect_objects(
     """The teacher's episodes on the tactic families (whose walkers turn,
     platforms reverse and plants rise more than the skill families'), with
     every frame's tracked objects recorded (EpisodeTask.record_objects):
-    pickled (train, validation) lists in ``output``/episodes.pkl."""
+    pickled (train, validation) lists in ``output``/episodes.pkl.
+
+    By default the strategy families are left out: their objects move as the
+    others' do, and each of their layouts first needs a speed-run reference
+    replayed through vision (one failed and stopped the collection)."""
     import dataclasses
 
     from . import layered_train as lt
     from .monte_carlo import BLOCK_SMB_MC_FAMILIES
+    from .strategy_families import STRATEGY_TACTIC_FAMILIES
+
+    if not families:
+        families = [f for f in BLOCK_SMB_MC_FAMILIES if f not in STRATEGY_TACTIC_FAMILIES]
 
     policy, saved = lt.load_layered_checkpoint(Path(source), "cpu")
     settings = dict(saved["config"])
@@ -227,11 +235,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--collect-from",
         help="first collect the tactic families' objects with this policy checkpoint",
     )
+    parser.add_argument(
+        "--collect-families",
+        nargs="*",
+        default=(),
+        help="the families to collect (default: the tactic families but the strategy ones)",
+    )
     args = vars(parser.parse_args(argv))
     source = args.pop("collect_from")
+    families = tuple(args.pop("collect_families"))
     config = TrackerConfig(**args)
     if source:
-        collected = collect_objects(source, config.output)
+        collected = collect_objects(source, config.output, families=families)
         config = dataclasses.replace(config, episodes=f"{config.episodes},{collected}")
     print(json.dumps(train_tracker(config)["best"]))
     return 0
