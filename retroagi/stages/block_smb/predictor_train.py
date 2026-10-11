@@ -23,7 +23,7 @@ from typing import Optional, Sequence
 import numpy as np
 import torch
 
-from retroagi.core.action_predictor import COLUMN, ActionPredictor, outcome_loss
+from retroagi.core.action_predictor import COLUMN, ActionPredictor, outcome_loss, reading_digest
 from retroagi.core.action_tokens import VERBS
 from retroagi.core.layered_policy import PolicySettings, forecast_features
 
@@ -176,6 +176,108 @@ def evaluate(policy, predictor, episodes, device, batch_frames: int) -> dict:
     }
 
 
+# A family's concentration on one end is explained by its scenes when the
+# predictor, which learns ends from scenes of every family, reproduces that
+# family's held-out ends within EXPLAINED_PIXELS, and its predicted end moves
+# with the action's object (at least EXPLAINED_FOLLOW of a shift of the object
+# in the picture): it follows the geometry, not a value learned for the
+# family.
+EXPLAINED_PIXELS = 8.0
+EXPLAINED_FOLLOW = 0.5
+
+
+def _shifted_rows(c, verbs, pointers, shift):
+    """The decision rows ``c`` [N, SEQ_LEN_C] with each action's object moved
+    ``shift`` pixels right (its x numbers; a hold's row unchanged)."""
+    from retroagi.core.action_tokens import pointer_target
+    from retroagi.core.smb_observer import _SLOT_WIDTH, C_SPANS
+
+    c = c.clone()
+    for k, (verb, pointer) in enumerate(zip(verbs.tolist(), pointers.tolist())):
+        if VERBS[verb] == "hold":
+            continue
+        name, slot = pointer_target(int(pointer))
+        start = C_SPANS[f"c_{name}"][0] + slot * _SLOT_WIDTH[name]
+        for column in (1, 2) if name in ("surfaces", "gaps") else (1, 3):
+            c[k, start + column] += shift / 256
+    return c
+
+
+@torch.no_grad()
+def explained(policy, predictor, episodes, device, shift: float = 8.0) -> dict:
+    """Whether each family's action ends are explained by its scenes: per
+    family and verb, over the teacher's chosen actions, the most common end's
+    share (within 2 pixels), the predictor's mean error on them (pixels), and
+    how far its predicted end moves when the action's object is moved
+    ``shift`` pixels right in the picture (as a fraction of the shift);
+    "explained" where the share is at most layered_train.COLLAPSE_SHARE, or
+    the error and the following meet EXPLAINED_PIXELS and EXPLAINED_FOLLOW
+    (or there are too few actions to judge: fewer than COLLAPSE_MIN)."""
+    predictor.eval()
+    gathered = defaultdict(lambda: {"ends": [], "errors": [], "follow": []})
+    for batch in lt._batches(episodes, 16384, random.Random(0)):
+        episode, frame, rows, records = _decisions(batch)
+        if not records:
+            continue
+        records = np.asarray(records)
+        chosen = records[:, COLUMN["chosen"]] > 0.5
+        if not chosen.any():
+            continue
+        families = [batch[episode[r]].family for r in rows]
+        inputs = predictor_inputs(policy, batch, device)
+        tokens, present, memory, forecast, index, recorded = inputs
+        keep = torch.tensor(chosen, device=device)
+        index, recorded = index[keep], recorded[keep]
+        verbs = recorded[:, COLUMN["verb"]].long()
+        pointers = recorded[:, COLUMN["pointer"]].long()
+        base = predictor(tokens, present, memory, forecast, index, verbs, pointers)["mean"]
+        # The same decisions with each action's object moved.
+        a, b, c, _, _, _ = lt._padded(batch, device)
+        used = sorted(set(rows))
+        e = torch.tensor([episode[r] for r in used], device=device)
+        f = torch.tensor([frame[r] for r in used], device=device)
+        moved_c = _shifted_rows(c[e, f][index], verbs, pointers, shift)
+        moved_tokens, moved_present = policy.encode_scene((a[e, f][index], b[e, f][index], moved_c))
+        moved = predictor(
+            moved_tokens,
+            moved_present,
+            memory[index],
+            forecast[index],
+            torch.arange(len(index), device=device),
+            verbs,
+            pointers,
+        )["mean"]
+        target = recorded[:, [COLUMN["dx"], COLUMN["dy"]]]
+        error = (base[:, :2] - target).norm(dim=-1)
+        follow = (moved[:, 0] - base[:, 0]) / shift
+        names = [f for f, kept in zip(families, chosen) if kept]
+        for k, family in enumerate(names):
+            verb = VERBS[int(verbs[k])]
+            if verb == "hold" or recorded[k, COLUMN["safe"]] < 0.5:
+                continue
+            entry = gathered[(family, verb)]
+            entry["ends"].append(tuple(int(v) for v in target[k].round().tolist()))
+            entry["errors"].append(float(error[k]))
+            entry["follow"].append(float(follow[k]))
+    out = {}
+    for (family, verb), entry in sorted(gathered.items()):
+        value, share = lt.top_share(entry["ends"])
+        error = float(np.mean(entry["errors"]))
+        follow = float(np.mean(entry["follow"]))
+        out.setdefault(family, {})[verb] = {
+            "actions": len(entry["ends"]),
+            "most_common_end": list(value),
+            "share": round(share, 3),
+            "error_pixels": round(error, 2),
+            "follows_object": round(follow, 2),
+            # Fewer than COLLAPSE_MIN actions are too few to judge.
+            "explained": len(entry["ends"]) < lt.COLLAPSE_MIN
+            or share <= lt.COLLAPSE_SHARE
+            or (error <= EXPLAINED_PIXELS and follow >= EXPLAINED_FOLLOW),
+        }
+    return out
+
+
 def train_predictor(config: PredictorConfig, episodes=None) -> dict:
     """Collect the teacher's episodes (or use ``episodes``: (train,
     validation) lists), train the predictor, and save it with its history."""
@@ -183,6 +285,7 @@ def train_predictor(config: PredictorConfig, episodes=None) -> dict:
     output.mkdir(parents=True, exist_ok=True)
     policy, saved = lt.load_layered_checkpoint(Path(config.source), config.device)
     policy.eval()
+    reads = reading_digest(policy)
     layer = _layer_config(config, saved)
     data = output / "episodes.pkl"
     if episodes is None and data.exists():
@@ -251,19 +354,32 @@ def train_predictor(config: PredictorConfig, episodes=None) -> dict:
         score = overall.get("end_error_pixels")
         if score is not None and (best is None or score < best):
             best = score
-            save_predictor(output / "best.pt", predictor, config, history)
-    save_predictor(output / "last.pt", predictor, config, history)
+            save_predictor(output / "best.pt", predictor, config, history, reads)
+    save_predictor(output / "last.pt", predictor, config, history, reads)
     (output / "history.json").write_text(json.dumps(history, indent=2) + "\n")
-    return {"best_end_error_pixels": best, "history": history}
+    # Whether each family's concentrated ends follow from its scenes.
+    chosen, _ = load_predictor(output / "best.pt", config.device)
+    report = explained(policy, chosen, validation, config.device)
+    (output / "explained.json").write_text(json.dumps(report, indent=2) + "\n")
+    unexplained = {
+        family: [verb for verb, entry in verbs.items() if not entry["explained"]]
+        for family, verbs in report.items()
+        if any(not entry["explained"] for entry in verbs.values())
+    }
+    print(f"[predictor] ends not explained by the scene: {unexplained or 'none'}", flush=True)
+    return {"best_end_error_pixels": best, "history": history, "unexplained": unexplained}
 
 
-def save_predictor(path, predictor, config: PredictorConfig, history) -> None:
+def save_predictor(path, predictor, config: PredictorConfig, history, reads: str) -> None:
+    """``reads``: the fingerprint of the scene encoder and memory it was
+    trained on (action_predictor.reading_digest)."""
     torch.save(
         {
             "predictor": predictor.state_dict(),
             "settings": asdict(PolicySettings(**_settings_of(predictor))),
             "config": asdict(config),
             "history": history,
+            "reads": reads,
         },
         path,
     )

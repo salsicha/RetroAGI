@@ -32,6 +32,8 @@ from retroagi.core.target_tracker import (
 
 @dataclass(frozen=True)
 class TrackerConfig:
+    # Pickled (train, validation) episode lists with recorded objects; several
+    # may be given, joined (comma separated).
     episodes: str = "artifacts/block_smb/action_predictor/episodes.pkl"
     width: int = 48
     epochs: int = 60
@@ -97,7 +99,8 @@ def train_tracker(config: TrackerConfig, episodes=None) -> dict:
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)
     if episodes is None:
-        episodes = pickle.loads(Path(config.episodes).read_bytes())
+        parts = [pickle.loads(Path(path).read_bytes()) for path in config.episodes.split(",")]
+        episodes = ([e for t, _ in parts for e in t], [e for _, v in parts for e in v])
     train, validation = (examples_of(part) for part in episodes)
     if not train:
         raise ValueError("no recorded objects: collect episodes with record_objects")
@@ -135,6 +138,63 @@ def train_tracker(config: TrackerConfig, episodes=None) -> dict:
     return {"steady_motion": baseline, "best": best, "history": history}
 
 
+def collect_objects(
+    source: str,
+    output: str,
+    *,
+    families: Sequence[str] = (),
+    rounds: int = 2,
+    layouts: int = 8,
+    validation_layouts: int = 2,
+    seed: int = 2026100909,
+    workers: int = 15,
+    lanes: int = 8,
+) -> Path:
+    """The teacher's episodes on the tactic families (whose walkers turn,
+    platforms reverse and plants rise more than the skill families'), with
+    every frame's tracked objects recorded (EpisodeTask.record_objects):
+    pickled (train, validation) lists in ``output``/episodes.pkl."""
+    import dataclasses
+
+    from . import layered_train as lt
+    from .monte_carlo import BLOCK_SMB_MC_FAMILIES
+
+    policy, saved = lt.load_layered_checkpoint(Path(source), "cpu")
+    settings = dict(saved["config"])
+    settings.update(
+        learner="tactic",
+        families=tuple(families or BLOCK_SMB_MC_FAMILIES),
+        output=output,
+        workers=workers,
+        lanes=lanes,
+        seed=seed,
+        predictor=None,
+        tracker=None,
+    )
+    layer = lt.LayeredTrainConfig(**settings)
+    Path(output).mkdir(parents=True, exist_ok=True)
+    pool = lt.EpisodePool(layer, policy.settings)
+    try:
+        pool.publish(policy)
+
+        def play(tasks):
+            tasks = [
+                dataclasses.replace(t, teacher_share=1.0, label=True, record_objects=True)
+                for t in pool.with_scenarios(tasks)
+            ]
+            return pool.play(tasks, teacher_only=True)
+
+        train = play(
+            [t for r in range(rounds) for t in lt._tasks(layer, "train", layouts, r, 1.0, True)]
+        )
+        validation = play(lt._tasks(layer, "validation", validation_layouts, 0, 0.0, False))
+    finally:
+        pool.close()
+    path = Path(output) / "episodes.pkl"
+    path.write_bytes(pickle.dumps((train, validation)))
+    return path
+
+
 def save_tracker(path, model, config: TrackerConfig, history) -> None:
     torch.save(
         {
@@ -163,7 +223,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.add_argument(
             f"--{field.name.replace('_', '-')}", type=type(field.default), default=field.default
         )
-    config = TrackerConfig(**vars(parser.parse_args(argv)))
+    parser.add_argument(
+        "--collect-from",
+        help="first collect the tactic families' objects with this policy checkpoint",
+    )
+    args = vars(parser.parse_args(argv))
+    source = args.pop("collect_from")
+    config = TrackerConfig(**args)
+    if source:
+        collected = collect_objects(source, config.output)
+        config = dataclasses.replace(config, episodes=f"{config.episodes},{collected}")
     print(json.dumps(train_tracker(config)["best"]))
     return 0
 

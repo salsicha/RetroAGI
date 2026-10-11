@@ -151,7 +151,9 @@ def encode_tactic(token: TacticToken) -> torch.Tensor:
 
 def token_layout() -> dict:
     """The token vocabularies, stored with checkpoints and compared on load."""
+    from .action_tokens import VERBS
     from .actions import SMB_ACTIONS
+    from .smb_observer import SCENE_SLOTS
 
     return {
         "strategies": list(STRATEGIES),
@@ -160,10 +162,11 @@ def token_layout() -> dict:
         "skill": {
             "strategy_context": "strategy_switch_v1",
             "execution_feedback": list(EXECUTION_FEEDBACK),
-            "modes": list(SKILL_MODES),
-            "x": list(SKILL_X),
-            "y": list(SKILL_Y),
-            "reference": "mario_feet_relative_pixels",
+            # An action: a verb and a pointer to one of the objects reported
+            # (core/action_tokens), executed at the action predictor's end.
+            "actions": list(VERBS),
+            "pointer": dict(SCENE_SLOTS),
+            "executed_by": "action_predictor_v1",
             "history": 16,
         },
         "executor": "goal_following_v2",

@@ -1,4 +1,4 @@
-"""The action layer's training layouts: every combination of every value of each
+"""The optional full-sweep curriculum: every combination of every value of each
 family's parameters."""
 
 import itertools
@@ -54,45 +54,50 @@ def test_random_draws_take_the_sweeps_values():
         assert draws.uniform(0.4, 0.53) in uniform_values(0.4, 0.53)
 
 
+# A family whose sweep is still small (most families now draw what follows a
+# threat and how far, which makes millions of combinations).
+SMALL = "action_descend"
+
+
 def test_a_family_sweep_takes_every_value_with_verified_routes():
-    layouts, dropped = block_smb_parameter_combinations("action_jump_gap", "easy")
+    layouts, dropped = block_smb_parameter_combinations(SMALL, "medium")
     assert dropped == 0
     seen = {
-        (meta["gap_width"], meta["edge_distance"])
+        (meta["drop_height"], meta["edge_distance"])
         for meta in (
             layout["metadata"]["block_smb_monte_carlo"]["parameters"] for layout in layouts
         )
     }
-    assert seen == set(itertools.product(range(8, 21), range(0, 5)))  # 13 widths x 5 distances
+    assert seen == set(itertools.product(range(33, 57), range(0, 25)))  # 24 drops x 25 distances
     for layout in layouts:
         meta = layout["metadata"]["block_smb_monte_carlo"]
-        assert meta["family"] == "action_jump_gap" and meta["reachability"]["reachable"]
+        assert meta["family"] == SMALL and meta["reachability"]["reachable"]
 
 
 @pytest.mark.timeout(300)
 def test_every_random_test_layout_is_one_the_sweep_covers():
     swept = {
-        (p["enemy_distance"], p["enemy_speed"])
+        (p["drop_height"], p["edge_distance"])
         for p in (
             layout["metadata"]["block_smb_monte_carlo"]["parameters"]
-            for layout in block_smb_parameter_combinations("action_stomp", "hard")[0]
+            for layout in block_smb_parameter_combinations(SMALL, "hard")[0]
         )
     }
     for index in range(12):
         sample = sample_block_smb_monte_carlo_scenario(
-            split="validation", seed=3, sample_index=index, family="action_stomp", difficulty="hard"
+            split="validation", seed=3, sample_index=index, family=SMALL, difficulty="hard"
         )
-        assert (sample.parameters["enemy_distance"], sample.parameters["enemy_speed"]) in swept
+        assert (sample.parameters["drop_height"], sample.parameters["edge_distance"]) in swept
 
 
 def test_a_family_split_by_its_first_draws_makes_the_same_layouts():
-    whole, _ = block_smb_parameter_combinations("action_climb", "medium")
-    prefixes = combination_prefixes("action_climb", "medium", at_least=4)
+    whole, _ = block_smb_parameter_combinations(SMALL, "medium")
+    prefixes = combination_prefixes(SMALL, "medium", at_least=4)
     assert len(prefixes) >= 4
     parts = [
         layout
         for prefix in prefixes
-        for layout in block_smb_parameter_combinations("action_climb", "medium", prefix=prefix)[0]
+        for layout in block_smb_parameter_combinations(SMALL, "medium", prefix=prefix)[0]
     ]
 
     def key(layout):
@@ -107,18 +112,20 @@ class _MapPool:
     pool = type("Inline", (), {"map": staticmethod(map)})
 
 
+@pytest.mark.timeout(300)
 def test_each_family_weighs_the_same_in_the_action_layers_training(tmp_path, monkeypatch):
     from retroagi.stages.block_smb.layered_train import LayeredTrainConfig, combination_tasks
 
     monkeypatch.setenv("RETROAGI_COMBINATION_CACHE", str(tmp_path))
-    config = LayeredTrainConfig(learner="skill", families=("action_walk", "action_jump_gap"))
+    config = LayeredTrainConfig(learner="skill", families=("action_walk", SMALL))
     tasks, made = combination_tasks(config, _MapPool())
     sizes = {f: sum(t.family == f for t in tasks) for f in config.families}
-    assert sizes == {"action_walk": 177, "action_jump_gap": 165}
+    # Every combination: 57, 60 and 60 walks; 25 distances x 25, 24 and 24 drops.
+    assert sizes == {"action_walk": 177, SMALL: 1825}
     totals = {f: sum(t.weight for t in tasks if t.family == f) for f in config.families}
-    assert totals["action_walk"] == pytest.approx(totals["action_jump_gap"])
+    assert totals["action_walk"] == pytest.approx(totals[SMALL])
     assert all(t.scenario is not None and t.label for t in tasks)
-    assert made["action_jump_gap:hard"] == {"layouts": 50, "no_route": 0}
+    assert made[f"{SMALL}:hard"] == {"layouts": 600, "no_route": 0}
     # Made again, the layouts come from the disk.
     again, _ = combination_tasks(config, _MapPool())
     assert [t.scenario for t in again] == [t.scenario for t in tasks]

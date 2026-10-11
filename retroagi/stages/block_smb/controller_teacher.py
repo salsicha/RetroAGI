@@ -441,9 +441,9 @@ def _jump_groups(env, state, memo, direction):
     # executor takes off with no speed and plans the rest of the jump again
     # once it has (Flight.replan): the jump made is the one his true speed
     # gives, which the simulator knows (training labels only).
-    known = spatial is not None and spatial.motion_ready
+    known = spatial is not None and getattr(spatial, "motion_ready", False)
     motion = copy(spatial.motion if known else env.motion)
-    tracks = spatial.tracks if spatial is not None else VisualTracks()
+    tracks = getattr(spatial, "tracks", None) or VisualTracks()
     box = scene.mario.box
     start = _body(env)
     rects = [p["rect"] for p in env.platforms]
@@ -1820,10 +1820,16 @@ def monster_destination(env, state):
         enemies = _enemy_paths(env, 300)
         lips = _pit_lips(env)
         start = _body(env)
+        # Inside the low tunnel, a retreat must leave it (past the line the
+        # segment keeps Mario behind): a shorter one keeps as much room from
+        # the monster while it walks, and is trapped when it arrives.
+        inside = (center + side * half - line) * side > 0
         screened = []
         for travel in range(8, 97):
             offset = -side * travel
             if not supported(offset) or center + offset < env.camera_x + half + 2:
+                continue
+            if inside and (center + offset + side * half - line) * side > 0:
                 continue
             walked = _screen_walk(
                 _run_path(start, offset, _run_frames(env.motion, offset)), enemies, lips

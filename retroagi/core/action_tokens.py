@@ -102,3 +102,25 @@ class ActionToken:
 
 def allowed_lists(verb: str) -> tuple:
     return VERB_TARGETS[verb]
+
+
+# The verb an executor command was made with, for commands that carry no
+# action (the teacher's own, given in training): its mode's plain verb.
+MODE_VERBS = {"hold": "hold", "run": "run_to", "jump": "land_on"}
+# An action as numbers in the skill's history (encode_action).
+ACTION_WIDTH = len(VERBS) + 2
+
+
+def encode_action(action: Optional[ActionToken], destination):
+    """[ACTION_WIDTH]: the verb (one-hot; for a command with no action, its
+    mode's verb, MODE_VERBS) and where the executor was sent (``destination``,
+    a tokens.SkillToken from Mario's feet: x / 256 and y / 256; none for a
+    hold)."""
+    import torch
+
+    vector = torch.zeros(ACTION_WIDTH)
+    verb = action.verb if action is not None else MODE_VERBS[destination.mode]
+    vector[VERBS.index(verb)] = 1.0
+    if destination is not None and destination.mode != "hold":
+        vector[-2:] = torch.tensor((destination.x / 256, destination.y / 256))
+    return vector

@@ -74,8 +74,15 @@ def test_the_agent_decides_nothing_while_it_watches():
     from retroagi.core.smb_agent import SMBAgents
     from retroagi.core.smb_observer import VisionObserver
 
+    from retroagi.core.action_predictor import ActionPredictor
+
     torch.manual_seed(0)
-    agents = SMBAgents(VisionObserver(SceneEcho(scene())), LayeredSMBPolicy().eval(), "cpu")
+    agents = SMBAgents(
+        VisionObserver(SceneEcho(scene())),
+        LayeredSMBPolicy().eval(),
+        "cpu",
+        predictor=ActionPredictor().eval(),
+    )
     agents.reset(0, watch=WATCH_FRAMES)
     screen = [np.zeros((240, 256, 3), np.uint8)]
     steps = [agents.act(screen, [0])[0] for _ in range(WATCH_FRAMES + 1)]
@@ -127,10 +134,10 @@ def test_the_skill_reads_each_enemys_forecast_and_starts_without_its_influence()
         tactic = encode_tactic(tactic_token("advance"))[None]
         plain = policy.run_skill(encoded, expected, tactic)
         read = policy.run_skill(encoded, expected, tactic, memory=hidden)
-        assert torch.equal(plain["x"], read["x"])  # zero influence until trained
+        assert torch.equal(plain["pointer"], read["pointer"])  # zero influence until trained
         policy.skill.forecast.weight.normal_()
         changed = policy.run_skill(encoded, expected, tactic, memory=hidden)
-    assert not torch.equal(plain["x"], changed["x"])
+    assert not torch.equal(plain["pointer"], changed["pointer"])
     features = forecast_features(policy.memory.enemies(hidden))
     assert features.shape == (1, 6, 5)
 

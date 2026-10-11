@@ -438,8 +438,12 @@ def test_composed_scenes_change_tactics_along_the_way():
 def test_choice_routes_with_tactic_switches_belong_to_tactics():
     from retroagi.stages.block_smb.layered_train import learner_families
 
-    families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
-    assert set(CLONE_FAMILIES) <= set(families)
+    tactic = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
+    skill = learner_families("skill", BLOCK_SMB_MC_FAMILIES)
+    assert set(CLONE_FAMILIES) == {"choice_advance", "choice_retreat"}
+    # choice_retreat backs away and then advances; choice_advance (the same
+    # layouts) only advances, a skill lesson.
+    assert "choice_retreat" in tactic and "choice_advance" in skill
 
 
 @pytest.mark.parametrize("split", ["train", "validation"])

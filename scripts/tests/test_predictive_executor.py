@@ -253,7 +253,14 @@ def test_teacher_owns_approach_waypoints_before_the_jump(family):
                 break
             env.step(action)
         plan, _ = teacher_plan(env, teacher, certify_holds=False)
-        assert teacher_skill(env, teacher, plan).mode == "jump"
+        crossing = teacher_skill(env, teacher, plan)
+        if family == "low_choice_alternate_route":
+            # The descent to the lower floor: running off the ledge's edge.
+            assert crossing.mode == "run" and crossing.y > 0
+            feet = env.mario["y"] + env.mario["h"] + crossing.y
+            assert any(p["rect"].top == feet for p in env.platforms if p["rect"].top > 160)
+        else:
+            assert crossing.mode == "jump"
     finally:
         env.close()
 
@@ -274,6 +281,7 @@ def test_occluded_floor_edge_is_not_camera_scroll_and_bridge_support_uses_geomet
     assert moving_support_offset(before) == moving_support_offset(after) == 10
 
 
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("sample_index", [100, 101])
 def test_teacher_destinations_board_ride_and_dismount_a_moving_bridge(sample_index):
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario

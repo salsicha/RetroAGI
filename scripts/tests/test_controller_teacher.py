@@ -157,20 +157,20 @@ def test_descent_preparation_progress_needs_a_successful_following_jump(monkeypa
         after = snapshot_env_state(env)
         scene = scene_from_labels(env.scene_labels())
         teacher.restore_env_state(env, before)
-        monkeypatch.setattr(
-            teacher,
-            "_trial",
-            lambda *args, **kwargs: teacher.Result(
-                progress=1, snapshot=after, spatial=SimpleNamespace(previous=scene)
-            ),
-        )
         jumps = []
 
-        def failed_jump(env, state, goal, target):
-            jumps.append(goal)
+        def stub_trial(env, state, goal, target, **kwargs):
+            if goal.mode == "run":
+                return teacher.Result(
+                    progress=1, snapshot=after, spatial=SimpleNamespace(previous=scene)
+                )
+            jumps.append(goal)  # every following jump fails
             return teacher.Result(safe=True, reached=True, won=False)
 
-        monkeypatch.setattr(teacher, "trial", failed_jump)
+        # The jump table tries each jump with _trial; winners are confirmed
+        # with trial.
+        monkeypatch.setattr(teacher, "_trial", stub_trial)
+        monkeypatch.setattr(teacher, "trial", stub_trial)
         assert descent_destination(env, state, target) is None
         assert jumps and all(goal.mode == "jump" for goal in jumps)
         assert snapshot_env_state(env) == before

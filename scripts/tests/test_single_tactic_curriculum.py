@@ -42,7 +42,6 @@ def test_skill_demonstrations_keep_one_tactic_until_completion(family, difficult
 @pytest.mark.parametrize("family", MULTI_TACTIC_FAMILIES)
 def test_switching_demonstrations_belong_to_tactics(family):
     witnesses = {
-        "enemy_patrol": ("medium", 104),
         "retreat_recovery": ("easy", 101),
     }
     difficulty, index = witnesses.get(family, ("easy", 100))

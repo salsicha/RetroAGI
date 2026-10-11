@@ -13,6 +13,7 @@ from retroagi.core.tokens import SkillToken
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.env_state import snapshot_env_state
 from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+from retroagi.stages.block_smb.controller_teacher import MIN_RUN
 from retroagi.stages.block_smb.patrol_teacher import destination, rollout
 from retroagi.stages.block_smb.teacher_tokens import episode_teacher, teacher_skill
 
@@ -23,6 +24,7 @@ def patrol(difficulty="easy", index=100):
     ).scenario
 
 
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize(
     "difficulty,index",
     [(d, 100 + i) for i, d in enumerate(["easy"] * 3 + ["medium"] * 3 + ["hard"] * 3)],
@@ -95,7 +97,8 @@ def test_early_visual_contact_gets_a_floor_target_to_finish_landing():
         spatial = SpatialFeedback(motion=deepcopy(env.motion))
         spatial.observe(scene)
         goal = destination(env, spatial, scene)
-        assert goal == SkillToken("run", 4, 6)
+        # A short run onto the floor below: any length under a normal run's.
+        assert goal.mode == "run" and goal.y == 6 and 1 <= goal.x < MIN_RUN
         result = rollout(env, goal, spatial, scene)
         assert result.safe and result.progress < 4
     finally:

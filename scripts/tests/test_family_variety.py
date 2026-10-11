@@ -1,10 +1,11 @@
-"""No family may teach, and no policy may learn, one single value.
+"""No kind of action may end at one value whatever the scene.
 
 The families that teach jumping over or past a pit or an enemy start Mario at
 varied distances from it (right next to it included) and follow it with a
-second pit or enemy at a varied distance. Teacher qualification fails a
-family whose labels collapse on one destination, and a training round whose
-policy collapses on one cannot pass its gate.
+second pit or enemy at a varied distance. Teacher qualification fails when
+one end of a verb covers most of that verb's labels over every family
+together, and a training round whose policy collapses on one end its teacher
+did not cannot pass its gate.
 """
 
 import os
@@ -17,7 +18,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from retroagi.core.tokens import SKILL_MODES, SKILL_X, SKILL_Y
+from retroagi.core.action_tokens import ACTION_WIDTH, VERBS
 from retroagi.stages.block_smb.layered_train import label_collapse, output_collapse, top_share
 from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 from retroagi.stages.block_smb.threat_variety import fit_patrols, follow_up, start_distance
@@ -74,31 +75,51 @@ def test_threat_families_vary_where_mario_starts_and_what_follows(family):
         assert {"pit", "enemy"} <= kinds, kinds
 
 
-def episode(family, modes, xs, *, labelled=True):
-    count = len(modes)
-    indices = {
-        "mode": np.array([SKILL_MODES.index(m) for m in modes]),
-        "x": np.array([SKILL_X.index(x) for x in xs]),
-        "y": np.full(count, SKILL_Y.index(0)),
+def episode(family, verbs, xs, *, labelled=True):
+    """Decisions with these verbs, ending xs pixels ahead (the teacher's
+    labels where ``labelled``; the learner's own actions otherwise)."""
+    count = len(verbs)
+    verb = np.array([VERBS.index(v) for v in verbs])
+    labels = {
+        "verb": verb,
+        "pointer": np.zeros(count, int),
+        "action_valid": np.ones(count, bool),
+        "end_dx": np.array(xs),
+        "end_dy": np.zeros(count, int),
+        "valid": np.ones(count, bool) if labelled else np.zeros(count, bool),
     }
-    labels = {**indices, "valid": np.ones(count, bool) if labelled else np.zeros(count, bool)}
-    return SimpleNamespace(family=family, labels=labels, picks=dict(indices))
+    used = np.zeros((count, ACTION_WIDTH), np.float32)
+    used[np.arange(count), verb] = 1.0
+    used[:, len(VERBS)] = np.array(xs) / 256
+    return SimpleNamespace(
+        family=family,
+        labels=labels,
+        picks={"verb": verb, "pointer": np.zeros(count, int)},
+        used=used,
+        played_teacher=np.full(count, labelled),
+    )
 
 
-def test_a_family_whose_labels_repeat_one_destination_collapses():
+def test_one_end_for_a_verb_over_every_family_collapses():
     assert top_share([(72, 0), (73, 0), (70, -2), (40, 0)]) == ((72, 0), 0.75)
     assert top_share([72, 73, 70, 40]) == (72, 0.75)
-    varied = [episode("a", ["jump"] * 4, [40, 52, 61, 75]) for _ in range(1)]
-    varied += [episode("a", ["jump"] * 4, [44, 57, 66, 80])]
-    single = [episode("b", ["jump", "run"], [72, 30 + i * 9]) for i in range(8)]
-    found = label_collapse(varied + single, "skill")
-    assert "a" not in found and found["b"]["jump"][1] == 1.0 and "run" not in found["b"]
+    varied = [episode("a", ["land_on"] * 4, [40, 52, 61, 75]) for _ in range(1)]
+    varied += [episode("a", ["land_on"] * 4, [44, 57, 66, 80])]
+    # A family may teach one end where its scenes call for it: judged over
+    # every family's labels together, one end of a verb among varied ones is
+    # not a collapse...
+    single = [episode("b", ["land_on", "run_to"], [72, 30 + i * 9]) for i in range(2)]
+    assert label_collapse(varied + single, "skill") == {}
+    # ...one end for most of a verb's labels over every family is.
+    single = [episode("b", ["land_on", "run_to"], [72, 30 + i * 9]) for i in range(12)]
+    found = label_collapse(varied + single, "skill")["all families"]
+    assert found["land_on"][0] == (72, 0) and "run_to" not in found
 
 
-def test_a_policy_that_repeats_one_value_its_teacher_did_not_collapses():
-    taught = [episode("a", ["jump"] * 4, [40 + 9 * i + j for i in range(4)]) for j in range(3)]
-    own = [episode("a", ["jump"] * 4, [72, 72, 73, 72], labelled=False) for _ in range(3)]
-    assert output_collapse(own, taught, "skill")["a"]["jump"][1] > 0.9
+def test_a_policy_that_repeats_one_end_its_teacher_did_not_collapses():
+    taught = [episode("a", ["land_on"] * 4, [40 + 9 * i + j for i in range(4)]) for j in range(3)]
+    own = [episode("a", ["land_on"] * 4, [72, 72, 73, 72], labelled=False) for _ in range(3)]
+    assert output_collapse(own, taught, "skill")["a"]["land_on"][1] > 0.9
     # Repeating what the teacher repeats is not a collapse of the policy.
-    same = [episode("a", ["jump"] * 4, [72, 72, 73, 72]) for _ in range(3)]
+    same = [episode("a", ["land_on"] * 4, [72, 72, 73, 72]) for _ in range(3)]
     assert output_collapse(own, same, "skill") == {}

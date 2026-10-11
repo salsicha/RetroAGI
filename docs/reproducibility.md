@@ -92,17 +92,31 @@ never trains on.
 Skill trains first with the predictive executor. Tactic then starts from a
 skill checkpoint that met its bar on every family (`passed.pt`).
 
+The action predictor reads the scene encoder and memory of the policy it is
+trained on, and skill training keeps them as they are, so the skill starts
+from a policy whose scene encoder and memory are already trained (`<policy>`
+below; the runs so far start from an earlier skill run's `best.pt`). No stage
+currently trains them from scratch.
+
 ```bash
-retroagi-block-smb train-layer --learner skill --output artifacts/block_smb/skill
-retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
+python -m retroagi.stages.block_smb.predictor_train --source <policy> --output artifacts/block_smb/action_predictor
+python -m retroagi.stages.block_smb.tracker_train --collect-from <policy> --output artifacts/block_smb/target_tracker
+retroagi-block-smb train-layer --learner skill --init <policy> --predictor artifacts/block_smb/action_predictor/best.pt --tracker artifacts/block_smb/target_tracker/best.pt --output artifacts/block_smb/skill
+retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --predictor artifacts/block_smb/action_predictor/best.pt --tracker artifacts/block_smb/target_tracker/best.pt --output artifacts/block_smb/tactic
 ```
 
-- **Skill layer:** trains on 38 local maneuver families, each under one
-  supplied tactic, learning destinations from vision, memory, tactic and its
-  previous 16 choices. All tactic-training families are excluded.
-- **Tactic layer:** trains on 45 families: 14 strategy families, eight composed
+- **Skill layer:** trains on 41 local maneuver families, each under one
+  supplied tactic, learning actions (a verb aimed at an object) from vision,
+  memory, tactic and its previous 16 actions. All tactic-training families
+  are excluded. Its actions run at the action predictor's end state, so the
+  predictor and the target tracker are trained first, on the teacher's
+  episodes, from the policy the skill starts from (`python -m
+  retroagi.stages.block_smb.predictor_train --source <policy>`, `python -m
+  retroagi.stages.block_smb.tracker_train --collect-from <policy>`), and
+  passed to `train-layer` with `--predictor` and `--tracker`.
+- **Tactic layer:** trains on 42 families: 14 strategy families, eight composed
   levels, four scene-driven route/response families, three alternate-route
-  families, three waiting/proceeding families and 13 families whose tactic
+  families, three waiting/proceeding families and 10 families whose tactic
   changes partway through, with layouts drawn at random. The complete grouping is documented
   in [the layered agent guide](layered-agent.md).
 

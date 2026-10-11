@@ -59,7 +59,9 @@ artifacts/block_smb/full_curve_*
 /artifacts/smb_composable/
 
 # Superseded vision transformer checkpoints kept locally for comparison: before
-# the land detector (in git history) and the first land-detector run (stomp
-# pictures weighted 20, worse at objects).
+# the land detector (in git history), the first land-detector run (stomp
+# pictures weighted 20, worse at objects) and the one before the 2026-10-11
+# retraining on the current families (in git history).
 data/*_vit/*_before_land_detector*
 data/*_vit/*_stomp20*
+data/*_vit/*_before_20261011*

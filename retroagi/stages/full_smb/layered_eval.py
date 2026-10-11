@@ -31,14 +31,25 @@ def evaluate_on_full(
     device: str = "cuda",
     vision_checkpoint: Path = DEFAULT_FULL_VIT_CHECKPOINT,
     strategy: str = DEFAULT_STRATEGY.kind,
+    predictor: Path | None = None,
+    tracker: Path | None = None,
 ) -> dict:
-    from retroagi.stages.block_smb.layered_train import load_layered_checkpoint
+    """``predictor`` and ``tracker``: the models that execute the skill's
+    actions (by default those the policy's run was trained with)."""
+    from retroagi.stages.block_smb.layered_train import (
+        _execution_models,
+        load_layered_checkpoint,
+    )
 
     policy, saved = load_layered_checkpoint(checkpoint, device)
     policy.eval()
     observer = VisionObserver(load_full_vit_checkpoint(vision_checkpoint, device=device).model)
     switch = StrategyToken(strategy, 1)  # Full SMB's goal is always to the right
-    agents = SMBAgents(observer, policy, device, len(levels), switch=switch)
+    trained = saved.get("config", {})
+    models = _execution_models(
+        predictor or trained.get("predictor"), tracker or trained.get("tracker"), device
+    )
+    agents = SMBAgents(observer, policy, device, len(levels), switch=switch, **models)
     runs = play_full_levels(agents, levels, frames)
     return {
         "checkpoint": str(checkpoint),
@@ -64,6 +75,8 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--vision-checkpoint", type=Path, default=DEFAULT_FULL_VIT_CHECKPOINT)
     parser.add_argument("--strategy", choices=STRATEGIES, default=DEFAULT_STRATEGY.kind)
+    parser.add_argument("--predictor", type=Path, help="the action predictor (default: the run's)")
+    parser.add_argument("--tracker", type=Path, help="the target tracker (default: the run's)")
     args = parser.parse_args()
     result = evaluate_on_full(
         args.checkpoint,
@@ -72,6 +85,8 @@ def main() -> None:
         device=args.device,
         vision_checkpoint=args.vision_checkpoint,
         strategy=args.strategy,
+        predictor=args.predictor,
+        tracker=args.tracker,
     )
     print(json.dumps(result, indent=2))
 

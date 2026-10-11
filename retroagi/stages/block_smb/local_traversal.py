@@ -67,6 +67,9 @@ class LocalObjective:
     platform_index: int | None = None
     enemy_index: int | None = None
     direction: int = 1
+    # A tactic segment's route platform (route_objective) is reached only by
+    # standing on it: landing beyond it leaves the route unfinished.
+    stand: bool = False
 
     @property
     def center(self):
@@ -103,7 +106,8 @@ class LocalObjective:
                 and not off_route
                 and (
                     support is target
-                    or (
+                    or not self.stand
+                    and (
                         (
                             m["x"] >= target["rect"].right
                             if self.direction > 0
@@ -244,8 +248,10 @@ def route_objective(env) -> LocalObjective | None:
         near, far = (rect.left, min(rect.right, rect.left + 48))
         if direction < 0:
             near, far = max(rect.left, rect.right - 48), rect.right
-        return LocalObjective("gap", near, far, rect.top, index, direction=direction)
-    return LocalObjective("mount", rect.left, rect.right, rect.top, index, direction=direction)
+        return LocalObjective("gap", near, far, rect.top, index, direction=direction, stand=True)
+    return LocalObjective(
+        "mount", rect.left, rect.right, rect.top, index, direction=direction, stand=True
+    )
 
 
 def retreat_objective(env) -> LocalObjective | None:
@@ -446,6 +452,15 @@ def safe_jump_holds(
     ):
         return timed_safe_holds(env, plant_history, direction)
 
+    def past_goal():
+        m, goal = env.mario, env.goal
+        if goal is None or env._goal_credited:
+            return False
+        return m["x"] >= goal.right if direction > 0 else m["x"] + m["w"] <= goal.left
+
+    # A jump toward the goal must not land beyond it: walking back to it
+    # turns the demonstration into a retreat.
+    goal_ahead = not past_goal()
     snapshot = snapshot_env_state(env)
     original_render = env.__dict__.get("render")
     env.render = lambda: None
@@ -476,6 +491,8 @@ def safe_jump_holds(
                 achieved = (
                     env._goal_credited if env._single_jump_attempt else objective.reached(env)
                 )
+                if landed and goal_ahead and past_goal():
+                    break
                 if achieved and (landed or env._goal_credited):
                     # Nonterminal stomp contact is not a completed primitive:
                     # the executor must survive the automatic bounce. At the

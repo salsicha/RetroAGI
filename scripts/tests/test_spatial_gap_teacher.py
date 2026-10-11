@@ -35,7 +35,11 @@ def test_upper_route_is_tactics_and_each_local_crossing_has_one_goal(family, dif
     assert len(s["tactics"]) == 1 and len(s["tactics"][0]["route"]) == 1
     assert s["tactics"][0]["forbidden"] == [3, 4]
     target = s["platforms"][s["tactics"][0]["route"][0]]
-    assert s["goal"] == [target[0], target[1] - 20, target[2], 20]
+    # The goal is the landing room on the route platform, from its near edge;
+    # past a ledge, a pit or an enemy bounds it before the platform ends.
+    x, y, width, height = s["goal"]
+    assert (x, y, height) == (target[0], target[1] - 20, 20)
+    assert 0 < width <= target[2]
 
 
 def play_teacher(family, difficulty, index, *, error=0, stall_frames=0):

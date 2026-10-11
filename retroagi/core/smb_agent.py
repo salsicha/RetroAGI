@@ -1,8 +1,11 @@
-"""Vision-only agent: strategy -> tactic -> spatial skill -> predictive executor.
+"""Vision-only agent: strategy -> tactic -> skill -> action predictor -> predictive executor.
 
-Scene memory updates regularly during execution. At each action boundary the option-critic checks the
-held tactic, and skill chooses a relative destination from scene, prediction,
-tactic and its 16 previous commands. The executor receives that target directly.
+Scene memory updates regularly during execution. At each action boundary the
+option-critic checks the held tactic, and the skill chooses an action (a verb
+aimed at an object it sees) from scene, prediction, tactic and its 16
+previous actions. The action predictor gives where the action ends, which is
+the executor's destination; the target tracker moves it when its object
+leaves its forecast (core/action_controller).
 Execution uses per-frame vision for motion, destination and hold feedback.
 Landing and destination arrival can end a plan early, and waits are rechecked
 each frame. Simulator state is never passed to these networks.
@@ -19,7 +22,7 @@ import numpy as np
 import torch
 
 from .action_controller import apply, bind, destination_of, retarget
-from .action_tokens import VERBS, ActionToken, pointer_index, pointer_target
+from .action_tokens import VERBS, ActionToken, pointer_index
 from .actions import SMBAction
 from .layered_policy import (
     CHOICE_WIDTH,
@@ -27,7 +30,6 @@ from .layered_policy import (
     HISTORY,
     HISTORY_LAYERS,
     MEMORY_INTERVAL,
-    POINTER_START,
     LayeredSMBPolicy,
     MemoryState,
     choice_log_prob,
@@ -193,7 +195,11 @@ def decide(
 
     if (missing("action") or "skill" in run_given) and runs("skill"):
         run("skill", _encoded(encode_tactic, tactics, device))
-    destinations = replaced("skill", chosen.get("skill", [None] * count))
+    # The skill's own choice is an action: its destination comes from the
+    # action predictor (SMBAgents); a given command is its own destination.
+    own_actions = chosen.get("skill", [None] * count)
+    given_skills = given.get("skill")
+    destinations = replaced("skill", [None] * count)
     plans = replaced("action", [None] * count)
     steps = list(tactic_steps) if tactic_steps is not None else [None] * count
     decisions = []
@@ -212,6 +218,9 @@ def decide(
                 value={layer: values[1][i] for layer, values in scores.items()},
                 tactic_step=steps[i],
                 skill=destinations[i],
+                action=(
+                    own_actions[i] if given_skills is None or given_skills[i] is None else None
+                ),
                 execution_feedback=(
                     execution_feedback[i].tolist()
                     if execution_feedback is not None
@@ -294,9 +303,10 @@ def choice_histories(copies: Sequence[_Copy], device) -> dict:
 
 
 def remember_choices(copy: _Copy, decision: Decision) -> None:
-    """Keep the skill's last 16 used destinations, including teacher choices."""
+    """Keep the skill's last 16 used actions (each with where the executor was
+    sent), including the teacher's commands."""
     if decision.skill is not None:
-        vector = encode_choice("skill", decision.skill)
+        vector = encode_choice("skill", (decision.action, decision.skill))
         copy.choices["skill"] = [vector, *copy.choices["skill"]][:HISTORY]
 
 
@@ -348,17 +358,21 @@ class SMBAgents:
     @torch.no_grad()
     def _actions(self, starting, scenes, encoded, hidden, made, own) -> None:
         """For the deciding copies playing their own skill choice (``own``):
-        the skill's action, its predicted end as the destination, and the
-        action bound to its object."""
-        chosen = [i for i in own if "verb" in made[i].picks.get("skill", {})]
+        the skill's action's predicted end (the action predictor) as the
+        executor's destination, and the action bound to its object."""
+        chosen = [i for i in own if made[i].action is not None]
+        for i in [i for i in chosen if made[i].action.verb == "hold"]:
+            # A hold has no end to predict: it holds.
+            made[i].skill = SkillToken("hold", 0, 0)
+            starting[i].target = None
+        chosen = [i for i in chosen if made[i].action.verb != "hold"]
         if not chosen:
             return
-        actions = []
-        for i in chosen:
-            picks = made[i].picks["skill"]
-            verb = VERBS[picks["verb"]]
-            target = None if verb == "hold" else pointer_target(picks["pointer"] + POINTER_START)
-            actions.append(ActionToken(verb, target))
+        if self.predictor is None:
+            raise RuntimeError(
+                "the skill chooses actions: the agent needs an action predictor to execute them"
+            )
+        actions = [made[i].action for i in chosen]
         tokens = torch.cat([encoded[i][0] for i in chosen])
         present = torch.cat([encoded[i][1] for i in chosen])
         memory = hidden[chosen]
@@ -381,7 +395,6 @@ class SMBAgents:
         for j, i in enumerate(chosen):
             dx, dy, odx, ody, frames = means[j]
             outcome = {"dx": dx, "dy": dy, "object_dx": odx, "object_dy": ody, "frames": frames}
-            made[i].action = actions[j]
             made[i].skill = destination_of(actions[j], outcome)
             copy = starting[i]
             copy.target = (
@@ -702,21 +715,20 @@ class SMBAgents:
                 ),
                 memory=remembered.hidden,
             )
-            if self.predictor is not None:
-                own = [
-                    j
-                    for j in range(len(deciding))
-                    if skills[j] is None
-                    and not (supplied.get("action") and supplied["action"][j] is not None)
-                ]
-                self._actions(
-                    starting,
-                    picked,
-                    [encoded[k] for k in deciding],
-                    remembered.hidden,
-                    made,
-                    own,
-                )
+            own = [
+                j
+                for j in range(len(deciding))
+                if skills[j] is None
+                and not (supplied.get("action") and supplied["action"][j] is not None)
+            ]
+            self._actions(
+                starting,
+                picked,
+                [encoded[k] for k in deciding],
+                remembered.hidden,
+                made,
+                own,
+            )
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 given_actions = supplied.get("action")
                 destination = (

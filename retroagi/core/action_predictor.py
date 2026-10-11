@@ -20,6 +20,7 @@ every action the teacher tried, its best safe version
 (docs/action-predictor-controller.md, section 2).
 """
 
+import hashlib
 import math
 
 import numpy as np
@@ -46,6 +47,18 @@ COLUMN = {name: i for i, name in enumerate(ACTION_RECORD)}
 ACTIONS_PER_DECISION = 16
 # The scene token a hold points at: Mario's.
 MARIO_TOKEN = 1
+
+
+def reading_digest(policy) -> str:
+    """A fingerprint of what the predictor reads from a policy: its scene
+    encoder's and scene memory's weights. A predictor is trained on one
+    policy's; those must stay as they were wherever it is used."""
+    digest = hashlib.sha256()
+    for name, value in sorted(policy.state_dict().items()):
+        if name.startswith(("scene.", "memory.")):
+            digest.update(name.encode())
+            digest.update(value.detach().cpu().contiguous().numpy().tobytes())
+    return digest.hexdigest()
 
 
 def action_record(action, outcome: dict, chosen: bool) -> np.ndarray:

@@ -2,19 +2,25 @@
 
 A vision-based hierarchical agent for Super Mario Bros.
 
-The hierarchy is **strategy → tactic → skill → predictive executor**:
+The hierarchy is **strategy → tactic → skill → action predictor → predictive
+executor**:
 
 1. **Strategy:** externally selected `speed_run` or `max_points` objective.
 2. **Tactic:** persistent option-critic choosing advance, retreat, climb or
    descend in either direction, or hold ground. There is no direction number
    in its categorical token.
-3. **Skill:** reads the tactic, strategy context, ViT scene, LSTM prediction and its last 16
-   spatial commands. Chooses a run/jump/hold mode, then a destination
-   relative to Mario's feet knowing that mode (x, then y knowing x).
-4. **Executor:** predicts movement, chooses buttons and jump duration, brakes
-   on arrival, tracks moving stomp targets, and holds a spot
-   relative to a moving platform. Waits are reconsidered every frame so a
-   departure window cannot disappear inside a long hold plan.
+3. **Skill:** reads the tactic, strategy context, ViT scene, LSTM prediction
+   and its last 16 actions. Chooses an action: a verb (hold, run to,
+   approach, land on, jump over, stomp, back away), then the object it is
+   aimed at, one of the objects the vision reports.
+4. **Action predictor:** where that action ends (and its object then), when,
+   and the chance it succeeds; the end is the executor's destination. A
+   **target tracker** forecasts every enemy and moving platform 1 to 96
+   frames ahead and moves the destination when its object departs.
+5. **Executor:** predicts movement, chooses buttons and jump duration, brakes
+   on arrival, and holds a spot relative to a moving platform. Waits are
+   reconsidered every frame so a departure window cannot disappear inside a
+   long hold plan.
 
 Each game has its own weights for the shared vision model. Simulator state
 supplies teacher labels and scores in training, never deployed network inputs.
@@ -25,9 +31,12 @@ screen → ViT → scene encoder → scene memory (LSTM prediction)
 strategy → tactic (option-critic)        │
                  │                      │
                  └──→ skill ←───────────┘
-                       ↑ current scene + last 16 skill commands
+                       ↑ current scene + last 16 actions
                        │
-                       ↓ relative spatial destination + movement mode
+                       ↓ action: verb + object
+                     action predictor → end state (destination)
+                       │                 ↑ target tracker moves it
+                       ↓
                      predictive executor ← per-frame vision + button history
                        ↓ buttons
 ```
@@ -35,18 +44,19 @@ strategy → tactic (option-critic)        │
 Training proceeds **skill → tactic**, freezing lower layers. The executor has
 no learned weights. Every family belongs to exactly one stage:
 
-- **Skill: 38 families**, each played under one supplied tactic from start to
+- **Skill: 41 families**, each played under one supplied tactic from start to
   finish: the 17 isolated maneuvers (walk, jump a gap, climb a step, jump onto
   a raised platform, walk off a ledge, jump down and stomp, each right and
   left, plus stomping an enemy on a raised platform both ways and holding a
   spot on a moving platform), two enemy-bypass families, nine local route
-  maneuvers, and ten older local families (flat runs, single gaps, enemy hops
-  and stomps, pipe and stomp mounts, pit leaps, platform hops, landing on an
-  enemy, holding an area).
-- **Tactic: 45 families**, for strategy-dependent selection and termination:
+  maneuvers, and 13 older local families (flat runs, single gaps, a pit
+  before an enemy, enemy hops, stomps and patrols, pipe and stomp mounts, pit
+  leaps, platform hops, landing on an enemy, holding an area, the direct
+  route of the choice scene).
+- **Tactic: 42 families**, for strategy-dependent selection and termination:
   14 strategy families (seven tactics under each strategy), eight composed
   levels, four scene-driven route/response families, three alternate-route
-  families, three waiting/proceeding families, and 13 families whose tactic
+  families, three waiting/proceeding families, and 10 families whose tactic
   changes partway through. These are excluded from skill training and
   evaluation.
 

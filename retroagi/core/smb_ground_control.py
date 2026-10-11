@@ -37,6 +37,7 @@ class GroundMove:
         if scene is None or scene.mario.box is None:
             self.done, self.status = True, "lost_observation"
             return 0
+        from .smb_scene_labels import fixed_surfaces
         from .smb_spatial_feedback import moving_support
 
         support_box = moving_support(scene)
@@ -54,7 +55,7 @@ class GroundMove:
             ]
             static_goal = any(
                 not s.moving and s.x0 <= goal <= s.x1 and abs(s.top - self.feet - self.height) <= 4
-                for s in scene.surfaces
+                for s in fixed_surfaces(scene)
             )
             if len(candidates) == 1 and not static_goal:
                 self.target = candidates[0]

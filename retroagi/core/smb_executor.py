@@ -19,7 +19,7 @@ from typing import Optional
 
 from .actions import SMB_JUMP_ACTIONS, SMBAction
 from .smb_pixel_types import VISIBLE_COLUMNS
-from .smb_scene_labels import SceneObservation, Surface
+from .smb_scene_labels import SceneObservation, Surface, fixed_surfaces
 
 # Controller actions are not emulator buttons. Only press() translates these
 # into the six shared SMBAction values.
@@ -82,7 +82,8 @@ class GroundHold:
         # Compact moving-platform boxes preserve the platform edges even where
         # Mario covers part of the surface. Fall back to reported surfaces.
         moving = [Surface(b[0], b[2], b[1], True) for b in scene.moving_platforms]
-        surfaces = [s for s in scene.surfaces if not s.moving or not moving] + moving
+        # Floors not cut where enemies stand: a cut end walks with the enemy.
+        surfaces = [s for s in fixed_surfaces(scene) if not s.moving or not moving] + moving
         # A surface clipped at BOTH edges provides no horizontal landmark.
         # Its viewport edges do not move when the camera scrolls. Treating one
         # as a world anchor makes the controller accelerate to chase the scroll.

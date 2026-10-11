@@ -268,3 +268,29 @@ def test_block_plant_inside_its_pipe_is_not_reported(phase, shown):
         (seen,) = scene.enemies
         assert seen.kind == "plant"
         assert seen.box[3] <= 180  # only the part above the pipe's top is drawn
+
+
+def test_a_floor_is_cut_where_an_enemy_stands_on_it():
+    from retroagi.core.smb_scene_labels import EnemyView, split_at_enemies
+
+    floor = (Surface(8, 200, 208, False),)
+    walker = EnemyView((60, 194, 76, 208), "walker")
+    assert split_at_enemies(floor, [walker]) == (
+        Surface(8, 60, 208, False),
+        Surface(76, 200, 208, False),
+    )
+    # Above the floor, defeated, or leaving a sliver under 8 pixels: no cut
+    # (the sliver is dropped).
+    flying = EnemyView((60, 150, 76, 164), "other")
+    defeated = EnemyView((60, 200, 76, 208), "defeated")
+    assert split_at_enemies(floor, [flying, defeated]) == floor
+    near_end = EnemyView((190, 194, 196, 208), "walker")
+    assert split_at_enemies(floor, [near_end]) == (Surface(8, 190, 208, False),)
+    # The true scene and the decoded one cut alike.
+    types = floor_with_pit()
+    types[194:208, 30:46] = E
+    instances = np.full(types.shape, -1, np.int32)
+    instances[194:208, 30:46] = 0
+    scene = scene_from_labels(labels(types, instances, {0: "enemy"}, {0: "walker"}))
+    assert Surface(8, 30, 208, False) in scene.surfaces
+    assert Surface(46, 100, 208, False) in scene.surfaces

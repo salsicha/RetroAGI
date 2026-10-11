@@ -45,7 +45,8 @@ def test_untrained_predictor_is_unsure_and_learns():
     records[:, COLUMN["dx"]] = torch.tensor([50.0, 40.0])
     records[:, COLUMN["frames"]] = 50.0
     records[:, COLUMN["safe"]] = torch.tensor([1.0, 0.0])
-    optimizer = torch.optim.Adam(predictor.parameters(), lr=3e-3)
+    # The training's rate (PredictorConfig.learning_rate).
+    optimizer = torch.optim.Adam(predictor.parameters(), lr=1e-3)
     first = None
     for _ in range(100):
         loss, stats = outcome_loss(
@@ -57,3 +58,35 @@ def test_untrained_predictor_is_unsure_and_learns():
         optimizer.step()
     assert stats["end_error_pixels"] < first / 4
     assert stats["success_accuracy"] == 1.0
+
+
+def test_the_predictor_reads_the_scene_encoder_and_memory_only():
+    from retroagi.core.action_predictor import reading_digest
+    from retroagi.core.layered_policy import LayeredSMBPolicy
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy()
+    before = reading_digest(policy)
+    with torch.no_grad():
+        next(policy.skill.parameters()).add_(1)
+        next(policy.tactic.parameters()).add_(1)
+    assert reading_digest(policy) == before
+    with torch.no_grad():
+        next(policy.memory.parameters()).add_(1)
+    assert reading_digest(policy) != before
+
+
+def test_skill_training_refuses_a_predictor_trained_on_another_encoder(tmp_path):
+    import pytest
+
+    from retroagi.stages.block_smb import layered_train as lt
+
+    torch.save({"reads": "another policy"}, tmp_path / "predictor.pt")
+    config = lt.LayeredTrainConfig(
+        families=("flat_run",),
+        output=str(tmp_path),
+        device="cpu",
+        predictor=str(tmp_path / "predictor.pt"),
+    )
+    with pytest.raises(ValueError, match="another scene encoder"):
+        lt.train_layer(config)

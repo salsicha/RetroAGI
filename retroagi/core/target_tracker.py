@@ -99,13 +99,15 @@ def object_rows(scene, spatial) -> np.ndarray:
         row[ROW["identity"]] = matches[0].identity
         row[ROW["kind"]] = OBJECT_KINDS.index(kind)
         row[ROW["x0"] : ROW["y1"] + 1] = (box[0] + camera, box[1], box[2] + camera, box[3])
-        middle = (box[0] + box[2]) / 2
-        under = [
-            s for s in scene.surfaces if abs(s.top - box[3]) <= 3 and s.x0 - 2 <= middle <= s.x1 + 2
-        ]
-        if kind != "platform" and under:
-            row[ROW["support_left"]] = under[0].x0 + camera
-            row[ROW["support_right"]] = under[0].x1 + camera
+        # The surface it walks on is cut at it (smb_scene_labels.
+        # split_at_enemies): its ends are the far ends of the pieces on
+        # either side.
+        level = [s for s in scene.surfaces if abs(s.top - box[3]) <= 3]
+        left = [s for s in level if abs(s.x1 - box[0]) <= 3]
+        right = [s for s in level if abs(s.x0 - box[2]) <= 3]
+        if kind != "platform" and (left or right):
+            row[ROW["support_left"]] = (left[0].x0 if left else box[0]) + camera
+            row[ROW["support_right"]] = (right[0].x1 if right else box[2]) + camera
             row[ROW["supported"]] = 1.0
         row[ROW["mario_x"]] = (mario[0] + mario[2]) / 2 + camera
         row[ROW["mario_feet"]] = mario[3]

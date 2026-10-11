@@ -224,7 +224,13 @@ def test_agent_decisions_depend_only_on_the_picture(family):
     tampered.reset(scenario=dict(sample.scenario), seed=0)
     # Two agents, so each computes exactly as the other (a shared batch may round
     # differently). The hidden state is scrambled just before the last picture.
-    agents = [SMBAgents(observer, policy, "cpu"), SMBAgents(observer, policy, "cpu")]
+    from retroagi.core.action_predictor import ActionPredictor
+
+    predictor = ActionPredictor().eval()
+    agents = [
+        SMBAgents(observer, policy, "cpu", predictor=predictor),
+        SMBAgents(observer, policy, "cpu", predictor=predictor),
+    ]
     frames = 14
     for frame in range(frames):
         if frame == frames - 1:

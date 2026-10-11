@@ -64,17 +64,21 @@ def test_stomp_takeoff_labels_forbid_the_thin_spawn_hop_and_allow_the_teacher_ta
     # window, so the spawn hop is labelled "keep running".
     at_spawn, at_teacher, closing = stomp_states(1, "medium")
     assert at_spawn == run_only
-    assert at_teacher is not None and at_teacher[2]
+    # The reference route waits for a robust window only at plants (the one
+    # use of these labels), so its stomp takeoff may be on the window's thin
+    # opening edge: running on (or jumping) toward the enemy, never away.
+    assert at_teacher is not None and (at_teacher[1] or at_teacher[2])
     assert not any(at_teacher[i] for i in (0, 3, 4, 5))
-    # The jump stays allowed while the window closes, and its last frame
-    # requires it.
+    # Running on, the jump is allowed while the window closes, and its last
+    # frame requires it.
     assert sum(label[2] for label in closing) > 5
     assert closing[-1] == [False, False, True, False, False, False]
 
     # Easy: a standing NES hop from spawn cannot reach even the stationary
     # enemy; the teacher's takeoff after a short run is inside the window.
     at_spawn, at_teacher, closing = stomp_states(0, "easy")
-    assert at_spawn == run_only and at_teacher[2]
+    assert at_spawn == run_only and (at_teacher[1] or at_teacher[2])
+    assert any(label[2] for label in closing)
     assert closing[-1] == [False, False, True, False, False, False]
 
 

@@ -7,8 +7,10 @@ reports (core.smb_observer). The simulator is read only by the teachers
 
 Layers are trained bottom-up, one at a time, with the others frozen:
 
-- skill: given the tactic, scene, memory prediction and 16 prior spatial
-  commands, choose a destination (also trains scene encoder and scene memory);
+- skill: given the tactic, scene, memory prediction and its 16 prior
+  actions, choose an action (a verb aimed at an object); the scene encoder
+  and scene memory stay as the action predictor that executes the actions
+  read them;
 - tactic: reading the layout's strategy switch, hold a tactic over many
   actions and know when it is finished: the tactic layer is an option-critic
   (core.layered_policy.TacticLayer) with its own memory network.
@@ -74,14 +76,10 @@ from retroagi.core.smb_observer import (
 )
 from retroagi.core.tokens import (
     EXECUTION_WIDTH,
-    SKILL_MODES,
-    SKILL_X,
-    SKILL_Y,
     TACTICS,
     TacticToken,
     encode_strategy,
     encode_tactic,
-    skill_picks,
     token_layout,
 )
 
@@ -150,6 +148,11 @@ class LayeredTrainConfig:
     seed: int = 0
     device: str = "cuda"
     vision_checkpoint: str = "data/block_vit/block_vit_scene.pth"
+    # The action predictor that turns the skill's own actions into the
+    # executor's destinations (predictor_train), and the target tracker that
+    # keeps them on a moving object (tracker_train; None: none).
+    predictor: Optional[str] = None
+    tracker: Optional[str] = None
     init: Optional[str] = None  # a checkpoint whose lower layers are already trained
     # The size of a new policy (ignored with init).
     policy_width: int = PolicySettings.width
@@ -251,13 +254,37 @@ class EpisodeRecord:
 _WORKER: dict = {}
 
 
-def _initialize_worker(vision_checkpoint: str, settings: dict, device: str) -> None:
+def _initialize_worker(
+    vision_checkpoint: str,
+    settings: dict,
+    device: str,
+    predictor: Optional[str] = None,
+    tracker: Optional[str] = None,
+) -> None:
     from .vision import load_block_vit_checkpoint
 
     torch.set_num_threads(1)
     vision = load_block_vit_checkpoint(Path(vision_checkpoint), device=device).model
     policy = LayeredSMBPolicy(PolicySettings(**settings)).to(device).eval()
-    _WORKER.update(observer=VisionObserver(vision), policy=policy, device=device, version=None)
+    _WORKER.update(
+        observer=VisionObserver(vision),
+        policy=policy,
+        device=device,
+        version=None,
+        **_execution_models(predictor, tracker, device),
+    )
+
+
+def _execution_models(predictor: Optional[str], tracker: Optional[str], device) -> dict:
+    """The action predictor and target tracker from their checkpoints (None
+    where none is given)."""
+    from .predictor_train import load_predictor
+    from .tracker_train import load_tracker
+
+    return {
+        "predictor": load_predictor(predictor, device)[0].eval() if predictor else None,
+        "tracker": load_tracker(tracker, device).eval() if tracker else None,
+    }
 
 
 def _play_job(job) -> list[EpisodeRecord]:
@@ -268,7 +295,14 @@ def _play_job(job) -> list[EpisodeRecord]:
         )
         _WORKER["version"] = version
     return play_episodes(
-        _WORKER["observer"], _WORKER["policy"], learner, tasks, _WORKER["device"], lanes
+        _WORKER["observer"],
+        _WORKER["policy"],
+        learner,
+        tasks,
+        _WORKER["device"],
+        lanes,
+        predictor=_WORKER["predictor"],
+        tracker=_WORKER["tracker"],
     )
 
 
@@ -364,11 +398,12 @@ class _Lane:
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
             if self.task.label and asked["skill"] is not None:
-                from .teacher_actions import teacher_action
+                from .teacher_actions import teacher_example
 
-                # The same choice as an action: a verb aimed at a reported
-                # object (None when its object is not reported).
-                asked["action_label"] = teacher_action(self.env, self.teacher, asked["skill"])
+                # The same choice as an action (a verb aimed at a reported
+                # object; None when its object is not reported) and where it
+                # ends.
+                asked["action_label"] = teacher_example(self.env, self.teacher, asked["skill"])
             if self.task.record_actions and self.task.label and asked["skill"] is not None:
                 from .teacher_actions import action_rows
 
@@ -388,7 +423,9 @@ class _Lane:
             d[f"pick_{head}"].append(value)
         d["log_prob"].append(decision.log_prob[learner])
         d["value"].append(decision.value[learner])
-        used = decision.skill
+        # The skill's: the action used (None for the teacher's command, given)
+        # and where the executor was sent, as its history holds it at play.
+        used = (decision.action, decision.skill) if learner == "skill" else decision.skill
         d["used"].append(encode_choice(learner, used).numpy())
         mine = decision.chosen[learner]
         if learner == "skill":
@@ -403,16 +440,10 @@ class _Lane:
                     (encode_tactic(decision.tactic), encode_strategy(decision.strategy))
                 ).numpy()
             )
-            labels = (
-                skill_picks(asked["skill"])
-                if asked["skill"] is not None
-                else dict.fromkeys(CHOICES["skill"], 0)
-            )
-            for head, value in labels.items():
-                d[f"label_{head}"].append(value)
             valid = self.task.label and asked["skill"] is not None
             d["label_valid"].append(valid)
-            action = asked.get("action_label")
+            example = asked.get("action_label")
+            action = example["action"] if example is not None else None
             d["label_action_valid"].append(valid and action is not None)
             d["label_verb"].append(VERBS.index(action.verb) if action is not None else 0)
             d["label_pointer"].append(
@@ -420,7 +451,11 @@ class _Lane:
                 if action is not None and action.target is not None
                 else 0
             )
-            d["agreed"].append(valid and mine == asked["skill"])
+            # Where the teacher's action ends (pixels from Mario's feet).
+            outcome = example["outcome"] if example is not None else {"dx": 0, "dy": 0}
+            d["label_end_dx"].append(round(outcome["dx"]))
+            d["label_end_dy"].append(round(outcome["dy"]))
+            d["agreed"].append(valid and action is not None and mine == action)
             return
 
     def _note_tactic(self, decision) -> None:
@@ -567,14 +602,17 @@ def play_episodes(
     tasks: Sequence[EpisodeTask],
     device,
     lanes: int,
+    predictor=None,
+    tracker=None,
 ) -> list[EpisodeRecord]:
     """Play ``tasks``, ``lanes`` at a time. The agent sees only the screens.
 
     With a ``learner``, the teachers give it its token from above and label
     its decisions. With none, the agent plays exactly as deployed: every token
-    is its own and nothing is given or labelled.
+    is its own and nothing is given or labelled. The skill's own actions are
+    executed through ``predictor`` (and ``tracker``; SMBAgents).
     """
-    agents = SMBAgents(observer, policy, device, lanes)
+    agents = SMBAgents(observer, policy, device, lanes, predictor=predictor, tracker=tracker)
     explore = {task.explore for task in tasks}
     if len(explore) > 1 or (learner is None and True in explore):
         raise ValueError("one call either explores, for a learner, or does not")
@@ -675,7 +713,13 @@ class EpisodePool:
             config.workers,
             mp_context=context,
             initializer=_initialize_worker,
-            initargs=(config.vision_checkpoint, asdict(settings), config.device),
+            initargs=(
+                config.vision_checkpoint,
+                asdict(settings),
+                config.device,
+                config.predictor,
+                config.tracker,
+            ),
         )
 
     def publish(self, policy: LayeredSMBPolicy) -> None:
@@ -890,33 +934,6 @@ def _decisions(
 def _weighted_mean(values, weights):
     """The mean of ``values`` with each counted by its weight."""
     return (values * weights).sum() / weights.sum().clamp_min(1e-12)
-
-
-# The skill's destination is taught with a loss that grows with its pixel
-# error. The target is spread over nearby pixels as a bell curve of this
-# width (so a pick 1 pixel off is nearly as good as the label), and the
-# expected distance between the pick and the label is added, in units of this
-# many pixels (so 57 pixels off costs far more than 14).
-POSITION_SPREAD_PIXELS = 2.0
-POSITION_DISTANCE_PIXELS = 32.0
-POSITIONS = {
-    "x": torch.tensor(SKILL_X, dtype=torch.float32),
-    "y": torch.tensor(SKILL_Y, dtype=torch.float32),
-}
-
-
-def position_loss(logits, label, head: str):
-    """[N]: the loss of a destination's x or y logits [N, bins] for label
-    indices [N]: the divergence from a bell curve around the label
-    (POSITION_SPREAD_PIXELS), plus the expected distance in pixels from the
-    label divided by POSITION_DISTANCE_PIXELS."""
-    pixels = POSITIONS[head].to(logits.device)
-    offsets = pixels[None, :] - pixels[label][:, None]
-    target = torch.softmax(-0.5 * (offsets / POSITION_SPREAD_PIXELS) ** 2, dim=-1)
-    log_p = logits.float().log_softmax(-1)
-    spread = (target * (target.clamp_min(1e-12).log() - log_p)).sum(-1)
-    distance = (log_p.exp() * offsets.abs()).sum(-1) / POSITION_DISTANCE_PIXELS
-    return spread + distance
 
 
 def action_memory(policy, a, b, c, d, episodes=None, return_all=False):
@@ -1140,21 +1157,13 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     with torch.set_grad_enabled(trains_memory):
         state, memory_states, memory_ticks = action_memory(policy, a, b, c, d, episodes, True)
         numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
-    # x and y are read with the mode and x already chosen: the teacher's where
-    # it labelled the decision (teaching), the learner's own elsewhere.
+    # The pointer is read with a verb already chosen: the teacher's where it
+    # labelled the decision with an action (teaching), the learner's own
+    # elsewhere.
     m = d["labelled"]
-    teaching = {
-        head: (
-            torch.where(m, d[f"label_{head}"].long(), d[f"pick_{head}"].long())
-            if f"pick_{head}" in d
-            else d[f"label_{head}"].long()
-        )
-        for head in ("mode", "x")
-    }
-    # The pointer is read with the teacher's verb where it named an action.
-    acted = m & d["label_action_valid"].bool() if "label_action_valid" in d else None
-    if acted is not None:
-        teaching["verb"] = torch.where(acted, d["label_verb"].long(), 0)
+    acted = m & d["label_action_valid"].bool()
+    own_verb = d["pick_verb"].long() if "pick_verb" in d else torch.zeros_like(e)
+    teaching = {"verb": torch.where(acted, d["label_verb"].long(), own_verb)}
     out = policy.run_skill(
         policy.encode_scene((a[e, f], b[e, f], c[e, f])),
         expected,
@@ -1172,32 +1181,14 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         losses.update(endpoint_losses)
         stats.update(endpoint_stats)
     imitation = 1.0 if rl is None else rl.imitation_weight
-    if m.any() and imitation > 0:
-        label = {
-            name[len("label_") :]: value[m]
-            for name, value in d.items()
-            if name.startswith("label_")
-        }
-        weight = d["weight"][m]
-        # Teach a useful next destination at failed commands, instead of letting
-        # the many easy approach decisions drown out the stall-repair examples.
-        stalled = d["execution_feedback"][m, 1] > 0.5
-        weight = weight * torch.where(stalled, 3.0, 1.0)
-        for head in CHOICES["skill"]:
-            if head == "mode":
-                each = F.cross_entropy(out[head][m], label[head], reduction="none")
-            else:
-                each = position_loss(out[head][m], label[head], head)
-                picked = out[head][m].argmax(-1)
-                stats[f"{head}_error_pixels"] = float((picked - label[head]).abs().float().mean())
-            losses[head] = imitation * _weighted_mean(each, weight)
-            stats[f"{head}_accuracy"] = float(
-                (out[head][m].argmax(-1) == label[head]).float().mean()
-            )
-    if acted is not None and acted.any() and imitation > 0:
+    if acted.any() and imitation > 0:
         # The action: its verb, and (except hold, which aims at nothing) the
-        # object it is aimed at among those in view.
+        # object it is aimed at among those in view. A useful next action at
+        # a failed command counts more, instead of letting the many easy
+        # approach decisions drown out the stall-repair examples.
         weight = d["weight"][acted]
+        stalled = d["execution_feedback"][acted, 1] > 0.5
+        weight = weight * torch.where(stalled, 3.0, 1.0)
         verb = d["label_verb"][acted].long()
         losses["verb"] = imitation * _weighted_mean(
             F.cross_entropy(out["verb"][acted], verb, reduction="none"), weight
@@ -1215,7 +1206,9 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     if rl is not None and x.any():
         picks = {head: d[f"pick_{head}"][x] for head in CHOICES[learner]}
         # Read with the learner's own picks as chosen, as it chose them.
-        own = policy.skill.heads_given(out["decision"][x], picks)
+        own = policy.skill.heads_given(
+            out["decision"][x], picks, out["objects"][x], out["object_present"][x]
+        )
         log_prob, entropy = choice_log_prob(learner, own, picks)
         advantage = d["advantage"][x]
         advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-6)
@@ -1819,45 +1812,68 @@ def top_share(values) -> tuple:
 
 
 def _choices(episode, learner: str, source: str) -> dict:
-    """An episode's choices by kind: each skill destination's x by mode (run,
-    jump; a hold has no destination; y is mostly the height of the floor it
-    lands on), or tactic names. ``source``: "picks" (the learner's own) or
-    "labels" (the teacher's, where valid)."""
+    """An episode's choices by kind: for the skill, where each action sent
+    Mario (pixels from his feet, (x, y)) by verb (a hold has no end); tactic
+    names for the tactic layer. ``source``: "picks" (the learner's own, where
+    it played its own choice) or "labels" (the teacher's, where valid)."""
     out: dict = defaultdict(list)
-    if source == "labels":
-        valid = episode.labels.get("valid")
-        if valid is None or not len(valid):
-            return out
-        rows = {
-            name: np.asarray(episode.labels[name])[np.asarray(valid, bool)]
-            for name in episode.labels
-            if name != "valid"
-        }
-    else:
-        rows = {name: np.asarray(value) for name, value in episode.picks.items()}
     if learner == "tactic":
-        out["tactic"] = [TACTICS[int(i)] for i in rows.get("tactic", ())]
+        if source == "labels":
+            valid = np.asarray(episode.labels.get("valid", ()), bool)
+            values = np.asarray(episode.labels.get("tactic", ()))[valid]
+        else:
+            values = np.asarray(episode.picks.get("tactic", ()))
+        out["tactic"] = [TACTICS[int(i)] for i in values]
         return out
-    for mode, x, y in zip(rows.get("mode", ()), rows.get("x", ()), rows.get("y", ())):
-        name = SKILL_MODES[int(mode)]
+    if source == "labels":
+        if "end_dx" not in episode.labels:
+            return out
+        acted = np.asarray(episode.labels["valid"], bool) & np.asarray(
+            episode.labels["action_valid"], bool
+        )
+        rows = zip(
+            np.asarray(episode.labels["verb"])[acted],
+            np.asarray(episode.labels["end_dx"])[acted],
+            np.asarray(episode.labels["end_dy"])[acted],
+        )
+    else:
+        if episode.used is None or "verb" not in episode.picks:
+            return out
+        own = ~np.asarray(episode.played_teacher, bool)
+        used = np.asarray(episode.used)[own]
+        rows = zip(
+            np.asarray(episode.picks["verb"])[own],
+            np.round(used[:, len(VERBS)] * 256),
+            np.round(used[:, len(VERBS) + 1] * 256),
+        )
+    for verb, dx, dy in rows:
+        name = VERBS[int(verb)]
         if name != "hold":
-            out[name].append(SKILL_X[int(x)])
+            out[name].append((int(dx), int(dy)))
     return out
 
 
 def label_collapse(episodes, learner: str, source: str = "labels") -> dict:
-    """Per family, the kinds of choice that collapse on one value: {family:
-    {kind: (value, share, count)}} (top_share; at least COLLAPSE_MIN)."""
-    gathered: dict = defaultdict(lambda: defaultdict(list))
+    """The kinds of choice whose labels collapse on one value across the whole
+    curriculum: {"all families": {kind: (value, share, count)}} (top_share;
+    at least COLLAPSE_MIN).
+
+    A single family may teach one value where its scenes call for it (a pit
+    nearly as wide as the longest jump is crossed by the longest jump: the
+    value follows from the scene); what must not happen is one value for a
+    kind of action whatever the scene, so the share is judged over every
+    family's labels together. Whether a family's concentration is explained
+    by its scenes is measured on the action predictor, which learns ends from
+    scenes (predictor_train.explained)."""
+    gathered: dict = defaultdict(list)
     for e in episodes:
         for kind, values in _choices(e, learner, source).items():
-            gathered[e.family][kind].extend(values)
+            gathered[kind].extend(values)
     found: dict = {}
-    for family, kinds in gathered.items():
-        for kind, values in kinds.items():
-            value, share = top_share(values)
-            if len(values) >= COLLAPSE_MIN and share > COLLAPSE_SHARE:
-                found.setdefault(family, {})[kind] = (value, round(share, 3), len(values))
+    for kind, values in gathered.items():
+        value, share = top_share(values)
+        if len(values) >= COLLAPSE_MIN and share > COLLAPSE_SHARE:
+            found.setdefault("all families", {})[kind] = (value, round(share, 3), len(values))
     return found
 
 
@@ -1866,7 +1882,7 @@ def output_collapse(validation, played, learner: str) -> dict:
     one value much more than the teacher's labels in this round's training
     episodes do: {family: {kind: (value, own share, teacher share)}}. The
     learner collapses where its share is above COLLAPSE_SHARE and more than 0.2
-    above the teacher's."""
+    above the teacher's (for the skill: where its actions sent Mario)."""
     teacher: dict = defaultdict(lambda: defaultdict(list))
     for e in played:
         for kind, values in _choices(e, learner, "labels").items():
@@ -1946,6 +1962,12 @@ def load_layered_checkpoint(path, device="cpu"):
         checkpoint["trained_layers"] = []
     if legacy_skill:
         saved_skill["strategy_context"] = now["skill"]["strategy_context"]
+    # A skill that chose destinations (a mode, x and y) instead of actions:
+    # its outputs start untrained and the layer must be trained again.
+    destination_skill = "modes" in saved_skill
+    if destination_skill:
+        saved_skill = dict(now["skill"])
+        checkpoint["trained_layers"] = []
     other_strategies = saved.get("strategies") != now["strategies"]
     if (
         saved_skill != now["skill"]
@@ -2030,15 +2052,18 @@ def load_layered_checkpoint(path, device="cpu"):
             if name.startswith(("skill.given_mode.", "skill.given_mode_and_x.")):
                 state[name] = fresh[name]
         checkpoint.setdefault("load_migrations", []).append("skill_ordered_choice_zero_initialized")
-    if "skill.verb.weight" not in state:
-        # The skill's action heads (a verb and the object it is aimed at) are
-        # new: they start untrained; every other output is unchanged.
-        for name in fresh:
-            if name.startswith(
-                ("skill.verb.", "skill.given_verb.", "skill.pointer_query.", "skill.pointer_key.")
-            ):
-                state[name] = fresh[name]
-        checkpoint.setdefault("load_migrations", []).append("skill_action_heads_initialized")
+    if destination_skill or "skill.heads.verb.weight" not in state:
+        # The skill's action heads (a verb and the object it is aimed at) and
+        # its history of actions are new: every skill tensor that is no longer
+        # there, or has another shape, is dropped; new ones start untrained.
+        state = {
+            name: value
+            for name, value in state.items()
+            if name in fresh and value.shape == fresh[name].shape
+        }
+        for name, value in fresh.items():
+            state.setdefault(name, value)
+        checkpoint.setdefault("load_migrations", []).append("skill_actions_initialized")
     policy.load_state_dict(state)
     return policy, checkpoint
 
@@ -2047,6 +2072,11 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     """Train one layer of the agent in Block SMB; returns the run summary."""
     if config.learner not in LEARNERS:
         raise ValueError("only skill and tactic are learned layers")
+    if config.predictor is None:
+        # The skill's own actions are executed at the action predictor's end
+        # state (the skill's rounds once the teacher's share drops, and the
+        # whole agent as deployed).
+        raise ValueError("the skill's actions need an action predictor (--predictor)")
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(config.seed)
@@ -2080,7 +2110,21 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             parameter.requires_grad_(True)
         return parameters
 
-    learning = learn_only(policy.parameters_of(config.learner))
+    if config.learner == "skill":
+        # The action predictor reads this policy's scene encoder and memory
+        # (core/action_predictor): they must be the ones it learned on, and
+        # they stay so; the skill learns its own transformer only.
+        from retroagi.core.action_predictor import reading_digest
+
+        reads = torch.load(config.predictor, map_location="cpu", weights_only=False).get("reads")
+        if reads != reading_digest(policy):
+            raise ValueError(
+                "the action predictor was trained on another scene encoder and memory "
+                "than this policy's (train it on the policy passed with --init)"
+            )
+        learning = learn_only(list(policy.skill.parameters()))
+    else:
+        learning = learn_only(policy.parameters_of(config.learner))
     optimizer = torch.optim.AdamW(
         learning, lr=config.learning_rate, weight_decay=config.weight_decay
     )
@@ -2350,19 +2394,26 @@ def examine_layer(
     workers: int = 12,
     families: Sequence[str] = tuple(BLOCK_SMB_MC_FAMILIES),
     vision_checkpoint: str = LayeredTrainConfig.vision_checkpoint,
+    predictor: Optional[str] = None,
+    tracker: Optional[str] = None,
 ) -> dict:
     """Play fresh held-out layouts (never used for validation) with a saved policy.
 
     With a ``learner``, the teacher gives it its token from above, as in its
-    validation; with none, the whole agent plays as deployed.
+    validation; with none, the whole agent plays as deployed. The skill's own
+    actions are executed through ``predictor`` (and ``tracker``); by default
+    those the policy's run was trained with.
     """
-    policy, _ = load_layered_checkpoint(checkpoint, "cpu")
+    policy, saved = load_layered_checkpoint(checkpoint, "cpu")
+    trained = saved.get("config", {})
     config = LayeredTrainConfig(
         learner=learner or "tactic",
         families=tuple(families),
         workers=workers,
         vision_checkpoint=vision_checkpoint,
         output=str(Path(checkpoint).parent),
+        predictor=predictor or trained.get("predictor"),
+        tracker=tracker or trained.get("tracker"),
     )
     tasks = [
         dataclasses.replace(task, sample_index=first_layout + task.sample_index)

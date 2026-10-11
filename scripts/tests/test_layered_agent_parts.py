@@ -277,8 +277,16 @@ def test_given_tokens_replace_the_policy_only_where_given():
     from retroagi.core.smb_agent import SMBAgents
     from retroagi.core.smb_observer import VisionObserver
 
+    from retroagi.core.action_predictor import ActionPredictor
+
     torch.manual_seed(0)
-    agents = SMBAgents(VisionObserver(SceneEcho(scene())), LayeredSMBPolicy().eval(), "cpu", 2)
+    agents = SMBAgents(
+        VisionObserver(SceneEcho(scene())),
+        LayeredSMBPolicy().eval(),
+        "cpu",
+        2,
+        predictor=ActionPredictor().eval(),
+    )
     screens = [np.zeros((240, 256, 3), np.uint8)] * 2
     teacher_tactic = tactic_token("climb_forward")
     teacher_plan = ActionPlan(SMBAction.RIGHT_JUMP, 6)
@@ -291,7 +299,9 @@ def test_given_tokens_replace_the_policy_only_where_given():
     first, second = steps[0].decision, steps[1].decision
     assert first.tactic == second.tactic == teacher_tactic
     assert first.plan == teacher_plan
-    assert second.skill == second.chosen["skill"]
+    # The skill's own choice is an action; its predicted end is the executor's
+    # destination.
+    assert second.action == second.chosen["skill"] and second.skill is not None
     assert second.plan is not None
     assert "action" not in first.chosen and "action" not in second.chosen
     assert first.tactic_step is None  # given for every copy, so the tactic layer did not run
@@ -310,10 +320,13 @@ def _record(learner: str, frames: int = 30):
     decisions = np.array([0, 10, 20], np.int32)
     width = {"skill": TACTIC_WIDTH, "tactic": STRATEGY_WIDTH}[learner]
     labels = {
+        # A hold, a landing on the second surface, a stomp of the first enemy.
         "skill": {
-            "mode": np.array([0, 1, 2]),
-            "x": np.array([280, 216, 256]),
-            "y": np.array([240, 216, 240]),
+            "verb": np.array([0, 3, 5]),
+            "pointer": np.array([0, 41, 0]),
+            "action_valid": np.ones(3, bool),
+            "end_dx": np.array([0, 40, 30]),
+            "end_dy": np.array([0, 0, -10]),
         },
         # The teacher's tactic, and whether the held one is finished.
         "tactic": {"tactic": np.array([0, 2, 2]), "end": np.array([False, True, False])},
@@ -403,12 +416,12 @@ def test_reward_rounds_train_from_sampled_choices():
     record.terminal = True
     record.rewards = np.linspace(0, 1, record.frames).astype(np.float32)
     record.old_value = np.zeros(3, np.float32)
-    record.picks = {head: record.labels[head] for head in ("mode", "x", "y")}
+    record.picks = {head: record.labels[head] for head in ("verb", "pointer")}
     record.old_log_prob = np.full(3, -3.0, np.float32)
     record.played_teacher = np.zeros(3, bool)
     config = LayeredTrainConfig(reward_rounds=1)
     losses, stats = learner_losses(policy, "skill", [record], 1.0, "cpu", rl=config)
-    assert {"reward", "estimate", "entropy", "mode", "x", "y"} <= set(losses)
+    assert {"reward", "estimate", "entropy", "verb", "pointer"} <= set(losses)
     sum(losses.values()).backward()
     assert policy.skill.value.weight.grad is not None
 
@@ -499,11 +512,15 @@ def test_the_skill_layer_reads_its_own_previous_destinations():
             now = policy.encode_scene(rows)
             _, expected = policy.expect(policy.remember(now, None))
             out = policy.run_skill(now, expected, tactic, (choices, present))
-        return out["x"]
+        return out["verb"]
 
+    from retroagi.core.action_tokens import ActionToken
+
+    walk = (ActionToken("run_to", ("surfaces", 0)), SkillToken("run", 24, 0))
+    jump = (ActionToken("land_on", ("surfaces", 1)), SkillToken("jump", 40, -24))
     nothing = action_scores([])
-    walked = action_scores([SkillToken("run", 24, 0)] * 3)
-    jumped = action_scores([SkillToken("jump", 40, -24)] * 3)
+    walked = action_scores([walk] * 3)
+    jumped = action_scores([jump] * 3)
     assert not torch.allclose(nothing, walked) and not torch.allclose(walked, jumped)
 
 
@@ -534,7 +551,9 @@ def test_the_agent_keeps_its_last_16_used_choices_newest_first():
             agents.copies[0].executor.press()
     kept = agents.copies[0].choices["skill"]
     assert len(kept) == HISTORY
-    expected = [encode_choice("skill", plan) for plan in reversed(plans)][:HISTORY]
+    # Given commands carry no action: each is kept as its mode's verb and
+    # where it sent the executor.
+    expected = [encode_choice("skill", (None, plan)) for plan in reversed(plans)][:HISTORY]
     assert all(torch.equal(a, b) for a, b in zip(kept, expected))
 
 
@@ -587,10 +606,12 @@ def _held_agents(end_bias: float, copies: int = 1, pictures=None):
     policy.tactic.heads["end"].bias.data.fill_(end_bias)
     # These tests exercise tactic persistence on a static fake scene. Force a
     # one-frame hold so action boundaries do not depend on random skill weights.
+    from retroagi.core.action_tokens import VERBS
+
     with torch.no_grad():
-        policy.skill.heads["mode"].weight.zero_()
-        policy.skill.heads["mode"].bias.fill_(-20)
-        policy.skill.heads["mode"].bias[2] = 20
+        policy.skill.heads["verb"].weight.zero_()
+        policy.skill.heads["verb"].bias.fill_(-20)
+        policy.skill.heads["verb"].bias[VERBS.index("hold")] = 20
     vision = SceneList(pictures) if pictures is not None else SceneEcho(scene())
     return SMBAgents(VisionObserver(vision), policy, "cpu", copies)
 

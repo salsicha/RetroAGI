@@ -101,9 +101,10 @@ def test_runs_and_holds():
         example = teacher_example(env, state, SkillToken("run", 40, 0))
         assert example["action"] == ActionToken("run_to", ("surfaces", 0))
         assert abs(example["outcome"]["dx"] - 40) <= 2
-        # A run ending beyond the screen: the floor the vision sees.
+        # A run ending beyond the screen: the floor the vision sees there (the
+        # floor is cut at the enemy: the piece past it).
         feet = env.mario["y"] + env.mario["h"]
-        assert surface_slot(env, state.scene, env.camera_x + 400, feet) == ("surfaces", 0)
+        assert surface_slot(env, state.scene, env.camera_x + 400, feet) == ("surfaces", 1)
     with Decision("skill_enemy_bypass") as d:
         # Away from the goal with the enemy near: backing away from it.
         assert teacher_action(d.env, d.state, SkillToken("run", -20, 0)) == ActionToken(

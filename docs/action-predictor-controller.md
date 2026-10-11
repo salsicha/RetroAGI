@@ -1,8 +1,9 @@
 # Action, predictor and adaptive controller (approved redesign)
 
-Status: approved (2026-10-10), being built; the target tracker's architecture
-(section 3) is the recommended one, and the adaptation network is to be worked
-out later. The
+Status: approved (2026-10-10) and built (2026-10-11): the skill chooses only
+actions, executed at the action predictor's end state, with the target
+tracker moving destinations on moving objects. The adaptation network's
+design (section 4) is proposed, to confirm. The
 current design is described in the [architecture and training
 guide](layered-agent.md); decisions and their status in
 [design decisions](design-decisions.md).
@@ -307,7 +308,10 @@ work out later:
    (`label_verb`, `label_pointer`, `label_action_valid`), taught with cross
    entropy beside the old mode, x and y heads, which still drive the
    executor until the controller takes actions (step 5). Old checkpoints
-   load with the new heads untrained.
+   load with the new heads untrained. Completed (2026-10-11): the mode, x and
+   y heads are removed; the skill outputs only the verb and the pointer, its
+   history holds its last 16 actions with where each sent the executor, and
+   a checkpoint with the old heads loads with the skill untrained.
 5. Make the controller reach targets and re-plan on updated ones, fast
    enough for training. Wired (2026-10-10, `core/action_controller.py`):
    `SMBAgents(predictor=, tracker=)` executes the skill's own action at the
@@ -316,8 +320,11 @@ work out later:
    object's predicted point), steps the tracker every frame, and when the
    object leaves its forecast moves the destination: a flight plans the
    rest of its jump again (`Flight.replan`), a run moves where it stops.
-   Without the two models the agent plays exactly as before. Checked with
-   untrained models only (wiring), and on a synthetic turning walker.
+   Checked with untrained models (wiring) and on a synthetic turning walker.
+   Completed (2026-10-11): the skill's own actions always execute through
+   the predictor (an agent without one refuses them; a hold needs none);
+   training (`--predictor`, `--tracker`), examination and Full SMB play take
+   both models.
 6. Document the adaptation network's design (details later). Proposed in
    section 4 (2026-10-10), to confirm.
 7. Validate the teaching on every layout, then train.

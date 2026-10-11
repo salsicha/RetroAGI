@@ -11,6 +11,7 @@ from . import smb_trajectory
 from .actions import SMBAction
 from .smb_ground_control import GroundMove
 from .smb_physics import NESPlayerMotion
+from .smb_scene_labels import fixed_surfaces
 from .smb_pixel_types import VISIBLE_COLUMNS
 from .smb_trajectory import VisualTracks, plan_flight
 
@@ -19,7 +20,8 @@ def terrain_edges(scene):
     """Unclipped, static landmarks for separating scroll from player motion."""
     return [
         (s.top, x)
-        for s in scene.surfaces
+        # Not the floors cut where enemies stand: those ends walk with them.
+        for s in fixed_surfaces(scene)
         if not s.moving
         for x in (s.x0, s.x1)
         if VISIBLE_COLUMNS[0] < x < VISIBLE_COLUMNS[1]
@@ -56,7 +58,7 @@ def moving_support(scene):
     # A shore to the right takes support at the dismount overlap.
     if any(
         not s.moving and s.x0 >= support[0] and s.x0 < x1 and s.x1 > x0 and abs(s.top - feet) <= 4
-        for s in scene.surfaces
+        for s in fixed_surfaces(scene)
     ):
         return None
     return support

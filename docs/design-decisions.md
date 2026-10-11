@@ -14,13 +14,75 @@ commit). How the parts work is described in the
   points) together with the side the goal is on. No network chooses it.
 - **The tactic layer is an option-critic.** It holds a tactic over many
   actions and checks at every action boundary whether to end it.
-- **The skill names a destination; the executor reaches it.** The executor
-  has no learned weights and never refuses a destination.
+- **The skill names an action; the executor reaches its predicted end.**
+  The skill chooses a verb aimed at an object it sees; the action predictor
+  gives where the action ends, and the executor, which has no learned weights
+  and never refuses a destination, goes there.
 - **Every teacher label is certified through the same executor** the agent
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
-## 2026-10-10 — Actions, an action-conditioned predictor, a target tracker and an adaptive controller (approved; being built)
+## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
+
+A share of one value within a family can be physics (a pit nearly as wide as
+the longest jump is crossed by the longest jump; a run-up of the 8-pixel
+minimum), not a shortcut. Approved: judge single values by the scene. Built:
+
+- Teacher qualification fails only when one end of a verb (within 2 pixels)
+  covers more than 40% of that verb's labels over every family together
+  (`layered_train.label_collapse`): one end for a kind of action whatever the
+  scene.
+- Per family, a concentration is explained when the action predictor, which
+  learns ends from scenes of every family, reproduces the family's held-out
+  ends within 8 pixels and its predicted end moves with the action's object
+  when the object is moved in the picture (at least half the shift)
+  (`predictor_train.explained`, written after each predictor training).
+- The skill no longer outputs x and y, so the old destination gate is gone;
+  the learner's own actions are checked per family against the teacher's
+  ends (more than 40% on one end and 20 points above the teacher's).
+
+## 2026-10-11 — Floors are cut where enemies stand (approved; built)
+
+"Land on" a wide floor did not say where on it: the teacher landed 8 pixels
+away in one scene and 45 in a similar one, depending on the threats around.
+The scene description (both the true scene and the vision's) now reports a
+surface cut where a live enemy stands on it (or a plant rises through it):
+each piece is the floor between two threats or a threat and an edge
+(`smb_scene_labels.split_at_enemies`; pieces under 8 pixels are dropped).
+Mario's own support is still judged on the uncut surfaces; the target
+tracker reads an enemy's floor as the pieces on either side of it.
+
+A cut end walks with its enemy, so it is no landmark: the scene also keeps
+the uncut surfaces (`SceneObservation.uncut_surfaces`, read through
+`fixed_surfaces`), and the controllers measure camera scroll, hold a spot
+and check for a static floor against those. Holding against a cut floor
+made Mario follow a Goomba walking toward him and leave his hold area.
+
+## 2026-10-11 — The skill chooses only actions (built)
+
+The skill's mode, x and y heads are removed: it outputs a verb and a pointer,
+and its own actions always execute at the action predictor's end state
+(docs/action-predictor-controller.md).
+
+The predictor reads the scene encoder's tokens and the scene memory of the
+policy it was trained on. Skill training used to update both, which would
+have moved the predictor's inputs under it during the run. Skill training now
+learns the skill transformer only, and refuses to start when the predictor's
+checkpoint records a different scene encoder and memory than the starting
+policy's.
+
+## 2026-10-11 — Three families move to the skill stage (built)
+
+A family belongs to the tactic stage when its teacher changes tactic within an
+episode. `choice_advance`, `enemy_gap` and `enemy_patrol` were there because
+their reference routes landed beyond the goal (or beyond the platform their
+route had to stand on) and walked back, a retreat. Jumps that land past the
+goal, or past a route platform, are no longer certified
+(`local_traversal.safe_jump_holds`, `LocalObjective.stand`); since then
+neither the reference route nor the teacher switched tactic in any of 36
+layouts of each, so they are skill families (41 skill, 42 tactic).
+
+## 2026-10-10 — Actions, an action-conditioned predictor, a target tracker and an adaptive controller (approved; built except the adaptation network)
 
 The user proposed, and the plan in
 [action-predictor-controller.md](action-predictor-controller.md) describes,
@@ -40,9 +102,10 @@ single values, value lists and imprecise run lengths found on 2026-10-09 and
 10; and the scene memory predicts the next action's end without being told
 the action.
 
-Status: approved 2026-10-10; being built. The current teacher and family work
-(below) was checked in first as a checkpoint, with tests still failing (listed
-in its commit); skill training on the current design is not started.
+Status: approved 2026-10-10; built 2026-10-11 (the skill's actions, the
+predictor, the tracker and the controller's re-planning; the adaptation
+network is a proposal). The predictor and tracker are trained before the
+skill learns its actions.
 
 ## 2026-10-10 — Full SMB training: checkpoints every 500 pixels (decided, for later)
 

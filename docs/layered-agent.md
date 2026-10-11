@@ -1,16 +1,17 @@
 # Layered SMB agent
 
-The runtime hierarchy is **strategy → tactic → skill → predictive executor**.
-Two layers are learned; the executor is a controller. Strategy is an externally selected objective.
+The runtime hierarchy is **strategy → tactic → skill → action predictor →
+predictive executor**, with a target tracker beside the executor. Two layers
+are learned by imitation and reward (tactic, skill); the action predictor and
+the target tracker are learned models the skill relies on; the executor is a
+controller. Strategy is an externally selected objective.
 
 Decisions behind this design, with their reasons and status, are listed in
-[design decisions](design-decisions.md). Approved and being built
-(2026-10-10): the skill
-chooses an action aimed at an object, an action-conditioned predictor gives
-its end state, a target tracker says where its target will be, and an
-adaptive predictive controller reaches it; see
-[action-predictor-controller.md](action-predictor-controller.md). Skill
-training on the current design is on hold.
+[design decisions](design-decisions.md). The skill chooses an action aimed at
+an object, the action predictor gives its end state, the target tracker says
+where its target will be and moves the destination when it departs, and the
+predictive executor reaches it; see
+[action-predictor-controller.md](action-predictor-controller.md).
 
 ## Information passed between layers
 
@@ -19,37 +20,38 @@ training on the current design is on hold.
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
 | Scene memory | Encoded scene every four frames and at decisions, elapsed time, visual camera shift, previous LSTM state | Next-boundary scene plus jointly predicted action-end time, platform positions and enemy positions |
 | Tactic | Strategy, current and predicted scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
-| Skill | Tactic, strategy context, current scene, memory prediction (including each enemy's forecast position), last 16 skill commands, measured execution feedback | Run/jump/hold mode and a relative destination `(x, y)` |
-| Executor | Spatial destination and per-frame vision | One of six emulator button combinations |
+| Skill | Tactic, strategy context, current scene, memory prediction (including each enemy's forecast position), last 16 actions, measured execution feedback | An action: a verb and a pointer to one object it sees |
+| Action predictor | The action, the scene tokens, the scene memory and the enemy forecasts | Where the action ends (Mario's feet and its object, from his feet), when, and the chance it succeeds |
+| Target tracker | Every frame's tracked enemies and moving platforms | Where each will be 1 to 96 frames ahead, and when one leaves its forecast |
+| Executor | The predicted end as its destination (moved by the tracker), per-frame vision | One of six emulator button combinations |
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
 `climb_backward`, `descend_forward`, `descend_backward`, and `hold_ground`.
 The tactic token is one-hot with no separate direction field. Forward means
 right; backward means left. The strategy switch separately carries the goal side.
 
-A skill command names a location relative to the center of Mario's feet at
-that decision: x is positive right, y is positive down, in integer pixels.
-The local range is x −256…256 and y −240…240. `jump(40, -24)` names a landing
-point 40 pixels to the right and 24 pixels up. `run` can include grounded
-movement or airborne steering after a timed jump-button plan has ended.
-`hold` anchors the current platform-relative spot and ignores x/y.
+The skill chooses an **action**: a verb (hold, run to, approach, land on,
+jump over, stomp, back away) and a pointer to one of the objects the vision
+reports (a surface, an enemy, a gap, a pipe, a block or a moving platform:
+one of 60 scene slots). It chooses in order: the verb first (a verb with
+nothing in view it can aim at is excluded), then the pointer reading the
+verb (the decision token, adjusted by the verb, scored against each object's
+scene token; absent objects and kinds the verb cannot aim at are excluded).
+A floor is reported cut where an enemy stands on it, so each piece is the
+floor between two threats, and an action aimed at a piece names where it
+ends. The action predictor gives the action's end; that end, in the verb's
+mode, is the executor's destination: a location relative to the center of
+Mario's feet (x positive right, y positive down). On an enemy or a moving
+platform the destination is bound to the object, and the target tracker moves
+it when the object leaves its forecast. A hold anchors the current
+platform-relative spot.
 
 The skill uses a transformer with positional encoding and a context of its
-last **16 used commands**, including teacher commands during training. History
-is newest first, marked by decision age, and reset between episodes. Its
-three output heads choose the command **in order**: the movement mode first,
-then the destination's x reading the chosen mode, then its y reading the mode
-and x. Choosing them apart let one command's mode be paired with another's x
-(a run to where a jump over an enemy lands: Mario runs into it) or one
-command's x with another's y (a stomp's x at ground height: Mario jumps over
-the enemy he should stomp). Coordinates are categorical one-pixel bins
-internally; the message delivered to the executor is a spatial vector (mode
-one-hot plus normalized x/y), not a tactic category. In training, x is read
-with the teacher's mode and y with the teacher's mode and x. x and y are
-taught with a loss that grows with the pixel error: the target is spread over
-nearby pixels as a two-pixel bell curve, and the expected distance from the
-label (in units of 32 pixels) is added, so a destination one pixel off is
-nearly as good as the label while one 57 pixels off is expensive.
+last **16 actions**, each with where it sent the executor (teacher commands
+in training are kept as their mode's verb). History is newest first, marked
+by decision age, and reset between episodes. It is taught by imitation: the
+teacher's command named as an action (`teacher_actions`): its verb, and
+(except hold) the object it is aimed at.
 
 Strategy context distinguishes otherwise identical inputs with conflicting
 demonstrations: the same retreat or climb tactic can require different
@@ -182,9 +184,14 @@ whether to continue holding every frame.
 Train **skill → tactic**. Skill can start from scratch or a compatible warm start;
 tactic requires a qualified skill checkpoint. Only the stage's parameters change:
 
-- **Skill:** scene encoder, scene memory, and skill transformer. Teacher supplies
-  tactic and spatial destinations. The predictive executor executes both teacher
-  and policy targets. Skill also learns next-action-end scene, duration and platform prediction losses.
+- **Skill:** the skill transformer. Teacher supplies the tactic and its own
+  commands, labelled as actions. The executor executes the teacher's commands
+  and the skill's own actions at the action predictor's end state (the
+  predictor and tracker are trained beforehand, `predictor_train`,
+  `tracker_train`, and passed with `--predictor`, `--tracker`). The predictor
+  reads the scene encoder and scene memory of the policy it was trained on,
+  so those stay fixed: training refuses a predictor whose checkpoint records
+  other weights than the starting policy's (`action_predictor.reading_digest`).
 - **Tactic:** tactic transformer and tactic memory. Skill, scene encoder, and
   scene memory stay frozen. Teacher labels tactic choice/termination and return
   targets train the critic.
@@ -192,19 +199,23 @@ tactic requires a qualified skill checkpoint. Only the stage's parameters change
 Teacher-controlled execution decreases across imitation rounds. Reward rounds
 use sampled choices, a clipped policy-gradient objective, and an entropy bonus.
 
-**No single values.** No family may teach, and no policy may learn, one
-destination for everything. Teacher qualification (before learning and before
-every round) fails a skill family whose labels collapse: one destination x,
-counting values within 2 pixels as one, covering more than 40% of a command
-mode's labels (at least 6 of them). After every round, the learner's own
-choices on held-out layouts are checked the same way, family by family; a
-family where the learner's most common value is above 40% and more than 20
-points above the teacher's share for that family collapses, and a round with
-a collapsed family cannot pass the gate (the round line lists it). The
-decision layers are regularized: dropout of 0.1 in the skill and tactic
-transformers while training (`PolicySettings.decision_dropout`), weight
-decay 0.05 (`LayeredTrainConfig.weight_decay`), and the two-pixel spread of
-the x and y targets.
+**No single values; ends explained by the scene.** No kind of action may end
+at one value whatever the scene. Teacher qualification (before learning and
+before every round) fails when, over every family's labels together, one end
+of a verb (within 2 pixels) covers more than 40% of that verb's labels (at
+least 6). A single family may concentrate on one end where its scenes call
+for it (a pit nearly as wide as the longest jump is crossed by the longest
+jump); whether they do is measured on the action predictor, which learns ends
+from scenes of every family (`predictor_train.explained`: a concentrated
+family is explained when the predictor reproduces its held-out ends within 8
+pixels and its predicted end follows the action's object when the object is
+moved). After every round, the learner's own actions on held-out layouts are
+checked family by family: a family where the learner's most common end is
+above 40% and more than 20 points above the teacher's share collapses, and a
+round with a collapsed family cannot pass the gate. The decision layers are
+regularized: dropout of 0.1 in the skill and tactic transformers while
+training (`PolicySettings.decision_dropout`) and weight decay 0.05
+(`LayeredTrainConfig.weight_decay`).
 Tactic reward updates additionally use the option-critic termination objective
 once the critic meets its readiness threshold. Reward rounds freeze shared
 scene/memory modules and update only the selected layer.
@@ -286,7 +297,7 @@ An optional parameter sweep remains available for explicitly selected small
 skill families. Normal training samples the full skill curriculum and adds
 extra layouts for weak families.
 
-Skill uses **38 scene families** for destination selection under one supplied
+Skill uses **41 scene families** for destination selection under one supplied
 tactic: local enemy encounters, platform maneuvers, holding a spot and all 17
 action families. Each supplies spatial destination labels instead of button
 labels at the skill stage. Any family that changes tactics within an episode
@@ -360,7 +371,7 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **45 families**, defined by `TACTIC_TRAINING_FAMILIES`:
+Tactic uses **42 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
@@ -370,10 +381,13 @@ Tactic uses **45 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 | Alternate routes (2) | `choice_alternate_route`, `low_choice_alternate_route`, under `max_points` with visible points on the required path |
 | Raised route (1) | `low_choice_advance`, under `speed_run`, preserving the upper path through two gaps |
 | Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
-| Additional tactic switches (13) | `choice_retreat`, `choice_advance`, `stair_climb`, `platform_chain`, `enemy_gap`, `enemy_patrol`, `retreat_recovery`, `tall_pipe_jump`, `bridge_wait`, `bridge_mount`, `bridge_dismount`, `stair_gap`, `enemy_on_platform` |
+| Additional tactic switches (10) | `choice_retreat`, `stair_climb`, `platform_chain`, `retreat_recovery`, `tall_pipe_jump`, `bridge_wait`, `bridge_mount`, `bridge_dismount`, `stair_gap`, `enemy_on_platform` |
 
 These families teach tactic selection and termination with the skill layer
-frozen. All 45 are excluded from skill training and skill evaluation. For
+frozen. All 42 are excluded from skill training and skill evaluation.
+`choice_advance`, `enemy_gap` and `enemy_patrol` moved to the skill stage on
+2026-10-11: once jumps stopped landing beyond the goal or a route platform,
+their demonstrations no longer switched tactics. For
 example, `choice_retreat` retreats then advances; bridge phases alternate
 holding and advancing; `platform_chain` can change from advance to retreat
 for the final landing. Local skill lessons must finish under one supplied tactic.

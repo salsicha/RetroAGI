@@ -2,7 +2,8 @@
 
 Both SMB games describe a frame the same way (SceneObservation): Mario, every
 enemy, coin, power-up, moving platform, pipe and block, every surface Mario
-can stand on, and every gap in the floor. Everything is as drawn on the
+can stand on (cut where an enemy stands on it: each piece is the floor
+between two threats), and every gap in the floor. Everything is as drawn on the
 256x240 screen: never the game's hidden collision bodies, and never anything
 hidden (a plant inside its pipe is not reported). There is no speed or
 motion: one picture, one scene.
@@ -52,6 +53,13 @@ _STANDABLE_IDS = tuple(TYPE_ID[name] for name in STANDABLE_TYPES)
 # A surface is the top edge of a standable run at least this wide and deep;
 # thinner fringes are drawing detail, not something to stand on.
 MIN_SURFACE_WIDTH = 8
+# An enemy whose feet are within this many rows of a surface's top stands on
+# it (split_at_enemies).
+ENEMY_ON_SURFACE = 3
+# Mario is stomping an enemy whose top is within this many rows of his feet:
+# on the stomp's frame the defeated enemy is drawn squashed, its top 5 rows
+# below them.
+STOMP_ROWS = 6
 MIN_SURFACE_DEPTH = 3
 # Pieces of one surface at most this many pixels apart, sideways or in
 # height, are one surface (the rounded corners of question blocks, the bumpy
@@ -130,6 +138,16 @@ class SceneObservation:
     blocks: tuple[BlockView, ...] = ()
     surfaces: tuple[Surface, ...] = ()
     gaps: tuple[Gap, ...] = ()
+    # The surfaces before they are cut at enemies (split_at_enemies): their
+    # ends stay put while enemies walk, so the controllers measure scroll and
+    # hold position against them (fixed_surfaces). Empty: as ``surfaces``.
+    uncut_surfaces: tuple[Surface, ...] = ()
+
+
+def fixed_surfaces(scene: "SceneObservation") -> tuple:
+    """The scene's surfaces with ends fixed to the world: not cut where
+    enemies stand."""
+    return scene.uncut_surfaces or scene.surfaces
 
 
 @dataclass(frozen=True)
@@ -376,6 +394,35 @@ def mario_support(types: np.ndarray, box: Optional[Box], standing: bool) -> str:
     return "ground"
 
 
+def split_at_enemies(surfaces, enemies) -> tuple:
+    """Surfaces with the stretch under each live enemy on them cut out: an
+    enemy standing on a surface (its feet within ENEMY_ON_SURFACE rows of the
+    top) or a plant rising through one. Each piece is the floor between two
+    threats (or a threat and an edge), so an action aimed at a piece names
+    where it ends; pieces narrower than MIN_SURFACE_WIDTH are dropped."""
+    out = []
+    for surface in surfaces:
+        pieces = [(surface.x0, surface.x1)]
+        for enemy in enemies:
+            if enemy.kind == "defeated":
+                continue
+            x0, y0, x1, y1 = enemy.box
+            if not (y0 <= surface.top + ENEMY_ON_SURFACE and y1 >= surface.top - ENEMY_ON_SURFACE):
+                continue
+            pieces = [
+                piece
+                for left, right in pieces
+                for piece in ((left, min(right, x0)), (max(left, x1), right))
+                if piece[1] > piece[0]
+            ]
+        out += [
+            Surface(left, right, surface.top, surface.moving)
+            for left, right in pieces
+            if right - left >= MIN_SURFACE_WIDTH
+        ]
+    return tuple(sorted(out, key=lambda s: (s.x0, s.top)))
+
+
 def scene_from_labels(labels: SceneLabels) -> SceneObservation:
     """The true SceneObservation of a frame (the vision transformer's target)."""
     boxes = instance_boxes(labels.instances)
@@ -394,6 +441,9 @@ def scene_from_labels(labels: SceneLabels) -> SceneObservation:
         if kind not in ENEMY_KINDS:
             raise ValueError(f"enemy object {number} has no known kind: {kind!r}")
         enemies.append(EnemyView(boxes[number], kind))
+    structure = structure_from_types(labels.types)
+    structure["uncut_surfaces"] = structure["surfaces"]
+    structure["surfaces"] = split_at_enemies(structure["surfaces"], enemies)
     return SceneObservation(
         mario=MarioView(
             box=mario_box,
@@ -405,7 +455,7 @@ def scene_from_labels(labels: SceneLabels) -> SceneObservation:
         coins=_left_to_right(boxes[n] for n in by_category["coin"]),
         power_ups=_left_to_right(boxes[n] for n in by_category["power_up"]),
         moving_platforms=_left_to_right(boxes[n] for n in by_category["moving_platform"]),
-        **structure_from_types(labels.types),
+        **structure,
     )
 
 
@@ -586,7 +636,7 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
             for left, right, top in surfaces
         )
         stomping = box is not None and any(
-            e.box[0] < box[2] and e.box[2] > box[0] and abs(e.box[1] - box[3]) <= 4
+            e.box[0] < box[2] and e.box[2] > box[0] and abs(e.box[1] - box[3]) <= STOMP_ROWS
             for e in objects["enemies"]
         )
         exact_support = box is not None and any(
@@ -605,7 +655,11 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
                     on_something=contact,
                 ),
                 **objects,
-                **structure,
+                **{
+                    **structure,
+                    "surfaces": split_at_enemies(structure["surfaces"], objects["enemies"]),
+                    "uncut_surfaces": structure["surfaces"],
+                },
             )
         )
     return scenes

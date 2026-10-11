@@ -1,10 +1,11 @@
-"""Two learned layers: tactic and spatial skill, followed by predictive control.
+"""Two learned layers: tactic and skill, followed by predictive control.
 
 Vision and an LSTM scene prediction feed the skill transformer, alongside its
-categorical tactic and the last 16 spatial commands. The skill emits a run,
-jump or hold command with a destination relative to Mario's feet, chosen in
-order: the mode, then the destination's x knowing the mode, then its y knowing
-both. This command goes directly to the visual predictive executor.
+categorical tactic and its last 16 actions. The skill chooses an action: a
+verb, then the object it is aimed at, one of the objects the vision reports
+(core/action_tokens). The action predictor (core/action_predictor) gives
+where the action ends, and that end is the predictive executor's destination
+(core/action_controller; docs/action-predictor-controller.md).
 
 Tactics remain persistent options with a termination head, critic, strategy
 switch and their own recurrent context. The executor chooses buttons with per-frame visual feedback.
@@ -18,7 +19,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .action_tokens import POINTER_TOKENS, VERBS, allowed_lists, pointer_index
+from .action_tokens import (
+    ACTION_WIDTH,
+    POINTER_TOKENS,
+    VERBS,
+    ActionToken,
+    allowed_lists,
+    encode_action,
+    pointer_index,
+    pointer_target,
+)
 from .smb_observer import (
     _SLOT_WIDTH,
     C_SPANS,
@@ -32,15 +42,9 @@ from .smb_observer import (
 from .tokens import (
     DEFAULT_STRATEGY,
     EXECUTION_WIDTH,
-    SKILL_MODES,
-    SKILL_WIDTH,
-    SKILL_X,
-    SKILL_Y,
     STRATEGY_WIDTH,
     TACTIC_WIDTH,
     TACTICS,
-    SkillToken,
-    encode_skill,
     encode_strategy,
     encode_tactic,
 )
@@ -53,7 +57,7 @@ HISTORY_LAYERS = ("skill",)
 # Each layer's context holds its own last HISTORY choices (the ones used).
 HISTORY = 16
 MEMORY_INTERVAL = 4
-CHOICE_WIDTH = {"tactic": TACTIC_WIDTH, "skill": SKILL_WIDTH}
+CHOICE_WIDTH = {"tactic": TACTIC_WIDTH, "skill": ACTION_WIDTH}
 # A held (or just ended) tactic as numbers: one-hot tactic with a last slot for
 # "none", then how long it has been held: log(1 + actions) / log(1 + 64) and
 # log(1 + frames) / log(1 + 1024).
@@ -71,7 +75,11 @@ def held_features(stance: Optional[str], actions: int = 0, frames: int = 0) -> t
 
 def encode_choice(layer: str, choice) -> torch.Tensor:
     """A layer's token as numbers: what its history holds."""
-    return {"tactic": encode_tactic, "skill": encode_skill}[layer](choice)
+    if layer == "skill":
+        # (the action, or None for a command given without one; the
+        # executor's destination)
+        return encode_action(*choice)
+    return encode_tactic(choice)
 
 
 @dataclass(frozen=True)
@@ -452,34 +460,26 @@ def _pick(logits, sample: bool):
 
 
 class SkillLayer(_Layer):
-    """The skill layer: it chooses its command in order.
+    """The skill layer: it chooses an action, a verb and then the object it is
+    aimed at (docs/action-predictor-controller.md).
 
-    First the mode (run, jump or hold); then the destination's x, reading the
-    chosen mode; then its y, reading the mode and x. Choosing the three apart
-    could pair one command's mode with another's x (a run to where a jump over
-    an enemy lands), or one command's x with another's y (a stomp's x with a
-    jump over's height).
+    The verb first (a verb with nothing in view it can aim at is excluded);
+    then the pointer, reading the chosen verb: the decision token, adjusted by
+    the verb, scored against each object's scene token after the blocks
+    (absent objects, and kinds the verb cannot aim at, are excluded; a hold
+    aims at nothing). The action predictor gives where the action ends: the
+    executor's destination.
     """
 
     def __init__(self, settings: PolicySettings, above_width: int):
         super().__init__(
             settings,
             above_width,
-            {"mode": len(SKILL_MODES), "x": len(SKILL_X), "y": len(SKILL_Y)},
-            SKILL_WIDTH,
-            choice_positions=(len(SKILL_MODES), len(SKILL_MODES) + 1),
+            {"verb": len(VERBS)},
+            ACTION_WIDTH,
+            choice_positions=(len(VERBS), len(VERBS) + 1),
         )
         width = settings.width
-        # The chosen x as a position number (x / 256) with its waves.
-        self.chosen_x_waves = PositionWaves((len(SKILL_MODES),), settings.position_frequencies)
-        self.given_mode = _Given(width, len(SKILL_MODES))
-        self.given_mode_and_x = _Given(
-            width, len(SKILL_MODES) + 1 + self.chosen_x_waves.extra_width()
-        )
-        # The action (docs/action-predictor-controller.md): a verb, then the
-        # object it is aimed at, read from the verb: the decision token
-        # (adjusted by the verb) scored against each object's scene token.
-        self.verb = nn.Linear(width, len(VERBS))
         self.given_verb = _Given(width, len(VERBS))
         self.pointer_query = nn.Linear(width, width)
         self.pointer_key = nn.Linear(width, width)
@@ -489,6 +489,13 @@ class SkillLayer(_Layer):
                 start = pointer_index((name, 0)) - POINTER_START
                 allowed[v, start : start + SCENE_SLOTS[name]] = True
         self.register_buffer("allowed", allowed, persistent=False)
+
+    def verb_logits(self, decision, present):
+        """The verb's logits [B, len(VERBS)]; ``present`` [B, POINTER_TOKENS]:
+        the objects in view."""
+        usable = (present[:, None, :] & self.allowed[None]).any(-1)
+        usable[:, VERBS.index("hold")] = True
+        return self.heads["verb"](decision).masked_fill(~usable, -1e4)
 
     def pointer_logits(self, decision, objects, present, verb):
         """The pointer's logits [B, POINTER_TOKENS] over the object tokens
@@ -502,75 +509,45 @@ class SkillLayer(_Layer):
         usable = present & self.allowed[verb.long()]
         return logits.masked_fill(~usable, -1e4)
 
-    def action_outputs(self, decision, objects, present, picks=None, sample=False):
-        """The verb's logits (a verb with nothing in view it can aim at is
-        excluded), and the pointer's for the verb in ``picks`` (or the one
-        chosen now); with the picks used."""
-        usable = (present[:, None, :] & self.allowed[None]).any(-1)
-        usable[:, VERBS.index("hold")] = True
-        verb_logits = self.verb(decision).masked_fill(~usable, -1e4)
-        verb = picks["verb"] if picks is not None else _pick(verb_logits, sample)
-        pointer_logits = self.pointer_logits(decision, objects, present, verb)
-        pointer = (
-            picks["pointer"]
-            if picks is not None and "pointer" in picks
-            else _pick(pointer_logits, sample)
-        )
-        return {"verb": verb_logits, "pointer": pointer_logits}, {"verb": verb, "pointer": pointer}
-
-    def x_logits(self, decision, mode):
-        """x's logits [B, len(SKILL_X)] for the chosen modes [B] (indices)."""
-        chosen = F.one_hot(mode.long(), len(SKILL_MODES)).to(decision.dtype)
-        return self.heads["x"](self.given_mode(decision, chosen))
-
-    def y_logits(self, decision, mode, x):
-        """y's logits [B, len(SKILL_Y)] for the chosen modes and x [B] (indices)."""
-        chosen = F.one_hot(mode.long(), len(SKILL_MODES)).to(decision.dtype)
-        pixels = (x.to(decision.dtype) + SKILL_X[0]).unsqueeze(-1) / 256
-        numbers = self.chosen_x_waves(torch.cat((chosen, pixels), dim=-1))
-        return self.heads["y"](self.given_mode_and_x(decision, numbers))
-
-    def heads_given(self, decision, picks) -> dict:
-        """The outputs read from ``decision`` [B, width] with the mode and x of
-        ``picks`` (index tensors [B]) as already chosen: logits of every head."""
+    def heads_given(self, decision, picks, objects, present) -> dict:
+        """The logits of both heads read from ``decision`` [B, width] with the
+        verb of ``picks`` (index tensors [B]) as already chosen; ``objects`` and
+        ``present``: the forward's "objects" and "object_present"."""
         return {
-            "mode": self.heads["mode"](decision),
-            "x": self.x_logits(decision, picks["mode"]),
-            "y": self.y_logits(decision, picks["mode"], picks["x"]),
+            "verb": self.verb_logits(decision, present),
+            "pointer": self.pointer_logits(decision, objects, present, picks["verb"]),
         }
 
     def forward(
         self, scene_tokens, present, expected, above=None, history=None, picks=None, sample=False
     ) -> dict[str, torch.Tensor]:
-        """Logits of each head, conditioned on the picks it chose (or, given
-        ``picks`` as index tensors [B] with mode and x, on those: teaching with
+        """Logits of each head, the pointer's for the verb chosen (or, given
+        ``picks`` as index tensors [B] with a verb, for that one: teaching with
         the teacher's choice, or scoring the layer's own); "picks", the index
-        tensors used; "decision", the decision token; and the value estimate."""
+        tensors used; "decision", the decision token; "objects" and
+        "object_present", the object tokens read; and the value estimate."""
         decision, seen = self.encode(scene_tokens, present, expected, above, history)
-        if picks is None:
-            mode_logits = self.heads["mode"](decision)
-            mode = _pick(mode_logits, sample)
-            x_logits = self.x_logits(decision, mode)
-            x = _pick(x_logits, sample)
-            y_logits = self.y_logits(decision, mode, x)
-            picks = {"mode": mode, "x": x, "y": _pick(y_logits, sample)}
-            out = {"mode": mode_logits, "x": x_logits, "y": y_logits}
-        else:
-            out = self.heads_given(decision, picks)
-        objects = slice(POINTER_START, POINTER_START + POINTER_TOKENS)
-        action, chosen = self.action_outputs(
-            decision,
-            seen[:, objects],
-            present[:, objects],
-            picks if "verb" in picks else None,
-            sample,
+        span = slice(POINTER_START, POINTER_START + POINTER_TOKENS)
+        objects, object_present = seen[:, span], present[:, span]
+        verb_logits = self.verb_logits(decision, object_present)
+        verb = (
+            picks["verb"] if picks is not None and "verb" in picks else _pick(verb_logits, sample)
         )
-        out.update(action)
-        picks = {**picks, **chosen}
-        out["picks"] = picks
-        out["decision"] = decision
-        out["value"] = self.value(decision.detach()).squeeze(-1)
-        return out
+        pointer_logits = self.pointer_logits(decision, objects, object_present, verb)
+        pointer = (
+            picks["pointer"]
+            if picks is not None and "pointer" in picks
+            else _pick(pointer_logits, sample)
+        )
+        return {
+            "verb": verb_logits,
+            "pointer": pointer_logits,
+            "picks": {"verb": verb, "pointer": pointer},
+            "decision": decision,
+            "objects": objects,
+            "object_present": object_present,
+            "value": self.value(decision.detach()).squeeze(-1),
+        }
 
 
 class TacticMemory(nn.Module):
@@ -772,15 +749,15 @@ class LayeredSMBPolicy(nn.Module):
         picks=None,
         sample=False,
     ):
-        """Choose a destination using the tactic and its strategy context.
+        """Choose an action using the tactic and its strategy context.
 
         Training records pack both tokens together. Direct callers may pass
         them separately; the default switch preserves the old convenience API.
         ``memory``: the scene memory's hidden state at the decision [B, memory
         width]; each enemy's forecast is then added to its scene token.
-        ``picks``: the mode and x (index tensors [B]) to read as chosen, instead
-        of choosing them (most likely, or sampled when ``sample``); see
-        SkillLayer.
+        ``picks``: the verb (and pointer) (index tensors [B]) to read as
+        chosen, instead of choosing them (most likely, or sampled when
+        ``sample``); see SkillLayer.
         """
         scene_tokens, present = encoded
         if memory is not None:
@@ -807,11 +784,10 @@ class LayeredSMBPolicy(nn.Module):
 
 CHOICES = {
     "tactic": ("tactic",),
-    "skill": ("mode", "x", "y"),
+    # The verb, then the pointer: an object slot (0 for the first: scene
+    # token POINTER_START).
+    "skill": ("verb", "pointer"),
 }
-# The skill's action heads (SkillLayer.action_outputs): the verb, then the
-# pointer (an object slot, 0 for the first: scene token POINTER_START).
-ACTION_HEADS = ("verb", "pointer")
 
 
 def _distributions(layer: str, out: Mapping[str, torch.Tensor]) -> dict:
@@ -826,10 +802,6 @@ def choose(layer: str, out: Mapping[str, torch.Tensor], *, sample: bool = False)
     """
     if "picks" in out:
         picks = {head: int(out["picks"][head]) for head in CHOICES[layer]}
-        # The skill's action (a verb and its object) rides along.
-        for head in ACTION_HEADS:
-            if head in out["picks"]:
-                picks[head] = int(out["picks"][head])
         return token_from_picks(layer, picks), picks
     batched = {name: value.unsqueeze(0) for name, value in out.items()}
     picks: dict[str, int] = {}
@@ -849,23 +821,31 @@ def token_from_picks(layer: str, picks: Mapping[str, int]):
     if layer == "tactic":
         return TACTICS[picks["tactic"]]
     if layer == "skill":
-        return SkillToken(SKILL_MODES[picks["mode"]], SKILL_X[picks["x"]], SKILL_Y[picks["y"]])
+        verb = VERBS[picks["verb"]]
+        if verb == "hold":
+            return ActionToken("hold")
+        return ActionToken(verb, pointer_target(picks["pointer"] + POINTER_START))
     raise ValueError(f"unknown learned layer {layer!r}")
 
 
 def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[str, torch.Tensor]):
     """Log-probability [B] of batched picks under a layer's outputs, and the entropy [B].
 
-    For the skill, ``out`` must be read with these picks as chosen (each
-    head's logits are then conditional on the heads before it, and the sum is
-    the whole command's log-probability).
+    For the skill, ``out`` must be read with these picks as chosen (the
+    pointer's logits are then those for the picked verb, and the sum is the
+    whole action's log-probability); a hold's pointer is not a choice.
     """
     distributions = _distributions(layer, out)
     log_prob = entropy = 0.0
     for head in CHOICES[layer]:
         value = picks[head].long()
-        log_prob = log_prob + distributions[head].log_prob(value)
-        entropy = entropy + distributions[head].entropy()
+        head_log_prob = distributions[head].log_prob(value)
+        head_entropy = distributions[head].entropy()
+        if layer == "skill" and head == "pointer":
+            aimed = (picks["verb"].long() != VERBS.index("hold")).to(head_log_prob.dtype)
+            head_log_prob, head_entropy = head_log_prob * aimed, head_entropy * aimed
+        log_prob = log_prob + head_log_prob
+        entropy = entropy + head_entropy
     return log_prob, entropy
 
 

@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from retroagi.core.layered_policy import LayeredSMBPolicy, choose
-from retroagi.core.tokens import SKILL_X, SKILL_Y, SkillToken, encode_skill
+from retroagi.core.tokens import SkillToken, encode_skill
 from retroagi.stages.block_smb.action_families import ACTION_FAMILIES
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.env_state import snapshot_env_state
@@ -28,20 +28,22 @@ from retroagi.stages.block_smb.monte_carlo import (
 from retroagi.stages.block_smb.teacher_tokens import episode_teacher, teacher_plan, teacher_skill
 
 
-def test_skill_command_is_a_relative_pixel_destination():
+def test_skill_chooses_an_action_and_the_executor_gets_a_relative_pixel_destination():
+    from retroagi.core.action_tokens import POINTER_TOKENS, VERBS, ActionToken, pointer_index
+    from retroagi.core.layered_policy import POINTER_START
+
     assert encode_skill(SkillToken("jump", -64, 32)).tolist() == [0, 1, 0, -0.25, 0.125]
     assert encode_skill(SkillToken("hold", 80, -40)).tolist() == [0, 0, 1, 0, 0]
     for mode, x, y in [("advance", 0, 0), ("run", 257, 0), ("jump", 1.5, 0)]:
         with pytest.raises(ValueError):
             SkillToken(mode, x, y)
     logits = {
-        "mode": torch.tensor([-9.0, 9.0, -9.0]),
-        "x": torch.full((len(SKILL_X),), -9.0),
-        "y": torch.full((len(SKILL_Y),), -9.0),
+        "verb": torch.full((len(VERBS),), -9.0),
+        "pointer": torch.full((POINTER_TOKENS,), -9.0),
     }
-    logits["x"][SKILL_X.index(-40)] = 9
-    logits["y"][SKILL_Y.index(-24)] = 9
-    assert choose("skill", logits)[0] == SkillToken("jump", -40, -24)
+    logits["verb"][VERBS.index("land_on")] = 9
+    logits["pointer"][pointer_index(("surfaces", 1)) - POINTER_START] = 9
+    assert choose("skill", logits)[0] == ActionToken("land_on", ("surfaces", 1))
 
 
 @pytest.mark.parametrize("family", ACTION_FAMILIES[9:])
@@ -104,8 +106,10 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(
         def observe(self, screens):
             return [scene_from_labels(lane.env.scene_labels())]
 
+    from retroagi.core.action_predictor import ActionPredictor
+
     policy = LayeredSMBPolicy().eval()
-    agent = SMBAgents(Observer(), policy, "cpu")
+    agent = SMBAgents(Observer(), policy, "cpu", predictor=ActionPredictor().eval())
     given = _teacher_given(learner, {0: lane})
     feedback = []
     try:
@@ -131,7 +135,7 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(
             assert not record.labels["valid"].any()
             assert all(
                 len(record.labels[head]) == len(record.decision_frames)
-                for head in ("mode", "x", "y")
+                for head in ("verb", "pointer", "action_valid", "end_dx", "end_dy")
             )
             return
         losses, _ = learner_losses(policy, learner, [record], 1.0, "cpu")
@@ -192,7 +196,9 @@ def test_skill_receives_strategy_context_in_runtime_and_training_records(monkeyp
         return original(*args, **kwargs)
 
     monkeypatch.setattr(policy, "run_skill", run)
-    agents = SMBAgents(Observer(), policy, "cpu", switch=switch)
+    from retroagi.core.action_predictor import ActionPredictor
+
+    agents = SMBAgents(Observer(), policy, "cpu", switch=switch, predictor=ActionPredictor().eval())
     try:
         step = agents.act([lane.screen], [0], given=_teacher_given("skill", {0: lane}))[0]
         for key, row in zip("abc", step.rows):
@@ -246,7 +252,7 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
 
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
-    assert len(families) == 38
+    assert len(families) == 41
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert not any("stomp" in name and "recovery" in name for name in BLOCK_SMB_MC_FAMILIES)
     assert {
@@ -265,9 +271,35 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
     assert "choice_alternate_route" not in families
 
 
-def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates():
+def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates(monkeypatch):
+    import copy
+    import random
     from collections import Counter
 
+    from retroagi.stages.block_smb import monte_carlo
+
+    generate, verify = monte_carlo._generate_family_scenario, monte_carlo._verified_route
+    repeated = generate(
+        "skill_enemy_bypass",
+        monte_carlo.ParameterDraws(random.Random(1)),
+        split="train",
+        difficulty="easy",
+    )
+    draws = []
+
+    def repeating(family, rng, **kwargs):
+        # The first three draws repeat one layout, which its route check rejects.
+        drawn = generate(family, rng, **kwargs)
+        draws.append(family)
+        return copy.deepcopy(repeated) if len(draws) <= 3 else drawn
+
+    def rejecting(family, scenario, actions):
+        if scenario == repeated[0]:
+            return None, "no_verified_route", None
+        return verify(family, scenario, actions)
+
+    monkeypatch.setattr(monte_carlo, "_generate_family_scenario", repeating)
+    monkeypatch.setattr(monte_carlo, "_verified_route", rejecting)
     rejected = Counter()
     sample = sample_block_smb_monte_carlo_scenario(
         split="train",
@@ -277,8 +309,8 @@ def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates():
         difficulty="easy",
         rejection_counter=rejected,
     )
-    assert rejected["duplicate_regeneration"] > 0
-    assert sample.reachability["reachable"]
+    assert rejected["duplicate_regeneration"] == 2
+    assert sample.reachability["reachable"] and sample.scenario != repeated[0]
 
 
 @pytest.mark.parametrize(

@@ -67,13 +67,13 @@ TIMING_TACTIC_FAMILIES = ("moving_bridge", "wait_timing", "piranha_avoidance")
 # A skill episode follows one supplied tactic throughout. These legacy names
 # conceal switches in teacher_tactic (including bridge phases and a final
 # approach/retreat after a landing), even with a single written schedule segment.
+# (choice_advance, enemy_gap and enemy_patrol left on 2026-10-11: once jumps
+# stopped landing beyond the goal or a route platform, neither the reference
+# route nor the teacher switched in any of 36 layouts each.)
 MULTI_TACTIC_FAMILIES = (
     "choice_retreat",
-    "choice_advance",
     "stair_climb",
     "platform_chain",
-    "enemy_gap",
-    "enemy_patrol",
     "retreat_recovery",
     "tall_pipe_jump",
     "bridge_wait",
