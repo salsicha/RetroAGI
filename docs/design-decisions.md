@@ -139,6 +139,12 @@ standing enemy and a walker coming on had shrunk to 2 pixels by the landing
 from the first frame). The bypass families' layouts are now checked the same
 way (`TEACHER_CHECKED`).
 
+With these (commit 0634d0e) the teacher won every layout the skill run can
+use: its validation and fresh-evaluation layouts (369 each) and the training
+layouts of all 12 rounds (656 each), 8,610 of 8,610, through vision and the
+production episode pipeline. The tactic families' layouts are still to be
+validated before tactic training.
+
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
 A share of one value within a family can be physics (a pit nearly as wide as
