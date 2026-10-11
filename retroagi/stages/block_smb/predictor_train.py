@@ -36,7 +36,12 @@ class PredictorConfig:
     # The policy whose scene encoder and memory the predictor reads.
     source: str = "artifacts/block_smb/skill_margin_teacher_20261009/best.pt"
     families: tuple[str, ...] = ()  # empty: every skill family
-    train_layouts_per_family: int = 24
+    # The training layouts of the first ``train_rounds`` rounds of a skill
+    # run with this seed (``train_layouts_per_family`` each), and its
+    # validation layouts: with the seed of a teacher validation, every
+    # layout was won by the teacher there.
+    train_layouts_per_family: int = 8
+    train_rounds: int = 3
     validation_layouts_per_difficulty: int = 3
     epochs: int = 40
     batch_frames: int = 16384
@@ -44,7 +49,7 @@ class PredictorConfig:
     weight_decay: float = 0.05
     workers: int = 15
     lanes: int = 8
-    seed: int = 2026101000
+    seed: int = 2026100909  # teacher_validation_dense_20261010's
     device: str = "cuda"
     output: str = "artifacts/block_smb/action_predictor"
 
@@ -187,7 +192,14 @@ def train_predictor(config: PredictorConfig, episodes=None) -> dict:
         try:
             pool.publish(policy)
             train = collect(
-                pool, lt._tasks(layer, "train", layer.train_layouts_per_family, 0, 1.0, True)
+                pool,
+                [
+                    task
+                    for r in range(config.train_rounds)
+                    for task in lt._tasks(
+                        layer, "train", layer.train_layouts_per_family, r, 1.0, True
+                    )
+                ],
             )
             validation = collect(
                 pool,
