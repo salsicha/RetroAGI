@@ -29,9 +29,12 @@ Round 0 of the re-validation lost two of 656 layouts:
 - **No room to brake.** In `action_stomp_up` the teacher jumped onto the
   raised platform 6 pixels from a standing enemy; landing speed slid Mario
   into it. Any landing within 48 pixels of a live enemy at the same height
-  is now safe only if holding from there until Mario stops does not reach
-  the enemy (`controller_teacher.stop_safe`; before, only plants had this
-  check). The teacher now wins that layout, in four commands: the direct
+  is now safe only if holding from there until Mario stops does not carry
+  him into the enemy where it stands (`controller_teacher.stop_safe`;
+  before, only plants had this check). Only his own slide is judged, the
+  enemies held in place: a walker coming toward him is the next decision's
+  to pass (judging its approach too left the teacher no command in the air
+  after a stomp in `enemy_hop`). The teacher now wins that layout, in four commands: the direct
   stomp needs the longest jump, and no destination aimed at the enemy makes
   the executor choose it (aiming at its top picks a shorter jump that comes
   down on the platform edge beside it). Left as a known limit of aiming.

@@ -1702,9 +1702,11 @@ BRAKE_FRAMES = 24
 
 def stop_safe(env, spatial, executor):
     """A landing needs room to brake: holding from where Mario lands must not
-    carry him into a live enemy beside him, nor onto the mouth of a pipe's
-    plant. (A landing 6 pixels from a standing enemy was taught; the slide
-    after it reached the enemy.)"""
+    carry him into a live enemy beside him, where it stands now, nor onto the
+    mouth of a pipe's plant. (A landing 6 pixels from a standing enemy was
+    taught; the slide after it reached the enemy.) An enemy walking toward
+    him is the next decision's to pass: only his own slide is judged here,
+    the enemies held where they are."""
     m = env.mario
     feet, middle = m["y"] + m["h"], m["x"] + m["w"] / 2
     plant = any(
@@ -1713,25 +1715,30 @@ def stop_safe(env, spatial, executor):
         and abs(m["x"] - e["x"]) < 48
         for e in env.enemies
     )
-    enemy = m["on_ground"] and any(
-        not e["dead"]
+    near = [
+        e
+        for e in env.enemies
+        if m["on_ground"]
+        and not e["dead"]
         and e["h"] > 0
         and e.get("kind") != "piranha_plant"
         and abs(e["y"] + e["h"] - feet) < 20
         and abs(e["x"] + e["w"] / 2 - middle) < BRAKE_WATCH
-        for e in env.enemies
-    )
-    if not plant and not enemy:
+    ]
+    if not plant and not near:
         return True
     if plant and on_plant_mouth(env):
         return False
     with probe_state(env):
+        spans = [(e["x"], e["x"] + e["w"]) for e in near]
+        for e in near:
+            e["dead"] = True  # held where they are (the probe restores them)
         feedback = deepcopy(spatial)
         control = SMBExecutor(last_button=executor.last_button)
         scene = scene_from_labels(env.scene_labels())
         plan = feedback.begin(SkillToken("hold", 0, 0), scene)
         control.start(plan, flight=feedback.flight, travel=feedback.travel)
-        for frame in range(BRAKE_FRAMES if enemy else 6):
+        for frame in range(BRAKE_FRAMES if near else 6):
             if frame:
                 control.end("hold_recheck")
                 plan = feedback.begin(SkillToken("hold", 0, 0), scene)
@@ -1741,7 +1748,10 @@ def stop_safe(env, spatial, executor):
             _, _, done, truncated, _ = env.step(button)
             if done or truncated or (plant and on_plant_mouth(env)):
                 return bool(env._goal_credited)
-            if not plant and env.mario["on_ground"] and abs(env.mario["vx"]) < 1 / 16:
+            m = env.mario
+            if any(m["x"] < right and m["x"] + m["w"] > left for left, right in spans):
+                return False
+            if not plant and m["on_ground"] and abs(m["vx"]) < 1 / 16:
                 break  # stopped
             scene = scene_from_labels(env.scene_labels())
             feedback.observe(scene)
