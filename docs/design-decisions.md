@@ -34,10 +34,11 @@ Round 0 of the re-validation lost two of 656 layouts:
   before, only plants had this check). Only his own slide is judged, the
   enemies held in place: a walker coming toward him is the next decision's
   to pass (judging its approach too left the teacher no command in the air
-  after a stomp in `enemy_hop`). The teacher now wins that layout, in four commands: the direct
-  stomp needs the longest jump, and no destination aimed at the enemy makes
-  the executor choose it (aiming at its top picks a shorter jump that comes
-  down on the platform edge beside it). Left as a known limit of aiming.
+  after a stomp in `enemy_hop`). The teacher now wins that layout, in four
+  commands: the direct stomp needs the longest jump, and no destination
+  aimed at the enemy makes the executor choose it (aiming at its top picks a
+  shorter jump that comes down on the platform edge beside it). Left as a
+  known limit of aiming.
 - **A descent the executor could not make.** A `skill_gap_descent` layout
   put a 61-pixel gap and a 35-pixel drop in front of a 40-pixel ledge; the
   reference route landed with 3 pixels of Mario on the lower ledge's edge,
