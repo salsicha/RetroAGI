@@ -18,8 +18,10 @@ from .bridge_traversal import bridge_oracle
 from .env import MarioScenarioEnv
 from .hierarchy import FAMILY_PREREQUISITES, HIERARCHY_FAMILIES
 from .skill_families import (
+    LOW_ROUTE_SKILL_FAMILIES,
     ROUTE_SKILL_FAMILIES,
     SKILL_FAMILIES,
+    UPPER_GAP_SKILL_FAMILIES,
     WATCH_FRAMES,
     skill_family_scenario,
 )
@@ -1227,6 +1229,46 @@ def _as_played(family, scenario):
     return played
 
 
+# Local route lessons: each is one maneuver from where Mario starts to its
+# route platform (skill_families).
+ROUTE_LESSONS = (*ROUTE_SKILL_FAMILIES, *LOW_ROUTE_SKILL_FAMILIES, *UPPER_GAP_SKILL_FAMILIES)
+
+
+def _route_lesson_fault(scenario, actions) -> Optional[str]:
+    """Why ``actions`` are not one clean maneuver of a local route lesson, or
+    None: "route_detour" when Mario stands on anything but the platform he
+    starts on and the route's platforms (dropping to the floor below a lower
+    ledge and climbing back up is not the lesson's one descent);
+    "edge_landing" when he comes down onto a lower route platform with his
+    middle off it (3 pixels of Mario on a ledge's edge leave the executor's
+    jump no room; a 61-pixel gap from a 40-pixel ledge was drawn so)."""
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=copy.deepcopy(dict(scenario)), seed=0)
+        route = {i for segment in env._tactics for i in segment.get("route", ())}
+        allowed = [env.platforms[i] for i in route]
+        start = None
+        for action in actions:
+            _, _, done, truncated, _ = env.step(int(action))
+            m = env.mario
+            support = m.get("_platform") if m["on_ground"] else None
+            if support is not None:
+                if start is None:
+                    start = support
+                elif support is not start:
+                    if not any(support is p for p in allowed):
+                        return "route_detour"
+                    r = support["rect"]
+                    lower = r.top > start["rect"].top
+                    if lower and not r.left <= m["x"] + m["w"] / 2 <= r.right:
+                        return "edge_landing"
+            if done or truncated:
+                break
+        return None if env._goal_credited else "no_verified_route"
+    finally:
+        env.close()
+
+
 def _verified_route(family, scenario, authored_actions):
     """The first route that completes the layout: (actions, source, reachability).
 
@@ -1243,9 +1285,12 @@ def _verified_route(family, scenario, authored_actions):
     if family in TACTIC_FAMILIES or family in ACTION_FAMILIES or family in SKILL_FAMILIES:
         # Only the teacher's route under the layout's tactics counts.
         result = reachable(authored_actions)
-        if result["reachable"]:
-            return list(authored_actions), "tactic_teacher", result
-        return None, "no_verified_route", None
+        if not result["reachable"]:
+            return None, "no_verified_route", None
+        fault = _route_lesson_fault(scenario, authored_actions) if family in ROUTE_LESSONS else None
+        if fault is not None:
+            return None, fault, None
+        return list(authored_actions), "tactic_teacher", result
     candidates = [list(authored_actions)]
     if family == "platform_hop":
         # This family isolates duration selection at the initial state.

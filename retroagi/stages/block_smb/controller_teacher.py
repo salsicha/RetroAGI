@@ -290,7 +290,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                     safe=bool(
                         route_available(env)
                         and not boxed_with_enemy(env, clearance)
-                        and plant_stop_safe(env, spatial, executor)
+                        and stop_safe(env, spatial, executor)
                         and landed
                         and (reached or advanced or objective or env.stomped)
                         and (moved > 0 or goal.mode == "hold")
@@ -1509,21 +1509,34 @@ def closes_on_enemy(env, target, goal, result):
 
 
 def mount_destination(env, state, target):
-    """Certify the takeoff location as well as the raised landing destination.
+    """Certify the takeoff location as well as the landing destination, for a
+    raised platform, or a lower one across a gap (walking off the edge does
+    not reach it).
 
-    Every jump Mario can make onto the raised platform, from where he stands
-    or after a run along his floor to any point (every pixel, forward or back:
-    a takeoff under an overhead ledge must first move clear of it), is
-    screened, and the one keeping the most room is certified and taught.
+    Every jump Mario can make onto the platform, from where he stands or after
+    a run along his floor to any point (every pixel, forward or back: a
+    takeoff under an overhead ledge must first move clear of it, and a jump
+    down across a wide gap may need a run-up), is screened, and the one
+    keeping the most room is certified and taught. (Without this, a jump that
+    dropped below a lower target counted as progress toward it.)
     """
     m = env.mario
     if not m["on_ground"] or target.platform_index is None or target.kind != "mount":
         return None
     rect = env.platforms[target.platform_index]["rect"]
     feet, center, half = m["y"] + m["h"], m["x"] + m["w"] / 2, m["w"] / 2
-    if rect.top >= feet - 2 or rect.top < feet - 88:
-        return None
     side = target.direction
+    lower = rect.top > feet + 2
+    if lower:
+        support = m.get("_platform")
+        if support is None:
+            return None
+        source = support["rect"]
+        gap = rect.left - source.right if side > 0 else source.left - rect.right
+        if gap <= 8:
+            return None  # walking off the edge reaches it
+    elif rect.top >= feet - 2 or rect.top < feet - 88:
+        return None
     memo = {}
 
     def wanted(option, landing, killed):
@@ -1543,9 +1556,17 @@ def mount_destination(env, state, target):
             for t in range(-48, REACH + 1)
             if t and source.left + half + 2 <= center + t * side <= source.right - half - 2
         ]
-    # Only jumps rising above the platform's top can land on it.
+    # Only jumps rising above a raised platform's top can land on it.
     best = _best_certified(
-        env, state, target, memo, side, travels, wanted, check, rise=feet - rect.top + 2
+        env,
+        state,
+        target,
+        memo,
+        side,
+        travels,
+        wanted,
+        check,
+        rise=None if lower else feet - rect.top + 2,
     )
     return best[0] if best is not None else None
 
@@ -1654,17 +1675,38 @@ def on_plant_mouth(env):
     )
 
 
-def plant_stop_safe(env, spatial, executor):
-    """A pipe landing needs room to brake outside the mouth of its plant."""
+# A landing this close (pixels between middles) to a live enemy at the same
+# height must leave room to brake (stop_safe).
+BRAKE_WATCH = 48
+# Frames of holding watched after such a landing: NES braking from a full run
+# takes about 20.
+BRAKE_FRAMES = 24
+
+
+def stop_safe(env, spatial, executor):
+    """A landing needs room to brake: holding from where Mario lands must not
+    carry him into a live enemy beside him, nor onto the mouth of a pipe's
+    plant. (A landing 6 pixels from a standing enemy was taught; the slide
+    after it reached the enemy.)"""
     m = env.mario
-    if not any(
+    feet, middle = m["y"] + m["h"], m["x"] + m["w"] / 2
+    plant = any(
         e.get("kind") == "piranha_plant"
-        and abs(m["y"] + m["h"] - e["pipe_top"]) < 2
+        and abs(feet - e["pipe_top"]) < 2
         and abs(m["x"] - e["x"]) < 48
         for e in env.enemies
-    ):
+    )
+    enemy = m["on_ground"] and any(
+        not e["dead"]
+        and e["h"] > 0
+        and e.get("kind") != "piranha_plant"
+        and abs(e["y"] + e["h"] - feet) < 20
+        and abs(e["x"] + e["w"] / 2 - middle) < BRAKE_WATCH
+        for e in env.enemies
+    )
+    if not plant and not enemy:
         return True
-    if on_plant_mouth(env):
+    if plant and on_plant_mouth(env):
         return False
     with probe_state(env):
         feedback = deepcopy(spatial)
@@ -1672,7 +1714,7 @@ def plant_stop_safe(env, spatial, executor):
         scene = scene_from_labels(env.scene_labels())
         plan = feedback.begin(SkillToken("hold", 0, 0), scene)
         control.start(plan, flight=feedback.flight, travel=feedback.travel)
-        for frame in range(6):
+        for frame in range(BRAKE_FRAMES if enemy else 6):
             if frame:
                 control.end("hold_recheck")
                 plan = feedback.begin(SkillToken("hold", 0, 0), scene)
@@ -1680,8 +1722,10 @@ def plant_stop_safe(env, spatial, executor):
             button = control.press(scene)
             feedback.executed(button, scene)
             _, _, done, truncated, _ = env.step(button)
-            if done or truncated or on_plant_mouth(env):
+            if done or truncated or (plant and on_plant_mouth(env)):
                 return bool(env._goal_credited)
+            if not plant and env.mario["on_ground"] and abs(env.mario["vx"]) < 1 / 16:
+                break  # stopped
             scene = scene_from_labels(env.scene_labels())
             feedback.observe(scene)
     return True

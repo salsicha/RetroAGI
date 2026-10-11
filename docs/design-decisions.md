@@ -22,6 +22,30 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-11 — Fixes from the teacher's re-validation (built)
+
+Round 0 of the re-validation lost two of 656 layouts:
+
+- **No room to brake.** In `action_stomp_up` the teacher jumped onto the
+  raised platform 6 pixels from a standing enemy; landing speed slid Mario
+  into it. Any landing within 48 pixels of a live enemy at the same height
+  is now safe only if holding from there until Mario stops does not reach
+  the enemy (`controller_teacher.stop_safe`; before, only plants had this
+  check). The teacher now wins that layout, in four commands: the direct
+  stomp needs the longest jump, and no destination aimed at the enemy makes
+  the executor choose it (aiming at its top picks a shorter jump that comes
+  down on the platform edge beside it). Left as a known limit of aiming.
+- **A descent the executor could not make.** A `skill_gap_descent` layout
+  put a 61-pixel gap and a 35-pixel drop in front of a 40-pixel ledge; the
+  reference route landed with 3 pixels of Mario on the lower ledge's edge,
+  and the teacher's jumps all fell to the floor below. The sampler now
+  redraws a local route lesson whose reference route stands anywhere but its
+  start and its route platforms, or comes down onto a lower route platform
+  with Mario's middle off it (`monte_carlo._route_lesson_fault`). The
+  teacher's search over run-ups and jumps that land on a raised route
+  platform (`mount_destination`) now also covers a lower one across a gap,
+  so a drop below the target no longer counts as progress toward it.
+
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
 A share of one value within a family can be physics (a pit nearly as wide as

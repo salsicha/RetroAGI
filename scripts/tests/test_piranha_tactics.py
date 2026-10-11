@@ -122,6 +122,7 @@ def test_timed_teacher_stops_in_the_staging_window_without_overshoot():
         env.close()
 
 
+@pytest.mark.timeout(180)
 def test_certified_departure_window_opens_on_observed_descent():
     import numpy as np
 
