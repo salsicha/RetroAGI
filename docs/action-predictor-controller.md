@@ -257,7 +257,11 @@ work out later:
    decides: the teacher runs 8 pixels to wait for an enemy and 196 to the
    goal, both "run to" that floor, so the predictor can only learn a mean
    (36 pixels off in the first test). The run's end must come from an object
-   (a gap's edge, an enemy, the end of the floor) or a further choice.
+   (a gap's edge, an enemy, the end of the floor) or a further choice. "Land
+   on" a wide floor has the same gap: where on it depends on the threats
+   around (8 pixels in one scene, 45 in a similar one). A surface split at
+   the threats on it (the floor between a pit and an enemy as one object)
+   would make the end follow from the object.
 2. Whether the predictor is a readout of the scene memory or its own network.
 3. Whether the skill reads the predicted outcomes of its candidate actions
    (choosing by predicted success and room) or only the scene.
@@ -273,14 +277,27 @@ work out later:
    (verb and object) for each choice, and the outcome of every action tried.
    Done for jumps (2026-10-10); runs are labelled for the chosen run only.
 2. Build the predictor; train it on the teacher's outcomes; measure its error
-   in pixels and frames on held-out layouts. Built (2026-10-10); a smoke test
-   on three episodes learns; not yet trained at scale.
+   in pixels and frames on held-out layouts. Built and trained (2026-10-10,
+   `artifacts/block_smb/action_predictor_20261010b`): 912 teacher episodes
+   of the validated layouts (3 rounds x 8 per skill family), 342 held out.
+   Held-out error of where Mario's feet end: land on 10.7 pixels, jump over
+   9.6, stomp 8.7, approach 9.0, run to 13.6 (hold 1.9); duration 6 to 11
+   frames; survival predicted better than its base rate (stomp 96.8% against
+   85.5% survived). Fitting the values by squared error (not only the
+   likelihood, which let a wide uncertainty excuse a poor value) halved the
+   errors. A plain linear fit from the target surface's numbers gets "land
+   on" to 18 pixels: the rest needs the threats around it.
 3. Build the target tracker; train it on logged object positions; measure
    its error at each time ahead and how fast it notices a change. Built
    (2026-10-10, `core/target_tracker.py`, `stages/block_smb/tracker_train.py`):
    on synthetic walkers it learns where they turn (64 frames ahead: 5 to 8
    pixels off, against 26 for steady motion) and its check notices a turn
-   within 4 frames. Not yet trained on played episodes.
+   within 4 frames. Trained on the same episodes' tracked objects (450
+   tracks; walkers, a few moving platforms): it matches, but does not yet
+   beat, steady motion averaged over 16 sightings (3.3 pixels off 64 frames
+   ahead; the last frame's movement continued was 21 pixels off). These
+   walkers seldom turn within the horizon; it needs data with turns and
+   reversals (patrols, moving platforms, plants).
 4. Give the skill verb and pointer heads; train it on the teacher's actions.
    Built (2026-10-10): `SkillLayer` chooses a verb (verbs with nothing in
    view to aim at are excluded), then a pointer reading the verb (the
