@@ -228,6 +228,21 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
         alive = [i for i, e in enumerate(env.enemies) if not e["dead"]]
         watch = _Watch(env)
         path = [_body(env)] if record else []
+        def finished():
+            enemy_gap, edge, outcome, distances = _measured(env, watch, alive, mark)
+            return Result(
+                safe=env._goal_credited,
+                won=env._goal_credited,
+                frames=env.steps - start,
+                enemy_gap=enemy_gap,
+                edge_margin=edge,
+                outcome=outcome,
+                distances=distances,
+                end_dx=env.mario["x"] - x,
+                end_dy=env.mario["y"] + env.mario["h"] - feet,
+                path=path,
+            )
+
         for _ in range(192):
             button = executor.press(scene)
             spatial.executed(button, scene)
@@ -236,35 +251,34 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
             if record:
                 path.append(_body(env))
             if done or truncated:
-                enemy_gap, edge, outcome, distances = _measured(env, watch, alive, mark)
-                return Result(
-                    safe=env._goal_credited,
-                    won=env._goal_credited,
-                    frames=env.steps - start,
-                    enemy_gap=enemy_gap,
-                    edge_margin=edge,
-                    outcome=outcome,
-                    distances=distances,
-                    end_dx=env.mario["x"] - x,
-                    end_dy=env.mario["y"] + env.mario["h"] - feet,
-                    path=path,
-                )
+                return finished()
             if visual or unsettled_contact:
                 scene = observer.observe([render()])[0]
                 unsettled_contact = scene.mario.on_something != env.mario["on_ground"]
             else:
                 scene = scene_from_labels(env.scene_labels())
             spatial.observe(scene)
+            seen_landing = landing.landed(scene)
             ended = (
-                landing.landed(scene)
-                or executor.finished
-                or executor.reconsider
-                or spatial.arrived()
+                seen_landing or executor.finished or executor.reconsider or spatial.arrived()
             )
             stalled = spatial.stalled and (
                 ended or spatial.observed_frames >= spatial.positions.maxlen
             )
             if ended or stalled:
+                # Vision sees a stomp's landing a frame or two before the
+                # simulator makes it (feet within STOMP_ROWS of the enemy's
+                # top): play on, as the episode does, until the simulator
+                # lands Mario or the stomp happens.
+                for _ in range(SETTLE_FRAMES if seen_landing else 0):
+                    if env.mario["on_ground"] or env.stomped:
+                        break
+                    _, _, done, truncated, _ = env.step(0)
+                    watch.observe(env)
+                    if record:
+                        path.append(_body(env))
+                    if done or truncated:
+                        return finished()
                 m = env.mario
                 advanced = mark != (env._tactic_index, env._route_done)
                 reached = spatial.report(scene)[2] > 0.5
@@ -331,6 +345,9 @@ def _body(env):
 # the enemies moved by their patrol rule, and the best are certified by trials.
 
 REACH = 128
+# Frames a trial plays on after vision sees a landing the simulator has not
+# made yet (_trial).
+SETTLE_FRAMES = 4
 # Screened options certified by a trial, best first.
 CERTIFY = 6
 # No run shorter than this is proposed by the general search (_run_options):

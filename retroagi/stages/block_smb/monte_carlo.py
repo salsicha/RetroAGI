@@ -1234,20 +1234,28 @@ def _as_played(family, scenario):
 ROUTE_LESSONS = (*ROUTE_SKILL_FAMILIES, *LOW_ROUTE_SKILL_FAMILIES, *UPPER_GAP_SKILL_FAMILIES)
 
 
+# How far inside a lower route platform's edge the reference route's landing
+# must put Mario's middle (_route_lesson_fault).
+LANDING_INSET = 4
+
+
 def _route_lesson_fault(scenario, actions) -> Optional[str]:
     """Why ``actions`` are not one clean maneuver of a local route lesson, or
     None: "route_detour" when Mario stands on anything but the platform he
     starts on and the route's platforms (dropping to the floor below a lower
     ledge and climbing back up is not the lesson's one descent);
     "edge_landing" when he comes down onto a lower route platform with his
-    middle off it (3 pixels of Mario on a ledge's edge leave the executor's
-    jump no room; a 61-pixel gap from a 40-pixel ledge was drawn so)."""
+    middle off it or within LANDING_INSET pixels of its edge (a reference
+    jump landing so leaves the executor's own jump, a few pixels shorter, no
+    room: 61- and 56-pixel gaps from 36- to 40-pixel ledges were drawn so)."""
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=copy.deepcopy(dict(scenario)), seed=0)
         route = {i for segment in env._tactics for i in segment.get("route", ())}
         allowed = [env.platforms[i] for i in route]
-        start = None
+        # Where Mario stands at the start (the route may jump on its first
+        # frame); else the first platform he comes down on.
+        start = env.mario.get("_platform") if env.mario["on_ground"] else None
         for action in actions:
             _, _, done, truncated, _ = env.step(int(action))
             m = env.mario
@@ -1260,7 +1268,8 @@ def _route_lesson_fault(scenario, actions) -> Optional[str]:
                         return "route_detour"
                     r = support["rect"]
                     lower = r.top > start["rect"].top
-                    if lower and not r.left <= m["x"] + m["w"] / 2 <= r.right:
+                    middle = m["x"] + m["w"] / 2
+                    if lower and not r.left + LANDING_INSET <= middle <= r.right - LANDING_INSET:
                         return "edge_landing"
             if done or truncated:
                 break

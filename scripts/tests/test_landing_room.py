@@ -84,3 +84,38 @@ def test_a_descent_landing_on_the_ledge_edge_is_redrawn():
     )
     assert rejected["edge_landing"] >= 1
     assert _route_lesson_fault(sample.scenario, sample.oracle["actions"]) is None
+
+
+def test_a_stomp_seen_a_frame_early_by_vision_still_counts():
+    from retroagi.core.tokens import SkillToken
+    from retroagi.stages.block_smb import controller_teacher as ct
+    from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
+    from retroagi.stages.block_smb.teacher_replay import reference_vision
+    from retroagi.stages.block_smb.teacher_tokens import episode_teacher
+
+    # Vision reports Mario's feet on the walker (within STOMP_ROWS of its
+    # top) a frame before the simulator stomps it: the trial plays on.
+    scenario = sample_block_smb_monte_carlo_scenario(
+        split="train",
+        seed=2026100909,
+        sample_index=2,
+        family="action_stomp_up_back",
+        difficulty="easy",
+    ).scenario
+    observer = reference_vision()[0]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=copy.deepcopy(scenario))
+        state = episode_teacher(scenario)
+        state.visual_observer = observer
+        state.observe_frame(env)
+        state.scene = observer.observe([type(env).render(env)])[0]
+        state.execution = SpatialFeedback()
+        state.execution.observe(state.scene)
+        state.controller = SMBExecutor()
+        env.render = lambda: None
+        stomp = SkillToken("jump", -33, -24)
+        result = ct._trial(env, state, stomp, ct.teacher_target(env), visual=True)
+        assert result.won and 0 in result.outcome[2]
+    finally:
+        env.close()
