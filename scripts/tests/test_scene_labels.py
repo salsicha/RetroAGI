@@ -172,11 +172,16 @@ def test_support_pixels_read_as_mario_below_his_feet_mean_he_stands_on_it():
     types[168:180, 95:105] = M
     types[181:185, 94:96] = M
     mario = _decoded(types)
-    assert mario.box == (94, 168, 105, 180)  # his feet are on the ledge
+    # His feet are on the ledge, and his sides are those of his body above
+    # it (the misread pixels below also widened the box by a column).
+    assert mario.box == (95, 168, 105, 180)
     assert mario.on_something and mario.support == "ground"
-    # Deeper than SINK_ROWS, it is not a misread support row: no change.
+    # 8 rows into a 12-pixel ledge (as seen on action_jump_down's ledges) is
+    # still a misread support row; deeper than SINK_ROWS, no change.
     types[181:188, 94:96] = M
-    assert _decoded(types).box[3] == 188 and not _decoded(types).on_something
+    assert _decoded(types).box == (95, 168, 105, 180) and _decoded(types).on_something
+    types[181:189, 94:96] = M
+    assert _decoded(types).box[3] == 189 and not _decoded(types).on_something
     # A short blob dipping into a platform is not a standing Mario: a coin on a
     # floating platform was once read as Mario this way (9 rows, 2 below).
     blob = np.zeros((240, 256), np.uint8)

@@ -530,20 +530,28 @@ def scene_targets(labels: SceneLabels) -> dict[str, np.ndarray]:
 # Mario cannot be inside solid support. When his found box reaches at most
 # SINK_ROWS rows below the top of a surface he mostly covers, with at least
 # BODY_ROWS of him above it, those rows are support pixels read as Mario (seen
-# on thin brick ledges): his feet are on that surface. A shorter blob there is
-# not a standing Mario (a coin read as Mario was one).
-SINK_ROWS = 6
+# on thin brick ledges, up to 7 rows into a 12-pixel ledge): his feet are on
+# that surface. A shorter blob there is not a standing Mario (a coin read as
+# Mario was one).
+SINK_ROWS = 8
 BODY_ROWS = 8
 
 
-def _feet_on_support(box, surfaces):
-    """Mario's box with its bottom raised to the top of a surface it sank into."""
+def _feet_on_support(box, surfaces, types=None):
+    """Mario's box with its bottom raised to the top of a surface it sank into
+    (and, given the per-pixel ``types``, its sides those of the Mario pixels
+    above that top: the support pixels read as Mario also widen the box)."""
     if box is None:
         return box
     width = box[2] - box[0]
     for left, right, top in surfaces:
         cover = min(right, box[2]) - max(left, box[0])
         if 2 * cover >= width and box[1] + BODY_ROWS <= top < box[3] <= top + SINK_ROWS:
+            if types is not None:
+                above = np.asarray(types)[box[1] : top, box[0] : box[2]] == TYPE_ID["mario"]
+                columns = np.flatnonzero(above.any(axis=0))
+                if columns.size:
+                    return (box[0] + int(columns[0]), box[1], box[0] + int(columns[-1]) + 1, top)
             return (box[0], box[1], box[2], top)
     return box
 
@@ -572,7 +580,7 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
         # consumes contact. Side contact is not support beneath Mario's feet.
         surfaces = [(s.x0, s.x1, s.top) for s in structure["surfaces"]]
         surfaces += [(b[0], b[2], b[1]) for b in objects["moving_platforms"]]
-        box = _feet_on_support(box, surfaces)
+        box = _feet_on_support(box, surfaces, types[b])
         standing = box is not None and any(
             left < box[2] and right > box[0] and abs(top - box[3]) <= 1
             for left, right, top in surfaces
