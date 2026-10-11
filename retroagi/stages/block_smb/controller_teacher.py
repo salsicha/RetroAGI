@@ -1765,11 +1765,12 @@ BRAKE_FRAMES = 24
 
 def stop_safe(env, spatial, executor):
     """A landing needs room to brake: holding from where Mario lands must not
-    carry him into a live enemy beside him, where it stands now, nor onto the
-    mouth of a pipe's plant. (A landing 6 pixels from a standing enemy was
-    taught; the slide after it reached the enemy.) An enemy walking toward
-    him is the next decision's to pass: only his own slide is judged here,
-    the enemies held where they are."""
+    carry him into a live enemy beside him, nor onto the mouth of a pipe's
+    plant. (A landing 6 pixels from a standing enemy was taught; the slide
+    after it reached the enemy.) An enemy walking toward him is the next
+    decision's to pass: it is held where it stands, so only his own slide is
+    judged. One walking away keeps walking (held, it barred every landing
+    behind a receding walker, and a stomp was taught under speed run)."""
     m = env.mario
     feet, middle = m["y"] + m["h"], m["x"] + m["w"] / 2
     plant = any(
@@ -1793,8 +1794,13 @@ def stop_safe(env, spatial, executor):
     if plant and on_plant_mouth(env):
         return False
     with probe_state(env):
-        spans = [(e["x"], e["x"] + e["w"]) for e in near]
-        for e in near:
+        held = [
+            e
+            for e in near
+            if e.get("speed", 0) * e.get("direction", 0) * (middle - e["x"] - e["w"] / 2) >= 0
+        ]
+        spans = [(e["x"], e["x"] + e["w"]) for e in held]
+        for e in held:
             e["dead"] = True  # held where they are (the probe restores them)
         feedback = deepcopy(spatial)
         control = SMBExecutor(last_button=executor.last_button)

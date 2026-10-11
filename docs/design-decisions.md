@@ -31,10 +31,12 @@ Round 0 of the re-validation lost two of 656 layouts:
   into it. Any landing within 48 pixels of a live enemy at the same height
   is now safe only if holding from there until Mario stops does not carry
   him into the enemy where it stands (`controller_teacher.stop_safe`;
-  before, only plants had this check). Only his own slide is judged, the
-  enemies held in place: a walker coming toward him is the next decision's
-  to pass (judging its approach too left the teacher no command in the air
-  after a stomp in `enemy_hop`). The teacher now wins that layout, in four
+  before, only plants had this check). A standing enemy, or one walking
+  toward him, is held where it stands, so only his own slide is judged: its
+  approach is the next decision's to pass (judging it too left the teacher
+  no command in the air after a stomp in `enemy_hop`). One walking away
+  keeps walking (held, it barred every landing behind a receding walker,
+  and under speed run a stomp was taught in `landing_enemy`). The teacher now wins that layout, in four
   commands: the direct stomp needs the longest jump, and no destination
   aimed at the enemy makes the executor choose it (aiming at its top picks a
   shorter jump that comes down on the platform edge beside it). Left as a
