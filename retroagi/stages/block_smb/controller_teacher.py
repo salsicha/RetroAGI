@@ -304,6 +304,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                     safe=bool(
                         route_available(env)
                         and not boxed_with_enemy(env, clearance)
+                        and bounce_lands_clear(env)
                         and stop_safe(env, spatial, executor)
                         and landed
                         and (reached or advanced or objective or env.stomped)
@@ -345,6 +346,9 @@ def _body(env):
 # the enemies moved by their patrol rule, and the best are certified by trials.
 
 REACH = 128
+# Above this speed (pixels a frame) the jumps from here are not those Mario
+# makes after a run-up or wait, which end at rest (_takeoff_search).
+MOVING = 0.5
 # Frames a trial plays on after vision sees a landing the simulator has not
 # made yet (_trial).
 SETTLE_FRAMES = 4
@@ -704,6 +708,14 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
     support = m.get("_platform")
     if support is None:
         return []
+    spatial = state.execution
+    known = spatial is not None and getattr(spatial, "motion_ready", False)
+    if abs((spatial.motion if known else env.motion).x_speed) / 16 > MOVING:
+        # The table's jumps start at Mario's speed now, but a run or a wait
+        # ends at rest: moved along the floor, they would reach too far (a
+        # run to the pit's edge was taught where only the running jump from
+        # here could cross it).
+        travels, waits = [t for t in travels if t == 0], ()
     start = _body(env)
     rects = [p["rect"] for p in env.platforms]
     # What a moved jump path must not pass through (moving platforms move).
@@ -1718,6 +1730,29 @@ def on_plant_mouth(env):
         and m["x"] < e["x"] + e["w"] + 2
         for e in env.enemies
     )
+
+
+def bounce_lands_clear(env):
+    """After a stomp, the bounce comes down (played out with no buttons) at
+    least 8 pixels from every live enemy, or wins first. Steering in the
+    air moves that landing only a few pixels: a stomp made as a walker
+    arrived left every landing 6 pixels from it, and no command after."""
+    if not env.stomped or env.mario["on_ground"]:
+        return True
+    with probe_state(env):
+        for _ in range(64):
+            _, _, done, truncated, _ = env.step(0)
+            if done or truncated:
+                return bool(env._goal_credited)
+            m = env.mario
+            if m["on_ground"]:
+                feet = m["y"] + m["h"]
+                return all(
+                    max(e["x"] - m["x"] - m["w"], m["x"] - e["x"] - e["w"]) >= 8
+                    for e in env.enemies
+                    if not e["dead"] and e["h"] > 0 and abs(e["y"] + e["h"] - feet) < 20
+                )
+    return True
 
 
 # A landing this close (pixels between middles) to a live enemy at the same

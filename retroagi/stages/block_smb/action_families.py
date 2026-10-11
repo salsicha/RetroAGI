@@ -404,4 +404,13 @@ GENERATORS = {
 
 
 def action_family_scenario(family: str, rng, difficulty: str) -> tuple[dict, Any, list]:
-    return GENERATORS[family](rng, difficulty)
+    from .skill_families import WATCH_FRAMES
+
+    scenario, parameters, actions = GENERATORS[family](rng, difficulty)
+    if scenario.get("enemies"):
+        # Watched before the first decision, as in enemy_stomp: one picture
+        # cannot show how an enemy moves, and without it no destination
+        # aimed at a walker made the jump that stomps it (stomp_up layouts
+        # were taught a landing beside the walker instead).
+        scenario["watch_frames"] = WATCH_FRAMES
+    return scenario, parameters, actions

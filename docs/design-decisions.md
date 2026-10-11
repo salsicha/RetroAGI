@@ -88,6 +88,27 @@ The third attempt lost one layout in round 3 and one in round 4, and round
 
 The teacher wins 246 of 246 fresh layouts of the 41 skill families with these.
 
+Its rounds 6 to 10 lost five more, three of which the current teacher still
+lost:
+
+- **A stomp whose bounce lands against a walker** (`enemy_hop`): the teacher
+  stomped a standing enemy as a walker arrived; the bounce came down 6
+  pixels from the walker whatever the steering in the air. A stomp is now
+  safe only if its bounce, played out, comes down at least 8 pixels from
+  every live enemy (`bounce_lands_clear`; the stomp's end, which the
+  predictor learns, stays on the enemy's top).
+- **A run-up judged at running speed** (`pit_leap`, which starts Mario
+  running): the jump from here was moved along the floor behind a run to the
+  pit's edge, but a run ends at rest, from where no jump cleared the
+  64-pixel pit. While Mario moves faster than half a pixel a frame, only
+  jumps from where he is are screened (`MOVING`).
+- **Stomping a walker on a raised platform** (`action_stomp_up`, twice): one
+  picture does not show how the walker moves, and no destination aimed at
+  it made the jump that stomps it; the teacher landed beside it instead.
+  Action families with an enemy now start with the 12 watched frames that
+  `enemy_stomp` has; the teacher then stomps at once. All 108 sampled
+  layouts of the six action families with enemies are won.
+
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
 A share of one value within a family can be physics (a pit nearly as wide as
