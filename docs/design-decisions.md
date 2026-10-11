@@ -46,6 +46,23 @@ Round 0 of the re-validation lost two of 656 layouts:
   platform (`mount_destination`) now also covers a lower one across a gap,
   so a drop below the target no longer counts as progress toward it.
 
+The second attempt's round 0 lost two more:
+
+- **Edge landings with no margin.** A reference jump landing with Mario's
+  middle exactly on the lower ledge's edge passed; the executor's own jump,
+  a few pixels shorter, fell past it. The middle must now land at least 4
+  pixels inside (`LANDING_INSET`). The check had also missed routes that
+  jump on their first frame: it took the first platform Mario stood on as
+  his start, which was the landing; the start is now read at reset.
+- **A stomp seen a frame early.** Vision reports Mario's feet on an enemy
+  when they are within 6 rows of its top (`STOMP_ROWS`), a frame or two
+  before the simulator stomps it. A teacher trial replayed through vision
+  ended at that report, found Mario still in the air and nothing stomped,
+  and judged the stomp unsafe; under vision the teacher then preferred
+  landing beside the enemy (`action_stomp_up_back`), where it had no next
+  command. A trial now plays on, as the episode does, until the simulator
+  lands Mario or makes the stomp (`SETTLE_FRAMES`, at most 4 frames).
+
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
 A share of one value within a family can be physics (a pit nearly as wide as
