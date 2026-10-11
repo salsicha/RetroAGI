@@ -168,6 +168,33 @@ def test_actual_episode_stall_limit_also_fails_teacher_qualification(monkeypatch
     assert episode["frames"] < episode["frame_limit"]
 
 
+def test_a_teacher_without_a_command_fails_qualification_instead_of_crashing(
+    monkeypatch, tmp_path
+):
+    from retroagi.core.layered_policy import LayeredSMBPolicy
+    from retroagi.core.smb_scene_labels import scene_from_labels
+    from retroagi.stages.block_smb import teacher_tokens
+    from retroagi.stages.block_smb.env import MarioScenarioEnv
+
+    env = MarioScenarioEnv()
+    env.reset(scenario=task().scenario)
+    scene = scene_from_labels(env.scene_labels())
+    env.close()
+    observer = SimpleNamespace(observe=lambda screens: [scene for _ in screens])
+    policy = LayeredSMBPolicy().eval()
+    # No command anywhere, and no action predictor for the skill's own actions.
+    monkeypatch.setattr(teacher_tokens, "teacher_skill", lambda *args: None)
+
+    def play(tasks, *, teacher_only):
+        return lt.play_episodes(observer, policy, "skill", tasks, "cpu", 1)
+
+    report = tmp_path / "unlabelled.json"
+    with pytest.raises(RuntimeError, match="Teacher qualification failed"):
+        qualify_teachers(SimpleNamespace(play=play), [task()], report)
+    episode = json.loads(report.read_text())["episodes"][0]
+    assert not episode["complete_labels"] and not episode["passed"]
+
+
 @pytest.mark.timeout(180)
 def test_retreating_enemy_teacher_finishes_inside_training_budget():
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario

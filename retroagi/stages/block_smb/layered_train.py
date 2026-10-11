@@ -558,7 +558,16 @@ def _teacher_given(learner: str, lanes: dict, agents=None):
             asked = lanes[copy].ask_teacher(learner, scene)
             if above:
                 tokens[above].append(asked[above])
-            tokens[learner].append(asked[learner] if asked["plays_teacher"] else None)
+            choice = asked[learner] if asked["plays_teacher"] else None
+            if choice is None and learner == "skill" and agents is not None and agents.predictor is None:
+                # Without an action predictor the skill's own action cannot be
+                # executed (teacher qualification plays only the teacher): where
+                # the teacher has no command, hold. The decision has no label,
+                # so qualification counts the layout as failed.
+                from retroagi.core.tokens import SkillToken
+
+                choice = SkillToken("hold", 0, 0)
+            tokens[learner].append(choice)
         return tokens
 
     return given
