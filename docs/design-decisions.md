@@ -133,6 +133,12 @@ The final attempt's round 3 lost three:
   kept only if the teacher wins it (`monte_carlo._teacher_wins`, on the
   true scene); about 15 seconds per layout, made in parallel.
 
+Its round 9 lost one: a `skill_enemy_bypass` layout whose room between a
+standing enemy and a walker coming on had shrunk to 2 pixels by the landing
+(the reference route won by touching the goal; the teacher had no command
+from the first frame). The bypass families' layouts are now checked the same
+way (`TEACHER_CHECKED`).
+
 ## 2026-10-11 — Single values are judged by whether the scene explains them (approved; built)
 
 A share of one value within a family can be physics (a pit nearly as wide as

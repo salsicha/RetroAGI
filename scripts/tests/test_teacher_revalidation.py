@@ -60,5 +60,24 @@ def test_an_action_lesson_the_teacher_cannot_win_is_redrawn():
         difficulty="medium",
         rejection_counter=rejected,
     )
-    assert rejected["teacher_cannot_aim"] >= 1
+    assert rejected["teacher_loses"] >= 1
     assert replay(sample.scenario, family="action_stomp_up")["won"]
+
+
+@pytest.mark.timeout(600)
+def test_a_bypass_whose_room_closes_before_the_landing_is_redrawn():
+    from collections import Counter
+
+    # A standing enemy, then a walker coming on: by the landing the room
+    # between them was 2 pixels.
+    rejected = Counter()
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="train",
+        seed=2026100909,
+        sample_index=9001,
+        family="skill_enemy_bypass",
+        difficulty="easy",
+        rejection_counter=rejected,
+    )
+    assert rejected["teacher_loses"] >= 1
+    assert replay(sample.scenario, family="skill_enemy_bypass")["won"]
