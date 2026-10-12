@@ -373,6 +373,10 @@ def _approach_versions(env, state, target, memo, action):
         return []
     scene = _scene(env, state)
     kind, slot = action.target
+    if kind == "gaps":
+        # The teacher names no action aimed at a gap (a jump across one lands
+        # on the surface beyond it): it has no version of this.
+        return []
     cx, half = m["x"] + m["w"] / 2, m["w"] / 2
     if kind == "enemies":
         index = next(

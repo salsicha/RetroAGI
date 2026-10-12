@@ -147,3 +147,6 @@ def test_the_teacher_carries_out_the_skills_chosen_action():
         # A hold holds; an object the vision does not report has no version.
         assert carry_out(d.env, d.state, ActionToken("hold")).mode == "hold"
         assert carry_out(d.env, d.state, ActionToken("land_on", ("surfaces", 13))) is None
+        # Nor does an action aimed at a gap: the teacher names none.
+        assert carry_out(d.env, d.state, ActionToken("approach", ("gaps", 0))) is None
+        assert carry_out(d.env, d.state, ActionToken("jump_over", ("gaps", 0))) is None
