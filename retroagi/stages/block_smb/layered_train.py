@@ -369,13 +369,36 @@ class _Lane:
         self.asked: dict = {}
         self.progress, self.progressed = None, 0
 
+    def _as_action(self, command):
+        """The teacher's ``command`` as {"action", "outcome"}
+        (teacher_actions.teacher_example), or None."""
+        from .teacher_actions import teacher_example
+
+        return teacher_example(self.env, self.teacher, command)
+
     def carry_out(self, action):
         """The executor's destination for the skill's own ``action`` here: the
         teacher's version of it (teacher_actions.carry_out), used instead of
         the action predictor until that predicts well. None when the teacher
-        has no safe version: the episode then ends as lost."""
+        has no safe version: the episode then ends as lost.
+
+        The teacher's own choice is asked for first when it was not (an
+        unlabelled episode): its command is the version of that action (its
+        own search reaches commands, such as a run-up before a committed jump
+        or a wait, that carry_out's does not)."""
         from .teacher_actions import carry_out
 
+        if "action_label" not in self.asked:
+            from .teacher_tokens import teacher_plan, teacher_skill
+
+            plan = (
+                None
+                if self.teacher.family == "enemy_patrol"
+                else teacher_plan(self.env, self.teacher, certify_holds=False)[0]
+            )
+            own = teacher_skill(self.env, self.teacher, plan)
+            self.asked["skill"] = own
+            self.asked["action_label"] = self._as_action(own) if own is not None else None
         label = (self.asked.get("action_label") or {}).get("action")
         command = carry_out(self.env, self.teacher, action, label, self.asked.get("skill"))
         if command is None:
@@ -414,12 +437,10 @@ class _Lane:
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
             if self.task.label and asked["skill"] is not None:
-                from .teacher_actions import teacher_example
-
                 # The same choice as an action (a verb aimed at a reported
                 # object; None when its object is not reported) and where it
                 # ends.
-                asked["action_label"] = teacher_example(self.env, self.teacher, asked["skill"])
+                asked["action_label"] = self._as_action(asked["skill"])
             if self.task.record_actions and self.task.label and asked["skill"] is not None:
                 from .teacher_actions import action_rows
 
