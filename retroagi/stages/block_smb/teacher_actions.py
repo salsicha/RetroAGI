@@ -4,10 +4,14 @@ reached. Training labels only: simulator state finds the objects.
 
 - A jump that kills an enemy stomps it; one that ends on the other side of an
   enemy it leaves alive jumps over it; any other jump lands on the surface it
-  ends on.
-- A run before a remembered jump (controller_teacher._commit) approaches what
-  that jump is aimed at; a run away from the goal's side with an enemy near
-  backs away from it; any other run runs to the surface it ends on.
+  ends on. A steer in the air that comes down on an enemy stomps it too.
+- A run before a jump approaches what that jump is aimed at, named in the
+  same order (run_up_slot): the jump remembered (controller_teacher._commit)
+  or, in training labels, the jump the teacher makes next
+  (layered_train._Lane._name_run_ups). A run before a jump that lands back on
+  the surface the run started on is a plain run.
+- A run away from the goal's side with an enemy near backs away from it; any
+  other run runs to the surface it ends on.
 - A hold holds.
 
 The outcome of an action is where Mario's feet end and where its object is
@@ -29,48 +33,61 @@ MATCH = 12
 # Enemies within this many pixels of Mario's middle make a run away from the
 # goal's side a retreat from the nearest of them.
 BACK_AWAY_RANGE = 96
+# Mario stands on a surface while any of his body is over it: his middle may
+# be up to half his width (10 pixels) past its edge.
+STANDING_REACH = 5
 
 
 def _scene(env, state):
     return getattr(state, "scene", None) or scene_from_labels(env.scene_labels())
 
 
+def _nearest_under(spans, x, top):
+    """The key of the span (key, left, right, span top) whose top is at
+    ``top`` (within 3 pixels) under ``x``: the first within 2 pixels of it,
+    else the nearest within STANDING_REACH; or None."""
+    near = [(key, left, right) for key, left, right, at in spans if abs(at - top) <= 3]
+    for key, left, right in near:
+        if left - 2 <= x <= right + 2:
+            return key
+    reach = [(max(left - x, x - right), key) for key, left, right in near]
+    reach = [r for r in reach if r[0] <= STANDING_REACH]
+    return min(reach, key=lambda r: r[0])[1] if reach else None
+
+
 def platform_at(env, x, feet):
     """The index of the platform whose top is at ``feet`` (within 3 pixels)
-    under world x, or None."""
-    for index, p in enumerate(env.platforms):
-        r = p["rect"]
-        if r.left - 2 <= x <= r.right + 2 and abs(r.top - feet) <= 3:
-            return index
-    return None
+    under world x (or within STANDING_REACH of it), or None."""
+    spans = [
+        (index, p["rect"].left, p["rect"].right, p["rect"].top)
+        for index, p in enumerate(env.platforms)
+    ]
+    return _nearest_under(spans, x, feet)
 
 
 def surface_slot(env, scene, x, top):
     """The slot of the reported surface (or moving platform, pipe or block
-    top) under world x whose top is at ``top``, or None."""
+    top) under world x whose top is at ``top`` (or within STANDING_REACH of
+    it: Mario standing on its edge), or None."""
     lists = packed_lists(scene)
     # A point beyond the window the vision sees is matched at its edge, where
     # it reports the part of a surface it sees.
     sx = min(VISIBLE_COLUMNS[1] - 1, max(VISIBLE_COLUMNS[0], x - env.camera_x))
-    for slot, s in enumerate(lists["surfaces"]):
-        if s.x0 - 2 <= sx <= s.x1 + 2 and abs(s.top - top) <= 3:
-            return "surfaces", slot
+    spans = [(("surfaces", slot), s.x0, s.x1, s.top) for slot, s in enumerate(lists["surfaces"])]
     for name in ("moving_platforms", "pipes"):
-        for slot, box in enumerate(lists[name]):
-            if box[0] - 2 <= sx <= box[2] + 2 and abs(box[1] - top) <= 3:
-                return name, slot
-    for slot, block in enumerate(lists["blocks"]):
-        box = block.box
-        if box[0] - 2 <= sx <= box[2] + 2 and abs(box[1] - top) <= 3:
-            return "blocks", slot
-    return None
+        spans += [((name, slot), box[0], box[2], box[1]) for slot, box in enumerate(lists[name])]
+    spans += [
+        (("blocks", slot), block.box[0], block.box[2], block.box[1])
+        for slot, block in enumerate(lists["blocks"])
+    ]
+    return _nearest_under(spans, sx, top)
 
 
-def enemy_slot(env, scene, index):
-    """The slot of the reported enemy that is the simulator's enemy ``index``
-    (nearest box middle within MATCH pixels), or None."""
-    e = env.enemies[index]
-    ex, ey = e["x"] + e["w"] / 2 - env.camera_x, e["y"] + e["h"] / 2
+def _enemy_box_slot(scene, box, camera_x):
+    """The slot of the reported enemy nearest a simulator enemy's ``box`` (x,
+    y, w, h; world) by box middle, within MATCH pixels, or None."""
+    x, y, w, h = box
+    ex, ey = x + w / 2 - camera_x, y + h / 2
     best, slot = MATCH, None
     for i, view in enumerate(packed_lists(scene)["enemies"]):
         b = view.box
@@ -80,45 +97,84 @@ def enemy_slot(env, scene, index):
     return None if slot is None else ("enemies", slot)
 
 
+def enemy_slot(env, scene, index):
+    """The slot of the reported enemy that is the simulator's enemy ``index``
+    (nearest box middle within MATCH pixels), or None."""
+    e = env.enemies[index]
+    return _enemy_box_slot(scene, (e["x"], e["y"], e["w"], e["h"]), env.camera_x)
+
+
+def _enemy_boxes(env) -> list:
+    return [(e["x"], e["y"], e["w"], e["h"], e["dead"]) for e in env.enemies]
+
+
+def jump_aim(env, result) -> list:
+    """What a jump from where Mario is now (its trial ``result``) is aimed at,
+    in the order a jump is named (_classify), for naming the run-up before it
+    (run_up_slot): the enemy it stomps; else each live enemy it ends on the
+    other side of, nearest first, then ("point", world x, feet) where it lands."""
+    if not result.outcome:
+        return []
+    killed = result.outcome[2]
+    if killed:
+        return [("enemy", min(killed))]
+    m = env.mario
+    point = ("point", m["x"] + m["w"] / 2 + result.end_dx, m["y"] + m["h"] + result.end_dy)
+    return [("enemy", i) for i in _passed(env, result)] + [point]
+
+
+def run_up_slot(aim, scene, camera_x, enemies, start):
+    """(slot, simulator object) of what a run-up is named after, in the scene
+    of the run's decision (``scene``, with the camera at ``camera_x``;
+    ``enemies``: the simulator's enemy boxes then, _enemy_boxes): the first
+    thing of its jump's ``aim`` (jump_aim) the scene reports, as the jump
+    itself is named. None when it reports none of them, or when the jump lands
+    back on the surface the run starts on (``start``: Mario's middle and feet
+    then, world): that run is a plain run, not a run-up."""
+    from types import SimpleNamespace
+
+    view = SimpleNamespace(camera_x=camera_x)
+    for item in aim:
+        if item[0] == "enemy":
+            x, y, w, h, dead = enemies[item[1]]
+            slot = None if dead else _enemy_box_slot(scene, (x, y, w, h), camera_x)
+            if slot is not None:
+                return slot, ("enemy", item[1])
+            continue
+        _, x, feet = item
+        slot = surface_slot(view, scene, x, feet)
+        if slot is None or slot == surface_slot(view, scene, *start):
+            return None
+        return slot, ("point", x, feet)
+    return None
+
+
 def run_context(env, state) -> dict:
     """What a run's label needs from its decision, to be named again at the
-    next one (approach_slot): the scene the skill saw, the camera's position
-    and the enemies' boxes then."""
+    next one (approach_slot): the scene the skill saw, the camera's position,
+    Mario's middle and feet and the enemies' boxes then."""
+    m = env.mario
     return {
         "scene": _scene(env, state),
         "camera_x": env.camera_x,
-        "enemies": [(e["x"], e["y"], e["w"], e["h"], e["dead"]) for e in env.enemies],
+        "mario": (m["x"] + m["w"] / 2, m["y"] + m["h"]),
+        "enemies": _enemy_boxes(env),
     }
 
 
-def approach_slot(context, env, state, command, result):
+def approach_slot(context, env, result):
     """The slot, in the scene of an earlier decision (``context``,
-    run_context), of what a jump from here (``command`` with its trial
-    ``result``) is aimed at, as a run-up approaches it: the enemy it stomps,
-    else the surface it lands on (_classify's approach). None when that scene
-    does not report it."""
-    from types import SimpleNamespace
-
-    then = SimpleNamespace(camera_x=context["camera_x"])
-    scene = context["scene"]
-    killed = result.outcome[2] if result.outcome else ()
-    if killed:
-        index = min(killed)
-        x, y, w, h, dead = context["enemies"][index]
-        if dead:
-            return None
-        ex, ey = x + w / 2 - then.camera_x, y + h / 2
-        best, slot = MATCH, None
-        for i, view in enumerate(packed_lists(scene)["enemies"]):
-            b = view.box
-            d = math.hypot((b[0] + b[2]) / 2 - ex, (b[1] + b[3]) / 2 - ey)
-            if d <= best:
-                best, slot = d, i
-        return None if slot is None else ("enemies", slot)
-    m = env.mario
-    x = m["x"] + m["w"] / 2 + result.end_dx
-    top = m["y"] + m["h"] + result.end_dy
-    return surface_slot(then, scene, x, top)
+    run_context), of what a jump from here (its trial ``result``) is aimed
+    at, as a run-up approaches it (run_up_slot); None when that run is not
+    named a run-up."""
+    found = run_up_slot(
+        jump_aim(env, result),
+        context["scene"],
+        context["camera_x"],
+        context["enemies"],
+        context["mario"],
+    )
+    return found[0] if found else None
 
 
 def _passed(env, result):
@@ -135,14 +191,6 @@ def _passed(env, result):
         if after != (cx < env.enemies[i]["x"] + env.enemies[i]["w"] / 2)
     ]
     return sorted(flipped, key=lambda i: abs(env.enemies[i]["x"] - m["x"]))
-
-
-def _enemy_at(env, x, feet):
-    """The live enemy whose top is at a world point, or None."""
-    for i, e in enumerate(env.enemies):
-        if not e["dead"] and e["x"] - 2 <= x <= e["x"] + e["w"] + 2 and abs(e["y"] - feet) <= 4:
-            return i
-    return None
 
 
 def _classify(env, state, command, result):
@@ -163,22 +211,32 @@ def _classify(env, state, command, result):
         thing = None if index is None else ("platform", index)
         return verb, thing, surface_slot(env, scene, x, top)
 
+    killed = result.outcome[2] if result.outcome else ()
     if command.mode == "jump":
-        killed = result.outcome[2] if result.outcome else ()
         if killed:
             return enemy("stomp", min(killed))
         for i in _passed(env, result):
             if enemy_slot(env, scene, i):
                 return enemy("jump_over", i)
         return surface("land_on", end_x, end_feet)
+    if killed:
+        # A steer in the air (or a walk off a ledge) that comes down on an
+        # enemy stomps it.
+        return enemy("stomp", min(killed))
     planned = state.notes.get("planned_jump") if hasattr(state, "notes") else None
     if planned is not None and planned[0] == command:
-        _, jump, stop = planned
-        landing_x, landing_feet = stop + m["w"] / 2 + jump.x, feet + jump.y
-        index = _enemy_at(env, landing_x, landing_feet)
-        if index is not None:
-            return enemy("approach", index)
-        return surface("approach", landing_x, landing_feet)
+        # A run-up before the jump remembered: named after what that jump is
+        # aimed at (jump_aim, found when it was certified); one before a jump
+        # back onto this surface is a plain run.
+        found = run_up_slot(planned[3], scene, env.camera_x, _enemy_boxes(env), (cx, feet))
+        if found is not None:
+            slot, (kind, *where) = found
+            if kind == "enemy":
+                thing = ("enemy", where[0])
+            else:
+                index = platform_at(env, *where)
+                thing = None if index is None else ("platform", index)
+            return "approach", thing, slot
     from .controller_teacher import teacher_target
 
     if command.x * getattr(teacher_target(env), "direction", 1) < 0:
@@ -338,24 +396,34 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
     (``teacher_label``, ``teacher_command``); else, of the versions the
     teacher tries that it names as this action and that are safe, the one it
     ranks best: a jump of its jump table (land_on, stomp, jump_over), a run
-    it screens (run_to, back_away; in the air, a steer), or a run-up before a
-    jump aimed at the action's object (approach).
+    it screens (run_to, back_away), or a run-up before a jump aimed at the
+    action's object (approach); in the air, a steer of any verb.
+
+    An approach to the surface Mario stands on has none: a run before a jump
+    back onto it is named a plain run (run_up_slot).
     """
     from retroagi.core.tokens import SkillToken
 
-    from .controller_teacher import _jump_table, _rank, teacher_target
+    from .controller_teacher import _air_options, _jump_table, _rank, teacher_target
 
     if action.verb == "hold":
         return SkillToken("hold", 0, 0)
     if teacher_command is not None and teacher_label == action:
         return teacher_command
+    m = env.mario
+    if action.verb == "approach" and action.target == surface_slot(
+        env, _scene(env, state), m["x"] + m["w"] / 2, m["y"] + m["h"]
+    ):
+        return None
     if action.verb == "approach" and _runs_up_to(env, state, action, teacher_command):
         # The teacher's run toward the object, stopping before it: a run-up
         # (the jump that follows is the next decision's).
         return teacher_command
     target = teacher_target(env)
     memo = {}
-    if action.verb in ("land_on", "stomp", "jump_over"):
+    if not m["on_ground"]:
+        candidates = _air_options(env, state, target, memo)
+    elif action.verb in ("land_on", "stomp", "jump_over"):
         candidates = [
             (o.command, o.result)
             for o in _jump_table(env, state, target, memo, described_only=False)
@@ -398,11 +466,9 @@ def _runs_up_to(env, state, action, command) -> bool:
 def _run_versions(env, state, target, memo, action):
     """Tried runs that may be ``action`` (a run_to ending on its surface, a
     back_away away from the target's side): the best CERTIFY of those the
-    teacher screens; in the air, every steer."""
-    from .controller_teacher import CERTIFY, _air_options, _screened_runs, _trial
+    teacher screens. On the ground only (carry_out)."""
+    from .controller_teacher import CERTIFY, _screened_runs, _trial
 
-    if not env.mario["on_ground"]:
-        return _air_options(env, state, target, memo)
     scene = _scene(env, state)
     m = env.mario
     cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]

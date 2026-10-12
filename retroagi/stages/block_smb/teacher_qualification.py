@@ -24,6 +24,10 @@ def qualify_teachers(pool, tasks, report_path):
     for task, record in zip(tasks, records):
         valid = record.labels["valid"]
         complete_labels = len(valid) > 0 and bool(valid.all())
+        # Skill decisions where the teacher's command names no action (its
+        # object is not one the scene reports): nothing there to imitate.
+        named = record.labels.get("action_valid")
+        unnamed = int((valid & ~named.astype(bool)).sum()) if named is not None else 0
         row = {
             "family": task.family,
             "split": task.split,
@@ -35,6 +39,7 @@ def qualify_teachers(pool, tasks, report_path):
             "end": record.end,
             "won": bool(record.won),
             "complete_labels": complete_labels,
+            "unnamed_choices": unnamed,
             "passed": bool(record.won and complete_labels),
         }
         if not row["passed"]:
@@ -45,11 +50,16 @@ def qualify_teachers(pool, tasks, report_path):
     # pixels) covering most of a mode's labels (layered_train.label_collapse).
     learner = getattr(getattr(pool, "config", None), "learner", None)
     collapsed = label_collapse(records, "skill") if learner == "skill" else {}
+    unnamed = {}
+    for row in rows:
+        if row["unnamed_choices"]:
+            unnamed[row["family"]] = unnamed.get(row["family"], 0) + row["unnamed_choices"]
     report = {
         "execution": "training_episode_pipeline",
         "stall_frames": STALL_FRAMES,
         "total": len(rows),
         "passed": len(rows) - len(failures),
+        "unnamed_choices": unnamed,
         "labels_collapsed": {
             family: {kind: list(v) for kind, v in kinds.items()}
             for family, kinds in collapsed.items()
@@ -62,7 +72,8 @@ def qualify_teachers(pool, tasks, report_path):
     path.write_text(json.dumps(report, indent=2) + "\n")
     print(
         f"[teacher qualification] {report['passed']}/{report['total']} passed"
-        f"{', labels collapse in ' + ', '.join(sorted(collapsed)) if collapsed else ''}: {path}",
+        f"{', labels collapse in ' + ', '.join(sorted(collapsed)) if collapsed else ''}"
+        f", {sum(unnamed.values())} unnamed choices: {path}",
         flush=True,
     )
     if collapsed:

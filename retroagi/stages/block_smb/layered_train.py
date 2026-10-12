@@ -506,14 +506,16 @@ class _Lane:
 
     def _name_run_ups(self, d, asked, decision) -> None:
         """A run of the teacher's that its next command follows with a jump in
-        the same direction is a run-up: its label becomes approaching what
-        that jump is aimed at, named in the run's own scene
-        (teacher_actions.approach_slot). Without this, whether such a run was
-        labelled an approach depended on whether the teacher had planned the
-        jump before running (its committed plan), which the scene does not
-        show. Called at each decision of a labelled skill episode, after its
-        labels are recorded."""
-        from .teacher_actions import approach_slot, run_context
+        the same direction is named after that jump: approaching what the
+        jump is aimed at, in the run's own scene (teacher_actions.approach_slot,
+        the rule the teacher's remembered plans and its executor use too), or
+        a plain run to where it ends when the jump lands back on the surface
+        the run started on. Without this, whether such a run was labelled an
+        approach depended on whether the teacher had planned the jump before
+        running (its committed plan), which the scene does not show. Called
+        at each decision of a labelled skill episode, after its labels are
+        recorded."""
+        from .teacher_actions import approach_slot, run_context, surface_slot
 
         env, command = self.env, asked.get("skill")
         pending, self._pending_run = getattr(self, "_pending_run", None), None
@@ -529,27 +531,45 @@ class _Lane:
             and (command.x > 0) == pending["right"]
             and env.mario["on_ground"]
         ):
-            slot = approach_slot(pending["context"], env, self.teacher, command, result)
+            slot = approach_slot(pending["context"], env, result)
             if slot is not None and slot[0] in VERB_TARGETS["approach"]:
-                t, action = pending["index"], ActionToken("approach", slot)
-                d["label_verb"][t] = VERBS.index("approach")
-                d["label_pointer"][t] = pointer_index(slot) - POINTER_START
+                action = ActionToken("approach", slot)
+            else:
+                action = pending["plain"]
+            if action is not None:
+                t = pending["index"]
+                d["label_verb"][t] = VERBS.index(action.verb)
+                d["label_pointer"][t] = pointer_index(action.target) - POINTER_START
                 d["agreed"][t] = pending["mine"] == action
         example = asked.get("action_label")
         action = example["action"] if example is not None else None
         if (
             action is not None
-            and action.verb == "run_to"
+            and action.verb in ("run_to", "approach")
             and command is not None
             and command.x != 0
             and decision.skill == command
             and env.mario["on_ground"]
         ):
+            context = run_context(env, self.teacher)
+            plain = action if action.verb == "run_to" else None
+            run = asked.get("label_result")
+            if plain is None and run is not None:
+                # The same run as a plain run: to the surface it ends on.
+                m = env.mario
+                slot = surface_slot(
+                    env,
+                    context["scene"],
+                    m["x"] + m["w"] / 2 + run.end_dx,
+                    m["y"] + m["h"] + run.end_dy,
+                )
+                plain = ActionToken("run_to", slot) if slot is not None else None
             self._pending_run = {
                 "index": len(d["label_verb"]) - 1,
-                "context": run_context(env, self.teacher),
+                "context": context,
                 "right": command.x > 0,
                 "mine": decision.chosen["skill"],
+                "plain": plain,
             }
 
     def _note_tactic(self, decision) -> None:

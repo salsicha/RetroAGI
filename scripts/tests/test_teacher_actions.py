@@ -113,21 +113,57 @@ def test_runs_and_holds():
 
 
 @pytest.mark.timeout(120)
-def test_a_run_up_approaches_what_its_jump_lands_on():
+def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
+    from retroagi.stages.block_smb.controller_teacher import _jump_table, teacher_target
+    from retroagi.stages.block_smb.teacher_actions import carry_out, jump_aim
+
     with Decision("skill_enemy_bypass") as d:
         env, state = d.env, d.state
         m = env.mario
+        cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
+        # A jump is aimed first at the enemy it stomps or clears.
+        for option in _jump_table(env, state, teacher_target(env), {}, described_only=False):
+            action = teacher_action(env, state, option.command, option.result)
+            if action is not None and action.verb in ("stomp", "jump_over"):
+                assert jump_aim(env, option.result)[0] == ("enemy", 0)
         run = SkillToken("run", 8, 0)
-        enemy = env.enemies[0]
-        on_enemy = round(enemy["x"] + enemy["w"] / 2 - (m["x"] + 8 + m["w"] / 2))
-        state.notes["planned_jump"] = (
-            run,
-            SkillToken("jump", on_enemy, round(enemy["y"] - (m["y"] + m["h"]))),
-            m["x"] + 8,
-        )
+        state.notes["planned_jump"] = (run, SkillToken("jump", 30, 0), m["x"] + 8, [("enemy", 0)])
         assert teacher_action(env, state, run) == ActionToken("approach", ("enemies", 0))
-        state.notes["planned_jump"] = (run, SkillToken("jump", -40, 0), m["x"] + 8)
-        assert teacher_action(env, state, run) == ActionToken("approach", ("surfaces", 0))
+        # Before a jump back onto the surface it starts on, a run is a plain run,
+        # and approaching that surface has no version.
+        landing = [("point", cx - 32, feet)]
+        state.notes["planned_jump"] = (run, SkillToken("jump", -40, 0), m["x"] + 8, landing)
+        assert teacher_action(env, state, run) == ActionToken("run_to", ("surfaces", 0))
+        assert carry_out(env, state, ActionToken("approach", ("surfaces", 0))) is None
+    with Decision("action_jump_gap") as d:
+        env, state = d.env, d.state
+        m = env.mario
+        far = min(
+            (p["rect"] for p in env.platforms if p["rect"].left > m["x"] + m["w"]),
+            key=lambda r: r.left,
+        )
+        run = SkillToken("run", 8, 0)
+        landing = [("point", far.left + 20, far.top)]
+        state.notes["planned_jump"] = (run, SkillToken("jump", 40, 0), m["x"] + 8, landing)
+        assert teacher_action(env, state, run) == ActionToken("approach", ("surfaces", 1))
+        # Mario stands on a surface's edge with his middle past it (by up to
+        # half his width): his landing there is on it.
+        assert surface_slot(env, state.scene, far.left - 3, far.top) == ("surfaces", 1)
+        assert surface_slot(env, state.scene, far.left - 8, far.top) is None
+
+
+@pytest.mark.timeout(120)
+def test_a_steer_that_comes_down_on_an_enemy_stomps_it():
+    from retroagi.stages.block_smb.teacher_actions import _trial_of
+
+    with Decision("enemy_stomp") as d:
+        env, m, e = d.env, d.env.mario, d.env.enemies[0]
+        m["x"], m["y"] = e["x"] + e["w"] / 2 - m["w"] / 2, e["y"] - m["h"] - 30
+        m["on_ground"] = False
+        steer = SkillToken("run", 0, round(e["y"] + e["h"] - (m["y"] + m["h"])))
+        result = _trial_of(env, d.state, steer)
+        assert 0 in result.outcome[2]
+        assert teacher_action(env, d.state, steer, result) == ActionToken("stomp", ("enemies", 0))
 
 
 @pytest.mark.timeout(240)
@@ -159,9 +195,9 @@ def test_a_run_the_teacher_follows_with_a_jump_is_labelled_an_approach():
     from retroagi.stages.block_smb import layered_train as lt
     from retroagi.stages.block_smb.teacher_replay import reference_vision
 
-    # The teacher runs to the pit's edge and then jumps; whether it had
-    # planned the jump before running is not in the scene, so the run is an
-    # approach to where the jump lands either way.
+    # The teacher runs to the pit's edge and then jumps across; whether it
+    # had planned the jump before running is not in the scene, so the run is
+    # an approach to where the jump lands either way.
     task = lt.EpisodeTask(
         index=0,
         family="single_gap",

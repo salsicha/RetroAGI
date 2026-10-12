@@ -23,6 +23,40 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-12 — One rule names a run-up; every teacher choice has a name (user decision; built)
+
+The run with run-ups named by what follows
+(`artifacts/block_smb/skill_approach_20261012`, stopped after round 1 at 93.8%)
+still lost 16 of 36 validation layouts in `landing_enemy`, `enemy_hop`,
+`enemy_patrol` and `single_gap`. A replay of them, choice by choice against
+the teacher's: none died; every one ended at a choice the teacher could not
+carry out, and the skill agreed with the teacher at 86 of 117 decisions.
+Losses by cause:
+
+- **A run-up named three ways (9).** Labels named it after the floor the
+  jump lands on, often Mario's own floor even when the jump clears an enemy;
+  the jump itself is named after the enemy. The teacher read "approach my
+  own floor" as a run toward that floor's middle, often backwards, so it had
+  no version. Now one rule names a run-up, in labels, in the plan the
+  teacher remembers between decisions and when carrying out the skill's
+  choice (`teacher_actions.jump_aim`, `run_up_slot`): what its jump is aimed
+  at, in the order a jump is named (the enemy it stomps, else the enemy it
+  clears, else the surface it lands on). A run before a jump back onto the
+  surface the run started on is a plain run; approaching that surface has no
+  version.
+- **Choices impossible from Mario's state (5):** running across a gap at
+  full speed, jumping while still in the air, jumping where the teacher
+  runs, and aiming at the far floor instead of the near one. These are the
+  skill's to learn.
+- **The teacher's own choice had no name (2).** A landing with Mario's
+  middle 3 pixels past a surface's edge matched no surface (now within half
+  his width, `STANDING_REACH`), and a steer in the air that came down on a
+  second enemy was named a run to a point in the air (now a stomp; in the
+  air, every verb is carried out by a steer).
+
+Enemy timing was a smaller part than expected: the enemy mattered in a few of
+the 16 losses, and then as "run up first" against "jump now".
+
 ## 2026-10-12 — Run-ups named by what follows; enemies watched in every skill lesson (user decision; built)
 
 The skill trained with the teacher carrying out its actions
