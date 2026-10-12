@@ -812,9 +812,20 @@ def _run_options(env, state, target, memo):
     where they end (in the goal first, then the most progress toward the
     target per frame, then the most room), the best CERTIFY tried:
     [(command, result)]."""
-    m = env.mario
-    if not m["on_ground"]:
+    if not env.mario["on_ground"]:
         return _air_options(env, state, target, memo)
+    out = []
+    for goal in _screened_runs(env, state, target)[:CERTIFY]:
+        if goal not in memo:
+            memo[goal] = _trial(env, state, goal, target)
+        out.append((goal, memo[goal]))
+    return out
+
+
+def _screened_runs(env, state, target):
+    """Every run _run_options screens (Mario standing), best first, untried:
+    [command]."""
+    m = env.mario
     support = m.get("_platform")
     if support is None:
         return []
@@ -866,12 +877,7 @@ def _run_options(env, state, target, memo):
                 )
             )
     screened.sort(key=lambda s: s[0], reverse=True)
-    out = []
-    for _, goal in screened[:CERTIFY]:
-        if goal not in memo:
-            memo[goal] = _trial(env, state, goal, target)
-        out.append((goal, memo[goal]))
-    return out
+    return [goal for _, goal in screened]
 
 
 def _air_options(env, state, target, memo):

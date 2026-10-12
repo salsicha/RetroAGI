@@ -186,9 +186,10 @@ tactic requires a qualified skill checkpoint. Only the stage's parameters change
 
 - **Skill:** the skill transformer. Teacher supplies the tactic and its own
   commands, labelled as actions. The executor executes the teacher's commands
-  and the skill's own actions at the action predictor's end state (the
-  predictor and tracker are trained beforehand, `predictor_train`,
-  `tracker_train`, and passed with `--predictor`, `--tracker`). The predictor
+  and the skill's own actions: until the action predictor predicts well, the
+  teacher carries those out (its best safe version of each; a choice it has
+  none of loses the episode; `teacher_actions.carry_out`); with `--predictor`
+  (and `--tracker`), they run at the predictor's end state. The predictor
   reads the scene encoder and scene memory of the policy it was trained on,
   so those stay fixed: training refuses a predictor whose checkpoint records
   other weights than the starting policy's (`action_predictor.reading_digest`).

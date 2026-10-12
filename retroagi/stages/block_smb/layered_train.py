@@ -361,10 +361,26 @@ class _Lane:
         self.final_enemy_observations = None
         self.goal = 0.0
         self.end = ""
+        # The skill chose an action the teacher has no safe version of
+        # (carry_out): the episode ends as lost.
+        self.unsafe_choice = False
         self.frames: dict[str, list] = defaultdict(list)
         self.decisions: dict[str, list] = defaultdict(list)
         self.asked: dict = {}
         self.progress, self.progressed = None, 0
+
+    def carry_out(self, action):
+        """The executor's destination for the skill's own ``action`` here: the
+        teacher's version of it (teacher_actions.carry_out), used instead of
+        the action predictor until that predicts well. None when the teacher
+        has no safe version: the episode then ends as lost."""
+        from .teacher_actions import carry_out
+
+        label = (self.asked.get("action_label") or {}).get("action")
+        command = carry_out(self.env, self.teacher, action, label, self.asked.get("skill"))
+        if command is None:
+            self.unsafe_choice = True
+        return command
 
     def stalled(self) -> bool:
         """Whether the episode has made no progress for STALL_FRAMES frames."""
@@ -517,7 +533,7 @@ class _Lane:
             final_enemy_observations=self.final_enemy_observations,
             rewards=np.asarray(self.frames["reward"], np.float32),
             terminal=self.end
-            in ("goal", "death", "off_route", "missed_objective", "failed_attempt"),
+            in ("goal", "death", "off_route", "missed_objective", "failed_attempt", "unsafe_choice"),
             explored=self.task.explore,
             picks={
                 name[len("pick_") :]: np.asarray(d[name], np.int64)
@@ -559,11 +575,10 @@ def _teacher_given(learner: str, lanes: dict, agents=None):
             if above:
                 tokens[above].append(asked[above])
             choice = asked[learner] if asked["plays_teacher"] else None
-            if choice is None and learner == "skill" and agents is not None and agents.predictor is None:
-                # Without an action predictor the skill's own action cannot be
-                # executed (teacher qualification plays only the teacher): where
-                # the teacher has no command, hold. The decision has no label,
-                # so qualification counts the layout as failed.
+            if choice is None and learner == "skill" and asked["plays_teacher"]:
+                # The teacher plays this decision but has no command: hold. The
+                # decision has no label, so teacher qualification (which plays
+                # only the teacher) counts the layout as failed.
                 from retroagi.core.tokens import SkillToken
 
                 choice = SkillToken("hold", 0, 0)
@@ -621,13 +636,22 @@ def play_episodes(
     is its own and nothing is given or labelled. The skill's own actions are
     executed through ``predictor`` (and ``tracker``; SMBAgents).
     """
-    agents = SMBAgents(observer, policy, device, lanes, predictor=predictor, tracker=tracker)
+    playing: dict[int, _Lane] = {}
+    carry = None
+    if predictor is None and learner is not None:
+        # No action predictor (or one not yet predicting well): the teacher
+        # carries out the skill's own actions (training only).
+        def carry(number, action):
+            return playing[number].carry_out(action)
+
+    agents = SMBAgents(
+        observer, policy, device, lanes, predictor=predictor, tracker=tracker, carry_out=carry
+    )
     explore = {task.explore for task in tasks}
     if len(explore) > 1 or (learner is None and True in explore):
         raise ValueError("one call either explores, for a learner, or does not")
     sample = (learner,) if True in explore else ()
     pending = list(tasks)
-    playing: dict[int, _Lane] = {}
     done: dict[int, EpisodeRecord] = {}
     given = _teacher_given(learner, playing, agents) if learner is not None else None
     while pending or playing:
@@ -671,12 +695,18 @@ def play_episodes(
             lane.frames["reward"].append(float(reward))
             lane.frames["potential"].append(_potential(lane.env))
             lane.goal += float(info["reward_terms"].get("goal", 0.0))
-            if len(lane.frames["button"]) >= lane.frame_limit or lane.stalled():
+            if (
+                len(lane.frames["button"]) >= lane.frame_limit
+                or lane.stalled()
+                or lane.unsafe_choice
+            ):
                 truncated = True
             if terminated or truncated:
                 lane.end = (
                     "goal"
                     if lane.goal > 0
+                    else "unsafe_choice"
+                    if lane.unsafe_choice
                     else (
                         "death"
                         if info.get("death")
@@ -2082,10 +2112,13 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     if config.learner not in LEARNERS:
         raise ValueError("only skill and tactic are learned layers")
     if config.predictor is None:
-        # The skill's own actions are executed at the action predictor's end
-        # state (the skill's rounds once the teacher's share drops, and the
-        # whole agent as deployed).
-        raise ValueError("the skill's actions need an action predictor (--predictor)")
+        # Until the action predictor predicts well, the teacher carries out
+        # the skill's own actions (its best safe version of each; a choice it
+        # has none of loses the episode).
+        print(
+            f"[{config.learner}] no action predictor: the teacher carries out the skill's actions",
+            flush=True,
+        )
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(config.seed)
@@ -2122,10 +2155,16 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     if config.learner == "skill":
         # The action predictor reads this policy's scene encoder and memory
         # (core/action_predictor): they must be the ones it learned on, and
-        # they stay so; the skill learns its own transformer only.
+        # they stay so (also while the teacher carries out the actions, so a
+        # predictor can be trained on them); the skill learns its own
+        # transformer only.
         from retroagi.core.action_predictor import reading_digest
 
-        reads = torch.load(config.predictor, map_location="cpu", weights_only=False).get("reads")
+        reads = (
+            torch.load(config.predictor, map_location="cpu", weights_only=False).get("reads")
+            if config.predictor
+            else reading_digest(policy)
+        )
         if reads != reading_digest(policy):
             raise ValueError(
                 "the action predictor was trained on another scene encoder and memory "
@@ -2411,10 +2450,14 @@ def examine_layer(
     With a ``learner``, the teacher gives it its token from above, as in its
     validation; with none, the whole agent plays as deployed. The skill's own
     actions are executed through ``predictor`` (and ``tracker``); by default
-    those the policy's run was trained with.
+    those the policy's run was trained with. With no predictor, the teacher
+    carries them out (only with a ``learner``: a deployed agent has no
+    teacher).
     """
     policy, saved = load_layered_checkpoint(checkpoint, "cpu")
     trained = saved.get("config", {})
+    if learner is None and not (predictor or trained.get("predictor")):
+        raise ValueError("an agent played as deployed needs an action predictor")
     config = LayeredTrainConfig(
         learner=learner or "tactic",
         families=tuple(families),

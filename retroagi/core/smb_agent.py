@@ -322,6 +322,7 @@ class SMBAgents:
         switch: StrategyToken = DEFAULT_STRATEGY,
         predictor=None,
         tracker=None,
+        carry_out=None,
     ):
         self.observer = observer
         self.policy = policy
@@ -333,6 +334,11 @@ class SMBAgents:
         # follows the object (core/action_controller).
         self.predictor = predictor
         self.tracker = tracker
+        # Training only, instead of the predictor until it predicts well:
+        # carry_out(copy number, action) gives the executor's destination for
+        # the skill's own action (the teacher's version of it), or None when
+        # there is none (then the copy holds; its episode is ended as lost).
+        self.carry_out = carry_out
         self.copies = [_Copy() for _ in range(copies)]
         for index in range(copies):
             self.reset(index)
@@ -356,10 +362,12 @@ class SMBAgents:
         )
 
     @torch.no_grad()
-    def _actions(self, starting, scenes, encoded, hidden, made, own) -> None:
+    def _actions(self, starting, scenes, encoded, hidden, made, own, numbers) -> None:
         """For the deciding copies playing their own skill choice (``own``):
         the skill's action's predicted end (the action predictor) as the
-        executor's destination, and the action bound to its object."""
+        executor's destination, and the action bound to its object; or, with
+        ``carry_out``, the teacher's version of the action (``numbers``: the
+        deciding copies' numbers)."""
         chosen = [i for i in own if made[i].action is not None]
         for i in [i for i in chosen if made[i].action.verb == "hold"]:
             # A hold has no end to predict: it holds.
@@ -367,6 +375,12 @@ class SMBAgents:
             starting[i].target = None
         chosen = [i for i in chosen if made[i].action.verb != "hold"]
         if not chosen:
+            return
+        if self.carry_out is not None:
+            for i in chosen:
+                destination = self.carry_out(numbers[i], made[i].action)
+                made[i].skill = destination or SkillToken("hold", 0, 0)
+                starting[i].target = None
             return
         if self.predictor is None:
             raise RuntimeError(
@@ -728,6 +742,7 @@ class SMBAgents:
                 remembered.hidden,
                 made,
                 own,
+                [copies[k] for k in deciding],
             )
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 given_actions = supplied.get("action")

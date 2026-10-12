@@ -22,6 +22,32 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-11 — The teacher carries out the skill's actions until the predictor works (user decision; built)
+
+The first skill run on actions (`artifacts/block_smb/skill_actions_20261011`)
+learned the teacher's choices (89% agreement by round 6) while its validation
+stayed at about 60% from round 1: its own actions were executed at the
+action predictor's ends, and those were off by 10 to 17 pixels on average for
+every moving verb (`run_to` 16.7, `land_on` 13.2, `approach` 11.9,
+`jump_over` 11.0, `stomp` 10.1; the 8-pixel figure first reported averaged in
+the holds). In `single_gap` the skill chose the teacher's own action and the
+predictor sent Mario 28 pixels past where the teacher stops, into the pit.
+
+User decision: do not use the prediction until it works. Until then the
+skill's own actions are carried out by the teacher (training only; the
+policies still see only vision): its own command when the action is its
+choice, else the best safe version of that action it tries
+(`teacher_actions.carry_out`: a jump of its jump table, a run it screens, a
+run-up before a jump aimed at the action's object). A choice it has no safe
+version of ends the episode as lost (`unsafe_choice`), so validation measures
+the skill's choices alone. Training without `--predictor` does this; an agent
+played as deployed still needs a predictor. The predictor is developed
+separately and switched on only when the skill's validation through it
+matches its validation with the teacher carrying out its actions. With the
+round-6 skill, `single_gap`, `enemy_stomp` and `landing_enemy` (0% through
+the predictor) won 4, 4 and 3 of 6; every loss was a choice the teacher would
+not make.
+
 ## 2026-10-11 — Fixes from the teacher's re-validation (built)
 
 Round 0 of the re-validation lost two of 656 layouts:

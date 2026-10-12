@@ -284,3 +284,136 @@ def action_rows(env, state, command):
         rows[count] = action_record(tried["action"], tried["outcome"], False)
         count += 1
     return rows
+
+
+def carry_out(env, state, action, teacher_label=None, teacher_command=None):
+    """The teacher's version of the skill's own chosen ``action`` from here,
+    as the executor's destination, or None when it has no safe version (the
+    choice then counts as a failure). Training only: the simulator finds and
+    tries it. Used instead of the action predictor until that predicts well
+    (docs/design-decisions.md).
+
+    The teacher's own command when the action is the teacher's choice
+    (``teacher_label``, ``teacher_command``); else, of the versions the
+    teacher tries that it names as this action and that are safe, the one it
+    ranks best: a jump of its jump table (land_on, stomp, jump_over), a run
+    it screens (run_to, back_away; in the air, a steer), or a run-up before a
+    jump aimed at the action's object (approach).
+    """
+    from retroagi.core.tokens import SkillToken
+
+    from .controller_teacher import _jump_table, _rank, teacher_target
+
+    if action.verb == "hold":
+        return SkillToken("hold", 0, 0)
+    if teacher_command is not None and teacher_label == action:
+        return teacher_command
+    target = teacher_target(env)
+    memo = {}
+    if action.verb in ("land_on", "stomp", "jump_over"):
+        candidates = [
+            (o.command, o.result)
+            for o in _jump_table(env, state, target, memo, described_only=False)
+        ]
+    elif action.verb == "approach":
+        candidates = _approach_versions(env, state, target, memo, action)
+    else:
+        candidates = _run_versions(env, state, target, memo, action)
+    found = []
+    for command, result in candidates:
+        verb, _, slot = _classify(env, state, command, result)
+        named = ActionToken("hold") if verb == "hold" else ActionToken(verb, slot) if slot else None
+        if named == action and (result.safe or result.won):
+            found.append((command, result))
+    if not found:
+        return None
+    return max(found, key=lambda v: _rank(*v))[0]
+
+
+def _run_versions(env, state, target, memo, action):
+    """Tried runs that may be ``action`` (a run_to ending on its surface, a
+    back_away away from the target's side): the best CERTIFY of those the
+    teacher screens; in the air, every steer."""
+    from .controller_teacher import CERTIFY, _air_options, _screened_runs, _trial
+
+    if not env.mario["on_ground"]:
+        return _air_options(env, state, target, memo)
+    scene = _scene(env, state)
+    m = env.mario
+    cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
+    side = getattr(target, "direction", 1)
+
+    def may_be(command):
+        if action.verb == "back_away":
+            return command.x * side < 0
+        return surface_slot(env, scene, cx + command.x, feet + command.y) == action.target
+
+    out = []
+    for command in _screened_runs(env, state, target):
+        if not may_be(command):
+            continue
+        if command not in memo:
+            memo[command] = _trial(env, state, command, target)
+        out.append((command, memo[command]))
+        if len(out) >= CERTIFY:
+            break
+    return out
+
+
+def _approach_versions(env, state, target, memo, action):
+    """A run-up along Mario's floor before a jump aimed at ``action``'s
+    object (landing on its platform, or stomping its enemy), certified as
+    the teacher certifies its own (controller_teacher._best_certified, which
+    remembers the jump for the next decision): [(command, result)]."""
+    from .controller_teacher import REACH, _best_certified
+
+    m = env.mario
+    support = m.get("_platform")
+    if not m["on_ground"] or support is None or support.get("moving"):
+        return []
+    scene = _scene(env, state)
+    kind, slot = action.target
+    cx, half = m["x"] + m["w"] / 2, m["w"] / 2
+    if kind == "enemies":
+        index = next(
+            (i for i in range(len(env.enemies)) if enemy_slot(env, scene, i) == action.target),
+            None,
+        )
+        if index is None:
+            return []
+        e = env.enemies[index]
+        goal_x = e["x"] + e["w"] / 2
+
+        def wanted(option, landing, killed):
+            return index in killed
+
+    else:
+        lists = packed_lists(scene)
+        if slot >= len(lists[kind]):
+            return []
+        item = lists[kind][slot]
+        if kind == "surfaces":
+            x0, top, x1 = item.x0, item.top, item.x1
+        else:
+            box = item.box if kind == "blocks" else item
+            x0, top, x1 = box[0], box[1], box[2]
+        goal_x = (x0 + x1) / 2 + env.camera_x
+        index = platform_at(env, goal_x, top)
+        if index is None:
+            return []
+
+        def wanted(option, landing, killed):
+            return landing == index
+
+    side = 1 if goal_x >= cx else -1
+    floor = support["rect"]
+    travels = [
+        t
+        for t in range(-48, REACH + 1)
+        if t and floor.left + half + 2 <= cx + t * side <= floor.right - half - 2
+    ]
+    best = _best_certified(
+        env, state, target, memo, side, travels, wanted, lambda r: r.won or r.safe
+    )
+    return [best] if best is not None else []
+

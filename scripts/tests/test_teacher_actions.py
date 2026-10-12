@@ -128,3 +128,22 @@ def test_a_run_up_approaches_what_its_jump_lands_on():
         assert teacher_action(env, state, run) == ActionToken("approach", ("enemies", 0))
         state.notes["planned_jump"] = (run, SkillToken("jump", -40, 0), m["x"] + 8)
         assert teacher_action(env, state, run) == ActionToken("approach", ("surfaces", 0))
+
+
+@pytest.mark.timeout(240)
+def test_the_teacher_carries_out_the_skills_chosen_action():
+    from retroagi.stages.block_smb.teacher_actions import carry_out
+
+    with Decision("action_jump_gap") as d:
+        safe = [t["action"] for t in tried_actions(d.env, d.state) if t["safe_versions"]]
+        assert safe
+        for action in safe[:3]:
+            command = carry_out(d.env, d.state, action)
+            assert command is not None and command.mode == "jump"
+            assert teacher_action(d.env, d.state, command) == action
+        # Its own choice, already found, is carried out as it is.
+        mine = SkillToken("jump", 30, 0)
+        assert carry_out(d.env, d.state, safe[0], safe[0], mine) == mine
+        # A hold holds; an object the vision does not report has no version.
+        assert carry_out(d.env, d.state, ActionToken("hold")).mode == "hold"
+        assert carry_out(d.env, d.state, ActionToken("land_on", ("surfaces", 13))) is None

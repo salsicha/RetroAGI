@@ -250,3 +250,24 @@ def test_ledge_teacher_never_falls_back_to_policy(family, split, index, difficul
 
     records = qualify_teachers(SimpleNamespace(play=play), [original], tmp_path / "edges.json")
     assert records[0].frames < 150
+
+
+def test_the_skill_plays_its_own_choice_unless_the_teacher_plays_the_decision():
+    from types import SimpleNamespace
+
+    from retroagi.core.tokens import SkillToken
+
+    class Lane:
+        def __init__(self, plays_teacher, skill):
+            self.teacher = SimpleNamespace()
+            self.asked = {"tactic": None, "skill": skill, "plays_teacher": plays_teacher}
+
+        def ask_teacher(self, learner, scene):
+            return self.asked
+
+    command = SkillToken("jump", 40, 0)
+    lanes = {0: Lane(False, command), 1: Lane(True, command), 2: Lane(True, None)}
+    tokens = lt._teacher_given("skill", lanes)([0, 1, 2], [None, None, None])
+    # Its own (None: the policy chooses), the teacher's, and a hold where the
+    # teacher plays but has no command (that decision has no label).
+    assert tokens["skill"] == [None, command, SkillToken("hold", 0, 0)]
