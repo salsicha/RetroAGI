@@ -102,7 +102,18 @@ def skill_family_scenario(family, rng, difficulty):
         }[family]
         sx, sy, sw, _ = scenario["platforms"][source]
         if source:
-            scenario["mario"] = [sx + rng.randint(3, max(3, min(sw - 16, 24))), sy - 16]
+            # Only on the part of the floor nothing stands on: a step resting
+            # on the lower floor covers its right end (Mario was once placed
+            # inside it, and pushed up into the goal on the first frame).
+            free = min(
+                [sw]
+                + [
+                    px - sx
+                    for i, (px, py, pw, ph) in enumerate(scenario["platforms"])
+                    if i != source and sx < px < sx + sw and py < sy <= py + ph
+                ]
+            )
+            scenario["mario"] = [sx + rng.randint(3, max(3, min(free - 16, 24))), sy - 16]
         else:
             # On the starting ledge, from right at its edge to 80 pixels back.
             scenario["mario"][0] = max(16, sx + sw - 10 - start_distance(rng, 80))

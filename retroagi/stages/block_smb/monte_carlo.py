@@ -1331,6 +1331,10 @@ def _verified_route(family, scenario, authored_actions):
         result = reachable(authored_actions)
         if not result["reachable"]:
             return None, "no_verified_route", None
+        if (result.get("completion_steps") or 99) <= 2:
+            # Won before any decision: nothing to teach (Mario placed inside
+            # the goal, or pushed into it).
+            return None, "won_at_start", None
         fault = _route_lesson_fault(scenario, authored_actions) if family in ROUTE_LESSONS else None
         if fault is not None:
             return None, fault, None
