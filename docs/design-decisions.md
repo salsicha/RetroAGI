@@ -14,10 +14,11 @@ commit). How the parts work is described in the
   points) together with the side the goal is on. No network chooses it.
 - **The tactic layer is an option-critic.** It holds a tactic over many
   actions and checks at every action boundary whether to end it.
-- **The skill names an action; the executor reaches its predicted end.**
-  The skill chooses a verb aimed at an object it sees; the action predictor
-  gives where the action ends, and the executor, which has no learned weights
-  and never refuses a destination, goes there.
+- **The skill names an action; the executor reaches its end.** The skill
+  chooses a verb aimed at an object it sees; the action predictor gives where
+  the action ends, and the executor, which has no learned weights and never
+  refuses a destination, goes there. Until the predictor predicts well, the
+  teacher carries out the skill's actions in training instead (2026-10-11).
 - **Every teacher label is certified through the same executor** the agent
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
@@ -62,11 +63,11 @@ Round 0 of the re-validation lost two of 656 layouts:
   approach is the next decision's to pass (judging it too left the teacher
   no command in the air after a stomp in `enemy_hop`). One walking away
   keeps walking (held, it barred every landing behind a receding walker,
-  and under speed run a stomp was taught in `landing_enemy`). The teacher now wins that layout, in four
-  commands: the direct stomp needs the longest jump, and no destination
-  aimed at the enemy makes the executor choose it (aiming at its top picks a
-  shorter jump that comes down on the platform edge beside it). Left as a
-  known limit of aiming.
+  and under speed run a stomp was taught in `landing_enemy`). The teacher
+  now wins that layout, in four commands: the direct stomp needs the longest
+  jump, and no destination aimed at the enemy makes the executor choose it
+  (aiming at its top picks a shorter jump that comes down on the platform
+  edge beside it). Left as a known limit of aiming.
 - **A descent the executor could not make.** A `skill_gap_descent` layout
   put a 61-pixel gap and a 35-pixel drop in front of a 40-pixel ledge; the
   reference route landed with 3 pixels of Mario on the lower ledge's edge,
