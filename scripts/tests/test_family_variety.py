@@ -53,6 +53,9 @@ def test_mario_often_starts_right_next_to_the_threat():
     assert 0.3 < sum(d <= 8 for d in distances) / len(distances) < 0.75
 
 
+# Layouts of one-move lessons with an enemy are kept only once the teacher
+# wins them (monte_carlo._teacher_wins): seconds each.
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "family",
     ["action_jump_gap", "skill_enemy_bypass", "single_gap", "enemy_hop", "action_platform_up"],
@@ -123,3 +126,15 @@ def test_a_policy_that_repeats_one_end_its_teacher_did_not_collapses():
     # Repeating what the teacher repeats is not a collapse of the policy.
     same = [episode("a", ["land_on"] * 4, [72, 72, 73, 72]) for _ in range(3)]
     assert output_collapse(own, same, "skill") == {}
+
+
+def test_a_choice_with_no_safe_version_sent_mario_nowhere():
+    # An unsafe choice ends its episode with Mario holding: its "end" (0, 0)
+    # is not where the action sent him, so it is no evidence of a collapse.
+    taught = [episode("a", ["stomp"] * 4, [40 + 9 * i + j for i in range(4)]) for j in range(3)]
+    own = []
+    for j in range(3):
+        e = episode("a", ["stomp"] * 2, [44 + j * 7, 0], labelled=False)
+        e.end = "unsafe_choice"
+        own.append(e)
+    assert output_collapse(own, taught, "skill") == {}

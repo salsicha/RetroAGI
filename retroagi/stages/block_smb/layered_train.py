@@ -1879,6 +1879,10 @@ def _choices(episode, learner: str, source: str) -> dict:
         if episode.used is None or "verb" not in episode.picks:
             return out
         own = ~np.asarray(episode.played_teacher, bool)
+        if getattr(episode, "end", "") == "unsafe_choice" and own.any():
+            # Its last own choice had no safe version (the teacher carried
+            # nothing out; Mario held): it sent him nowhere.
+            own[np.flatnonzero(own)[-1]] = False
         used = np.asarray(episode.used)[own]
         rows = zip(
             np.asarray(episode.picks["verb"])[own],
