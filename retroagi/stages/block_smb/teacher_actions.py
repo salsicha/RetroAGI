@@ -80,6 +80,47 @@ def enemy_slot(env, scene, index):
     return None if slot is None else ("enemies", slot)
 
 
+def run_context(env, state) -> dict:
+    """What a run's label needs from its decision, to be named again at the
+    next one (approach_slot): the scene the skill saw, the camera's position
+    and the enemies' boxes then."""
+    return {
+        "scene": _scene(env, state),
+        "camera_x": env.camera_x,
+        "enemies": [(e["x"], e["y"], e["w"], e["h"], e["dead"]) for e in env.enemies],
+    }
+
+
+def approach_slot(context, env, state, command, result):
+    """The slot, in the scene of an earlier decision (``context``,
+    run_context), of what a jump from here (``command`` with its trial
+    ``result``) is aimed at, as a run-up approaches it: the enemy it stomps,
+    else the surface it lands on (_classify's approach). None when that scene
+    does not report it."""
+    from types import SimpleNamespace
+
+    then = SimpleNamespace(camera_x=context["camera_x"])
+    scene = context["scene"]
+    killed = result.outcome[2] if result.outcome else ()
+    if killed:
+        index = min(killed)
+        x, y, w, h, dead = context["enemies"][index]
+        if dead:
+            return None
+        ex, ey = x + w / 2 - then.camera_x, y + h / 2
+        best, slot = MATCH, None
+        for i, view in enumerate(packed_lists(scene)["enemies"]):
+            b = view.box
+            d = math.hypot((b[0] + b[2]) / 2 - ex, (b[1] + b[3]) / 2 - ey)
+            if d <= best:
+                best, slot = d, i
+        return None if slot is None else ("enemies", slot)
+    m = env.mario
+    x = m["x"] + m["w"] / 2 + result.end_dx
+    top = m["y"] + m["h"] + result.end_dy
+    return surface_slot(then, scene, x, top)
+
+
 def _passed(env, result):
     """The enemies a trial ended on the other side of (alive), nearest first."""
     if not result.outcome:
@@ -308,6 +349,10 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
         return SkillToken("hold", 0, 0)
     if teacher_command is not None and teacher_label == action:
         return teacher_command
+    if action.verb == "approach" and _runs_up_to(env, state, action, teacher_command):
+        # The teacher's run toward the object, stopping before it: a run-up
+        # (the jump that follows is the next decision's).
+        return teacher_command
     target = teacher_target(env)
     memo = {}
     if action.verb in ("land_on", "stomp", "jump_over"):
@@ -328,6 +373,26 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
     if not found:
         return None
     return max(found, key=lambda v: _rank(*v))[0]
+
+
+def _runs_up_to(env, state, action, command) -> bool:
+    """Whether ``command`` (the teacher's) is a run along Mario's floor toward
+    ``action``'s object that stops before it."""
+    m = env.mario
+    if command is None or command.mode != "run" or not m["on_ground"] or command.x == 0:
+        return False
+    kind, slot = action.target
+    lists = packed_lists(_scene(env, state))
+    if kind == "gaps" or slot >= len(lists[kind]):
+        return False
+    item = lists[kind][slot]
+    if kind == "surfaces":
+        x0, x1 = item.x0, item.x1
+    else:
+        box = item.box if kind in ("blocks", "enemies") else item
+        x0, x1 = box[0], box[2]
+    ahead = (x0 + x1) / 2 + env.camera_x - (m["x"] + m["w"] / 2)
+    return (command.x > 0) == (ahead > 0) and abs(command.x) < abs(ahead)
 
 
 def _run_versions(env, state, target, memo, action):

@@ -81,3 +81,12 @@ def test_a_bypass_whose_room_closes_before_the_landing_is_redrawn():
     )
     assert rejected["teacher_loses"] >= 1
     assert replay(sample.scenario, family="skill_enemy_bypass")["won"]
+
+
+@pytest.mark.timeout(600)
+def test_every_skill_layout_with_an_enemy_is_watched_first():
+    from retroagi.stages.block_smb.skill_families import WATCH_FRAMES
+
+    for family in ("enemy_hop", "landing_enemy", "stomp_mount", "enemy_patrol"):
+        assert layout(family, 0, "medium")["watch_frames"] == WATCH_FRAMES, family
+    assert not layout("flat_run", 0, "medium").get("watch_frames")

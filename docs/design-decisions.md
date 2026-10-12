@@ -23,6 +23,31 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-12 — Run-ups named by what follows; enemies watched in every skill lesson (user decision; built)
+
+The skill trained with the teacher carrying out its actions
+(`artifacts/block_smb/skill_teacher_execution_20261011`: best validation
+90.5%, 88.9% of 369 fresh layouts) failed in two ways:
+
+- **Approach or run?** A run along the floor was labelled an approach only
+  when the teacher had planned the jump before running; otherwise the same
+  run was "run to my floor" and the jump was planned at the next decision.
+  That plan is not in the scene, so similar scenes got different verbs, and
+  a mix-up was often a choice with no safe version (`single_gap`,
+  `action_jump_gap`). Now a teacher run its next command follows with a jump
+  the same way is labelled an approach to what that jump stomps or lands on,
+  named in the run's own scene (`layered_train._Lane._name_run_ups`,
+  `teacher_actions.approach_slot`, using the jump's trial made before it
+  starts). Carrying out the skill's "approach X", the teacher's own run
+  toward X that stops before it counts (`teacher_actions._runs_up_to`).
+- **Enemy timing** (`enemy_hop`, `landing_enemy`, `stomp_mount`,
+  `enemy_patrol`): the skill chose stomps, landings and runs at moments with
+  no safe version. Every layout of a skill-curriculum family with an enemy
+  now starts with the 12 watched frames (one picture does not show how an
+  enemy moves; before, only `enemy_stomp`, the bypasses and the action
+  families had them), and these four families get 16 extra layouts every
+  round (`LayeredTrainConfig.extra_layouts`).
+
 ## 2026-10-11 — The teacher carries out the skill's actions until the predictor works (user decision; built)
 
 The first skill run on actions (`artifacts/block_smb/skill_actions_20261011`)

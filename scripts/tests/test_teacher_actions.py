@@ -150,3 +150,38 @@ def test_the_teacher_carries_out_the_skills_chosen_action():
         # Nor does an action aimed at a gap: the teacher names none.
         assert carry_out(d.env, d.state, ActionToken("approach", ("gaps", 0))) is None
         assert carry_out(d.env, d.state, ActionToken("jump_over", ("gaps", 0))) is None
+
+
+@pytest.mark.timeout(600)
+def test_a_run_the_teacher_follows_with_a_jump_is_labelled_an_approach():
+    from retroagi.core.layered_policy import POINTER_START, LayeredSMBPolicy
+    from retroagi.core.action_tokens import VERBS
+    from retroagi.stages.block_smb import layered_train as lt
+    from retroagi.stages.block_smb.teacher_replay import reference_vision
+
+    # The teacher runs to the pit's edge and then jumps; whether it had
+    # planned the jump before running is not in the scene, so the run is an
+    # approach to where the jump lands either way.
+    task = lt.EpisodeTask(
+        index=0,
+        family="single_gap",
+        split="train",
+        seed=2026100909,
+        sample_index=0,
+        difficulty="hard",
+        teacher_share=1.0,
+        label=True,
+    )
+    record = lt.play_episodes(
+        reference_vision()[0], LayeredSMBPolicy().eval(), "skill", [task], "cpu", 1
+    )[0]
+    named = [
+        (VERBS[int(v)], pointer_target(int(p) + POINTER_START))
+        for v, p, ok in zip(
+            record.labels["verb"], record.labels["pointer"], record.labels["action_valid"]
+        )
+        if ok
+    ]
+    jumps = [i for i, (verb, _) in enumerate(named) if verb == "land_on"]
+    assert record.won and jumps
+    assert all(named[i - 1][0] == "approach" for i in jumps if i and named[i - 1][0] != "land_on")

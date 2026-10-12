@@ -25,7 +25,13 @@ from .skill_families import (
     WATCH_FRAMES,
     skill_family_scenario,
 )
-from .tactic_families import NEW_FAMILIES, TACTIC_FAMILIES, family_route, tactic_family_scenario
+from .tactic_families import (
+    NEW_FAMILIES,
+    TACTIC_FAMILIES,
+    TACTIC_TRAINING_FAMILIES,
+    family_route,
+    tactic_family_scenario,
+)
 from .tactic_schedule import segment
 from .threat_variety import fit_patrols, follow_up, reachable_span, standing_reach, start_distance
 from .transfer_failure_families import (
@@ -1167,6 +1173,17 @@ def _generate_family_scenario(family, rng, *, split, difficulty=None):
         scenario.setdefault("reward_goal_distance_shaping", 2.0)
         scenario.setdefault("goal_requires_support", True)
     _finish_layout(family, scenario, params)
+    if (
+        family not in TACTIC_TRAINING_FAMILIES
+        and scenario.get("enemies")
+        and not scenario.get("mario_velocity")
+    ):
+        # Watched before the first decision: one picture cannot show how an
+        # enemy moves (skill_families.WATCH_FRAMES); the skill's choice there
+        # depends on it. Not where Mario starts running (pit_leap,
+        # platform_hop): he stands while the world is watched, and the
+        # running start would be gone.
+        scenario.setdefault("watch_frames", WATCH_FRAMES)
     scenario["tactics"] = _family_tactics(family, scenario)
     if (
         family in TACTIC_FAMILIES
@@ -2021,16 +2038,21 @@ def _stomp_mount(
     else:
         patrol_min = enemy_x - to_boundary
         patrol_max = patrol_min + 2 * patrol_halfwidth
+    # The enemy is watched for WATCH_FRAMES before the first decision: it
+    # starts that many frames' walk back, so the episode begins with it at
+    # enemy_x and its first reversal still turn_frames ahead.
+    watched_from = enemy_x - direction * enemy_speed * WATCH_FRAMES
     scenario = {
         "world_width": 340,
         "mario": [mario_x, 200],
         "platforms": [[0, 220, 340, 20]],
-        "enemies": [[enemy_x, 206, patrol_min, patrol_max, enemy_speed, direction]],
+        "enemies": [[watched_from, 206, patrol_min, patrol_max, enemy_speed, direction]],
         "coins": [],
         "goal": [enemy_x - 2, 186, 16, 20],
         "goal_on_stomp": True,
         "reward_goal_distance_shaping": 2.0,
         "reward_progress_per_pixel": 0.0,
+        "watch_frames": WATCH_FRAMES,
     }
     # Reachability remains an exact-physics check. Direction/phase variation
     # invalidates the old single time-indexed hold per tier. Pick a reachable

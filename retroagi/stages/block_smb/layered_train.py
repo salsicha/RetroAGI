@@ -48,7 +48,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from retroagi.core.action_tokens import VERBS, pointer_index
+from retroagi.core.action_tokens import VERB_TARGETS, VERBS, ActionToken, pointer_index
 from retroagi.core.actions import SMBAction
 from retroagi.core.layered_policy import (
     CHOICE_WIDTH,
@@ -104,6 +104,9 @@ class LayeredTrainConfig:
     # Extra layouts next round for a family that lost validation episodes:
     # this many times its share of losses.
     focus_layouts: int = 8
+    # Extra layouts every round for named families, "family=count,...": more
+    # practice where the skill is weakest (extra_layouts_of).
+    extra_layouts: Optional[str] = None
     # Optional full parameter sweep for explicitly selected small skill
     # families. Normal skill training samples all skill families with focus replay.
     sweep: bool = False
@@ -369,12 +372,12 @@ class _Lane:
         self.asked: dict = {}
         self.progress, self.progressed = None, 0
 
-    def _as_action(self, command):
-        """The teacher's ``command`` as {"action", "outcome"}
-        (teacher_actions.teacher_example), or None."""
+    def _as_action(self, command, result=None):
+        """The teacher's ``command`` (with its trial ``result``, if made) as
+        {"action", "outcome"} (teacher_actions.teacher_example), or None."""
         from .teacher_actions import teacher_example
 
-        return teacher_example(self.env, self.teacher, command)
+        return teacher_example(self.env, self.teacher, command, result)
 
     def carry_out(self, action):
         """The executor's destination for the skill's own ``action`` here: the
@@ -437,10 +440,14 @@ class _Lane:
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
             if self.task.label and asked["skill"] is not None:
+                from .teacher_actions import _trial_of
+
                 # The same choice as an action (a verb aimed at a reported
                 # object; None when its object is not reported) and where it
-                # ends.
-                asked["action_label"] = self._as_action(asked["skill"])
+                # ends; its trial, made before it is executed, is kept for
+                # naming run-ups (_name_run_ups).
+                asked["label_result"] = _trial_of(self.env, self.teacher, asked["skill"])
+                asked["action_label"] = self._as_action(asked["skill"], asked["label_result"])
             if self.task.record_actions and self.task.label and asked["skill"] is not None:
                 from .teacher_actions import action_rows
 
@@ -493,7 +500,57 @@ class _Lane:
             d["label_end_dx"].append(round(outcome["dx"]))
             d["label_end_dy"].append(round(outcome["dy"]))
             d["agreed"].append(valid and action is not None and mine == action)
+            if self.task.label:
+                self._name_run_ups(d, asked, decision)
             return
+
+    def _name_run_ups(self, d, asked, decision) -> None:
+        """A run of the teacher's that its next command follows with a jump in
+        the same direction is a run-up: its label becomes approaching what
+        that jump is aimed at, named in the run's own scene
+        (teacher_actions.approach_slot). Without this, whether such a run was
+        labelled an approach depended on whether the teacher had planned the
+        jump before running (its committed plan), which the scene does not
+        show. Called at each decision of a labelled skill episode, after its
+        labels are recorded."""
+        from .teacher_actions import approach_slot, run_context
+
+        env, command = self.env, asked.get("skill")
+        pending, self._pending_run = getattr(self, "_pending_run", None), None
+        # The jump's trial made before it started (ask_teacher): its execution
+        # has begun by now.
+        result = asked.get("label_result")
+        if (
+            pending is not None
+            and command is not None
+            and result is not None
+            and command.mode == "jump"
+            and command.x != 0
+            and (command.x > 0) == pending["right"]
+            and env.mario["on_ground"]
+        ):
+            slot = approach_slot(pending["context"], env, self.teacher, command, result)
+            if slot is not None and slot[0] in VERB_TARGETS["approach"]:
+                t, action = pending["index"], ActionToken("approach", slot)
+                d["label_verb"][t] = VERBS.index("approach")
+                d["label_pointer"][t] = pointer_index(slot) - POINTER_START
+                d["agreed"][t] = pending["mine"] == action
+        example = asked.get("action_label")
+        action = example["action"] if example is not None else None
+        if (
+            action is not None
+            and action.verb == "run_to"
+            and command is not None
+            and command.x != 0
+            and decision.skill == command
+            and env.mario["on_ground"]
+        ):
+            self._pending_run = {
+                "index": len(d["label_verb"]) - 1,
+                "context": run_context(env, self.teacher),
+                "right": command.x > 0,
+                "mine": decision.chosen["skill"],
+            }
 
     def _note_tactic(self, decision) -> None:
         """The tactic learner's decision: what its layer did (TacticStep), and the
@@ -1672,6 +1729,18 @@ def learner_families(learner: str, families: Sequence[str]) -> tuple[str, ...]:
     return tuple(f for f in families if f in own)
 
 
+def extra_layouts_of(config) -> dict:
+    """LayeredTrainConfig.extra_layouts as {family: count}."""
+    out = {}
+    for part in (config.extra_layouts or "").split(","):
+        if part.strip():
+            family, count = part.split("=")
+            if family.strip() not in BLOCK_SMB_MC_FAMILIES:
+                raise ValueError(f"extra_layouts: unknown family {family.strip()!r}")
+            out[family.strip()] = int(count)
+    return out
+
+
 def _tasks(
     config,
     split: str,
@@ -2221,6 +2290,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
         )
     replay: list[EpisodeRecord] = []
     focus: dict[str, int] = {}  # extra layouts per family, from the last validation
+    fixed = extra_layouts_of(config)  # and every round, for named families
     history: list[dict] = []
     best = best_passed = -1.0
     tactic = config.learner == "tactic"
@@ -2271,7 +2341,9 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     share,
                     True,
                     explore=by_reward,
-                    extra=focus,
+                    extra={
+                        f: focus.get(f, 0) + fixed.get(f, 0) for f in set(focus) | set(fixed)
+                    },
                 )
             tasks = pool.with_scenarios(tasks)
             demonstrated = qualify_teachers(
