@@ -153,6 +153,19 @@ def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
 
 
 @pytest.mark.timeout(120)
+def test_a_point_where_the_floor_is_cut_at_an_enemy_is_on_the_nearest_piece():
+    with Decision("enemy_stomp") as d:
+        env, scene = d.env, d.state.scene
+        e = env.enemies[0]
+        under = e["x"] + e["w"] / 2
+        feet = next(p["rect"].top for p in env.platforms if p["rect"].left <= under <= p["rect"].right)
+        # The scene cuts the floor out under the enemy.
+        assert not any(s.x0 <= under - env.camera_x <= s.x1 for s in scene.surfaces)
+        slot = surface_slot(env, scene, under, feet)
+        assert slot is not None and slot[0] == "surfaces"
+
+
+@pytest.mark.timeout(120)
 def test_a_steer_that_comes_down_on_an_enemy_stomps_it():
     from retroagi.stages.block_smb.teacher_actions import _trial_of
 

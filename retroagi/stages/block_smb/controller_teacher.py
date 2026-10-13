@@ -304,7 +304,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                     safe=bool(
                         route_available(env)
                         and not boxed_with_enemy(env, clearance)
-                        and bounce_lands_clear(env, spatial, executor)
+                        and next_action_safe(env, state, spatial, executor, scene)
                         and stop_safe(env, spatial, executor)
                         and landed
                         and (reached or advanced or objective or env.stomped)
@@ -948,7 +948,8 @@ def destination(env, state, proposal):
     if proposal is not None:
         result = trial(env, state, proposal, target)
         if (
-            not (speed_run and _move_kind(env, result) == "stomp")
+            _nameable(env, state, proposal, result)
+            and not (speed_run and _move_kind(env, result) == "stomp")
             and not (proposal.mode == "jump" and _mere_hop(env, result))
             and (
                 result.won
@@ -969,6 +970,8 @@ def destination(env, state, proposal):
     options = [(o.command, o.result) for o in _jump_table(env, state, target, memo)]
     options += _run_options(env, state, target, memo)
     for goal, result in options:
+        if not _nameable(env, state, goal, result):
+            continue
         # The proposal stays a candidate: it may have been passed over only
         # for being a stomp under speed run or a mere hop, ranked last here.
         last = speed_run and _move_kind(env, result) == "stomp"
@@ -1007,6 +1010,8 @@ def destination(env, state, proposal):
     ]
     for kind, goal in ordered:
         result = trial(env, state, goal, target)
+        if not _nameable(env, state, goal, result):
+            continue
         if kind == "win" and result.won:
             return _with_margin(env, state, target, goal, result, memo)
         if (
@@ -1025,6 +1030,15 @@ def destination(env, state, proposal):
         if trial(env, state, hold, target).safe:
             return hold
     return None
+
+
+def _nameable(env, state, goal, result) -> bool:
+    """Whether a command names an action (teacher_actions.teacher_action): a
+    verb aimed at an object the scene reports. Only such a command is taught;
+    one aimed at a point in the air, say, gives the skill nothing to learn."""
+    from .teacher_actions import teacher_action
+
+    return teacher_action(env, state, goal, result) is not None
 
 
 def _exact_key(result) -> tuple:
@@ -1135,7 +1149,7 @@ def _with_margin(env, state, target, goal, result, memo=None):
             chosen = (g, result)
             break
         confirmed = trial(env, state, g, target)
-        if _works(confirmed, result, hop):
+        if _works(confirmed, result, hop) and _nameable(env, state, g, confirmed):
             chosen = (g, confirmed)
             break
     if chosen is None:
@@ -1743,46 +1757,44 @@ def on_plant_mouth(env):
     )
 
 
-def bounce_lands_clear(env, spatial, executor):
-    """After a stomp, the bounce comes down at least 8 pixels from every live
-    enemy, or wins first: played out as the next decision plays it, a run to
-    the floor below through the executor (in the air, every run command came
-    down at the same place). A stomp made as a walker arrived left every
-    landing a few pixels from it, and no command after; played out with no
-    buttons, the bounce had stomped the walker too and looked clear."""
+# The steers tried after a stomp for a safe next action (next_action_safe):
+# every NEXT_STEP pixels within 32 of Mario, straight down first.
+NEXT_STEP = 4
+
+
+def next_action_safe(env, state, spatial, executor, scene):
+    """After a stomp, whether the teacher has a safe next action to teach.
+
+    A stomp ends when Mario's falling feet meet the enemy; what he does next
+    is a new action the teacher chooses there. In the air it chooses a steer
+    to a point of the floor below within 32 pixels (_air_options, each named
+    as running to that floor, or stomping an enemy it comes down on). The
+    stomp is safe only if one of them is: it wins, or it is safe as a taught
+    action is (reaches the floor at least 8 pixels from every live enemy,
+    with room to brake). Tried every NEXT_STEP pixels, straight down first.
+    ``spatial``, ``executor`` and ``scene``: the stomp's at its end."""
     m = env.mario
     if not env.stomped or m["on_ground"]:
         return True
-    feet = m["y"] + m["h"]
-    below = [
-        p["rect"].top
-        for p in env.platforms
-        if p["rect"].left < m["x"] + m["w"] and p["rect"].right > m["x"] and p["rect"].top >= feet
-    ]
-    run = SkillToken("run", 0, round(min(below) - feet) if below else 0)
-    with probe_state(env):
-        feedback = deepcopy(spatial)
-        control = SMBExecutor(last_button=executor.last_button)
-        scene = scene_from_labels(env.scene_labels())
-        plan = feedback.begin(run, scene)
-        control.start(plan, flight=feedback.flight, travel=feedback.travel)
-        for _ in range(64):
-            button = control.press(scene)
-            feedback.executed(button, scene)
-            _, _, done, truncated, _ = env.step(button)
-            if done or truncated:
-                return bool(env._goal_credited)
-            m = env.mario
-            if m["on_ground"]:
-                feet = m["y"] + m["h"]
-                return all(
-                    max(e["x"] - m["x"] - m["w"], m["x"] - e["x"] - e["w"]) >= 8
-                    for e in env.enemies
-                    if not e["dead"] and e["h"] > 0 and abs(e["y"] + e["h"] - feet) < 20
-                )
-            scene = scene_from_labels(env.scene_labels())
-            feedback.observe(scene)
-    return True
+    following = copy(state)
+    following.execution, following.controller = deepcopy(spatial), executor
+    following.scene = scene
+    target = teacher_target(env)
+    side = getattr(target, "direction", 1)
+    cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
+    for dx in sorted(range(-32, 33, NEXT_STEP), key=lambda d: (abs(d), d * side < 0)):
+        below = [
+            p["rect"].top
+            for p in env.platforms
+            if p["rect"].left <= cx + dx <= p["rect"].right and p["rect"].top >= feet - 2
+        ]
+        if not below:
+            continue
+        steer = SkillToken("run", dx, max(SKILL_Y[0], min(SKILL_Y[-1], round(min(below) - feet))))
+        result = _trial(env, following, steer, target)
+        if result.won or (result.safe and result.clearance >= 8):
+            return True
+    return False
 
 
 # A landing this close (pixels between middles) to a live enemy at the same

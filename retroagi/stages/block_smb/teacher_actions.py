@@ -26,7 +26,7 @@ from typing import Optional
 from retroagi.core.action_tokens import ActionToken
 from retroagi.core.smb_observer import packed_lists
 from retroagi.core.smb_pixel_types import VISIBLE_COLUMNS
-from retroagi.core.smb_scene_labels import scene_from_labels
+from retroagi.core.smb_scene_labels import ENEMY_ON_SURFACE, MIN_SURFACE_WIDTH, scene_from_labels
 
 # How far (pixels) a reported enemy may be from the simulator's to be it.
 MATCH = 12
@@ -68,7 +68,12 @@ def platform_at(env, x, feet):
 def surface_slot(env, scene, x, top):
     """The slot of the reported surface (or moving platform, pipe or block
     top) under world x whose top is at ``top`` (or within STANDING_REACH of
-    it: Mario standing on its edge), or None."""
+    it: Mario standing on its edge), or None.
+
+    A point where the floor is cut at an enemy standing on it (the stretch
+    under the enemy, and a piece beside it too narrow to report:
+    smb_scene_labels.split_at_enemies) is on the nearest reported piece of
+    that floor."""
     lists = packed_lists(scene)
     # A point beyond the window the vision sees is matched at its edge, where
     # it reports the part of a surface it sees.
@@ -80,7 +85,25 @@ def surface_slot(env, scene, x, top):
         (("blocks", slot), block.box[0], block.box[2], block.box[1])
         for slot, block in enumerate(lists["blocks"])
     ]
-    return _nearest_under(spans, sx, top)
+    found = _nearest_under(spans, sx, top)
+    if found is not None:
+        return found
+    for enemy in scene.enemies:
+        x0, y0, x1, y1 = enemy.box
+        if enemy.kind == "defeated" or not (
+            y0 <= top + ENEMY_ON_SURFACE and y1 >= top - ENEMY_ON_SURFACE
+        ):
+            continue
+        if x0 - MIN_SURFACE_WIDTH <= sx <= x1 + MIN_SURFACE_WIDTH:
+            reach = [
+                (max(left - sx, sx - right), key)
+                for key, left, right, at in spans
+                if key[0] == "surfaces" and abs(at - top) <= 3
+            ]
+            reach = [r for r in reach if r[0] <= (x1 - x0) + MIN_SURFACE_WIDTH + STANDING_REACH]
+            if reach:
+                return min(reach)[1]
+    return None
 
 
 def _enemy_box_slot(scene, box, camera_x):
@@ -195,7 +218,10 @@ def _passed(env, result):
 
 def _classify(env, state, command, result):
     """(verb, the simulator object as ("enemy" | "platform", index) or None,
-    the reported slot or None) for ``command`` with its trial ``result``."""
+    the reported slot or None) for ``command`` with its trial ``result``.
+
+    An action that reaches the goal before it ends (in the air) is named by
+    where it was going: its destination."""
     if command.mode == "hold":
         return "hold", None, None
     scene = _scene(env, state)
@@ -207,9 +233,13 @@ def _classify(env, state, command, result):
         return verb, ("enemy", index), enemy_slot(env, scene, index)
 
     def surface(verb, x, top):
+        slot = surface_slot(env, scene, x, top)
+        if slot is None and result.won:
+            x, top = cx + command.x, feet + command.y
+            slot = surface_slot(env, scene, x, top)
         index = platform_at(env, x, top)
         thing = None if index is None else ("platform", index)
-        return verb, thing, surface_slot(env, scene, x, top)
+        return verb, thing, slot
 
     killed = result.outcome[2] if result.outcome else ()
     if command.mode == "jump":
