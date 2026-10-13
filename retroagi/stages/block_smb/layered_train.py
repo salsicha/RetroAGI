@@ -156,6 +156,11 @@ class LayeredTrainConfig:
     # keeps them on a moving object (tracker_train; None: none).
     predictor: Optional[str] = None
     tracker: Optional[str] = None
+    # Skill training: the scene encoder and memory the skill reads learn with
+    # it (else only the skill's own transformer does). An action predictor
+    # reads them too, so none may execute the skill's actions meanwhile; one
+    # is trained on them afterwards.
+    train_reading: bool = False
     init: Optional[str] = None  # a checkpoint whose lower layers are already trained
     # The size of a new policy (ignored with init).
     policy_width: int = PolicySettings.width
@@ -2266,7 +2271,15 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             parameter.requires_grad_(True)
         return parameters
 
-    if config.learner == "skill":
+    if config.learner == "skill" and config.train_reading:
+        # The scene encoder and memory learn with the skill (train_reading).
+        if config.predictor:
+            raise ValueError(
+                "the action predictor reads the scene encoder and memory: they cannot "
+                "learn while it executes the skill's actions (train_reading)"
+            )
+        learning = learn_only(policy.parameters_of("skill"))
+    elif config.learner == "skill":
         # The action predictor reads this policy's scene encoder and memory
         # (core/action_predictor): they must be the ones it learned on, and
         # they stay so (also while the teacher carries out the actions, so a

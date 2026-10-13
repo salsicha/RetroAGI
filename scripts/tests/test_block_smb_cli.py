@@ -54,6 +54,10 @@ def test_a_true_or_false_setting_reads_false_as_false():
     assert args.sweep is False
     args = cli.build_parser().parse_args(["train-layer", "--sweep", "true"])
     assert args.sweep is True
+    # The skill's scene encoder and memory learn with it only when asked.
+    assert cli.build_parser().parse_args(["train-layer"]).train_reading is False
+    args = cli.build_parser().parse_args(["train-layer", "--train-reading", "true"])
+    assert args.train_reading is True
 
 
 def test_exam_layer_examines_the_whole_agent_by_default():
