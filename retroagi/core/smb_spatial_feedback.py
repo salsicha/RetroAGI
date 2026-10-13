@@ -342,5 +342,11 @@ class SpatialFeedback:
         target = self.destination
         if target is None or target.mode != "run" or not self.tracked or target.x == 0:
             return False
+        # A run ends with Mario standing at its destination: one that takes
+        # him off a ledge onto a lower floor is still on its way while he
+        # falls (his landing ends it), as is a steer in the air.
+        mario = self.previous.mario if self.previous is not None else None
+        if mario is None or not (mario.on_something and mario.support != "air"):
+            return False
         distance = self.displacement - self.start_displacement
         return distance * (1 if target.x > 0 else -1) >= abs(target.x)

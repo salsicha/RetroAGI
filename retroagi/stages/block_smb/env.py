@@ -83,6 +83,9 @@ MONSTER_W, MONSTER_H = 16, 20
 MARIO, MARIO_SKIDDING, EYE = (255, 0, 0), (255, 220, 0), (255, 255, 255)
 POWER_UP_CAP, POWER_UP_SPOT, POWER_UP_STEM = (232, 48, 24), (252, 252, 252), (252, 216, 168)
 POWER_UP_SIZE = 16
+# Pre-episode frames ("watch_frames") end with Mario standing: up to this many
+# more are watched while one who starts above the floor drops onto it.
+LANDING_WATCH = 64
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -506,13 +509,21 @@ class MarioScenarioEnv:
         # Mario stands, and their pictures are kept for the agent to watch
         # (prefilled history), so its first decision has seen how things move.
         # The episode, its frame count and its routes start after them.
+        # Mario stands while they are watched: one who starts above the floor
+        # is watched dropping onto it too (up to LANDING_WATCH more frames),
+        # so the first decision is made standing, not in the air.
         self.watched_screens, self.watched_labels = [], []
-        for _ in range(int(scenario.get("watch_frames", 0) or 0)):
+        watch = int(scenario.get("watch_frames", 0) or 0)
+        while len(self.watched_screens) < watch or (
+            watch and not self.mario["on_ground"] and len(self.watched_screens) < watch + LANDING_WATCH
+        ):
             self.watched_screens.append(obs)
             self.watched_labels.append(self.scene_labels())  # training-only truth
             obs, _, done, truncated, _ = self.step(0)
             if done or truncated:
                 raise ValueError("the pre-episode frames ended the episode")
+        if watch and not self.mario["on_ground"]:
+            raise ValueError("Mario has not landed by the end of the pre-episode frames")
         if self.watched_screens:
             self.steps = 0
             tactic_schedule._begin(self)

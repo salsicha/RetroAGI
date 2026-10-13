@@ -543,7 +543,17 @@ labels throughout. A failure stops the run and saves its layout and outcome in
 This applies to both skill and tactic training, with teacher destinations used
 to qualify tactic layouts independently of the learned skill. The first fully
 teacher-driven skill round reuses these demonstrations. Qualification covers
-the sampled layouts, not all possible layouts or learner-created states.
+the sampled layouts, not all possible layouts or learner-created states. Its
+report also counts decisions where the teacher's choice names no action.
+
+To check the teaching by eye, `python -m retroagi.stages.block_smb.family_atlas
+--out <folder>` pictures every skill family's layouts with each drawn parameter
+at its lowest, middle and highest value, at each difficulty: where the enemies
+and moving platforms go (blurred over the episode's frames), the teacher's
+path through the production pipeline, and a heat spot where Mario's feet are
+at each decision, marked by whether he stands, is on an enemy he has just
+stomped, or is in the air. Decisions in the air, other than on a stomped enemy,
+are faults.
 
 When approaching a moving stomp target that is travelling away, the teacher
 measures relative progress over the complete run command. Tiny stop/start

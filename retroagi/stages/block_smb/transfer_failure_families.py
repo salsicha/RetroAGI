@@ -31,7 +31,7 @@ TRANSFER_FAILURE_SCHEMAS = {
         "spawn_drop": [12, 28],
         "enemy_distance": [54, 90],
         "enemy_speed": [0.2, 0.6],
-        "goal": "finish a descent, clear an approaching enemy, and reach the exit",
+        "goal": "drop in, clear an approaching enemy, and reach the exit",
     },
     "enemy_on_platform": {
         "platform_height": [28, 50],
@@ -86,7 +86,9 @@ def transfer_failure_scenario(family, rng, difficulty):
         scenario = {
             "world_width": world,
             # More than eight pixels above support avoids the spawn-grounding
-            # snap. The policy must first finish this real airborne descent.
+            # snap. Mario drops onto the floor while the watched frames play
+            # (they last until he stands: no decision is made in the air), so
+            # his first decision is made standing, the enemy approaching.
             "mario": [spawn_x, 204 - drop],
             "platforms": [[0, 220, world, 20]],
             "enemies": [[enemy_x, 206, enemy_x - 16, enemy_x + 16, speed, -1]],

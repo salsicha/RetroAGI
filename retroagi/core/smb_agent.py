@@ -54,6 +54,9 @@ from .tokens import (
 )
 
 NOOP = int(SMBAction.NOOP)
+# Rows Mario's feet must move while he is in the air for contact to be a
+# landing (LandingWatch).
+LANDING_MOVE = 2
 
 
 @dataclass
@@ -245,16 +248,38 @@ class AgentStep:
 
 @dataclass
 class LandingWatch:
-    """Use vision's contact signal; the executor does not rebuild terrain contacts."""
+    """Use vision's contact signal; the executor does not rebuild terrain contacts.
+
+    A landing is contact after Mario was in the air and moved up or down there
+    (his feet by at least LANDING_MOVE rows). As he walks off an edge, vision's
+    contact can flicker on for a frame at the height he left (his box still
+    touching the edge's corner): that is no landing, and he is still in the
+    air (it had ended an action there, and the next decision was made in the
+    air)."""
 
     airborne: bool = False
+    # The lowest and highest feet row seen since he left the ground (None:
+    # not seen, as when the watch starts in the air).
+    feet: Optional[tuple] = None
 
     def landed(self, scene: SceneObservation) -> bool:
         if scene.mario.box is None:
             return False
-        contact = scene.mario.on_something
-        landed = self.airborne and contact
-        self.airborne = not contact
+        bottom = scene.mario.box[3]
+        if not scene.mario.on_something:
+            if not self.airborne:
+                self.airborne, self.feet = True, (bottom, bottom)
+            elif self.feet is not None:
+                self.feet = (min(self.feet[0], bottom), max(self.feet[1], bottom))
+            return False
+        if (
+            self.airborne
+            and self.feet is not None
+            and max(self.feet[1], bottom) - min(self.feet[0], bottom) < LANDING_MOVE
+        ):
+            return False
+        landed = self.airborne
+        self.airborne, self.feet = False, None
         return landed
 
 

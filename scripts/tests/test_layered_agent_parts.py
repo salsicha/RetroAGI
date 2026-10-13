@@ -163,7 +163,8 @@ def test_a_landing_is_the_land_detector_turning_on_after_mario_was_in_the_air():
         seen = LandingWatch()
         return [seen.landed(picture) for picture in pictures]
 
-    air = scene(support="air")
+    # In the air 6 rows above the floor, then on it.
+    air = scene(mario=(100, 186, 112, 202), support="air")
     assert watch([air, scene()]) == [False, True]
     assert watch([air, scene(support="moving_platform")]) == [False, True]
     # Landing on an enemy: still in the air, but the detector says his feet are on something.
@@ -176,6 +177,11 @@ def test_a_landing_is_the_land_detector_turning_on_after_mario_was_in_the_air():
     assert watch([air, scene(support="air", enemies=[goomba])]) == [False, False]
     # A picture without Mario changes nothing.
     assert watch([air, scene(mario=None, support="ground"), scene()]) == [False, False, True]
+    # Walking off an edge, the detector flickers on for a frame at the height
+    # he left: no landing; the one after he falls is.
+    edge = scene(support="air")
+    fallen = scene(mario=(98, 200, 110, 216), surfaces=[Surface(8, 248, 216, False)])
+    assert watch([scene(), edge, scene(), edge, fallen]) == [False, False, False, False, True]
 
 
 @pytest.mark.parametrize("platform", [Surface(48, 100, 208, False), Surface(112, 200, 208, False)])
@@ -183,7 +189,7 @@ def test_executor_uses_vision_contact_without_reconstructing_terrain(platform):
     from retroagi.core.smb_agent import LandingWatch
 
     watch = LandingWatch()
-    assert not watch.landed(scene(support="air"))
+    assert not watch.landed(scene(mario=(100, 186, 112, 202), support="air"))
     assert watch.landed(scene(surfaces=[platform], on_something=True))
     assert not watch.landed(scene())
 
@@ -208,7 +214,7 @@ def test_a_landing_ends_the_action_early_and_nothing_else_does():
     torch.manual_seed(0)
     goomba = EnemyView((112, 196, 122, 208), "walker")
     pictures = [scene(), scene(enemies=[goomba]), scene(mario=None), scene(support="air")]
-    pictures += [scene(support="air"), scene()]
+    pictures += [scene(mario=(100, 186, 112, 202), support="air"), scene()]
     agents = SMBAgents(VisionObserver(SceneList(pictures)), LayeredSMBPolicy().eval(), "cpu")
     plan = ActionPlan(SMBAction.RIGHT, 20)
 

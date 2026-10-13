@@ -23,6 +23,45 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-12 — After a stomp the teacher teaches the next action; no decisions in the air (user decision; built)
+
+A stomp ends when Mario's falling feet meet the enemy; leaving the enemy is a
+new action, and what it is (verb and object) is the teacher's to teach (user,
+correcting the description of it as a bounce). The re-check of every layout
+found three choices after a stomp with no name: the teacher had taught a
+command aimed at the goal, a point in the air, which names no action. It
+also judged a stomp safe by one fixed follow-up (falling straight down)
+rather than by an action it would teach.
+
+- **Only named actions are taught** (`controller_teacher._nameable`): the
+  proposal, the ranked moves and the margin versions must each name an
+  action (`teacher_actions.teacher_action`).
+- **A stomp is safe only if a next action is** (`next_action_safe`, replacing
+  `bounce_lands_clear`): from the moment of contact, a steer the teacher can
+  teach (straight down first, every 4 pixels within 32) wins or lands at
+  least 8 pixels from every live enemy with room to brake.
+- **Names:** an action that reaches the goal before it ends is named by its
+  destination; a point where the floor is cut at an enemy is on the nearest
+  piece of that floor.
+
+Pictures of every skill family (`stages/block_smb/family_atlas.py`, user
+request: each drawn parameter at its lowest, middle and highest value, enemy
+and moving-platform motion blurred, a heat spot at each decision) then
+showed decisions in the air of two kinds, both fixed:
+
+- **The first decision of every `landing_enemy` layout** came while Mario
+  was still dropping onto the floor. The watched frames before an episode
+  now continue until he stands (`env.LANDING_WATCH`, up to 64 more).
+- **Walking off a low step** (`action_descend_back`), vision's contact went
+  off and then flickered on for a frame at the height he left (his box at
+  the step's corner): the agent took it for a landing, ended the run there
+  and decided again in the air. A landing now needs his feet to have moved
+  up or down at least 2 rows while he was in the air
+  (`smb_agent.LandingWatch`, `LANDING_MOVE`); the deployed agent ends
+  actions by the same check. Likewise a run ends on arrival only with him
+  standing (`SpatialFeedback.arrived`): one that takes him off a ledge is
+  ended by his landing.
+
 ## 2026-10-12 — One rule names a run-up; every teacher choice has a name (user decision; built)
 
 The run with run-ups named by what follows

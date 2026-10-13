@@ -52,12 +52,15 @@ def test_stair_gap_is_a_real_gap_after_the_highest_step():
         )
 
 
-def test_landing_enemy_starts_airborne_and_needs_a_new_grounded_decision():
+def test_landing_enemy_drops_mario_in_and_decides_on_the_ground():
     item = sample("landing_enemy")
     env = MarioScenarioEnv()
     try:
+        # He starts above the floor and lands while the watched frames play.
+        assert item.scenario["mario"][1] + 16 < item.scenario["platforms"][0][1]
         env.reset(scenario=item.scenario)
-        assert not env.mario["on_ground"]
+        assert env.mario["on_ground"]
+        assert len(env.watched_screens) > item.scenario["watch_frames"]
         assert env.enemies[0]["direction"] == -1
         for frame, action in enumerate(item.oracle["actions"]):
             was_grounded = env.mario["on_ground"]
