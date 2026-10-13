@@ -392,11 +392,60 @@ def tried_actions(env, state, target=None) -> list:
     return out
 
 
+# Runs recorded per decision for the action predictor (tried_runs): to at
+# most this many surfaces.
+RUN_SURFACES = 4
+
+
+def tried_runs(env, state, target=None) -> list:
+    """The teacher's version (carry_out) of running to each reported surface
+    Mario can run to, those its screening ranks best first (at most
+    RUN_SURFACES), and of backing away from the nearest enemy, as actions
+    with their outcomes: [{"action", "outcome"}]. On the ground only; an
+    action with no safe version is left out. (Its jumps are tried_actions.)"""
+    from .controller_teacher import _screened_runs, teacher_target
+
+    m = env.mario
+    if not m["on_ground"]:
+        return []
+    if target is None:
+        target = teacher_target(env)
+    scene = _scene(env, state)
+    cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
+    actions = []
+    for command in _screened_runs(env, state, target):
+        slot = surface_slot(env, scene, cx + command.x, feet + command.y)
+        if slot is not None and ActionToken("run_to", slot) not in actions:
+            actions.append(ActionToken("run_to", slot))
+            if len(actions) == RUN_SURFACES:
+                break
+    near = [
+        i
+        for i, e in enumerate(env.enemies)
+        if not e["dead"] and abs(e["x"] + e["w"] / 2 - cx) <= BACK_AWAY_RANGE
+    ]
+    if near:
+        slot = enemy_slot(env, scene, min(near, key=lambda i: abs(env.enemies[i]["x"] - m["x"])))
+        if slot is not None:
+            actions.append(ActionToken("back_away", slot))
+    out = []
+    for action in actions:
+        command = carry_out(env, state, action)
+        if command is None:
+            continue
+        result = _trial_of(env, state, command)
+        verb, thing, slot = _classify(env, state, command, result)
+        if slot is not None and ActionToken(verb, slot) == action:
+            out.append({"action": action, "outcome": action_outcome(env, result, thing)})
+    return out
+
+
 def action_rows(env, state, command):
-    """The teacher's choice and every jump it could make here, as records for
-    the action predictor: [ACTIONS_PER_DECISION, len(ACTION_RECORD)] numbers
+    """The teacher's choice, its runs (tried_runs) and every jump it could
+    make here (tried_actions), as records for the action predictor:
+    [ACTIONS_PER_DECISION, len(ACTION_RECORD)] numbers
     (core/action_predictor), the choice first (when its object is reported),
-    padded with verb -1."""
+    the runs before the jumps (far fewer of them), padded with verb -1."""
     from retroagi.core.action_predictor import ACTIONS_PER_DECISION, action_record, empty_records
 
     rows = empty_records()
@@ -405,7 +454,7 @@ def action_rows(env, state, command):
     if chosen is not None:
         rows[0] = action_record(chosen["action"], chosen["outcome"], True)
         count = 1
-    for tried in tried_actions(env, state):
+    for tried in tried_runs(env, state) + tried_actions(env, state):
         if count == ACTIONS_PER_DECISION:
             break
         if chosen is not None and tried["action"] == chosen["action"]:

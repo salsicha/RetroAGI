@@ -152,6 +152,21 @@ def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
         assert surface_slot(env, state.scene, far.left - 8, far.top) is None
 
 
+@pytest.mark.timeout(240)
+def test_the_predictors_records_hold_the_teachers_runs_as_well_as_its_jumps():
+    from retroagi.core.action_predictor import COLUMN
+    from retroagi.core.action_tokens import VERBS
+    from retroagi.stages.block_smb.teacher_actions import action_rows, tried_runs
+
+    with Decision("enemy_stomp") as d:
+        runs = {r["action"]: r["outcome"] for r in tried_runs(d.env, d.state)}
+        assert ActionToken("run_to", ("surfaces", 0)) in runs
+        assert runs[ActionToken("back_away", ("enemies", 0))]["dx"] < 0
+        rows = action_rows(d.env, d.state, SkillToken("hold", 0, 0))
+        verbs = [VERBS[int(v)] for v in rows[:, COLUMN["verb"]] if v >= 0]
+        assert verbs[0] == "hold" and {"run_to", "back_away", "land_on"} <= set(verbs)
+
+
 @pytest.mark.timeout(120)
 def test_a_point_where_the_floor_is_cut_at_an_enemy_is_on_the_nearest_piece():
     with Decision("enemy_stomp") as d:
