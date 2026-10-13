@@ -91,29 +91,26 @@ class FullSMBRun:
 
 
 def play_full_levels(agents, levels: Sequence[str], frames: int) -> list[FullSMBRun]:
-    """Each level played once from its start by one copy of ``agents``
-    (core.smb_agent.SMBAgents with at least len(levels) copies), side by side,
-    until Mario dies, leaves the level or ``frames`` frames pass."""
-    games = [FullSMBGame(level) for level in levels]
-    screens = [game.reset() for game in games]
-    for copy in range(len(games)):
-        agents.reset(copy)
-    furthest = [0] * len(games)
-    ended: dict[int, FullSMBRun] = {}
-    try:
-        for frame in range(frames):
-            playing = [k for k in range(len(games)) if k not in ended]
-            if not playing:
-                break
-            steps = agents.act([screens[k] for k in playing], playing)
-            for k, step in zip(playing, steps):
-                screens[k], outcome = games[k].step(step.button)
-                furthest[k] = max(furthest[k], outcome.level_x)
+    """Each level played once from its start by copy 0 of ``agents``
+    (core.smb_agent.SMBAgents), one after another (the emulator allows one
+    game a process), until Mario dies, leaves the level or ``frames`` frames
+    pass."""
+    runs = []
+    for level in levels:
+        game = FullSMBGame(level)
+        try:
+            screen = game.reset()
+            agents.reset(0)
+            furthest = 0
+            for frame in range(frames):
+                step = agents.act([screen], [0])[0]
+                screen, outcome = game.step(step.button)
+                furthest = max(furthest, outcome.level_x)
                 if outcome.dying or outcome.finished or frame == frames - 1:
-                    ended[k] = FullSMBRun(
-                        levels[k], frame + 1, furthest[k], outcome.dying, outcome.finished
+                    runs.append(
+                        FullSMBRun(level, frame + 1, furthest, outcome.dying, outcome.finished)
                     )
-    finally:
-        for game in games:
+                    break
+        finally:
             game.close()
-    return [ended[k] for k in range(len(games))]
+    return runs

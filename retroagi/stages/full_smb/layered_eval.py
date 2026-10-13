@@ -49,7 +49,7 @@ def evaluate_on_full(
     models = _execution_models(
         predictor or trained.get("predictor"), tracker or trained.get("tracker"), device
     )
-    agents = SMBAgents(observer, policy, device, len(levels), switch=switch, **models)
+    agents = SMBAgents(observer, policy, device, 1, switch=switch, **models)
     runs = play_full_levels(agents, levels, frames)
     return {
         "checkpoint": str(checkpoint),
