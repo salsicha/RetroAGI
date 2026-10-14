@@ -1529,50 +1529,35 @@ def _pit_takeoff(env, state, target, goal, result, memo):
     ):
         return goal, result
     best = _pit_run_up(env, state, target, memo)
+    if best is not None and _clear_of_enemies(best[1].distances):
+        return best
+    # Nothing crosses now keeping ENOUGH_ROOM from every enemy (a walker
+    # pacing the landing up to the pit's edge): wait where Mario stands, with
+    # room to run up, until a running jump across will (user, 2026-10-14),
+    # rather than walk to the edge and jump from rest onto its lip beside
+    # the walker.
+    wait = _pit_wait(env, state, target, memo)
+    if wait is not None:
+        state.notes.pop("planned_jump", None)  # the run-up _pit_run_up planned
+        return wait
     if best is not None:
         return best
-    if goal.mode != "run" or _crosses_from(env, state, target, memo, goal.x):
-        # From where the run ends a jump from rest crosses, when its landing
-        # is clear: the run is taught (and the wait made there).
-        return goal, result
-    # Nothing crosses now and the run would strand Mario where no jump from
-    # rest crosses (a 56-pixel pit, a walker pacing the landing, until the
-    # episode stalled): wait where he stands for a run-up that will.
-    wait = _pit_wait(env, state, target, memo)
-    return wait if wait is not None else (goal, result)
+    return goal, result
 
 
-# Reach a jump from where a run stops is granted beyond one from rest (a run
-# that brakes keeps a little speed; a 51-pixel pit 1 pixel past the longest
-# jump from rest was crossed from there), when judging whether the run would
-# strand Mario (_crosses_from).
-STRAND_TOLERANCE = 4
+def _clear_of_enemies(distances) -> bool:
+    """Whether every enemy stays at least ENOUGH_ROOM pixels away (``distances``:
+    Result.distances, or a screen's)."""
+    return all(d >= ENOUGH_ROOM for key, d in distances.items() if key[0] == "enemy")
 
 
-def _crosses_from(env, state, target, memo, travel) -> bool:
-    """Whether some jump from rest, ``travel`` pixels along the floor from
-    where Mario stands, lands across the pit ahead, given STRAND_TOLERANCE
-    more reach (its free path moved there, by geometry alone: enemies not
-    counted, their timing changes)."""
-    inputs = _pit_inputs(env, target)
-    if inputs is None:
-        return True
-    _, wanted = inputs
-    rects = [p["rect"] for p in env.platforms]
-    shift = travel + STRAND_TOLERANCE * target.direction
-    for option in _jump_table(env, state, target, memo, (target.direction,), described_only=False):
-        if not option.free_path:
-            continue
-        screened = _screen(env, option.free_path, shift, 0, {}, [], rects)
-        if screened is not None and wanted(option, screened[1], screened[2]):
-            return True
-    return False
-
-
-def _pit_inputs(env, target):
+def _pit_inputs(env, target, state=None):
     """For the pit ahead with the target beyond it: (the run-up lengths
     searched, toward it and ending within 48 pixels of its edge, and which
-    landings cross it); or None."""
+    landings cross it); or None. Unless the lesson is played for points, a
+    crossing stomps nothing: Mario lands with room and then clears the walker
+    (user, 2026-10-14; the screen took a jump onto the walker for one clear
+    of it, which no trial certified)."""
     direction = target.direction
     lip = _pit_ahead(env, direction)
     if lip is None or (target.center - lip) * direction <= 0:
@@ -1580,21 +1565,25 @@ def _pit_inputs(env, target):
     m = env.mario
     front = (lip - (m["x"] + m["w"] if direction > 0 else m["x"])) * direction
     travels = [0] + [t for t in range(1, math.floor(front) + 1) if front - t <= 48]
-    return travels, _crossing_wanted(env, target, lip, direction)
+    crosses = _crossing_wanted(env, target, lip, direction)
+    if getattr(state, "strategy", "speed_run") == "max_points":
+        return travels, crosses
+    return travels, lambda option, landing, killed: not killed and crosses(option, landing, killed)
 
 
 def _pit_run_up(env, state, target, memo):
     """The takeoff over the pit ahead (_pit_takeoff's search): jumping now, or
     after a run-up toward it ending within 48 pixels of its edge, certified;
     (command, its result) or None (no pit ahead, or nothing certifies)."""
-    inputs = _pit_inputs(env, target)
+    inputs = _pit_inputs(env, target, state)
     if inputs is None:
         return None
     travels, wanted = inputs
 
     def check(r):
         index = r.outcome[1] if r.outcome else None
-        return r.won or (index is not None and wanted(None, index, set()))
+        killed = r.outcome[2] if r.outcome else ()
+        return r.won or (index is not None and wanted(None, index, killed))
 
     return _best_certified(env, state, target, memo, target.direction, travels, wanted, check)
 
@@ -1609,29 +1598,34 @@ MAX_PLANNED_WAITS = 4
 
 
 def _pit_wait(env, state, target, memo):
-    """When no takeoff over the pit ahead certifies now: the shortest wait in
-    place after which a run-up and jump across is screened to keep the most
-    room, as (hold, its trial); or None. The wait is remembered
-    (notes["planned_wait"]): the holds until it ends are taught without
-    searching again (_planned_wait; searched every frame, a wait took minutes
-    of teacher time), and the takeoff is then certified as usual."""
-    inputs = _pit_inputs(env, target)
+    """When no takeoff over the pit ahead certifies now keeping ENOUGH_ROOM
+    from every enemy: the shortest wait in place after which a run-up and
+    jump across is screened to keep it, as (hold, its trial); or None. The
+    wait is remembered (notes["planned_wait"]): the holds until it ends are
+    taught without searching again (_planned_wait; searched every frame, a
+    wait took minutes of teacher time), and the takeoff is then certified as
+    usual."""
+    inputs = _pit_inputs(env, target, state)
     notes = getattr(state, "notes", None)
     if inputs is None or notes is None or notes.get("waits_planned", 0) >= MAX_PLANNED_WAITS:
         return None
     travels, wanted = inputs
-    waits = tuple(range(WAIT_STEP, MAX_WAIT + 1, WAIT_STEP))
-    later = [
-        f
-        for f in _takeoff_search(
-            env, state, target, memo, target.direction, travels, wanted, run_waits=waits
-        )
-        if f[1] and f[2]
-    ]
-    if not later:
+    if not any(
+        not e["dead"] and (e.get("speed", 0) or e.get("kind") in ("piranha_plant", "monster"))
+        for e in env.enemies
+    ):
+        # Nothing moves: waiting changes nothing (a standing walker 14 pixels
+        # from the certified landing, against 16, was waited for until
+        # MAX_PLANNED_WAITS ran out).
         return None
-    best = max(f[0] for f in later)
-    wait = min(f[2] for f in later if f[0] == best)
+    waits = tuple(range(WAIT_STEP, MAX_WAIT + 1, WAIT_STEP))
+    found = _takeoff_search(
+        env, state, target, memo, target.direction, travels, wanted, run_waits=waits
+    )
+    clear = [f[2] for f in found if f[1] and f[2] and _clear_of_enemies(f[4])]
+    if not clear:
+        return None
+    wait = min(clear)
     hold = SkillToken("hold", 0, 0)
     result = trial(env, state, hold, target)
     if not result.safe:

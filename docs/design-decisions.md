@@ -126,11 +126,20 @@ From the user's review of the pictures after that:
   proposal was taught whenever it progressed: `skill_lower_descent` walked
   16 pixels to a waypoint, then ran down to the goal. A proposal that only
   progresses is now taught when no move from here wins.
-- **The wait before a run-up applies only where a run would strand Mario**:
-  where no jump from rest crosses from where the run ends, given 4 pixels
-  more reach than from rest (`STRAND_TOLERANCE`; a run that brakes keeps a
-  little speed, and a 51-pixel pit 1 pixel past the longest jump from rest
-  was crossed from there). At most 4 waits are planned an episode
+- **Wait for space, then a running jump over the pit** (user, reviewing a
+  `single_gap` layout whose walker paced the far floor up to the pit's edge;
+  the teacher walked to the edge and jumped from rest onto the lip, 5 pixels
+  from the walker, with no name for the landing). A takeoff over a pit is
+  taught at once only if it keeps `ENOUGH_ROOM` (16 pixels) from every
+  enemy; otherwise, while an enemy moves, Mario waits where he stands, with
+  room to run up, for the shortest wait after which a running jump across
+  is screened to keep it (`_pit_wait`), then runs up keeping his speed and
+  jumps; the walker is cleared by the same jump when it is near, or by a
+  jump of its own after landing in front of it. Unless the lesson is played
+  for points, a crossing stomps nothing (the screen had taken jumps onto the
+  walker for clear ones). Over 32 `single_gap` and `enemy_gap` layouts of a
+  round: 26 jump the gap and then the walker, 5 clear both at once, 3 wait
+  first; all won. At most 4 waits are planned an episode
   (`MAX_PLANNED_WAITS`): the screen can keep promising a run-up the
   certified search refuses.
 - **The pictures' decision lists** give a hold decided again and again as
