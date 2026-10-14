@@ -95,6 +95,26 @@ episode where the teacher has no command now ends there
 (`no_teacher_command`): it held and asked again every frame until the stall
 limit, an hour and a half for one layout, which failed the check anyway.
 
+The re-check's training rounds then lost two layouts in four rounds:
+
+- **Stranded at a wide pit** (`single_gap`, a 56-pixel pit with a walker
+  pacing the far floor). With no takeoff working at the start, the teacher
+  walked Mario to the edge, from where no jump crosses, and held there until
+  the episode stalled. When nothing crosses now, the teacher now waits where
+  Mario stands for the shortest wait after which a run-up and jump across is
+  screened to keep the most room (`_pit_wait`); the holds until it ends are
+  taught without searching again (`_planned_wait`), and the run-up is then
+  certified as usual. Mario waits 48 frames, runs up keeping his speed and
+  jumps the pit and the walker.
+- **A stomp only one jump height makes** (`action_stomp_up_back`, a walker
+  standing on a small raised platform, which vision places 4 rows lower than
+  the truth). Played in a batch of eight episodes, the teacher's jump missed
+  and it walked under the platform. A one-jump lesson only one jump height
+  wins is now redrawn (`one_height`; 2 of 176 one-jump lessons a round).
+- **No holding when nothing moves.** After that walk the teacher held, with
+  only a standing walker in the scene, until the stall limit. Holding is now
+  taught only while something moves.
+
 Everything the skill learned from needs teaching again: the actions, their
 names and where they end changed in most families.
 

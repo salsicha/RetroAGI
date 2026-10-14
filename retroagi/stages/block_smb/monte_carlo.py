@@ -1344,7 +1344,49 @@ def _one_action_fault(family, scenario) -> Optional[str]:
         return "teacher_loses"
     if len(played["commands"]) != 1:
         return "two_actions"
+    if len(_winning_holds(family, scenario)) < 2:
+        return "one_height"
     return None
+
+
+def _winning_holds(family, scenario) -> list:
+    """The jump heights (holds of the jump button) from where a one-jump lesson
+    starts that win it, by label-only trials. A lesson only one wins is too
+    narrow to teach: a stomp up onto a walker standing on a small raised
+    platform, which vision placed 4 rows lower than the truth, was lost in
+    the re-check while the label-only check won it (2 of 176 one-jump
+    lessons a round)."""
+    from retroagi.core.smb_executor import SMBExecutor
+    from retroagi.core.smb_scene_labels import scene_from_labels
+    from retroagi.core.smb_spatial_feedback import SpatialFeedback
+
+    from . import controller_teacher as ct
+    from .env import MarioScenarioEnv
+    from .teacher_tokens import episode_teacher
+
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=copy.deepcopy(dict(scenario)))
+        env.render = lambda: None
+        state = episode_teacher(scenario)
+        state.family = family
+        spatial = SpatialFeedback()
+        # The watched pictures first, as the agent sees them (teacher_replay).
+        for labels in env.watched_labels:
+            scene = scene_from_labels(labels)
+            spatial.observe(scene)
+            spatial.executed(0, scene)
+        state.observe_frame(env)
+        scene = scene_from_labels(env.scene_labels())
+        spatial.observe(scene)
+        state.execution, state.controller, state.scene = spatial, SMBExecutor(), scene
+        direction = scenario["action_jump_direction"]
+        options = ct._jump_table(
+            env, state, ct.teacher_target(env), {}, (direction,), described_only=False
+        )
+        return sorted(o.hold for o in options if o.result.won)
+    finally:
+        env.close()
 
 
 class _SecondCommand(Exception):

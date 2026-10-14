@@ -93,3 +93,44 @@ def test_every_skill_layout_with_an_enemy_is_watched_first():
     for family in ("enemy_hop", "landing_enemy", "stomp_mount", "enemy_patrol"):
         assert layout(family, 0, "medium")["watch_frames"] == WATCH_FRAMES, family
     assert not layout("flat_run", 0, "medium").get("watch_frames")
+
+
+# ── Lost in the 2026-10-14 re-check ──────────────────────────────────────────
+
+
+def practice_layout(family, index, difficulty, rejected=None):
+    return sample_block_smb_monte_carlo_scenario(
+        split="train",
+        seed=2026101201,
+        sample_index=index,
+        family=family,
+        difficulty=difficulty,
+        rejection_counter=rejected,
+    ).scenario
+
+
+@pytest.mark.timeout(900)
+def test_the_teacher_waits_for_a_run_up_rather_than_strand_mario_at_a_wide_pit():
+    # A 56-pixel pit no jump from rest crosses, a walker pacing the landing:
+    # walking to the edge stranded Mario there until the episode stalled. He
+    # waits where he starts, then runs up keeping his speed into the jump.
+    result = replay(practice_layout("single_gap", 19, "hard"), family="single_gap")
+    assert result["won"]
+    skills = [c["skill"] for c in result["commands"]]
+    assert skills[0]["mode"] == "hold"
+    move = next(s for s in skills if s["mode"] != "hold")
+    assert move["mode"] == "run" and move["carry"]
+
+
+@pytest.mark.timeout(600)
+def test_a_one_jump_lesson_only_one_jump_height_wins_is_redrawn():
+    from collections import Counter
+
+    from retroagi.stages.block_smb.monte_carlo import _winning_holds
+
+    # A walker standing on a small raised platform: only one height of jump
+    # stomped it, and the lesson was lost when vision placed it 4 rows lower.
+    rejected = Counter()
+    scenario = practice_layout("action_stomp_up_back", 3014, "medium", rejected)
+    assert rejected["one_height"] >= 1
+    assert len(_winning_holds("action_stomp_up_back", scenario)) >= 2
