@@ -223,8 +223,14 @@ def track(env) -> bool:
         platform = env._tactic_anchor_platform
         if platform is not None:
             anchor += env.platforms[platform]["rect"].x - env._tactic_anchor_platform_x
+        # Leaving the area: moving more than ``area`` from its anchor, or
+        # standing on another platform (a jump in place is in the air above
+        # it, not off it).
         if abs(env.mario["x"] - anchor) > area or (
-            seg["stance"] == "hold_area" and platform is not None and on != platform
+            seg["stance"] == "hold_area"
+            and platform is not None
+            and on is not None
+            and on != platform
         ):
             env._off_route = True
     while env._tactic_index < len(env._tactics) - 1 and _over(env, current(env)):

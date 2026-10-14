@@ -117,6 +117,9 @@ class LayeredTrainConfig:
     validation_layouts_per_difficulty: int = 3
     # Training layouts' difficulty: easy, medium and hard in these proportions.
     difficulty_weights: tuple[float, float, float] = (2.0, 2.0, 1.0)
+    # ... and a family's extra layouts' (extra_layouts, focus_layouts): the
+    # same by default; more hard ones where the skill fails on hard layouts.
+    extra_difficulty_weights: tuple[float, float, float] = (2.0, 2.0, 1.0)
     teacher_share_start: float = 1.0  # chance a decision plays the teacher's choice, first round
     teacher_share_end: float = 0.0  # ... and last round
     epochs_per_round: int = 8
@@ -510,8 +513,9 @@ class _Lane:
             return
 
     def _name_run_ups(self, d, asked, decision) -> None:
-        """A run of the teacher's that its next command follows with a jump in
-        the same direction is named after that jump: approaching what the
+        """A run-up of the teacher's (a run that keeps its speed) that its next
+        command follows with a jump in the same direction is named after that
+        jump: approaching what the
         jump is aimed at, in the run's own scene (teacher_actions.approach_slot,
         the rule the teacher's remembered plans and its executor use too), or
         a plain run to where it ends when the jump lands back on the surface
@@ -552,6 +556,7 @@ class _Lane:
             action is not None
             and action.verb in ("run_to", "approach")
             and command is not None
+            and command.carry  # a run-up: one that stops is a plain run
             and command.x != 0
             and decision.skill == command
             and env.mario["on_ground"]
@@ -1777,7 +1782,8 @@ def _tasks(
     extra: Optional[dict] = None,
 ):
     """Training tasks: ``layouts`` per family (plus ``extra``), each layout's
-    difficulty drawn by config.difficulty_weights. Held-out tasks: ``layouts``
+    difficulty drawn by config.difficulty_weights (its extra layouts:
+    extra_difficulty_weights). Held-out tasks: ``layouts``
     per family at each difficulty.
 
     Each family draws its difficulties from its own random sequence, so a
@@ -1788,9 +1794,13 @@ def _tasks(
     tasks = []
     for family in learner_families(config.learner, config.families):
         if split == "train":
-            count = layouts + (extra or {}).get(family, 0)
             rng = random.Random(f"{config.seed}|{split}|{round_index}|{family}")
-            difficulties = rng.choices(DIFFICULTIES, weights=config.difficulty_weights, k=count)
+            difficulties = rng.choices(DIFFICULTIES, weights=config.difficulty_weights, k=layouts)
+            difficulties += rng.choices(
+                DIFFICULTIES,
+                weights=config.extra_difficulty_weights,
+                k=(extra or {}).get(family, 0),
+            )
         else:
             difficulties = [d for d in DIFFICULTIES for _ in range(layouts)]
         for i, difficulty in enumerate(difficulties):

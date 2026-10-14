@@ -28,7 +28,8 @@ def destination_of(action: ActionToken, outcome: dict) -> SkillToken:
         return SkillToken("hold", 0, 0)
     x = max(SKILL_X[0], min(SKILL_X[-1], round(outcome["dx"])))
     y = max(SKILL_Y[0], min(SKILL_Y[-1], round(outcome["dy"])))
-    return SkillToken(action.mode, x, y)
+    # An approach is a run-up: it keeps its speed into the jump after it.
+    return SkillToken(action.mode, x, y, carry=action.verb == "approach")
 
 
 @dataclass

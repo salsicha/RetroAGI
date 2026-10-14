@@ -109,11 +109,12 @@ def action_jump_gap(rng, difficulty: str, world=None, edges=(96, 136)):
         "mario": [edge - MARIO_WIDTH - distance, STANDING],
         "platforms": [[0, FLOOR, edge, 20], [far, FLOOR, world - far, 20]],
         "goal_requires_support": True,
+        # One jump, from where Mario stands (no run-up first).
+        "action_jump_direction": 1,
     }
     # A second pit or an enemy bounds the landing; the goal is the floor
-    # between the two threats. The teacher may first walk to the best
-    # takeoff, and then the jump keeping the most room from both pits and
-    # what follows covers the pit and the room: the room's width is drawn
+    # between the two threats. The jump keeping the most room from both pits
+    # and what follows covers the pit and the room: the room's width is drawn
     # so that this jump is spread over every jump that clears the pit.
     room = best_jump_room(rng, 16, 80, standing_reach(0) - width)
     kind, room, detail = follow_up(rng, scenario, 1, far, 1, window=(room, room))
@@ -146,6 +147,8 @@ def action_climb(rng, difficulty: str):
         # a second move (advance) in a one-tactic lesson.
         "goal": [step, FLOOR - height - 20, width, 20],
         "goal_requires_support": True,
+        # One jump, from where Mario stands (no run-up or step back first).
+        "action_jump_direction": 1,
     }
     parameters = {
         "step_height": height,
@@ -169,6 +172,8 @@ def action_climb_back(rng, difficulty: str):
         "platforms": [[0, FLOOR, world, 20], [step, FLOOR - height, width, height]],
         "goal": [step, FLOOR - height - 20, width, 20],  # anywhere on the step
         "goal_requires_support": True,
+        # One jump, from where Mario stands (no step away or toward it first).
+        "action_jump_direction": -1,
     }
     parameters = {
         "step_height": height,

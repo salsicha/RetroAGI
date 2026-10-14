@@ -266,11 +266,38 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
     elif family in CHOICE_FAMILIES:
         scenario, params = _choice_layout(rng, difficulty)
         if family == "choice_hold_area":
+            from .threat_variety import ENEMY_HEIGHT, fit_patrols
+
             params.pop("schedules")
             spawn = scenario["mario"][0]
-            scenario["tactics"] = [segment("hold_area", 1, area=1, frames=params["hold_frames"])]
-            scenario["goal"] = [spawn - 2, FLOOR - 20, 14, 20]
+            # Holding an area while walkers come through it: Mario stays
+            # within ``area`` pixels of where he starts, jumping over each
+            # walker as it reaches him (user, 2026-10-13), for long enough
+            # that every walker comes through.
+            tier = ("easy", "medium", "hard").index(difficulty)
+            # Wide enough that a hop over a walker lands inside it (one
+            # carries Mario 30 to 45 pixels; at their speeds a walker cannot
+            # pass under a jump straight up).
+            area = rng.randint(48, 64)
+            hold = rng.randint(120, 200)
+            speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0.0, 0.15), 3)
+            walkers = 1 if tier == 0 else rng.randint(1, 2)
+            enemies = [[spawn + rng.randint(48, 80), FLOOR - ENEMY_HEIGHT, 0, 0, speed, -1]]
+            if walkers == 2:
+                enemies.append(
+                    [max(8, spawn - rng.randint(48, 64)), FLOOR - ENEMY_HEIGHT, 0, 0, speed, 1]
+                )
+            # Only the floors: a raised path overhead would cut short the
+            # jumps over the walkers (and box Mario in under it).
+            scenario["platforms"] = scenario["platforms"][:2]
+            scenario["enemies"] = enemies
+            fit_patrols(scenario)  # each walks its whole floor, through the area
+            scenario["tactics"] = [segment("hold_area", 1, area=area, frames=hold)]
+            # The goal is the whole area: holding it until the end, wherever
+            # in it Mario stands then, completes the lesson.
+            scenario["goal"] = [spawn - area, FLOOR - 20, 2 * area + 10, 20]
             scenario["coins"] = []
+            params.update(area=area, hold_frames=hold, walker_speed=speed, walkers=walkers)
         elif family == "choice_advance":
             far = scenario["platforms"][1][0]
             scenario["goal"] = [far, FLOOR - 20, 24, 20]

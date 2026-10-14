@@ -182,6 +182,27 @@ def test_a_landing_is_the_land_detector_turning_on_after_mario_was_in_the_air():
     edge = scene(support="air")
     fallen = scene(mario=(98, 200, 110, 216), surfaces=[Surface(8, 248, 216, False)])
     assert watch([scene(), edge, scene(), edge, fallen]) == [False, False, False, False, True]
+    # Rising past the top corner of a pipe as tall as his jump, the detector
+    # turns on a row below his feet: no landing; coming down on it is one.
+    pipe = [Surface(136, 176, 159, False)]
+    rising = [scene(mario=(126, 147 - k, 136, 159 - k), support="air", surfaces=pipe) for k in (-2, 0)]
+    corner = scene(mario=(127, 146, 137, 158), surfaces=pipe)
+    down = scene(mario=(130, 147, 140, 159), surfaces=pipe)
+    assert watch([*rising, corner, down]) == [False, False, False, True]
+    # A stomp is contact with the enemy drawn flattened on its frame (alive
+    # the frame before); falling back past it after the bounce is none, and
+    # the floor under it is the next landing.
+    walker = EnemyView((130, 204, 146, 220), "walker")
+    flat = EnemyView((130, 216, 146, 220), "defeated")
+    falling = scene(mario=(130, 190, 142, 206), support="air", enemies=[walker])
+    stomped = scene(mario=(130, 194, 142, 210), support="air", on_something=True, enemies=[flat])
+    bounce = scene(mario=(130, 186, 142, 202), support="air", enemies=[flat])
+    back = scene(mario=(130, 197, 142, 213), support="air", on_something=True, enemies=[flat])
+    floor = scene(mario=(130, 204, 142, 220), enemies=[flat], surfaces=[Surface(8, 248, 220, False)])
+    assert watch([falling, stomped, bounce, back, floor]) == [False, True, False, False, True]
+    # A lift rising under him lands him while his feet rise.
+    lift = scene(mario=(100, 190, 112, 206), support="moving_platform")
+    assert watch([air, scene(mario=(100, 194, 112, 210), support="air"), lift]) == [False, False, True]
 
 
 @pytest.mark.parametrize("platform", [Surface(48, 100, 208, False), Surface(112, 200, 208, False)])

@@ -67,17 +67,25 @@ class SkillToken:
     Hold anchors the current spot on the supporting platform; x/y are ignored.
     Run/jump coordinates describe the destination, not a button duration.
     Jump starts takeoff now; preparation requires a separate run command.
+
+    ``carry`` (runs only): a run-up, which keeps its speed. It runs toward
+    the destination without braking and ends there still running, so the
+    jump that follows takes off with the run's momentum. Any other run brakes
+    to stop at its destination.
     """
 
     mode: str
     x: int
     y: int
+    carry: bool = False
 
     def __post_init__(self):
         if self.mode not in SKILL_MODES:
             raise ValueError(f"unknown skill mode {self.mode!r}")
         if self.x not in SKILL_X or self.y not in SKILL_Y:
             raise ValueError("skill destination must be integer pixels within the local screen")
+        if self.carry and self.mode != "run":
+            raise ValueError("only a run keeps its speed at its destination")
 
 
 def encode_skill(token: SkillToken) -> torch.Tensor:

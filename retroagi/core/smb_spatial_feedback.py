@@ -279,7 +279,12 @@ class SpatialFeedback:
                 self.status = "lost_observation"
                 return ActionPlan(HOLD_GROUND, 1)
             self.travel = GroundMove(
-                self, destination.x, self.displacement, scene.mario.box[3], destination.y
+                self,
+                destination.x,
+                self.displacement,
+                scene.mario.box[3],
+                destination.y,
+                carry=destination.carry,
             )
             return ActionPlan(0, 1)
         if destination is not None and destination.mode == "jump" and scene.mario.box is None:

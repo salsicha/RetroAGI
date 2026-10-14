@@ -51,6 +51,10 @@ def test_lower_route_and_local_maneuvers_have_reachable_goals(family, difficulty
 
 def test_hold_skill_finishes_at_timer_without_a_departure_or_gap_crossing():
     scenario = sample("choice_hold_area")
+    # Walkers come through the area (the teacher jumps over each one);
+    # without them, standing still holds it until the timer ends the lesson.
+    assert 1 <= len(scenario["enemies"]) <= 2
+    scenario = {**scenario, "enemies": []}
     env = MarioScenarioEnv()
     try:
         env.reset(scenario=scenario)

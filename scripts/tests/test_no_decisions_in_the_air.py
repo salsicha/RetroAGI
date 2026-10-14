@@ -12,11 +12,20 @@ from test_teacher_actions import Decision
 
 @pytest.mark.timeout(120)
 def test_the_watched_frames_last_until_mario_has_landed():
-    # landing_enemy starts Mario above the floor; he lands after its 12
-    # watched frames.
+    from retroagi.stages.block_smb.env import MarioScenarioEnv
+
+    # No family starts Mario in the air now; one placed 24 pixels up still
+    # lands before the first decision, after the 12 watched frames.
     with Decision("landing_enemy") as d:
-        assert d.env.mario["on_ground"]
-        assert len(d.env.watched_screens) > d.scenario["watch_frames"]
+        scenario = dict(d.scenario)
+    x, y = scenario["mario"]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario={**scenario, "mario": [x, y - 24]})
+        assert env.mario["on_ground"]
+        assert len(env.watched_screens) > scenario["watch_frames"]
+    finally:
+        env.close()
 
 
 @pytest.mark.timeout(120)
@@ -36,7 +45,7 @@ def test_a_run_onto_a_lower_floor_ends_when_mario_lands_there():
 @pytest.mark.parametrize(
     "family, difficulty, q",
     [
-        # Mario starts above the floor (decided in the air at frame 12).
+        # Mario started above the floor (decided in the air at frame 12).
         ("landing_enemy", "medium", 0.5),
         # Walking off a low step, vision's contact flickered on at the edge
         # (an action ended there, and the next decision was in the air).

@@ -31,8 +31,39 @@ class GroundMove:
     started_moving: bool | None = None
     target: object = None
     target_offset: float = 0
+    # A run-up (SkillToken.carry): runs toward the destination without
+    # braking and ends on reaching it, still running (_carry_press).
+    carry: bool = False
 
     def press(self, scene):
+        if self.carry:
+            return self._carry_press(scene)
+        return self._stop_press(scene)
+
+    def _carry_press(self, scene):
+        """Press toward the destination every frame; done once Mario's middle
+        reaches it (pressing on that frame too, so the jump decided next
+        takes off with all the speed gained)."""
+        self.elapsed += 1
+        if scene is None or scene.mario.box is None:
+            self.done, self.status = True, "lost_observation"
+            return 0
+        direction = 1 if self.distance > 0 else -1
+        remaining = self.distance - (self.feedback.displacement - self.start)
+        button = 1 if direction > 0 else 3
+        grounded = scene.mario.on_something and scene.mario.support != "air"
+        if remaining * direction <= 0 or not grounded or self.elapsed >= 192:
+            self.done = True
+            self.status = (
+                "arrived_running"
+                if remaining * direction <= 0
+                else "left_the_ground" if not grounded else "travel_timeout"
+            )
+        else:
+            self.status = "running"
+        return button
+
+    def _stop_press(self, scene):
         self.elapsed += 1
         if scene is None or scene.mario.box is None:
             self.done, self.status = True, "lost_observation"

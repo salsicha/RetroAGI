@@ -114,6 +114,15 @@ def skill_family_scenario(family, rng, difficulty):
                 ]
             )
             scenario["mario"] = [sx + rng.randint(3, max(3, min(free - 16, 24))), sy - 16]
+            # Not under a ledge low enough to cut his jump short: stepping out
+            # from under it first would be a second action (the lesson is
+            # one jump). Moved along the free floor, if it can be.
+            x = scenario["mario"][0]
+            for px, py, pw, ph in scenario["platforms"]:
+                if 0 < (sy - 12) - (py + ph) < 48 and px < x + 10 and px + pw > x:
+                    x = max(x, px + pw + 1)
+            if x + 10 <= sx + free:
+                scenario["mario"][0] = x
         else:
             # On the starting ledge, from right at its edge to 80 pixels back.
             scenario["mario"][0] = max(16, sx + sw - 10 - start_distance(rng, 80))

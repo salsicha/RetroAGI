@@ -40,7 +40,7 @@ from .layered_policy import (
 )
 from .smb_executor import ActionPlan, SMBExecutor
 from .smb_observer import SEQ_LEN_A, SEQ_LEN_B, VisionObserver, column_codes, pack_c
-from .smb_scene_labels import SceneObservation
+from .smb_scene_labels import STOMP_ROWS, SceneObservation
 from .smb_spatial_feedback import SpatialFeedback
 from .tokens import (
     DEFAULT_STRATEGY,
@@ -255,18 +255,40 @@ class LandingWatch:
     contact can flicker on for a frame at the height he left (his box still
     touching the edge's corner): that is no landing, and he is still in the
     air (it had ended an action there, and the next decision was made in the
-    air)."""
+    air). Nor is contact while his feet still rise, except on a moving
+    platform (which may rise under him): rising past the top corner of a
+    pipe as tall as his jump, his box touched it 1 row below his feet, and
+    the jump was ended on the way up. Nor is coming down past an enemy
+    stomped before: it stays drawn flattened, and its top within STOMP_ROWS
+    of his feet is contact, as on the frame he stomps it (when it was still
+    alive the frame before); falling back past it after the bounce ended the
+    next action in the air."""
 
     airborne: bool = False
     # The lowest and highest feet row seen since he left the ground (None:
     # not seen, as when the watch starts in the air).
     feet: Optional[tuple] = None
+    # The feet row on the frame before (None: not seen yet).
+    last: Optional[int] = None
+    # The defeated enemies' boxes on the frame before.
+    defeated: tuple = ()
 
     def landed(self, scene: SceneObservation) -> bool:
         if scene.mario.box is None:
             return False
         bottom = scene.mario.box[3]
-        if not scene.mario.on_something:
+        rising = self.last is not None and bottom < self.last
+        self.last = bottom
+        before, self.defeated = self.defeated, tuple(
+            e.box for e in scene.enemies if e.kind == "defeated"
+        )
+        if not scene.mario.on_something or (
+            self.airborne
+            and (
+                (rising and scene.mario.support != "moving_platform")
+                or _only_old_defeated(scene, before)
+            )
+        ):
             if not self.airborne:
                 self.airborne, self.feet = True, (bottom, bottom)
             elif self.feet is not None:
@@ -281,6 +303,29 @@ class LandingWatch:
         landed = self.airborne
         self.airborne, self.feet = False, None
         return landed
+
+
+# A defeated enemy's box this many pixels from where one was on the frame
+# before, sideways (the camera scrolls), is the same one.
+DEFEATED_MATCH = 4
+
+
+def _only_old_defeated(scene: SceneObservation, before: tuple) -> bool:
+    """Whether vision's contact is only a stomp contact (no surface at his
+    feet) with enemies that were already defeated on the frame before."""
+    box = scene.mario.box
+    if scene.mario.support != "air":
+        return False
+    touched = [
+        e
+        for e in scene.enemies
+        if e.box[0] < box[2] and e.box[2] > box[0] and abs(e.box[1] - box[3]) <= STOMP_ROWS
+    ]
+    return bool(touched) and all(
+        e.kind == "defeated"
+        and any(abs(b[0] - e.box[0]) <= DEFEATED_MATCH and b[1] == e.box[1] for b in before)
+        for e in touched
+    )
 
 
 @dataclass

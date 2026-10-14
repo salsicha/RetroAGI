@@ -12,8 +12,15 @@ value), at each difficulty; one picture a layout. Each picture shows:
   (vision, executor; teacher_share 1, labelled);
 - a heat spot where Mario's feet are at each decision of the skill: orange on
   the ground, teal on an enemy he has just stomped, magenta anywhere else in
-  the air, with a black cross where the teacher's choice names no action;
-- each decision's number and the action taught there.
+  the air, with a black cross where the teacher's choice names no action and
+  an arrow where it is a run-up that keeps its speed into the jump after it;
+- each decision's number and the action taught there (the same action
+  decided again where Mario stands still, as holds are, numbered once).
+
+A lesson won by stomping its enemy shows no goal box.
+
+atlas.json also lists, per layout, the moves the teacher passed over for
+failing when started a little later (controller_teacher._tolerant).
 
 Training-only diagnostic: nothing learns from it.
 
@@ -171,6 +178,24 @@ def occupancy(scenario: dict, frames: int):
     }
 
 
+def on_enemy(env) -> bool:
+    """Whether Mario has just stomped an enemy: the simulator resolved it this
+    frame, or his feet are on an enemy's top (vision sees the landing a frame
+    or two before the simulator kills it, and the action ends there)."""
+    if env.stomped:
+        return True
+    m = env.mario
+    feet = m["y"] + m["h"]
+    return any(
+        not e["dead"]
+        and e["h"] > 0
+        and -2 <= feet - e["y"] <= 6
+        and m["x"] < e["x"] + e["w"]
+        and e["x"] < m["x"] + m["w"]
+        for e in env.enemies
+    )
+
+
 def play_teacher(scenario: dict, family: str, difficulty: str):
     """The teacher's episode on ``scenario`` through the training pipeline:
     Mario's path (world middle x, feet y per frame), and at each decision of
@@ -182,8 +207,25 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
     from . import layered_train as lt
     from .teacher_replay import reference_vision
 
-    path, decisions = [], []
+    from . import controller_teacher as ct
+
+    path, decisions, fragile = [], [], []
     original_potential, original_note = lt._potential, lt._Lane.note_decision
+    original_tolerant, original_init = ct._tolerant, lt._Lane.__init__
+
+    def init(self, task, copy):
+        # Where Mario stands when the episode starts, before its first frame
+        # (after any watched frames).
+        original_init(self, task, copy)
+        m = self.env.mario
+        path.append((m["x"] + m["w"] / 2, m["y"] + m["h"]))
+
+    def tolerant(env, state, target, command):
+        # Count the moves the teacher passes over for failing a later start.
+        ok = original_tolerant(env, state, target, command)
+        if not ok:
+            fragile.append(str(command))
+        return ok
 
     def potential(env):
         # Called once after every frame the episode plays (the teacher's
@@ -199,13 +241,14 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
                 "frame": len(self.frames["button"]),
                 "x": m["x"] + m["w"] / 2,
                 "feet": m["y"] + m["h"],
-                "place": "ground" if m["on_ground"] else "enemy" if env.stomped else "air",
+                "place": "ground" if m["on_ground"] else "enemy" if on_enemy(env) else "air",
                 "command": str(self.asked.get("skill")),
             }
         )
         return original_note(self, learner, decision)
 
-    lt._potential, lt._Lane.note_decision = potential, note
+    lt._potential, lt._Lane.note_decision, ct._tolerant = potential, note, tolerant
+    lt._Lane.__init__ = init
     try:
         task = lt.EpisodeTask(
             index=0,
@@ -228,6 +271,7 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
         )[0]
     finally:
         lt._potential, lt._Lane.note_decision = original_potential, original_note
+        ct._tolerant, lt._Lane.__init__ = original_tolerant, original_init
     labels = record.labels
     for i, d in enumerate(decisions[: len(labels["valid"])]):
         named = bool(labels["valid"][i]) and bool(labels.get("action_valid", labels["valid"])[i])
@@ -240,7 +284,13 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
             )
         else:
             d["action"] = "unnamed"
-    return {"path": path, "decisions": decisions, "won": bool(record.won), "end": record.end}
+    return {
+        "path": path,
+        "decisions": decisions,
+        "won": bool(record.won),
+        "end": record.end,
+        "fragile_moves": fragile,
+    }
 
 
 _OBSERVER: dict = {}
@@ -267,6 +317,31 @@ SINGULAR = {
 
 
 PLACES = {"ground": "", "enemy": " (on the stomped enemy)", "air": " (IN THE AIR)"}
+
+
+def grouped(decisions) -> list:
+    """Consecutive decisions taking the same action where Mario stands still
+    (within 4 pixels; a hold decided again and again while a platform
+    carries him, say) as one: [(first decision, how many)]."""
+    groups = []
+    for d in decisions:
+        last = groups[-1][0] if groups else None
+        if (
+            last is not None
+            and d.get("action") == last.get("action")
+            and d["place"] == last["place"]
+            and abs(d["x"] - groups[-1][2]) <= 4
+        ):
+            groups[-1][1] += 1
+            groups[-1][2] = d["x"]
+        else:
+            groups.append([d, 1, d["x"]])
+    return [(d, count) for d, count, _ in groups]
+
+
+def keeps_speed(decision) -> bool:
+    """Whether the decision's command is a run-up that keeps its speed."""
+    return "carry=True" in decision.get("command", "")
 
 
 def draw(world: dict, played: dict, title: str, path: Path) -> None:
@@ -309,8 +384,13 @@ def draw(world: dict, played: dict, title: str, path: Path) -> None:
     small = ImageFont.load_default(size=12)
     head = 26
     lines, line = [], ""
-    for number, d in enumerate(played["decisions"], 1):
-        item = f"{number} {action_words(d.get('action'))}{PLACES[d['place']]}"
+    groups = grouped(played["decisions"])
+    for number, (d, count) in enumerate(groups, 1):
+        item = (
+            f"{number} {action_words(d.get('action'))}"
+            f"{' (keeps its speed)' if keeps_speed(d) else ''}"
+            f"{PLACES[d['place']]}{f' x{count}' if count > 1 else ''}"
+        )
         if line and font.getlength(line + "   " + item) > width * SCALE - 12:
             lines.append(line)
             line = item
@@ -338,11 +418,19 @@ def draw(world: dict, played: dict, title: str, path: Path) -> None:
         pen.line([at(x, y) for x, y in played["path"]], fill=PATH + (170,), width=1)
         x, y = played["path"][0]
         pen.rectangle([*at(x - 5, y - 12), *at(x + 5, y)], outline=PATH, width=1)
-    for number, d in enumerate(played["decisions"], 1):
+    for number, (d, _) in enumerate(groups, 1):
         color = {"ground": ON_GROUND, "enemy": ON_ENEMY, "air": IN_AIR}[d["place"]]
         cx, cy = at(d["x"], d["feet"])
         for radius, alpha in ((14, 50), (9, 90), (5, 210)):
             pen.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=color + (alpha,))
+        if keeps_speed(d):
+            # A run-up keeping its speed: an arrow along it.
+            side = -1 if "x=-" in d.get("command", "") else 1
+            pen.polygon(
+                [(cx + side * 22, cy + 8), (cx + side * 10, cy + 3), (cx + side * 10, cy + 13)],
+                fill=(20, 20, 20),
+            )
+            pen.line([cx + side * 2, cy + 8, cx + side * 12, cy + 8], fill=(20, 20, 20), width=2)
         if d.get("action") in (None, "unnamed"):
             pen.line([cx - 7, cy - 7, cx + 7, cy + 7], fill=(0, 0, 0), width=2)
             pen.line([cx - 7, cy + 7, cx + 7, cy - 7], fill=(0, 0, 0), width=2)
@@ -374,12 +462,17 @@ def _job(job):
         scenario.get("watch_frames", 0) or 0
     )
     world = occupancy(scenario, frames)
+    if scenario.get("goal_on_stomp"):
+        # Won by the stomp itself: the goal box only marks where the enemy
+        # starts, which it walks away from.
+        world["goal"] = None
     played = play_teacher(scenario, family, difficulty)
     name = f"{family}/{difficulty}_q{round(q * 100):03d}.png"
     (out / family).mkdir(parents=True, exist_ok=True)
     title = (
         f"{family} · {difficulty} · draws at {q:.0%} of their ranges · teacher "
         f"{'won' if played['won'] else 'LOST (' + played['end'] + ')'}"
+        f"{' by the stomp' if scenario.get('goal_on_stomp') and played['won'] else ''}"
     )
     draw(world, played, title, out / name)
     return {
@@ -388,6 +481,7 @@ def _job(job):
         "fingerprint": fingerprint,
         "won": played["won"],
         "end": played["end"],
+        "fragile_moves": played["fragile_moves"],
         "decisions": [
             {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items()}
             for d in played["decisions"]

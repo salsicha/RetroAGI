@@ -126,9 +126,14 @@ def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
             action = teacher_action(env, state, option.command, option.result)
             if action is not None and action.verb in ("stomp", "jump_over"):
                 assert jump_aim(env, option.result)[0] == ("enemy", 0)
-        run = SkillToken("run", 8, 0)
+        # A run-up keeps its speed into the jump (carry).
+        run = SkillToken("run", 8, 0, carry=True)
         state.notes["planned_jump"] = (run, SkillToken("jump", 30, 0), m["x"] + 8, [("enemy", 0)])
         assert teacher_action(env, state, run) == ActionToken("approach", ("enemies", 0))
+        # A step that stops before the jump is a plain run.
+        step = SkillToken("run", 8, 0)
+        state.notes["planned_jump"] = (step, SkillToken("jump", 30, 0), m["x"] + 8, [("enemy", 0)])
+        assert teacher_action(env, state, step).verb == "run_to"
         # Before a jump back onto the surface it starts on, a run is a plain run,
         # and approaching that surface has no version.
         landing = [("point", cx - 32, feet)]
@@ -142,7 +147,7 @@ def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
             (p["rect"] for p in env.platforms if p["rect"].left > m["x"] + m["w"]),
             key=lambda r: r.left,
         )
-        run = SkillToken("run", 8, 0)
+        run = SkillToken("run", 8, 0, carry=True)
         landing = [("point", far.left + 20, far.top)]
         state.notes["planned_jump"] = (run, SkillToken("jump", 40, 0), m["x"] + 8, landing)
         assert teacher_action(env, state, run) == ActionToken("approach", ("surfaces", 1))

@@ -305,7 +305,9 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                         route_available(env)
                         and not boxed_with_enemy(env, clearance)
                         and next_action_safe(env, state, spatial, executor, scene)
-                        and stop_safe(env, spatial, executor)
+                        # A run-up does not stop: the jump it carries into is
+                        # judged with it (_certify), not a brake after it.
+                        and (goal.carry or stop_safe(env, spatial, executor))
                         and landed
                         and (reached or advanced or objective or env.stomped)
                         and (moved > 0 or goal.mode == "hold")
@@ -686,37 +688,82 @@ def _combine(*parts):
     return out
 
 
+# Room from every threat beyond this many pixels is enough: among moves with
+# enough room, the lowest jump is taught (then the shortest run-up), not the
+# highest, which keeps the most room (user, 2026-10-13: a jump should not be
+# higher than it needs to be).
+ENOUGH_ROOM = 16
+# From the edges of the surface Mario lands on, less is enough: a pipe or
+# step top is 20 to 40 pixels wide, and landing nearer its middle is no
+# reason to step back first (Mario is 10 pixels wide).
+ENOUGH_LANDING = 6
+
+
+def _enough(key, d) -> float:
+    """A distance as far as it matters: capped at ENOUGH_ROOM, or
+    ENOUGH_LANDING for the landing surface's edges."""
+    return min(ENOUGH_LANDING if key == ("landing",) else ENOUGH_ROOM, d)
+
+
+def _room_key(distances) -> tuple:
+    """_distance_key with every distance capped where it is enough (_enough):
+    the closest first, in 2-pixel steps."""
+    values = sorted(_enough(k, d) // 2 for k, d in distances.items())
+    return tuple(int(v) for v in values[:12]) + (ENOUGH_ROOM // 2,) * max(0, 12 - len(values))
+
+
+def _rise(path) -> float:
+    """How far a path (world boxes, the start first) rises above its start's
+    feet (pixels); 0 for none."""
+    return path[0][3] - min(b[3] for b in path) if len(path) else 0.0
+
+
+def _carry_run(motion, shift):
+    """A run-up of ``shift`` pixels from ``motion`` that keeps its speed
+    (SkillToken.carry): (its frames, Mario's motion as it ends)."""
+    motion = copy(motion)
+    direction = 1 if shift > 0 else -1
+    moved, frames = 0.0, 0
+    while moved < abs(shift) and frames < 300:
+        dx, _, _ = motion.advance(
+            direction=direction, jump=False, grounded=True, y=0, run=direction > 0
+        )
+        moved += dx * direction
+        frames += 1
+    return frames, motion
+
+
 def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, waits=(), rise=None):
-    """Every travel in ``travels`` (pixels toward ``direction``, negative:
-    back; 0: from here) followed by every jump toward ``direction`` of the
-    table, and every wait of ``waits`` frames in place followed by every jump:
-    screened, the jump paths moved along the floor and the enemies moved by
-    their patrol rule.
+    """Every jump toward ``direction``: from here (the jump table's), after a
+    run-up of each travel in ``travels`` toward ``direction`` (pixels; at
+    least MIN_RUN), and after each wait of ``waits`` frames in place;
+    screened against the pits and the enemies moved by their patrol rule.
+
+    A run-up keeps its speed (SkillToken.carry): the jumps after it are
+    predicted from where it ends, at the speed it ends with (_carry_run,
+    smb_trajectory.hold_paths). Only run-ups toward the jump are searched:
+    running away to come back gains nothing a run-up keeps. A wait ends at
+    rest; none is searched while Mario is moving.
 
     ``wanted(option, landing index, killed)``: the jumps that do what is
-    needed. Returns [(room key, travel, wait, option, screened distances)],
-    the most room first (equal room: the shortest travel, then wait).
-
-    A travel shorter than MIN_RUN is not a run-up: it would be taught as a
-    creep (a run of a pixel or two, then a hop) that gains a few pixels of
-    room; the jump from here, or a real run-up, is taught instead.
+    needed. Returns [(room key, travel, wait, option, screened distances)]:
+    the most room up to ENOUGH_ROOM first, then the lowest jump, then the
+    shortest travel and wait. For a run-up the option is the jump's hold at
+    that speed (certified from where the run-up really ends: _certify).
     """
     table = _jump_table(env, state, target, memo, (direction,), rise=rise, described_only=False)
-    if not table:
-        return []
     m = env.mario
     support = m.get("_platform")
-    if support is None:
+    scene = state.scene or scene_from_labels(env.scene_labels())
+    if support is None or scene.mario.box is None:
         return []
     spatial = state.execution
     known = spatial is not None and getattr(spatial, "motion_ready", False)
-    if abs((spatial.motion if known else env.motion).x_speed) / 16 > MOVING:
-        # The table's jumps start at Mario's speed now, but a run or a wait
-        # ends at rest: moved along the floor, they would reach too far (a
-        # run to the pit's edge was taught where only the running jump from
-        # here could cross it).
-        travels, waits = [t for t in travels if t == 0], ()
+    motion = copy(spatial.motion if known else env.motion)
+    if abs(motion.x_speed) / 16 > MOVING:
+        waits = ()
     start = _body(env)
+    box = scene.mario.box
     rects = [p["rect"] for p in env.platforms]
     # What a moved jump path must not pass through (moving platforms move).
     solid = [p["rect"] for p in env.platforms if not p.get("moving")]
@@ -725,50 +772,105 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
     enemies = _enemy_paths(env, horizon)
     floor = support["rect"]
     found = []
-    options = [(t, 0) for t in travels if not 0 < abs(t) < MIN_RUN] + [(0, w) for w in waits]
-    for travel, wait in options:
+
+    def add(option, path, frames, travel, wait, walked, blocked=()):
+        if not len(path) or (rise is not None and _rise(path) < rise):
+            return
+        screened = _screen(env, path, 0, frames, enemies, lips, rects, blocked)
+        if screened is None:
+            return
+        distances, landing, killed, (dx, _) = screened
+        if option.result is None:
+            # A run-up's jump, not yet tried: its outcome as screened (where
+            # it lands, what it kills, and which side of every other enemy
+            # Mario ends on, that enemy moved on to then), as _measured has it.
+            end = _path_landing(path, rects)
+            t = frames + (end[0] if end else len(path) - 1)
+            middle = (path[0][0] + path[0][2]) / 2 + dx
+            sides = []
+            for i, e in enumerate(env.enemies):
+                if e["dead"] or i in killed:
+                    continue
+                boxes = enemies.get(i)
+                b = boxes[min(t, len(boxes) - 1)] if boxes else (e["x"], 0, e["x"] + e["w"], 0)
+                sides.append(middle < (b[0] + b[2]) / 2)
+            option.result = Result(outcome=(False, landing, frozenset(killed), None, tuple(sides)))
+        if not wanted(option, landing, killed):
+            return
+        total = _combine(walked, distances)
+        found.append((_room_key(total), -_rise(path), -travel, -wait, travel, wait, option, total))
+
+    # From here: each jump's trial path (it may hit things on its way), when
+    # its destination names it.
+    for option in table:
+        if option.described and option.result.path:
+            add(option, option.result.path, 0, 0, 0, {})
+    # After a run-up that keeps its speed.
+    for travel in sorted({t for t in travels if t >= MIN_RUN}):
         shift = travel * direction
         if not (floor.left <= start[0] + shift and start[2] + shift <= floor.right):
             continue
-        frames = (_run_frames(env.motion, shift) if travel else 0) + wait
+        frames, arrival = _carry_run(motion, shift)
         if frames >= horizon:
             continue
-        walked = _screen_walk(_run_path(start, shift, frames), enemies, lips) if frames else {}
+        walked = _screen_walk(_run_path(start, shift, frames), enemies, lips)
+        if walked is None:
+            continue
+        takeoff = (start[0] + shift, start[1], start[2] + shift, start[3])
+        moved_box = (box[0] + shift, box[1], box[2] + shift, box[3])
+        for hold, predicted in enumerate(hold_paths(scene, arrival, moved_box, direction), 1):
+            path = [takeoff, *[tuple(takeoff[k] + b[k] - moved_box[k] for k in range(4)) for b in predicted]]
+            end = _path_landing(path, rects)
+            if end is not None and abs(end[1]) > REACH:
+                # No destination the teacher commands (within REACH) makes a
+                # jump landing this far (_same_jump): a run-up into it could
+                # not be certified, and used up the tries.
+                continue
+            option = JumpOption(None, None, [], hold, direction, path, False)
+            add(option, path, frames, travel, 0, walked, solid)
+    # After a wait in place: the table's jumps, started later.
+    for wait in waits:
+        if wait >= horizon:
+            continue
+        walked = _screen_walk(_run_path(start, 0, wait), enemies, lips)
         if walked is None:
             continue
         for option in table:
-            # From here, the jump's trial (it may hit things on its way), if
-            # its destination names it; moved along the floor, its free path
-            # (the trial's bumps would be in the wrong place). Certification
-            # tries it for real.
-            if not shift and not option.described:
+            if option.described and option.result.path:
+                add(option, option.result.path, wait, 0, wait, walked)
+    found.sort(key=lambda f: f[:4], reverse=True)
+    _middle_of_equal_runs(found)
+    # Last, a step that stops (a plain run, toward the jump or away from it),
+    # then a jump from rest: for when no running jump works, as onto a tall
+    # pipe Mario stands too close to for a run-up to rise in time, or from
+    # under an overhead ledge he must first step out from (the jumps' free
+    # paths moved along the floor, as from rest). Toward the jump first.
+    backs = []
+    for travel in sorted({t for t in travels if abs(t) >= MIN_RUN}, key=lambda t: (t < 0, abs(t))):
+        shift = travel * direction
+        if not (floor.left <= start[0] + shift and start[2] + shift <= floor.right):
+            continue
+        frames = _run_frames(env.motion, shift)
+        walked = _screen_walk(_run_path(start, shift, frames), enemies, lips)
+        if walked is None or frames >= horizon:
+            continue
+        for option in table:
+            if not option.free_path:
                 continue
-            path = option.result.path if not shift else option.free_path
-            if not path:
-                continue
-            screened = _screen(
-                env, path, shift, frames, enemies, lips, rects, solid if shift else ()
-            )
+            screened = _screen(env, option.free_path, shift, frames, enemies, lips, rects, solid)
             if screened is None:
                 continue
             distances, landing, killed, (dx, dy) = screened
-            if not wanted(option, landing, killed):
-                continue
-            if shift and not killed and not _named(option.members, dx, dy):
-                # No destination names where this jump lands from there (the
-                # executor makes another jump for that point): it cannot be
-                # taught. Which destinations make which jump does not depend
-                # on where on the floor Mario stands.
+            if not wanted(option, landing, killed) or (
+                not killed and not _named(option.members, dx, dy)
+            ):
                 continue
             total = _combine(walked, distances)
-            screened_result = Result(distances=total)
-            key = _distance_key(screened_result)
-            exact = _exact_key(screened_result)
-            found.append((key, exact, -abs(travel), -wait, travel, wait, option, total))
-    # The most room in 2-pixel steps, then exactly; then the shortest travel.
-    found.sort(key=lambda f: f[:4], reverse=True)
-    _middle_of_equal_runs(found)
-    return [(f[0], f[4], f[5], f[6], f[7]) for f in found]
+            backs.append(
+                (_room_key(total), -_rise(option.free_path), -(travel < 0), -abs(travel), travel, 0, option, total)
+            )
+    backs.sort(key=lambda f: f[:4], reverse=True)
+    return [(f[0], f[4], f[5], f[6], f[7]) for f in found + backs]
 
 
 def _middle_of_equal_runs(found):
@@ -854,6 +956,11 @@ def _screened_runs(env, state, target):
             if abs(dx) < MIN_RUN:
                 continue
             on_floor = r is floor
+            if not on_floor and floor.left - half < x < floor.right + half:
+                # Under the floor he stands on: a lower floor is walked onto
+                # off its ends only. (Aimed under a raised block, every run
+                # stopped at once; with hops never taught, nothing was left.)
+                continue
             if on_floor:
                 frames = _run_frames(env.motion, dx)
                 walk = _screen_walk(_run_path(start, dx, frames), enemies, lips)
@@ -941,10 +1048,33 @@ def destination(env, state, proposal):
     mount = mount_destination(env, state, target)
     if mount is not None:
         return mount
+    seg = tactic_schedule.current(env)
+    if (
+        _waiting(env, state)
+        and seg["kind"] == "plain"
+        and seg.get("area") is not None
+        and env.mario["on_ground"]
+    ):
+        # Holding an area: hold, or jump over a walker coming through it;
+        # nothing else (no route's moves, no progress).
+        return _dodge_in_area(env, state, target) or SkillToken("hold", 0, 0)
     # Under speed run a stomp is the last resort: any other move that wins
     # or advances is taught first (the strategy picks stomp or pass;
     # _choose_move). Under max points the ranking alone decides.
     speed_run = getattr(state, "strategy", "speed_run") != "max_points"
+    # The moves found that fail when started a little later (_tolerant), in
+    # the order found, each with the run-up plan it committed (or None).
+    fragile = []
+
+    def taught(command):
+        """``command`` when it tolerates a later start; else None (the next
+        move found is tried), the move and its plan kept in ``fragile``."""
+        if _tolerant(env, state, target, command):
+            return command
+        notes = getattr(state, "notes", {})
+        fragile.append((command, notes.pop("planned_jump", None)))
+        return None
+
     if proposal is not None:
         result = trial(env, state, proposal, target)
         if (
@@ -958,10 +1088,13 @@ def destination(env, state, proposal):
                     and result.clearance >= 8
                     and closes_on_enemy(env, target, proposal, result)
                     and (proposal.mode != "hold" or _waiting(env, state))
+                    and not _overshoots_goal(env, result)
                 )
             )
         ):
-            return _with_margin(env, state, target, proposal, result)
+            command = taught(_with_margin(env, state, target, proposal, result))
+            if command is not None:
+                return command
     # Rank every jump Mario can make and the screened runs (_jump_table,
     # _run_options: every destination considered) on label-only trials;
     # confirm in order through the full trial (which replays jumps through
@@ -987,11 +1120,14 @@ def destination(env, state, proposal):
             and result.clearance >= 8
             and closes_on_enemy(env, target, goal, result)
             and (result.advanced or result.progress > 0 or airborne)
+            and not _overshoots_goal(env, result)
         ):
             value = (100 if result.advanced else result.progress) / max(1, result.frames)
-            # A mere hop advances only after every other move that does.
-            hop = goal.mode == "jump" and _mere_hop(env, result)
-            progressing.append(((back, last, hop), (value, result.margin), goal))
+            if goal.mode == "jump" and _mere_hop(env, result):
+                # A hop that clears nothing is never taught (user,
+                # 2026-10-13): a run makes the same progress.
+                continue
+            progressing.append(((back, last, False), (value, result.margin), goal))
     winners = [((back, last, False), rank, goal) for (back, last), rank, goal in winners]
     ordered = [
         (kind, goal)
@@ -1009,19 +1145,31 @@ def destination(env, state, proposal):
         )
     ]
     for kind, goal in ordered:
+        if len(fragile) > FRAGILE_TRIES:
+            break
         result = trial(env, state, goal, target)
         if not _nameable(env, state, goal, result):
             continue
-        if kind == "win" and result.won:
-            return _with_margin(env, state, target, goal, result, memo)
-        if (
+        if (kind == "win" and result.won) or (
             kind == "advance"
             and result.safe
             and result.clearance >= 8
             and closes_on_enemy(env, target, goal, result)
             and (result.advanced or result.progress > 0 or airborne)
+            and not _overshoots_goal(env, result)
         ):
-            return _with_margin(env, state, target, goal, result, memo)
+            command = taught(_with_margin(env, state, target, goal, result, memo))
+            if command is not None:
+                return command
+    if fragile:
+        # No move found that tolerates a later start: the first one found.
+        command, plan = fragile[0]
+        if plan is not None:
+            state.notes["planned_jump"] = plan
+        return command
+    run_up = _run_up_fallback(env, state, target, memo, speed_run)
+    if run_up is not None:
+        return run_up
     descent = descent_destination(env, state, target)
     if descent is not None:
         return descent
@@ -1030,6 +1178,29 @@ def destination(env, state, proposal):
         if trial(env, state, hold, target).safe:
             return hold
     return None
+
+
+def _overshoots_goal(env, result) -> bool:
+    """Whether a move ends Mario past the goal box, on its floor, from short
+    of it, in the layout's last tactic with its points collected: no progress
+    toward the goal. (Passed over for being fragile, a jump into a goal a
+    walker was heading for gave way to a longer one past it, against the
+    world's end, where the walker trapped Mario.)"""
+    goal = env.goal
+    if (
+        goal is None
+        or env._goal_on_stomp
+        or env._tactic_index != len(env._tactics) - 1
+        or env.points() < env._strategy_objective.get("points", 0)
+    ):
+        return False
+    m = env.mario
+    cx, feet = m["x"] + m["w"] / 2, m["y"] + m["h"]
+    if goal.left <= cx <= goal.right or abs(feet + result.end_dy - goal.bottom) > 2:
+        return False
+    side = 1 if goal.centerx > cx else -1
+    far = goal.right if side > 0 else goal.left
+    return (cx + result.end_dx - far) * side > 0
 
 
 def _nameable(env, state, goal, result) -> bool:
@@ -1050,13 +1221,14 @@ def _exact_key(result) -> tuple:
 
 
 def _rank(goal, result):
-    """Larger is better among versions of one move: the most room from every
-    threat (_distance_key: the closest first, in 2-pixel steps), then the
-    destination nearest where it lands (for a stomp, the enemy's middle), then
-    the exact room, then the quickest."""
+    """Larger is better among versions of one move: enough room from every
+    threat (_room_key: up to ENOUGH_ROOM, the closest first), then the
+    destination nearest where it lands (for a stomp, the enemy's middle),
+    then the lowest jump, then the most room, then the quickest."""
     return (
-        _distance_key(result),
+        _room_key(result.distances) if result.distances else _distance_key(result),
         -getattr(result, "aim_error", 0.0),
+        -_rise(result.path),
         _exact_key(result),
         -result.frames,
     )
@@ -1179,6 +1351,62 @@ def _works_now(r):
     return r.won or (r.safe and r.clearance >= 8 and (r.advanced or r.progress > 0))
 
 
+# A taught move must still work when it starts this many frames later, Mario
+# coasting meanwhile (_tolerant): the skill decides at a slightly different
+# moment and place, after its own slightly different moves, and a move that
+# works only from the exact moment the teacher chose is a choice it cannot
+# reliably repeat (a hop onto a strip of floor before a walker; a creep
+# before a jump). After FRAGILE_TRIES such moves, the first one is taught.
+TOLERANCE_FRAMES = (2, 4)
+FRAGILE_TRIES = 3
+
+
+def _tolerant(env, state, target, command) -> bool:
+    """Whether ``command`` still works started each of TOLERANCE_FRAMES frames
+    later, aimed at the same point of the world, Mario pressing nothing
+    meanwhile: it wins, or is safe with 8 pixels of room and advances (in
+    the air, safe is enough, as for the move itself). A hold always does."""
+    if command.mode == "hold":
+        return True
+    airborne = not env.mario["on_ground"]
+    m = env.mario
+    aim_x, aim_feet = m["x"] + command.x, m["y"] + m["h"] + command.y
+    for delay in TOLERANCE_FRAMES:
+        with probe_state(env):
+            spatial = deepcopy(state.execution) if state.execution is not None else SpatialFeedback()
+            scene = state.scene or scene_from_labels(env.scene_labels())
+            if state.execution is None:
+                spatial.motion = deepcopy(env.motion)
+                spatial.observe(scene)
+            for _ in range(delay):
+                spatial.executed(0, scene)
+                _, _, done, truncated, _ = env.step(0)
+                if done or truncated:
+                    break
+                scene = scene_from_labels(env.scene_labels())
+                spatial.observe(scene)
+            if done or truncated:
+                if not env._goal_credited:
+                    return False
+                continue
+            later = copy(state)
+            later.execution, later.controller, later.scene = spatial, None, scene
+            m = env.mario
+            moved = SkillToken(
+                command.mode,
+                round(aim_x - m["x"]),
+                round(aim_feet - (m["y"] + m["h"])),
+                carry=command.carry,
+            )
+            r = _trial(env, later, moved, target)
+            if not (
+                r.won
+                or (r.safe and r.clearance >= 8 and (r.advanced or r.progress > 0 or airborne))
+            ):
+                return False
+    return True
+
+
 def _crossing_wanted(env, target, lip, direction):
     """Whether a screened jump ends past the pit edge at ``lip``: on the
     target's platform when the target is one."""
@@ -1195,8 +1423,9 @@ def _crossing_wanted(env, target, lip, direction):
 
 
 def _certify(env, state, target, direction, travel, wait, option, check):
-    """Certify a screened plan by trials: from here, a run of ``travel``
-    pixels toward ``direction`` (or a hold, for a wait), then ``option``'s
+    """Certify a screened plan by trials: from here, a run-up of ``travel``
+    pixels toward ``direction`` that keeps its speed (or a hold, for a wait),
+    then ``option``'s
     jump from where that leaves Mario (_same_jump), as the screen assumed. ``check(jump result)`` must hold for the jump.
     Returns (first command, its result, the jump's result, the plan) or None;
     the plan, after a run or a wait: (the jump, Mario's x where it starts,
@@ -1205,10 +1434,21 @@ def _certify(env, state, target, direction, travel, wait, option, check):
 
     if not travel and not wait:
         confirmed = trial(env, state, option.command, target)
-        if not _works_now(confirmed) or not check(confirmed):
+        if (
+            not _works_now(confirmed)
+            or not check(confirmed)
+            or (not confirmed.won and _overshoots_goal(env, confirmed))
+        ):
             return None
         return option.command, confirmed, confirmed, None
-    first = SkillToken("run", travel * direction, 0) if travel else SkillToken("hold", 0, 0)
+    # A run-up keeps its speed into the jump (SkillToken.carry).
+    # A run-up's jump is screened from where it ends at its speed (its option
+    # has no command yet); a step that stops is followed by a table jump.
+    first = (
+        SkillToken("run", travel * direction, 0, carry=travel > 0 and option.command is None)
+        if travel
+        else SkillToken("hold", 0, 0)
+    )
     moved = _trial(env, state, first, target, save=True)
     if not moved.safe or moved.snapshot is None:
         return None
@@ -1232,7 +1472,8 @@ def _certify(env, state, target, direction, travel, wait, option, check):
             jump, landed = aimed, again
         stop = env.mario["x"]
         aim = jump_aim(env, landed)
-    if not _works_now(landed) or not check(landed):
+        over = not landed.won and _overshoots_goal(env, landed)
+    if not _works_now(landed) or not check(landed) or over:
         return None
     combined = Result(**{**vars(moved), "distances": _combine(moved.distances, landed.distances)})
     return first, combined, landed, (jump, stop, aim)
@@ -1257,10 +1498,18 @@ def _pit_takeoff(env, state, target, goal, result, memo):
         or not result.outcome
     ):
         return goal, result
+    best = _pit_run_up(env, state, target, memo)
+    return best if best is not None else (goal, result)
+
+
+def _pit_run_up(env, state, target, memo):
+    """The takeoff over the pit ahead (_pit_takeoff's search): jumping now, or
+    after a run-up toward it ending within 48 pixels of its edge, certified;
+    (command, its result) or None (no pit ahead, or nothing certifies)."""
     direction = target.direction
     lip = _pit_ahead(env, direction)
     if lip is None or (target.center - lip) * direction <= 0:
-        return goal, result
+        return None
     m = env.mario
     front = (lip - (m["x"] + m["w"] if direction > 0 else m["x"])) * direction
     travels = [0] + [t for t in range(1, math.floor(front) + 1) if front - t <= 48]
@@ -1270,8 +1519,7 @@ def _pit_takeoff(env, state, target, goal, result, memo):
         index = r.outcome[1] if r.outcome else None
         return r.won or (index is not None and wanted(None, index, set()))
 
-    best = _best_certified(env, state, target, memo, direction, travels, wanted, check)
-    return best if best is not None else (goal, result)
+    return _best_certified(env, state, target, memo, direction, travels, wanted, check)
 
 
 def _best_certified(
@@ -1279,22 +1527,44 @@ def _best_certified(
 ):
     """The best screened plan (_takeoff_search) that trials certify, as (first
     command, its result): jumping now when it works, unless running or waiting
-    first gives at least GAIN more pixels of room (so a takeoff is not moved
-    a little at a time). None when nothing certifies."""
-    now, later, tried = None, None, 0
+    first gives at least GAIN more pixels of room, counting room up to
+    ENOUGH_ROOM (so a takeoff is not moved a little at a time, nor for room
+    already enough). None when nothing certifies."""
+    now, later = None, None
+    # Tries per kind of plan: jumping now, running up (or waiting) first, and
+    # a step that stops first (searched last, for when no running jump works:
+    # its tries are not spent on running jumps the trials refuse).
+    tried = {"now": 0, "later": 0, "step": 0}
     for _, travel, wait, option, _ in _takeoff_search(
         env, state, target, memo, direction, travels, wanted, waits=waits, rise=rise
     ):
-        if (now is not None and later is not None) or tried >= 2 * CERTIFY:
+        if now is not None and later is not None:
             break
-        if not travel and not wait:
+        kind = (
+            "now"
+            if not travel and not wait
+            else "step" if travel and option.command is not None else "later"
+        )
+        # A step is the last resort, and its jump from rest, onto a pipe as
+        # tall as a jump rises, is screened less exactly: more of them are
+        # tried.
+        if tried[kind] >= {"now": CERTIFY, "later": 2 * CERTIFY, "step": 4 * CERTIFY}[kind]:
+            continue
+        if kind == "now":
             if now is None:
-                tried += 1
+                tried[kind] += 1
                 now = _certify(env, state, target, direction, 0, 0, option, check)
         elif later is None:
-            tried += 1
+            tried[kind] += 1
             later = _certify(env, state, target, direction, travel, wait, option, check)
-    if now is not None and (later is None or later[1].margin < now[1].margin + GAIN):
+    def enough(certified):
+        r = certified[1]
+        values = [_enough(k, d) for k, d in r.distances.items()] + [_enough(None, r.enemy_gap)]
+        if r.edge_margin is not None:
+            values.append(_enough(("landing",), r.edge_margin))
+        return min(values)
+
+    if now is not None and (later is None or enough(later) < enough(now) + GAIN):
         return now[0], now[1]
     if later is not None:
         _commit(state, later)
@@ -1403,11 +1673,66 @@ def _choose_move(env, state, target, goal, result, memo):
             if _waiting_helps(env, state, target, goal, confirmed, memo):
                 return goal, result
         return g, confirmed
+    # No jump from here does it: a run-up toward the enemy that keeps its
+    # speed into one that does (not a run that stops short, or a hop).
+    run_up = _run_up_to_enemy(env, state, target, wanted, memo)
+    if run_up is not None:
+        return run_up
     if kind == "stomp" and not max_points:
         wait = _wait_to_pass(env, state, target, memo)
         if wait is not None:
             return wait
     return goal, result
+
+
+def run_up_travels(reach):
+    """The run-up lengths searched up to ``reach`` pixels: every 2 pixels from
+    MIN_RUN to 64, every 4 beyond (a long run-up's takeoff matters less to a
+    pixel)."""
+    near = list(range(MIN_RUN, min(64, reach) + 1, 2))
+    return near + list(range(68, reach + 1, 4))
+
+
+def _run_up_to_enemy(env, state, target, kind, memo):
+    """A run-up toward the nearest enemy ahead, keeping its speed into a jump
+    that does ``kind`` to it ("pass" or "stomp"): the best certified
+    (_best_certified; the jump is remembered for the next decision), as
+    (command, its result); or None."""
+    direction = target.direction
+    m = env.mario
+    cx = m["x"] + m["w"] / 2
+    ahead = [
+        (e["x"] + e["w"] / 2 - cx) * direction
+        for e in env.enemies
+        if not e["dead"] and e["h"] > 0 and (e["x"] + e["w"] / 2 - cx) * direction > 0
+    ]
+    if not ahead:
+        return None
+    reach = int(min(REACH, max(ahead)))
+
+    def check(r):
+        return r.won or _move_kind(env, r) == kind
+
+    return _best_certified(
+        env, state, target, memo, direction, run_up_travels(reach), _pass_wanted(env, kind), check
+    )
+
+
+def _run_up_fallback(env, state, target, memo, speed_run):
+    """When no move from here advances: a run-up keeping its speed into a jump
+    past the enemy ahead (or onto it, under max points; the other if that
+    fails), or over the pit ahead; its first command, or None. (Hops toward
+    them are not taught, and a run that stops short of them leaves the same
+    jump to make from a standstill.)"""
+    if not env.mario["on_ground"] or getattr(env, "_action_jump_direction", 0):
+        return None
+    if _enemy_ahead(env, target.direction):
+        for kind in ("pass", "stomp") if speed_run else ("stomp", "pass"):
+            found = _run_up_to_enemy(env, state, target, kind, memo)
+            if found is not None:
+                return found[0]
+    found = _pit_run_up(env, state, target, memo)
+    return found[0] if found is not None else None
 
 
 def _jumps_that(env, state, target, kind, memo, direction=None):
@@ -1595,8 +1920,9 @@ def mount_destination(env, state, target):
     raised platform, or a lower one across a gap (walking off the edge does
     not reach it).
 
-    Every jump Mario can make onto the platform, from where he stands or after
-    a run along his floor to any point (every pixel, forward or back: a
+    Every jump Mario can make onto the platform, from where he stands or
+    (except in lessons that are one given jump) after a run along his floor
+    to any point (every pixel, forward or back: a
     takeoff under an overhead ledge must first move clear of it, and a jump
     down across a wide gap may need a run-up), is screened, and the one
     keeping the most room is certified and taught. (Without this, a jump that
@@ -1631,7 +1957,8 @@ def mount_destination(env, state, target):
 
     support = env.mario.get("_platform")
     travels = [0]
-    if support is not None and not support.get("moving"):
+    # A lesson that is one given jump takes it from where Mario stands.
+    if support is not None and not support.get("moving") and not getattr(env, "_action_jump_direction", 0):
         source = support["rect"]
         travels += [
             t
@@ -1651,6 +1978,117 @@ def mount_destination(env, state, target):
         rise=None if lower else feet - rect.top + 2,
     )
     return best[0] if best is not None else None
+
+
+# Holding an area, a walker that would reach Mario within this many frames
+# is jumped over (_dodge_in_area); one closer than IMMINENT_FRAMES is jumped
+# over even with less than ENOUGH_ROOM.
+DODGE_FRAMES = 48
+IMMINENT_FRAMES = 12
+
+
+def _dodge_in_area(env, state, target):
+    """Holding an area (a hold segment with an ``area``): when a walker would
+    reach Mario if he held, the lowest jump that lets it pass under or behind
+    him and lands back on his platform without leaving the area, at the
+    moment its room from the walker is greatest: now, unless the same jumps
+    started up to 20 frames later keep more (then hold), or the walker is
+    about to reach him. Certified by a trial that it passes the walker
+    safely. None: hold."""
+    seg = tactic_schedule.current(env)
+    area = seg.get("area")
+    m = env.mario
+    support = m.get("_platform")
+    if area is None or not m["on_ground"] or support is None:
+        return None
+    start = _body(env)
+    lips = _pit_lips(env)
+    soon = _enemy_paths(env, DODGE_FRAMES)
+    if _screen_walk(_run_path(start, 0, DODGE_FRAMES), soon, lips) is not None:
+        return None  # holding meets no walker for a while
+    imminent = _screen_walk(_run_path(start, 0, IMMINENT_FRAMES), soon, lips) is None
+    anchor = env._tactic_anchor
+    if env._tactic_anchor_platform is not None:
+        anchor += env.platforms[env._tactic_anchor_platform]["rect"].x - env._tactic_anchor_platform_x
+    index = next((i for i, p in enumerate(env.platforms) if p is support), None)
+    rects = [p["rect"] for p in env.platforms]
+    enemies = _enemy_paths(env, 400)
+    middle = (start[0] + start[2]) / 2
+    scene = state.scene or scene_from_labels(env.scene_labels())
+    if scene.mario.box is None:
+        return None
+    box = scene.mario.box
+    spatial = state.execution
+    known = spatial is not None and getattr(spatial, "motion_ready", False)
+    motion = copy(spatial.motion if known else env.motion)
+    # Each jump's predicted path (the executor's own, every hold and way):
+    # cheap enough to weigh every frame; a destination is found only for the
+    # one taught (destination_for).
+    groups, paths_of = [], {}
+    for direction in (0, -1, 1):
+        paths_of[direction] = hold_paths(scene, motion, box, direction)
+        for hold, predicted in enumerate(paths_of[direction], 1):
+            free = [start, *[tuple(start[k] + b[k] - box[k] for k in range(4)) for b in predicted]]
+            landing = _path_landing(free, rects)
+            if landing is None or any(abs(b[0] - anchor) > area for b in free[: landing[0] + 1]):
+                continue
+            groups.append((hold, direction, landing, _rise(free), free))
+
+    def destination_for(hold, direction, landing):
+        """A destination the executor makes this very jump for (its rule:
+        smb_trajectory.best_holds), nearest the predicted landing; or None."""
+        y = round(landing[2])
+        xs = [0] if direction == 0 else range(round(landing[1]) - 6, round(landing[1]) + 7)
+        xs = [x for x in xs if x * direction >= 0 and x in SKILL_X]
+        if not xs or y not in SKILL_Y:
+            return None
+        tracks = getattr(spatial, "tracks", None) or VisualTracks()
+        goals = [_plan_goal(tracks, box, x, y) for x in xs]
+        made = best_holds(scene, motion, box, goals, direction, paths_of[direction])
+        fits = [x for x, (h, _, _) in zip(xs, made) if h == hold]
+        if not fits:
+            return None
+        return SkillToken("jump", min(fits, key=lambda x: abs(x - landing[1])), y)
+
+    def passing(delay):
+        """[(room key, -rise, hold group)] of the jumps started ``delay``
+        frames from now that pass a walker and land back in the area."""
+        out = []
+        for group in groups:
+            hold, direction, landing, rise, free = group
+            screened = _screen(env, free, 0, delay, enemies, lips, rects)
+            if screened is None:
+                continue
+            distances, landed_on, killed, (dx, _) = screened
+            if killed or landed_on != index:
+                continue
+            passes = False
+            for boxes in enemies.values():
+                before = boxes[min(delay, len(boxes) - 1)]
+                after = boxes[min(delay + landing[0], len(boxes) - 1)]
+                if (middle < (before[0] + before[2]) / 2) != (middle + dx < (after[0] + after[2]) / 2):
+                    passes = True
+            if passes:
+                out.append((_room_key(distances), -rise, group))
+        return out
+
+    now = sorted(passing(0), key=lambda c: c[:2], reverse=True)
+    if not imminent:
+        best = now[0][0] if now else None
+        for delay in range(2, 21, 2):
+            if _screen_walk(_run_path(start, 0, delay), enemies, lips) is None:
+                break  # holding that long meets the walker
+            later = passing(delay)
+            if later and (best is None or max(c[0] for c in later) > best):
+                return None  # a later start keeps more room: hold for now
+    for _, _, (hold, direction, landing, rise, free) in now[:CERTIFY]:
+        command = destination_for(hold, direction, landing)
+        if command is None:
+            continue
+        r = trial(env, state, command, target)
+        if (r.safe or r.won) and _move_kind(env, r) == "pass":
+            return command
+    return None
 
 
 def _waiting(env, state):

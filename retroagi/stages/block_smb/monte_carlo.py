@@ -1313,6 +1313,26 @@ def _teacher_wins(family, scenario) -> bool:
     return bool(replay(copy.deepcopy(dict(scenario)), family=family)["won"])
 
 
+# Families whose route is the spatial teacher's own play (_verified_route).
+TEACHER_ROUTED = ("choice_hold_area",)
+
+
+def _one_action_fault(family, scenario) -> Optional[str]:
+    """Why a single-jump action lesson (scenario "action_jump_direction") is
+    not one action: "teacher_loses" when the teacher, through the executor
+    (on the true scene), loses it, "two_actions" when it needs more than its
+    jump (a run-up or a step back first: Mario starts too close to a tall
+    step, say); else None. Action families are single-action scenes."""
+    from .teacher_replay import replay
+
+    played = replay(copy.deepcopy(dict(scenario)), family=family)
+    if not played["won"]:
+        return "teacher_loses"
+    if len(played["commands"]) != 1:
+        return "two_actions"
+    return None
+
+
 def _verified_route(family, scenario, authored_actions):
     """The first route that completes the layout: (actions, source, reachability).
 
@@ -1326,6 +1346,15 @@ def _verified_route(family, scenario, authored_actions):
     def reachable(actions):
         return validate_block_smb_monte_carlo_oracle(scenario, actions, max_steps=max_steps)
 
+    if family in TEACHER_ROUTED:
+        # The button route cannot dodge (it holds still while a walker comes
+        # through the area): the spatial teacher's own play is the route.
+        from .teacher_replay import replay
+
+        played = replay(copy.deepcopy(dict(scenario)), family=family)
+        if not played["won"]:
+            return None, "teacher_loses", None
+        authored_actions = list(played["actions"])
     if family in TACTIC_FAMILIES or family in ACTION_FAMILIES or family in SKILL_FAMILIES:
         # Only the teacher's route under the layout's tactics counts.
         result = reachable(authored_actions)
@@ -1338,7 +1367,11 @@ def _verified_route(family, scenario, authored_actions):
         fault = _route_lesson_fault(scenario, authored_actions) if family in ROUTE_LESSONS else None
         if fault is not None:
             return None, fault, None
-        if family in TEACHER_CHECKED and scenario.get("enemies") and not _teacher_wins(
+        if family in ACTION_FAMILIES and scenario.get("action_jump_direction"):
+            fault = _one_action_fault(family, scenario)
+            if fault is not None:
+                return None, fault, None
+        elif family in TEACHER_CHECKED and scenario.get("enemies") and not _teacher_wins(
             family, scenario
         ):
             return None, "teacher_loses", None
@@ -1916,10 +1949,12 @@ def _pipe_mount(
     # The pipe's place and width, and how far Mario starts from it, vary.
     pipe_x, pipe_width = rng.randint(104, 136), rng.randint(24, 40)
     # Usually close enough that the pipe top's middle is within a standing
-    # jump's reach (threat_variety.reachable_span).
-    # (From Mario's left edge to the pipe: at least his width and 2 pixels.)
+    # jump's reach (threat_variety.reachable_span). (From Mario's left edge to
+    # the pipe: at least his width and 10 pixels. Closer, a jump onto the
+    # pipe slides up its side and ends short of where it is aimed, and the
+    # teacher stepped back first: the lesson is one jump.)
     spawn_distance = reachable_span(
-        rng, 12, 40, standing_reach(pipe_height) - 3 - pipe_width / 2 + 5
+        rng, 20, 40, standing_reach(pipe_height) - 3 - pipe_width / 2 + 5
     )
     goal_x = pipe_x
     scenario = {

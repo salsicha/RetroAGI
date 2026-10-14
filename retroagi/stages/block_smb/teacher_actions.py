@@ -5,11 +5,12 @@ reached. Training labels only: simulator state finds the objects.
 - A jump that kills an enemy stomps it; one that ends on the other side of an
   enemy it leaves alive jumps over it; any other jump lands on the surface it
   ends on. A steer in the air that comes down on an enemy stomps it too.
-- A run before a jump approaches what that jump is aimed at, named in the
-  same order (run_up_slot): the jump remembered (controller_teacher._commit)
-  or, in training labels, the jump the teacher makes next
-  (layered_train._Lane._name_run_ups). A run before a jump that lands back on
-  the surface the run started on is a plain run.
+- A run-up (a run that keeps its speed into the jump after it:
+  SkillToken.carry) approaches what that jump is aimed at, named in the same
+  order (run_up_slot): the jump remembered (controller_teacher._commit) or,
+  in training labels, the jump the teacher makes next
+  (layered_train._Lane._name_run_ups). A run-up before a jump that lands back
+  on the surface it started on is a plain run, as is any run that stops.
 - A run away from the goal's side with an enemy near backs away from it; any
   other run runs to the surface it ends on.
 - A hold holds.
@@ -26,7 +27,12 @@ from typing import Optional
 from retroagi.core.action_tokens import ActionToken
 from retroagi.core.smb_observer import packed_lists
 from retroagi.core.smb_pixel_types import VISIBLE_COLUMNS
-from retroagi.core.smb_scene_labels import ENEMY_ON_SURFACE, MIN_SURFACE_WIDTH, scene_from_labels
+from retroagi.core.smb_scene_labels import (
+    ENEMY_ON_SURFACE,
+    MIN_SURFACE_WIDTH,
+    STOMP_ROWS,
+    scene_from_labels,
+)
 
 # How far (pixels) a reported enemy may be from the simulator's to be it.
 MATCH = 12
@@ -241,7 +247,21 @@ def _classify(env, state, command, result):
         thing = None if index is None else ("platform", index)
         return verb, thing, slot
 
-    killed = result.outcome[2] if result.outcome else ()
+    # An enemy whose top Mario's falling feet are on was stomped by the action
+    # before: vision ends it there, the simulator kills it a frame later
+    # (once the boxes overlap), in this action. It does not name this one.
+    underfoot = {
+        i
+        for i, e in enumerate(env.enemies)
+        if not m["on_ground"]
+        and m["vy"] >= 0
+        and not e["dead"]
+        and e["h"] > 0
+        and 0 <= e["y"] - feet <= STOMP_ROWS
+        and m["x"] < e["x"] + e["w"]
+        and e["x"] < m["x"] + m["w"]
+    }
+    killed = set(result.outcome[2]) - underfoot if result.outcome else ()
     if command.mode == "jump":
         if killed:
             return enemy("stomp", min(killed))
@@ -254,10 +274,11 @@ def _classify(env, state, command, result):
         # enemy stomps it.
         return enemy("stomp", min(killed))
     planned = state.notes.get("planned_jump") if hasattr(state, "notes") else None
-    if planned is not None and planned[0] == command:
-        # A run-up before the jump remembered: named after what that jump is
-        # aimed at (jump_aim, found when it was certified); one before a jump
-        # back onto this surface is a plain run.
+    if planned is not None and planned[0] == command and command.carry:
+        # A run-up (it keeps its speed into the jump remembered): named after
+        # what that jump is aimed at (jump_aim, found when it was certified);
+        # one before a jump back onto this surface is a plain run, as is a
+        # step back that stops before a jump from rest.
         found = run_up_slot(planned[3], scene, env.camera_x, _enemy_boxes(env), (cx, feet))
         if found is not None:
             slot, (kind, *where) = found
@@ -523,10 +544,10 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
 
 
 def _runs_up_to(env, state, action, command) -> bool:
-    """Whether ``command`` (the teacher's) is a run along Mario's floor toward
-    ``action``'s object that stops before it."""
+    """Whether ``command`` (the teacher's) is a run-up along Mario's floor
+    toward ``action``'s object (it keeps its speed) that ends before it."""
     m = env.mario
-    if command is None or command.mode != "run" or not m["on_ground"] or command.x == 0:
+    if command is None or command.mode != "run" or not command.carry or not m["on_ground"]:
         return False
     kind, slot = action.target
     lists = packed_lists(_scene(env, state))

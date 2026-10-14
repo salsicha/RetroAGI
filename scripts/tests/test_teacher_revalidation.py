@@ -48,7 +48,7 @@ def test_a_stomps_bounce_is_judged_as_the_next_command_plays_it(index, difficult
 
 
 @pytest.mark.timeout(600)
-def test_an_action_lesson_the_teacher_cannot_win_is_redrawn():
+def test_an_action_lesson_the_teacher_cannot_win_in_one_action_is_redrawn():
     from collections import Counter
 
     rejected = Counter()
@@ -60,8 +60,11 @@ def test_an_action_lesson_the_teacher_cannot_win_is_redrawn():
         difficulty="medium",
         rejection_counter=rejected,
     )
-    assert rejected["teacher_loses"] >= 1
-    assert replay(sample.scenario, family="action_stomp_up")["won"]
+    # The first draw the teacher lost; since run-ups keep their speed it wins
+    # it, but in two actions: an action lesson is one action.
+    assert rejected["teacher_loses"] + rejected["two_actions"] >= 1
+    played = replay(sample.scenario, family="action_stomp_up")
+    assert played["won"] and len(played["commands"]) == 1
 
 
 @pytest.mark.timeout(600)

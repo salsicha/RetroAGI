@@ -28,10 +28,9 @@ TRANSFER_FAILURE_SCHEMAS = {
         "goal": "climb, jump from the top across a gap, descend, and finish",
     },
     "landing_enemy": {
-        "spawn_drop": [12, 28],
         "enemy_distance": [54, 90],
         "enemy_speed": [0.2, 0.6],
-        "goal": "drop in, clear an approaching enemy, and reach the exit",
+        "goal": "clear an approaching enemy, and reach the exit",
     },
     "enemy_on_platform": {
         "platform_height": [28, 50],
@@ -78,18 +77,15 @@ def transfer_failure_scenario(family, rng, difficulty):
         )
     elif family == "landing_enemy":
         spawn_x = rng.randint(24, 96)
-        drop = (24, 18, 12)[tier] + rng.randint(0, 6)
         distance = (86, 70, 58)[tier] + rng.randint(-10, 10)
         enemy_x = spawn_x + distance
         speed = (0.2, 0.4, 0.6)[tier]
         world = 400
         scenario = {
             "world_width": world,
-            # More than eight pixels above support avoids the spawn-grounding
-            # snap. Mario drops onto the floor while the watched frames play
-            # (they last until he stands: no decision is made in the air), so
-            # his first decision is made standing, the enemy approaching.
-            "mario": [spawn_x, 204 - drop],
+            # Mario starts standing on the floor (no episode starts in the
+            # air), the enemy approaching.
+            "mario": [spawn_x, 204],
             "platforms": [[0, 220, world, 20]],
             "enemies": [[enemy_x, 206, enemy_x - 16, enemy_x + 16, speed, -1]],
             "goal": [world - 28, 204, 16, 16],
@@ -99,7 +95,6 @@ def transfer_failure_scenario(family, rng, difficulty):
         kind, room, detail = follow_up(rng, scenario, 0, enemy_x + 14, 1, window=(40, 96))
         params.update(
             spawn_x=spawn_x,
-            spawn_drop=drop,
             enemy_distance=distance,
             enemy_speed=speed,
             then=kind,

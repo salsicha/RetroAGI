@@ -23,6 +23,71 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-13 — Fixes from the review of the family pictures (user decisions; built)
+
+The user reviewed the picture of every layout and asked for these:
+
+- **A run-up keeps its speed into the jump** ("approach keeps its speed into
+  the jump"). Mario walked to a gap's edge, stopped, and jumped from rest,
+  barely clearing it. An approach is now a run that does not brake: it
+  ends at its destination still running (`SkillToken.carry`,
+  `GroundMove._carry_press`), and the jump after it is planned from where it
+  ends, at that speed (`controller_teacher._takeoff_search`, `_carry_run`).
+  Only such a run is named "approach". A step that stops before a jump
+  from rest (onto a pipe too tall to clear running from close up) is a plain
+  run, searched last.
+- **Jumps no higher than needed.** Among moves with enough room (16 pixels
+  from every threat, 6 from a landing edge: `ENOUGH_ROOM`, `ENOUGH_LANDING`;
+  more room counts for nothing), the lowest jump is taught (`_rank`). A hop
+  that clears nothing is never taught (`_mere_hop`).
+- **Action lessons are one action**, in every layout. The sampler drops a
+  layout the teacher cannot finish in its one jump (`monte_carlo._one_action_fault`).
+  `action_climb` and `action_climb_back` had walks before the jump.
+- **No lesson starts in the air**: `landing_enemy` and the others start Mario
+  on the floor.
+- **`choice_hold_area`**: a larger area and walkers that pass through it.
+  Mario stays in the area and jumps over each one (`_dodge_in_area`); the
+  goal box covers the area. In the air above the area is not leaving it.
+- **A taught move tolerates a late start** (`_tolerant`): it must still work
+  started 2 or 4 frames later; after 3 that do not, the first is taught.
+- **Starts and spawns:** `pipe_mount` starts 20 to 40 pixels from the pipe;
+  overhead-climb lessons start clear of the ledge above.
+
+Last checks before re-making the pictures found four more, now fixed:
+
+- **Vision ended a jump on the way up.** Rising past the top corner of a pipe
+  as tall as his jump, Mario's box touched it one row below his feet, and
+  vision called that contact. A landing now needs his feet not to be rising,
+  except on a moving platform (`LandingWatch`). This made `pipe_mount` hard
+  walk to the pipe, walk back and then jump; it now takes a 14-pixel step
+  and jumps.
+- **Vision saw a landing on an enemy stomped earlier.** It stays drawn
+  flattened. After the bounce, falling back past it ended the next action in
+  the air. Contact only with enemies already defeated on the frame before is
+  no landing (`LandingWatch`, `_only_old_defeated`).
+- **A stomp completed in the next action was named a second stomp.** Vision
+  ends a stomp when Mario's feet touch the enemy's top; the simulator kills
+  it a frame later, once the boxes overlap. That kill no longer names the
+  next action (`teacher_actions._classify`).
+- **No progress past the goal.** A jump into the goal that failed when
+  started late gave way to a longer one past the goal, against the world's
+  end, where the walker trapped Mario. A move that ends past the goal box is
+  no progress (`_overshoots_goal`), in plans as well as single moves.
+
+The test suite found two more, also fixed:
+
+- **Run-ups into jumps no command makes.** After a run-up, jumps landing
+  more than REACH (128) pixels away were screened, and no command the
+  teacher gives makes them; they used up the tries, and the teacher stomped
+  an enemy it should pass. They are no longer screened (`_takeoff_search`).
+- **Runs aimed under a raised block.** The run search took the floor under
+  the block Mario stood on for a lower floor he could walk onto; every such
+  run stopped at once. With hops no longer taught, the teacher had no move.
+  A lower floor is now reached off the ends of his own only (`_screened_runs`).
+
+Everything the skill learned from needs teaching again: the actions, their
+names and where they end changed in most families.
+
 ## 2026-10-12 — After a stomp the teacher teaches the next action; no decisions in the air (user decision; built)
 
 A stomp ends when Mario's falling feet meet the enemy; leaving the enemy is a
