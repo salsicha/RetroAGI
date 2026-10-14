@@ -375,6 +375,11 @@ class _Lane:
         # The skill chose an action the teacher has no safe version of
         # (carry_out): the episode ends as lost.
         self.unsafe_choice = False
+        # The teacher played a decision and had no command: the episode ends
+        # there (the decision has no label, so teacher qualification fails the
+        # layout either way; held and asked again every frame until the stall
+        # limit, one such layout took an hour and a half).
+        self.no_teacher_command = False
         self.frames: dict[str, list] = defaultdict(list)
         self.decisions: dict[str, list] = defaultdict(list)
         self.asked: dict = {}
@@ -684,12 +689,14 @@ def _teacher_given(learner: str, lanes: dict, agents=None):
                 tokens[above].append(asked[above])
             choice = asked[learner] if asked["plays_teacher"] else None
             if choice is None and learner == "skill" and asked["plays_teacher"]:
-                # The teacher plays this decision but has no command: hold. The
-                # decision has no label, so teacher qualification (which plays
-                # only the teacher) counts the layout as failed.
+                # The teacher plays this decision but has no command: hold, and
+                # the episode ends. The decision has no label, so teacher
+                # qualification (which plays only the teacher) counts the
+                # layout as failed.
                 from retroagi.core.tokens import SkillToken
 
                 choice = SkillToken("hold", 0, 0)
+                lanes[copy].no_teacher_command = True
             tokens[learner].append(choice)
         return tokens
 
@@ -807,6 +814,7 @@ def play_episodes(
                 len(lane.frames["button"]) >= lane.frame_limit
                 or lane.stalled()
                 or lane.unsafe_choice
+                or lane.no_teacher_command
             ):
                 truncated = True
             if terminated or truncated:
@@ -815,6 +823,8 @@ def play_episodes(
                     if lane.goal > 0
                     else "unsafe_choice"
                     if lane.unsafe_choice
+                    else "no_teacher_command"
+                    if lane.no_teacher_command
                     else (
                         "death"
                         if info.get("death")

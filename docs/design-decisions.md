@@ -85,6 +85,14 @@ The test suite found two more, also fixed:
   run stopped at once. With hops no longer taught, the teacher had no move.
   A lower floor is now reached off the ends of his own only (`_screened_runs`).
 
+The re-check of every layout found one more: on a ledge 33 pixels wide,
+only a 3-pixel step to its end took Mario onto the platform above, and steps
+were at least 8 pixels (against creeping, which a step whose jump is
+remembered does not do). A step before a jump can now be any length. And an
+episode where the teacher has no command now ends there
+(`no_teacher_command`): it held and asked again every frame until the stall
+limit, an hour and a half for one layout, which failed the check anyway.
+
 Everything the skill learned from needs teaching again: the actions, their
 names and where they end changed in most families.
 

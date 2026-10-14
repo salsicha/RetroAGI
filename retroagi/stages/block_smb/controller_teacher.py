@@ -844,9 +844,12 @@ def _takeoff_search(env, state, target, memo, direction, travels, wanted, *, wai
     # then a jump from rest: for when no running jump works, as onto a tall
     # pipe Mario stands too close to for a run-up to rise in time, or from
     # under an overhead ledge he must first step out from (the jumps' free
-    # paths moved along the floor, as from rest). Toward the jump first.
+    # paths moved along the floor, as from rest). Toward the jump first. A
+    # step of any length: the jump after it is remembered (_commit), so it does
+    # not creep (on a ledge 33 pixels wide, only a 3-pixel step to its end
+    # took Mario onto the platform above).
     backs = []
-    for travel in sorted({t for t in travels if abs(t) >= MIN_RUN}, key=lambda t: (t < 0, abs(t))):
+    for travel in sorted({t for t in travels if t}, key=lambda t: (t < 0, abs(t))):
         shift = travel * direction
         if not (floor.left <= start[0] + shift and start[2] + shift <= floor.right):
             continue

@@ -193,6 +193,8 @@ def test_a_teacher_without_a_command_fails_qualification_instead_of_crashing(
         qualify_teachers(SimpleNamespace(play=play), [task()], report)
     episode = json.loads(report.read_text())["episodes"][0]
     assert not episode["complete_labels"] and not episode["passed"]
+    # It ends there, not after holding until the stall limit.
+    assert episode["end"] == "no_teacher_command" and episode["frames"] <= 2
 
 
 @pytest.mark.timeout(180)
