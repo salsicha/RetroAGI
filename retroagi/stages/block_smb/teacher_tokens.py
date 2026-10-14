@@ -366,9 +366,13 @@ def episode_teacher(scenario) -> TeacherState:
 def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Optional[SkillToken]:
     from .controller_teacher import destination
 
-    proposal = _route_skill(env, state, plan)
     if state.family == "enemy_patrol":
-        return proposal
+        # No route proposal (its walkers turn at both ends of their patrols):
+        # the teacher weighs every move itself, as for every family. Its own
+        # patrol teacher taught the most progress per frame, a hop along the
+        # floor before the first walker clearing nothing (user).
+        return destination(env, state, None)
+    proposal = _route_skill(env, state, plan)
     return destination(env, state, proposal if plan is not None else None)
 
 
@@ -385,15 +389,8 @@ def _route_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Option
     Runs end at an objective, support transition or bounded travel waypoint.
     An upcoming jump's run-up is a separate supported waypoint. The probe
     is restored exactly; only the spatial command reaches the executor.
-    Patrol uses controller-certified destinations directly and returns None
-    when none is certified; that state must not receive an imitation label.
     """
     from retroagi.core.smb_coaching import probe_state
-
-    if state.family == "enemy_patrol":
-        from .patrol_teacher import destination
-
-        return destination(env, state.execution, state.scene)
 
     if plan is not None and (
         plan.action == HOLD_GROUND or (plan.action == SMBAction.NOOP and env.mario["on_ground"])

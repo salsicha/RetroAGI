@@ -115,6 +115,27 @@ The re-check's training rounds then lost two layouts in four rounds:
   only a standing walker in the scene, until the stall limit. Holding is now
   taught only while something moves.
 
+From the user's review of the pictures after that:
+
+- **`enemy_patrol` is taught by the main teacher.** It alone had its own
+  teacher (`patrol_teacher.py`, now removed), which took the most progress
+  per frame: a hop along the floor before the first walker, clearing
+  nothing. It now gets no route proposal and the teacher weighs every move,
+  as for every family: a run-up into a stomp or a jump over each walker.
+- **A route waypoint is not taught before a move that wins.** The route's
+  proposal was taught whenever it progressed: `skill_lower_descent` walked
+  16 pixels to a waypoint, then ran down to the goal. A proposal that only
+  progresses is now taught when no move from here wins.
+- **The wait before a run-up applies only where a run would strand Mario**:
+  where no jump from rest crosses from where the run ends, given 4 pixels
+  more reach than from rest (`STRAND_TOLERANCE`; a run that brakes keeps a
+  little speed, and a 51-pixel pit 1 pixel past the longest jump from rest
+  was crossed from there). At most 4 waits are planned an episode
+  (`MAX_PLANNED_WAITS`): the screen can keep promising a run-up the
+  certified search refuses.
+- **The pictures' decision lists** give a hold decided again and again as
+  one line ("hold ×71"), named "hold" alone (it is aimed at nothing).
+
 Everything the skill learned from needs teaching again: the actions, their
 names and where they end changed in most families.
 

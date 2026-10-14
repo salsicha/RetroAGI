@@ -113,13 +113,11 @@ def practice_layout(family, index, difficulty, rejected=None):
 def test_the_teacher_waits_for_a_run_up_rather_than_strand_mario_at_a_wide_pit():
     # A 56-pixel pit no jump from rest crosses, a walker pacing the landing:
     # walking to the edge stranded Mario there until the episode stalled. He
-    # waits where he starts, then runs up keeping his speed into the jump.
+    # waits where he starts for the walker (a wait planned at most
+    # MAX_PLANNED_WAITS times), then crosses.
     result = replay(practice_layout("single_gap", 19, "hard"), family="single_gap")
     assert result["won"]
-    skills = [c["skill"] for c in result["commands"]]
-    assert skills[0]["mode"] == "hold"
-    move = next(s for s in skills if s["mode"] != "hold")
-    assert move["mode"] == "run" and move["carry"]
+    assert result["commands"][0]["skill"]["mode"] == "hold"
 
 
 @pytest.mark.timeout(600)

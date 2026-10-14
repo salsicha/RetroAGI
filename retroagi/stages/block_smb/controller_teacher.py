@@ -1093,26 +1093,29 @@ def destination(env, state, proposal):
         fragile.append((command, notes.pop("planned_jump", None)))
         return None
 
+    deferred = None
     if proposal is not None:
         result = trial(env, state, proposal, target)
         if (
             _nameable(env, state, proposal, result)
             and not (speed_run and _move_kind(env, result) == "stomp")
             and not (proposal.mode == "jump" and _mere_hop(env, result))
-            and (
-                result.won
-                or (
-                    result.safe
-                    and result.clearance >= 8
-                    and closes_on_enemy(env, target, proposal, result)
-                    and (proposal.mode != "hold" or _waiting(env, state))
-                    and not _overshoots_goal(env, result)
-                )
-            )
         ):
-            command = taught(_with_margin(env, state, target, proposal, result))
-            if command is not None:
-                return command
+            if result.won:
+                command = taught(_with_margin(env, state, target, proposal, result))
+                if command is not None:
+                    return command
+            elif (
+                result.safe
+                and result.clearance >= 8
+                and closes_on_enemy(env, target, proposal, result)
+                and (proposal.mode != "hold" or _waiting(env, state))
+                and not _overshoots_goal(env, result)
+            ):
+                # A proposal that only progresses is taught when no move
+                # from here wins (below): the route's waypoint 16 pixels on
+                # was taught before a run that reached the goal (user).
+                deferred = (proposal, result)
     # Rank every jump Mario can make and the screened runs (_jump_table,
     # _run_options: every destination considered) on label-only trials;
     # confirm in order through the full trial (which replays jumps through
@@ -1147,6 +1150,10 @@ def destination(env, state, proposal):
                 continue
             progressing.append(((back, last, False), (value, result.margin), goal))
     winners = [((back, last, False), rank, goal) for (back, last), rank, goal in winners]
+    if deferred is not None and not winners:
+        command = taught(_with_margin(env, state, target, *deferred))
+        if command is not None:
+            return command
     ordered = [
         (kind, goal)
         for backward in (False, True)
@@ -1524,12 +1531,42 @@ def _pit_takeoff(env, state, target, goal, result, memo):
     best = _pit_run_up(env, state, target, memo)
     if best is not None:
         return best
-    # Nothing crosses now: wait where Mario stands for a run-up that will,
-    # rather than run on toward the edge (a pit too wide to cross from rest
-    # stranded him there, a walker pacing the landing, until the episode
-    # stalled).
+    if goal.mode != "run" or _crosses_from(env, state, target, memo, goal.x):
+        # From where the run ends a jump from rest crosses, when its landing
+        # is clear: the run is taught (and the wait made there).
+        return goal, result
+    # Nothing crosses now and the run would strand Mario where no jump from
+    # rest crosses (a 56-pixel pit, a walker pacing the landing, until the
+    # episode stalled): wait where he stands for a run-up that will.
     wait = _pit_wait(env, state, target, memo)
     return wait if wait is not None else (goal, result)
+
+
+# Reach a jump from where a run stops is granted beyond one from rest (a run
+# that brakes keeps a little speed; a 51-pixel pit 1 pixel past the longest
+# jump from rest was crossed from there), when judging whether the run would
+# strand Mario (_crosses_from).
+STRAND_TOLERANCE = 4
+
+
+def _crosses_from(env, state, target, memo, travel) -> bool:
+    """Whether some jump from rest, ``travel`` pixels along the floor from
+    where Mario stands, lands across the pit ahead, given STRAND_TOLERANCE
+    more reach (its free path moved there, by geometry alone: enemies not
+    counted, their timing changes)."""
+    inputs = _pit_inputs(env, target)
+    if inputs is None:
+        return True
+    _, wanted = inputs
+    rects = [p["rect"] for p in env.platforms]
+    shift = travel + STRAND_TOLERANCE * target.direction
+    for option in _jump_table(env, state, target, memo, (target.direction,), described_only=False):
+        if not option.free_path:
+            continue
+        screened = _screen(env, option.free_path, shift, 0, {}, [], rects)
+        if screened is not None and wanted(option, screened[1], screened[2]):
+            return True
+    return False
 
 
 def _pit_inputs(env, target):
@@ -1563,9 +1600,12 @@ def _pit_run_up(env, state, target, memo):
 
 
 # A wait before a run-up over a pit (_pit_wait) is screened every WAIT_STEP
-# frames up to MAX_WAIT.
+# frames up to MAX_WAIT; at most MAX_PLANNED_WAITS are planned an episode (the
+# screen can keep promising a run-up the certified search then refuses, at
+# about 100 s a search).
 WAIT_STEP = 8
 MAX_WAIT = 240
+MAX_PLANNED_WAITS = 4
 
 
 def _pit_wait(env, state, target, memo):
@@ -1576,7 +1616,8 @@ def _pit_wait(env, state, target, memo):
     searching again (_planned_wait; searched every frame, a wait took minutes
     of teacher time), and the takeoff is then certified as usual."""
     inputs = _pit_inputs(env, target)
-    if inputs is None:
+    notes = getattr(state, "notes", None)
+    if inputs is None or notes is None or notes.get("waits_planned", 0) >= MAX_PLANNED_WAITS:
         return None
     travels, wanted = inputs
     waits = tuple(range(WAIT_STEP, MAX_WAIT + 1, WAIT_STEP))
@@ -1595,7 +1636,8 @@ def _pit_wait(env, state, target, memo):
     result = trial(env, state, hold, target)
     if not result.safe:
         return None
-    state.notes["planned_wait"] = (env.steps + wait, env.mario["x"])
+    notes["planned_wait"] = (env.steps + wait, env.mario["x"])
+    notes["waits_planned"] = notes.get("waits_planned", 0) + 1
     return hold, result
 
 
