@@ -1322,15 +1322,33 @@ def _one_action_fault(family, scenario) -> Optional[str]:
     not one action: "teacher_loses" when the teacher, through the executor
     (on the true scene), loses it, "two_actions" when it needs more than its
     jump (a run-up or a step back first: Mario starts too close to a tall
-    step, say); else None. Action families are single-action scenes."""
+    step, say); else None. Action families are single-action scenes.
+
+    The replay stops at the teacher's second command: the layout is redrawn
+    either way, and played on, a teacher holding under a raised walker
+    decided again every frame (about 5 s each) for minutes."""
     from .teacher_replay import replay
 
-    played = replay(copy.deepcopy(dict(scenario)), family=family)
+    commands = []
+
+    def second(command):
+        commands.append(command)
+        if len(commands) > 1:
+            raise _SecondCommand
+
+    try:
+        played = replay(copy.deepcopy(dict(scenario)), family=family, progress=second)
+    except _SecondCommand:
+        return "two_actions"
     if not played["won"]:
         return "teacher_loses"
     if len(played["commands"]) != 1:
         return "two_actions"
     return None
+
+
+class _SecondCommand(Exception):
+    """The teacher gave a second command in a one-action lesson."""
 
 
 def _verified_route(family, scenario, authored_actions):
