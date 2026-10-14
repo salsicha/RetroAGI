@@ -303,6 +303,8 @@ def action_words(action) -> str:
     if action == "unnamed":
         return "no name"
     verb, (kind, slot) = action
+    if verb == "hold":
+        return "hold"  # aimed at nothing: its pointer slot is unused
     return f"{verb} {SINGULAR.get(kind, kind)} {slot}"
 
 
