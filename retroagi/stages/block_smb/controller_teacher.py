@@ -1553,6 +1553,11 @@ def _best_certified(
         # tried.
         if tried[kind] >= {"now": CERTIFY, "later": 2 * CERTIFY, "step": 4 * CERTIFY}[kind]:
             continue
+        if kind == "step" and abs(travel) < MIN_RUN and now is not None:
+            # A step this short only when no jump from here works: for a few
+            # pixels more room it was taught before jumps that worked as they
+            # were (pipe_mount, skill_upper_gap_exit).
+            continue
         if kind == "now":
             if now is None:
                 tried[kind] += 1
