@@ -274,6 +274,31 @@ def test_the_agent_rechecks_waits_each_frame_without_losing_the_support_anchor()
     assert [step.ended for step in steps] == [None, "hold_recheck", "hold_recheck"]
 
 
+def test_the_skills_own_hold_is_carried_out_with_the_teachers_length():
+    from types import SimpleNamespace
+
+    from retroagi.core.action_tokens import ActionToken
+    from retroagi.core.smb_agent import SMBAgents
+    from retroagi.core.smb_observer import VisionObserver
+
+    # In training the teacher carries out the skill's own actions, holds
+    # included: a wait lasts as long as its true length (one action).
+    asked = []
+
+    def carry_out(number, action):
+        asked.append(action)
+        return SkillToken("hold", 0, 0, frames=30) if action.verb == "hold" else None
+
+    agents = SMBAgents(
+        VisionObserver(SceneList([scene()])), LayeredSMBPolicy().eval(), "cpu", carry_out=carry_out
+    )
+    made = [SimpleNamespace(action=ActionToken("hold"), skill=None)]
+    starting = [SimpleNamespace(target="bound")]
+    agents._actions(starting, [None], [None], None, made, [0], [0])
+    assert asked == [ActionToken("hold")]
+    assert made[0].skill == SkillToken("hold", 0, 0, frames=30) and starting[0].target is None
+
+
 # ── Layers ────────────────────────────────────────────────────────────────────
 
 

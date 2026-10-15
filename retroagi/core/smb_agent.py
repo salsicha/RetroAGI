@@ -439,18 +439,20 @@ class SMBAgents:
         ``carry_out``, the teacher's version of the action (``numbers``: the
         deciding copies' numbers)."""
         chosen = [i for i in own if made[i].action is not None]
+        if self.carry_out is not None:
+            # Holds too: the teacher's version of a hold lasts as long as its
+            # true wait (a wait is one action; teacher_actions.carry_out).
+            for i in chosen:
+                destination = self.carry_out(numbers[i], made[i].action)
+                made[i].skill = destination or SkillToken("hold", 0, 0)
+                starting[i].target = None
+            return
         for i in [i for i in chosen if made[i].action.verb == "hold"]:
             # A hold has no end to predict: it holds.
             made[i].skill = SkillToken("hold", 0, 0)
             starting[i].target = None
         chosen = [i for i in chosen if made[i].action.verb != "hold"]
         if not chosen:
-            return
-        if self.carry_out is not None:
-            for i in chosen:
-                destination = self.carry_out(numbers[i], made[i].action)
-                made[i].skill = destination or SkillToken("hold", 0, 0)
-                starting[i].target = None
             return
         if self.predictor is None:
             raise RuntimeError(
