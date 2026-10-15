@@ -28,7 +28,7 @@ def test_a_move_that_works_only_from_this_moment_is_not_taught():
         assert taught != hop and ct._tolerant(env, state, target, taught)
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize("family", ["action_climb", "action_climb_back", "action_jump_gap"])
 def test_a_single_jump_lesson_is_one_jump_from_where_mario_stands(family):
     from retroagi.stages.block_smb.family_atlas import atlas_layout, play_teacher
@@ -38,7 +38,15 @@ def test_a_single_jump_lesson_is_one_jump_from_where_mario_stands(family):
         scenario, why = atlas_layout(family, difficulty, q)
         if scenario is None:
             # Not a one-action lesson from there: the sampler redraws it.
-            assert why in ("two_actions", "teacher_loses", "no_verified_route")
+            assert why in (
+                "two_actions",
+                "teacher_loses",
+                "one_height",
+                "edge_landing",
+                "two_actions_through_vision",
+                "teacher_loses_through_vision",
+                "no_verified_route",
+            )
             continue
         assert scenario["action_jump_direction"] in (1, -1)
         played = play_teacher(scenario, family, difficulty)

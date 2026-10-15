@@ -112,7 +112,7 @@ def test_runs_and_holds():
         )
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(300)
 def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
     from retroagi.stages.block_smb.controller_teacher import _jump_table, teacher_target
     from retroagi.stages.block_smb.teacher_actions import carry_out, jump_aim

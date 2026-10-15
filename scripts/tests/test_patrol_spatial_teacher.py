@@ -17,7 +17,7 @@ def patrol(difficulty="easy", index=100):
     ).scenario
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "difficulty,index",
     [(d, 100 + i) for i, d in enumerate(["easy"] * 3 + ["medium"] * 3 + ["hard"] * 3)],

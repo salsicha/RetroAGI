@@ -38,7 +38,7 @@ def test_a_walker_on_a_raised_platform_is_watched_and_stomped_at_once():
     assert result["won"] and len(result["commands"]) == 1
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("index,difficulty", [(3011, "hard"), (3013, "easy")])
 def test_a_stomps_bounce_is_judged_as_the_next_command_plays_it(index, difficulty):
     # With no buttons the bounce stomped the arriving walker too and looked

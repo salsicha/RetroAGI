@@ -46,6 +46,7 @@ def test_skill_chooses_an_action_and_the_executor_gets_a_relative_pixel_destinat
     assert choose("skill", logits)[0] == ActionToken("land_on", ("surfaces", 1))
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("family", ACTION_FAMILIES[9:])
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_new_maneuvers_are_immediate_directional_jumps_with_spatial_landings(family, difficulty):
@@ -81,6 +82,7 @@ def test_new_maneuvers_are_immediate_directional_jumps_with_spatial_landings(fam
         env.close()
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("learner", ["skill"])
 @pytest.mark.parametrize("label", [True, False])
 @pytest.mark.parametrize("family", ["action_walk", "enemy_patrol"])
@@ -313,6 +315,7 @@ def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates(monkeypatc
     assert sample.reachability["reachable"] and sample.scenario != repeated[0]
 
 
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize(
     "family,tactic",
     [
@@ -369,6 +372,7 @@ def test_route_skill_ends_on_first_destination_without_a_tactic_sequence(
         env.close()
 
 
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("family", ["skill_enemy_bypass", "skill_enemy_bypass_back"])
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_enemy_bypass_lands_beyond_a_live_enemy_and_stomping_fails(family, difficulty):

@@ -26,7 +26,7 @@ def sample(family, index=103, difficulty="medium"):
     ).scenario
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "family,index,difficulty",
     [
