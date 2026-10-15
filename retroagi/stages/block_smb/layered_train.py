@@ -774,6 +774,14 @@ def play_episodes(
             if copy not in playing and pending:
                 playing[copy] = _Lane(pending.pop(0), copy)
                 agents.reset(copy, playing[copy].switch, watch=len(playing[copy].watching))
+                if learner is not None:
+                    # Training: the executor aims at walkers where the
+                    # simulator moves them, as the teacher's trials do; the
+                    # learner's memory forecasts are learned, never relied on
+                    # (user, 2026-10-14). As deployed, they are its own.
+                    from .controller_teacher import exact_positions
+
+                    agents.copies[copy].spatial.tracks.exact = exact_positions(playing[copy].env)
         live = list(playing.values())
         if learner is not None:
             for lane in live:

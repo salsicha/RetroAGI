@@ -30,6 +30,10 @@ def replay(
     state.family = family or state.family
     state.visual_observer = observer
     spatial, executor, landing = SpatialFeedback(), SMBExecutor(), LandingWatch()
+    from .controller_teacher import exact_positions
+
+    # The teacher's play aims at walkers where the simulator moves them.
+    spatial.tracks.exact = exact_positions(env)
     # Watch the pre-episode pictures first, as the agent does.
     watched = (
         observer.observe(env.watched_screens)

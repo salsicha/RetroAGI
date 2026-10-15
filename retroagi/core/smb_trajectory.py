@@ -6,6 +6,7 @@ response to buttons; terrain, enemies and edge safety are the skill's responsibi
 
 from copy import copy
 from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 from .smb_physics import NESPlayerMotion
 
@@ -69,6 +70,13 @@ class Track:
 class VisualTracks:
     tracks: list = field(default_factory=list)
     next_identity: int = 1
+    # Training only: exact(track, frames) -> where the simulator will have
+    # moved the walker the track follows, ``frames`` from now (a box in the
+    # scene's pixels), or None. A jump aimed at a walker then lands where it
+    # will be (aimed_goal), not where the learner's memory forecasts it: the
+    # teacher teaches and the memory learns, never the other way round (user,
+    # 2026-10-14). None when the agent plays as deployed.
+    exact: Optional[Callable] = None
 
     def observe(self, scene, scroll):
         objects = [(e.box, e.kind) for e in scene.enemies if e.kind != "defeated"]
@@ -413,6 +421,31 @@ def best_holds(scene, motion, box, goals, direction, paths=None):
     return out
 
 
+def aimed_goal(target, offset, tracks, scene, motion, box, direction) -> tuple:
+    """The point a jump aimed at ``target`` (a track; ``offset`` from its middle
+    and top) aims at. A walker's landing is planned where it will be when this
+    jump ends: with tracks.exact (training), its place from the simulator at
+    the jump's own landing time, the jump planned again until that time
+    settles; else where the memory forecasts it (Track.landing_box: trusted
+    forecasts only, else where it stands now)."""
+    exact = getattr(tracks, "exact", None)
+    if exact is None or target.kind != "walker":
+        b = target.landing_box()
+        return ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
+    b, frames = target.box, None
+    for _ in range(4):
+        goal = ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
+        _, prediction = _best_hold(scene, motion, box, goal, direction)
+        if len(prediction.steps) == frames:
+            break
+        frames = len(prediction.steps)
+        moved = exact(target, frames)
+        if moved is None:
+            break
+        b = moved
+    return ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
+
+
 def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None):
     """Choose an immediate takeoff; skill must request any preparation as a run."""
     box = scene.mario.box
@@ -433,10 +466,7 @@ def plan_flight(scene, tracks, speed, destination, proposed=None, *, motion=None
         else (0, 0)
     )
     if target is not None:
-        # A walker's landing is planned where the memory forecasts it will be
-        # when this jump ends (Track.landing_box), not where it stands now.
-        b = target.landing_box()
-        goal = ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
+        goal = aimed_goal(target, offset, tracks, scene, motion, box, direction)
     hold, prediction = _best_hold(scene, motion, box, goal, direction)
     return Flight(
         goal,

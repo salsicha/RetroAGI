@@ -1344,18 +1344,47 @@ def _one_action_fault(family, scenario) -> Optional[str]:
         return "teacher_loses"
     if len(played["commands"]) != 1:
         return "two_actions"
-    if len(_winning_holds(family, scenario)) < 2:
+    winners = _winning_holds(family, scenario, rooms=True)
+    if len(winners) < 2:
         return "one_height"
+    rooms = [room for _, room in winners if room is not None]
+    if rooms and max(rooms) < LANDING_INSET:
+        # Every jump that wins lands within LANDING_INSET pixels of its
+        # platform's edge (a climb onto a step 40 pixels tall from 29 pixels
+        # away: 1 pixel inside at best, against a goal box over the whole
+        # step). 4 pixels, not ENOUGH_LANDING's 6: at 6, four in five
+        # standing jumps across a gap were redrawn (user, 2026-10-14).
+        return "edge_landing"
+    # Through vision as well, as training plays it: a climb onto a step 56
+    # pixels tall from 5 pixels beside it was won by labels, but every jump a
+    # destination names clipped the step's corner under vision's steering.
+    from .teacher_replay import reference_vision
+
+    commands.clear()
+    try:
+        seen = replay(
+            copy.deepcopy(dict(scenario)),
+            family=family,
+            progress=second,
+            observer=reference_vision()[0],
+        )
+    except _SecondCommand:
+        return "two_actions_through_vision"
+    if not seen["won"] or len(seen["commands"]) != 1:
+        return "teacher_loses_through_vision"
     return None
 
 
-def _winning_holds(family, scenario) -> list:
+def _winning_holds(family, scenario, rooms=False) -> list:
     """The jump heights (holds of the jump button) from where a one-jump lesson
     starts that win it, by label-only trials. A lesson only one wins is too
     narrow to teach: a stomp up onto a walker standing on a small raised
     platform, which vision placed 4 rows lower than the truth, was lost in
     the re-check while the label-only check won it (2 of 176 one-jump
-    lessons a round)."""
+    lessons a round). With ``rooms``: [(hold, its landing's distance from
+    the nearer edge of the platform it ends on)], the distance None when its
+    destination does not name its landing (the teacher cannot teach it) or it
+    ends standing on nothing."""
     from retroagi.core.smb_executor import SMBExecutor
     from retroagi.core.smb_scene_labels import scene_from_labels
     from retroagi.core.smb_spatial_feedback import SpatialFeedback
@@ -1384,6 +1413,12 @@ def _winning_holds(family, scenario) -> list:
         options = ct._jump_table(
             env, state, ct.teacher_target(env), {}, (direction,), described_only=False
         )
+        if rooms:
+            return sorted(
+                (o.hold, o.result.edge_margin if o.described else None)
+                for o in options
+                if o.result.won
+            )
         return sorted(o.hold for o in options if o.result.won)
     finally:
         env.close()

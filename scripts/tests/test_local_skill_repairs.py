@@ -69,6 +69,7 @@ def test_hold_skill_finishes_at_timer_without_a_departure_or_gap_crossing():
         env.close()
 
 
+@pytest.mark.timeout(900)  # each one-jump lesson drawn is also replayed through vision
 def test_stomp_label_anchors_the_current_enemy_and_restores_probe_contact():
     # The first held-out layout whose enemy walks.
     scenario = next(

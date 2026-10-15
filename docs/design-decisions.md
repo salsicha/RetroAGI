@@ -145,6 +145,30 @@ From the user's review of the pictures after that:
 - **The pictures' decision lists** give a hold decided again and again as
   one line ("hold ×71"), named "hold" alone (it is aimed at nothing).
 
+From the full re-check that followed (5 of about 10,000 layouts lost):
+
+- **The teacher is omniscient** (user: "the teacher teaches and the LSTM
+  learns, not the other way around"). A jump aimed at a walker was planned
+  where the learner's memory forecast it; an older checkpoint's forecast of
+  a standing walker made three stomp lessons miss. In training the
+  executor, in the teacher's trials and in the episode itself, now aims at
+  where the simulator will have moved the walker when the jump lands
+  (`VisualTracks.exact`, `exact_positions`; `smb_trajectory.aimed_goal`
+  plans the jump again until its landing time settles). As deployed, the
+  agent aims by its own memory, as before. The re-check now plays with the
+  policy training starts from, not an older one.
+- **One-jump lessons are also replayed through vision** before they are
+  used: a climb onto a step 56 pixels tall from 5 pixels away was won with
+  labels, but under vision's steering every jump a destination names
+  clipped the step's corner.
+- **A run off a ledge aims 4 pixels past its end** (`DROP_MARGIN`): aimed
+  just clear of it, a run stopped 3 pixels short through vision and Mario
+  stood on the ledge's corner.
+- **Of the moves that win, the one ending nearest the goal box's middle is
+  taught** (user), and a one-jump lesson whose jumps all land within 4
+  pixels of the platform's edge is redrawn (`edge_landing`): a climb onto a
+  wide step from too close landed 1 pixel inside it.
+
 Everything the skill learned from needs teaching again: the actions, their
 names and where they end changed in most families.
 

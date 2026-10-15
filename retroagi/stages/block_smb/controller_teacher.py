@@ -24,7 +24,7 @@ from retroagi.core.smb_coaching import probe_state, training_target
 from retroagi.core.smb_executor import SMBExecutor
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import VisualTracks, best_holds, hold_paths
+from retroagi.core.smb_trajectory import VisualTracks, aimed_goal, best_holds, hold_paths
 from retroagi.core.tokens import SKILL_X, SKILL_Y, SkillToken
 
 from . import tactic_schedule
@@ -63,6 +63,11 @@ class Result:
     # enemy he ended on. Commands with the same outcome are versions of the
     # same move.
     outcome: tuple = field(default=())
+    # For a command that wins: how far Mario's middle ends from the goal
+    # box's middle (pixels); 0 otherwise. Of the moves that win, the one
+    # ending nearest the box's middle is taught (_rank): the lowest climb
+    # onto a wide step had landed on its near edge (user, 2026-10-14).
+    goal_offset: float = 0.0
 
     @property
     def margin(self) -> float:
@@ -208,6 +213,9 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
         if state.execution is None:
             spatial.motion = deepcopy(env.motion)
             spatial.observe(scene)
+        # The teacher's trials aim at walkers where the simulator moves them,
+        # never by the learner's forecasts.
+        spatial.tracks.exact = exact_positions(env)
         executor = SMBExecutor(last_button=2 if spatial.motion.previous_jump else 0)
         controller = getattr(state, "controller", None)
         if controller is not None:
@@ -230,6 +238,12 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
         path = [_body(env)] if record else []
         def finished():
             enemy_gap, edge, outcome, distances = _measured(env, watch, alive, mark)
+            m = env.mario
+            offset = (
+                abs(m["x"] + m["w"] / 2 - env.goal.centerx)
+                if env._goal_credited and env.goal is not None
+                else 0.0
+            )
             return Result(
                 safe=env._goal_credited,
                 won=env._goal_credited,
@@ -241,6 +255,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                 end_dx=env.mario["x"] - x,
                 end_dy=env.mario["y"] + env.mario["h"] - feet,
                 path=path,
+                goal_offset=offset,
             )
 
         for _ in range(192):
@@ -361,6 +376,11 @@ CERTIFY = 6
 # jump is remembered and taken at the next decision (_commit), so it is not
 # re-planned a pixel at a time.
 MIN_RUN = 8
+# A run off a ledge onto a lower floor aims at least this far past the
+# ledge's end (pixels beyond Mario's half width): a run aimed 5 pixels past
+# it, Mario's body just clear, stopped 3 pixels short through vision and he
+# stood on the ledge's corner.
+DROP_MARGIN = 4
 # Running first must give the jump this much more room than jumping now.
 GAIN = 4
 
@@ -394,9 +414,10 @@ def _landing_heights(env, feet):
     return sorted(t for t in tops if SKILL_Y[0] <= t <= SKILL_Y[-1])
 
 
-def _plan_goal(tracks, box, x, y):
+def _plan_goal(tracks, box, x, y, scene, motion, direction):
     """The point a jump to (x, y) from Mario's feet aims at: plan_flight's
-    rule (a walker under it is aimed at where it is forecast to be)."""
+    rule (a walker under it is aimed at where it will be when the jump lands:
+    smb_trajectory.aimed_goal)."""
     goal = ((box[0] + box[2]) / 2 + x, box[3] + y)
     targets = [
         t
@@ -409,8 +430,32 @@ def _plan_goal(tracks, box, x, y):
         return goal
     t = targets[0]
     offset = (goal[0] - (t.box[0] + t.box[2]) / 2, goal[1] - t.box[1])
-    b = t.landing_box()
-    return ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
+    return aimed_goal(t, offset, tracks, scene, motion, box, direction)
+
+
+def exact_positions(env):
+    """VisualTracks.exact for training: where the simulator will have moved
+    the walker a track follows (matched by its box, within 8 pixels), a number
+    of frames from now, in the scene's pixels; None when no walker matches.
+    The teacher is omniscient (user, 2026-10-14): its trials, and the agent's
+    executor in training, aim stomps by this, not by the learner's forecast."""
+
+    def exact(track, frames):
+        camera = int(env.camera_x)
+        best = None
+        for i, e in enumerate(env.enemies):
+            if e["dead"] or e["h"] <= 0:
+                continue
+            d = abs(e["x"] - camera - track.box[0]) + abs(e["y"] - track.box[1])
+            if d <= 8 and (best is None or d < best[0]):
+                best = (d, i)
+        if best is None:
+            return None
+        boxes = _enemy_paths(env, frames)[best[1]]
+        b = boxes[min(frames, len(boxes) - 1)]
+        return (b[0] - camera, b[1], b[2] - camera, b[3])
+
+    return exact
 
 
 def _path_landing(path, rects):
@@ -476,7 +521,7 @@ def _jump_groups(env, state, memo, direction):
     if not destinations:
         return groups_out
     paths = hold_paths(scene, motion, box, direction)
-    goals = [_plan_goal(tracks, box, x, y) for x, y in destinations]
+    goals = [_plan_goal(tracks, box, x, y, scene, motion, direction) for x, y in destinations]
     groups = defaultdict(list)
     for (x, y), (hold, _, _) in zip(
         destinations, best_holds(scene, motion, box, goals, direction, paths)
@@ -971,10 +1016,11 @@ def _screened_runs(env, state, target):
             if abs(dx) < MIN_RUN:
                 continue
             on_floor = r is floor
-            if not on_floor and floor.left - half < x < floor.right + half:
+            if not on_floor and floor.left - half - DROP_MARGIN < x < floor.right + half + DROP_MARGIN:
                 # Under the floor he stands on: a lower floor is walked onto
-                # off its ends only. (Aimed under a raised block, every run
-                # stopped at once; with hops never taught, nothing was left.)
+                # off its ends only, DROP_MARGIN past them. (Aimed under a
+                # raised block, every run stopped at once; with hops never
+                # taught, nothing was left.)
                 continue
             if on_floor:
                 frames = _run_frames(env.motion, dx)
@@ -1253,10 +1299,13 @@ def _exact_key(result) -> tuple:
 def _rank(goal, result):
     """Larger is better among versions of one move: enough room from every
     threat (_room_key: up to ENOUGH_ROOM, the closest first), then the
-    destination nearest where it lands (for a stomp, the enemy's middle),
-    then the lowest jump, then the most room, then the quickest."""
+    move that ends nearest the goal box's middle (of moves that win; in
+    4-pixel steps), then the destination nearest where it lands (for a stomp,
+    the enemy's middle), then the lowest jump, then the most room, then the
+    quickest."""
     return (
         _room_key(result.distances) if result.distances else _distance_key(result),
+        -(getattr(result, "goal_offset", 0.0) // 4),
         -getattr(result, "aim_error", 0.0),
         -_rise(result.path),
         _exact_key(result),
@@ -2183,7 +2232,7 @@ def _dodge_in_area(env, state, target):
         if not xs or y not in SKILL_Y:
             return None
         tracks = getattr(spatial, "tracks", None) or VisualTracks()
-        goals = [_plan_goal(tracks, box, x, y) for x in xs]
+        goals = [_plan_goal(tracks, box, x, y, scene, motion, direction) for x in xs]
         made = best_holds(scene, motion, box, goals, direction, paths_of[direction])
         fits = [x for x, (h, _, _) in zip(xs, made) if h == hold]
         if not fits:
