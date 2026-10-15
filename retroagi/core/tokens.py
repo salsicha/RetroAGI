@@ -56,6 +56,9 @@ EXECUTION_FEEDBACK = (
     "moved_y",
     "remaining_x",
     "remaining_y",
+    # The last action (a wait) was ended because a coming enemy will need a
+    # move then: the executor's report, not a prediction (user, 2026-10-15).
+    "collision_due",
 )
 EXECUTION_WIDTH = len(EXECUTION_FEEDBACK)
 
@@ -76,7 +79,9 @@ class SkillToken:
     ``frames`` (holds only): how long the hold lasts, a wait as one action:
     until something will need a move (a walker coming within the distance a
     jump over it needs, say). Training: the simulator's truth; deployed: the
-    prediction. 0 is a single frame, decided again after it.
+    prediction. 0 is a single frame, decided again after it. ``threat``
+    (holds only): it ends because a coming enemy will need a move then (the
+    executor reports so: "collision_due").
     """
 
     mode: str
@@ -84,6 +89,7 @@ class SkillToken:
     y: int
     carry: bool = False
     frames: int = 0
+    threat: bool = False
 
     def __post_init__(self):
         if self.mode not in SKILL_MODES:
@@ -94,6 +100,8 @@ class SkillToken:
             raise ValueError("only a run keeps its speed at its destination")
         if self.frames and (self.mode != "hold" or not 0 < self.frames <= 255):
             raise ValueError("only a hold lasts a number of frames (1 to 255)")
+        if self.threat and not self.frames:
+            raise ValueError("only a hold of some length ends at a coming enemy")
 
 
 def encode_skill(token: SkillToken) -> torch.Tensor:

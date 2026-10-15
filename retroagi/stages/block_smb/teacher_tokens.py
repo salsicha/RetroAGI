@@ -376,6 +376,83 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Optio
     return destination(env, state, proposal if plan is not None else None)
 
 
+def whole_wait(env, state: TeacherState, command: Optional[SkillToken]) -> Optional[SkillToken]:
+    """The teacher's one-frame hold ``command`` as one whole wait, for playing
+    it: held on in a probe (the executor's own hold buttons) for as many
+    frames as the teacher would hold again each frame. It ends where the
+    teacher would do anything else, where the schedule's segment ends (the
+    tactic is decided again), when Mario leaves the ground or after
+    HOLD_FRAMES. A wait is one action, its length the simulator's truth in
+    training (user, 2026-10-15). ``threat``: it ends with a walker that
+    would reach Mario, standing, within DODGE_FRAMES (collision_truth): the
+    executor then reports the wait as ended by a coming enemy.
+
+    Any other command is returned as it is. Only a hold that is played is
+    measured: its label is the verb alone."""
+    if (
+        command is None
+        or command.mode != "hold"
+        or command.frames
+        or not env.mario["on_ground"]
+    ):
+        return command
+    from retroagi.core.smb_coaching import probe_state
+    from retroagi.core.smb_executor import HOLD_FRAMES, SMBExecutor
+    from retroagi.core.smb_scene_labels import scene_from_labels
+    from retroagi.core.smb_spatial_feedback import SpatialFeedback
+
+    from .collision_truth import collisions
+    from .controller_teacher import DODGE_FRAMES
+
+    held, threat = 0, False
+    with probe_state(env):
+        later = copy.copy(state)
+        later.notes = copy.deepcopy(state.notes)
+        later.observer = copy.deepcopy(state.observer)
+        scene = state.scene or scene_from_labels(env.scene_labels())
+        if state.execution is not None:
+            spatial = copy.deepcopy(state.execution)
+        else:
+            spatial = SpatialFeedback()
+            spatial.motion = copy.deepcopy(env.motion)
+            spatial.observe(scene)
+        executor = SMBExecutor(last_button=2 if spatial.motion.previous_jump else 0)
+        if state.controller is not None:
+            executor.hold = copy.deepcopy(state.controller.hold)
+            executor.last_button = state.controller.last_button
+        executor.start(spatial.begin(SkillToken("hold", 0, 0, frames=HOLD_FRAMES), scene))
+        mark = (env._tactic_index, env._route_done)
+        while held < HOLD_FRAMES:
+            button = executor.press(scene)
+            spatial.executed(button, scene)
+            _, _, done, truncated, _ = env.step(button)
+            held += 1
+            if done or truncated:
+                break
+            later.observe_frame(env)
+            scene = scene_from_labels(env.scene_labels())
+            spatial.observe(scene)
+            if not env.mario["on_ground"] or (env._tactic_index, env._route_done) != mark:
+                break
+            later.execution, later.controller, later.scene = spatial, executor, scene
+            plan = (
+                None
+                if state.family == "enemy_patrol"
+                else teacher_plan(env, later, certify_holds=False)[0]
+            )
+            again = teacher_skill(env, later, plan)
+            if again is None or again.mode != "hold" or again.frames:
+                threat = (
+                    again is not None
+                    and again.mode != "hold"
+                    and any(c.kind == "hit" for c in collisions(env, horizon=DODGE_FRAMES))
+                )
+                break
+    if held <= 1:
+        return command
+    return SkillToken("hold", 0, 0, frames=held, threat=threat)
+
+
 # A run label follows the route until its next event (a jump, a wait, a
 # landing, the objective) or this many frames. A shorter cap (it was 64) made
 # every long run the same distance (104 pixels from a standstill).

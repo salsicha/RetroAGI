@@ -591,7 +591,7 @@ class SMBAgents:
                     "landed"
                     if landed
                     else (
-                        "done"
+                        ("threat" if copy.executor.plan.threat else "done")
                         if copy.executor.finished
                         else (
                             "hold_recheck"
@@ -612,6 +612,7 @@ class SMBAgents:
                     reason = "no_progress"
                 if reason is not None:
                     copy.executor.end(reason)
+                    copy.spatial.ended = reason
             ended.append(reason)
         deciding = [k for k, copy in enumerate(playing) if copy.executor.idle and not copy.watch]
         decisions: list[Optional[Decision]] = [None] * len(playing)

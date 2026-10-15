@@ -407,6 +407,11 @@ class _Lane:
             self.asked["skill"] = own
             self.asked["action_label"] = self._as_action(own) if own is not None else None
         label = (self.asked.get("action_label") or {}).get("action")
+        if action.verb == "hold":
+            from .teacher_tokens import whole_wait
+
+            # The teacher's hold, played: as long as its whole wait.
+            self.asked["skill"] = whole_wait(self.env, self.teacher, self.asked.get("skill"))
         command = carry_out(self.env, self.teacher, action, label, self.asked.get("skill"))
         if command is None:
             self.unsafe_choice = True
@@ -443,6 +448,11 @@ class _Lane:
                     self.env, self.teacher, certify_holds=False
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
+            if asked["plays_teacher"]:
+                from .teacher_tokens import whole_wait
+
+                # Played: a hold as long as its whole wait.
+                asked["skill"] = whole_wait(self.env, self.teacher, asked["skill"])
             if self.task.label and asked["skill"] is not None:
                 from .teacher_actions import _trial_of
 
@@ -1926,7 +1936,14 @@ def load_layered_checkpoint(path, device="cpu"):
         )
     saved_skill = dict(saved.get("skill") or {})
     legacy_skill = "strategy_context" not in saved_skill
-    legacy_feedback = "execution_feedback" not in saved_skill
+    saved_feedback = saved_skill.get("execution_feedback")
+    # No feedback at all, or fewer numbers than now (new ones are appended,
+    # as "collision_due" was on 2026-10-15): the skill's reading of them
+    # widens, the new ones starting with no influence.
+    legacy_feedback = saved_feedback is None or (
+        len(saved_feedback) < len(now["skill"]["execution_feedback"])
+        and list(saved_feedback) == now["skill"]["execution_feedback"][: len(saved_feedback)]
+    )
     if legacy_feedback:
         saved_skill["execution_feedback"] = now["skill"]["execution_feedback"]
         checkpoint["trained_layers"] = []

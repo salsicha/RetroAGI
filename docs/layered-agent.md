@@ -85,8 +85,14 @@ first decision let the tracks see enemies move.
 
 In Block SMB training a wait is one action: the teacher's hold lasts until it
 would do something else, or until a coming enemy is close enough that a jump
-over it is due (`controller_teacher._dodge_wait`). The skill then picks the
-next action, which it learns from the teacher.
+over it is due (`controller_teacher._dodge_wait`). Every other teacher hold
+is measured the same way when it is played (`teacher_tokens.whole_wait`):
+held on in a probe for as many frames as the teacher would hold again, up to
+the end of the schedule's segment or 255 frames. A wait that ends because a
+walker coming at Mario would reach him soon (within 48 frames, by the
+simulator's truth) is marked so: the executor ends it as `threat`, and the
+skill's next execution feedback says so (`collision_due`). The skill then
+picks the next action, which it learns from the teacher.
 
 Evaluation is Full SMB played many times, learning continuing on every
 playthrough, the world model and the trackers included, in speed mode (time
@@ -142,9 +148,10 @@ landmarks; featureless scrolling uses Mario's button-response displacement until
 landmarks return. This dead reckoning cannot independently verify progress.
 
 If observed displacement remains within two pixels in both axes for 24 frames,
-an active movement ends with `no_progress`. Skill receives eight explicit values:
+an active movement ends with `no_progress`. Skill receives nine explicit values:
 feedback present, no progress, arrival, elapsed time, horizontal/vertical
-displacement, and horizontal/vertical distance remaining. Training records the
+displacement, horizontal/vertical distance remaining, and whether the last
+action was a wait ended by a coming enemy (`collision_due`). Training records the
 same feedback supplied during execution. This lets skill learn to choose another
 destination after a failed attempt. The controller does not invent a new target.
 Hold commands retain their separate platform-relative controller.

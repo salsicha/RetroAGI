@@ -140,3 +140,31 @@ def test_runup_executor_checkpoint_requires_requalification_without_changing_wei
     loaded, metadata = load_layered_checkpoint(path)
     assert metadata["trained_layers"] == []
     assert all(torch.equal(v, loaded.state_dict()[k]) for k, v in policy.state_dict().items())
+
+
+def test_a_checkpoint_without_the_newest_feedback_number_reads_it_with_no_influence(tmp_path):
+    # "collision_due" was appended on 2026-10-15: a skill saved before it
+    # reads it with zero weight, its other weights kept.
+    policy = LayeredSMBPolicy()
+    state = policy.state_dict()
+    width = state["skill.above.weight"].shape[1]
+    state["skill.above.weight"] = state["skill.above.weight"][:, : width - 1].clone()
+    layout = token_layout()
+    layout["skill"]["execution_feedback"] = layout["skill"]["execution_feedback"][:-1]
+    path = tmp_path / "before_collision_due.pt"
+    torch.save(
+        dict(
+            settings=asdict(policy.settings),
+            state_dict=state,
+            token_layout=layout,
+            observation_layout=observation_layout(),
+            trained_layers=["skill"],
+            memory_version=4,
+        ),
+        path,
+    )
+    loaded, _ = load_layered_checkpoint(path)
+    weight = loaded.state_dict()["skill.above.weight"]
+    assert weight.shape[1] == width
+    assert torch.equal(weight[:, : width - 1], state["skill.above.weight"])
+    assert not weight[:, width - 1 :].any()

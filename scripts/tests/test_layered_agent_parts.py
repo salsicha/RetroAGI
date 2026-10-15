@@ -298,6 +298,34 @@ def test_the_skills_own_hold_is_carried_out_with_the_teachers_length():
     assert made[0].skill == SkillToken("hold", 0, 0, frames=30)
 
 
+def test_a_wait_ended_by_a_coming_enemy_is_reported_to_the_skill():
+    from retroagi.core.smb_agent import SMBAgents
+    from retroagi.core.smb_observer import VisionObserver
+    from retroagi.core.tokens import EXECUTION_FEEDBACK
+
+    # The teacher's wait ends where a walker coming at Mario needs the jump
+    # (``threat``): the executor ends it as "threat", and the skill's next
+    # feedback says so ("collision_due"), its report, not a prediction.
+    with pytest.raises(ValueError):
+        SkillToken("hold", 0, 0, threat=True)  # a one-frame hold ends no wait
+    assert EXECUTION_FEEDBACK[-1] == "collision_due"
+    support = [Surface(60, 180, 208, False)]
+    for threat, end in ((True, "threat"), (False, "done")):
+        pictures = [scene(surfaces=support) for _ in range(4)]
+        agents = SMBAgents(VisionObserver(SceneList(pictures)), LayeredSMBPolicy().eval(), "cpu")
+        wait = SkillToken("hold", 0, 0, frames=3, threat=threat)
+
+        def given(copies, scenes):
+            return {"tactic": [tactic_token("hold_ground")], "skill": [wait]}
+
+        screen = [np.zeros((240, 256, 3), np.uint8)]
+        steps = [agents.act(screen, [0], given=given)[0] for _ in pictures]
+        assert [step.ended for step in steps] == [None, None, None, end]
+        assert [step.decision is not None for step in steps] == [True, False, False, True]
+        report = agents.copies[0].spatial.report(scene(surfaces=support))
+        assert report[EXECUTION_FEEDBACK.index("collision_due")] == float(threat)
+
+
 # ── Layers ────────────────────────────────────────────────────────────────────
 
 

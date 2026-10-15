@@ -8,7 +8,7 @@ from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
 
 from .env import MarioScenarioEnv
-from .teacher_tokens import episode_teacher, teacher_plan, teacher_skill
+from .teacher_tokens import episode_teacher, teacher_plan, teacher_skill, whole_wait
 
 
 def replay(
@@ -83,7 +83,7 @@ def replay(
                     if state.family == "enemy_patrol"
                     else teacher_plan(env, state, certify_holds=False)[0]
                 )
-                goal = teacher_skill(env, state, plan)
+                goal = whole_wait(env, state, teacher_skill(env, state, plan))
                 if goal is None:
                     break
                 commands.append(

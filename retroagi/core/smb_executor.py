@@ -42,6 +42,9 @@ class ActionPlan:
     # A hold the skill gave a length (a wait as one action): played to its
     # end, not re-decided after a frame (reconsider).
     wait: bool = False
+    # Such a hold ends because a coming enemy will need a move then: its end
+    # is reported as "threat".
+    threat: bool = False
 
     def __post_init__(self):
         if self.action not in EXECUTOR_ACTIONS:

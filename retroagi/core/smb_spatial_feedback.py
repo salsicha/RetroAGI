@@ -92,6 +92,9 @@ class SpatialFeedback:
     start_feet: float = 0.0
     observed_frames: int = 0
     positions: deque = field(default_factory=lambda: deque(maxlen=24))
+    # Why the last action ended (the agent's reason: "landed", "done",
+    # "threat", ...), reported to the skill.
+    ended: str | None = None
 
     @property
     def stalled(self):
@@ -131,6 +134,7 @@ class SpatialFeedback:
             dy / 240,
             rx / 256,
             ry / 240,
+            float(self.ended == "threat"),
         ]
 
     def executed(self, button, scene):
@@ -273,7 +277,12 @@ class SpatialFeedback:
             return proposed  # Exact teacher playback only.
         if proposed is None and destination.mode == "hold":
             self.status = "holding"
-            return ActionPlan(HOLD_GROUND, max(1, destination.frames), wait=destination.frames > 0)
+            return ActionPlan(
+                HOLD_GROUND,
+                max(1, destination.frames),
+                wait=destination.frames > 0,
+                threat=destination.threat,
+            )
         if proposed is None and destination.mode == "run":
             if scene.mario.box is None:
                 self.status = "lost_observation"

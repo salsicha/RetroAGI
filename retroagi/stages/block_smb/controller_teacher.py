@@ -258,7 +258,8 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                 goal_offset=offset,
             )
 
-        for _ in range(192):
+        # A wait may be longer than a jump's trial (HOLD_FRAMES).
+        for _ in range(max(192, plan.frames + SETTLE_FRAMES + 1)):
             button = executor.press(scene)
             spatial.executed(button, scene)
             _, _, done, truncated, _ = env.step(button)
@@ -343,7 +344,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                     end_dy=env.mario["y"] + env.mario["h"] - feet,
                     path=path,
                 )
-        return Result(frames=192)
+        return Result(frames=env.steps - start)
 
 
 def _body(env):
@@ -2321,7 +2322,7 @@ def _dodge_wait(env, state, target):
         limit = min(limit, seg["end"]["frames"] - (env.steps - env._tactic_started))
     if not seg.get("dodge") or limit <= 1:
         return SkillToken("hold", 0, 0)
-    held = limit
+    held, threat = limit, False
     with probe_state(env):
         spatial = deepcopy(state.execution) if state.execution is not None else SpatialFeedback()
         scene = state.scene or scene_from_labels(env.scene_labels())
@@ -2339,9 +2340,11 @@ def _dodge_wait(env, state, target):
             later = copy(state)
             later.execution, later.controller, later.scene = spatial, None, scene
             if _dodge_in_area(env, later, target) is not None:
-                held = frame
+                # A coming walker needs the jump then: the executor reports
+                # the wait as ended by it ("collision_due").
+                held, threat = frame, True
                 break
-    return SkillToken("hold", 0, 0, frames=held)
+    return SkillToken("hold", 0, 0, frames=held, threat=threat)
 
 
 def _waiting(env, state):

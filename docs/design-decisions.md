@@ -64,11 +64,15 @@ Built so far:
   are gone; old checkpoints migrate (`memory_version` 4); the predictor is
   refused in training.
 - Collision truth (`stages/block_smb/collision_truth.py`).
+- Every wait is one action of true length. The teacher's one-frame holds are
+  measured when played (`teacher_tokens.whole_wait`). A wait ended by a coming
+  walker is marked (`SkillToken.threat`), and the executor ends it as `threat`.
+  The skill's execution feedback gains a ninth number, `collision_due`. Older
+  checkpoints read it with zero weight.
 
-Next: every wait as one action of true length, with "ended by a coming
-collision" in the executor's feedback. In training a walk is the teacher's
-certified-safe version, so no collision ever cuts one short: forced ends of
-walks come with the trackers. The world model and trackers follow
+In training a walk is the teacher's certified-safe version, so no collision
+ever cuts one short: forced ends of walks come with the trackers. The world
+model and trackers follow
 (`/home/amoran/.claude/plans/resilient-wobbling-abelson.md`, Phase 2).
 
 ## 2026-10-15 — Holding: a trigger buffer around Mario for each walker (user decision; built)

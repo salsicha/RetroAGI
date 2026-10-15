@@ -97,6 +97,54 @@ def test_a_hold_jumps_a_walker_at_a_trigger_distance_that_grows_with_its_speed()
     assert gaps[0.8] > gaps[0.35] > 0
 
 
+def test_a_faster_walker_ends_the_wait_sooner_and_the_wait_ends_at_it():
+    from copy import deepcopy
+
+    # The wait lasts until the walker needs the jump (the simulator's truth
+    # in training): sooner the faster it comes; and it is marked as ended by
+    # it, which the executor reports to the skill ("collision_due").
+    base = sample("choice_hold_area")
+    waits = {}
+    for speed in (0.35, 0.8):
+        scenario = deepcopy(base)
+        scenario["enemies"][0][4] = speed
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=scenario)
+            state = episode_teacher(scenario)
+            state.observe_frame(env)
+            wait = teacher_skill(env, state, teacher_plan(env, state, certify_holds=False)[0])
+        finally:
+            env.close()
+        assert wait.mode == "hold" and wait.frames > 1 and wait.threat
+        waits[speed] = wait.frames
+    assert waits[0.8] < waits[0.35]
+
+
+def test_a_teachers_one_frame_hold_is_played_as_one_whole_wait():
+    from retroagi.stages.block_smb.teacher_tokens import whole_wait
+
+    # Holding a spot on a moving platform: the teacher holds again each
+    # frame; played, the hold is one wait as long as all of them, ended by
+    # no enemy (user, 2026-10-15).
+    scenario = sample("action_wait")
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        state = episode_teacher(scenario)
+        state.observe_frame(env)
+        hold = teacher_skill(env, state, teacher_plan(env, state, certify_holds=False)[0])
+        assert hold == SkillToken("hold", 0, 0)
+        steps, x = env.steps, env.mario["x"]
+        wait = whole_wait(env, state, hold)
+        assert wait.mode == "hold" and wait.frames > 1 and not wait.threat
+        assert (env.steps, env.mario["x"]) == (steps, x)  # measured in a probe
+        run = SkillToken("run", 16, 0)
+        assert whole_wait(env, state, run) is run
+    finally:
+        env.close()
+
+
 def test_a_hold_with_a_length_is_played_to_its_end():
     from retroagi.core.smb_executor import HOLD_GROUND, SMBExecutor
 
