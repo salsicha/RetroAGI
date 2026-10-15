@@ -28,6 +28,9 @@ EXECUTOR_ACTIONS = (*tuple(SMBAction), HOLD_GROUND)
 
 # Supported button-hold durations for physical control and teacher playback.
 FRAME_COUNTS = tuple(range(1, 33))
+# A hold (HOLD_GROUND) may last longer: a wait is one action, as long as the
+# predicted time until something needs a move (user, 2026-10-15).
+HOLD_FRAMES = 255
 
 
 @dataclass
@@ -36,13 +39,18 @@ class ActionPlan:
 
     action: int
     frames: int
+    # A hold the skill gave a length (a wait as one action): played to its
+    # end, not re-decided after a frame (reconsider).
+    wait: bool = False
 
     def __post_init__(self):
         if self.action not in EXECUTOR_ACTIONS:
             raise ValueError(f"unknown executor action {self.action!r}")
         self.action = int(self.action)
-        if self.frames not in FRAME_COUNTS:
-            raise ValueError(f"{self.frames} frames is outside 1 to {FRAME_COUNTS[-1]}")
+        longest = HOLD_FRAMES if self.action == HOLD_GROUND else FRAME_COUNTS[-1]
+        if int(self.frames) != self.frames or not 1 <= self.frames <= longest:
+            raise ValueError(f"{self.frames} frames is outside 1 to {longest}")
+        self.frames = int(self.frames)
 
 
 @dataclass
@@ -177,9 +185,16 @@ class SMBExecutor:
 
         Keep the support anchor when another hold follows; only its scheduling
         interval ends. A learned 32-frame hold must not hide a bridge or plant
-        transition for the whole interval.
+        transition for the whole interval. A hold the skill gave a length
+        (``wait``) is played to its end instead: a wait is one action, as long
+        as the predicted time until a move is needed (user, 2026-10-15).
         """
-        return self.plan is not None and self.plan.action == HOLD_GROUND and self.pressed > 0
+        return (
+            self.plan is not None
+            and self.plan.action == HOLD_GROUND
+            and not self.plan.wait
+            and self.pressed > 0
+        )
 
     def start(self, plan: ActionPlan, flight=None, travel=None) -> None:
         if not self.idle:

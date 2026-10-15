@@ -51,8 +51,8 @@ def test_lower_route_and_local_maneuvers_have_reachable_goals(family, difficulty
 
 def test_hold_skill_finishes_at_timer_without_a_departure_or_gap_crossing():
     scenario = sample("choice_hold_area")
-    # Walkers come through the area (the teacher jumps over each one);
-    # without them, standing still holds it until the timer ends the lesson.
+    # Walkers come at Mario (the teacher jumps over each one); without them,
+    # standing still holds until the timer ends the lesson.
     assert 1 <= len(scenario["enemies"]) <= 2
     scenario = {**scenario, "enemies": []}
     env = MarioScenarioEnv()
@@ -67,6 +67,54 @@ def test_hold_skill_finishes_at_timer_without_a_departure_or_gap_crossing():
         assert len(scenario["tactics"]) == 1
     finally:
         env.close()
+
+
+@pytest.mark.timeout(900)
+def test_a_hold_jumps_a_walker_at_a_trigger_distance_that_grows_with_its_speed():
+    from copy import deepcopy
+
+    from retroagi.stages.block_smb.family_atlas import play_teacher
+
+    # No fixed area: Mario holds where he is and jumps over the walker when
+    # it comes within a buffer around him just wide enough, at its speed,
+    # for the jump (user, 2026-10-15).
+    base = sample("choice_hold_area")
+    assert len(base["enemies"]) == 1 and "area" not in base["tactics"][0]
+    gaps = {}
+    for speed in (0.35, 0.8):
+        scenario = deepcopy(base)
+        scenario["enemies"][0][4] = speed
+        played = play_teacher(scenario, "choice_hold_area", "easy")
+        assert played["won"]
+        jumps = [d["trigger"][0] for d in played["decisions"] if d.get("trigger")]
+        assert jumps and all(d["action"][0] == "jump_over" for d in played["decisions"] if d.get("trigger"))
+        gaps[speed] = jumps[0]
+        # Each wait is one action, as long as the frames until the jump is
+        # due (user, 2026-10-15): a few decisions, not one a frame.
+        first = played["decisions"][0]
+        assert first["action"][0] == "hold" and first["hold_frames"] > 1
+        assert len(played["decisions"]) <= 6
+    assert gaps[0.8] > gaps[0.35] > 0
+
+
+def test_a_hold_with_a_length_is_played_to_its_end():
+    from retroagi.core.smb_executor import HOLD_GROUND, SMBExecutor
+
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample("choice_hold_area"))
+        scene = scene_from_labels(env.scene_labels())
+    finally:
+        env.close()
+    feedback = SpatialFeedback()
+    plan = feedback.begin(SkillToken("hold", 0, 0, frames=40), scene)
+    assert plan.action == HOLD_GROUND and plan.frames == 40 and plan.wait
+    executor = SMBExecutor()
+    executor.start(plan)
+    executor.pressed = 1
+    assert not executor.reconsider and not executor.finished
+    one = feedback.begin(SkillToken("hold", 0, 0), scene)
+    assert one.frames == 1 and not one.wait
 
 
 @pytest.mark.timeout(900)  # each one-jump lesson drawn is also replayed through vision

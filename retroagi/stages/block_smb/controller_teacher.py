@@ -21,7 +21,7 @@ from typing import Optional
 
 from retroagi.core.smb_agent import LandingWatch
 from retroagi.core.smb_coaching import probe_state, training_target
-from retroagi.core.smb_executor import SMBExecutor
+from retroagi.core.smb_executor import HOLD_FRAMES, SMBExecutor
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
 from retroagi.core.smb_trajectory import VisualTracks, aimed_goal, best_holds, hold_paths
@@ -1116,12 +1116,12 @@ def destination(env, state, proposal):
     if (
         _waiting(env, state)
         and seg["kind"] == "plain"
-        and seg.get("area") is not None
+        and (seg.get("area") is not None or seg.get("dodge"))
         and env.mario["on_ground"]
     ):
-        # Holding an area: hold, or jump over a walker coming through it;
-        # nothing else (no route's moves, no progress).
-        return _dodge_in_area(env, state, target) or SkillToken("hold", 0, 0)
+        # Holding (an area, or where Mario is): hold, or jump over a walker
+        # coming at him; nothing else (no route's moves, no progress).
+        return _dodge_in_area(env, state, target) or _dodge_wait(env, state, target)
     # Under speed run a stomp is the last resort: any other move that wins
     # or advances is taught first (the strategy picks stomp or pass;
     # _choose_move). Under max points the ranking alone decides.
@@ -1448,42 +1448,47 @@ def _tolerant(env, state, target, command) -> bool:
     if command.mode == "hold":
         return True
     airborne = not env.mario["on_ground"]
+    for delay in TOLERANCE_FRAMES:
+        r = _trial_later(env, state, target, command, delay)
+        if r == "goal":
+            continue
+        if r is None or not (
+            r.won or (r.safe and r.clearance >= 8 and (r.advanced or r.progress > 0 or airborne))
+        ):
+            return False
+    return True
+
+
+def _trial_later(env, state, target, command, delay):
+    """The trial of ``command`` started ``delay`` frames later, aimed at the
+    same point of the world, Mario pressing nothing meanwhile: its Result;
+    "goal" when the episode is won while he waits, None when it ends so
+    otherwise."""
     m = env.mario
     aim_x, aim_feet = m["x"] + command.x, m["y"] + m["h"] + command.y
-    for delay in TOLERANCE_FRAMES:
-        with probe_state(env):
-            spatial = deepcopy(state.execution) if state.execution is not None else SpatialFeedback()
-            scene = state.scene or scene_from_labels(env.scene_labels())
-            if state.execution is None:
-                spatial.motion = deepcopy(env.motion)
-                spatial.observe(scene)
-            for _ in range(delay):
-                spatial.executed(0, scene)
-                _, _, done, truncated, _ = env.step(0)
-                if done or truncated:
-                    break
-                scene = scene_from_labels(env.scene_labels())
-                spatial.observe(scene)
+    with probe_state(env):
+        spatial = deepcopy(state.execution) if state.execution is not None else SpatialFeedback()
+        scene = state.scene or scene_from_labels(env.scene_labels())
+        if state.execution is None:
+            spatial.motion = deepcopy(env.motion)
+            spatial.observe(scene)
+        for _ in range(delay):
+            spatial.executed(0, scene)
+            _, _, done, truncated, _ = env.step(0)
             if done or truncated:
-                if not env._goal_credited:
-                    return False
-                continue
-            later = copy(state)
-            later.execution, later.controller, later.scene = spatial, None, scene
-            m = env.mario
-            moved = SkillToken(
-                command.mode,
-                round(aim_x - m["x"]),
-                round(aim_feet - (m["y"] + m["h"])),
-                carry=command.carry,
-            )
-            r = _trial(env, later, moved, target)
-            if not (
-                r.won
-                or (r.safe and r.clearance >= 8 and (r.advanced or r.progress > 0 or airborne))
-            ):
-                return False
-    return True
+                return "goal" if env._goal_credited else None
+            scene = scene_from_labels(env.scene_labels())
+            spatial.observe(scene)
+        later = copy(state)
+        later.execution, later.controller, later.scene = spatial, None, scene
+        m = env.mario
+        moved = SkillToken(
+            command.mode,
+            round(aim_x - m["x"]),
+            round(aim_feet - (m["y"] + m["h"])),
+            carry=command.carry,
+        )
+        return _trial(env, later, moved, target)
 
 
 def _crossing_wanted(env, target, lip, direction):
@@ -1675,7 +1680,9 @@ def _pit_wait(env, state, target, memo):
     if not clear:
         return None
     wait = min(clear)
-    hold = SkillToken("hold", 0, 0)
+    # The whole wait as one hold (a wait is one action, its length the
+    # simulator's truth; user, 2026-10-15).
+    hold = SkillToken("hold", 0, 0, frames=min(wait, HOLD_FRAMES))
     result = trial(env, state, hold, target)
     if not result.safe:
         return None
@@ -1703,7 +1710,7 @@ def _planned_wait(env, state):
     ):
         notes.pop("planned_wait", None)
         return None
-    return SkillToken("hold", 0, 0)
+    return SkillToken("hold", 0, 0, frames=min(left, HOLD_FRAMES))
 
 
 def _best_certified(
@@ -2169,33 +2176,41 @@ def mount_destination(env, state, target):
     return best[0] if best is not None else None
 
 
-# Holding an area, a walker that would reach Mario within this many frames
-# is jumped over (_dodge_in_area); one closer than IMMINENT_FRAMES is jumped
-# over even with less than ENOUGH_ROOM.
+# Holding, a walker that would reach Mario within DODGE_FRAMES may be jumped
+# over (_dodge_in_area): when the jump over it, started TRIGGER_SLACK frames
+# later, would no longer pass it. That is the next decision (a frame on) and
+# then the latest start a taught move must tolerate (TOLERANCE_FRAMES). While
+# the predicted paths pass it started SCREEN_SLACK frames later, Mario holds
+# without trying the jump.
 DODGE_FRAMES = 48
-IMMINENT_FRAMES = 12
+TRIGGER_SLACK = 1 + max(TOLERANCE_FRAMES)
+SCREEN_SLACK = TRIGGER_SLACK + 8
 
 
-def _dodge_in_area(env, state, target):
-    """Holding an area (a hold segment with an ``area``): when a walker would
-    reach Mario if he held, the lowest jump that lets it pass under or behind
-    him and lands back on his platform without leaving the area, at the
-    moment its room from the walker is greatest: now, unless the same jumps
-    started up to 20 frames later keep more (then hold), or the walker is
-    about to reach him. Certified by a trial that it passes the walker
-    safely. None: hold."""
+def _dodge_in_area(env, state, target, timing=True):
+    """Holding (a hold segment with an ``area``, or ``dodge``): hold until a
+    walker comes within its trigger distance of Mario, then jump over it and
+    land behind it, back on his platform (and, with an ``area``, without
+    leaving it). The trigger distance is a buffer around Mario, one for each
+    walker: just wide enough, at that walker's speed, for the jump; Mario
+    jumps when the jump, started TRIGGER_SLACK frames later, would no longer
+    pass it safely (user, 2026-10-15). Of the jumps that pass it now and go
+    through nothing solid (into a pipe's side or up into bricks), the one
+    keeping the most room from every enemy, then the lowest; certified by a
+    trial (the simulator's own walker paths: where it really is when Mario
+    lands). None: hold. Without ``timing``: that jump now, whenever a
+    walker is coming (for testing other rules of when to jump)."""
     seg = tactic_schedule.current(env)
     area = seg.get("area")
     m = env.mario
     support = m.get("_platform")
-    if area is None or not m["on_ground"] or support is None:
+    if (area is None and not seg.get("dodge")) or not m["on_ground"] or support is None:
         return None
     start = _body(env)
     lips = _pit_lips(env)
     soon = _enemy_paths(env, DODGE_FRAMES)
     if _screen_walk(_run_path(start, 0, DODGE_FRAMES), soon, lips) is not None:
         return None  # holding meets no walker for a while
-    imminent = _screen_walk(_run_path(start, 0, IMMINENT_FRAMES), soon, lips) is None
     anchor = env._tactic_anchor
     if env._tactic_anchor_platform is not None:
         anchor += env.platforms[env._tactic_anchor_platform]["rect"].x - env._tactic_anchor_platform_x
@@ -2219,7 +2234,9 @@ def _dodge_in_area(env, state, target):
         for hold, predicted in enumerate(paths_of[direction], 1):
             free = [start, *[tuple(start[k] + b[k] - box[k] for k in range(4)) for b in predicted]]
             landing = _path_landing(free, rects)
-            if landing is None or any(abs(b[0] - anchor) > area for b in free[: landing[0] + 1]):
+            if landing is None or (
+                area is not None and any(abs(b[0] - anchor) > area for b in free[: landing[0] + 1])
+            ):
                 continue
             groups.append((hold, direction, landing, _rise(free), free))
 
@@ -2245,7 +2262,10 @@ def _dodge_in_area(env, state, target):
         out = []
         for group in groups:
             hold, direction, landing, rise, free = group
-            screened = _screen(env, free, 0, delay, enemies, lips, rects)
+            # Not through anything solid: a brick row overhead or a pipe's
+            # side would stop the real jump short (the prediction does not
+            # see them), most often onto the walker.
+            screened = _screen(env, free, 0, delay, enemies, lips, rects, solid=rects)
             if screened is None:
                 continue
             distances, landed_on, killed, (dx, _) = screened
@@ -2262,22 +2282,66 @@ def _dodge_in_area(env, state, target):
         return out
 
     now = sorted(passing(0), key=lambda c: c[:2], reverse=True)
-    if not imminent:
-        best = now[0][0] if now else None
-        for delay in range(2, 21, 2):
-            if _screen_walk(_run_path(start, 0, delay), enemies, lips) is None:
-                break  # holding that long meets the walker
-            later = passing(delay)
-            if later and (best is None or max(c[0] for c in later) > best):
-                return None  # a later start keeps more room: hold for now
+    if not now:
+        return None  # no jump passes it yet (or any more)
+    if (
+        timing
+        and _screen_walk(_run_path(start, 0, SCREEN_SLACK), enemies, lips) is not None
+        and passing(SCREEN_SLACK)
+    ):
+        return None  # well outside its trigger distance: hold
+    # Near it the predicted paths are a frame or two hopeful (and do not see
+    # bricks overhead): the trials decide.
     for _, _, (hold, direction, landing, rise, free) in now[:CERTIFY]:
         command = destination_for(hold, direction, landing)
         if command is None:
             continue
         r = trial(env, state, command, target)
         if (r.safe or r.won) and _move_kind(env, r) == "pass":
+            if not timing:
+                return command
+            later = _trial_later(env, state, target, command, TRIGGER_SLACK)
+            if later == "goal" or (
+                later is not None and (later.safe or later.won) and _move_kind(env, later) == "pass"
+            ):
+                return None  # it still works started that much later: hold
             return command
     return None
+
+
+def _dodge_wait(env, state, target):
+    """The hold while no walker needs jumping yet, as one action: as many
+    frames as until _dodge_in_area would jump (the simulator's truth, by
+    holding on in a probe), or until the hold segment ends (at most
+    HOLD_FRAMES). A wait is one action whose length is predicted, as a
+    stomp's landing is (user, 2026-10-15); deployed, the predictor's."""
+    seg = tactic_schedule.current(env)
+    limit = HOLD_FRAMES
+    if "frames" in seg["end"]:
+        limit = min(limit, seg["end"]["frames"] - (env.steps - env._tactic_started))
+    if not seg.get("dodge") or limit <= 1:
+        return SkillToken("hold", 0, 0)
+    held = limit
+    with probe_state(env):
+        spatial = deepcopy(state.execution) if state.execution is not None else SpatialFeedback()
+        scene = state.scene or scene_from_labels(env.scene_labels())
+        if state.execution is None:
+            spatial.motion = deepcopy(env.motion)
+            spatial.observe(scene)
+        for frame in range(1, limit):
+            spatial.executed(0, scene)
+            _, _, done, truncated, _ = env.step(0)
+            if done or truncated:
+                held = frame
+                break
+            scene = scene_from_labels(env.scene_labels())
+            spatial.observe(scene)
+            later = copy(state)
+            later.execution, later.controller, later.scene = spatial, None, scene
+            if _dodge_in_area(env, later, target) is not None:
+                held = frame
+                break
+    return SkillToken("hold", 0, 0, frames=held)
 
 
 def _waiting(env, state):

@@ -273,7 +273,7 @@ class SpatialFeedback:
             return proposed  # Exact teacher playback only.
         if proposed is None and destination.mode == "hold":
             self.status = "holding"
-            return ActionPlan(HOLD_GROUND, 1)
+            return ActionPlan(HOLD_GROUND, max(1, destination.frames), wait=destination.frames > 0)
         if proposed is None and destination.mode == "run":
             if scene.mario.box is None:
                 self.status = "lost_observation"

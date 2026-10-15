@@ -26,6 +26,11 @@ A segment is a dictionary:
   standing on them being a loss (optional);
 - ``area``: for hold_area, how far (pixels) Mario may move from where the
   segment began, relative to the platform supporting him then;
+- ``dodge``: for hold_area, no fixed area: Mario holds where he is and jumps
+  over each walker that comes within its trigger distance of him, landing
+  behind it (controller_teacher._dodge_in_area). The trigger is a buffer
+  around Mario, one for each walker: just wide enough, at that walker's
+  speed, for a jump over it (user, 2026-10-15);
 - ``keep_behind``: for a monster segment, a line Mario should stay behind
   until he jumps over it (monster.py);
 - ``stomp``: an enemy the teacher goes to stomp while the segment lasts
@@ -63,6 +68,7 @@ def segment(
     forbidden: Iterable[int] = (),
     avoid: Iterable[int] = (),
     area: Optional[float] = None,
+    dodge: bool = False,
     keep_behind: Optional[float] = None,
     stomp: Optional[int] = None,
     keep_alive: Iterable[int] = (),
@@ -81,6 +87,8 @@ def segment(
     }
     if area is not None:
         built["area"] = float(area)
+    if dodge:
+        built["dodge"] = True
     if keep_behind is not None:
         built["keep_behind"] = float(keep_behind)
     if stomp is not None:
@@ -96,6 +104,8 @@ def check_segment(seg: dict) -> None:
         raise ValueError("a segment's direction is -1 or 1")
     if seg.get("kind", "plain") not in SEGMENT_KINDS:
         raise ValueError(f"unknown segment kind {seg.get('kind')!r}")
+    if seg.get("dodge") and (seg["stance"] != "hold_area" or seg.get("area") is not None):
+        raise ValueError("dodge is a hold_area's, in place of a fixed area")
     end = seg.get("end") or {}
     if len(end) != 1 or next(iter(end)) not in END_KEYS:
         raise ValueError(f"a segment ends one way, one of {END_KEYS}: {end!r}")

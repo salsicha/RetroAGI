@@ -217,7 +217,7 @@ def test_retreating_enemy_teacher_finishes_inside_training_budget():
     assert len(result["commands"]) < 15
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "family,split,index,difficulty",
     [

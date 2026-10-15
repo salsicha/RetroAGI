@@ -23,6 +23,48 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-15 — Holding: a trigger buffer around Mario for each walker (user decision; built)
+
+In `choice_hold_area` the hold area was a fixed place 48 to 64 pixels either
+side of the start, leaving it lost the lesson, and the teacher jumped a walker
+when the jump kept the most room (after 14 to 67 holds). The policy timed these
+jumps badly (round 0 of skill_practice_20261013: 4 of 9). The user's rule:
+
+- **The box is a buffer around Mario, not a place.** When a walker enters
+  it, Mario jumps over the walker and lands behind it.
+- **Its size depends on the walker's speed:** just wide enough for the jump.
+  Each walker has its own (walkers now draw their own speeds).
+- **Where the walker will be when Mario lands** is the simulator's truth in
+  training; in deployment the predictor will have to forecast it.
+
+- **Pits and obstacles near Mario** (user): on each side, 32 to 80 pixels
+  away, his floor ends at a pit, or a pipe stands, or the floor goes on;
+  sometimes a brick row hangs low over him. A jump over a walker must not
+  land in the pit, hit the pipe or go up into the bricks
+  (`tactic_families._hold_layout`). Walkers turn at the pit's lip or the
+  pipe, so they come back.
+- **A wait is one action, its length predicted** (user: "the wait action
+  should be using the prediction, just like stomp"). A hold carries a number
+  of frames (`SkillToken.frames`): until the walker is close enough that the
+  jump is due. In training that is the simulator's truth; deployed it is the
+  predictor's. The executor plays such a hold to its end (`ActionPlan.wait`)
+  instead of deciding again every frame, so an episode has 2 to 5 decisions,
+  not about 130. A planned wait before a pit crossing is one hold as well.
+
+Built: the schedule's `dodge` hold (no `area`; nothing about where Mario holds
+is a loss; the lesson completes anywhere on his floor).
+`controller_teacher._dodge_in_area` jumps when the jump over the walker,
+started `TRIGGER_SLACK` frames later (the next decision, then the 4-frame late
+start every taught move tolerates), would no longer pass it; near the walker
+trials decide, since the predicted paths are a frame or two hopeful and do not
+see bricks overhead. Jumps whose predicted path goes through anything solid
+are not considered. `_dodge_wait` finds the hold's length by holding on in a
+probe until that rule jumps. Over 27 layouts the teacher won all, jumping when
+the walker was 2 to 6 pixels away (more for faster walkers). About half the
+medium and hard draws have no safe dodge (two walkers between a pit and a
+pipe) and are redrawn. The family pictures draw each jump's trigger box
+instead of a goal box, and each hold's length.
+
 ## 2026-10-13 — Fixes from the review of the family pictures (user decisions; built)
 
 The user reviewed the picture of every layout and asked for these:
@@ -48,6 +90,7 @@ The user reviewed the picture of every layout and asked for these:
 - **`choice_hold_area`**: a larger area and walkers that pass through it.
   Mario stays in the area and jumps over each one (`_dodge_in_area`); the
   goal box covers the area. In the air above the area is not leaving it.
+  (Replaced on 2026-10-15 by a trigger buffer around Mario, above.)
 - **A taught move tolerates a late start** (`_tolerant`): it must still work
   started 2 or 4 frames later; after 3 that do not, the first is taught.
 - **Starts and spawns:** `pipe_mount` starts 20 to 40 pixels from the pipe;

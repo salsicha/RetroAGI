@@ -507,6 +507,11 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
     from .controller_teacher import _air_options, _jump_table, _rank, teacher_target
 
     if action.verb == "hold":
+        # As long as the teacher's own wait (its length the simulator's
+        # truth: a wait is one action); a single frame where the teacher
+        # would move now.
+        if teacher_command is not None and teacher_command.mode == "hold":
+            return teacher_command
         return SkillToken("hold", 0, 0)
     if teacher_command is not None and teacher_label == action:
         return teacher_command

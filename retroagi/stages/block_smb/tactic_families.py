@@ -3,7 +3,8 @@
 Tactic training includes complete routes, strategy objectives, waiting/proceeding
 choices and every family whose teacher changes tactics within an episode.
 Sibling choice layouts share geometry but differ in their required routes;
-choice_hold_area is the local, fixed-tactic skill among those siblings.
+choice_hold_area, a local fixed-tactic skill, has layouts of its own
+(_hold_layout).
 The route skill families end on one destination support instead of completing
 an entire route. Generator membership (TACTIC_FAMILIES) is distinct from
 learner membership (TACTIC_TRAINING_FAMILIES).
@@ -152,10 +153,6 @@ def _choice_layout(rng: random.Random, difficulty: str, vary: bool = False) -> t
     raised = [2, 3, 4]
     schedules = {
         "choice_advance": [segment("advance", 1, forbidden=raised)],
-        "choice_hold_area": [
-            segment("hold_area", 1, area=16, frames=hold),
-            segment("advance", 1, forbidden=raised),
-        ],
         "choice_retreat": [
             segment("retreat", -1, reach_x=back),
             segment("advance", 1, forbidden=raised),
@@ -164,6 +161,105 @@ def _choice_layout(rng: random.Random, difficulty: str, vary: bool = False) -> t
     params = {"pit_x": pit_x, "pit_width": pit, "spawn_x": spawn, "hold_frames": hold}
     params["retreat_to"] = back
     return scenario, {"schedules": schedules, **params}
+
+
+def _hold_layout(rng: random.Random, difficulty: str) -> tuple[dict, dict]:
+    """Holding while walkers come at Mario (choice_hold_area), with pits and
+    obstacles about that a jump over a walker must not go into (user,
+    2026-10-15): on each side of Mario, at a random distance, the floor ends
+    at a pit, or a pipe stands, or the floor goes on; sometimes a brick row
+    hangs low over him. Each walker, at its own speed, walks the floor
+    between them, turning at the pit's lip or the pipe, so it comes at Mario
+    again and again. Mario holds where he is and, when a walker comes within
+    its trigger distance, jumps over it and lands behind it (the teacher's
+    rule: controller_teacher._dodge_in_area); a jump over it into the pit or
+    the pipe, or up into the bricks, is what he must learn not to make.
+
+    Platforms: 0 Mario's floor, then the floor beyond a pit, pipes and the
+    brick row, as drawn. Layouts the teacher cannot hold through are redrawn
+    (monte_carlo.TEACHER_ROUTED).
+    """
+    from .threat_variety import ENEMY_HEIGHT, ENEMY_WIDTH
+
+    tier = ("easy", "medium", "hard").index(difficulty)
+    spawn = rng.randint(100, 124)  # Mario's left edge
+    # How far the floor runs on each side of Mario before a pit or a pipe:
+    # from just enough for a walker and a short jump over it (a long jump
+    # lands in the pit or hits the pipe) to well beyond any jump.
+    rooms = {side: rng.randint(32, 80) for side in (-1, 1)}
+    # Easy layouts keep one side's floor open; harder ones may close both.
+    choices = ("pit", "pipe", "open")
+    ends = {side: rng.choice(choices) for side in (-1, 1)}
+    if tier == 0 and "open" not in ends.values():
+        ends[rng.choice((-1, 1))] = "open"
+    left, right = spawn - rooms[-1], spawn + 10 + rooms[1]
+    width = right + 160
+    floor_left = left if ends[-1] == "pit" else 0
+    floor_right = right if ends[1] == "pit" else width
+    platforms = [[floor_left, FLOOR, floor_right - floor_left, 20]]
+    kinds = ["ground"]
+    # Where the walkers turn: the lip of a pit, the face of a pipe, or (open
+    # floor) as far again from Mario.
+    turn = {-1: left, 1: right}
+    for side in (-1, 1):
+        edge = turn[side]
+        if ends[side] == "pit":
+            pit = (28, 36, 44)[tier] + rng.randint(-4, 4)
+            if side < 0 and edge - pit >= 24:
+                platforms.append([0, FLOOR, edge - pit, 20])
+                kinds.append("ground")
+            elif side > 0:
+                platforms.append([edge + pit, FLOOR, width - edge - pit, 20])
+                kinds.append("ground")
+        elif ends[side] == "pipe":
+            height = rng.randint(24, 44)
+            x = edge - 32 if side < 0 else edge
+            platforms.append([x, FLOOR - height, 32, height])
+            kinds.append("pipe")
+        else:
+            turn[side] = max(8, edge - 40) if side < 0 else min(width - 8, edge + 40)
+    if rng.random() < (0.2, 0.3, 0.4)[tier]:
+        # A brick row low over Mario: high jumps hit it.
+        low = rng.randint(46, 62)
+        wide = rng.randint(32, 64)
+        x = spawn + 5 - wide // 2 + rng.randint(-24, 24)
+        platforms.append([x, FLOOR - low - 16, wide, 16])
+        kinds.append("brick")
+    walkers = 1 if tier == 0 else rng.randint(1, 2)
+    # Each walker its own speed, so each needs its own trigger.
+    speeds = [round((0.4, 0.5, 0.6)[tier] + rng.uniform(-0.1, 0.25), 3) for _ in range(walkers)]
+    lo, hi = turn[-1], turn[1] - ENEMY_WIDTH
+    first = rng.choice((-1, 1))
+    enemies = []
+    for speed, side in zip(speeds, (first, -first)):
+        if side > 0:
+            x = rng.randint(spawn + 10 + 20, max(spawn + 30, hi))
+        else:
+            x = rng.randint(min(lo, spawn - 20 - ENEMY_WIDTH), spawn - 20 - ENEMY_WIDTH)
+        enemies.append([x, FLOOR - ENEMY_HEIGHT, lo, hi, speed, -side])
+    hold = rng.randint(120, 200)
+    scenario = {
+        "world_width": width,
+        "mario": [spawn, FLOOR - 16],
+        "platforms": platforms,
+        "platform_kinds": kinds,
+        "enemies": enemies,
+        "coins": [],
+        # Holding until the end, anywhere on Mario's floor between the pits
+        # and pipes, completes the lesson.
+        "goal": [left, FLOOR - 20, right - left, 20],
+        "goal_requires_support": True,
+        "frame_budget": hold + 40,
+        "tactics": [segment("hold_area", 1, dodge=True, frames=hold)],
+    }
+    params = {
+        "hold_frames": hold,
+        "walker_speeds": speeds,
+        "walkers": walkers,
+        "ends": [ends[-1], ends[1]],
+        "rooms": [rooms[-1], rooms[1]],
+    }
+    return scenario, params
 
 
 def _low_choice_layout(
@@ -263,42 +359,13 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
         scenario["coins"] = [[edge + 22, FLOOR - 20, 10, 10]]
         scenario["strategy"] = "max_points"
         scenario["strategy_objective"] = {"points": len(scenario["coins"])}
+    elif family == "choice_hold_area":
+        # Its own layouts, not its siblings': holding while walkers come at
+        # Mario, among pits and obstacles (_hold_layout).
+        scenario, params = _hold_layout(rng, difficulty)
     elif family in CHOICE_FAMILIES:
         scenario, params = _choice_layout(rng, difficulty)
-        if family == "choice_hold_area":
-            from .threat_variety import ENEMY_HEIGHT, fit_patrols
-
-            params.pop("schedules")
-            spawn = scenario["mario"][0]
-            # Holding an area while walkers come through it: Mario stays
-            # within ``area`` pixels of where he starts, jumping over each
-            # walker as it reaches him (user, 2026-10-13), for long enough
-            # that every walker comes through.
-            tier = ("easy", "medium", "hard").index(difficulty)
-            # Wide enough that a hop over a walker lands inside it (one
-            # carries Mario 30 to 45 pixels; at their speeds a walker cannot
-            # pass under a jump straight up).
-            area = rng.randint(48, 64)
-            hold = rng.randint(120, 200)
-            speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0.0, 0.15), 3)
-            walkers = 1 if tier == 0 else rng.randint(1, 2)
-            enemies = [[spawn + rng.randint(48, 80), FLOOR - ENEMY_HEIGHT, 0, 0, speed, -1]]
-            if walkers == 2:
-                enemies.append(
-                    [max(8, spawn - rng.randint(48, 64)), FLOOR - ENEMY_HEIGHT, 0, 0, speed, 1]
-                )
-            # Only the floors: a raised path overhead would cut short the
-            # jumps over the walkers (and box Mario in under it).
-            scenario["platforms"] = scenario["platforms"][:2]
-            scenario["enemies"] = enemies
-            fit_patrols(scenario)  # each walks its whole floor, through the area
-            scenario["tactics"] = [segment("hold_area", 1, area=area, frames=hold)]
-            # The goal is the whole area: holding it until the end, wherever
-            # in it Mario stands then, completes the lesson.
-            scenario["goal"] = [spawn - area, FLOOR - 20, 2 * area + 10, 20]
-            scenario["coins"] = []
-            params.update(area=area, hold_frames=hold, walker_speed=speed, walkers=walkers)
-        elif family == "choice_advance":
+        if family == "choice_advance":
             far = scenario["platforms"][1][0]
             scenario["goal"] = [far, FLOOR - 20, 24, 20]
     elif family in LOW_CHOICE_FAMILIES:

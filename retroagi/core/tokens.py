@@ -72,12 +72,18 @@ class SkillToken:
     the destination without braking and ends there still running, so the
     jump that follows takes off with the run's momentum. Any other run brakes
     to stop at its destination.
+
+    ``frames`` (holds only): how long the hold lasts, a wait as one action:
+    until something will need a move (a walker coming within the distance a
+    jump over it needs, say). Training: the simulator's truth; deployed: the
+    prediction. 0 is a single frame, decided again after it.
     """
 
     mode: str
     x: int
     y: int
     carry: bool = False
+    frames: int = 0
 
     def __post_init__(self):
         if self.mode not in SKILL_MODES:
@@ -86,6 +92,8 @@ class SkillToken:
             raise ValueError("skill destination must be integer pixels within the local screen")
         if self.carry and self.mode != "run":
             raise ValueError("only a run keeps its speed at its destination")
+        if self.frames and (self.mode != "hold" or not 0 < self.frames <= 255):
+            raise ValueError("only a hold lasts a number of frames (1 to 255)")
 
 
 def encode_skill(token: SkillToken) -> torch.Tensor:

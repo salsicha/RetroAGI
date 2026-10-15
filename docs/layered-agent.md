@@ -330,11 +330,16 @@ local tasks; splitting the curriculum does not change execution behavior.
 
 The lower full route likewise has a visible lower-floor coin and a `max_points`
 objective. `choice_advance` finishes at its first supported far-side landing.
-`choice_hold_area` holds an area 48 to 64 pixels either side of the start for
-120 to 200 frames while one or two walkers pass through it; Mario stays in the
-area and jumps over each walker as it reaches him (the lowest jump that lands
-back in the area, at the moment its room is greatest:
-`controller_teacher._dodge_in_area`). Departure timing belongs to tactic lessons
+`choice_hold_area` holds for 120 to 200 frames while one or two walkers, each
+at its own speed, come at Mario, between pits, pipes and low brick rows 32 to
+80 pixels from him. He holds where he is until a walker comes within its
+trigger distance, a buffer around him just wide enough at that walker's speed
+for a jump over it, then jumps over it and lands behind it, into no pit or
+obstacle (`controller_teacher._dodge_in_area`; the jump is taught when the
+same jump started 5 frames later would no longer pass it). Each wait is one
+hold action whose length is the number of frames until the jump is due
+(`SkillToken.frames`; the simulator's truth in training, the predictor's when
+deployed). There is no fixed area: the lesson completes anywhere on his floor. Departure timing belongs to tactic lessons
 such as `wait_timing`, where a moving platform provides an observable reason to
 proceed. Repeated movement commands share stall history,
 including zero-distance requests, so their next skill decision receives no-progress

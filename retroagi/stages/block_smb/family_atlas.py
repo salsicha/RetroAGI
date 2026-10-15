@@ -17,7 +17,11 @@ value), at each difficulty; one picture a layout. Each picture shows:
 - each decision's number and the action taught there (the same action
   decided again where Mario stands still, as holds are, numbered once).
 
-A lesson won by stomping its enemy shows no goal box.
+A lesson won by stomping its enemy shows no goal box. Nor does a hold with
+walkers coming (a ``dodge`` hold: anywhere on the floor at the end wins);
+there each jump over a walker shows the walker's trigger box instead: a
+buffer centred on Mario, as wide as the gap to the walker when he jumped
+(its trigger distance at its speed; a colour for each walker).
 
 atlas.json also lists, per layout, the moves the teacher passed over for
 failing when started a little later (controller_teacher._tolerant).
@@ -65,6 +69,8 @@ PATH = (34, 34, 34)
 ON_GROUND = (255, 140, 0)
 ON_ENEMY = (0, 160, 150)
 IN_AIR = (220, 0, 220)
+# A dodge hold's trigger box, one colour for each walker.
+TRIGGER = ((46, 139, 87), (40, 90, 200), (190, 110, 0))
 
 
 class QuantileDraws(CombinationDraws):
@@ -166,6 +172,8 @@ def occupancy(scenario: dict, frames: int):
         ]
         coins = [(c["rect"].left, c["rect"].top, c["rect"].right, c["rect"].bottom) for c in env.coins]
         goal = (env.goal.left, env.goal.top, env.goal.right, env.goal.bottom) if env.goal else None
+        if any(seg.get("dodge") for seg in scenario.get("tactics") or ()):
+            goal = None  # anywhere on the floor; the trigger boxes are drawn
     finally:
         env.close()
     return {
@@ -176,6 +184,29 @@ def occupancy(scenario: dict, frames: int):
         "goal": goal,
         "size": (width, height),
     }
+
+
+def trigger(env, command):
+    """For a jump while holding with ``dodge`` (tactic_schedule): (gap,
+    enemy) for the walker it jumps over (the nearest coming at Mario): how
+    far its box is from his, his trigger distance for it; else None."""
+    from . import tactic_schedule
+
+    if command is None or command.mode != "jump" or not tactic_schedule.current(env).get("dodge"):
+        return None
+    m, found = env.mario, []
+    for i, e in enumerate(env.enemies):
+        if e["dead"] or e["h"] <= 0:
+            continue
+        if e["x"] >= m["x"] + m["w"]:
+            gap, coming = e["x"] - (m["x"] + m["w"]), e["direction"] < 0
+        elif e["x"] + e["w"] <= m["x"]:
+            gap, coming = m["x"] - (e["x"] + e["w"]), e["direction"] > 0
+        else:
+            gap, coming = 0.0, True
+        if coming:
+            found.append((round(gap, 1), i))
+    return min(found) if found else None
 
 
 def on_enemy(env) -> bool:
@@ -243,6 +274,9 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
                 "feet": m["y"] + m["h"],
                 "place": "ground" if m["on_ground"] else "enemy" if on_enemy(env) else "air",
                 "command": str(self.asked.get("skill")),
+                "trigger": trigger(env, self.asked.get("skill")),
+                "half": m["w"] / 2,
+                "hold_frames": getattr(self.asked.get("skill"), "frames", 0),
             }
         )
         return original_note(self, learner, decision)
@@ -388,10 +422,13 @@ def draw(world: dict, played: dict, title: str, path: Path) -> None:
     lines, line = [], ""
     groups = grouped(played["decisions"])
     for number, (d, count) in enumerate(groups, 1):
+        gap = f" (trigger {d['trigger'][0]:.0f} px)" if d.get("trigger") else ""
+        if d.get("hold_frames"):
+            gap = f" ({d['hold_frames']} frames)"
         item = (
             f"{number} {action_words(d.get('action'))}"
             f"{' (keeps its speed)' if keeps_speed(d) else ''}"
-            f"{PLACES[d['place']]}{f' x{count}' if count > 1 else ''}"
+            f"{PLACES[d['place']]}{f' x{count}' if count > 1 else ''}{gap}"
         )
         if line and font.getlength(line + "   " + item) > width * SCALE - 12:
             lines.append(line)
@@ -420,6 +457,17 @@ def draw(world: dict, played: dict, title: str, path: Path) -> None:
         pen.line([at(x, y) for x, y in played["path"]], fill=PATH + (170,), width=1)
         x, y = played["path"][0]
         pen.rectangle([*at(x - 5, y - 12), *at(x + 5, y)], outline=PATH, width=1)
+    for d, _ in groups:
+        if d.get("trigger"):
+            # The walker's trigger box: centred on Mario, its edge where the
+            # walker was when he jumped.
+            gap, enemy = d["trigger"]
+            reach = d.get("half", 5) + gap
+            pen.rectangle(
+                [*at(d["x"] - reach, d["feet"] - 22), *at(d["x"] + reach, d["feet"])],
+                outline=TRIGGER[enemy % len(TRIGGER)],
+                width=2,
+            )
     for number, (d, _) in enumerate(groups, 1):
         color = {"ground": ON_GROUND, "enemy": ON_ENEMY, "air": IN_AIR}[d["place"]]
         cx, cy = at(d["x"], d["feet"])
