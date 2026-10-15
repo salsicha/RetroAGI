@@ -1,29 +1,30 @@
 # Layered SMB agent
 
-The runtime hierarchy is **strategy → tactic → skill → action predictor →
-predictive executor**, with a target tracker beside the executor. Two layers
-are learned by imitation and reward (tactic, skill); the action predictor and
-the target tracker are learned models the skill relies on; the executor is a
-controller. Strategy is an externally selected objective.
+The runtime hierarchy is **strategy → tactic → skill → predictive
+executor**. Two layers are learned by imitation and reward (tactic, skill);
+the executor is a controller; strategy is an externally selected objective.
+Beside them are two prediction networks: the **world model** (an LSTM run
+once at the start of each action, after the skill has chosen it, to predict
+that action's outcome) and the **target trackers** (one per enemy, run every
+frame, predicting when and where the enemy and Mario will collide). The
+skill and tactic layers read no prediction (user, 2026-10-15). While the
+skills and tactics train in Block SMB, neither prediction network is used:
+each "prediction" is the simulator's ground truth, and the networks are
+trained apart from recorded truth.
 
 Decisions behind this design, with their reasons and status, are listed in
-[design decisions](design-decisions.md). The skill chooses an action aimed at
-an object, the action predictor gives its end state, the target tracker says
-where its target will be and moves the destination when it departs, and the
-predictive executor reaches it; see
-[action-predictor-controller.md](action-predictor-controller.md).
+[design decisions](design-decisions.md).
 
 ## Information passed between layers
 
 | Component | Inputs | Output |
 |---|---|---|
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
-| Scene memory | Encoded scene every four frames and at decisions, elapsed time, visual camera shift, previous LSTM state | Next-boundary scene plus jointly predicted action-end time, platform positions and enemy positions |
-| Tactic | Strategy, current and predicted scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
-| Skill | Tactic, strategy context, current scene, memory prediction (including each enemy's forecast position), last 16 actions, measured execution feedback | An action: a verb and a pointer to one object it sees |
-| Action predictor | The action, the scene tokens, the scene memory and the enemy forecasts | Where the action ends (Mario's feet and its object, from his feet), when, and the chance it succeeds |
-| Target tracker | Every frame's tracked enemies and moving platforms | Where each will be 1 to 96 frames ahead, and when one leaves its forecast |
-| Executor | The predicted end as its destination (moved by the tracker), per-frame vision | One of six emulator button combinations |
+| Tactic | Strategy, current scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
+| Skill | Tactic, strategy context, current scene, last 16 actions, measured execution feedback | An action: a verb and a pointer to one object it sees |
+| World model (LSTM; not used in Block SMB training) | The chosen action, the scene at its start, its own state from earlier actions | The action's successful outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds |
+| Target trackers (not used in Block SMB training) | Every frame's vision of each enemy and of Mario | When and where that enemy and Mario will collide, and whether as a stomp or a hit |
+| Executor | The action's end as its destination (in Block SMB training: the teacher's ground-truth version of the action), per-frame vision | One of six emulator button combinations |
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
 `climb_backward`, `descend_forward`, `descend_backward`, and `hold_ground`.
@@ -39,12 +40,14 @@ verb (the decision token, adjusted by the verb, scored against each object's
 scene token; absent objects and kinds the verb cannot aim at are excluded).
 A floor is reported cut where an enemy stands on it, so each piece is the
 floor between two threats, and an action aimed at a piece names where it
-ends. The action predictor gives the action's end; that end, in the verb's
-mode, is the executor's destination: a location relative to the center of
-Mario's feet (x positive right, y positive down). On an enemy or a moving
-platform the destination is bound to the object, and the target tracker moves
-it when the object leaves its forecast. A hold anchors the current
-platform-relative spot.
+ends. The action's end, in the verb's mode, is the executor's destination: a
+location relative to the center of Mario's feet (x positive right, y
+positive down). In Block SMB training it is the teacher's version of the
+action (`teacher_actions.carry_out`: the ground truth the world model will
+predict). A hold anchors the current platform-relative spot and lasts as
+long as its wait: one action whose length is the ground truth in training
+(`SkillToken.frames`). A jump at a walking enemy aims where it really is when
+Mario lands (`tracks.exact`), the place the trackers will predict.
 
 The skill uses a transformer with positional encoding and a context of its
 last **16 actions**, each with where it sent the executor (teacher commands
@@ -67,38 +70,28 @@ The controller chooses the buttons and durations; the skill chooses the target.
 
 ## Memory and timing
 
-The existing scene LSTM updates every four frames and at every skill decision.
-Elapsed frames and observed camera displacement accompany the scene summary.
-Its next-boundary scene prediction is re-encoded for skill and tactic; this
-expectation is made before choosing the command, so it is not action-conditioned.
+The skill and tactic layers read no prediction (user, 2026-10-15). The world
+model's LSTM (`layered_policy.Memory`) does not update every few frames: it is
+to run once at the start of each action, after the skill has chosen it, with
+the chosen action as input, and predict that action's outcome. It is trained
+apart from recorded ground truth and is not used while the skills and tactics
+train; its current weights are kept, unused, until it is reshaped so.
 
-The same LSTM jointly predicts **the next action's end scene and how many physical
-frames remain until that end**. Its platform readout predicts displacement at
-that same endpoint, with spatial uncertainty and track-visibility confidence.
-Both skill and tactic receive the predicted timing with the expected scene.
+The target trackers (`core/target_tracker.py`) run every frame. They are to
+predict, for each enemy, when and where it and Mario will collide (a stomp or
+a hit); the simulator's truth stands in until they are trained
+(`stages/block_smb/collision_truth.py`). Watched frames before a lesson's
+first decision let the tracks see enemies move.
 
-Its enemy readout forecasts, for each enemy seen now, where that enemy will be
-when the next action ends, with spatial uncertainty and the chance it is still
-seen; it is trained like the platform readout, from vision's tracks of each
-enemy. The skill reads each enemy's forecast added to that enemy's scene
-token, so a stomp or bypass landing is chosen from where the enemy will be,
-not where it stands. When the skill's jump targets a walking enemy, the
-controller plans the first landing at the forecast position and keeps
-re-aiming at the forecast, rebased by what vision sees, during the flight.
-Untrained forecasts (wide uncertainty or unlikely visibility) are ignored.
-Duration is a learned positive continuous output with its own uncertainty, not
-a choice among preset horizons. It has no 64-frame cap: saved action traces
-already contain 168-frame commands, ground execution permits 192 frames, and
-jump-button hold length does not include the whole flight.
+In Block SMB training a wait is one action: the teacher's hold lasts until it
+would do something else, or until a coming enemy is close enough that a jump
+over it is due (`controller_teacher._dodge_wait`). The skill then picks the
+next action, which it learns from the teacher.
 
-At a decision, the label is the state and elapsed time at the next decision.
-Periodic memory ticks within that action are trained toward the same endpoint
-with the remaining duration. A completed terminal action also supplies its
-final observed state, even when no next decision is made. Unfinished actions
-cut off by the episode budget are censored, not taught as completed actions.
-Platform labels follow visual identity and compensate camera motion. Missing
-or clipped identities have no position target. No separate motion predictor
-is used. These predictions inform the learned destination selection.
+Evaluation is Full SMB played many times, learning continuing on every
+playthrough, the world model and the trackers included, in speed mode (time
+to each checkpoint) and points mode. The measure is how few playthroughs it
+takes before Mario plays the level successfully.
 
 Ground movement uses **eight-frame model-predictive control**: simulate Mario's
 response to candidate button sequences, apply only the first button, then observe
@@ -127,7 +120,7 @@ model has a 96-frame horizon and contains no terrain or hazard simulation.
 flight re-predicts the path from what vision shows and re-chooses the
 steering and the remaining hold: that corrects the motion estimate, and
 re-aims a jump at a walking enemy (a stomp) or a moving platform at where it
-is forecast to be. Off, a flight plays the hold and steering chosen at
+is now. Off, a flight plays the hold and steering chosen at
 takeoff, then keeps steering toward the goal. Holding a spot on a moving
 platform is the separate hold controller and is unaffected. The per-frame
 search was half the cost of every teacher trial; with it off, a jump is set
@@ -184,17 +177,14 @@ whether to continue holding every frame.
 Train **skill → tactic**. Skill can start from scratch or a compatible warm start;
 tactic requires a qualified skill checkpoint. Only the stage's parameters change:
 
-- **Skill:** the skill transformer. Teacher supplies the tactic and its own
-  commands, labelled as actions. The executor executes the teacher's commands
-  and the skill's own actions: until the action predictor predicts well, the
-  teacher carries those out (its best safe version of each; a choice it has
-  none of loses the episode; `teacher_actions.carry_out`); with `--predictor`
-  (and `--tracker`), they run at the predictor's end state. The predictor
-  reads the scene encoder and scene memory of the policy it was trained on,
-  so those stay fixed: training refuses a predictor whose checkpoint records
-  other weights than the starting policy's (`action_predictor.reading_digest`).
-- **Tactic:** tactic transformer and tactic memory. Skill, scene encoder, and
-  scene memory stay frozen. Teacher labels tactic choice/termination and return
+- **Skill:** the skill transformer (and, with `--train-reading`, the scene
+  encoder). Teacher supplies the tactic and its own commands, labelled as
+  actions. The executor executes the teacher's commands and the skill's own
+  actions, which the teacher carries out (its best safe version of each, the
+  ground truth the world model will predict; a choice it has none of loses the
+  episode; `teacher_actions.carry_out`).
+- **Tactic:** tactic transformer and tactic memory. Skill and scene encoder
+  stay frozen. Teacher labels tactic choice/termination and return
   targets train the critic.
 
 Teacher-controlled execution decreases across imitation rounds. Reward rounds
@@ -206,11 +196,8 @@ before every round) fails when, over every family's labels together, one end
 of a verb (within 2 pixels) covers more than 40% of that verb's labels (at
 least 6). A single family may concentrate on one end where its scenes call
 for it (a pit nearly as wide as the longest jump is crossed by the longest
-jump); whether they do is measured on the action predictor, which learns ends
-from scenes of every family (`predictor_train.explained`: a concentrated
-family is explained when the predictor reproduces its held-out ends within 8
-pixels and its predicted end follows the action's object when the object is
-moved). After every round, the learner's own actions on held-out layouts are
+jump); whether they do is to be measured on the world model, which learns
+ends from scenes of every family. After every round, the learner's own actions on held-out layouts are
 checked family by family: a family where the learner's most common end is
 above 40% and more than 20 points above the teacher's share collapses, and a
 round with a collapsed family cannot pass the gate. The decision layers are
@@ -370,9 +357,8 @@ bypass families the right landing depends on exactly that (a standing enemy
 needs a longer jump than one walking toward Mario; an approaching enemy needs
 a short approach, a retreating one a long chase). These layouts therefore
 start with 12 pre-episode frames (`watch_frames`): the simulator runs them at
-reset while Mario stands, and the agent watches their pictures, its memory
-stepping every four frames and its tracks measuring each enemy's motion, but
-decides nothing. The episode, its routes and its frame budget start after
+reset while Mario stands, and the agent watches their pictures, its tracks
+(and target trackers) measuring each enemy's motion, but decides nothing. The episode, its routes and its frame budget start after
 them.
 
 For each strategy-route combination, the teacher evaluates both its default

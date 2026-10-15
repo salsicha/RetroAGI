@@ -30,33 +30,6 @@ class Track:
     kind: str
     samples: list = field(default_factory=list)
     identity: int = 0
-    distant: list = field(default_factory=list)
-    forecast_age: int = 0
-
-    def distant_forecast(self, frames):
-        """A timed LSTM endpoint, rebased by actual observations; never extrapolated."""
-        usable = [
-            p
-            for p in self.distant
-            if p[0] - self.forecast_age >= frames
-            and p[0] > self.forecast_age
-            and p[3] <= 4
-            and p[4] >= 0.8
-        ]
-        if not usable:
-            return None
-        horizon, dx, dy, sigma, visible = min(usable)
-        return horizon - self.forecast_age, translated(self.box, dx, dy), sigma
-
-    def landing_box(self):
-        """Where a walker will be when the coming action (this jump) ends: its
-        memory forecast once trusted (rebased by what has since been seen),
-        else where it is now."""
-        if self.kind == "walker":
-            forecast = self.distant_forecast(1)
-            if forecast is not None:
-                return forecast[1]
-        return self.box
 
     @property
     def velocity(self):
@@ -73,9 +46,9 @@ class VisualTracks:
     # Training only: exact(track, frames) -> where the simulator will have
     # moved the walker the track follows, ``frames`` from now (a box in the
     # scene's pixels), or None. A jump aimed at a walker then lands where it
-    # will be (aimed_goal), not where the learner's memory forecasts it: the
-    # teacher teaches and the memory learns, never the other way round (user,
-    # 2026-10-14). None when the agent plays as deployed.
+    # will be (aimed_goal): the ground truth a prediction will stand for
+    # (the target tracker's collision point; user, 2026-10-14/15). None when
+    # the agent plays without the teacher.
     exact: Optional[Callable] = None
 
     def observe(self, scene, scroll):
@@ -120,11 +93,6 @@ class VisualTracks:
                 # Preserve this visual identity across motion and reversals.
                 # Flights may hold a reference to this particular walker.
                 track = old
-                track.distant = [
-                    (h, px - dx, py - dy, sigma, visible)
-                    for h, px, py, sigma, visible in track.distant
-                ]
-                track.forecast_age += 1
                 track.box = box
                 track.samples = ([] if reversed_course else old.samples) + [(dx, dy)]
                 track.samples = track.samples[-32:]
@@ -230,7 +198,7 @@ class Flight:
             return self._planned_button()
         if self.target is not None:
             if any(t is self.target for t in self.tracks.tracks):
-                b = self.target.landing_box()
+                b = self.target.box
                 self.goal = (
                     (b[0] + b[2]) / 2 + self.target_offset[0],
                     b[1] + self.target_offset[1],
@@ -426,11 +394,11 @@ def aimed_goal(target, offset, tracks, scene, motion, box, direction) -> tuple:
     and top) aims at. A walker's landing is planned where it will be when this
     jump ends: with tracks.exact (training), its place from the simulator at
     the jump's own landing time, the jump planned again until that time
-    settles; else where the memory forecasts it (Track.landing_box: trusted
-    forecasts only, else where it stands now)."""
+    settles; else where it stands now (the target tracker's predicted
+    collision point will stand in, once it is trained)."""
     exact = getattr(tracks, "exact", None)
     if exact is None or target.kind != "walker":
-        b = target.landing_box()
+        b = target.box
         return ((b[0] + b[2]) / 2 + offset[0], b[1] + offset[1])
     b, frames = target.box, None
     for _ in range(4):

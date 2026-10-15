@@ -108,10 +108,16 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(
         def observe(self, screens):
             return [scene_from_labels(lane.env.scene_labels())]
 
-    from retroagi.core.action_predictor import ActionPredictor
-
     policy = LayeredSMBPolicy().eval()
-    agent = SMBAgents(Observer(), policy, "cpu", predictor=ActionPredictor().eval())
+
+    def carry_out(number, action):
+        # Labelled: the teacher carries out the skill's own actions (their
+        # ground truth). Unlabelled, a fixed stand-in: no teacher is asked.
+        if label:
+            return lane.carry_out(action)
+        return SkillToken("hold", 0, 0) if action.verb == "hold" else SkillToken("run", 16, 0)
+
+    agent = SMBAgents(Observer(), policy, "cpu", carry_out=carry_out)
     given = _teacher_given(learner, {0: lane})
     feedback = []
     try:
@@ -198,9 +204,13 @@ def test_skill_receives_strategy_context_in_runtime_and_training_records(monkeyp
         return original(*args, **kwargs)
 
     monkeypatch.setattr(policy, "run_skill", run)
-    from retroagi.core.action_predictor import ActionPredictor
-
-    agents = SMBAgents(Observer(), policy, "cpu", switch=switch, predictor=ActionPredictor().eval())
+    agents = SMBAgents(
+        Observer(),
+        policy,
+        "cpu",
+        switch=switch,
+        carry_out=lambda number, action: lane.carry_out(action),
+    )
     try:
         step = agents.act([lane.screen], [0], given=_teacher_given("skill", {0: lane}))[0]
         for key, row in zip("abc", step.rows):

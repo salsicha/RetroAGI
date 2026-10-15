@@ -23,6 +23,54 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-15 — Predictions come after the choice; ground truth stands in until they are trained (user decision; building)
+
+The policy's LSTM used to step every 4 frames and before each decision, and the
+skill and tactic layers read its forecasts: the scene expected at the action's
+end, each enemy's place then, and its state, fed into the tactic memory. The
+forecasts were useless for timing. Ending a wait on them won 1 of 27
+choice_hold_area layouts; aiming stomps with them landed 18 of 51 moving
+walkers on the first jump.
+
+User decisions:
+
+- **The skill reads no prediction.** It chooses from vision, the tactic, the
+  strategy, its own last choices and the executor's feedback. "The prediction
+  reads the skill chosen."
+- **The world model** is the LSTM run once at the start of an action, after
+  the skill has chosen it, with that action as input. It predicts the action's
+  outcome: where Mario and its object end, how many frames it takes (for a
+  wait, how long), and the chance it succeeds. The action predictor folds into
+  it.
+- **Target trackers** run every frame. Each predicts when and where its enemy
+  and Mario will collide, as a stomp or a hit.
+- **The executor's per-enemy estimate** ends a wait or walk sooner the faster
+  an enemy comes at Mario; the skill then picks again and learns from the
+  teacher to jump. A stomp aims at the predicted collision point. No Kalman
+  filter for now.
+- **Neither network is used while the skills and tactics train.** Every
+  "prediction" is the simulator's ground truth until they are trained, from
+  recorded truth.
+- **Evaluation is Full SMB played many times,** learning continuing on every
+  playthrough, the two networks included. Speed mode is rewarded by time to
+  each checkpoint, points mode by points. The measure is how few playthroughs
+  it takes before Mario plays the level successfully.
+
+Built so far:
+
+- The skill's own holds carried out with the teacher's wait length (659e6d0).
+- The LSTM out of skill and tactic play and training. The skill's forecast
+  input, the expected-scene inputs and the tactic memory's action-memory input
+  are gone; old checkpoints migrate (`memory_version` 4); the predictor is
+  refused in training.
+- Collision truth (`stages/block_smb/collision_truth.py`).
+
+Next: every wait as one action of true length, with "ended by a coming
+collision" in the executor's feedback. In training a walk is the teacher's
+certified-safe version, so no collision ever cuts one short: forced ends of
+walks come with the trackers. The world model and trackers follow
+(`/home/amoran/.claude/plans/resilient-wobbling-abelson.md`, Phase 2).
+
 ## 2026-10-15 — Holding: a trigger buffer around Mario for each walker (user decision; built)
 
 In `choice_hold_area` the hold area was a fixed place 48 to 64 pixels either

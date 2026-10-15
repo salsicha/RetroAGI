@@ -106,7 +106,16 @@ def _decisions(episodes):
 def predictor_inputs(policy, episodes, device):
     """What the predictor reads at every decision with actions, from the
     fixed policy (no gradients), and the action records:
-    (scene tokens, present, memory, enemy forecast, rows, records) or None."""
+    (scene tokens, present, memory, enemy forecast, rows, records) or None.
+
+    Retired with the memory's every-4-frames stepping (user, 2026-10-15):
+    the world model's LSTM, run once at the start of an action with the
+    chosen action as input, replaces the action predictor; its trainer
+    replaces this one."""
+    raise NotImplementedError(
+        "the action predictor is replaced by the world model (docs/design-decisions.md "
+        "2026-10-15): its trainer is not built yet"
+    )
     episode, frame, rows, records = _decisions(episodes)
     if not records:
         return None

@@ -293,10 +293,9 @@ def test_the_skills_own_hold_is_carried_out_with_the_teachers_length():
         VisionObserver(SceneList([scene()])), LayeredSMBPolicy().eval(), "cpu", carry_out=carry_out
     )
     made = [SimpleNamespace(action=ActionToken("hold"), skill=None)]
-    starting = [SimpleNamespace(target="bound")]
-    agents._actions(starting, [None], [None], None, made, [0], [0])
+    agents._actions([None], made, [0], [0])
     assert asked == [ActionToken("hold")]
-    assert made[0].skill == SkillToken("hold", 0, 0, frames=30) and starting[0].target is None
+    assert made[0].skill == SkillToken("hold", 0, 0, frames=30)
 
 
 # ── Layers ────────────────────────────────────────────────────────────────────
@@ -329,7 +328,9 @@ def test_given_tokens_replace_the_policy_only_where_given():
     from retroagi.core.smb_agent import SMBAgents
     from retroagi.core.smb_observer import VisionObserver
 
-    from retroagi.core.action_predictor import ActionPredictor
+    def carry_out(number, action):
+        # The teacher's version of the skill's own action (its ground truth).
+        return SkillToken("hold", 0, 0) if action.verb == "hold" else SkillToken("run", 16, 0)
 
     torch.manual_seed(0)
     agents = SMBAgents(
@@ -337,7 +338,7 @@ def test_given_tokens_replace_the_policy_only_where_given():
         LayeredSMBPolicy().eval(),
         "cpu",
         2,
-        predictor=ActionPredictor().eval(),
+        carry_out=carry_out,
     )
     screens = [np.zeros((240, 256, 3), np.uint8)] * 2
     teacher_tactic = tactic_token("climb_forward")
@@ -351,8 +352,8 @@ def test_given_tokens_replace_the_policy_only_where_given():
     first, second = steps[0].decision, steps[1].decision
     assert first.tactic == second.tactic == teacher_tactic
     assert first.plan == teacher_plan
-    # The skill's own choice is an action; its predicted end is the executor's
-    # destination.
+    # The skill's own choice is an action; its end (the teacher's version of
+    # it, in training) is the executor's destination.
     assert second.action == second.chosen["skill"] and second.skill is not None
     assert second.plan is not None
     assert "action" not in first.chosen and "action" not in second.chosen
@@ -431,7 +432,8 @@ def test_training_one_layer_leaves_every_other_part_unchanged(learner):
         parameter.requires_grad_(True)
     optimizer = torch.optim.SGD(learning, lr=0.1)
     losses, _ = learner_losses(policy, learner, [_record(learner)], 1.0, "cpu")
-    assert ("expectation" in losses) == (learner == "skill")
+    # Neither layer trains (or reads) the world model's LSTM.
+    assert "expectation" not in losses
     optimizer.zero_grad()
     sum(losses.values()).backward()
     optimizer.step()
@@ -503,43 +505,38 @@ def _rows(xs):
     return [(p.src_a[None], p.src_b[None], p.src_c[None]) for p in picked]
 
 
-def test_the_memory_reads_only_the_latest_picture():
+def test_the_skill_reads_no_prediction():
     torch.manual_seed(0)
     policy = LayeredSMBPolicy().eval()
-    # It takes the latest scene's summary and nothing else: no action, no button.
-    assert policy.memory.cell.input_size == policy.settings.width
+    rows = _rows([150])[0]
+    tactic = encode_tactic(tactic_token("advance"))[None]
     with torch.no_grad():
-        frames = [policy.encode_scene(rows) for rows in _rows([150, 160])]
-        near = policy.remember(frames[0], None)
-        far = policy.remember(frames[1], None)
-        later = policy.remember(frames[1], near)
-        expected, _ = policy.expect(near)
-    assert not torch.allclose(near.hidden, far.hidden)
-    # What it saw at an earlier action stays in its state.
-    assert not torch.allclose(far.hidden, later.hidden)
-    assert expected.shape == (1, SEQ_LEN_C)
+        before = policy.run_skill(policy.encode_scene(rows), tactic)["verb"]
+        # The world model's LSTM, whatever its weights, changes nothing the
+        # skill does: it predicts the outcome of the skill's choice, after it.
+        for parameter in policy.memory.parameters():
+            parameter.normal_()
+        after = policy.run_skill(policy.encode_scene(rows), tactic)["verb"]
+    assert torch.equal(before, after)
+    assert not any(p in set(policy.parameters_of("skill")) for p in policy.memory.parameters())
 
 
-def test_replaying_an_episode_gives_the_memory_play_gave():
-    from retroagi.stages.block_smb.layered_train import action_memory
+def test_the_world_models_lstm_does_not_step_while_the_skill_plays():
+    from retroagi.core.smb_agent import SMBAgents
+    from retroagi.core.smb_observer import VisionObserver
 
-    torch.manual_seed(0)
     policy = LayeredSMBPolicy().eval()
-    frames = _rows([150 + 3 * t for t in range(12)])
-    starts = [0, 1, 5, 9]  # the frames on which actions started
-    with torch.no_grad():
-        state, played = None, []
-        for t in sorted(set(starts) | set(range(0, len(frames), 4))):
-            state = policy.remember(policy.encode_scene(frames[t]), state)
-            if t in starts:
-                played.append(state.hidden[0])
-        a, b, c = (torch.cat([r[i] for r in frames]).unsqueeze(0) for i in range(3))
-        d = {
-            "episode": torch.zeros(len(starts), dtype=torch.long),
-            "frame": torch.tensor(starts),
-        }
-        replayed = action_memory(policy, a, b, c, d)
-    assert torch.allclose(torch.stack(played), replayed, atol=1e-5)
+    steps = []
+    policy.memory.register_forward_hook(lambda *_: steps.append(1))
+    agents = SMBAgents(
+        VisionObserver(SceneEcho(scene())),
+        policy,
+        "cpu",
+        carry_out=lambda number, action: SkillToken("hold", 0, 0, frames=5),
+    )
+    screen = [np.zeros((240, 256, 3), np.uint8)]
+    decided = [agents.act(screen, [0])[0].decision is not None for _ in range(12)]
+    assert sum(decided) >= 2 and not steps
 
 
 # ── Each layer's own previous choices ─────────────────────────────────────────
@@ -561,9 +558,7 @@ def test_the_skill_layer_reads_its_own_previous_destinations():
             choices[0, age] = encode_choice("skill", plan)
             present[0, age] = True
         with torch.no_grad():
-            now = policy.encode_scene(rows)
-            _, expected = policy.expect(policy.remember(now, None))
-            out = policy.run_skill(now, expected, tactic, (choices, present))
+            out = policy.run_skill(policy.encode_scene(rows), tactic, (choices, present))
         return out["verb"]
 
     from retroagi.core.action_tokens import ActionToken

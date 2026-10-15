@@ -22,10 +22,8 @@ def scene(batch=2, enemy=(True, False)):
 
 def run(policy, rows, picks=None):
     encoded = policy.encode_scene(rows)
-    state = policy.memory.initial(len(rows[0]), "cpu")
-    _, expected = policy.expect(state)
     tactic = torch.stack([encode_tactic(tactic_token("advance"))] * len(rows[0]))
-    return policy.run_skill(encoded, expected, tactic, memory=state.hidden, picks=picks)
+    return policy.run_skill(encoded, tactic, picks=picks)
 
 
 def test_verbs_and_objects_are_masked_by_what_is_in_view():

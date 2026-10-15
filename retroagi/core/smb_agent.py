@@ -1,41 +1,40 @@
-"""Vision-only agent: strategy -> tactic -> skill -> action predictor -> predictive executor.
+"""Vision-only agent: strategy -> tactic -> skill -> predictive executor.
 
-Scene memory updates regularly during execution. At each action boundary the
-option-critic checks the held tactic, and the skill chooses an action (a verb
-aimed at an object it sees) from scene, prediction, tactic and its 16
-previous actions. The action predictor gives where the action ends, which is
-the executor's destination; the target tracker moves it when its object
-leaves its forecast (core/action_controller).
+At each action boundary the option-critic checks the held tactic, and the
+skill chooses an action (a verb aimed at an object it sees) from the scene,
+the tactic, the strategy, its 16 previous actions and the executor's
+feedback. Neither reads a prediction (user, 2026-10-15). Where the action
+ends, the executor's destination, is the teacher's ground truth in training
+(``carry_out``); later the world model will predict it, run once at the
+start of the action after it is chosen. The target tracker, when given,
+observes every frame.
 Execution uses per-frame vision for motion, destination and hold feedback.
 Landing and destination arrival can end a plan early, and waits are rechecked
-each frame. Simulator state is never passed to these networks.
+each frame unless given a length. Simulator state is never passed to these
+networks.
 
 Training may supply teacher tokens for selected layers; runtime playback
 uses only the policy's own choices and the externally set strategy switch.
 """
 
-import math
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Sequence
 
 import numpy as np
 import torch
 
-from .action_controller import apply, bind, destination_of, retarget
-from .action_tokens import VERBS, ActionToken, pointer_index
+from .action_tokens import ActionToken
 from .actions import SMBAction
 from .layered_policy import (
     CHOICE_WIDTH,
     CHOICES,
     HISTORY,
     HISTORY_LAYERS,
-    MEMORY_INTERVAL,
     LayeredSMBPolicy,
     MemoryState,
     choice_log_prob,
     choose,
     encode_choice,
-    forecast_features,
     held_features,
 )
 from .smb_executor import ActionPlan, SMBExecutor
@@ -87,8 +86,8 @@ class Decision:
     tactic_step: Optional[TacticStep] = None  # when the tactic layer ran
     skill: Optional[SkillToken] = None
     execution_feedback: list = field(default_factory=lambda: [0.0] * EXECUTION_WIDTH)
-    # With an action predictor: the skill's action, whose predicted end is
-    # the destination ``skill``.
+    # The skill's own action, whose end (the teacher's version, in training)
+    # is the destination ``skill``.
     action: Optional[ActionToken] = None
 
 
@@ -122,7 +121,6 @@ def decide(
     policy: LayeredSMBPolicy,
     scenes: Sequence[SceneObservation],
     rows: Sequence[tuple],
-    expected,
     device,
     switches: Sequence[StrategyToken],
     tactics: Sequence[Optional[TacticToken]],
@@ -133,16 +131,13 @@ def decide(
     histories: Optional[Mapping[str, tuple]] = None,
     tactic_steps: Optional[Sequence[Optional[TacticStep]]] = None,
     execution_feedback=None,
-    memory=None,
 ) -> list[Decision]:
     """Skill destinations and action plans for pictures under ``tactics``
     (each held by the tactic layer, or given).
 
-    ``expected``: the action memory's expected scene at the end of the coming
-    action, encoded (LayeredSMBPolicy.expect). ``encoded_scene``: the pictures'
-    scenes already encoded, when the caller has them. ``histories``: the
-    skill's own previous destinations (choice_histories). ``memory``: the scene
-    memory's hidden state, whose enemy forecasts the skill reads.
+    ``encoded_scene``: the pictures' scenes already encoded, when the caller
+    has them. ``histories``: the skill's own previous destinations
+    (choice_histories).
 
     ``given["action"]`` can replay an exact teacher button plan in tests and
     teacher diagnostics. Learned policies never produce button plans.
@@ -178,12 +173,10 @@ def decide(
     def run(layer: str, above) -> None:
         out = policy.run_skill(
             encoded(),
-            expected,
             above,
             (histories or {}).get("skill"),
             strategy=_encoded(encode_strategy, switches, device),
             feedback=execution_feedback,
-            memory=memory,
             sample=layer in sample,
         )
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
@@ -198,8 +191,9 @@ def decide(
 
     if (missing("action") or "skill" in run_given) and runs("skill"):
         run("skill", _encoded(encode_tactic, tactics, device))
-    # The skill's own choice is an action: its destination comes from the
-    # action predictor (SMBAgents); a given command is its own destination.
+    # The skill's own choice is an action: its destination is the teacher's
+    # version of it (SMBAgents.carry_out); a given command is its own
+    # destination.
     own_actions = chosen.get("skill", [None] * count)
     given_skills = given.get("skill")
     destinations = replaced("skill", [None] * count)
@@ -333,8 +327,6 @@ class _Copy:
     executor: SMBExecutor = field(default_factory=SMBExecutor)
     landing: LandingWatch = field(default_factory=LandingWatch)
     spatial: SpatialFeedback = field(default_factory=SpatialFeedback)
-    hidden: Optional[torch.Tensor] = None
-    cell: Optional[torch.Tensor] = None
     button: int = NOOP
     # Each layer's choices used at earlier decisions, the most recent first.
     choices: dict = field(default_factory=lambda: {layer: [] for layer in HISTORY_LAYERS})
@@ -343,18 +335,15 @@ class _Copy:
     held_since: tuple[int, int] = (0, 0)  # (decisions, frames) when it started
     decisions: int = 0  # decisions made this episode
     frame: int = 0  # frames played this episode
-    memory_frame: int = -1
-    memory_camera: float = 0.0
     # Pre-episode frames still to watch (prefilled history): the agent observes
-    # them, its memory and tracks update, but it decides nothing and presses
-    # nothing until they are over.
+    # them, its tracks (and target tracker) update, but it decides nothing and
+    # presses nothing until they are over.
     watch: int = 0
     tactic_hidden: Optional[torch.Tensor] = None  # the tactic memory
     tactic_cell: Optional[torch.Tensor] = None
-    # With a target tracker: the tracked objects (ObjectTracker), and the
-    # running action's object (action_controller.ActionTarget).
+    # With a target tracker: the tracked objects (ObjectTracker), observed
+    # every frame.
     objects: object = None
-    target: object = None
 
 
 def choice_histories(copies: Sequence[_Copy], device) -> dict:
@@ -398,32 +387,30 @@ class SMBAgents:
         self.policy = policy
         self.device = torch.device(device)
         self.switch = switch  # the strategy switch a copy starts with, unless told otherwise
-        # With an action predictor (core/action_predictor), the skill's own
-        # decisions are its action, executed at the predictor's end state; with
-        # a target tracker (core/target_tracker), an action on a moving object
-        # follows the object (core/action_controller).
+        # The action predictor is replaced by the world model (not built yet):
+        # an agent given one refuses to play its own actions (_actions). A
+        # target tracker (core/target_tracker), when given, observes every
+        # frame.
         self.predictor = predictor
         self.tracker = tracker
-        # Training only, instead of the predictor until it predicts well:
-        # carry_out(copy number, action) gives the executor's destination for
-        # the skill's own action (the teacher's version of it), or None when
-        # there is none (then the copy holds; its episode is ended as lost).
+        # Training: carry_out(copy number, action) gives the executor's
+        # destination for the skill's own action (the teacher's version of
+        # it: the ground truth an outcome prediction will stand for), or None
+        # when there is none (then the copy holds; its episode is ended as
+        # lost).
         self.carry_out = carry_out
         self.copies = [_Copy() for _ in range(copies)]
         for index in range(copies):
             self.reset(index)
 
     def reset(self, copy: int, switch: Optional[StrategyToken] = None, watch: int = 0) -> None:
-        """Start a new episode for one copy: empty memories, no plan, no tactic,
-        and its strategy switch (``switch``, else the agents' own). ``watch``:
-        pre-episode frames to observe before the first decision."""
-        zeros = torch.zeros(self.policy.memory.width, device=self.device)
+        """Start a new episode for one copy: an empty tactic memory, no plan, no
+        tactic, and its strategy switch (``switch``, else the agents' own).
+        ``watch``: pre-episode frames to observe before the first decision."""
         tactic = torch.zeros(self.policy.tactic_memory.width, device=self.device)
         from .target_tracker import ObjectTracker
 
         self.copies[copy] = _Copy(
-            hidden=zeros,
-            cell=zeros.clone(),
             switch=switch or self.switch,
             tactic_hidden=tactic,
             tactic_cell=tactic.clone(),
@@ -432,12 +419,12 @@ class SMBAgents:
         )
 
     @torch.no_grad()
-    def _actions(self, starting, scenes, encoded, hidden, made, own, numbers) -> None:
+    def _actions(self, starting, made, own, numbers) -> None:
         """For the deciding copies playing their own skill choice (``own``):
-        the skill's action's predicted end (the action predictor) as the
-        executor's destination, and the action bound to its object; or, with
-        ``carry_out``, the teacher's version of the action (``numbers``: the
-        deciding copies' numbers)."""
+        the executor's destination for the skill's action, the teacher's
+        version of it (``carry_out``; ``numbers``: the deciding copies'
+        numbers). Without ``carry_out`` a hold holds; any other action needs
+        the world model's predicted outcome, not built yet."""
         chosen = [i for i in own if made[i].action is not None]
         if self.carry_out is not None:
             # Holds too: the teacher's version of a hold lasts as long as its
@@ -445,52 +432,17 @@ class SMBAgents:
             for i in chosen:
                 destination = self.carry_out(numbers[i], made[i].action)
                 made[i].skill = destination or SkillToken("hold", 0, 0)
-                starting[i].target = None
             return
         for i in [i for i in chosen if made[i].action.verb == "hold"]:
-            # A hold has no end to predict: it holds.
             made[i].skill = SkillToken("hold", 0, 0)
-            starting[i].target = None
-        chosen = [i for i in chosen if made[i].action.verb != "hold"]
-        if not chosen:
-            return
-        if self.predictor is None:
+        if any(made[i].action.verb != "hold" for i in chosen):
             raise RuntimeError(
-                "the skill chooses actions: the agent needs an action predictor to execute them"
-            )
-        actions = [made[i].action for i in chosen]
-        tokens = torch.cat([encoded[i][0] for i in chosen])
-        present = torch.cat([encoded[i][1] for i in chosen])
-        memory = hidden[chosen]
-        rows = torch.arange(len(chosen), device=self.device)
-        verbs = torch.tensor([VERBS.index(a.verb) for a in actions], device=self.device)
-        pointers = torch.tensor(
-            [1 if a.target is None else pointer_index(a.target) for a in actions],
-            device=self.device,
-        )
-        predicted = self.predictor(
-            tokens,
-            present,
-            memory,
-            forecast_features(self.policy.memory.enemies(memory)),
-            rows,
-            verbs,
-            pointers,
-        )
-        means = predicted["mean"].cpu().tolist()
-        for j, i in enumerate(chosen):
-            dx, dy, odx, ody, frames = means[j]
-            outcome = {"dx": dx, "dy": dy, "object_dx": odx, "object_dy": ody, "frames": frames}
-            made[i].skill = destination_of(actions[j], outcome)
-            copy = starting[i]
-            copy.target = (
-                bind(actions[j], outcome, scenes[i], copy.spatial, copy.objects.frame)
-                if copy.objects is not None
-                else None
+                "the skill chose an action: playing it without the teacher needs the world "
+                "model's predicted outcome (not built yet; docs/design-decisions.md 2026-10-15)"
             )
 
     @torch.no_grad()
-    def _tactics(self, starting, now, expected, action_memory, given, run_given, sample):
+    def _tactics(self, starting, now, given, run_given, sample):
         """The tactic each deciding copy uses for its next action, and what the
         tactic layer did (TacticStep, None where it did not run).
 
@@ -538,7 +490,6 @@ class SMBAgents:
             index = torch.tensor(holding, device=device)
             out = policy.tactic_outputs(
                 part(index, now),
-                part(index, expected),
                 switches[index],
                 held_rows[index],
                 hidden[index],
@@ -564,7 +515,6 @@ class SMBAgents:
             stepped = policy.recall(
                 part(index, now),
                 held_rows[index],
-                action_memory[index],
                 MemoryState(hidden[index], cell[index]),
             )
             hidden, cell = hidden.clone(), cell.clone()
@@ -577,9 +527,7 @@ class SMBAgents:
         if choosing:
             index = torch.tensor(choosing, device=device)
             none = held_features(None).to(device).expand(len(choosing), -1)
-            out = policy.tactic_outputs(
-                part(index, now), part(index, expected), switches[index], none, hidden[index]
-            )
+            out = policy.tactic_outputs(part(index, now), switches[index], none, hidden[index])
             for k, i in enumerate(choosing):
                 stance, picks = choose("tactic", {"tactic": out["tactic"][k]}, sample=explore)
                 own[i] = stance
@@ -636,10 +584,6 @@ class SMBAgents:
                 from .target_tracker import object_rows
 
                 copy.objects.observe(object_rows(scene, copy.spatial))
-                if copy.target is not None and not copy.executor.idle:
-                    moved = retarget(copy.target, scene, copy.spatial, copy.objects)
-                    if moved is not None:
-                        apply(moved, scene, copy.spatial)
             landed = copy.landing.landed(scene)
             reason = None
             if not copy.executor.idle:
@@ -670,92 +614,6 @@ class SMBAgents:
                     copy.executor.end(reason)
             ended.append(reason)
         deciding = [k for k, copy in enumerate(playing) if copy.executor.idle and not copy.watch]
-        # Memory observes motion during execution as well as at decisions.
-        refreshing = [
-            k
-            for k, copy in enumerate(playing)
-            if copy.frame % MEMORY_INTERVAL == 0 or k in deciding
-        ]
-        encoded = {}
-        if refreshing:
-            from .smb_observer import packed_lists
-
-            now_all = self.policy.encode_scene(
-                stack_rows([rows[k] for k in refreshing], self.device)
-            )
-            prior = MemoryState(
-                torch.stack([playing[k].hidden for k in refreshing]),
-                torch.stack([playing[k].cell for k in refreshing]),
-            )
-            timing = torch.tensor(
-                [
-                    [
-                        (playing[k].frame - max(0, playing[k].memory_frame)) / 32,
-                        (playing[k].spatial.camera_position - playing[k].memory_camera) / 256,
-                    ]
-                    for k in refreshing
-                ],
-                device=self.device,
-            )
-            remembered_all = self.policy.remember(now_all, prior, timing)
-            enemy_forecasts = {
-                name: value.cpu().tolist()
-                for name, value in self.policy.memory.enemies(remembered_all.hidden).items()
-            }
-            forecasts = self.policy.memory.platforms(remembered_all.hidden)
-            end_frames = forecasts["frames"].cpu().tolist()
-            end_sigma = forecasts["frame_sigma"].cpu().tolist()
-            displacement = forecasts["displacement"].cpu().tolist()
-            uncertainty = forecasts["sigma"].cpu().tolist()
-            visibility = forecasts["visible"].sigmoid().cpu().tolist()
-            for j, k in enumerate(refreshing):
-                copy = playing[k]
-                copy.hidden, copy.cell = remembered_all.hidden[j], remembered_all.cell[j]
-                copy.memory_frame, copy.memory_camera = copy.frame, copy.spatial.camera_position
-                encoded[k] = tuple(value[j : j + 1] for value in now_all)
-                for slot, box in enumerate(packed_lists(scenes[k])["moving_platforms"]):
-                    matches = [
-                        t
-                        for t in copy.spatial.tracks.tracks
-                        if t.kind == "platform" and t.box == box
-                    ]
-                    if len(matches) == 1:
-                        track = matches[0]
-                        track.forecast_age = 0
-                        vx, vy = track.velocity or (0, 0)
-                        # Timing uncertainty also makes the predicted endpoint
-                        # uncertain in space for a moving platform.
-                        sigma = max(uncertainty[j][slot]) + max(abs(vx), abs(vy)) * end_sigma[j]
-                        track.distant = [
-                            (
-                                float(end_frames[j]),
-                                *displacement[j][slot],
-                                sigma,
-                                visibility[j][slot],
-                            )
-                        ]
-                for slot, enemy in enumerate(packed_lists(scenes[k])["enemies"]):
-                    matches = [
-                        t
-                        for t in copy.spatial.tracks.tracks
-                        if t.kind == enemy.kind and t.box == enemy.box
-                    ]
-                    if len(matches) == 1:
-                        track = matches[0]
-                        track.forecast_age = 0
-                        vx, vy = track.velocity or (0, 0)
-                        f = enemy_forecasts
-                        sigma = (
-                            max(f["sigma"][j][slot]) + max(abs(vx), abs(vy)) * f["frame_sigma"][j]
-                        )
-                        track.distant = [
-                            (
-                                float(f["frames"][j]),
-                                *f["displacement"][j][slot],
-                                sigma,
-                                1 / (1 + math.exp(-f["visible"][j][slot])),
-                            )
-                        ]
         decisions: list[Optional[Decision]] = [None] * len(playing)
         if deciding:
             starting = [playing[k] for k in deciding]
@@ -767,25 +625,17 @@ class SMBAgents:
             needs_context = (
                 "tactic" in run_given or "skill" in run_given or any(s is None for s in skills)
             )
-            remembered = MemoryState(
-                torch.stack([copy.hidden for copy in starting]),
-                torch.stack([copy.cell for copy in starting]),
+            # The scene is encoded at decisions only (nothing reads it between).
+            now = (
+                self.policy.encode_scene(stack_rows(picked_rows, self.device))
+                if needs_context
+                else None
             )
-            now = expected = None
-            if needs_context:
-                now = tuple(
-                    torch.cat([encoded[k][i] for k in deciding])
-                    for i in range(len(encoded[deciding[0]]))
-                )
-                _, expected = self.policy.expect(remembered)
-            tactics, tactic_steps = self._tactics(
-                starting, now, expected, remembered.hidden, extra, run_given, sample
-            )
+            tactics, tactic_steps = self._tactics(starting, now, extra, run_given, sample)
             made = decide(
                 self.policy,
                 picked,
                 picked_rows,
-                expected,
                 self.device,
                 [copy.switch for copy in starting],
                 tactics,
@@ -799,7 +649,6 @@ class SMBAgents:
                     [copy.spatial.report(scene) for copy, scene in zip(starting, picked)],
                     device=self.device,
                 ),
-                memory=remembered.hidden,
             )
             own = [
                 j
@@ -807,15 +656,7 @@ class SMBAgents:
                 if skills[j] is None
                 and not (supplied.get("action") and supplied["action"][j] is not None)
             ]
-            self._actions(
-                starting,
-                picked,
-                [encoded[k] for k in deciding],
-                remembered.hidden,
-                made,
-                own,
-                [copies[k] for k in deciding],
-            )
+            self._actions(starting, made, own, [copies[k] for k in deciding])
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 given_actions = supplied.get("action")
                 destination = (
@@ -823,7 +664,6 @@ class SMBAgents:
                 )
                 decision.plan = playing[k].spatial.begin(destination, scenes[k], decision.plan)
                 decisions[k] = decision
-                playing[k].hidden, playing[k].cell = remembered.hidden[j], remembered.cell[j]
                 remember_choices(playing[k], decision)
                 playing[k].decisions += 1
                 playing[k].executor.start(

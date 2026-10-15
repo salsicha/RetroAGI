@@ -56,7 +56,6 @@ LAYERS = ("tactic", "skill")
 HISTORY_LAYERS = ("skill",)
 # Each layer's context holds its own last HISTORY choices (the ones used).
 HISTORY = 16
-MEMORY_INTERVAL = 4
 CHOICE_WIDTH = {"tactic": TACTIC_WIDTH, "skill": ACTION_WIDTH}
 # A held (or just ended) tactic as numbers: one-hot tactic with a last slot for
 # "none", then how long it has been held: log(1 + actions) / log(1 + 64) and
@@ -225,12 +224,15 @@ class MemoryState:
 
 
 class Memory(nn.Module):
-    """One scene LSTM, refreshed every four frames and at skill decisions.
+    """The world model's LSTM. Not used while the skills and tactics train
+    (user, 2026-10-15): there, an action's outcome is the ground truth.
 
-    The same hidden state predicts the next action endpoint: its scene,
-    platform and enemy world displacements, and remaining duration in physical
-    frames. No second recurrent model is used. Elapsed time and observed camera scroll distinguish
-    object motion from camera motion and irregular decision intervals.
+    It is to run once at the start of each action, after the skill has
+    chosen it, with the chosen action as input, and predict that action's
+    outcome; it is reshaped so when it is trained (the action predictor's
+    readout folds into it). Until then its readouts are the old ones (the
+    next action endpoint: its scene, platform and enemy world displacements
+    and remaining duration), kept so its weights load.
     """
 
     def __init__(self, settings: PolicySettings):
@@ -355,10 +357,11 @@ def forecast_features(forecast):
 
 
 class _Layer(nn.Module):
-    """A transformer whose context holds the current scene's tokens, the expected
-    scene's tokens (the memory's prediction of the world when the coming action
-    ends), the token from above, and its own last HISTORY choices, each marked
-    with how many decisions ago it was made -> a decision token."""
+    """A transformer whose context holds the current scene's tokens, the token
+    from above, and its own last HISTORY choices, each marked with how many
+    decisions ago it was made -> a decision token. It reads no prediction: the
+    world model predicts the outcome of what it chooses, after it chooses
+    (user, 2026-10-15)."""
 
     def __init__(
         self,
@@ -377,8 +380,6 @@ class _Layer(nn.Module):
             self.history_waves = PositionWaves(choice_positions, settings.position_frequencies)
             self.history = nn.Linear(choice_width + self.history_waves.extra_width(), width)
             self.history_age = nn.Parameter(torch.zeros(HISTORY, width))
-        # Marks the expected scene's tokens apart from the current scene's.
-        self.expected_marker = nn.Parameter(torch.zeros(1, 1, width))
         self.above = nn.Linear(above_width, width) if above_width else None
         self.query = nn.Parameter(torch.zeros(1, 1, width))
         layer = nn.TransformerEncoderLayer(
@@ -394,7 +395,7 @@ class _Layer(nn.Module):
         self.heads = nn.ModuleDict({name: nn.Linear(width, size) for name, size in outputs.items()})
         self.value = nn.Linear(width, 1)
 
-    def encode(self, scene_tokens, present, expected, above=None, history=None, more=()):
+    def encode(self, scene_tokens, present, above=None, history=None, more=()):
         """Returns the decision token and the current scene's tokens after the blocks.
 
         ``history``: (choices [B, HISTORY, choice width], present [B, HISTORY]),
@@ -402,15 +403,13 @@ class _Layer(nn.Module):
         ``more``: further (tokens [B, n, width], present [B, n]) groups.
         """
         batch = scene_tokens.shape[0]
-        expected_tokens, expected_present = expected
         extra = [self.query.expand(batch, -1, -1)]
         if self.above is not None:
             extra.append(self.above(above).unsqueeze(1))
-        parts = [*extra, scene_tokens, expected_tokens + self.expected_marker]
+        parts = [*extra, scene_tokens]
         masks = [
             torch.ones(batch, len(extra), dtype=torch.bool, device=present.device),
             present,
-            expected_present,
         ]
         if history is not None:
             choices, made = history
@@ -425,10 +424,8 @@ class _Layer(nn.Module):
         seen = slice(len(extra), len(extra) + scene_tokens.shape[1])
         return out[:, 0], out[:, seen]
 
-    def forward(
-        self, scene_tokens, present, expected, above=None, history=None
-    ) -> dict[str, torch.Tensor]:
-        decision, _ = self.encode(scene_tokens, present, expected, above, history)
+    def forward(self, scene_tokens, present, above=None, history=None) -> dict[str, torch.Tensor]:
+        decision, _ = self.encode(scene_tokens, present, above, history)
         out = {name: head(decision) for name, head in self.heads.items()}
         # The estimate of reward to come reads the decision without shaping it.
         out["value"] = self.value(decision.detach()).squeeze(-1)
@@ -467,8 +464,9 @@ class SkillLayer(_Layer):
     then the pointer, reading the chosen verb: the decision token, adjusted by
     the verb, scored against each object's scene token after the blocks
     (absent objects, and kinds the verb cannot aim at, are excluded; a hold
-    aims at nothing). The action predictor gives where the action ends: the
-    executor's destination.
+    aims at nothing). Where the action ends (the executor's destination) is
+    the teacher's ground truth in training, the world model's prediction
+    later; the layer reads neither.
     """
 
     def __init__(self, settings: PolicySettings, above_width: int):
@@ -519,14 +517,14 @@ class SkillLayer(_Layer):
         }
 
     def forward(
-        self, scene_tokens, present, expected, above=None, history=None, picks=None, sample=False
+        self, scene_tokens, present, above=None, history=None, picks=None, sample=False
     ) -> dict[str, torch.Tensor]:
         """Logits of each head, the pointer's for the verb chosen (or, given
         ``picks`` as index tensors [B] with a verb, for that one: teaching with
         the teacher's choice, or scoring the layer's own); "picks", the index
         tensors used; "decision", the decision token; "objects" and
         "object_present", the object tokens read; and the value estimate."""
-        decision, seen = self.encode(scene_tokens, present, expected, above, history)
+        decision, seen = self.encode(scene_tokens, present, above, history)
         span = slice(POINTER_START, POINTER_START + POINTER_TOKENS)
         objects, object_present = seen[:, span], present[:, span]
         verb_logits = self.verb_logits(decision, object_present)
@@ -556,17 +554,16 @@ class TacticMemory(nn.Module):
     tactic ends).
 
     Each step takes the picture (the scene encoder's summary of the frame the
-    new tactic starts on), the tactic that just ended and how long it lasted
-    (held_features; "none" at an episode's start), and the action memory's
-    state then, which carries what happened while that tactic was held. From
-    its state it predicts the scene when the coming tactic will end. It is
-    never told which tactic comes next.
+    new tactic starts on) and the tactic that just ended and how long it
+    lasted (held_features; "none" at an episode's start). From its state it
+    predicts the scene when the coming tactic will end. It is never told
+    which tactic comes next.
     """
 
     def __init__(self, settings: PolicySettings):
         super().__init__()
         self.width = settings.tactic_memory_width
-        self.inputs = nn.Linear(settings.width + HELD_WIDTH + settings.memory_width, settings.width)
+        self.inputs = nn.Linear(settings.width + HELD_WIDTH, settings.width)
         self.cell = nn.LSTM(settings.width, self.width, batch_first=True)
         self.expectation = nn.Sequential(
             nn.Linear(self.width, self.width * 2),
@@ -578,11 +575,10 @@ class TacticMemory(nn.Module):
         zeros = torch.zeros(batch, self.width, device=device)
         return MemoryState(zeros, zeros.clone())
 
-    def step_inputs(self, scene_summary, ended, action_memory):
-        """[B, width]: one step's input from the picture's summary [B, width], the
-        tactic that ended [B, HELD_WIDTH] and the action memory's state [B,
-        memory_width]."""
-        return self.inputs(torch.cat((scene_summary, ended, action_memory), dim=-1))
+    def step_inputs(self, scene_summary, ended):
+        """[B, width]: one step's input from the picture's summary [B, width] and
+        the tactic that ended [B, HELD_WIDTH]."""
+        return self.inputs(torch.cat((scene_summary, ended), dim=-1))
 
     def forward(self, inputs, state: MemoryState) -> MemoryState:
         """One tactic's start: ``inputs`` [B, width] (step_inputs)."""
@@ -605,11 +601,10 @@ class TacticMemory(nn.Module):
 class TacticLayer(_Layer):
     """The option-critic tactic layer.
 
-    Its context: the current scene's tokens, the action memory's expected scene
-    (end of the coming action), the strategy switch, the tactic it holds and
-    for how long (held_features; "none" when choosing), its memory's state, and
-    that memory's expected scene when the current tactic ends. Outputs, per
-    picture:
+    Its context: the current scene's tokens, the strategy switch, the tactic it
+    holds and for how long (held_features; "none" when choosing), its memory's
+    state, and that memory's expected scene when the current tactic ends.
+    Outputs, per picture:
 
     - ``tactic`` [7]: scores of the tactics to choose, when choosing;
     - ``end`` []: the end check, the log-odds that the held tactic is finished;
@@ -631,7 +626,7 @@ class TacticLayer(_Layer):
         # Marks the tokens of the scene expected when the tactic ends.
         self.end_marker = nn.Parameter(torch.zeros(1, 1, width))
 
-    def forward(self, scene_tokens, present, expected, switch, held, recalled, expected_end):
+    def forward(self, scene_tokens, present, switch, held, recalled, expected_end):
         """``held`` [B, HELD_WIDTH]; ``recalled`` [B, tactic memory width] (the
         tactic memory's state); ``expected_end``: the encoded scene it expects
         when the tactic ends (tokens, present)."""
@@ -641,7 +636,6 @@ class TacticLayer(_Layer):
         decision, _ = self.encode(
             scene_tokens,
             present,
-            expected,
             switch,
             more=(
                 (self.held(held).unsqueeze(1), everyone),
@@ -656,12 +650,16 @@ class TacticLayer(_Layer):
 
 
 class LayeredSMBPolicy(nn.Module):
-    """The two learned layers, scene encoder and two memories.
+    """The two learned layers, the scene encoder, the tactic memory, and the
+    world model's LSTM (``memory``).
 
-    remember() steps scene memory periodically and at decisions. When the
-    executor's plan ends, expect() gives its expected scene, the tactic layer
-    checks its held tactic (and, when it ends, recall() steps the tactic memory
-    and the layer chooses the next), and the skill layer chooses the executor's next destination.
+    When the executor's plan ends, the tactic layer checks its held tactic
+    (and, when it ends, recall() steps the tactic memory and the layer
+    chooses the next), and the skill layer chooses the next action. Neither
+    reads a prediction (user, 2026-10-15): the world model runs once at the
+    start of an action, after it is chosen, to predict its outcome. It is
+    trained from recorded ground truth and not used while the skills and
+    tactics train; until then every "prediction" is the ground truth.
     """
 
     def __init__(self, settings: PolicySettings = PolicySettings()):
@@ -672,66 +670,34 @@ class LayeredSMBPolicy(nn.Module):
         self.tactic = TacticLayer(settings)
         self.tactic_memory = TacticMemory(settings)
         self.skill = SkillLayer(settings, TACTIC_WIDTH + STRATEGY_WIDTH + EXECUTION_WIDTH)
-        # Each enemy's forecast (where it will be when the next action ends) is
-        # added to that enemy's scene token. Starts with no influence.
-        self.skill.forecast = nn.Linear(FORECAST_WIDTH, settings.width)
-        nn.init.zeros_(self.skill.forecast.weight)
-        nn.init.zeros_(self.skill.forecast.bias)
 
     def parameters_of(self, layer: str):
         modules = {
-            "skill": (self.scene, self.memory, self.skill),
+            "skill": (self.scene, self.skill),
             "tactic": (self.tactic, self.tactic_memory),
         }[layer]
         return [p for module in modules for p in module.parameters()]
 
-    def remember(self, now, state: Optional[MemoryState], timing=None) -> MemoryState:
-        """Step scene memory on a periodic observation or decision boundary.
-
-        ``now``: the encoded scene (encode_scene) of the frame the action starts
-        on; the memory takes its summary token. ``state``: the memory after the
-        previous action (None at an episode's start).
-        """
-        summary = now[0][:, 0]
-        if state is None:
-            state = self.memory.initial(summary.shape[0], summary.device)
-        return self.memory(summary, state, timing)
-
-    def expect(self, state: MemoryState):
-        """The memory's expected scene at the end of the coming action: its C row
-        numbers and its encoding for the decision layers."""
-        numbers = self.memory.expected_scene(state.hidden)
-        tokens, present = self.scene.expected(numbers)
-        endpoint = self.memory.action_end(state.hidden)
-        timing = torch.stack((endpoint["frames"], endpoint["sigma"]), dim=-1)
-        tokens = tokens.clone()
-        tokens[:, 0] += self.memory.end_time_embedding(torch.log1p(timing / 32))
-        return numbers, (tokens, present)
-
-    def recall(self, now, ended, action_memory, state: Optional[MemoryState]) -> MemoryState:
+    def recall(self, now, ended, state: Optional[MemoryState]) -> MemoryState:
         """Step the tactic memory when a tactic starts.
 
         ``now``: the encoded scene of the frame it starts on (its summary token
         is taken); ``ended`` [B, HELD_WIDTH]: the tactic that just ended and how
-        long it was held (held_features); ``action_memory`` [B, memory width]:
-        the action memory's state now; ``state``: the tactic memory before (None
-        at an episode's start).
+        long it was held (held_features); ``state``: the tactic memory before
+        (None at an episode's start).
         """
         summary = now[0][:, 0]
         if state is None:
             state = self.tactic_memory.initial(summary.shape[0], summary.device)
-        return self.tactic_memory(
-            self.tactic_memory.step_inputs(summary, ended, action_memory), state
-        )
+        return self.tactic_memory(self.tactic_memory.step_inputs(summary, ended), state)
 
-    def tactic_outputs(self, encoded, expected, switch, held, recalled):
+    def tactic_outputs(self, encoded, switch, held, recalled):
         """The tactic layer's outputs (TacticLayer) from the encoded scene, the
-        action memory's encoded expected scene, the encoded switch [B,
-        STRATEGY_WIDTH], the held tactic [B, HELD_WIDTH] and the tactic memory's
-        hidden state [B, tactic memory width]."""
+        encoded switch [B, STRATEGY_WIDTH], the held tactic [B, HELD_WIDTH] and
+        the tactic memory's hidden state [B, tactic memory width]."""
         scene_tokens, present = encoded
         expected_end = self.scene.expected(self.tactic_memory.expected_scene(recalled))
-        return self.tactic(scene_tokens, present, expected, switch, held, recalled, expected_end)
+        return self.tactic(scene_tokens, present, switch, held, recalled, expected_end)
 
     def encode_scene(self, inputs):
         """Batched PolicyInput rows (src_a, src_b, src_c) -> scene tokens and their mask."""
@@ -740,12 +706,10 @@ class LayeredSMBPolicy(nn.Module):
     def run_skill(
         self,
         encoded,
-        expected,
         tactic,
         history=None,
         strategy=None,
         feedback=None,
-        memory=None,
         picks=None,
         sample=False,
     ):
@@ -753,19 +717,11 @@ class LayeredSMBPolicy(nn.Module):
 
         Training records pack both tokens together. Direct callers may pass
         them separately; the default switch preserves the old convenience API.
-        ``memory``: the scene memory's hidden state at the decision [B, memory
-        width]; each enemy's forecast is then added to its scene token.
         ``picks``: the verb (and pointer) (index tensors [B]) to read as
         chosen, instead of choosing them (most likely, or sampled when
         ``sample``); see SkillLayer.
         """
         scene_tokens, present = encoded
-        if memory is not None:
-            features = forecast_features(self.memory.enemies(memory)).detach()
-            scene_tokens = scene_tokens.clone()
-            scene_tokens[:, ENEMY_TOKENS] = scene_tokens[:, ENEMY_TOKENS] + self.skill.forecast(
-                features
-            )
         if tactic.shape[-1] == TACTIC_WIDTH:
             if strategy is None:
                 strategy = encode_strategy(DEFAULT_STRATEGY).to(tactic).expand(len(tactic), -1)
@@ -773,9 +729,7 @@ class LayeredSMBPolicy(nn.Module):
         if feedback is None:
             feedback = tactic.new_zeros((len(tactic), EXECUTION_WIDTH))
         tactic = torch.cat((tactic, feedback), dim=-1)
-        return self.skill(
-            scene_tokens, present, expected, tactic, history, picks=picks, sample=sample
-        )
+        return self.skill(scene_tokens, present, tactic, history, picks=picks, sample=sample)
 
 
 # ── Choosing from the outputs ─────────────────────────────────────────────────

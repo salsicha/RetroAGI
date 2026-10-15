@@ -55,10 +55,8 @@ from retroagi.core.layered_policy import (
     CHOICES,
     HELD_WIDTH,
     HISTORY,
-    MEMORY_INTERVAL,
     POINTER_START,
     LayeredSMBPolicy,
-    MemoryState,
     PolicySettings,
     choice_log_prob,
     encode_choice,
@@ -66,13 +64,11 @@ from retroagi.core.layered_policy import (
 from retroagi.core.smb_agent import SMBAgents
 from retroagi.core.smb_observer import (
     C_SPANS,
-    SCENE_SLOTS,
     SEQ_LEN_A,
     SEQ_LEN_B,
     SEQ_LEN_C,
     VisionObserver,
     observation_layout,
-    packed_lists,
 )
 from retroagi.core.tokens import (
     EXECUTION_WIDTH,
@@ -127,7 +123,7 @@ class LayeredTrainConfig:
     learning_rate: float = 3e-4
     # Weight decay of the optimizer (AdamW), regularizing the learned layers.
     weight_decay: float = 0.05
-    expectation_weight: float = 1.0  # the memory's expected scene, against imitation
+    expectation_weight: float = 1.0  # the tactic memory's expected scene, against imitation
     replay_episodes: int = 6000  # at least the latest round is always kept
     workers: int = 12
     lanes: int = 8  # episodes each worker plays side by side
@@ -224,12 +220,9 @@ class EpisodeRecord:
     played_teacher: np.ndarray  # [D] bool
     agreed: np.ndarray  # [D] bool, the policy chose what the teacher would have
     execution_feedback: Optional[np.ndarray] = None  # [D,8], measured prior command outcome
-    platform_observations: Optional[np.ndarray] = None  # [T,3,3]: identity, world x/y
-    final_src_c: Optional[np.ndarray] = None  # Observed completed final action endpoint only
-    final_platform_observations: Optional[np.ndarray] = None
-    enemy_observations: Optional[np.ndarray] = None  # [T,6,3]: identity, world x/y
-    final_enemy_observations: Optional[np.ndarray] = None
-    camera_positions: Optional[np.ndarray] = None  # [T] cumulative visual scroll
+    # Whether the last action ended before the episode did (else it was cut
+    # off by the episode's end: its length is not known).
+    last_action_ended: bool = False
     rewards: Optional[np.ndarray] = None  # [T] float32, the reward after each frame
     terminal: bool = False  # ended by death or the goal (not a timeout)
     explored: bool = False  # the learner sampled its choices
@@ -367,9 +360,7 @@ class _Lane:
         # and the side its goal is on (set by whoever runs the agent).
         self.switch = teacher_strategy(self.teacher)
         self.rng = random.Random(task.index * 7919 + task.sample_index)
-        self.final_src_c = None
-        self.final_platform_observations = None
-        self.final_enemy_observations = None
+        self.last_action_ended = False
         self.goal = 0.0
         self.end = ""
         # The skill chose an action the teacher has no safe version of
@@ -638,12 +629,7 @@ class _Lane:
             execution_feedback=(
                 np.asarray(d["execution_feedback"], np.float32) if d["execution_feedback"] else None
             ),
-            platform_observations=np.asarray(self.frames["platforms"], np.float32),
-            enemy_observations=np.asarray(self.frames["enemies"], np.float32),
-            camera_positions=np.asarray(self.frames["camera"], np.float32),
-            final_src_c=self.final_src_c,
-            final_platform_observations=self.final_platform_observations,
-            final_enemy_observations=self.final_enemy_observations,
+            last_action_ended=self.last_action_ended,
             rewards=np.asarray(self.frames["reward"], np.float32),
             terminal=self.end
             in ("goal", "death", "off_route", "missed_objective", "failed_attempt", "unsafe_choice"),
@@ -712,28 +698,6 @@ def _potential(env) -> float:
     return float(weight * env._prev_goal_distance)
 
 
-def observed_platforms(scene, spatial):
-    """Visual identities and camera-corrected coordinates, never simulator IDs."""
-    observed = np.zeros((3, 3), np.float32)
-    for slot, box in enumerate(packed_lists(scene)["moving_platforms"]):
-        matches = [t for t in spatial.tracks.tracks if t.kind == "platform" and t.box == box]
-        if len(matches) == 1 and 8 < box[0] and box[2] < 248:
-            observed[slot] = (matches[0].identity, box[0] + spatial.camera_position, box[1])
-    return observed
-
-
-def observed_enemies(scene, spatial):
-    """Each enemy slot's visual identity and camera-corrected position, as platforms."""
-    observed = np.zeros((SCENE_SLOTS["enemies"], 3), np.float32)
-    for slot, enemy in enumerate(packed_lists(scene)["enemies"]):
-        box = enemy.box
-        matches = [t for t in spatial.tracks.tracks if t.kind == enemy.kind and t.box == box]
-        if len(matches) == 1 and 8 < box[0] and box[2] < 248:
-            observed[slot] = (matches[0].identity, box[0] + spatial.camera_position, box[1])
-    return observed
-
-
-@torch.no_grad()
 def play_episodes(
     observer: VisionObserver,
     policy: LayeredSMBPolicy,
@@ -776,9 +740,9 @@ def play_episodes(
                 agents.reset(copy, playing[copy].switch, watch=len(playing[copy].watching))
                 if learner is not None:
                     # Training: the executor aims at walkers where the
-                    # simulator moves them, as the teacher's trials do; the
-                    # learner's memory forecasts are learned, never relied on
-                    # (user, 2026-10-14). As deployed, they are its own.
+                    # simulator moves them, as the teacher's trials do: the
+                    # ground truth the target tracker's collision point will
+                    # stand for (user, 2026-10-14/15).
                     from .controller_teacher import exact_positions
 
                     agents.copies[copy].spatial.tracks.exact = exact_positions(playing[copy].env)
@@ -797,9 +761,6 @@ def play_episodes(
             for name, value in zip("abc", step.rows):
                 lane.frames[name].append(value)
             spatial = agents.copies[lane.copy].spatial
-            lane.frames["platforms"].append(observed_platforms(step.scene, spatial))
-            lane.frames["enemies"].append(observed_enemies(step.scene, spatial))
-            lane.frames["camera"].append(spatial.camera_position)
             if lane.task.record_objects:
                 from retroagi.core.target_tracker import object_rows
 
@@ -849,17 +810,12 @@ def play_episodes(
                         )
                     )
                 )
-                # Observe the final state only as a target, after the last button.
-                # A time-budget cutoff is censored, unless the executor also ended.
+                # A time-budget cutoff leaves the last action's length
+                # unknown, unless the executor also ended it.
                 executor = agents.copies[lane.copy].executor
-                if terminated or executor.finished or executor.reconsider:
-                    final_scene = observer.observe([lane.screen])[0]
-                    spatial.observe(final_scene)
-                    from retroagi.core.smb_observer import pack_c
-
-                    lane.final_src_c = pack_c(final_scene).astype(np.float16)
-                    lane.final_platform_observations = observed_platforms(final_scene, spatial)
-                    lane.final_enemy_observations = observed_enemies(final_scene, spatial)
+                lane.last_action_ended = bool(
+                    terminated or executor.finished or executor.reconsider
+                )
                 done[lane.task.index] = lane.record()
                 lane.env.close()
                 del playing[lane.copy]
@@ -1101,72 +1057,12 @@ def _weighted_mean(values, weights):
     return (values * weights).sum() / weights.sum().clamp_min(1e-12)
 
 
-def action_memory(policy, a, b, c, d, episodes=None, return_all=False):
-    """Replay precisely the runtime memory ticks: every four frames plus decisions.
-
-    Future observations are only loss targets, never recurrent inputs at earlier
-    frames. Both elapsed frames and camera displacement match online updates.
-    """
-    e, f = d["episode"], d["frame"]
-    counts = (
-        [episode.frames for episode in episodes] if episodes is not None else [a.shape[1]] * len(a)
-    )
-    ticks = [
-        sorted(set(range(0, length, MEMORY_INTERVAL)) | set(f[e == i].tolist()))
-        for i, length in enumerate(counts)
-    ]
-    ei = torch.tensor([i for i, ts in enumerate(ticks) for _ in ts], device=a.device)
-    fi = torch.tensor([t for ts in ticks for t in ts], device=a.device)
-    summaries = policy.scene(a[ei, fi], b[ei, fi], c[ei, fi])[0][:, 0]
-    window = summaries.new_zeros(len(ticks), max(map(len, ticks)), summaries.shape[-1])
-    timing = summaries.new_zeros(*window.shape[:2], 2)
-    position = torch.empty_like(f)
-    cursor = 0
-    for i, ts in enumerate(ticks):
-        window[i, : len(ts)] = summaries[cursor : cursor + len(ts)]
-        cursor += len(ts)
-        timing[i, : len(ts), 0] = torch.tensor(np.diff([0, *ts]), device=a.device) / 32
-        camera = episodes[i].camera_positions if episodes is not None else None
-        if camera is not None and len(camera):
-            timing[i, : len(ts), 1] = (
-                torch.tensor(np.diff(np.r_[0, camera[ts]]), device=a.device) / 256
-            )
-        indices = {t: j for j, t in enumerate(ts)}
-        position[e == i] = torch.tensor([indices[t] for t in f[e == i].tolist()], device=a.device)
-    states = policy.memory.sequence(window, timing)
-    if return_all:
-        return states[e, position], states, ticks
-    return states[e, position]
-
-
-def action_end_targets(ticks, episodes):
-    """(episode, memory tick, current frame, observed next action-end frame).
-
-    All ticks within one action point to the same endpoint. Frame counts are
-    actual physical elapsed time, including approach, flight and release frames.
-    An unfinished final action at an episode cutoff supplies no endpoint label.
-    """
-    pairs = []
-    for i, (episode, ts) in enumerate(zip(episodes, ticks)):
-        decisions = np.asarray(episode.decision_frames)
-        for j, frame in enumerate(ts):
-            following = np.searchsorted(decisions, frame, side="right")
-            if following < len(decisions):
-                end = int(decisions[following])
-            elif episode.final_src_c is not None:
-                end = episode.frames
-            else:
-                continue
-            pairs.append((i, j, frame, end))
-    return pairs
-
-
 def action_duration_summary(episodes):
     """Measured completed command durations; censored tails are not short actions."""
     durations = []
     for episode in episodes:
         boundaries = list(episode.decision_frames)
-        if episode.final_src_c is not None and boundaries:
+        if episode.last_action_ended and boundaries:
             boundaries.append(episode.frames)
         durations.extend(int(value) for value in np.diff(boundaries))
     return {
@@ -1174,103 +1070,6 @@ def action_duration_summary(episodes):
         "max_frames": max(durations, default=0),
         "over_64_frames": sum(value > 64 for value in durations),
     }
-
-
-def endpoint_prediction_losses(policy, states, ticks, episodes, expectation_weight):
-    """Joint next-action endpoint scene, duration and tracked platform targets."""
-    pairs = action_end_targets(ticks, episodes)
-    if not pairs:
-        return {}, {}
-    indices = tuple(torch.tensor([p[k] for p in pairs], device=states.device) for k in (0, 1))
-    hidden = states[indices]
-    target_frames = torch.tensor(
-        [end - frame for _, _, frame, end in pairs], device=states.device, dtype=states.dtype
-    )
-    actual = np.stack(
-        [
-            episodes[i].src_c[end] if end < episodes[i].frames else episodes[i].final_src_c
-            for i, _, _, end in pairs
-        ]
-    )
-    actual = torch.tensor(actual, device=states.device, dtype=states.dtype)
-    weights = torch.tensor(
-        [getattr(episodes[i], "weight", 1.0) for i, _, _, _ in pairs],
-        device=states.device,
-        dtype=states.dtype,
-    )
-    numbers = policy.memory.expected_scene(hidden)
-    duration = policy.memory.action_end(hidden)
-    losses = {
-        "expectation": expectation_weight
-        * _weighted_mean(
-            (numbers[:, SCENE_NUMBERS] - actual[:, SCENE_NUMBERS]).square().mean(-1), weights
-        )
-    }
-    # Scaling changes optimization units, not which durations are representable.
-    time_loss = (
-        0.5 * ((duration["frames"] - target_frames) / duration["sigma"]).square()
-        + (duration["sigma"] / 32).log()
-    )
-    losses["end_duration"] = 0.1 * _weighted_mean(time_loss, weights)
-    stats = {
-        "end_duration_error_frames": float(
-            (duration["frames"] - target_frames).detach().abs().mean()
-        ),
-        "end_duration_targets": len(pairs),
-        "max_end_duration_frames": float(target_frames.max()),
-    }
-    for name, observed, final, forecast in (
-        (
-            "platform",
-            "platform_observations",
-            "final_platform_observations",
-            policy.memory.platforms,
-        ),
-        ("enemy", "enemy_observations", "final_enemy_observations", policy.memory.enemies),
-    ):
-        loss, forecast_stats = _forecast_loss(pairs, episodes, hidden, observed, final, forecast)
-        if loss is not None:
-            losses[f"{name}_prediction"] = loss * 0.05
-        stats.update({f"{name}_{key}": value for key, value in forecast_stats.items()})
-    return losses, stats
-
-
-def _forecast_loss(pairs, episodes, hidden, observed, final, forecast):
-    """The memory's forecast of where each tracked object seen at a tick will be
-    at the next action's end, against where vision saw it then (same visual
-    identity, camera-corrected); objects no longer seen teach visibility only."""
-    entries, targets, visible = [], [], []
-    for k, (i, _, frame, end) in enumerate(pairs):
-        episode = episodes[i]
-        observations = getattr(episode, observed, None)
-        if observations is None or len(observations) != episode.frames:
-            continue
-        future = observations[end] if end < episode.frames else getattr(episode, final, None)
-        if future is None:
-            continue
-        for slot, (identity, x, y) in enumerate(observations[frame]):
-            if not identity:
-                continue
-            match = future[future[:, 0] == identity]
-            entries.append((k, slot))
-            visible.append(len(match) == 1)
-            targets.append(match[0, 1:] - (x, y) if len(match) == 1 else (0, 0))
-    if not entries:
-        return None, {}
-    predicted = forecast(hidden)
-    index = tuple(
-        torch.tensor([entry[k] for entry in entries], device=hidden.device) for k in (0, 1)
-    )
-    mean, sigma, logit = (predicted[name][index] for name in ("displacement", "sigma", "visible"))
-    target = torch.tensor(np.asarray(targets), device=hidden.device, dtype=hidden.dtype)
-    mask = torch.tensor(visible, device=hidden.device)
-    loss = F.binary_cross_entropy_with_logits(logit, mask.float())
-    stats = {"targets": len(entries)}
-    if mask.any():
-        error = mean[mask] - target[mask]
-        loss = loss + ((error / sigma[mask]).square() / 2 + sigma[mask].log()).mean()
-        stats["error_pixels"] = error.detach().abs().mean().item()
-    return loss, stats
 
 
 def choice_history(used, episode):
@@ -1296,10 +1095,10 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     - imitation, on every decision the teacher labelled: the teacher's choice;
     - reward (``rl``, a LayeredTrainConfig, on decisions the learner sampled):
       the clipped policy-gradient objective, its estimate of the return, and
-      an entropy bonus;
-    - the memory's expectation (skill learner only: it alone trains the
-      scene encoder, the window and the memory): at each action's start, the
-      scene the vision transformer reports when that action ends.
+      an entropy bonus.
+
+    The skill reads no prediction (user, 2026-10-15): the world model's LSTM
+    is trained apart, from recorded ground truth.
 
     The tactic learner's losses are tactic_losses (with ``rl`` or the default
     settings).
@@ -1318,10 +1117,6 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     e, f = d["episode"], d["frame"]
     losses = {}
     a, b, c, _, _, _ = _padded(episodes, device)
-    trains_memory = rl is None
-    with torch.set_grad_enabled(trains_memory):
-        state, memory_states, memory_ticks = action_memory(policy, a, b, c, d, episodes, True)
-        numbers, expected = policy.expect(MemoryState(state, torch.zeros_like(state)))
     # The pointer is read with a verb already chosen: the teacher's where it
     # labelled the decision with an action (teaching), the learner's own
     # elsewhere.
@@ -1331,20 +1126,12 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     teaching = {"verb": torch.where(acted, d["label_verb"].long(), own_verb)}
     out = policy.run_skill(
         policy.encode_scene((a[e, f], b[e, f], c[e, f])),
-        expected,
         d["given"],
         choice_history(d["used"], e),
         feedback=d["execution_feedback"],
-        memory=state,
         picks=teaching,
     )
     stats = {"decisions": int(len(e))}
-    if trains_memory:
-        endpoint_losses, endpoint_stats = endpoint_prediction_losses(
-            policy, memory_states, memory_ticks, episodes, expectation_weight
-        )
-        losses.update(endpoint_losses)
-        stats.update(endpoint_stats)
     imitation = 1.0 if rl is None else rl.imitation_weight
     if acted.any() and imitation > 0:
         # The action: its verb, and (except hold, which aims at nothing) the
@@ -1517,11 +1304,9 @@ def tactic_forward(policy, episodes, config, device, memory_grad: bool):
     e, f = d["episode"], d["frame"]
     with torch.no_grad():
         encoded = policy.scene(a[e, f], b[e, f], c[e, f])
-        action_state = action_memory(policy, a, b, c, d, episodes)
-        _, expected = policy.expect(MemoryState(action_state, torch.zeros_like(action_state)))
     held = held_rows(d["held"], d["actions"], d["frames"])
     with torch.set_grad_enabled(memory_grad and torch.is_grad_enabled()):
-        inputs = policy.tactic_memory.step_inputs(encoded[0][:, 0], held, action_state)
+        inputs = policy.tactic_memory.step_inputs(encoded[0][:, 0], held)
         before, after = tactic_memory_replay(policy, inputs, d["started"], e)
     none = held_rows(
         torch.full_like(d["held"], -1),
@@ -1535,7 +1320,6 @@ def tactic_forward(policy, episodes, config, device, memory_grad: bool):
             return None
         return policy.tactic_outputs(
             (encoded[0][index], encoded[1][index]),
-            (expected[0][index], expected[1][index]),
             d["switch"][index],
             rows[index],
             memory[index],
@@ -2102,7 +1886,7 @@ def _file_digest(path) -> str:
 def save_layered_checkpoint(path, policy, config, trained_layers, history) -> None:
     torch.save(
         {
-            "memory_version": 3,
+            "memory_version": 4,
             "settings": asdict(policy.settings),
             "state_dict": policy.state_dict(),
             "observation_layout": observation_layout(),
@@ -2148,6 +1932,11 @@ def load_layered_checkpoint(path, device="cpu"):
         checkpoint["trained_layers"] = []
     if legacy_skill:
         saved_skill["strategy_context"] = now["skill"]["strategy_context"]
+    if saved_skill.get("executed_by") == "action_predictor_v1":
+        # Its actions were executed by the action predictor or, in training,
+        # the teacher; now always the ground truth until the world model
+        # predicts it (user, 2026-10-15).
+        saved_skill["executed_by"] = now["skill"]["executed_by"]
     # A skill that chose destinations (a mode, x and y) instead of actions:
     # its outputs start untrained and the layer must be trained again.
     destination_skill = "modes" in saved_skill
@@ -2206,14 +1995,7 @@ def load_layered_checkpoint(path, device="cpu"):
         checkpoint["trained_layers"] = []
         checkpoint.setdefault("load_migrations", []).append("timed_memory_requires_requalification")
     if "memory.enemy_prediction.weight" not in state:
-        # The enemy forecast and the skill's reading of it start with no
-        # influence (an untrained forecast is never trusted by the controller).
-        for name in (
-            "memory.enemy_prediction.weight",
-            "memory.enemy_prediction.bias",
-            "skill.forecast.weight",
-            "skill.forecast.bias",
-        ):
+        for name in ("memory.enemy_prediction.weight", "memory.enemy_prediction.bias"):
             state[name] = fresh[name]
         checkpoint.setdefault("load_migrations", []).append("enemy_forecast_zero_initialized")
     if "memory.end_duration.weight" not in state:
@@ -2238,6 +2020,24 @@ def load_layered_checkpoint(path, device="cpu"):
             if name.startswith(("skill.given_mode.", "skill.given_mode_and_x.")):
                 state[name] = fresh[name]
         checkpoint.setdefault("load_migrations", []).append("skill_ordered_choice_zero_initialized")
+    if checkpoint.get("memory_version", 0) < 4:
+        # The skill and tactic layers read no prediction (user, 2026-10-15):
+        # the skill's reading of the enemy forecasts, the expected-scene
+        # markers and the tactic memory's action-memory input go; the LSTM's
+        # own weights stay, unused, for the world model.
+        for name in (
+            "skill.forecast.weight",
+            "skill.forecast.bias",
+            "skill.expected_marker",
+            "tactic.expected_marker",
+        ):
+            state.pop(name, None)
+        inputs = state.get("tactic_memory.inputs.weight")
+        width = fresh["tactic_memory.inputs.weight"].shape[1]
+        if inputs is not None and inputs.shape[1] > width:
+            state["tactic_memory.inputs.weight"] = inputs[:, :width].clone()
+        checkpoint["trained_layers"] = []
+        checkpoint.setdefault("load_migrations", []).append("layers_read_no_prediction")
     if destination_skill or "skill.heads.verb.weight" not in state:
         # The skill's action heads (a verb and the object it is aimed at) and
         # its history of actions are new: every skill tensor that is no longer
@@ -2258,13 +2058,11 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     """Train one layer of the agent in Block SMB; returns the run summary."""
     if config.learner not in LEARNERS:
         raise ValueError("only skill and tactic are learned layers")
-    if config.predictor is None:
-        # Until the action predictor predicts well, the teacher carries out
-        # the skill's own actions (its best safe version of each; a choice it
-        # has none of loses the episode).
-        print(
-            f"[{config.learner}] no action predictor: the teacher carries out the skill's actions",
-            flush=True,
+    if config.predictor is not None:
+        raise ValueError(
+            "the action predictor is replaced by the world model, trained apart from recorded "
+            "ground truth: skills and tactics train with the teacher carrying out their "
+            "actions (docs/design-decisions.md 2026-10-15)"
         )
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -2300,31 +2098,9 @@ def train_layer(config: LayeredTrainConfig) -> dict:
         return parameters
 
     if config.learner == "skill" and config.train_reading:
-        # The scene encoder and memory learn with the skill (train_reading).
-        if config.predictor:
-            raise ValueError(
-                "the action predictor reads the scene encoder and memory: they cannot "
-                "learn while it executes the skill's actions (train_reading)"
-            )
+        # The scene encoder learns with the skill (train_reading).
         learning = learn_only(policy.parameters_of("skill"))
     elif config.learner == "skill":
-        # The action predictor reads this policy's scene encoder and memory
-        # (core/action_predictor): they must be the ones it learned on, and
-        # they stay so (also while the teacher carries out the actions, so a
-        # predictor can be trained on them); the skill learns its own
-        # transformer only.
-        from retroagi.core.action_predictor import reading_digest
-
-        reads = (
-            torch.load(config.predictor, map_location="cpu", weights_only=False).get("reads")
-            if config.predictor
-            else reading_digest(policy)
-        )
-        if reads != reading_digest(policy):
-            raise ValueError(
-                "the action predictor was trained on another scene encoder and memory "
-                "than this policy's (train it on the policy passed with --init)"
-            )
         learning = learn_only(list(policy.skill.parameters()))
     else:
         learning = learn_only(policy.parameters_of(config.learner))
@@ -2532,12 +2308,9 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 entry["critic_ready"] = critic_ready
                 entry["end_agreement"] = ends_agree
                 entry["end_agreement_families"] = agreement["families"]
-            if config.learner == LEARNERS[-1]:
-                # The top layer trained in Block SMB: also the whole agent as it plays,
-                # every token its own (the strategy switch set by each layout).
-                deployed = family_success(pool.play(validation_tasks, as_deployed=True))
-                entry["deployed_validation_success"] = float(np.mean(list(deployed.values())))
-                entry["deployed_validation_families"] = deployed
+            # The whole agent without the teacher (every token its own) needs
+            # the world model to carry out its actions: not built yet
+            # (docs/design-decisions.md 2026-10-15).
             history.append(entry)
             print(_round_line(config.learner, entry), flush=True)
             # The gate also needs no family whose choices collapse on one value.
@@ -2614,8 +2387,11 @@ def examine_layer(
     """
     policy, saved = load_layered_checkpoint(checkpoint, "cpu")
     trained = saved.get("config", {})
-    if learner is None and not (predictor or trained.get("predictor")):
-        raise ValueError("an agent played as deployed needs an action predictor")
+    if learner is None:
+        raise ValueError(
+            "an agent played without the teacher needs the world model to carry out its "
+            "actions: not built yet (docs/design-decisions.md 2026-10-15)"
+        )
     config = LayeredTrainConfig(
         learner=learner or "tactic",
         families=tuple(families),

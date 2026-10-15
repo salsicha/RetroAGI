@@ -224,12 +224,16 @@ def test_agent_decisions_depend_only_on_the_picture(family):
     tampered.reset(scenario=dict(sample.scenario), seed=0)
     # Two agents, so each computes exactly as the other (a shared batch may round
     # differently). The hidden state is scrambled just before the last picture.
-    from retroagi.core.action_predictor import ActionPredictor
+    # An action's destination stands in for its ground-truth end: a fixed one
+    # per verb, so nothing but the picture differs.
+    from retroagi.core.tokens import SkillToken
 
-    predictor = ActionPredictor().eval()
+    def carry_out(number, action):
+        return SkillToken("hold", 0, 0) if action.verb == "hold" else SkillToken("run", 16, 0)
+
     agents = [
-        SMBAgents(observer, policy, "cpu", predictor=predictor),
-        SMBAgents(observer, policy, "cpu", predictor=predictor),
+        SMBAgents(observer, policy, "cpu", carry_out=carry_out),
+        SMBAgents(observer, policy, "cpu", carry_out=carry_out),
     ]
     frames = 14
     for frame in range(frames):
@@ -243,6 +247,6 @@ def test_agent_decisions_depend_only_on_the_picture(family):
         assert all(np.array_equal(x, y) for x, y in zip(mine.rows, theirs.rows))
         assert mine.button == theirs.button
         assert same_decision(mine.decision, theirs.decision)
-        assert torch.equal(agents[0].copies[0].hidden, agents[1].copies[0].hidden)
+        assert torch.equal(agents[0].copies[0].tactic_hidden, agents[1].copies[0].tactic_hidden)
         honest_screen, *_ = honest.step(mine.button)
         tampered.step(theirs.button)

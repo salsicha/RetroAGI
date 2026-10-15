@@ -2,43 +2,57 @@
 
 A vision-based hierarchical agent for Super Mario Bros.
 
-The hierarchy is **strategy → tactic → skill → action predictor → predictive
-executor**:
+The hierarchy is **strategy → tactic → skill → predictive executor**:
 
 1. **Strategy:** externally selected `speed_run` or `max_points` objective.
 2. **Tactic:** persistent option-critic choosing advance, retreat, climb or
    descend in either direction, or hold ground. There is no direction number
    in its categorical token.
-3. **Skill:** reads the tactic, strategy context, ViT scene, LSTM prediction
-   and its last 16 actions. Chooses an action: a verb (hold, run to,
-   approach, land on, jump over, stomp, back away), then the object it is
-   aimed at, one of the objects the vision reports.
-4. **Action predictor:** where that action ends (and its object then), when,
-   and the chance it succeeds; the end is the executor's destination. A
-   **target tracker** forecasts every enemy and moving platform 1 to 96
-   frames ahead and moves the destination when its object departs.
-5. **Executor:** predicts movement, chooses buttons and jump duration, brakes
-   on arrival, and holds a spot relative to a moving platform. Waits are
-   reconsidered every frame so a departure window cannot disappear inside a
-   long hold plan.
+3. **Skill:** reads the tactic, strategy context, ViT scene, its last 16
+   actions and the executor's feedback; no prediction. Chooses an action: a
+   verb (hold, run to, approach, land on, jump over, stomp, back away), then
+   the object it is aimed at, one of the objects the vision reports.
+4. **Executor:** carries the action out to its end: predicts movement,
+   chooses buttons and jump duration, brakes on arrival, and holds a spot
+   relative to a moving platform. A wait is one action, as long as until a
+   move is needed.
+
+Beside them are two prediction networks, trained apart from recorded ground
+truth and not used while the skills and tactics train (until then each
+"prediction" is the simulator's truth):
+
+- **World model:** an LSTM run once at the start of each action, after the
+  skill has chosen it, predicting that action's outcome: where Mario and its
+  object end, how many frames it takes (for a wait, how long), and the
+  chance it succeeds. Its prediction is the executor's destination.
+- **Target trackers:** run every frame, each predicting when and where its
+  enemy and Mario will collide (a stomp or a hit). The executor aims stomps
+  at the collision point and ends a wait or walk when a collision calls for
+  a move.
+
+Evaluation is Full SMB played many times, learning continuing on every
+playthrough (the world model and the trackers included), in speed mode
+(time to each checkpoint) and points mode; the measure is how few
+playthroughs it takes before Mario plays the level successfully.
 
 Each game has its own weights for the shared vision model. Simulator state
-supplies teacher labels and scores in training, never deployed network inputs.
+supplies teacher labels, ground truth and scores in training, never deployed
+network inputs.
 
 ```text
-screen → ViT → scene encoder → scene memory (LSTM prediction)
-                 │                      │
-strategy → tactic (option-critic)        │
-                 │                      │
-                 └──→ skill ←───────────┘
-                       ↑ current scene + last 16 actions
+screen → ViT → scene encoder
+                 │
+strategy → tactic (option-critic)
+                 │
+                 └──→ skill ← current scene + last 16 actions + executor feedback
                        │
                        ↓ action: verb + object
-                     action predictor → end state (destination)
-                       │                 ↑ target tracker moves it
+             world model (LSTM) → outcome (destination; a wait's length)
+                       │            [Block SMB training: the ground truth]
                        ↓
-                     predictive executor ← per-frame vision + button history
-                       ↓ buttons
+                     predictive executor ← per-frame vision
+                       │  ↑ target trackers: when and where each enemy collides
+                       ↓ buttons            [Block SMB training: the ground truth]
 ```
 
 Training proceeds **skill → tactic**, freezing lower layers. The executor has

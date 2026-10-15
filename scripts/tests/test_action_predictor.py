@@ -1,4 +1,6 @@
-"""The action predictor's records, outputs and loss."""
+"""The action predictor's records, outputs and loss. Its attention readout
+and loss are to fold into the world model's LSTM (docs/design-decisions.md
+2026-10-15); until then it is not used to play or train."""
 
 import torch
 
@@ -76,17 +78,19 @@ def test_the_predictor_reads_the_scene_encoder_and_memory_only():
     assert reading_digest(policy) != before
 
 
-def test_skill_training_refuses_a_predictor_trained_on_another_encoder(tmp_path):
+def test_skill_training_refuses_an_action_predictor(tmp_path):
     import pytest
 
     from retroagi.stages.block_smb import layered_train as lt
 
-    torch.save({"reads": "another policy"}, tmp_path / "predictor.pt")
+    # The world model replaces the action predictor; skills and tactics train
+    # with the teacher carrying out their actions (user, 2026-10-15).
+    torch.save({"reads": "a policy"}, tmp_path / "predictor.pt")
     config = lt.LayeredTrainConfig(
         families=("flat_run",),
         output=str(tmp_path),
         device="cpu",
         predictor=str(tmp_path / "predictor.pt"),
     )
-    with pytest.raises(ValueError, match="another scene encoder"):
+    with pytest.raises(ValueError, match="replaced by the world model"):
         lt.train_layer(config)

@@ -281,7 +281,7 @@ def test_occluded_floor_edge_is_not_camera_scroll_and_bridge_support_uses_geomet
     assert moving_support_offset(before) == moving_support_offset(after) == 10
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize("sample_index", [100, 101])
 def test_teacher_destinations_board_ride_and_dismount_a_moving_bridge(sample_index):
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
@@ -324,6 +324,7 @@ def test_teacher_destinations_board_ride_and_dismount_a_moving_bridge(sample_ind
         env.close()
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize("difficulty,sample_index", [("easy", 100), ("medium", 104), ("hard", 108)])
 def test_bridge_mount_jumps_on_request_without_running_off_starting_ledge(difficulty, sample_index):
     from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario

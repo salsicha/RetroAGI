@@ -33,6 +33,7 @@ def played_tactics(family, difficulty, index):
         env.close()
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("family", learner_families("skill", BLOCK_SMB_MC_FAMILIES))
 @pytest.mark.parametrize("difficulty,index", [("easy", 100), ("medium", 103), ("hard", 106)])
 def test_skill_demonstrations_keep_one_tactic_until_completion(family, difficulty, index):

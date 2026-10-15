@@ -1,6 +1,6 @@
-"""In training, jumps at a walker aim where the simulator will have moved it,
-never where the learner's memory forecasts it: the teacher teaches and the
-memory learns (user, 2026-10-14)."""
+"""In training, jumps at a walker aim where the simulator will have moved it:
+the ground truth the target tracker's predicted collision point will stand
+for once it is trained (user, 2026-10-14/15)."""
 
 import os
 
@@ -30,18 +30,18 @@ def scene_with_walker(speed):
     return env, scene, tracks
 
 
-def test_a_wrong_trusted_forecast_does_not_move_the_aim_when_positions_are_exact():
-    env, scene, tracks = scene_with_walker(0.0)
+def test_a_walker_is_aimed_at_where_it_is_unless_positions_are_exact():
+    env, scene, tracks = scene_with_walker(0.5)
     try:
         (walker,) = tracks.tracks
-        # A confident forecast 40 pixels to the right, of a walker standing still.
-        walker.distant = [(30.0, 40.0, 0.0, 1.0, 1.0)]
         box = scene.mario.box
         args = (walker, (0, 0), tracks, scene, NESPlayerMotion(), box, 1)
         middle = (walker.box[0] + walker.box[2]) / 2
-        assert aimed_goal(*args)[0] == middle + 40  # as deployed: the forecast
+        # Without the truth (and before the target tracker is trained): where
+        # it is now. In training: where it will be when the jump lands.
+        assert aimed_goal(*args)[0] == middle
         tracks.exact = exact_positions(env)
-        assert aimed_goal(*args)[0] == middle  # training: where it is
+        assert aimed_goal(*args)[0] < middle - 2
     finally:
         env.close()
 

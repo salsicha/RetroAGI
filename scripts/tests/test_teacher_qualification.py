@@ -120,20 +120,14 @@ def test_training_stops_before_updates_when_qualification_fails(
     def update(*args, **kwargs):
         pytest.fail("Weights must not change before qualification passes")
 
-    from retroagi.core import action_predictor
-
     monkeypatch.setattr(lt, "EpisodePool", Pool)
     monkeypatch.setattr(teacher_qualification, "qualify_teachers", qualify)
     monkeypatch.setattr(lt.torch.optim.AdamW, "step", update)
-    # The stand-in pool loads no predictor; its file only records what it reads.
-    monkeypatch.setattr(action_predictor, "reading_digest", lambda policy: "stand-in")
-    lt.torch.save({"reads": "stand-in"}, tmp_path / "predictor.pt")
     config = lt.LayeredTrainConfig(
         families=("flat_run",),
         rounds=1,
         output=str(tmp_path),
         device="cpu",
-        predictor=str(tmp_path / "predictor.pt"),
     )
     with pytest.raises(RuntimeError, match="Teacher qualification failed"):
         lt.train_layer(config)
