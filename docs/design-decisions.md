@@ -165,9 +165,12 @@ From the full re-check that followed (5 of about 10,000 layouts lost):
   just clear of it, a run stopped 3 pixels short through vision and Mario
   stood on the ledge's corner.
 - **Of the moves that win, the one ending nearest the goal box's middle is
-  taught** (user), and a one-jump lesson whose jumps all land within 4
-  pixels of the platform's edge is redrawn (`edge_landing`): a climb onto a
-  wide step from too close landed 1 pixel inside it.
+  taught** (user), and a one-jump lesson whose jumps onto a higher surface
+  all land within 4 pixels of its edge is redrawn (`edge_landing`): a climb
+  onto a wide step from too close landed 1 pixel inside it. Jumps across a
+  gap or down are not checked: the widest gap a standing jump crosses lands
+  just past its far lip, and with every landing checked the sampler gave up
+  on hard action_jump_gap lessons.
 
 Everything the skill learned from needs teaching again: the actions, their
 names and where they end changed in most families.

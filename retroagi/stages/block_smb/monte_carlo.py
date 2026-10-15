@@ -1347,13 +1347,15 @@ def _one_action_fault(family, scenario) -> Optional[str]:
     winners = _winning_holds(family, scenario, rooms=True)
     if len(winners) < 2:
         return "one_height"
-    rooms = [room for _, room in winners if room is not None]
+    rooms = [room for _, room, dy in winners if room is not None and dy < -2]
     if rooms and max(rooms) < LANDING_INSET:
-        # Every jump that wins lands within LANDING_INSET pixels of its
-        # platform's edge (a climb onto a step 40 pixels tall from 29 pixels
-        # away: 1 pixel inside at best, against a goal box over the whole
-        # step). 4 pixels, not ENOUGH_LANDING's 6: at 6, four in five
-        # standing jumps across a gap were redrawn (user, 2026-10-14).
+        # Every jump that wins onto a higher surface lands within
+        # LANDING_INSET pixels of its edge (a climb onto a step 40 pixels
+        # tall from 29 pixels away: 1 pixel inside at best, against a goal
+        # box over the whole step; user, 2026-10-14). Not a jump across a
+        # gap or down: the widest gap a standing jump crosses lands just past
+        # its far lip, and at 4 pixels every hard action_jump_gap draw was
+        # redrawn until the sampler gave up.
         return "edge_landing"
     # Through vision as well, as training plays it: a climb onto a step 56
     # pixels tall from 5 pixels beside it was won by labels, but every jump a
@@ -1382,9 +1384,9 @@ def _winning_holds(family, scenario, rooms=False) -> list:
     platform, which vision placed 4 rows lower than the truth, was lost in
     the re-check while the label-only check won it (2 of 176 one-jump
     lessons a round). With ``rooms``: [(hold, its landing's distance from
-    the nearer edge of the platform it ends on)], the distance None when its
-    destination does not name its landing (the teacher cannot teach it) or it
-    ends standing on nothing."""
+    the nearer edge of the platform it ends on, its height from the start's
+    feet)], the distance None when its destination does not name its landing
+    (the teacher cannot teach it) or it ends standing on nothing."""
     from retroagi.core.smb_executor import SMBExecutor
     from retroagi.core.smb_scene_labels import scene_from_labels
     from retroagi.core.smb_spatial_feedback import SpatialFeedback
@@ -1415,7 +1417,7 @@ def _winning_holds(family, scenario, rooms=False) -> list:
         )
         if rooms:
             return sorted(
-                (o.hold, o.result.edge_margin if o.described else None)
+                (o.hold, o.result.edge_margin if o.described else None, o.result.end_dy)
                 for o in options
                 if o.result.won
             )
