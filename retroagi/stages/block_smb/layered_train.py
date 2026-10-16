@@ -220,6 +220,13 @@ class EpisodeRecord:
     played_teacher: np.ndarray  # [D] bool
     agreed: np.ndarray  # [D] bool, the policy chose what the teacher would have
     execution_feedback: Optional[np.ndarray] = None  # [D,8], measured prior command outcome
+    # Skill learner, per decision: the teacher's verb at that moment (index
+    # into VERBS; -1 when it has no named choice) and whether the skill's own
+    # choice (verb and object) was the teacher's. Asked at every decision the
+    # skill plays itself, labelled or not (carry_out needs it): how its
+    # held-out choices are judged (choices_against_teacher).
+    teacher_verb: Optional[np.ndarray] = None
+    same_as_teacher: Optional[np.ndarray] = None
     # Whether the last action ended before the episode did (else it was cut
     # off by the episode's end: its length is not known).
     last_action_ended: bool = False
@@ -514,6 +521,8 @@ class _Lane:
             d["label_end_dx"].append(round(outcome["dx"]))
             d["label_end_dy"].append(round(outcome["dy"]))
             d["agreed"].append(valid and action is not None and mine == action)
+            d["teacher_verb"].append(VERBS.index(action.verb) if action is not None else -1)
+            d["same_as_teacher"].append(action is not None and mine == action)
             if self.task.label:
                 self._name_run_ups(d, asked, decision)
             return
@@ -638,6 +647,10 @@ class _Lane:
             agreed=np.asarray(d["agreed"], bool),
             execution_feedback=(
                 np.asarray(d["execution_feedback"], np.float32) if d["execution_feedback"] else None
+            ),
+            teacher_verb=np.asarray(d["teacher_verb"], np.int64) if d["teacher_verb"] else None,
+            same_as_teacher=(
+                np.asarray(d["same_as_teacher"], bool) if d["same_as_teacher"] else None
             ),
             last_action_ended=self.last_action_ended,
             rewards=np.asarray(self.frames["reward"], np.float32),
@@ -1857,12 +1870,77 @@ def label_collapse(episodes, learner: str, source: str = "labels") -> dict:
     return found
 
 
+def _against_teacher(episodes):
+    """Per family, the skill's own choices with the teacher's at the same
+    moments: (own verb, teacher verb, the same choice) for each decision the
+    skill played itself where the teacher had a named choice."""
+    found: dict = defaultdict(list)
+    for e in episodes:
+        if e.teacher_verb is None or e.same_as_teacher is None or "verb" not in e.picks:
+            continue
+        own = ~np.asarray(e.played_teacher, bool) & (np.asarray(e.teacher_verb) >= 0)
+        for verb, taught, same in zip(
+            np.asarray(e.picks["verb"])[own],
+            np.asarray(e.teacher_verb)[own],
+            np.asarray(e.same_as_teacher)[own],
+        ):
+            found[e.family].append((VERBS[int(verb)], VERBS[int(taught)], bool(same)))
+    return found
+
+
+def choices_against_teacher(episodes) -> dict:
+    """How the skill's own choices on these episodes compare with the
+    teacher's choice at the same moments, per family: {family: {"decisions":
+    n, "agreed": share choosing the teacher's action (verb and object),
+    "differ": {"<own verb> for <teacher verb>" or "<verb> at another
+    object": count}}}.
+
+    The skill picks an action (a verb and an object); how far it goes is the
+    teacher's version of it (carry_out), so its choices are judged here, at
+    the same moments, not by where its actions ended."""
+    report = {}
+    for family, rows in sorted(_against_teacher(episodes).items()):
+        differ = Counter(
+            f"{own} at another object" if own == taught else f"{own} for {taught}"
+            for own, taught, same in rows
+            if not same
+        )
+        report[family] = {
+            "decisions": len(rows),
+            "agreed": round(sum(same for _, _, same in rows) / len(rows), 3),
+            "differ": dict(differ.most_common()),
+        }
+    return report
+
+
 def output_collapse(validation, played, learner: str) -> dict:
     """Families where the learner's own choices on held-out layouts collapse on
-    one value much more than the teacher's labels in this round's training
-    episodes do: {family: {kind: (value, own share, teacher share)}}. The
-    learner collapses where its share is above COLLAPSE_SHARE and more than 0.2
-    above the teacher's (for the skill: where its actions sent Mario)."""
+    one value much more than the teacher's do: {family: {kind: (value, own
+    share, teacher share)}}. The learner collapses where its share is above
+    COLLAPSE_SHARE and more than 0.2 above the teacher's.
+
+    The skill: a verb it picks at those decisions against the teacher's
+    choices at the same moments (value None; its run lengths are the
+    teacher's, carry_out). The tactic layer: a tactic against the teacher's
+    labels in this round's training episodes."""
+    if learner == "skill":
+        found: dict = {}
+        for family, rows in _against_teacher(validation).items():
+            own = Counter(verb for verb, _, _ in rows)
+            taught = Counter(verb for _, verb, _ in rows)
+            for verb, count in own.items():
+                share, teacher_share = count / len(rows), taught[verb] / len(rows)
+                if (
+                    count >= COLLAPSE_MIN
+                    and share > COLLAPSE_SHARE
+                    and share > teacher_share + 0.2
+                ):
+                    found.setdefault(family, {})[verb] = (
+                        None,
+                        round(share, 3),
+                        round(teacher_share, 3),
+                    )
+        return found
     teacher: dict = defaultdict(lambda: defaultdict(list))
     for e in played:
         for kind, values in _choices(e, learner, "labels").items():
@@ -2301,6 +2379,13 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     for name, values in totals.items()
                 },
                 "replay_episodes": len(replay),
+                # The skill's own held-out choices against the teacher's at
+                # the same moments.
+                **(
+                    {"against_teacher": choices_against_teacher(validation)}
+                    if config.learner == "skill"
+                    else {}
+                ),
                 # Families whose own held-out choices collapse on one value.
                 "collapsed": {
                     family: {kind: list(v) for kind, v in kinds.items()}
@@ -2364,10 +2449,28 @@ def _round_line(learner: str, entry: dict) -> str:
             f", tactic changes agree {ends if ends is None else round(ends, 3)}, "
             f"critic explains {explained if explained is None else round(explained, 3)}"
         )
+    against = entry.get("against_teacher") or {}
+    differing = sorted(
+        ((f, v) for f, v in against.items() if v["differ"]), key=lambda item: item[1]["agreed"]
+    )
+    if differing:
+        # Where the skill's own held-out choices were not the teacher's at
+        # the same moments (worst four families).
+        tactic += "; differs from teacher " + ", ".join(
+            f"{family} {round(v['agreed'] * v['decisions'])}/{v['decisions']} ("
+            + ", ".join(f"{pair} x{n}" for pair, n in list(v["differ"].items())[:2])
+            + ")"
+            for family, v in differing[:4]
+        )
     collapsed = entry.get("collapsed") or {}
     if collapsed:
+        def value(v):
+            if v[0] is None:
+                return ""
+            return f" {tuple(v[0]) if isinstance(v[0], (list, tuple)) else v[0]}"
+
         tactic += "; COLLAPSED " + ", ".join(
-            f"{family} {kind} {tuple(v[0]) if isinstance(v[0], (list, tuple)) else v[0]} {v[1]:.0%} (teacher {v[2]:.0%})"
+            f"{family} {kind}{value(v)} {v[1]:.0%} (teacher {v[2]:.0%})"
             for family, kinds in collapsed.items()
             for kind, v in kinds.items()
         )
@@ -2438,4 +2541,7 @@ def examine_layer(
         "families": families_won,
         "difficulties": family_success(played, by_difficulty=True),
         "below_gate": {f: v for f, v in families_won.items() if v < config.family_gate},
+        **(
+            {"against_teacher": choices_against_teacher(played)} if learner == "skill" else {}
+        ),
     }

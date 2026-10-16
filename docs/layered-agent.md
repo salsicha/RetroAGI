@@ -204,10 +204,20 @@ of a verb (within 2 pixels) covers more than 40% of that verb's labels (at
 least 6). A single family may concentrate on one end where its scenes call
 for it (a pit nearly as wide as the longest jump is crossed by the longest
 jump); whether they do is to be measured on the world model, which learns
-ends from scenes of every family. After every round, the learner's own actions on held-out layouts are
-checked family by family: a family where the learner's most common end is
-above 40% and more than 20 points above the teacher's share collapses, and a
-round with a collapsed family cannot pass the gate. The decision layers are
+ends from scenes of every family. After every round, the skill's own choices
+on held-out layouts are compared with the teacher's choice at the same
+moments (recorded at each decision; carry_out asks for it). Each round's
+line reports per family how many it matched (verb and object) and how it
+differed ("jump_over for approach"), worst families first; the history and
+the fresh evaluation keep the whole report (`choices_against_teacher`). A
+family where the skill picks one verb at more than 40% of its decisions and
+more than 20 points above the teacher's share at those decisions collapses,
+and a round with a collapsed family cannot pass the gate. The skill picks
+only the action; how far it goes is the teacher's version (carry_out), so
+where its actions ended is not judged (it measured the teacher's run-ups:
+enemy_hop's 20-pixel run-ups were all the teacher's own, 2026-10-16). The
+tactic layer's held-out tactics are still compared with the teacher's labels
+in the round's training episodes. The decision layers are
 regularized: dropout of 0.1 in the skill and tactic transformers while
 training (`PolicySettings.decision_dropout`) and weight decay 0.05
 (`LayeredTrainConfig.weight_decay`).

@@ -4,8 +4,8 @@ The families that teach jumping over or past a pit or an enemy start Mario at
 varied distances from it (right next to it included) and follow it with a
 second pit or enemy at a varied distance. Teacher qualification fails when
 one end of a verb covers most of that verb's labels over every family
-together, and a training round whose policy collapses on one end its teacher
-did not cannot pass its gate.
+together, and a training round whose skill picks one verb far more often
+than its teacher would at the same moments cannot pass its gate.
 """
 
 import os
@@ -19,7 +19,12 @@ import numpy as np
 import pytest
 
 from retroagi.core.action_tokens import ACTION_WIDTH, VERBS
-from retroagi.stages.block_smb.layered_train import label_collapse, output_collapse, top_share
+from retroagi.stages.block_smb.layered_train import (
+    choices_against_teacher,
+    label_collapse,
+    output_collapse,
+    top_share,
+)
 from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
 from retroagi.stages.block_smb.threat_variety import fit_patrols, follow_up, start_distance
 
@@ -119,22 +124,46 @@ def test_one_end_for_a_verb_over_every_family_collapses():
     assert found["land_on"][0] == (72, 0) and "run_to" not in found
 
 
-def test_a_policy_that_repeats_one_end_its_teacher_did_not_collapses():
-    taught = [episode("a", ["land_on"] * 4, [40 + 9 * i + j for i in range(4)]) for j in range(3)]
-    own = [episode("a", ["land_on"] * 4, [72, 72, 73, 72], labelled=False) for _ in range(3)]
-    assert output_collapse(own, taught, "skill")["a"]["land_on"][1] > 0.9
-    # Repeating what the teacher repeats is not a collapse of the policy.
-    same = [episode("a", ["land_on"] * 4, [72, 72, 73, 72]) for _ in range(3)]
-    assert output_collapse(own, same, "skill") == {}
+def own_choices(family, verbs, teacher_verbs, same=None):
+    """Held-out decisions the skill played itself (``verbs``) next to the
+    teacher's verb at the same moments; ``same``: whether each was the
+    teacher's choice (verb and object; default: the verbs are equal)."""
+    e = episode(family, verbs, [0] * len(verbs), labelled=False)
+    e.teacher_verb = np.array([VERBS.index(v) for v in teacher_verbs])
+    e.same_as_teacher = np.array(
+        same if same is not None else [a == b for a, b in zip(verbs, teacher_verbs)]
+    )
+    return e
 
 
-def test_a_choice_with_no_safe_version_sent_mario_nowhere():
-    # An unsafe choice ends its episode with Mario holding: its "end" (0, 0)
-    # is not where the action sent him, so it is no evidence of a collapse.
-    taught = [episode("a", ["stomp"] * 4, [40 + 9 * i + j for i in range(4)]) for j in range(3)]
-    own = []
-    for j in range(3):
-        e = episode("a", ["stomp"] * 2, [44 + j * 7, 0], labelled=False)
-        e.end = "unsafe_choice"
-        own.append(e)
-    assert output_collapse(own, taught, "skill") == {}
+def test_a_skill_that_picks_one_verb_where_the_teacher_would_not_collapses():
+    # Judged at the same moments as the teacher's choices (its run lengths
+    # are the teacher's: carry_out), not by where its actions ended.
+    teacher = ["approach", "jump_over", "run_to", "approach"]
+    own = [own_choices("a", ["jump_over"] * 4, teacher) for _ in range(3)]
+    found = output_collapse(own, [], "skill")
+    assert found == {"a": {"jump_over": (None, 1.0, 0.25)}}
+    # Picking what the teacher picks there is no collapse, however often.
+    same = [own_choices("a", ["jump_over"] * 4, ["jump_over"] * 4) for _ in range(3)]
+    assert output_collapse(same, [], "skill") == {}
+
+
+def test_the_skills_choices_are_compared_with_the_teachers_at_the_same_moments():
+    episodes = [
+        own_choices("enemy_hop", ["jump_over", "run_to"], ["jump_over", "run_to"]),
+        # The same verb aimed at another object is not the teacher's choice.
+        own_choices("enemy_hop", ["jump_over", "approach"], ["jump_over", "approach"], [True, False]),
+        own_choices("enemy_hop", ["stomp", "jump_over"], ["stomp", "approach"]),
+    ]
+    # A decision the teacher played, or where it had no named choice, is not
+    # the skill's own: left out.
+    episodes[0].played_teacher = np.array([True, False])
+    episodes[2].teacher_verb[0] = -1
+    report = choices_against_teacher(episodes)
+    assert report == {
+        "enemy_hop": {
+            "decisions": 4,
+            "agreed": 0.5,
+            "differ": {"approach at another object": 1, "jump_over for approach": 1},
+        }
+    }

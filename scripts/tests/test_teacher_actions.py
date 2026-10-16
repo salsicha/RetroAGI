@@ -254,3 +254,33 @@ def test_a_run_the_teacher_follows_with_a_jump_is_labelled_an_approach():
     jumps = [i for i, (verb, _) in enumerate(named) if verb == "land_on"]
     assert record.won and jumps
     assert all(named[i - 1][0] == "approach" for i in jumps if i and named[i - 1][0] != "land_on")
+
+
+@pytest.mark.timeout(600)
+def test_a_held_out_episode_records_the_teachers_choice_at_each_skill_decision():
+    from retroagi.core.layered_policy import LayeredSMBPolicy
+    from retroagi.stages.block_smb import layered_train as lt
+    from retroagi.stages.block_smb.teacher_replay import reference_vision
+
+    # Unlabelled, the skill playing every decision itself (as on held-out
+    # layouts): the teacher's choice at each one is still recorded (carry_out
+    # asks for it), so the skill's choices are judged against it.
+    task = lt.EpisodeTask(
+        index=0,
+        family="action_walk",
+        split="validation",
+        seed=0,
+        sample_index=0,
+        difficulty="easy",
+        teacher_share=0.0,
+        label=False,
+    )
+    record = lt.play_episodes(
+        reference_vision()[0], LayeredSMBPolicy().eval(), "skill", [task], "cpu", 1
+    )[0]
+    count = len(record.decision_frames)
+    assert count and len(record.teacher_verb) == count == len(record.same_as_teacher)
+    assert not record.played_teacher.any() and (record.teacher_verb >= 0).all()
+    same = record.same_as_teacher
+    assert (record.picks["verb"][same] == record.teacher_verb[same]).all()
+    assert lt.choices_against_teacher([record])["action_walk"]["decisions"] == count

@@ -23,6 +23,25 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-16 — The skill's held-out choices are judged against the teacher's at the same moments (user decision; built)
+
+skill_waits_20261015 round 0-1 flagged "enemy_hop approach (20, 0) 71%
+(teacher 17%)" as a collapse. A replay of the 9 held-out layouts showed 33 of
+the skill's 34 choices were the teacher's own (verb and object), and every one
+of the 7 run-ups was the teacher's command (carry_out: 21, 24, 20, 22, 18, 72,
+20 pixels). The check compared where actions ended on held-out layouts with
+the teacher's labels on training layouts: since the skill picks only the
+action, it measured the teacher. The one real mistake: hard layout 8, Mario
+standing 36 px before a standing walker, the skill chose "jump over" where
+the teacher ran up first; no standing jump gets over it (each comes down
+before it or on it), so the choice had no safe version.
+
+User: "make the check". Each skill decision now records the teacher's choice
+at that moment, labelled or not (`EpisodeRecord.teacher_verb`,
+`same_as_teacher`). Each round reports per family the share matched and the
+differences (`choices_against_teacher`); the collapse gate compares the
+skill's verb shares with the teacher's at the same decisions.
+
 ## 2026-10-15 — Predictions come after the choice; ground truth stands in until they are trained (user decision; building)
 
 The policy's LSTM used to step every 4 frames and before each decision, and the
