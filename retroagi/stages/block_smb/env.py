@@ -1011,8 +1011,8 @@ class MarioScenarioEnv:
         keep it (stages/block_smb/truth_recording.py), in world pixels:
         Mario's collision box, every enemy's collision box and the box it is
         drawn in (its feet included), whether each enemy is absent (a plant
-        down in its pipe), alive or dead, every moving platform's rectangle,
-        and the camera's left edge."""
+        down in its pipe), alive or dead and whether it can be stomped, every
+        moving platform's rectangle, and the camera's left edge."""
         m = self.mario
         enemies, drawn, state = [], [], []
         for e in self.enemies:
@@ -1025,6 +1025,7 @@ class MarioScenarioEnv:
             "enemies": enemies,
             "enemies_drawn": drawn,
             "enemy_state": state,
+            "stompable": [bool(e.get("stompable", True)) for e in self.enemies],
             "platforms": [
                 (p["rect"].left, p["rect"].top, p["rect"].right, p["rect"].bottom)
                 for p in self.platforms

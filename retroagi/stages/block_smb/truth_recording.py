@@ -34,7 +34,8 @@ class TruthRecorder:
     def arrays(self) -> dict:
         """{"mario" [N,4], "enemies" [N,E,4], "enemies_drawn" [N,E,4],
         "enemy_state" [N,E] (ENEMY_STATES), "platforms" [N,P,4] (int16 world
-        pixels, rounded), "camera" [N] float32}; N = frames + 1."""
+        pixels, whole), "camera" [N] float32, "stompable" [E] bool}; N =
+        frames + 1."""
         rows = self.rows
         count = len(rows)
         enemies = len(rows[0]["enemies"]) if rows else 0
@@ -44,11 +45,13 @@ class TruthRecorder:
             out = np.zeros((count, width, 4), np.int16)
             for t, row in enumerate(rows):
                 if row[key]:
-                    out[t] = np.rint(np.asarray(row[key], np.float32))
+                    out[t] = np.floor(np.asarray(row[key], np.float32))
             return out
 
         return {
-            "mario": np.rint(np.asarray([r["mario"] for r in rows], np.float32)).astype(np.int16)
+            # Whole pixels as the simulator compares boxes (int(): its
+            # coordinates are positive).
+            "mario": np.floor(np.asarray([r["mario"] for r in rows], np.float32)).astype(np.int16)
             if rows
             else np.zeros((0, 4), np.int16),
             "enemies": boxes("enemies", enemies),
@@ -58,6 +61,7 @@ class TruthRecorder:
             ),
             "platforms": boxes("platforms", platforms),
             "camera": np.asarray([r["camera"] for r in rows], np.float32),
+            "stompable": np.asarray(rows[0]["stompable"] if rows else [], bool),
         }
 
 
