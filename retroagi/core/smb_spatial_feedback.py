@@ -92,6 +92,10 @@ class SpatialFeedback:
     start_feet: float = 0.0
     observed_frames: int = 0
     positions: deque = field(default_factory=lambda: deque(maxlen=24))
+    # Mario's feet's movement since the last frame (pixels, down positive;
+    # 0 when either frame lost him): the vertical part of his estimate
+    # (smb_kinematics).
+    feet_velocity: float = 0.0
     # Why the last action ended (the agent's reason: "landed", "done",
     # "threat", ...), reported to the skill.
     ended: str | None = None
@@ -157,6 +161,7 @@ class SpatialFeedback:
         shift = None
         if scene.mario.box is None:
             self.previous = None
+            self.feet_velocity = 0.0
             self.positions.clear()
             self.velocities.clear()
             self.speed = None
@@ -251,6 +256,11 @@ class SpatialFeedback:
         if self.destination is not None:
             self.observed_frames += 1
             self.positions.append((self.displacement, scene.mario.box[3]))
+        self.feet_velocity = (
+            float(scene.mario.box[3] - self.previous.mario.box[3])
+            if self.previous is not None and self.previous.mario.box is not None
+            else 0.0
+        )
         self.previous = scene
 
     def begin(self, destination, scene, proposed=None):
