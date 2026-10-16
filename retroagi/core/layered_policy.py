@@ -1,11 +1,13 @@
 """Two learned layers: tactic and skill, followed by predictive control.
 
-Vision and an LSTM scene prediction feed the skill transformer, alongside its
-categorical tactic and its last 16 actions. The skill chooses an action: a
-verb, then the object it is aimed at, one of the objects the vision reports
-(core/action_tokens). The action predictor (core/action_predictor) gives
-where the action ends, and that end is the predictive executor's destination
-(core/action_controller; docs/action-predictor-controller.md).
+Vision feeds the skill transformer, alongside its categorical tactic, the
+strategy switch, its last 16 actions and the executor's feedback; it reads
+no prediction (user, 2026-10-15). The skill chooses an action: a verb, then
+the object it is aimed at, one of the objects the vision reports
+(core/action_tokens). In Block SMB training the teacher carries the action
+out; without the teacher the world model (``memory``, core/world_model),
+run once at the action's start, predicts where it ends, and that end is the
+predictive executor's destination.
 
 Tactics remain persistent options with a termination head, critic, strategy
 switch and their own recurrent context. The executor chooses buttons with per-frame visual feedback.
@@ -39,6 +41,7 @@ from .smb_observer import (
     SEQ_LEN_B,
     SEQ_LEN_C,
 )
+from .world_model import WorldModel
 from .tokens import (
     DEFAULT_STRATEGY,
     EXECUTION_WIDTH,
@@ -223,134 +226,8 @@ class MemoryState:
         return MemoryState(self.hidden.detach(), self.cell.detach())
 
 
-class Memory(nn.Module):
-    """The world model's LSTM. Not used while the skills and tactics train
-    (user, 2026-10-15): there, an action's outcome is the ground truth.
-
-    It is to run once at the start of each action, after the skill has
-    chosen it, with the chosen action as input, and predict that action's
-    outcome; it is reshaped so when it is trained (the action predictor's
-    readout folds into it). Until then its readouts are the old ones (the
-    next action endpoint: its scene, platform and enemy world displacements
-    and remaining duration), kept so its weights load.
-    """
-
-    def __init__(self, settings: PolicySettings):
-        super().__init__()
-        self.width = settings.memory_width
-        self.cell = nn.LSTM(settings.width, settings.memory_width, batch_first=True)
-        self.timing = nn.Linear(2, settings.width, bias=False)
-        nn.init.zeros_(self.timing.weight)
-        self.platform_prediction = _forecast_readout(
-            settings.memory_width, SCENE_SLOTS["moving_platforms"]
-        )
-        # Where each enemy seen now will be when the next action ends.
-        self.enemy_prediction = _forecast_readout(settings.memory_width, SCENE_SLOTS["enemies"])
-        self.end_time_embedding = nn.Linear(2, settings.width, bias=False)
-        nn.init.zeros_(self.end_time_embedding.weight)
-        self.end_duration = nn.Linear(settings.memory_width, 2)
-        nn.init.zeros_(self.end_duration.weight)
-        nn.init.constant_(self.end_duration.bias, math.log(math.expm1(31 / 32)))
-        self.expectation = nn.Sequential(
-            nn.Linear(settings.memory_width, settings.memory_width * 2),
-            nn.GELU(),
-            nn.Linear(settings.memory_width * 2, SEQ_LEN_C),
-        )
-
-    def initial(self, batch: int, device) -> MemoryState:
-        zeros = torch.zeros(batch, self.width, device=device)
-        return MemoryState(zeros, zeros.clone())
-
-    def forward(self, scene_summary, state: MemoryState, timing=None) -> MemoryState:
-        """One observation tick: scene_summary [B, width], optional elapsed/scroll."""
-        if timing is not None:
-            scene_summary = scene_summary + self.timing(timing)
-        _, (hidden, cell) = self.cell(
-            scene_summary.unsqueeze(1), (state.hidden.unsqueeze(0), state.cell.unsqueeze(0))
-        )
-        return MemoryState(hidden[0], cell[0])
-
-    def sequence(self, scene_summaries, timing=None) -> torch.Tensor:
-        """Every memory tick of whole episodes from their start: scene_summaries
-        [B, K, width]. Returns the state after each action's start, [B, K,
-        memory_width]. Padding after an episode's last action does not change
-        its earlier steps."""
-        if timing is not None:
-            scene_summaries = scene_summaries + self.timing(timing)
-        hidden, _ = self.cell(scene_summaries)
-        return hidden
-
-    def action_end(self, hidden):
-        """Predict time until the next action ends, not a preselected horizon.
-
-        Positive continuous frame count and uncertainty, with no upper duration
-        cap. Round only at consumption if an integer frame index is needed.
-        """
-        values = 1 + torch.nn.functional.softplus(self.end_duration(hidden)) * 32
-        return {"frames": values[..., 0], "sigma": values[..., 1]}
-
-    def platforms(self, hidden):
-        """Platform displacement at the SAME predicted next-action endpoint.
-
-        Dimensions: [..., current platform slot, (x,y)]. The duration output is
-        shared with the next-scene prediction; this is not a multi-horizon head.
-        """
-        return self._forecast(self.platform_prediction, SCENE_SLOTS["moving_platforms"], hidden)
-
-    def enemies(self, hidden):
-        """Each enemy's displacement at the same next-action endpoint, as platforms."""
-        return self._forecast(self.enemy_prediction, SCENE_SLOTS["enemies"], hidden)
-
-    def _forecast(self, readout, slots, hidden):
-        raw = readout(hidden).view(*hidden.shape[:-1], slots, 5)
-        endpoint = self.action_end(hidden)
-        return {
-            "frames": endpoint["frames"],
-            "frame_sigma": endpoint["sigma"],
-            "displacement": raw[..., :2] * 64,
-            "sigma": raw[..., 2:4].clamp(0, math.log(64)).exp(),
-            "visible": raw[..., 4],
-        }
-
-    def expected_scene(self, hidden) -> torch.Tensor:
-        """[..., memory_width] -> the scene numbers expected when the action ends."""
-        return self.expectation(hidden)
-
-
-def _forecast_readout(width, slots):
-    """Per slot: displacement (x, y), log uncertainty (x, y), visibility logit.
-
-    Starts at no displacement, 32-pixel uncertainty and unlikely visibility:
-    an untrained forecast is never confident enough to be used.
-    """
-    readout = nn.Linear(width, slots * 5)
-    nn.init.zeros_(readout.weight)
-    with torch.no_grad():
-        bias = readout.bias.view(-1, 5)
-        bias.zero_()
-        bias[:, 2:4] = math.log(32)
-        bias[:, 4] = -2
-    return readout
-
-
-# Where the enemy slots sit among the scene tokens: after the summary and Mario.
-ENEMY_TOKENS = slice(2, 2 + SCENE_SLOTS["enemies"])
 # The first object slot's scene token (action_tokens.pointer_index).
 POINTER_START = 2
-FORECAST_WIDTH = 5
-
-
-def forecast_features(forecast):
-    """[..., slots, FORECAST_WIDTH] numbers from a memory forecast: displacement
-    and uncertainty in screen widths, and the chance the object is still seen."""
-    return torch.cat(
-        (
-            forecast["displacement"] / 64,
-            forecast["sigma"] / 64,
-            forecast["visible"].sigmoid().unsqueeze(-1),
-        ),
-        dim=-1,
-    )
 
 
 # ── Layers ────────────────────────────────────────────────────────────────────
@@ -666,7 +543,9 @@ class LayeredSMBPolicy(nn.Module):
         super().__init__()
         self.settings = settings
         self.scene = SceneEncoder(settings)
-        self.memory = Memory(settings)
+        # The world model (core/world_model): run once at the start of each
+        # action, after the skill picks it; not used while the layers train.
+        self.memory = WorldModel(settings.width, settings.memory_width, settings.heads)
         self.tactic = TacticLayer(settings)
         self.tactic_memory = TacticMemory(settings)
         self.skill = SkillLayer(settings, TACTIC_WIDTH + STRATEGY_WIDTH + EXECUTION_WIDTH)
@@ -808,7 +687,6 @@ __all__ = [
     "HELD_WIDTH",
     "LAYERS",
     "LayeredSMBPolicy",
-    "Memory",
     "MemoryState",
     "PolicySettings",
     "SceneEncoder",

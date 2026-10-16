@@ -1,9 +1,12 @@
 # Action, predictor and adaptive controller (approved redesign)
 
 Status: approved (2026-10-10) and built (2026-10-11): the skill chooses only
-actions, executed at the action predictor's end state, with the target
-tracker moving destinations on moving objects. The adaptation network's
-design (section 4) is proposed, to confirm. The
+actions. Sections 2 and 3 are superseded (2026-10-16): the action predictor
+is replaced by the world model (the policy's LSTM, run once per action after
+the skill chooses it, `core/world_model.py`), and the target tracker by the
+collision trackers (collision time, place, stomp or hit, `core/target_tracker.py`),
+both reading the executor's first-order kinematics and trained on recorded
+truth. The adaptation network's design (section 4) is proposed, to confirm. The
 current design is described in the [architecture and training
 guide](layered-agent.md); decisions and their status in
 [design decisions](design-decisions.md).

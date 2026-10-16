@@ -22,8 +22,8 @@ Decisions behind this design, with their reasons and status, are listed in
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
 | Tactic | Strategy, current scene, held tactic/age, tactic memory | Persistent categorical tactic, termination probability, option values |
 | Skill | Tactic, strategy context, current scene, last 16 actions, measured execution feedback | An action: a verb and a pointer to one object it sees |
-| World model (LSTM; not used in Block SMB training) | The chosen action, the scene at its start, its own state from earlier actions | The action's successful outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds |
-| Target trackers (not used in Block SMB training) | Every frame's vision of each enemy and of Mario | When and where that enemy and Mario will collide, and whether as a stomp or a hit |
+| World model (LSTM; not used in Block SMB training) | The chosen action, the scene at its start, the executor's kinematics, the last feedback, its own state from earlier actions | The action's outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds |
+| Collision trackers (not used in Block SMB training) | Every frame: the executor's kinematics of each enemy and of Mario, what vision shows of the enemy, the action in progress | When and where that enemy and Mario will touch, and whether as a stomp or a hit |
 | Executor | The action's end as its destination (in Block SMB training: the teacher's ground-truth version of the action), per-frame vision | One of six emulator button combinations |
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
@@ -71,11 +71,21 @@ The controller chooses the buttons and durations; the skill chooses the target.
 ## Memory and timing
 
 The skill and tactic layers read no prediction (user, 2026-10-15). The world
-model's LSTM (`layered_policy.Memory`) does not update every few frames: it is
-to run once at the start of each action, after the skill has chosen it, with
-the chosen action as input, and predict that action's outcome. It is trained
-apart from recorded ground truth and is not used while the skills and tactics
-train; its current weights are kept, unused, until it is reshaped so.
+model (`core/world_model.py`, the policy's `memory`) is an LSTM run once at
+the start of each action, after the skill has chosen it: it reads the scene
+encoder's tokens with the executor's kinematics added to each sprite's and
+Mario's, the last execution feedback, and the chosen action (its verb and its
+object's token); its state carries from action to action. It predicts where
+Mario's feet and the object end, how many frames the action takes (for a
+wait, how long) and the chance it succeeds. It is trained apart
+(`stages/block_smb/world_model_train.py`) on recorded outcomes: each executed
+action's measured one (`core/action_outcomes.py`) and the other actions the
+teacher tried at each decision, evaluated from the state before it without
+advancing it (a one-frame teacher hold counts only as a lower bound on a
+wait's length). It reads the scene encoder trained with the skill, frozen,
+and refuses a changed one (its digest). It is not used while the skills and
+tactics train. Checkpoints saved before it (memory version below 5) load
+with it untrained, their layers' qualifications kept.
 
 The executor keeps a first-order state estimate of every sprite it tracks
 (an enemy or a moving platform: where it is and how fast it moves, the mean
@@ -90,11 +100,20 @@ frame's true boxes and one more after the last button, which true enemy each
 scene slot shows, why each action ended, and each executed command and the
 action it carried out; the networks' labels are made from these afterwards.
 
-The target trackers (`core/target_tracker.py`) run every frame. They are to
-predict, for each enemy, when and where it and Mario will collide (a stomp or
-a hit); the simulator's truth stands in until they are trained
-(`stages/block_smb/collision_truth.py`). Watched frames before a lesson's
-first decision let the tracks see enemies move.
+The collision trackers (`core/target_tracker.py`) run every frame, one GRU
+state per tracked enemy. Each predicts whether that enemy and Mario will touch
+within 96 frames, when (in two-frame bins), where (from Mario's feet), and
+as a stomp or a hit. They read the executor's kinematics of the enemy and of
+Mario, what vision shows of the enemy (kind, size, the surface it walks on)
+and the action in progress (its verb, where it sends Mario from where he is
+now, how long it has run; an action aimed at an enemy sends him to the
+enemy's point when it began, never to the teacher's command, which was aimed
+with the enemy's true future). Their labels are made from recorded real
+paths (`core/collision_labels.py`): Mario's path until his action ends, then
+standing, against the enemy's; unknown past a recording's end. They are
+trained by `stages/block_smb/tracker_train.py`; until then the simulator's
+truth stands in (`stages/block_smb/collision_truth.py`). Watched frames
+before a lesson's first decision let the tracks see enemies move.
 
 In Block SMB training a wait is one action: the teacher's hold lasts until it
 would do something else, or until a coming enemy is close enough that a jump

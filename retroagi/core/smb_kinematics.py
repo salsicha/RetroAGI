@@ -27,6 +27,11 @@ from .smb_trajectory import ESTIMATE_SAMPLES
 SPRITE_STATE = ("present", "x", "y", "vx", "vy", "seen")
 MARIO_STATE = ("vx", "vy", "grounded")
 SPRITE_SLOTS = SCENE_SLOTS["enemies"] + SCENE_SLOTS["moving_platforms"]
+ENEMY_SLOTS = SCENE_SLOTS["enemies"]
+# What vision shows of an enemy besides where it is (enemy_context): its kind,
+# its box's size (/16), and the surface it walks on (the far ends of the
+# pieces on either side of it, from its middle, /64; supported 0 when none).
+CONTEXT = ("walker", "plant", "other", "width", "height", "supported", "left", "right")
 
 
 def kinematics(scene, spatial) -> tuple[np.ndarray, np.ndarray]:
@@ -66,3 +71,51 @@ def kinematics(scene, spatial) -> tuple[np.ndarray, np.ndarray]:
     grounded = scene.mario.on_something and scene.mario.support != "air"
     mario[:] = (speed, spatial.feet_velocity, float(grounded))
     return sprites, mario
+
+
+def slot_identities(scene, spatial) -> np.ndarray:
+    """[SPRITE_SLOTS] int32: the executor's track identity of each sprite
+    slot's sprite (0: none): a slot's sprite changes as sprites come nearer
+    or farther, its identity does not."""
+    out = np.zeros(SPRITE_SLOTS, np.int32)
+    if scene.mario.box is None:
+        return out
+    lists = packed_lists(scene)
+    objects = [
+        (slot, e.box, e.kind) for slot, e in enumerate(lists["enemies"]) if e.kind != "defeated"
+    ]
+    objects += [
+        (SCENE_SLOTS["enemies"] + slot, b, "platform")
+        for slot, b in enumerate(lists["moving_platforms"])
+    ]
+    for slot, b, kind in objects:
+        matches = [t for t in spatial.tracks.tracks if t.kind == kind and t.box == b]
+        if len(matches) == 1:
+            out[slot] = matches[0].identity
+    return out
+
+
+def enemy_context(scene) -> np.ndarray:
+    """[ENEMY_SLOTS, len(CONTEXT)]: each enemy slot's kind, size and the
+    surface it walks on, as vision shows them (no estimation)."""
+    out = np.zeros((ENEMY_SLOTS, len(CONTEXT)), np.float32)
+    for slot, enemy in enumerate(packed_lists(scene)["enemies"]):
+        if enemy.kind == "defeated":
+            continue
+        x0, y0, x1, y1 = enemy.box
+        middle = (x0 + x1) / 2
+        row = out[slot]
+        row[CONTEXT.index(enemy.kind)] = 1.0
+        row[CONTEXT.index("width")] = (x1 - x0) / 16
+        row[CONTEXT.index("height")] = (y1 - y0) / 16
+        # The surface it walks on is cut at it (smb_scene_labels.
+        # split_at_enemies): its ends are the far ends of the pieces on
+        # either side.
+        level = [s for s in scene.surfaces if abs(s.top - y1) <= 3]
+        left = [s for s in level if abs(s.x1 - x0) <= 3]
+        right = [s for s in level if abs(s.x0 - x1) <= 3]
+        if enemy.kind != "plant" and (left or right):
+            row[CONTEXT.index("supported")] = 1.0
+            row[CONTEXT.index("left")] = ((left[0].x0 if left else x0) - middle) / 64
+            row[CONTEXT.index("right")] = ((right[0].x1 if right else x1) - middle) / 64
+    return out

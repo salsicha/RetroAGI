@@ -1,384 +1,354 @@
-"""The target tracker: where an object the vision reports will be some frames
-from now (docs/action-predictor-controller.md, section 3).
+"""The collision trackers: for each enemy vision reports, every frame, whether
+Mario and it will touch within HORIZON frames, when, where, and as a stomp
+or a hit (user, 2026-10-15/16). They are trained on labels made from what
+really happened (core/collision_labels) and are not used while the skills
+and tactics train; the executor will end a wait or a walk and aim a stomp by
+them in play without the teacher.
 
-The predictive controller has no model of the world; it asks this tracker
-where its target (a walking enemy, a moving platform) will be when Mario gets
-there, and the tracker tells it when the world departs from what it said.
+Each enemy's inputs per frame (frame_features), from the executor and vision
+only:
 
-One small recurrent network (a GRU) is shared by every tracked enemy and
-moving platform and stepped once per frame for each. Per frame and object it
-reads, from vision only:
+- the executor's first-order kinematics of it (core/smb_kinematics: where
+  it is from Mario's feet, its velocity, how many sightings the velocity
+  rests on) and what vision shows of it (kind, size, the surface it walks
+  on);
+- the executor's kinematics of Mario (his speed, his feet's movement,
+  whether he stands);
+- the action Mario is carrying out (ActionState): its verb, where it sends
+  him from where he is now, how long it has run, whether it keeps his
+  speed, whether this enemy is its object.
 
-- whether the object is seen, how it moved since it was last seen and on
-  average over its last SMOOTH_FRAMES sightings (pixels per frame, the
-  camera's scroll removed);
-- its kind (walker, plant, other enemy, moving platform);
-- its surroundings: how far its middle is from each end of the surface it
-  stands on (a walker turns at a ledge or a wall);
-- Mario's position relative to it.
+Where an action sends Mario is what the executor was asked, except for an
+action aimed at an enemy: there it is the enemy's point when the action
+began. The teacher aimed those with the enemy's true future, which no input
+may carry; a hold sends him nowhere (its length is the teacher's truth).
 
-Its recurrent state carries what one picture cannot show: direction, speed,
-and where a plant or platform is in its cycle. It outputs, for each of
-TRACKER_HORIZONS frames ahead, the object's displacement from where it is
-now (x, y), an uncertainty for each, and the chance that it is still seen.
-The displacement is a correction to steady motion (its average movement
-continued), so an untrained tracker predicts steady motion.
+One GRU (shared by every enemy, a state per track identity) reads the first
+OBSERVATION_WIDTH inputs every frame the enemy is seen: what one picture
+cannot show (a plant's phase, where a walker turns). A head reads its state
+with all the frame's inputs; the action enters there only, so asking about
+another action needs no more GRU steps. It gives CLASSES logits (a stomp or
+a hit in each of BINS two-frame bins over HORIZON frames, or none) and the
+contact place (from Mario's feet now) with its uncertainty.
 """
 
 import math
-from collections import defaultdict, deque
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from .smb_observer import SCENE_SLOTS, packed_lists
-from .smb_pixel_types import VISIBLE_COLUMNS
+from .action_tokens import VERBS, pointer_target
+from .collision_labels import HORIZON, KINDS
+from .layered_policy import POINTER_START
+from .smb_kinematics import CONTEXT, ENEMY_SLOTS, MARIO_STATE, SPRITE_STATE
+from .tokens import SKILL_MODES
 
-TRACKER_HORIZONS = (1, 2, 4, 8, 16, 32, 64, 96)
-OBJECT_SLOTS = SCENE_SLOTS["enemies"] + SCENE_SLOTS["moving_platforms"]
-OBJECT_KINDS = ("walker", "plant", "other", "platform")
-# One object at one frame, as play records it (object_rows): its visual
-# identity (0: no object), kind (index in OBJECT_KINDS), box in world pixels,
-# the ends of the surface it stands on (world x; "supported" 0 when none),
-# and Mario's middle and feet (world pixels).
-OBJECT_ROW = (
-    "identity",
-    "kind",
-    "x0",
-    "y0",
-    "x1",
-    "y1",
-    "support_left",
-    "support_right",
-    "supported",
-    "mario_x",
-    "mario_feet",
-)
-ROW = {name: i for i, name in enumerate(OBJECT_ROW)}
-# The steady motion a forecast corrects: an object's movement per frame
-# averaged over its last SMOOTH_FRAMES sightings. Boxes move by whole pixels,
-# so a walker at 0.3 pixels per frame moves 0 or 1 between two frames: its
-# last movement continued for 64 frames was 21 pixels off on average, the
-# average over 16 sightings 3.
-SMOOTH_FRAMES = 16
-# The tracker's input per object and frame (track_inputs).
-TRACK_INPUT = 1 + 2 + 2 + len(OBJECT_KINDS) + 3 + 2
+BINS = HORIZON // 2
+NONE = 2 * BINS  # the class "no contact within HORIZON"
+CLASSES = NONE + 1
+# Each input's unit (pixels and pixels a frame are scaled to about 1).
+POSITION_SCALE = 128.0
+OBSERVATION_WIDTH = len(SPRITE_STATE) + len(CONTEXT) + len(MARIO_STATE)
+ACTION_WIDTH = len(VERBS) + 1 + 2 + 1 + 1 + 1
+FEATURES = OBSERVATION_WIDTH + ACTION_WIDTH
+# The place's unit while learning (pixels).
+PLACE_SCALE = 16.0
+# Its uncertainty is kept between half a pixel and 256 pixels: a place
+# predicted exactly (standing Mario's contacts are where he stands) would
+# otherwise drive it to nothing and the loss to minus infinity.
+LOG_SIGMA = (math.log(0.5 / PLACE_SCALE), math.log(256 / PLACE_SCALE))
 
 
-def _visible(box) -> bool:
-    """Whole inside the window the vision sees (a clipped box moves its middle
-    without the object moving)."""
-    return VISIBLE_COLUMNS[0] < box[0] and box[2] < VISIBLE_COLUMNS[1]
+@dataclass
+class ActionState:
+    """The action Mario is carrying out, as the trackers read it."""
+
+    verb: int = -1  # VERBS index; -1: none (watched frames, an unnamed command)
+    destination: tuple = (0.0, 0.0)  # from his feet at the start (pixels)
+    start_position: tuple = (0.0, 0.0)  # his world displacement and feet row then
+    start_frame: int = 0
+    carry: bool = False
+    target: int = 0  # the track identity of its enemy (0: none)
 
 
-def object_rows(scene, spatial) -> np.ndarray:
-    """[OBJECT_SLOTS, len(OBJECT_ROW)]: the enemies' slots, then the moving
-    platforms', each with its visual identity from ``spatial``'s tracks
-    (SpatialFeedback) and its position in world pixels."""
-    rows = np.zeros((OBJECT_SLOTS, len(OBJECT_ROW)), np.float32)
-    if scene.mario.box is None:
-        return rows
-    camera = spatial.camera_position
-    lists = packed_lists(scene)
-    tracks = spatial.tracks.tracks
-    mario = scene.mario.box
-    objects = [
-        (slot, e.box, e.kind) for slot, e in enumerate(lists["enemies"]) if e.kind != "defeated"
-    ]
-    objects += [
-        (SCENE_SLOTS["enemies"] + slot, box, "platform")
-        for slot, box in enumerate(lists["moving_platforms"])
-    ]
-    for slot, box, kind in objects:
-        matches = [t for t in tracks if t.kind == kind and t.box == box]
-        if len(matches) != 1 or not _visible(box):
-            continue
-        row = rows[slot]
-        row[ROW["identity"]] = matches[0].identity
-        row[ROW["kind"]] = OBJECT_KINDS.index(kind)
-        row[ROW["x0"] : ROW["y1"] + 1] = (box[0] + camera, box[1], box[2] + camera, box[3])
-        # The surface it walks on is cut at it (smb_scene_labels.
-        # split_at_enemies): its ends are the far ends of the pieces on
-        # either side.
-        level = [s for s in scene.surfaces if abs(s.top - box[3]) <= 3]
-        left = [s for s in level if abs(s.x1 - box[0]) <= 3]
-        right = [s for s in level if abs(s.x0 - box[2]) <= 3]
-        if kind != "platform" and (left or right):
-            row[ROW["support_left"]] = (left[0].x0 if left else box[0]) + camera
-            row[ROW["support_right"]] = (right[0].x1 if right else box[2]) + camera
-            row[ROW["supported"]] = 1.0
-        row[ROW["mario_x"]] = (mario[0] + mario[2]) / 2 + camera
-        row[ROW["mario_feet"]] = mario[3]
-    return rows
+def action_state(verb, pointer, command, sprites, identities, position, frame) -> ActionState:
+    """The ActionState of an action starting now: ``verb`` and ``pointer``
+    (VERBS index and pointer slot; -1 unknown), the executed ``command``
+    (tokens.command_row: mode, x, y, carry, frames, threat; mode -1 none),
+    this frame's sprite kinematics and slot identities, Mario's position."""
+    mode = int(command[0])
+    carry = bool(command[3]) if mode >= 0 else False
+    if pointer >= 0:
+        name, slot = pointer_target(pointer + POINTER_START)
+        if name == "enemies":
+            # The enemy's point as seen now (smb_kinematics: from his feet);
+            # nowhere when it is not tracked (never the command: aimed with
+            # its true future).
+            if sprites[slot, 0] <= 0:
+                return ActionState(verb, (0.0, 0.0), tuple(position), frame, carry, 0)
+            destination = (float(sprites[slot, 1]), float(sprites[slot, 2]))
+            return ActionState(
+                verb, destination, tuple(position), frame, carry, int(identities[slot])
+            )
+    destination = (0.0, 0.0)
+    if mode in (SKILL_MODES.index("run"), SKILL_MODES.index("jump")):
+        destination = (float(command[1]), float(command[2]))  # a hold: nowhere
+    return ActionState(verb, destination, tuple(position), frame, carry, 0)
 
 
-def _point(row):
-    """An object's reference point: its middle and its top (world pixels)."""
-    return np.array(((row[ROW["x0"]] + row[ROW["x1"]]) / 2, row[ROW["y0"]]), np.float32)
-
-
-def _move(row, previous, gap):
-    """Movement per frame since the object was last seen (pixels)."""
-    return (_point(row) - _point(previous)) / gap
-
-
-def track_inputs(row, previous, gap: int, average=None) -> np.ndarray:
-    """[TRACK_INPUT] for one object at one frame: ``row`` (None: not seen this
-    frame), ``previous`` its row when last seen (None: never), ``gap`` the
-    frames since then, ``average`` its average movement per frame (None:
-    unknown)."""
-    out = np.zeros(TRACK_INPUT, np.float32)
-    if row is None:
-        return out
-    out[0] = 1.0
-    if previous is not None and gap > 0:
-        out[1:3] = _move(row, previous, gap) / 2
-    if average is not None:
-        out[3:5] = np.asarray(average) / 2
-    kind = int(row[ROW["kind"]])
-    out[5 + kind] = 1.0
-    k = 5 + len(OBJECT_KINDS)
-    if row[ROW["supported"]]:
-        middle = (row[ROW["x0"]] + row[ROW["x1"]]) / 2
-        out[k] = 1.0
-        out[k + 1] = min(4.0, max(0.0, middle - row[ROW["support_left"]]) / 64)
-        out[k + 2] = min(4.0, max(0.0, row[ROW["support_right"]] - middle) / 64)
-    out[k + 3] = (row[ROW["mario_x"]] - (row[ROW["x0"]] + row[ROW["x1"]]) / 2) / 128
-    out[k + 4] = (row[ROW["mario_feet"]] - row[ROW["y1"]]) / 128
+def frame_features(sprites, mario, context, identities, position, frame, action: ActionState):
+    """[ENEMY_SLOTS, FEATURES] for one frame: the executor's kinematics of
+    each enemy slot ([SPRITE_SLOTS, len(SPRITE_STATE)]; only the enemy slots
+    are read) and of Mario, what vision shows of each enemy, each slot's
+    track identity, Mario's position (world displacement, feet row) and the
+    action in progress."""
+    out = np.zeros((ENEMY_SLOTS, FEATURES), np.float32)
+    enemy = np.asarray(sprites[:ENEMY_SLOTS], np.float32).copy()
+    enemy[:, 1:3] /= POSITION_SCALE
+    out[:, : len(SPRITE_STATE)] = enemy
+    k = len(SPRITE_STATE)
+    out[:, k : k + len(CONTEXT)] = context
+    k += len(CONTEXT)
+    out[:, k : k + len(MARIO_STATE)] = mario
+    k += len(MARIO_STATE)
+    out[:, k + (action.verb if action.verb >= 0 else len(VERBS))] = 1.0
+    k += len(VERBS) + 1
+    moved = (position[0] - action.start_position[0], position[1] - action.start_position[1])
+    out[:, k] = (action.destination[0] - moved[0]) / POSITION_SCALE
+    out[:, k + 1] = (action.destination[1] - moved[1]) / POSITION_SCALE
+    out[:, k + 2] = min(frame - action.start_frame, HORIZON) / HORIZON
+    out[:, k + 3] = float(action.carry)
+    out[:, k + 4] = (np.asarray(identities[:ENEMY_SLOTS]) == action.target) & (action.target > 0)
+    present = enemy[:, 0] > 0
+    out[~present] = 0.0
     return out
 
 
-class TargetTracker(nn.Module):
-    def __init__(self, width: int = 48):
+def record_features(record) -> np.ndarray:
+    """[T, ENEMY_SLOTS, FEATURES] for a recorded episode (EpisodeTask.
+    record_truth): the inputs the trackers had at each frame, the action in
+    progress being the one carried out from each decision (the teacher's
+    choice as named where it played)."""
+    frames = len(record.sprite_kinematics)
+    starts = {int(f): k for k, f in enumerate(record.decision_frames)}
+    sprites = record.sprite_kinematics.astype(np.float32)
+    mario = record.mario_kinematics.astype(np.float32)
+    context = record.enemy_context.astype(np.float32)
+    out = np.zeros((frames, ENEMY_SLOTS, FEATURES), np.float32)
+    action = ActionState()
+    for t in range(frames):
+        k = starts.get(t)
+        if k is not None and record.action_verb is not None:
+            action = action_state(
+                int(record.action_verb[k]),
+                int(record.action_pointer[k]),
+                record.commands[k],
+                sprites[t],
+                record.slot_identity[t],
+                record.mario_position[t],
+                t,
+            )
+        out[t] = frame_features(
+            sprites[t],
+            mario[t],
+            context[t],
+            record.slot_identity[t],
+            record.mario_position[t],
+            t,
+            action,
+        )
+    return out
+
+
+class CollisionTracker(nn.Module):
+    """The GRU over an enemy's observations and the head (module notes)."""
+
+    def __init__(self, width: int = 64):
         super().__init__()
         self.width = width
-        self.cell = nn.GRU(TRACK_INPUT, width, batch_first=True)
-        self.head = nn.Linear(width, len(TRACKER_HORIZONS) * 5)
-        self.register_buffer(
-            "horizons", torch.tensor(TRACKER_HORIZONS, dtype=torch.float32), persistent=False
+        self.gru = nn.GRU(OBSERVATION_WIDTH, width, batch_first=True)
+        self.head = nn.Sequential(
+            nn.Linear(width + FEATURES, 128), nn.GELU(), nn.Linear(128, CLASSES + 4)
         )
-        # Untrained: steady motion, an uncertainty growing with the horizon
-        # (about a pixel 4 frames ahead, 8 pixels 64 ahead), and most likely
-        # still seen.
-        nn.init.zeros_(self.head.weight)
+        last = self.head[-1]
+        nn.init.zeros_(last.weight)
+        nn.init.zeros_(last.bias)
         with torch.no_grad():
-            bias = self.head.bias.view(len(TRACKER_HORIZONS), 5)
-            bias.zero_()
-            bias[:, 2:4] = math.log(0.25)
-            bias[:, 4] = 2.0
+            # Untrained: no contact (95% against the 96 contact classes).
+            last.bias[NONE] = math.log(2 * BINS) + 3.0
+            last.bias[CLASSES + 2 :] = math.log(2.0)  # place uncertainty, 2 x 16 pixels
 
-    def run(self, inputs, hidden=None):
-        """inputs [N, T, TRACK_INPUT] -> (states [N, T, width], last [1, N, width])."""
-        return self.cell(inputs, hidden)
+    def observe(self, observations, hidden=None):
+        """GRU states [N, L, width] after each observation [N, L, OBSERVATION_WIDTH]."""
+        states, _ = self.gru(observations, hidden)
+        return states
 
-    def forecast(self, states, velocity):
-        """From states [..., width] and each object's average movement velocity
-        [..., 2] (pixels per frame): {"displacement", "sigma"} [...,
-        horizons, 2] in pixels and "visible" [..., horizons] logits."""
-        raw = self.head(states).view(*states.shape[:-1], len(TRACKER_HORIZONS), 5)
-        h = self.horizons.view(*([1] * (states.dim() - 1)), -1, 1)
-        steady = velocity.unsqueeze(-2) * h
-        spread = 2.0 + h / 2
+    def step(self, observation, hidden):
+        """One frame per enemy: observation [B, OBSERVATION_WIDTH], hidden [B, width]."""
+        _, out = self.gru(observation.unsqueeze(1), hidden.unsqueeze(0))
+        return out[0]
+
+    def answer(self, states, features) -> dict:
+        """{"logits" [..., CLASSES], "place" [..., 2] (pixels), "log_sigma"
+        [..., 2] (in PLACE_SCALE units)}."""
+        out = self.head(torch.cat((states, features), -1))
         return {
-            "displacement": steady + raw[..., :2] * spread,
-            "sigma": raw[..., 2:4].clamp(-4, 3).exp() * spread,
-            "visible": raw[..., 4],
+            "logits": out[..., :CLASSES],
+            "place": out[..., CLASSES : CLASSES + 2] * PLACE_SCALE,
+            "log_sigma": out[..., CLASSES + 2 :].clamp(*LOG_SIGMA),
         }
 
 
-def tracker_loss(predicted, target, seen, known):
-    """predicted: TargetTracker.forecast; ``target`` [..., horizons, 2]
-    displacement where the object is seen then; ``seen`` [..., horizons]
-    bool; ``known`` [..., horizons]: whether that frame is within the episode
-    (whether the object is seen then is known). Returns (loss, stats with
-    the mean error in pixels at each horizon)."""
-    loss = F.binary_cross_entropy_with_logits(predicted["visible"][known], seen[known].float())
-    stats = {}
-    if seen.any():
-        mean, sigma = predicted["displacement"][seen], predicted["sigma"][seen]
-        error = mean - target[seen]
-        loss = loss + (0.5 * (error / sigma).square() + sigma.log()).mean()
-        pixels = (predicted["displacement"] - target).detach().norm(dim=-1)
-        for k, h in enumerate(TRACKER_HORIZONS):
-            mask = seen[..., k]
-            if mask.any():
-                stats[f"error_{h}"] = float(pixels[..., k][mask].mean())
-    return loss, stats
+def class_of(frames: int, kind: int) -> int:
+    """The class of a contact ``frames`` after now (1..HORIZON), KINDS ``kind``."""
+    return (frames - 1) // 2 + (BINS if KINDS[kind] == "hit" else 0)
 
 
-def interpolate(horizons, values, frames: float):
-    """A forecast's value ``frames`` ahead, read linearly between its horizons
-    (``values`` [horizons, ...]; before the first, from no displacement)."""
-    points = (0, *horizons)
-    if frames >= points[-1]:
-        return values[-1]
-    k = next(i for i in range(1, len(points)) if frames <= points[i])
-    low = values[k - 2] if k >= 2 else values[0] * 0
-    w = (frames - points[k - 1]) / (points[k] - points[k - 1])
-    return low * (1 - w) + values[k - 1] * w
-
-
-class ObjectTracker:
-    """The tracker at play: one recurrent state per visual identity, stepped
-    every frame; where an object will be, and whether it has departed from
-    what was forecast (then the controller is sent the updated target)."""
-
-    # How many frames back the forecast checked against what is seen now was
-    # made, and how many of its uncertainties away the object must be.
-    CHECK_LAG = 4
-    CHECK_SIGMAS = 3.0
-
-    def __init__(self, model: TargetTracker, device="cpu"):
-        self.model = model.to(device).eval()
-        self.device = device
-        self.hidden: dict = {}
-        self.last: dict = {}  # identity -> (row, frame) when last seen
-        self.velocity: dict = defaultdict(lambda: np.zeros(2, np.float32))
-        self.moves: dict = defaultdict(lambda: deque(maxlen=SMOOTH_FRAMES))
-        self.forecasts: dict = defaultdict(lambda: deque(maxlen=self.CHECK_LAG + 1))
-        self.frame = 0
-
-    @torch.no_grad()
-    def observe(self, rows: np.ndarray) -> None:
-        """One frame's object_rows."""
-        seen = {int(r[ROW["identity"]]): r for r in rows if r[ROW["identity"]]}
-        identities = sorted(set(seen) | set(self.hidden))
-        if not identities:
-            self.frame += 1
-            return
-        inputs, moving = [], set()
-        for i in identities:
-            row = seen.get(i)
-            previous, when = self.last.get(i, (None, self.frame))
-            average = None
-            if row is not None and previous is not None and self.frame > when:
-                self.moves[i].append(_move(row, previous, self.frame - when))
-                average = np.mean(self.moves[i], axis=0)
-                self.velocity[i] = average.astype(np.float32)
-                moving.add(i)
-            inputs.append(track_inputs(row, previous, self.frame - when, average))
-        hidden = torch.stack(
-            [
-                self.hidden.get(i, torch.zeros(self.model.width, device=self.device))
-                for i in identities
-            ]
-        )
-        x = torch.tensor(np.stack(inputs), device=self.device).unsqueeze(1)
-        states, last = self.model.run(x, hidden.unsqueeze(0))
-        velocity = torch.tensor(
-            np.stack([self.velocity[i] for i in identities]), device=self.device
-        )
-        out = self.model.forecast(states[:, 0], velocity)
-        for k, i in enumerate(identities):
-            self.hidden[i] = last[0, k]
-            if i in seen:
-                self.last[i] = (seen[i], self.frame)
-                where = _point(seen[i])
-                self.forecasts[i].append(
-                    (
-                        self.frame,
-                        where,
-                        out["displacement"][k].cpu().numpy(),
-                        out["sigma"][k].cpu().numpy(),
-                        i in moving,
-                    )
-                )
-        # Objects unseen for the longest horizon are forgotten.
-        for i in [
-            i for i, (_, when) in self.last.items() if self.frame - when > TRACKER_HORIZONS[-1]
-        ]:
-            for store in (self.hidden, self.last, self.velocity, self.moves, self.forecasts):
-                store.pop(i, None)
-        self.frame += 1
-
-    def where(self, identity: int, frames: float):
-        """(x, y, sigma) in world pixels: where the object (its middle and top)
-        will be ``frames`` after the last observed frame; None if unknown."""
-        if not self.forecasts.get(identity):
-            return None
-        _, now, displacement, sigma, _ = self.forecasts[identity][-1]
-        d = interpolate(TRACKER_HORIZONS, displacement, frames)
-        s = interpolate(TRACKER_HORIZONS, sigma, frames)
-        return float(now[0] + d[0]), float(now[1] + d[1]), float(np.linalg.norm(s))
-
-    def changed(self, identity: int) -> bool:
-        """Whether the object is now outside what was forecast CHECK_LAG
-        frames ago (a walker turned, a platform reversed). A forecast made
-        before its movement was seen (at its first sighting) is not checked."""
-        history = self.forecasts.get(identity)
-        if not history or len(history) <= self.CHECK_LAG:
-            return False
-        made, then, displacement, sigma, moving = history[0]
-        if not moving:
-            return False
-        seen_frame, now, _, _, _ = history[-1]
-        lag = seen_frame - made
-        expected = then + interpolate(TRACKER_HORIZONS, displacement, lag)
-        spread = interpolate(TRACKER_HORIZONS, sigma, lag)
-        error = np.abs(now - expected)
-        return bool((error > self.CHECK_SIGMAS * np.maximum(spread, 0.5)).any())
-
-
-def track_examples(objects: np.ndarray):
-    """Training sequences from one episode's object rows [T, OBJECT_SLOTS,
-    len(OBJECT_ROW)]: for each visual identity, from its first to its last
-    sighting, (inputs [L, TRACK_INPUT], average velocity [L, 2], targets [L,
-    horizons, 2], seen [L, horizons], known [L, horizons], valid [L]):
-    ``known`` marks the horizons within the episode, ``valid`` the frames it
-    is seen (a forecast is made from those)."""
-    frames = len(objects)
-    sightings = defaultdict(dict)
-    for t in range(frames):
-        for row in objects[t]:
-            if row[ROW["identity"]]:
-                sightings[int(row[ROW["identity"]])][t] = row
-    out = []
-    for seen_at in sightings.values():
-        first, last = min(seen_at), max(seen_at)
-        length = last - first + 1
-        inputs = np.zeros((length, TRACK_INPUT), np.float32)
-        velocity = np.zeros((length, 2), np.float32)
-        targets = np.zeros((length, len(TRACKER_HORIZONS), 2), np.float32)
-        seen = np.zeros((length, len(TRACKER_HORIZONS)), bool)
-        known = np.zeros((length, len(TRACKER_HORIZONS)), bool)
-        valid = np.zeros(length, bool)
-        previous, when, moving = None, first, np.zeros(2, np.float32)
-        moves = deque(maxlen=SMOOTH_FRAMES)
-        for k, t in enumerate(range(first, last + 1)):
-            row = seen_at.get(t)
-            if row is None:
-                velocity[k] = moving
-                continue
-            average = None
-            if previous is not None:
-                moves.append(_move(row, previous, t - when))
-                average = np.mean(moves, axis=0)
-                moving = average.astype(np.float32)
-            inputs[k] = track_inputs(row, previous, t - when, average)
-            velocity[k] = moving
-            valid[k] = True
-            here = _point(row)
-            for j, h in enumerate(TRACKER_HORIZONS):
-                later = seen_at.get(t + h)
-                known[k, j] = t + h < frames
-                if later is not None:
-                    targets[k, j] = _point(later) - here
-                    seen[k, j] = True
-            previous, when = row, t
-        out.append((inputs, velocity, targets, seen, known, valid))
+def allowed_classes(frames, kind, censor) -> np.ndarray:
+    """[N, CLASSES] bool: the classes each label allows: its contact's; none
+    (known to HORIZON); or, censored from offset c, every contact from c on
+    and none."""
+    frames, kind, censor = (np.asarray(a) for a in (frames, kind, censor))
+    out = np.zeros((len(frames), CLASSES), bool)
+    seen = frames > 0
+    rows = np.flatnonzero(seen)
+    out[rows, [class_of(int(f), int(k)) for f, k in zip(frames[seen], kind[seen])]] = True
+    known = ~seen & (censor == 0)
+    out[known, NONE] = True
+    for i in np.flatnonzero(~seen & (censor > 0)):
+        first = (int(censor[i]) - 1) // 2
+        out[i, first:BINS] = True
+        out[i, BINS + first : NONE] = True
+        out[i, NONE] = True
     return out
 
 
-def steady_error(examples) -> dict:
-    """The steady-motion forecast's mean error (pixels) at each horizon: the
-    baseline the tracker must beat."""
-    totals = defaultdict(list)
-    for _, velocity, targets, seen, _, valid in examples:
-        for j, h in enumerate(TRACKER_HORIZONS):
-            mask = valid & seen[:, j]
-            if mask.any():
-                error = np.linalg.norm(velocity[mask] * h - targets[mask, j], axis=-1)
-                totals[h].extend(error.tolist())
-    return {h: float(np.mean(v)) for h, v in totals.items()}
+def collision_loss(out: dict, allowed, place, seen):
+    """Minus the log-probability of the classes each label allows, and, for
+    seen contacts, the place: squared error in PLACE_SCALE units plus a
+    Gaussian fit of the uncertainty (the error detached, so a wide one
+    cannot excuse a poor place). ``allowed`` [N, CLASSES] bool, ``place``
+    [N, 2] pixels, ``seen`` [N] bool. Returns (loss, stats)."""
+    logits = out["logits"]
+    total = torch.logsumexp(logits, -1)
+    kept = torch.logsumexp(logits.masked_fill(~allowed, float("-inf")), -1)
+    classes = (total - kept).mean()
+    stats = {"classes": float(classes)}
+    loss = classes
+    if seen.any():
+        error = (out["place"][seen] - place[seen]) / PLACE_SCALE
+        log_sigma = out["log_sigma"][seen]
+        fit = (error.detach() ** 2 / (2 * torch.exp(2 * log_sigma)) + log_sigma).mean()
+        squared = (error**2).mean()
+        loss = loss + squared + fit
+        stats["place_px"] = float(error.abs().mean() * PLACE_SCALE)
+    return loss, stats
+
+
+@dataclass
+class Collision:
+    """One enemy's estimate: the chance of any contact within HORIZON, of a
+    hit and of a stomp by each two-frame bin (cumulative), the median frame
+    of a contact given one, its place (pixels from Mario's feet now) and its
+    uncertainty."""
+
+    contact: float
+    hit_by: np.ndarray
+    stomp_by: np.ndarray
+    frames: float
+    place: tuple
+    sigma: tuple
+
+    def hit_within(self, frames: float) -> float:
+        if frames < 1:
+            return 0.0
+        return float(self.hit_by[min(BINS - 1, int(frames - 1) // 2)])
+
+    def stomp_within(self, frames: float) -> float:
+        if frames < 1:
+            return 0.0
+        return float(self.stomp_by[min(BINS - 1, int(frames - 1) // 2)])
+
+
+def collision_of(out: dict) -> Collision:
+    """A Collision from one enemy's head output (unbatched)."""
+    p = torch.softmax(out["logits"], -1).detach().cpu().numpy()
+    stomp, hit = p[:BINS], p[BINS:NONE]
+    contact = float(stomp.sum() + hit.sum())
+    by_bin = stomp + hit
+    median = BINS - 1
+    if contact > 0:
+        median = int(np.searchsorted(np.cumsum(by_bin), contact / 2))
+    return Collision(
+        contact=contact,
+        hit_by=np.cumsum(hit),
+        stomp_by=np.cumsum(stomp),
+        frames=2.0 * median + 1.5,
+        place=tuple(out["place"].detach().cpu().numpy().tolist()),
+        sigma=tuple((torch.exp(out["log_sigma"]) * PLACE_SCALE).detach().cpu().numpy().tolist()),
+    )
+
+
+class CollisionTrackers:
+    """The trackers at play: a GRU state per track identity, stepped each
+    frame its enemy is seen (forgotten after HORIZON frames unseen)."""
+
+    def __init__(self, model: CollisionTracker, device="cpu"):
+        self.model = model.eval()
+        self.device = device
+        self.hidden: dict = {}
+        self.features: dict = {}
+        self.seen: dict = {}
+        self.frame = 0
+
+    @torch.no_grad()
+    def observe(self, features: np.ndarray, identities) -> None:
+        """One frame: frame_features and each enemy slot's identity."""
+        self.frame += 1
+        present = [
+            (slot, int(identities[slot]))
+            for slot in range(ENEMY_SLOTS)
+            if identities[slot] and features[slot, 0] > 0
+        ]
+        if present:
+            ids = [i for _, i in present]
+            rows = torch.as_tensor(
+                np.stack([features[s, :OBSERVATION_WIDTH] for s, _ in present]), device=self.device
+            )
+            hidden = torch.stack(
+                [
+                    self.hidden.get(i, torch.zeros(self.model.width, device=self.device))
+                    for i in ids
+                ]
+            )
+            stepped = self.model.step(rows, hidden)
+            for (slot, i), h in zip(present, stepped):
+                self.hidden[i] = h
+                self.features[i] = features[slot]
+                self.seen[i] = self.frame
+        for i in [i for i, last in self.seen.items() if self.frame - last > HORIZON]:
+            for store in (self.hidden, self.features, self.seen):
+                store.pop(i, None)
+
+    def refresh(self, features: np.ndarray, identities) -> None:
+        """This frame's inputs again after a new action began (no GRU step:
+        the action enters the head only)."""
+        for slot in range(ENEMY_SLOTS):
+            i = int(identities[slot])
+            if i in self.features and features[slot, 0] > 0:
+                self.features[i] = features[slot]
+
+    @torch.no_grad()
+    def estimate(self, identity: int, features: Optional[np.ndarray] = None):
+        """The Collision for ``identity`` (None if not tracked), with this
+        frame's inputs or ``features`` (another action's, say)."""
+        if identity not in self.hidden:
+            return None
+        row = self.features[identity] if features is None else features
+        out = self.model.answer(
+            self.hidden[identity], torch.as_tensor(row, dtype=torch.float32, device=self.device)
+        )
+        return collision_of(out)

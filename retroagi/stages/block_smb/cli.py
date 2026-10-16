@@ -86,10 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     exam_layer.add_argument("--layouts-per-difficulty", type=int, default=6)
     exam_layer.add_argument("--first-layout", type=int, default=100)
     exam_layer.add_argument("--workers", type=int, default=12)
-    exam_layer.add_argument(
-        "--predictor", help="the action predictor that executes the skill's actions"
-    )
-    exam_layer.add_argument("--tracker", help="the target tracker (optional)")
+    exam_layer.add_argument("--tracker", help="the collision trackers (optional)")
     return parser
 
 
@@ -105,7 +102,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             layouts_per_difficulty=args.layouts_per_difficulty,
             first_layout=args.first_layout,
             workers=args.workers,
-            predictor=args.predictor,
             tracker=args.tracker,
         )
     raise ValueError(f"unknown command {args.command!r}")

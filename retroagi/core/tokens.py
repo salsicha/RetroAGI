@@ -104,6 +104,25 @@ class SkillToken:
             raise ValueError("only a hold of some length ends at a coming enemy")
 
 
+# An executed command as recordings and the collision trackers keep it.
+COMMAND_FIELDS = ("mode", "x", "y", "carry", "frames", "threat")
+
+
+def command_row(skill) -> list:
+    """COMMAND_FIELDS for an executed SkillToken (mode: SKILL_MODES index);
+    mode -1 when there is none (an exact button plan)."""
+    if skill is None:
+        return [-1, 0, 0, 0, 0, 0]
+    return [
+        SKILL_MODES.index(skill.mode),
+        skill.x,
+        skill.y,
+        int(skill.carry),
+        skill.frames,
+        int(skill.threat),
+    ]
+
+
 def encode_skill(token: SkillToken) -> torch.Tensor:
     vector = torch.zeros(SKILL_WIDTH)
     vector[SKILL_MODES.index(token.mode)] = 1.0

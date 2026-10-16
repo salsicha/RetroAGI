@@ -159,7 +159,7 @@ def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
 
 @pytest.mark.timeout(240)
 def test_the_predictors_records_hold_the_teachers_runs_as_well_as_its_jumps():
-    from retroagi.core.action_predictor import COLUMN
+    from retroagi.core.world_model import COLUMN
     from retroagi.core.action_tokens import VERBS
     from retroagi.stages.block_smb.teacher_actions import action_rows, tried_runs
 

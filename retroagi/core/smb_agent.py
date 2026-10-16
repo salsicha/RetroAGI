@@ -23,13 +23,14 @@ from typing import Callable, Mapping, Optional, Sequence
 import numpy as np
 import torch
 
-from .action_tokens import ActionToken
+from .action_tokens import VERBS, ActionToken, pointer_index
 from .actions import SMBAction
 from .layered_policy import (
     CHOICE_WIDTH,
     CHOICES,
     HISTORY,
     HISTORY_LAYERS,
+    POINTER_START,
     LayeredSMBPolicy,
     MemoryState,
     choice_log_prob,
@@ -341,9 +342,15 @@ class _Copy:
     watch: int = 0
     tactic_hidden: Optional[torch.Tensor] = None  # the tactic memory
     tactic_cell: Optional[torch.Tensor] = None
-    # With a target tracker: the tracked objects (ObjectTracker), observed
-    # every frame.
-    objects: object = None
+    # With collision trackers (core/target_tracker.CollisionTrackers): stepped
+    # every frame on the executor's kinematics and the action in progress.
+    trackers: object = None
+    # The action in progress as the trackers read it (target_tracker.
+    # ActionState), set when one starts.
+    action_now: object = None
+    # This frame's kinematics (smb_kinematics: per sprite slot, Mario's), the
+    # sprite slots' identities, and what vision shows of the enemies.
+    kinematics: tuple = ()
 
 
 def choice_histories(copies: Sequence[_Copy], device) -> dict:
@@ -379,7 +386,6 @@ class SMBAgents:
         device,
         copies: int = 1,
         switch: StrategyToken = DEFAULT_STRATEGY,
-        predictor=None,
         tracker=None,
         carry_out=None,
     ):
@@ -387,11 +393,8 @@ class SMBAgents:
         self.policy = policy
         self.device = torch.device(device)
         self.switch = switch  # the strategy switch a copy starts with, unless told otherwise
-        # The action predictor is replaced by the world model (not built yet):
-        # an agent given one refuses to play its own actions (_actions). A
-        # target tracker (core/target_tracker), when given, observes every
-        # frame.
-        self.predictor = predictor
+        # Collision trackers (core/target_tracker.CollisionTracker), when
+        # given, are stepped every frame.
         self.tracker = tracker
         # Training: carry_out(copy number, action) gives the executor's
         # destination for the skill's own action (the teacher's version of
@@ -408,14 +411,71 @@ class SMBAgents:
         tactic, and its strategy switch (``switch``, else the agents' own).
         ``watch``: pre-episode frames to observe before the first decision."""
         tactic = torch.zeros(self.policy.tactic_memory.width, device=self.device)
-        from .target_tracker import ObjectTracker
+        from .target_tracker import ActionState, CollisionTrackers
 
         self.copies[copy] = _Copy(
             switch=switch or self.switch,
             tactic_hidden=tactic,
             tactic_cell=tactic.clone(),
             watch=watch,
-            objects=ObjectTracker(self.tracker, self.device) if self.tracker is not None else None,
+            trackers=(
+                CollisionTrackers(self.tracker, self.device) if self.tracker is not None else None
+            ),
+            action_now=ActionState(),
+        )
+
+    def _track(self, copy: _Copy, scene) -> None:
+        """Step the copy's collision trackers on this frame: the executor's
+        kinematics, what vision shows of the enemies, and the action in
+        progress."""
+        from .smb_kinematics import enemy_context, kinematics, slot_identities
+        from .target_tracker import frame_features
+
+        sprites, mario = kinematics(scene, copy.spatial)
+        identities = slot_identities(scene, copy.spatial)
+        context = enemy_context(scene)
+        copy.kinematics = (sprites, mario, identities, context)
+        copy.trackers.observe(
+            frame_features(
+                sprites,
+                mario,
+                context,
+                identities,
+                self._position(copy, scene),
+                copy.frame,
+                copy.action_now,
+            ),
+            identities,
+        )
+
+    @staticmethod
+    def _position(copy: _Copy, scene) -> tuple:
+        """Mario's world displacement (the executor's) and his feet's row."""
+        feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
+        return (copy.spatial.displacement, feet)
+
+    def _began(self, copy: _Copy, decision: Decision, scene) -> None:
+        """A new action began: the trackers read it from now on."""
+        from .target_tracker import action_state, frame_features
+        from .tokens import command_row
+
+        action = decision.action
+        verb = VERBS.index(action.verb) if action is not None else -1
+        pointer = (
+            pointer_index(action.target) - POINTER_START
+            if action is not None and action.target is not None
+            else -1
+        )
+        sprites, mario, identities, context = copy.kinematics
+        position = self._position(copy, scene)
+        copy.action_now = action_state(
+            verb, pointer, command_row(decision.skill), sprites, identities, position, copy.frame
+        )
+        copy.trackers.refresh(
+            frame_features(
+                sprites, mario, context, identities, position, copy.frame, copy.action_now
+            ),
+            identities,
         )
 
     @torch.no_grad()
@@ -580,10 +640,8 @@ class SMBAgents:
         ended = []
         for copy, scene in zip(playing, scenes):
             copy.spatial.observe(scene)
-            if copy.objects is not None:
-                from .target_tracker import object_rows
-
-                copy.objects.observe(object_rows(scene, copy.spatial))
+            if copy.trackers is not None:
+                self._track(copy, scene)
             landed = copy.landing.landed(scene)
             reason = None
             if not copy.executor.idle:
@@ -664,6 +722,8 @@ class SMBAgents:
                     None if given_actions and given_actions[j] is not None else decision.skill
                 )
                 decision.plan = playing[k].spatial.begin(destination, scenes[k], decision.plan)
+                if playing[k].trackers is not None:
+                    self._began(playing[k], decision, scenes[k])
                 decisions[k] = decision
                 remember_choices(playing[k], decision)
                 playing[k].decisions += 1

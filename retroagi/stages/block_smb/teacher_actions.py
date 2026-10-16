@@ -463,11 +463,11 @@ def tried_runs(env, state, target=None) -> list:
 
 def action_rows(env, state, command):
     """The teacher's choice, its runs (tried_runs) and every jump it could
-    make here (tried_actions), as records for the action predictor:
+    make here (tried_actions), as records for the world model:
     [ACTIONS_PER_DECISION, len(ACTION_RECORD)] numbers
-    (core/action_predictor), the choice first (when its object is reported),
+    (core/world_model), the choice first (when its object is reported),
     the runs before the jumps (far fewer of them), padded with verb -1."""
-    from retroagi.core.action_predictor import ACTIONS_PER_DECISION, action_record, empty_records
+    from retroagi.core.world_model import ACTIONS_PER_DECISION, action_record, empty_records
 
     rows = empty_records()
     count = 0

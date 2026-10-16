@@ -7,10 +7,10 @@ reports (core.smb_observer). The simulator is read only by the teachers
 
 Layers are trained bottom-up, one at a time, with the others frozen:
 
-- skill: given the tactic, scene, memory prediction and its 16 prior
-  actions, choose an action (a verb aimed at an object); the scene encoder
-  and scene memory stay as the action predictor that executes the actions
-  read them;
+- skill: given the tactic, the strategy switch, the scene, its 16 prior
+  actions and the executor's feedback, choose an action (a verb aimed at an
+  object); the teacher carries it out (the ground truth the world model
+  will stand for; core/world_model);
 - tactic: reading the layout's strategy switch, hold a tactic over many
   actions and know when it is finished: the tactic layer is an option-critic
   (core.layered_policy.TacticLayer) with its own memory network.
@@ -71,10 +71,11 @@ from retroagi.core.smb_observer import (
     observation_layout,
 )
 from retroagi.core.tokens import (
+    COMMAND_FIELDS,
     EXECUTION_WIDTH,
-    SKILL_MODES,
     TACTICS,
     TacticToken,
+    command_row,
     encode_strategy,
     encode_tactic,
     token_layout,
@@ -151,15 +152,15 @@ class LayeredTrainConfig:
     seed: int = 0
     device: str = "cuda"
     vision_checkpoint: str = "data/block_vit/block_vit_scene.pth"
-    # The action predictor that turns the skill's own actions into the
-    # executor's destinations (predictor_train), and the target tracker that
-    # keeps them on a moving object (tracker_train; None: none).
+    # Retired (the action predictor is replaced by the world model): kept so
+    # saved configs load; refused when set.
     predictor: Optional[str] = None
+    # The collision trackers (tracker_train; None: none), stepped every frame
+    # in play; not used while the layers train.
     tracker: Optional[str] = None
-    # Skill training: the scene encoder and memory the skill reads learn with
-    # it (else only the skill's own transformer does). An action predictor
-    # reads them too, so none may execute the skill's actions meanwhile; one
-    # is trained on them afterwards.
+    # Skill training: the scene encoder the skill reads learns with it (else
+    # only the skill's own transformer does). The world model reads it too:
+    # one trained on the old encoder refuses the new one.
     train_reading: bool = False
     init: Optional[str] = None  # a checkpoint whose lower layers are already trained
     # The size of a new policy (ignored with init).
@@ -196,9 +197,6 @@ class EpisodeTask:
     # jump it could make, as actions with their outcomes (the action
     # predictor's data; teacher_actions.action_rows). Slow: off in training.
     record_actions: bool = False
-    # Record every frame's tracked enemies and moving platforms
-    # (core/target_tracker.object_rows): the target tracker's data.
-    record_objects: bool = False
     # Record the simulator's truth every frame (truth_recording), which true
     # enemy each scene slot shows, and the executor's kinematics: the data the
     # collision trackers' and the world model's labels are made from
@@ -208,25 +206,6 @@ class EpisodeTask:
 
 # Why an action ended (core.smb_agent AgentStep.ended), as recordings code it.
 END_REASONS = ("", "landed", "done", "threat", "hold_recheck", "arrived", "no_progress")
-# An executed command (core.tokens.SkillToken) as a recording keeps it.
-COMMAND_FIELDS = ("mode", "x", "y", "carry", "frames", "threat")
-
-
-def command_row(skill) -> list:
-    """COMMAND_FIELDS for an executed SkillToken (mode: SKILL_MODES index);
-    mode -1 when there is none (an exact button plan)."""
-    if skill is None:
-        return [-1, 0, 0, 0, 0, 0]
-    return [
-        SKILL_MODES.index(skill.mode),
-        skill.x,
-        skill.y,
-        int(skill.carry),
-        skill.frames,
-        int(skill.threat),
-    ]
-
-
 @dataclass
 class EpisodeRecord:
     """One played episode: what the policy saw and pressed, and its labelled decisions."""
@@ -272,12 +251,9 @@ class EpisodeRecord:
     # "started", "used" (tactic index), "own_end", "end_probability".
     tactic: dict = field(default_factory=dict)
     weight: float = 1.0  # how much its decisions count in learning (EpisodeTask.weight)
-    # [D, ACTIONS_PER_DECISION, len(ACTION_RECORD)] (core/action_predictor),
+    # [D, ACTIONS_PER_DECISION, len(ACTION_RECORD)] (core/world_model),
     # with EpisodeTask.record_actions; else None.
     actions: Optional[np.ndarray] = None
-    # [T, OBJECT_SLOTS, len(OBJECT_ROW)] (core/target_tracker), with
-    # EpisodeTask.record_objects; else None.
-    objects: Optional[np.ndarray] = None
     # With EpisodeTask.record_truth: the simulator's state each frame and one
     # more after the last button (truth_recording.TruthRecorder.arrays), the
     # true enemy (or moving platform) each sprite slot shows [T, SPRITE_SLOTS]
@@ -288,6 +264,14 @@ class EpisodeRecord:
     slot_match: Optional[np.ndarray] = None
     sprite_kinematics: Optional[np.ndarray] = None
     mario_kinematics: Optional[np.ndarray] = None
+    # ... and each sprite slot's track identity [T, SPRITE_SLOTS] (0: none),
+    # what vision shows of each enemy slot [T, ENEMY_SLOTS, len(CONTEXT)]
+    # (smb_kinematics.enemy_context), and where Mario is [T, 2] (the
+    # executor's world displacement and his feet's row): the collision
+    # trackers' inputs are made from these (target_tracker.record_features).
+    slot_identity: Optional[np.ndarray] = None
+    enemy_context: Optional[np.ndarray] = None
+    mario_position: Optional[np.ndarray] = None
     # Always: why an action ended at each frame [T] (END_REASONS index; 0
     # none), and per decision of the skill learner the command executed [D, 6]
     # (COMMAND_FIELDS; mode -1 for an exact button plan) and the action it
@@ -315,7 +299,6 @@ def _initialize_worker(
     vision_checkpoint: str,
     settings: dict,
     device: str,
-    predictor: Optional[str] = None,
     tracker: Optional[str] = None,
 ) -> None:
     from .vision import load_block_vit_checkpoint
@@ -328,20 +311,15 @@ def _initialize_worker(
         policy=policy,
         device=device,
         version=None,
-        **_execution_models(predictor, tracker, device),
+        **_execution_models(tracker, device),
     )
 
 
-def _execution_models(predictor: Optional[str], tracker: Optional[str], device) -> dict:
-    """The action predictor and target tracker from their checkpoints (None
-    where none is given)."""
-    from .predictor_train import load_predictor
+def _execution_models(tracker: Optional[str], device) -> dict:
+    """The collision trackers from their checkpoint (None where none is given)."""
     from .tracker_train import load_tracker
 
-    return {
-        "predictor": load_predictor(predictor, device)[0].eval() if predictor else None,
-        "tracker": load_tracker(tracker, device).eval() if tracker else None,
-    }
+    return {"tracker": load_tracker(tracker, device).eval() if tracker else None}
 
 
 def _play_job(job) -> list[EpisodeRecord]:
@@ -358,7 +336,6 @@ def _play_job(job) -> list[EpisodeRecord]:
         tasks,
         _WORKER["device"],
         lanes,
-        predictor=_WORKER["predictor"],
         tracker=_WORKER["tracker"],
     )
 
@@ -447,7 +424,7 @@ class _Lane:
     def carry_out(self, action):
         """The executor's destination for the skill's own ``action`` here: the
         teacher's version of it (teacher_actions.carry_out), used instead of
-        the action predictor until that predicts well. None when the teacher
+        the world model, which is not used while the layers train. None when the teacher
         has no safe version: the episode then ends as lost.
 
         The teacher's own choice is asked for first when it was not (an
@@ -549,7 +526,7 @@ class _Lane:
         mine = decision.chosen[learner]
         if learner == "skill":
             if self.task.record_actions:
-                from retroagi.core.action_predictor import empty_records
+                from retroagi.core.world_model import empty_records
 
                 found = asked.get("actions")
                 d["actions"].append(found if found is not None else empty_records())
@@ -743,6 +720,19 @@ class _Lane:
                 if self.truth is not None
                 else None
             ),
+            slot_identity=(
+                np.asarray(self.frames["slot_identity"], np.int32) if self.truth is not None else None
+            ),
+            enemy_context=(
+                np.asarray(self.frames["enemy_context"], np.float16)
+                if self.truth is not None
+                else None
+            ),
+            mario_position=(
+                np.asarray(self.frames["mario_position"], np.float32)
+                if self.truth is not None
+                else None
+            ),
             ended=np.asarray(self.frames["ended"], np.int8),
             commands=np.asarray(d["command"], np.int16).reshape(-1, len(COMMAND_FIELDS))
             if d["command"]
@@ -767,9 +757,6 @@ class _Lane:
             potentials=np.asarray(self.frames["potential"], np.float32),
             weight=self.task.weight,
             actions=np.asarray(d["actions"], np.float32) if self.task.record_actions else None,
-            objects=(
-                np.asarray(self.frames["objects"], np.float32) if self.task.record_objects else None
-            ),
             tactic={
                 name[len("tactic_") :]: np.asarray(d[name])
                 for name in d
@@ -827,27 +814,24 @@ def play_episodes(
     tasks: Sequence[EpisodeTask],
     device,
     lanes: int,
-    predictor=None,
     tracker=None,
 ) -> list[EpisodeRecord]:
     """Play ``tasks``, ``lanes`` at a time. The agent sees only the screens.
 
     With a ``learner``, the teachers give it its token from above and label
-    its decisions. With none, the agent plays exactly as deployed: every token
-    is its own and nothing is given or labelled. The skill's own actions are
-    executed through ``predictor`` (and ``tracker``; SMBAgents).
+    its decisions, and the teacher carries out the skill's own actions (the
+    ground truth the world model will stand for). With none, the agent plays
+    exactly as deployed: every token is its own and nothing is given or
+    labelled. ``tracker``: the collision trackers, stepped every frame
+    (SMBAgents).
     """
     playing: dict[int, _Lane] = {}
     carry = None
-    if predictor is None and learner is not None:
-        # No action predictor (or one not yet predicting well): the teacher
-        # carries out the skill's own actions (training only).
+    if learner is not None:
         def carry(number, action):
             return playing[number].carry_out(action)
 
-    agents = SMBAgents(
-        observer, policy, device, lanes, predictor=predictor, tracker=tracker, carry_out=carry
-    )
+    agents = SMBAgents(observer, policy, device, lanes, tracker=tracker, carry_out=carry)
     explore = {task.explore for task in tasks}
     if len(explore) > 1 or (learner is None and True in explore):
         raise ValueError("one call either explores, for a learner, or does not")
@@ -883,12 +867,12 @@ def play_episodes(
             for name, value in zip("abc", step.rows):
                 lane.frames[name].append(value)
             spatial = agents.copies[lane.copy].spatial
-            if lane.task.record_objects:
-                from retroagi.core.target_tracker import object_rows
-
-                lane.frames["objects"].append(object_rows(step.scene, spatial))
             if lane.truth is not None:
-                from retroagi.core.smb_kinematics import kinematics
+                from retroagi.core.smb_kinematics import (
+                    enemy_context,
+                    kinematics,
+                    slot_identities,
+                )
 
                 from .truth_recording import match_slots
 
@@ -899,6 +883,10 @@ def play_episodes(
                 lane.frames["sprite_kinematics"].append(sprites)
                 lane.frames["mario_kinematics"].append(mario)
                 lane.frames["slot_match"].append(match_slots(step.scene, frame))
+                lane.frames["slot_identity"].append(slot_identities(step.scene, spatial))
+                lane.frames["enemy_context"].append(enemy_context(step.scene))
+                feet = step.scene.mario.box[3] if step.scene.mario.box is not None else 0.0
+                lane.frames["mario_position"].append((spatial.displacement, feet))
             lane.frames["ended"].append(
                 END_REASONS.index(step.ended) if step.ended in END_REASONS else 0
             )
@@ -978,7 +966,6 @@ class EpisodePool:
                 config.vision_checkpoint,
                 asdict(settings),
                 config.device,
-                config.predictor,
                 config.tracker,
             ),
         )
@@ -1973,8 +1960,8 @@ def label_collapse(episodes, learner: str, source: str = "labels") -> dict:
     value follows from the scene); what must not happen is one value for a
     kind of action whatever the scene, so the share is judged over every
     family's labels together. Whether a family's concentration is explained
-    by its scenes is measured on the action predictor, which learns ends from
-    scenes (predictor_train.explained)."""
+    by its scenes is measured on the world model, which learns ends from
+    scenes (world_model_train.explained)."""
     gathered: dict = defaultdict(list)
     for e in episodes:
         for kind, values in _choices(e, learner, source).items():
@@ -2088,10 +2075,16 @@ def _file_digest(path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def save_layered_checkpoint(path, policy, config, trained_layers, history) -> None:
+def save_layered_checkpoint(
+    path, policy, config, trained_layers, history, world_model=None
+) -> None:
+    """``world_model``: what its training measured ({"reads": the scene
+    encoder's digest it was trained on, "report", "passed"}; None:
+    untrained)."""
     torch.save(
         {
-            "memory_version": 4,
+            "memory_version": 5,
+            "world_model": world_model,
             "settings": asdict(policy.settings),
             "state_dict": policy.state_dict(),
             "observation_layout": observation_layout(),
@@ -2197,34 +2190,6 @@ def load_layered_checkpoint(path, device="cpu"):
         widened[:, : len(TACTICS)] = old[:, : len(TACTICS)]
         state["skill.above.weight"] = widened
     fresh = policy.state_dict()
-    if "memory.platform_prediction.weight" not in state:
-        for name in (
-            "memory.timing.weight",
-            "memory.platform_prediction.weight",
-            "memory.platform_prediction.bias",
-        ):
-            state[name] = fresh[name]
-        checkpoint["trained_layers"] = []
-        checkpoint.setdefault("load_migrations", []).append("timed_memory_requires_requalification")
-    if "memory.enemy_prediction.weight" not in state:
-        for name in ("memory.enemy_prediction.weight", "memory.enemy_prediction.bias"):
-            state[name] = fresh[name]
-        checkpoint.setdefault("load_migrations", []).append("enemy_forecast_zero_initialized")
-    if "memory.end_duration.weight" not in state:
-        # Fixed-horizon readouts have no next-action endpoint semantics. Reset
-        # those readouts, preserving the shared LSTM, scene, skill and tactics.
-        for name in (
-            "memory.platform_prediction.weight",
-            "memory.platform_prediction.bias",
-            "memory.end_duration.weight",
-            "memory.end_duration.bias",
-            "memory.end_time_embedding.weight",
-        ):
-            state[name] = fresh[name]
-        checkpoint["trained_layers"] = []
-        checkpoint.setdefault("load_migrations", []).append(
-            "action_endpoint_requires_requalification"
-        )
     if "skill.given_mode.net.0.weight" not in state:
         # The skill's x reading its chosen mode, and y reading both, start with
         # no influence: the same outputs as the skill that chose them apart.
@@ -2250,6 +2215,15 @@ def load_layered_checkpoint(path, device="cpu"):
             state["tactic_memory.inputs.weight"] = inputs[:, :width].clone()
         checkpoint["trained_layers"] = []
         checkpoint.setdefault("load_migrations", []).append("layers_read_no_prediction")
+    if checkpoint.get("memory_version", 0) < 5:
+        # The LSTM is the world model now (core/world_model; user,
+        # 2026-10-15/16), run once per action with the chosen action: the
+        # old scene memory's weights go and it starts untrained. No layer
+        # reads it, so their qualifications stand.
+        state = {name: value for name, value in state.items() if not name.startswith("memory.")}
+        state.update({name: value for name, value in fresh.items() if name.startswith("memory.")})
+        checkpoint["world_model"] = None
+        checkpoint.setdefault("load_migrations", []).append("world_model_reshaped")
     if destination_skill or "skill.heads.verb.weight" not in state:
         # The skill's action heads (a verb and the object it is aimed at) and
         # its history of actions are new: every skill tensor that is no longer
@@ -2282,9 +2256,13 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     rng = random.Random(config.seed)
     device = torch.device(config.device)
     trained_layers: list[str] = []
+    world_model = None
     if config.init:
         policy, checkpoint = load_layered_checkpoint(config.init, device)
         trained_layers = list(checkpoint["trained_layers"])
+        # Kept as it was trained; its digest says whether the scene encoder
+        # it read has changed since (core/world_model.scene_digest).
+        world_model = checkpoint.get("world_model")
     else:
         policy = LayeredSMBPolicy(
             PolicySettings(
@@ -2539,16 +2517,22 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             if tactic:
                 gate_met = gate_met and ends_agree is not None and ends_agree >= config.end_gate
             layers = trained_layers + ([config.learner] if gate_met else [])
-            save_layered_checkpoint(output / "last.pt", policy, config, layers, history)
+            save_layered_checkpoint(
+                output / "last.pt", policy, config, layers, history, world_model
+            )
             # Of equally good rounds the latest is kept: it has learned from
             # more episodes, more of them its own play.
             if mean >= best:
                 best = mean
-                save_layered_checkpoint(output / "best.pt", policy, config, layers, history)
+                save_layered_checkpoint(
+                    output / "best.pt", policy, config, layers, history, world_model
+                )
             if gate_met and mean >= best_passed:
                 # The best round that met the gate: the next layer starts from it.
                 best_passed = mean
-                save_layered_checkpoint(output / "passed.pt", policy, config, layers, history)
+                save_layered_checkpoint(
+                    output / "passed.pt", policy, config, layers, history, world_model
+                )
             (output / "history.json").write_text(json.dumps(history, indent=2))
     finally:
         pool.close()
@@ -2610,17 +2594,14 @@ def examine_layer(
     workers: int = 12,
     families: Sequence[str] = tuple(BLOCK_SMB_MC_FAMILIES),
     vision_checkpoint: str = LayeredTrainConfig.vision_checkpoint,
-    predictor: Optional[str] = None,
     tracker: Optional[str] = None,
 ) -> dict:
     """Play fresh held-out layouts (never used for validation) with a saved policy.
 
     With a ``learner``, the teacher gives it its token from above, as in its
-    validation; with none, the whole agent plays as deployed. The skill's own
-    actions are executed through ``predictor`` (and ``tracker``); by default
-    those the policy's run was trained with. With no predictor, the teacher
-    carries them out (only with a ``learner``: a deployed agent has no
-    teacher).
+    validation, and carries out the skill's own actions; with none, the whole
+    agent plays as deployed (not yet: that needs the world model to carry
+    them out). ``tracker``: the collision trackers (default: the run's).
     """
     policy, saved = load_layered_checkpoint(checkpoint, "cpu")
     trained = saved.get("config", {})
@@ -2635,7 +2616,6 @@ def examine_layer(
         workers=workers,
         vision_checkpoint=vision_checkpoint,
         output=str(Path(checkpoint).parent),
-        predictor=predictor or trained.get("predictor"),
         tracker=tracker or trained.get("tracker"),
     )
     tasks = [

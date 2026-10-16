@@ -23,6 +23,34 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-16 — Phase 2: the executor's kinematics, collision trackers and the world model (user decision; building)
+
+Approved plan (`/home/amoran/.claude/plans/resilient-wobbling-abelson.md`):
+
+- **The executor keeps a first-order state estimate** (position and velocity,
+  constant velocity) of every tracked sprite and of Mario. User: "vision
+  should not be doing any state estimation since the executor is already
+  doing that. send the state estimates to the LSTM". The collision trackers
+  read the same estimates. Built: `smb_trajectory.Track` (16-sighting mean,
+  identity kept 8 frames unseen), `core/smb_kinematics.py`.
+- **Truth is recorded** with collection episodes (`record_truth`) and labels
+  are made afterwards from recorded real paths (`core/collision_labels.py`,
+  `core/action_outcomes.py`), the same way Full SMB's memory will fill them.
+- **Collision trackers** (`core/target_tracker.py`, rewritten): per enemy,
+  every frame, a stomp or a hit in two-frame bins over 96 frames, or none,
+  and the contact place; inputs are the kinematics, what vision shows of the
+  enemy and the action in progress (an enemy-aimed action's destination is
+  the enemy's seen point, never the teacher's command). The old
+  displacement tracker and the action controller are deleted.
+- **The world model** (`core/world_model.py`, the policy's `memory`): one
+  LSTM step per action; trained on executed and tried actions
+  (`world_model_train.py`). The action predictor and its trainer are
+  deleted. Checkpoints load at memory version 5 with it untrained.
+
+Next: collecting and training both (on the user's go), deployed execution
+(forced ends of waits and walks, stomp aim) and the Block SMB deployed
+evaluation, then the Full SMB loop.
+
 ## 2026-10-16 — Stomp variety; the plant and monster teachers win their lessons (user decision; built)
 
 skill_waits_20261015 stopped at round 11's teacher qualification: 29 of the
