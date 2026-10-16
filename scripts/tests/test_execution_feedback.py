@@ -118,7 +118,9 @@ def test_feedback_migration_keeps_old_weights_and_clears_qualification(tmp_path)
     assert torch.equal(weight[:, :before], state["skill.above.weight"])
     assert not weight[:, before:].any()
     for k, v in state.items():
-        if k != "skill.above.weight":
+        # The world model (memory.*) of a checkpoint saved before it starts
+        # untrained (memory version 5).
+        if k != "skill.above.weight" and not k.startswith("memory."):
             assert torch.equal(v, loaded.state_dict()[k])
 
 
@@ -139,7 +141,11 @@ def test_runup_executor_checkpoint_requires_requalification_without_changing_wei
     )
     loaded, metadata = load_layered_checkpoint(path)
     assert metadata["trained_layers"] == []
-    assert all(torch.equal(v, loaded.state_dict()[k]) for k, v in policy.state_dict().items())
+    assert all(
+        torch.equal(v, loaded.state_dict()[k])
+        for k, v in policy.state_dict().items()
+        if not k.startswith("memory.")  # the world model starts untrained (memory version 5)
+    )
 
 
 def test_a_checkpoint_without_the_newest_feedback_number_reads_it_with_no_influence(tmp_path):

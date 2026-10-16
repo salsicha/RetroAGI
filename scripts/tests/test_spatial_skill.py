@@ -251,6 +251,8 @@ def test_legacy_checkpoint_migration_preserves_action_and_existing_skill_weights
     loaded, metadata = load_layered_checkpoint(path)
     assert metadata["load_migrations"]
     for name, value in state.items():
+        if name.startswith("memory."):
+            continue  # the world model starts untrained (memory version 5)
         actual = loaded.state_dict()[name]
         if name == "skill.above.weight":
             assert torch.equal(actual[:, :TACTIC_WIDTH], value)

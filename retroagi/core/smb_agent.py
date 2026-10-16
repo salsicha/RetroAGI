@@ -38,7 +38,7 @@ from .layered_policy import (
     encode_choice,
     held_features,
 )
-from .smb_executor import ActionPlan, SMBExecutor
+from .smb_executor import HOLD_FRAMES, HOLD_GROUND, ActionPlan, SMBExecutor
 from .smb_observer import SEQ_LEN_A, SEQ_LEN_B, VisionObserver, column_codes, pack_c
 from .smb_scene_labels import STOMP_ROWS, SceneObservation
 from .smb_spatial_feedback import SpatialFeedback
@@ -90,6 +90,25 @@ class Decision:
     # The skill's own action, whose end (the teacher's version, in training)
     # is the destination ``skill``.
     action: Optional[ActionToken] = None
+    # Without the teacher: the world model's predicted outcome of ``action``
+    # (core/world_model: "mean", "sigma", "success").
+    predicted: Optional[dict] = None
+
+
+def destination_of(action: ActionToken, outcome, contact=None) -> SkillToken:
+    """The executor's destination for an action from its predicted outcome
+    (core/world_model OUTCOME_FIELDS: dx, dy, object_dx, object_dy, frames):
+    a hold lasts the predicted frames (a wait, 1 to HOLD_FRAMES); runs (a
+    run-up keeps its speed) and jumps go to the predicted end; a stomp to
+    ``contact`` (the collision trackers' meeting point) when given."""
+    if action.verb == "hold":
+        return SkillToken("hold", 0, 0, frames=int(min(HOLD_FRAMES, max(1, round(outcome[4])))))
+    dx, dy = contact if (action.verb == "stomp" and contact is not None) else outcome[:2]
+    x = int(min(256, max(-256, round(dx))))
+    y = int(min(240, max(-240, round(dy))))
+    if action.verb in ("land_on", "jump_over", "stomp"):
+        return SkillToken("jump", x, y)
+    return SkillToken("run", x, y, carry=action.verb == "approach")
 
 
 def scene_rows(scenes: Sequence[SceneObservation]) -> list[tuple]:
@@ -351,6 +370,11 @@ class _Copy:
     # This frame's kinematics (smb_kinematics: per sprite slot, Mario's), the
     # sprite slots' identities, and what vision shows of the enemies.
     kinematics: tuple = ()
+    # Without the teacher: the world model's state (hidden, cell), carried
+    # from action to action, and the watch that ends a wait or a ground move
+    # when a coming enemy needs a move (smb_threat.ThreatWatch).
+    world: Optional[tuple] = None
+    threat_watch: object = None
 
 
 def choice_histories(copies: Sequence[_Copy], device) -> dict:
@@ -388,14 +412,26 @@ class SMBAgents:
         switch: StrategyToken = DEFAULT_STRATEGY,
         tracker=None,
         carry_out=None,
+        world_model: bool = False,
+        watch_threats: Optional[bool] = None,
     ):
         self.observer = observer
         self.policy = policy
         self.device = torch.device(device)
         self.switch = switch  # the strategy switch a copy starts with, unless told otherwise
         # Collision trackers (core/target_tracker.CollisionTracker), when
-        # given, are stepped every frame.
+        # given, are stepped every frame; without the teacher they end waits
+        # and walks (smb_threat) and aim stomps.
         self.tracker = tracker
+        # Without the teacher (no carry_out): the policy's world model carries
+        # out the skill's actions (its predicted outcome is the destination).
+        # Only a trained one should be (its report: world_model_train).
+        self.world_model = world_model
+        # Whether the collision trackers end waits and walks (smb_threat):
+        # by default when no teacher carries actions out.
+        self.watch_threats = (
+            tracker is not None and carry_out is None if watch_threats is None else watch_threats
+        )
         # Training: carry_out(copy number, action) gives the executor's
         # destination for the skill's own action (the teacher's version of
         # it: the ground truth an outcome prediction will stand for), or None
@@ -411,6 +447,7 @@ class SMBAgents:
         tactic, and its strategy switch (``switch``, else the agents' own).
         ``watch``: pre-episode frames to observe before the first decision."""
         tactic = torch.zeros(self.policy.tactic_memory.width, device=self.device)
+        from .smb_threat import ThreatWatch
         from .target_tracker import ActionState, CollisionTrackers
 
         self.copies[copy] = _Copy(
@@ -422,6 +459,7 @@ class SMBAgents:
                 CollisionTrackers(self.tracker, self.device) if self.tracker is not None else None
             ),
             action_now=ActionState(),
+            threat_watch=ThreatWatch() if self.watch_threats and self.tracker is not None else None,
         )
 
     def _track(self, copy: _Copy, scene) -> None:
@@ -479,12 +517,14 @@ class SMBAgents:
         )
 
     @torch.no_grad()
-    def _actions(self, starting, made, own, numbers) -> None:
+    def _actions(self, starting, made, own, numbers, now=None, scenes=()) -> None:
         """For the deciding copies playing their own skill choice (``own``):
-        the executor's destination for the skill's action, the teacher's
-        version of it (``carry_out``; ``numbers``: the deciding copies'
-        numbers). Without ``carry_out`` a hold holds; any other action needs
-        the world model's predicted outcome, not built yet."""
+        the executor's destination for the skill's action. In training, the
+        teacher's version of it (``carry_out``; ``numbers``: the deciding
+        copies' numbers). Without the teacher, the world model's predicted
+        outcome (``world_model``; ``now``: the encoded scenes, ``scenes``:
+        what vision shows): one step of it per action. Else a hold holds and
+        any other action raises (nothing can carry it out)."""
         chosen = [i for i in own if made[i].action is not None]
         if self.carry_out is not None:
             # Holds too: the teacher's version of a hold lasts as long as its
@@ -493,13 +533,84 @@ class SMBAgents:
                 destination = self.carry_out(numbers[i], made[i].action)
                 made[i].skill = destination or SkillToken("hold", 0, 0)
             return
+        if self.world_model and chosen:
+            self._predicted(starting, made, chosen, now, scenes)
+            return
         for i in [i for i in chosen if made[i].action.verb == "hold"]:
             made[i].skill = SkillToken("hold", 0, 0)
         if any(made[i].action.verb != "hold" for i in chosen):
             raise RuntimeError(
                 "the skill chose an action: playing it without the teacher needs the world "
-                "model's predicted outcome (not built yet; docs/design-decisions.md 2026-10-15)"
+                "model (SMBAgents(world_model=True), a trained one: world_model_train)"
             )
+
+    def _predicted(self, starting, made, chosen, now, scenes) -> None:
+        """The world model's outcome of each chosen action, one step each from
+        its copy's state, as the executor's destination (destination_of); a
+        stomp aimed at the collision trackers' contact point when they expect
+        one."""
+        from .smb_kinematics import kinematics
+        from .world_model import MARIO_TOKEN
+
+        tokens, present = now
+        rows = torch.as_tensor(chosen, device=self.device)
+        moving = [kinematics(scenes[i], starting[i].spatial) for i in chosen]
+        sprites = torch.as_tensor(np.stack([m[0] for m in moving]), device=self.device)
+        mario = torch.as_tensor(np.stack([m[1] for m in moving]), device=self.device)
+        feedback = torch.as_tensor(
+            [made[i].execution_feedback for i in chosen], dtype=torch.float32, device=self.device
+        )
+        actions = [made[i].action for i in chosen]
+        verbs = torch.as_tensor([VERBS.index(a.verb) for a in actions], device=self.device)
+        pointers = torch.as_tensor(
+            [pointer_index(a.target) if a.target is not None else MARIO_TOKEN for a in actions],
+            device=self.device,
+        )
+        model = self.policy.memory
+        empty = model.initial(1, self.device)
+        hidden = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[0] for i in chosen])
+        cell = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[1] for i in chosen])
+        out, (hidden, cell) = model.predict(
+            tokens[rows], present[rows], sprites, mario, feedback, verbs, pointers, (hidden, cell)
+        )
+        for j, i in enumerate(chosen):
+            copy = starting[i]
+            copy.world = (hidden[j], cell[j])
+            made[i].predicted = {name: value[j] for name, value in out.items()}
+            mean = out["mean"][j].tolist()
+            made[i].skill = destination_of(actions[j], mean, self._contact(copy, actions[j], scenes[i]))
+
+    def _contact(self, copy: _Copy, action, scene):
+        """Where the collision trackers expect a stomp ``action`` to meet its
+        enemy (pixels from Mario's feet), asked with the stomp as the action
+        in progress; None when they expect none or do not track it."""
+        if action.verb != "stomp" or copy.trackers is None or not copy.kinematics:
+            return None
+        from .target_tracker import action_state, frame_features
+
+        sprites, mario, identities, context = copy.kinematics
+        pointer = pointer_index(action.target) - POINTER_START
+        slot = action.target[1]
+        identity = int(identities[slot]) if action.target[0] == "enemies" else 0
+        if not identity:
+            return None
+        position = self._position(copy, scene)
+        stomp = action_state(
+            VERBS.index("stomp"), pointer, [1, 0, 0, 0, 0, 0], sprites, identities, position, copy.frame
+        )
+        features = frame_features(sprites, mario, context, identities, position, copy.frame, stomp)
+        estimate = copy.trackers.estimate(identity, features[slot])
+        if estimate is None or estimate.stomp_within(96) < 0.5:
+            return None
+        return estimate.place
+
+    @staticmethod
+    def _waiting_or_walking(copy: _Copy) -> bool:
+        """Whether the copy is in a wait (a hold with a length) or a ground move."""
+        plan = copy.executor.plan
+        if plan is None:
+            return False
+        return (plan.action == HOLD_GROUND and plan.wait) or copy.executor.travel is not None
 
     @torch.no_grad()
     def _tactics(self, starting, now, given, run_given, sample):
@@ -660,6 +771,14 @@ class SMBAgents:
                         )
                     )
                 )
+                if (
+                    reason is None
+                    and copy.threat_watch is not None
+                    and self._waiting_or_walking(copy)
+                    and copy.threat_watch.due(copy.trackers, copy.kinematics, scene)
+                ):
+                    # A coming enemy needs a move now (smb_threat).
+                    reason = "threat"
                 if copy.spatial.stalled and (
                     reason is not None
                     or copy.spatial.observed_frames >= copy.spatial.positions.maxlen
@@ -715,7 +834,7 @@ class SMBAgents:
                 if skills[j] is None
                 and not (supplied.get("action") and supplied["action"][j] is not None)
             ]
-            self._actions(starting, made, own, [copies[k] for k in deciding])
+            self._actions(starting, made, own, [copies[k] for k in deciding], now, picked)
             for j, (k, decision) in enumerate(zip(deciding, made)):
                 given_actions = supplied.get("action")
                 destination = (

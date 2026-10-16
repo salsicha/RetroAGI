@@ -87,6 +87,13 @@ def build_parser() -> argparse.ArgumentParser:
     exam_layer.add_argument("--first-layout", type=int, default=100)
     exam_layer.add_argument("--workers", type=int, default=12)
     exam_layer.add_argument("--tracker", help="the collision trackers (optional)")
+    exam_layer.add_argument(
+        "--execution",
+        choices=("teacher", "world_model", "trackers", "deployed"),
+        default="teacher",
+        help="who carries out the skill's actions: the teacher, the world model, the teacher "
+        "with the collision trackers ending waits and aiming stomps, or both networks",
+    )
     return parser
 
 
@@ -103,6 +110,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             first_layout=args.first_layout,
             workers=args.workers,
             tracker=args.tracker,
+            # The whole agent without the teacher is the deployed execution.
+            execution="deployed" if args.learner == "deployed" else args.execution,
         )
     raise ValueError(f"unknown command {args.command!r}")
 

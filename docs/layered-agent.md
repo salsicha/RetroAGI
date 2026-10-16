@@ -115,6 +115,20 @@ trained by `stages/block_smb/tracker_train.py`; until then the simulator's
 truth stands in (`stages/block_smb/collision_truth.py`). Watched frames
 before a lesson's first decision let the tracks see enemies move.
 
+Without the teacher (deployed play, `SMBAgents(world_model=True)`), the
+world model's predicted outcome is the executor's destination
+(`smb_agent.destination_of`): a hold lasts the predicted frames, runs and
+jumps go to the predicted end (a run-up keeps its speed), a stomp goes to the
+collision trackers' expected contact point. The executor ends a wait or a
+ground move as `threat` (feedback `collision_due`) when the trackers expect
+a hit within the lead a jump over that enemy needs, plus 5 frames
+(`core/smb_threat.py`): the smallest gap from which one of the executor's own
+jumps still clears the enemy coming at its estimated speed, so a faster enemy
+is jumped from farther away; within 48 frames when no jump clears it; never in
+the air. `exam-layer --execution teacher | world_model | trackers | deployed`
+plays the same held-out layouts with each network carrying out its part, so
+what each costs is measured apart.
+
 In Block SMB training a wait is one action: the teacher's hold lasts until it
 would do something else, or until a coming enemy is close enough that a jump
 over it is due (`controller_teacher._dodge_wait`). Every other teacher hold

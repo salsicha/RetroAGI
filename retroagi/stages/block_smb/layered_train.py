@@ -70,10 +70,12 @@ from retroagi.core.smb_observer import (
     VisionObserver,
     observation_layout,
 )
+from retroagi.core.smb_executor import HOLD_FRAMES
 from retroagi.core.tokens import (
     COMMAND_FIELDS,
     EXECUTION_WIDTH,
     TACTICS,
+    SkillToken,
     TacticToken,
     command_row,
     encode_strategy,
@@ -202,8 +204,19 @@ class EpisodeTask:
     # collision trackers' and the world model's labels are made from
     # (core/collision_labels). Training only.
     record_truth: bool = False
+    # How the skill's own actions are carried out (EXECUTIONS): by the
+    # teacher (training); or, to measure the prediction networks, by the
+    # world model, with the collision trackers ending waits and walks and
+    # aiming stomps, or both.
+    execution: str = "teacher"
 
 
+# How the skill's own actions are carried out (EpisodeTask.execution):
+# teacher: its version of them (training); world_model: the world model's
+# predicted outcome (stomps aimed by the simulator's truth, waits as long as
+# predicted); trackers: the teacher's, but waits left open and ended by the
+# collision trackers, stomps aimed by them; deployed: both networks.
+EXECUTIONS = ("teacher", "world_model", "trackers", "deployed")
 # Why an action ended (core.smb_agent AgentStep.ended), as recordings code it.
 END_REASONS = ("", "landed", "done", "threat", "hold_recheck", "arrived", "no_progress")
 @dataclass
@@ -826,12 +839,31 @@ def play_episodes(
     (SMBAgents).
     """
     playing: dict[int, _Lane] = {}
+    executions = {task.execution for task in tasks}
+    if len(executions) > 1 or not executions <= set(EXECUTIONS):
+        raise ValueError(f"one call plays one execution of {EXECUTIONS}, not {executions}")
+    execution = executions.pop() if executions else "teacher"
     carry = None
-    if learner is not None:
+    if learner is not None and execution in ("teacher", "trackers"):
         def carry(number, action):
-            return playing[number].carry_out(action)
+            command = playing[number].carry_out(action)
+            if execution == "trackers" and command is not None and command.mode == "hold":
+                # The wait is left open: the collision trackers end it.
+                return SkillToken("hold", 0, 0, frames=HOLD_FRAMES)
+            return command
 
-    agents = SMBAgents(observer, policy, device, lanes, tracker=tracker, carry_out=carry)
+    agents = SMBAgents(
+        observer,
+        policy,
+        device,
+        lanes,
+        tracker=tracker,
+        carry_out=carry,
+        world_model=execution in ("world_model", "deployed"),
+        watch_threats=execution in ("trackers", "deployed"),
+    )
+    # The simulator's truth aims stomps where the trackers do not.
+    exact = learner is not None and execution in ("teacher", "world_model")
     explore = {task.explore for task in tasks}
     if len(explore) > 1 or (learner is None and True in explore):
         raise ValueError("one call either explores, for a learner, or does not")
@@ -844,7 +876,7 @@ def play_episodes(
             if copy not in playing and pending:
                 playing[copy] = _Lane(pending.pop(0), copy)
                 agents.reset(copy, playing[copy].switch, watch=len(playing[copy].watching))
-                if learner is not None:
+                if exact:
                     # Training: the executor aims at walkers where the
                     # simulator moves them, as the teacher's trials do: the
                     # ground truth the target tracker's collision point will
@@ -2595,21 +2627,27 @@ def examine_layer(
     families: Sequence[str] = tuple(BLOCK_SMB_MC_FAMILIES),
     vision_checkpoint: str = LayeredTrainConfig.vision_checkpoint,
     tracker: Optional[str] = None,
+    execution: str = "teacher",
 ) -> dict:
     """Play fresh held-out layouts (never used for validation) with a saved policy.
 
     With a ``learner``, the teacher gives it its token from above, as in its
-    validation, and carries out the skill's own actions; with none, the whole
-    agent plays as deployed (not yet: that needs the world model to carry
-    them out). ``tracker``: the collision trackers (default: the run's).
+    validation; with none, the whole agent plays as deployed (``execution``
+    "deployed"). ``execution`` (EXECUTIONS): who carries out the skill's own
+    actions, the same held-out layouts in each, so what each prediction
+    network costs is measured apart (the world model's: ``checkpoint``'s
+    memory; ``tracker``: the collision trackers, default the run's).
     """
     policy, saved = load_layered_checkpoint(checkpoint, "cpu")
     trained = saved.get("config", {})
-    if learner is None:
-        raise ValueError(
-            "an agent played without the teacher needs the world model to carry out its "
-            "actions: not built yet (docs/design-decisions.md 2026-10-15)"
-        )
+    if execution not in EXECUTIONS:
+        raise ValueError(f"execution must be one of {EXECUTIONS}")
+    if learner is None and execution != "deployed":
+        raise ValueError("an agent played without the teacher is the deployed execution")
+    if execution in ("world_model", "deployed") and saved.get("world_model") is None:
+        raise ValueError(f"{checkpoint} has no trained world model (world_model_train)")
+    if execution in ("trackers", "deployed") and not (tracker or trained.get("tracker")):
+        raise ValueError("this execution needs the collision trackers (--tracker)")
     config = LayeredTrainConfig(
         learner=learner or "tactic",
         families=tuple(families),
@@ -2619,7 +2657,9 @@ def examine_layer(
         tracker=tracker or trained.get("tracker"),
     )
     tasks = [
-        dataclasses.replace(task, sample_index=first_layout + task.sample_index)
+        dataclasses.replace(
+            task, sample_index=first_layout + task.sample_index, execution=execution
+        )
         for task in _tasks(config, "validation", layouts_per_difficulty, 0, 0.0, False)
     ]
     pool = EpisodePool(config, policy.settings)
@@ -2630,10 +2670,16 @@ def examine_layer(
     finally:
         pool.close()
     families_won = family_success(played)
+    threat = END_REASONS.index("threat")
     return {
         "checkpoint": str(checkpoint),
         "learner": learner,
+        "execution": execution,
         "episodes": len(played),
+        "ends": dict(Counter(e.end for e in played)),
+        # Actions the collision trackers (or the teacher's truth) ended
+        # because a coming enemy needed a move.
+        "threat_ends": int(sum(int((e.ended == threat).sum()) for e in played)),
         "success": float(np.mean([e.won for e in played])),
         "families": families_won,
         "difficulties": family_success(played, by_difficulty=True),

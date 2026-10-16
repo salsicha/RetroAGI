@@ -47,9 +47,14 @@ Approved plan (`/home/amoran/.claude/plans/resilient-wobbling-abelson.md`):
   (`world_model_train.py`). The action predictor and its trainer are
   deleted. Checkpoints load at memory version 5 with it untrained.
 
-Next: collecting and training both (on the user's go), deployed execution
-(forced ends of waits and walks, stomp aim) and the Block SMB deployed
-evaluation, then the Full SMB loop.
+- **Deployed execution** (built): the world model's outcome is the
+  destination; `core/smb_threat.py` ends waits and ground moves when the
+  trackers expect a hit within the executor's jump lead (+5 frames; an enemy
+  not yet seen closing is given 0.5 px a frame); stomps aim at the trackers'
+  contact point. `exam-layer --execution` measures each network apart.
+
+Collection and training of both: after the tactic re-check's validation and
+fresh stages (user, 2026-10-17; chained). Then the Full SMB loop.
 
 ## 2026-10-16 — Stomp variety; the plant and monster teachers win their lessons (user decision; built)
 

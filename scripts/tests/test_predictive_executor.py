@@ -118,7 +118,8 @@ def test_legacy_checkpoint_discards_only_action_weights(tmp_path):
     assert "maneuver_targets_require_requalification" in metadata["load_migrations"]
     assert "removed_action_network" in metadata["load_migrations"]
     for name, value in policy.state_dict().items():
-        assert torch.equal(value, loaded.state_dict()[name])
+        if not name.startswith("memory."):  # the world model starts untrained (memory version 5)
+            assert torch.equal(value, loaded.state_dict()[name])
     config = LayeredTrainConfig(vision_checkpoint=str(source))
     output = tmp_path / "new.pt"
     save_layered_checkpoint(output, loaded, config, ["skill"], [])
