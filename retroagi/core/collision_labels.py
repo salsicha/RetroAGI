@@ -130,6 +130,8 @@ def slot_labels(labels: CollisionLabels, slot_match: np.ndarray, enemy_slots: in
     rows = np.arange(len(match))[:, None]
 
     def take(values):
+        if values.shape[1] == 0:  # no enemy in the recording
+            return np.zeros(match.shape + values.shape[2:], values.dtype)
         picked = values[rows, index]
         mask = labelled.reshape(labelled.shape + (1,) * (picked.ndim - 2))
         return np.where(mask, picked, 0)

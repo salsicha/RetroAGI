@@ -143,7 +143,14 @@ picks the next action, which it learns from the teacher.
 Evaluation is Full SMB played many times, learning continuing on every
 playthrough, the world model and the trackers included, in speed mode (time
 to each checkpoint) and points mode. The measure is how few playthroughs it
-takes before Mario plays the level successfully.
+takes before Mario plays the level successfully. Full SMB's truth is read
+from the emulator's memory every frame (`stages/full_smb/truth.py`): the
+game's own collision boxes for Mario and its six enemy slots (a slot filled
+again is a new enemy), alive or defeated, and the level's progress (distance,
+score, coins, time). It is kept in Block SMB's recording arrays, so the same
+labels train the same networks; `stages/full_smb/practice.py` records a
+playthrough of the deployed agent, with a checkpoint every 500 pixels of
+Mario's distance into the level.
 
 Ground movement uses **eight-frame model-predictive control**: simulate Mario's
 response to candidate button sequences, apply only the first button, then observe

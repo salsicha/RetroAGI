@@ -79,6 +79,17 @@ def test_nothing_is_known_past_the_recordings_end():
     assert labels.frames[t, 0] == 0 and labels.censor[t, 0] == frames - t + 1
 
 
+def test_a_recording_without_enemies_labels_no_slot():
+    truth, live = standing_recording(0.2, frames=20)
+    for name in ("enemies", "enemies_drawn"):
+        truth[name] = truth[name][:, :0]
+    truth["enemy_state"], truth["stompable"] = truth["enemy_state"][:, :0], truth["stompable"][:0]
+    labels = collision_labels(truth, action_ends([0], len(live)))
+    slots = slot_labels(labels, np.full((len(live), 9), -1), 6)
+    assert slots["frames"].shape == (len(live), 6) and slots["place"].shape == (len(live), 6, 2)
+    assert not slots["labelled"].any()
+
+
 @pytest.fixture(scope="module")
 def stomp():
     task = lt.EpisodeTask(

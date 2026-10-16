@@ -56,6 +56,19 @@ Approved plan (`/home/amoran/.claude/plans/resilient-wobbling-abelson.md`):
 Collection and training of both: after the tactic re-check's validation and
 fresh stages (user, 2026-10-17; chained). Then the Full SMB loop.
 
+- **Full SMB's truth from the emulator's memory** (built; user: "go ahead
+  with the Full SMB foundation"): the boxes the game itself tests contacts
+  with (Mario's and each enemy slot's), each slot's drawn box, alive or
+  defeated, stompable; the level's progress (Mario's distance into it, score,
+  coins, time left, dying, left the level) (`stages/full_smb/truth.py`). The
+  game reuses its six enemy slots as the level scrolls; a slot filled again is
+  a new enemy column. The arrays have Block SMB's recording format, so the
+  same labels and the same trainers read them. `stages/full_smb/practice.py`
+  records a playthrough with the deployed agent (no teacher). How the
+  playthroughs feed learning (how many per update, replay, the rewards of the
+  two modes, the skill's and tactic's reward rounds) is to be settled with the
+  user once the networks' first results exist.
+
 ## 2026-10-16 — Stomp variety; the plant and monster teachers win their lessons (user decision; built)
 
 skill_waits_20261015 stopped at round 11's teacher qualification: 29 of the
