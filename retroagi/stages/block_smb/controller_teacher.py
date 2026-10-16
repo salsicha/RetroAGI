@@ -631,7 +631,22 @@ def _enemy_paths(env, frames):
     frames by its patrol rule (env._update_enemy): {index: [box]}."""
     out = {}
     for i, e in enumerate(env.enemies):
-        if e["dead"] or e["h"] <= 0:
+        plant = e.get("kind") == "piranha_plant"
+        if e["dead"] or (e["h"] <= 0 and not plant):
+            continue
+        if plant:
+            # Its rise and fall by its own cycle (piranha.position_plant),
+            # hidden frames included (no height: it touches nothing).
+            from .piranha import position_plant
+
+            future, boxes = dict(e), []
+            for k in range(frames + 1):
+                future["plant_tick"] = e["plant_tick"] + k
+                position_plant(future)
+                boxes.append(
+                    (future["x"], future["y"], future["x"] + future["w"], future["y"] + future["h"])
+                )
+            out[i] = boxes
             continue
         x, d = e["x"], e["direction"]
         moves = e.get("kind") != "piranha_plant" and (e.get("kind") != "monster" or e.get("awake"))
@@ -999,6 +1014,21 @@ def _screened_runs(env, state, target):
     enemies = _enemy_paths(env, 300)
     forbidden = set(tactic_schedule.current(env).get("forbidden", ()))
     before = distance(env, target)
+    # Solids standing on his floor as high as his body (a pipe, a step): a
+    # run along it ends before them, it cannot pass through. Unscreened, the
+    # runs ranked first by progress were aimed into or behind a plant's pipe,
+    # every one stopped at the pipe, and no run to its foot was tried: the
+    # teacher held until the episode ran out (piranha_avoidance, 2026-10-16).
+    walls = [
+        p["rect"]
+        for p in env.platforms
+        if p["rect"] is not floor
+        and not p.get("moving")
+        and p["rect"].top < floor.top
+        and p["rect"].bottom > floor.top - m["h"]
+        and p["rect"].right > floor.left
+        and p["rect"].left < floor.right
+    ]
     screened = []
     for i, p in enumerate(env.platforms):
         r = p["rect"]
@@ -1015,6 +1045,9 @@ def _screened_runs(env, state, target):
         ):
             dx = round(x - cx)
             if abs(dx) < MIN_RUN:
+                continue
+            low, high = min(cx, x) - half, max(cx, x) + half
+            if any(w.left < high and w.right > low for w in walls):
                 continue
             on_floor = r is floor
             if not on_floor and floor.left - half - DROP_MARGIN < x < floor.right + half + DROP_MARGIN:
@@ -2563,8 +2596,32 @@ def stop_safe(env, spatial, executor):
     return True
 
 
+# Waiting for a plant to go back into its pipe, Mario stands this many pixels
+# before the pipe: room for a run-up into the jump over it (the old button
+# teacher's staging spot, piranha_tactics.staging_x).
+PLANT_STAGING = 32
+# A crossing is searched for only when the plant will be hidden within this
+# many frames (a run-up and a jump take about that long); before that it
+# cannot work, and each search costs seconds.
+PLANT_LEAD = 64
+
+
+def _frames_until_hidden(plant) -> int:
+    """Frames until the plant is down in its pipe (0: it is now), by its
+    cycle (piranha.position_plant)."""
+    rise, exposed, hidden = plant["rise_frames"], plant["exposed_frames"], plant["hidden_frames"]
+    phase = plant["plant_tick"] % (2 * rise + exposed + hidden)
+    return max(0, 2 * rise + exposed - phase)
+
+
 def plant_destination(env, state):
-    """Time the actual spatial crossing, including its stopped takeoff waypoint."""
+    """Crossing a plant's pipe. Before it: a jump from here, or after a
+    run-up toward it (the takeoff search pits use), that ends on the pipe or
+    past it, certified by trials (the plant rises and falls by its own cycle:
+    _enemy_paths); searched only while the plant will be down within
+    PLANT_LEAD frames. Else Mario goes to a spot PLANT_STAGING pixels before
+    the pipe, or holds there. On the pipe or in the air: of the jumps ending
+    on it or past it and the runs, the best that trials certify."""
     cached = state.notes.get("plant_destination")
     if cached is not None and cached[0] == env.steps:
         return cached[1]
@@ -2588,34 +2645,68 @@ def plant_destination(env, state):
     )
     if pipe is None:
         return None
-    # Every jump Mario can make that ends on the pipe's top or past it, and
-    # the screened runs (every pixel he can walk to), certified by trials: of
-    # the crossings that work, the one passing farthest from the plant.
+
+    def remember(goal):
+        state.notes["plant_destination"] = (env.steps, goal)
+        return goal
+
+    def crosses(index):
+        ends = env.platforms[index]["rect"] if index is not None else None
+        return ends is not None and (ends == pipe or ends.left >= pipe.right - 2)
+
+    def works(result):
+        return result.won or result.safe and result.clearance >= 8
+
     memo = {}
-    options = []
-    if m["on_ground"]:
-        for option in _jump_table(env, state, target, memo, (target.direction,)):
-            index = option.result.outcome[1] if option.result.outcome else None
-            ends = env.platforms[index]["rect"] if index is not None else None
-            if option.result.won or (
-                ends is not None and (ends == pipe or ends.left >= pipe.right - 2)
-            ):
-                options.append((option.command, option.result))
-    options += _run_options(env, state, target, memo)
-    working = [
-        (_rank(goal, result), goal)
-        for goal, result in options
-        if result.won or result.safe and result.clearance >= 8
-    ]
-    for _, goal in sorted(working, key=lambda w: w[0], reverse=True)[:CERTIFY]:
-        result = trial(env, state, goal, target)
-        if result.won or result.safe and result.clearance >= 8:
-            state.notes["plant_destination"] = (env.steps, goal)
-            return goal
+    direction = target.direction if target.direction in (-1, 1) else 1
+    front = (
+        pipe.left - (m["x"] + m["w"]) if direction > 0 else m["x"] - pipe.right
+    )
+    if m["on_ground"] and front >= -1:
+        # The jump planned after a run-up just made, if it still works.
+        committed = _committed(env, state, target)
+        if committed is not None:
+            return remember(committed)
+        if _frames_until_hidden(plant) <= PLANT_LEAD:
+            travels = [0] + [t for t in range(MIN_RUN, math.floor(front) + 1)]
+
+            def wanted(option, landing, killed):
+                return crosses(landing)
+
+            def check(r):
+                return r.won or (
+                    crosses(r.outcome[1] if r.outcome else None)
+                    and r.safe
+                    and r.clearance >= 8
+                )
+
+            best = _best_certified(env, state, target, memo, direction, travels, wanted, check)
+            if best is not None:
+                return remember(best[0])
+        # Not yet: wait where a run-up still fits.
+        spot = (
+            pipe.left - PLANT_STAGING - m["w"] if direction > 0 else pipe.right + PLANT_STAGING
+        )
+        offset = round(spot - m["x"])
+        if abs(offset) >= MIN_RUN:
+            goal = SkillToken("run", offset, 0)
+            if works(trial(env, state, goal, target)):
+                return remember(goal)
+    else:
+        options = []
+        if m["on_ground"]:
+            for option in _jump_table(env, state, target, memo, (direction,)):
+                index = option.result.outcome[1] if option.result.outcome else None
+                if option.result.won or crosses(index):
+                    options.append((option.command, option.result))
+        options += _run_options(env, state, target, memo)
+        working = [(_rank(goal, result), goal) for goal, result in options if works(result)]
+        for _, goal in sorted(working, key=lambda w: w[0], reverse=True)[:CERTIFY]:
+            if works(trial(env, state, goal, target)):
+                return remember(goal)
     hold = SkillToken("hold", 0, 0)
     if trial(env, state, hold, target).safe:
-        state.notes["plant_destination"] = (env.steps, hold)
-        return hold
+        return remember(hold)
     return None
 
 
@@ -2659,14 +2750,19 @@ def monster_destination(env, state):
     near_opening = (enemy["x"] - line) * side <= 16
     if gap < 96 and near_opening:
         # Of every jump Mario can make that clears the monster onto his floor,
-        # the one passing farthest from it.
+        # the one passing farthest from it. His floor by its place in the
+        # list: every trial restores the simulator with new platform objects,
+        # so the one found before them is none of them afterwards (every jump
+        # was refused and Mario held until the monster cornered him,
+        # monster_retreat, 2026-10-16).
+        floor_index = next((i for i, p in enumerate(env.platforms) if p is support), None)
         working = []
         for option in _jump_table(env, state, target, {}, (side,)):
             result = option.result
             index = result.outcome[1] if result.outcome else None
             if not (result.won or (result.safe and result.advanced and result.clearance >= 8)):
                 continue
-            if not result.won and (index is None or env.platforms[index] is not support):
+            if not result.won and (index is None or index != floor_index):
                 continue
             working.append((_rank(option.command, result), option.command))
         for _, goal in sorted(working, key=lambda w: w[0], reverse=True)[:CERTIFY]:

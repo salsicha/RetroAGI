@@ -23,6 +23,38 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-16 — Stomp variety; the plant and monster teachers win their lessons (user decision; built)
+
+skill_waits_20261015 stopped at round 11's teacher qualification: 29 of the
+round's 72 stomp labels came down 45-47 pixels ahead (40.3%, against the 40%
+limit), 21 of them in stomp_mount, whose walker always started beyond a
+standing jump's reach (52-76 pixels): the teacher met it with the longest
+standing jump every time. User: add variety, do not restart the skill run.
+stomp_mount's walker now starts within a standing jump's reach in most
+layouts (REACHABLE, 75%: right next to Mario up to about 44 pixels; a moving
+walker no closer than it walks while watched), beyond it in the rest. 18
+drawn layouts: all won, stomps 9-47 pixels ahead, 4 of 18 at 45-47.
+
+Next is the tactic layer (user: tactics, and build the world model and the
+trackers meanwhile). Two tactic families were lost by the teacher:
+
+- **piranha_avoidance** (timeouts). The teacher's runs were ranked by
+  progress and screened only against enemies and pits, so the six tried were
+  aimed into or behind the plant's pipe; each stopped at it, and none to its
+  foot was tried. Runs along the floor now stop before a solid in their way
+  (`_screened_runs`). The plant teacher then crosses with a run-up into a
+  jump onto the pipe or past it (the takeoff search pits use), certified by
+  trials, waits 32 pixels before the pipe while none works, and searches
+  only while the plant will be down within 64 frames. The teacher's enemy
+  paths now include a plant's rise and fall by its cycle (`_enemy_paths`).
+  Layouts 100 and 101: won in 5 and 8 decisions.
+- **monster_retreat** (no command). The monster teacher refused every jump
+  over the monster: it compared the jump's landing floor with the floor
+  object found before the trials, and every trial restores the simulator
+  with new platform objects. Compared by place in the list now; Mario backs
+  out of the tunnel, waits, and jumps the monster in the open. Layouts 100
+  and 101: won.
+
 ## 2026-10-16 — The skill's held-out choices are judged against the teacher's at the same moments (user decision; built)
 
 skill_waits_20261015 round 0-1 flagged "enemy_hop approach (20, 0) 71%

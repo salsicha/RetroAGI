@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import math
 import random
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -33,7 +34,14 @@ from .tactic_families import (
     tactic_family_scenario,
 )
 from .tactic_schedule import segment
-from .threat_variety import fit_patrols, follow_up, reachable_span, standing_reach, start_distance
+from .threat_variety import (
+    REACHABLE,
+    fit_patrols,
+    follow_up,
+    reachable_span,
+    standing_reach,
+    start_distance,
+)
 from .transfer_failure_families import (
     TRANSFER_FAILURE_FAMILIES,
     TRANSFER_FAILURE_SCHEMAS,
@@ -328,7 +336,7 @@ def block_smb_monte_carlo_family_specs() -> dict[str, BlockSMBScenarioFamilySpec
             "a_level_action": [2, 2],
         },
         "stomp_mount": {
-            "enemy_distance": [52, 76],
+            "enemy_distance": [10, 76],
             "enemy_speed": [0.0, 0.9],
             "enemy_initial_direction": [-1, 1],
             "frames_to_first_turn": [0, 12],
@@ -2158,11 +2166,26 @@ def _stomp_mount(
 ) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
     # Single-jump interception. The moving tiers vary direction and phase,
     # with a first reversal while jump release can still change the arc.
-    enemy_distance, patrol_halfwidth, enemy_speed = {
+    far, patrol_halfwidth, enemy_speed = {
         "easy": (rng.randint(52, 60), 0, 0.0),
         "medium": (rng.randint(62, 68), 10, 0.6),
         "hard": (rng.randint(70, 76), 14, 0.9),
     }[difficulty]
+    # Where the walker starts: in most layouts within a standing jump's reach
+    # (right next to Mario included), so the stomp comes down at any distance
+    # a jump from here can; in the rest beyond it, where Mario meets it with
+    # the longest standing jump. Always beyond reach, 21 of a round's 25
+    # stomps came down 44-47 pixels ahead (2026-10-16).
+    if rng.random() < REACHABLE:
+        # Mario's front to the walker's back, its middle within reach of his.
+        # A moving walker starts no closer than it walks while watched
+        # (it may come toward him then): it must not touch him before the
+        # lesson begins.
+        lowest = math.ceil(enemy_speed * WATCH_FRAMES) + 4 if enemy_speed else 0
+        reach = round(standing_reach(14)) - 1 - 10
+        enemy_distance = 10 + lowest + start_distance(rng, reach - lowest)
+    else:
+        enemy_distance = far
     direction = rng.choice((-1, 1)) if enemy_speed else 1
     turn_frames = rng.randint(6, 12) if enemy_speed else 0
     mario_x = rng.randint(24, 72)

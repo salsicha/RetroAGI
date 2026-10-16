@@ -145,19 +145,22 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
 
     def test_stomp_mount_targets_the_enemy_itself(self):
         # B-level stomp teaching: success is landing ON the enemy
-        # (goal_on_stomp), distance bands are disjoint and increasing, and
-        # the upper tiers patrol so the interception point moves in flight.
+        # (goal_on_stomp); the walker starts at varied distances, mostly
+        # within a standing jump's reach, so stomps do not all come down at
+        # the longest one; the upper tiers patrol faster so the interception
+        # point moves in flight.
         distances = {}
+        speeds = {}
         for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS:
-            for seed in range(4):
+            for index in range(6):
                 sample = sample_block_smb_monte_carlo_scenario(
                     split="validation",
-                    seed=seed,
-                    sample_index=0,
+                    seed=0,
+                    sample_index=index,
                     family="stomp_mount",
                     difficulty=difficulty,
                 )
-                self.assertTrue(sample.reachability["reachable"], (difficulty, seed))
+                self.assertTrue(sample.reachability["reachable"], (difficulty, index))
                 scenario = sample.scenario
                 parameters = sample.parameters
                 self.assertTrue(scenario["goal_on_stomp"])
@@ -170,8 +173,12 @@ class TestBlockSMBMonteCarlo(unittest.TestCase):
                     self.assertGreater(parameters["enemy_speed"], 0.0)
                     self.assertLess(enemy[2], enemy[3])
                 distances.setdefault(difficulty, []).append(int(parameters["enemy_distance"]))
-        self.assertLess(max(distances["easy"]), min(distances["medium"]))
-        self.assertLess(max(distances["medium"]), min(distances["hard"]))
+                speeds[difficulty] = parameters["enemy_speed"]
+        every = [d for values in distances.values() for d in values]
+        self.assertGreater(sum(d <= 44 for d in every), len(every) / 2)
+        self.assertGreater(len(set(every)), len(every) / 2)
+        self.assertLess(speeds["easy"], speeds["medium"])
+        self.assertLess(speeds["medium"], speeds["hard"])
 
     def test_pipe_mount_isolates_b_level_with_shaping_and_given_action(self):
         self.assertIn("pipe_mount", BLOCK_SMB_MC_FAMILIES)
