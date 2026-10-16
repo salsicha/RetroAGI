@@ -72,6 +72,7 @@ from retroagi.core.smb_observer import (
 )
 from retroagi.core.tokens import (
     EXECUTION_WIDTH,
+    SKILL_MODES,
     TACTICS,
     TacticToken,
     encode_strategy,
@@ -198,6 +199,32 @@ class EpisodeTask:
     # Record every frame's tracked enemies and moving platforms
     # (core/target_tracker.object_rows): the target tracker's data.
     record_objects: bool = False
+    # Record the simulator's truth every frame (truth_recording), which true
+    # enemy each scene slot shows, and the executor's kinematics: the data the
+    # collision trackers' and the world model's labels are made from
+    # (core/collision_labels). Training only.
+    record_truth: bool = False
+
+
+# Why an action ended (core.smb_agent AgentStep.ended), as recordings code it.
+END_REASONS = ("", "landed", "done", "threat", "hold_recheck", "arrived", "no_progress")
+# An executed command (core.tokens.SkillToken) as a recording keeps it.
+COMMAND_FIELDS = ("mode", "x", "y", "carry", "frames", "threat")
+
+
+def command_row(skill) -> list:
+    """COMMAND_FIELDS for an executed SkillToken (mode: SKILL_MODES index);
+    mode -1 when there is none (an exact button plan)."""
+    if skill is None:
+        return [-1, 0, 0, 0, 0, 0]
+    return [
+        SKILL_MODES.index(skill.mode),
+        skill.x,
+        skill.y,
+        int(skill.carry),
+        skill.frames,
+        int(skill.threat),
+    ]
 
 
 @dataclass
@@ -251,6 +278,25 @@ class EpisodeRecord:
     # [T, OBJECT_SLOTS, len(OBJECT_ROW)] (core/target_tracker), with
     # EpisodeTask.record_objects; else None.
     objects: Optional[np.ndarray] = None
+    # With EpisodeTask.record_truth: the simulator's state each frame and one
+    # more after the last button (truth_recording.TruthRecorder.arrays), the
+    # true enemy (or moving platform) each sprite slot shows [T, SPRITE_SLOTS]
+    # (-1: none), and the executor's kinematics the networks read
+    # (core/smb_kinematics): per sprite slot [T, SPRITE_SLOTS, 6], Mario's
+    # [T, 3].
+    truth: Optional[dict] = None
+    slot_match: Optional[np.ndarray] = None
+    sprite_kinematics: Optional[np.ndarray] = None
+    mario_kinematics: Optional[np.ndarray] = None
+    # Always: why an action ended at each frame [T] (END_REASONS index; 0
+    # none), and per decision of the skill learner the command executed [D, 6]
+    # (COMMAND_FIELDS; mode -1 for an exact button plan) and the action it
+    # carried out (verb [D], pointer slot [D]; -1 unknown): the teacher's
+    # choice as named where the teacher played, else the skill's own.
+    ended: Optional[np.ndarray] = None
+    commands: Optional[np.ndarray] = None
+    action_verb: Optional[np.ndarray] = None
+    action_pointer: Optional[np.ndarray] = None
 
     @property
     def frames(self) -> int:
@@ -380,6 +426,14 @@ class _Lane:
         self.no_teacher_command = False
         self.frames: dict[str, list] = defaultdict(list)
         self.decisions: dict[str, list] = defaultdict(list)
+        # The simulator's truth (EpisodeTask.record_truth); the watched
+        # pictures' was kept at reset.
+        self.truth = None
+        if task.record_truth:
+            from .truth_recording import TruthRecorder
+
+            self.truth = TruthRecorder()
+        self.watched_truth = list(self.env.watched_truth)
         self.asked: dict = {}
         self.progress, self.progressed = None, 0
 
@@ -523,6 +577,16 @@ class _Lane:
             d["agreed"].append(valid and action is not None and mine == action)
             d["teacher_verb"].append(VERBS.index(action.verb) if action is not None else -1)
             d["same_as_teacher"].append(action is not None and mine == action)
+            # What was executed: the command, and the skill's own action
+            # (where the teacher played, its named choice is used: record).
+            d["command"].append(command_row(decision.skill))
+            own = decision.action
+            d["own_verb"].append(VERBS.index(own.verb) if own is not None else -1)
+            d["own_pointer"].append(
+                pointer_index(own.target) - POINTER_START
+                if own is not None and own.target is not None
+                else -1
+            )
             if self.task.label:
                 self._name_run_ups(d, asked, decision)
             return
@@ -622,6 +686,22 @@ class _Lane:
         )
         d["agreed"].append(step.own == teacher.stance)
 
+    def _executed_actions(self) -> dict:
+        """{"action_verb", "action_pointer"} per skill decision: the action
+        carried out (the teacher's choice as named, run-ups renamed, where it
+        played; else the skill's own); -1 unknown. Empty when not recorded."""
+        d = self.decisions
+        if not d["own_verb"]:
+            return {}
+        verb = np.asarray(d["own_verb"], np.int64)
+        pointer = np.asarray(d["own_pointer"], np.int64)
+        named = np.asarray(d["label_action_valid"], bool) & np.asarray(d["played_teacher"], bool)
+        verb[named] = np.asarray(d["label_verb"], np.int64)[named]
+        pointer[named] = np.asarray(d["label_pointer"], np.int64)[named]
+        unknown = np.asarray(d["played_teacher"], bool) & ~named
+        verb[unknown], pointer[unknown] = -1, -1
+        return {"action_verb": verb.astype(np.int8), "action_pointer": pointer.astype(np.int16)}
+
     def record(self) -> EpisodeRecord:
         d = self.decisions
         count = len(d["frame"])
@@ -649,6 +729,25 @@ class _Lane:
                 np.asarray(d["execution_feedback"], np.float32) if d["execution_feedback"] else None
             ),
             teacher_verb=np.asarray(d["teacher_verb"], np.int64) if d["teacher_verb"] else None,
+            truth=self.truth.arrays() if self.truth is not None else None,
+            slot_match=(
+                np.asarray(self.frames["slot_match"], np.int16) if self.truth is not None else None
+            ),
+            sprite_kinematics=(
+                np.asarray(self.frames["sprite_kinematics"], np.float16)
+                if self.truth is not None
+                else None
+            ),
+            mario_kinematics=(
+                np.asarray(self.frames["mario_kinematics"], np.float16)
+                if self.truth is not None
+                else None
+            ),
+            ended=np.asarray(self.frames["ended"], np.int8),
+            commands=np.asarray(d["command"], np.int16).reshape(-1, len(COMMAND_FIELDS))
+            if d["command"]
+            else None,
+            **self._executed_actions(),
             same_as_teacher=(
                 np.asarray(d["same_as_teacher"], bool) if d["same_as_teacher"] else None
             ),
@@ -788,6 +887,21 @@ def play_episodes(
                 from retroagi.core.target_tracker import object_rows
 
                 lane.frames["objects"].append(object_rows(step.scene, spatial))
+            if lane.truth is not None:
+                from retroagi.core.smb_kinematics import kinematics
+
+                from .truth_recording import match_slots
+
+                # The state behind this picture (a watched one's was kept at reset).
+                frame = lane.watched_truth.pop(0) if lane.watching else lane.env.true_frame()
+                lane.truth.add(frame)
+                sprites, mario = kinematics(step.scene, spatial)
+                lane.frames["sprite_kinematics"].append(sprites)
+                lane.frames["mario_kinematics"].append(mario)
+                lane.frames["slot_match"].append(match_slots(step.scene, frame))
+            lane.frames["ended"].append(
+                END_REASONS.index(step.ended) if step.ended in END_REASONS else 0
+            )
             if lane.watching:
                 # A pre-episode picture, already played by the simulator at reset.
                 lane.watching.pop(0)
@@ -839,6 +953,9 @@ def play_episodes(
                 lane.last_action_ended = bool(
                     terminated or executor.finished or executor.reconsider
                 )
+                if lane.truth is not None:
+                    # The state the last button left: the stomp or death it made.
+                    lane.truth.add(lane.env.true_frame())
                 done[lane.task.index] = lane.record()
                 lane.env.close()
                 del playing[lane.copy]

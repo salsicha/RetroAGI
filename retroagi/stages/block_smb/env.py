@@ -299,6 +299,7 @@ class MarioScenarioEnv:
         self._objective_missed = False
         self.watched_screens = []  # pre-episode pictures (reset, "watch_frames")
         self.watched_labels = []  # ... and their true labels, for teachers only
+        self.watched_truth = []  # ... and the simulator's state then (true_frame)
         self.camera_x = 0.0
         self.score = 0
         self.steps = 0
@@ -512,13 +513,14 @@ class MarioScenarioEnv:
         # Mario stands while they are watched: one who starts above the floor
         # is watched dropping onto it too (up to LANDING_WATCH more frames),
         # so the first decision is made standing, not in the air.
-        self.watched_screens, self.watched_labels = [], []
+        self.watched_screens, self.watched_labels, self.watched_truth = [], [], []
         watch = int(scenario.get("watch_frames", 0) or 0)
         while len(self.watched_screens) < watch or (
             watch and not self.mario["on_ground"] and len(self.watched_screens) < watch + LANDING_WATCH
         ):
             self.watched_screens.append(obs)
             self.watched_labels.append(self.scene_labels())  # training-only truth
+            self.watched_truth.append(self.true_frame())
             obs, _, done, truncated, _ = self.step(0)
             if done or truncated:
                 raise ValueError("the pre-episode frames ended the episode")
@@ -1003,6 +1005,33 @@ class MarioScenarioEnv:
             facing_right=self.mario["facing"] > 0,
             stomping=self.stomped,
         )
+
+    def true_frame(self) -> dict:
+        """Training only: the simulator's state at this frame, as recordings
+        keep it (stages/block_smb/truth_recording.py), in world pixels:
+        Mario's collision box, every enemy's collision box and the box it is
+        drawn in (its feet included), whether each enemy is absent (a plant
+        down in its pipe), alive or dead, every moving platform's rectangle,
+        and the camera's left edge."""
+        m = self.mario
+        enemies, drawn, state = [], [], []
+        for e in self.enemies:
+            foot = e.get("foot_offset", 0)
+            enemies.append((e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"]))
+            drawn.append((e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"] + foot))
+            state.append(2 if e["dead"] else 0 if e["h"] <= 0 else 1)
+        return {
+            "mario": (m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"]),
+            "enemies": enemies,
+            "enemies_drawn": drawn,
+            "enemy_state": state,
+            "platforms": [
+                (p["rect"].left, p["rect"].top, p["rect"].right, p["rect"].bottom)
+                for p in self.platforms
+                if p.get("moving")
+            ],
+            "camera": float(self.camera_x),
+        }
 
     def enemy_screen_rects(self) -> list[pygame.Rect]:
         """The screen rectangle each drawn enemy is painted inside, in draw order."""

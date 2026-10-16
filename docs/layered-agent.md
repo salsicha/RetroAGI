@@ -77,6 +77,19 @@ the chosen action as input, and predict that action's outcome. It is trained
 apart from recorded ground truth and is not used while the skills and tactics
 train; its current weights are kept, unused, until it is reshaped so.
 
+The executor keeps a first-order state estimate of every sprite it tracks
+(an enemy or a moving platform: where it is and how fast it moves, the mean
+of its last 16 sightings, constant velocity) and of Mario (his measured
+speed, his feet's movement, whether he stands). Vision reports boxes only;
+a sprite missed for up to 8 frames keeps its identity and velocity. Both
+prediction networks read these same estimates, per scene slot
+(`core/smb_kinematics.py`): the trackers every frame, the world model at each
+action's start (user, 2026-10-16). Collection episodes record the simulator's
+truth with them (`EpisodeTask.record_truth`, `truth_recording.py`): every
+frame's true boxes and one more after the last button, which true enemy each
+scene slot shows, why each action ended, and each executed command and the
+action it carried out; the networks' labels are made from these afterwards.
+
 The target trackers (`core/target_tracker.py`) run every frame. They are to
 predict, for each enemy, when and where it and Mario will collide (a stomp or
 a hit); the simulator's truth stands in until they are trained
