@@ -2328,8 +2328,16 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             flush=True,
         )
     # The world model (the policy's LSTM) and the collision trackers learn
-    # from the same teacher episodes as the layer (user, 2026-10-17).
-    predictions = Predictions(policy, config, device, output) if config.train_predictions else None
+    # from the same teacher episodes as the layer (user, 2026-10-17); the
+    # trackers saved beside the checkpoint this run starts from (a skill
+    # run's, for the tactic run) go on learning.
+    predictions = None
+    if config.train_predictions:
+        from .tracker_train import load_tracker
+
+        earlier = Path(config.init).parent / "tracker.pt" if config.init else None
+        tracker = load_tracker(earlier, device) if earlier is not None and earlier.exists() else None
+        predictions = Predictions(policy, config, device, output, tracker=tracker)
     replay: list[EpisodeRecord] = []
     focus: dict[str, int] = {}  # extra layouts per family, from the last round's agreement
     fixed = extra_layouts_of(config)  # and every round, for named families
