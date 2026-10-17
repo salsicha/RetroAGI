@@ -12,14 +12,14 @@ button is held while moving right, as in Block SMB's motion model.
 """
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 
 from retroagi.core.actions import SMBAction, full_smb_action
 
 from .pixel_labels import canonical_rgb
-from .vision_frames import _dying
+from .vision_frames import ENGINE_ROUTINE, _dying
 
 WORLD, LEVEL = 0x75F, 0x75C  # [WorldNumber], [LevelNumber]
 # Levels kept out of any Full SMB policy training, to test the agent on.
@@ -27,6 +27,9 @@ WORLD, LEVEL = 0x75F, 0x75C  # [WorldNumber], [LevelNumber]
 POLICY_TEST_LEVELS = ("Level1-1", "Level5-1")
 PAGE, X_ON_PAGE = 0x6D, 0x86  # [Player_PageLoc], [Player_X_Position]
 RUN_ACTIONS = (SMBAction.RIGHT, SMBAction.RIGHT_JUMP)
+# [GameEngineSubroutine] while Mario is played (not entering, dying or
+# between levels).
+PLAYING = 8
 
 
 @dataclass(frozen=True)
@@ -39,17 +42,24 @@ class FullSMBOutcome:
 
 
 class FullSMBGame:
-    """One saved level start of Super Mario Bros in the emulator."""
+    """One saved level start of Super Mario Bros in the emulator, or (with
+    ``start_state``) a level start captured in play (next_level_state)."""
 
-    def __init__(self, level: str):
+    def __init__(self, level: str, start_state: Optional[bytes] = None):
         import retro
 
         self.level = level
+        self.start_state = start_state
+        # A captured start has no saved state of its own: the game's default
+        # is loaded, then replaced at reset.
         self.env = retro.make(
-            "SuperMarioBros-Nes", state=level, inttype=retro.data.Integrations.STABLE
+            "SuperMarioBros-Nes",
+            state=level if start_state is None else retro.State.DEFAULT,
+            inttype=retro.data.Integrations.STABLE,
         )
         self.buttons = list(self.env.buttons)
         self.start: tuple[int, int] = (0, 0)
+        self.raw: Optional[np.ndarray] = None  # the emulator's last picture, unpadded
 
     def _screen(self, observation) -> np.ndarray:
         return np.ascontiguousarray(canonical_rgb(np.asarray(observation)[..., :3]))
@@ -65,6 +75,10 @@ class FullSMBGame:
     def reset(self) -> np.ndarray:
         result = self.env.reset()
         observation = result[0] if isinstance(result, tuple) else result
+        if self.start_state is not None:
+            self.env.em.set_state(self.start_state)
+            observation, *_ = self.env.step(np.zeros(len(self.buttons), np.int8))
+        self.raw = np.asarray(observation)
         ram = self.env.get_ram()
         self.start = (int(ram[WORLD]), int(ram[LEVEL]))
         return self._screen(observation)
@@ -75,7 +89,23 @@ class FullSMBGame:
         if action in RUN_ACTIONS:
             buttons[self.buttons.index("B")] = 1
         observation, *_ = self.env.step(buttons)
+        self.raw = np.asarray(observation)
         return self._screen(observation), self.outcome()
+
+    def next_level_state(self, limit: int = 2000) -> Optional[tuple]:
+        """After a level is finished: (the next level's name, "Level<world>-
+        <level>", and the emulator's state once Mario is played in it, its
+        intro and entry passed with no buttons pressed): the start a later
+        playthrough of it begins from. None if that does not come within
+        ``limit`` frames."""
+        idle = np.zeros(len(self.buttons), np.int8)
+        for _ in range(limit):
+            ram = self.env.get_ram()
+            here = (int(ram[WORLD]), int(ram[LEVEL]))
+            if here != self.start and int(ram[ENGINE_ROUTINE]) == PLAYING:
+                return f"Level{here[0] + 1}-{here[1] + 1}", self.env.em.get_state()
+            self.env.step(idle)
+        return None
 
     def close(self) -> None:
         self.env.close()

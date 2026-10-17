@@ -384,6 +384,215 @@ def _rows(values, count: int) -> np.ndarray:
     )
 
 
+# What the teacher said at a decision where there is none (Full SMB): nothing
+# is labelled and the agent plays its own choices.
+NO_TEACHER = {"plays_teacher": False, "tactic": None, "skill": None}
+
+
+class EpisodeRecorder:
+    """What one episode records for one learner: every frame's scene rows,
+    button, reward and (with record_truth) truth and kinematics (``frames``,
+    which the recorders of one episode can share), and the learner's
+    decisions; record() makes the EpisodeRecord the learners and the
+    prediction networks read. Block SMB's lanes and Full SMB's playthroughs
+    record through it."""
+
+    def __init__(self, task: EpisodeTask, frames: Optional[dict] = None):
+        self.task = task
+        self.frames: dict[str, list] = frames if frames is not None else defaultdict(list)
+        self.decisions: dict[str, list] = defaultdict(list)
+
+    def note_decision(self, learner: str, decision, asked: dict) -> None:
+        """Record a decision, the token the learner was given and the teacher's
+        label (``asked``: what the teacher said there; without a teacher, as
+        in Full SMB, NO_TEACHER: nothing is labelled)."""
+        d = self.decisions
+        d["frame"].append(len(self.frames["a"]) - 1)
+        d["played_teacher"].append(asked["plays_teacher"])
+        if learner == "tactic":
+            self._note_tactic(decision, asked)
+            return
+        for head, value in decision.picks[learner].items():
+            d[f"pick_{head}"].append(value)
+        d["log_prob"].append(decision.log_prob[learner])
+        d["value"].append(decision.value[learner])
+        # The skill's: the action used (None for the teacher's command, given)
+        # and where the executor was sent, as its history holds it at play.
+        used = (decision.action, decision.skill) if learner == "skill" else decision.skill
+        d["used"].append(encode_choice(learner, used).numpy())
+        mine = decision.chosen[learner]
+        if learner == "skill":
+            if self.task.record_actions:
+                from retroagi.core.world_model import empty_records
+
+                found = asked.get("actions")
+                d["actions"].append(found if found is not None else empty_records())
+            d["execution_feedback"].append(decision.execution_feedback)
+            d["given"].append(
+                torch.cat(
+                    (encode_tactic(decision.tactic), encode_strategy(decision.strategy))
+                ).numpy()
+            )
+            valid = self.task.label and asked["skill"] is not None
+            d["label_valid"].append(valid)
+            example = asked.get("action_label")
+            action = example["action"] if example is not None else None
+            d["label_action_valid"].append(valid and action is not None)
+            d["label_verb"].append(VERBS.index(action.verb) if action is not None else 0)
+            d["label_pointer"].append(
+                pointer_index(action.target) - POINTER_START
+                if action is not None and action.target is not None
+                else 0
+            )
+            # Where the teacher's action ends (pixels from Mario's feet).
+            outcome = example["outcome"] if example is not None else {"dx": 0, "dy": 0}
+            d["label_end_dx"].append(round(outcome["dx"]))
+            d["label_end_dy"].append(round(outcome["dy"]))
+            d["agreed"].append(valid and action is not None and mine == action)
+            d["teacher_verb"].append(VERBS.index(action.verb) if action is not None else -1)
+            d["same_as_teacher"].append(action is not None and mine == action)
+            # What was executed: the command, and the skill's own action
+            # (where the teacher played, its named choice is used: record).
+            d["command"].append(command_row(decision.skill))
+            own = decision.action
+            d["own_verb"].append(VERBS.index(own.verb) if own is not None else -1)
+            d["own_pointer"].append(
+                pointer_index(own.target) - POINTER_START
+                if own is not None and own.target is not None
+                else -1
+            )
+            return
+
+    def _note_tactic(self, decision, asked: dict) -> None:
+        """The tactic learner's decision: what its layer did (TacticStep), and the
+        teacher's labels: its tactic here, and whether the held tactic is
+        finished (the teacher's tactic is no longer it)."""
+        d, step = self.decisions, decision.tactic_step
+        teacher: Optional[TacticToken] = asked["tactic"]
+        d["given"].append(encode_strategy(decision.strategy).numpy())
+        d["label_tactic"].append(TACTICS.index(teacher.stance) if teacher is not None else 0)
+        d["label_end"].append(
+            teacher is not None and step.held is not None and teacher.stance != step.held
+        )
+        d["label_valid"].append(teacher is not None)
+        d["pick_tactic"].append(TACTICS.index(step.own))
+        d["log_prob"].append(step.choice_log_prob)
+        d["value"].append(0.0)
+        d["used"].append(encode_choice("tactic", decision.tactic).numpy())
+        d["tactic_held"].append(-1 if step.held is None else TACTICS.index(step.held))
+        d["tactic_actions"].append(step.actions)
+        d["tactic_frames"].append(step.frames)
+        d["tactic_started"].append(step.started)
+        d["tactic_used"].append(TACTICS.index(decision.tactic.stance))
+        d["tactic_own_end"].append(step.own_end)
+        d["tactic_end_probability"].append(
+            -1.0 if step.end_probability is None else step.end_probability
+        )
+        d["agreed"].append(teacher is not None and step.own == teacher.stance)
+
+    def _executed_actions(self) -> dict:
+        """{"action_verb", "action_pointer"} per skill decision: the action
+        carried out (the teacher's choice as named, run-ups renamed, where it
+        played; else the skill's own); -1 unknown. Empty when not recorded."""
+        d = self.decisions
+        if not d["own_verb"]:
+            return {}
+        verb = np.asarray(d["own_verb"], np.int64)
+        pointer = np.asarray(d["own_pointer"], np.int64)
+        named = np.asarray(d["label_action_valid"], bool) & np.asarray(d["played_teacher"], bool)
+        verb[named] = np.asarray(d["label_verb"], np.int64)[named]
+        pointer[named] = np.asarray(d["label_pointer"], np.int64)[named]
+        unknown = np.asarray(d["played_teacher"], bool) & ~named
+        verb[unknown], pointer[unknown] = -1, -1
+        return {"action_verb": verb.astype(np.int8), "action_pointer": pointer.astype(np.int16)}
+
+    def record(self, *, won: bool, end: str, truth, last_action_ended: bool) -> EpisodeRecord:
+        """The episode as an EpisodeRecord for this learner (``truth``: the
+        recorded truth arrays, or None)."""
+        d = self.decisions
+        count = len(d["frame"])
+        labels = {
+            name[len("label_") :]: np.asarray(d[name]) for name in d if name.startswith("label_")
+        }
+        labels.setdefault("valid", np.zeros(count, bool))
+        return EpisodeRecord(
+            family=self.task.family,
+            split=self.task.split,
+            sample_index=self.task.sample_index,
+            won=won,
+            difficulty=self.task.difficulty,
+            end=end,
+            src_a=np.asarray(self.frames["a"], np.int8).reshape(-1, SEQ_LEN_A),
+            src_b=np.asarray(self.frames["b"], np.int8).reshape(-1, SEQ_LEN_B),
+            src_c=np.asarray(self.frames["c"], np.float16).reshape(-1, SEQ_LEN_C),
+            buttons=np.asarray(self.frames["button"], np.int8),
+            decision_frames=np.asarray(d["frame"], np.int32),
+            given=_rows(d["given"], count),
+            labels=labels,
+            played_teacher=np.asarray(d["played_teacher"], bool),
+            agreed=np.asarray(d["agreed"], bool),
+            execution_feedback=(
+                np.asarray(d["execution_feedback"], np.float32) if d["execution_feedback"] else None
+            ),
+            teacher_verb=np.asarray(d["teacher_verb"], np.int64) if d["teacher_verb"] else None,
+            truth=truth,
+            slot_match=(
+                np.asarray(self.frames["slot_match"], np.int16) if truth is not None else None
+            ),
+            sprite_kinematics=(
+                np.asarray(self.frames["sprite_kinematics"], np.float16)
+                if truth is not None
+                else None
+            ),
+            mario_kinematics=(
+                np.asarray(self.frames["mario_kinematics"], np.float16)
+                if truth is not None
+                else None
+            ),
+            slot_identity=(
+                np.asarray(self.frames["slot_identity"], np.int32) if truth is not None else None
+            ),
+            enemy_context=(
+                np.asarray(self.frames["enemy_context"], np.float16)
+                if truth is not None
+                else None
+            ),
+            mario_position=(
+                np.asarray(self.frames["mario_position"], np.float32)
+                if truth is not None
+                else None
+            ),
+            ended=np.asarray(self.frames["ended"], np.int8),
+            commands=np.asarray(d["command"], np.int16).reshape(-1, len(COMMAND_FIELDS))
+            if d["command"]
+            else None,
+            **self._executed_actions(),
+            same_as_teacher=(
+                np.asarray(d["same_as_teacher"], bool) if d["same_as_teacher"] else None
+            ),
+            last_action_ended=last_action_ended,
+            rewards=np.asarray(self.frames["reward"], np.float32),
+            terminal=end in ("goal", "death", "off_route", "missed_objective", "failed_attempt"),
+            explored=self.task.explore,
+            picks={
+                name[len("pick_") :]: np.asarray(d[name], np.int64)
+                for name in d
+                if name.startswith("pick_")
+            },
+            old_log_prob=np.asarray(d["log_prob"], np.float32),
+            old_value=np.asarray(d["value"], np.float32),
+            used=_rows(d["used"], count),
+            potentials=np.asarray(self.frames["potential"], np.float32),
+            weight=self.task.weight,
+            actions=np.asarray(d["actions"], np.float32) if self.task.record_actions else None,
+            tactic={
+                name[len("tactic_") :]: np.asarray(d[name])
+                for name in d
+                if name.startswith("tactic_")
+            },
+        )
+
+
 class _Lane:
     """One episode being played: the simulator, its teacher, and the records."""
 
@@ -410,15 +619,13 @@ class _Lane:
         self.last_action_ended = False
         self.goal = 0.0
         self.end = ""
-        # The skill chose an action the teacher has no safe version of
-        # (carry_out): the episode ends as lost.
         # The teacher played a decision and had no command: the episode ends
         # there (the decision has no label, so teacher qualification fails the
         # layout either way; held and asked again every frame until the stall
         # limit, one such layout took an hour and a half).
         self.no_teacher_command = False
-        self.frames: dict[str, list] = defaultdict(list)
-        self.decisions: dict[str, list] = defaultdict(list)
+        self.recorder = EpisodeRecorder(task)
+        self.frames, self.decisions = self.recorder.frames, self.recorder.decisions
         # The simulator's truth (EpisodeTask.record_truth); the watched
         # pictures' was kept at reset.
         self.truth = None
@@ -520,188 +727,16 @@ class _Lane:
         return asked
 
     def note_decision(self, learner: str, decision) -> None:
-        """Record a decision, the token the learner was given and the teacher's label."""
-        d, asked = self.decisions, self.asked
-        d["frame"].append(len(self.frames["a"]) - 1)
-        d["played_teacher"].append(asked["plays_teacher"])
-        if learner == "tactic":
-            self._note_tactic(decision)
-            return
-        for head, value in decision.picks[learner].items():
-            d[f"pick_{head}"].append(value)
-        d["log_prob"].append(decision.log_prob[learner])
-        d["value"].append(decision.value[learner])
-        # The skill's: the action used (None for the teacher's command, given)
-        # and where the executor was sent, as its history holds it at play.
-        used = (decision.action, decision.skill) if learner == "skill" else decision.skill
-        d["used"].append(encode_choice(learner, used).numpy())
-        mine = decision.chosen[learner]
-        if learner == "skill":
-            if self.task.record_actions:
-                from retroagi.core.world_model import empty_records
-
-                found = asked.get("actions")
-                d["actions"].append(found if found is not None else empty_records())
-            d["execution_feedback"].append(decision.execution_feedback)
-            d["given"].append(
-                torch.cat(
-                    (encode_tactic(decision.tactic), encode_strategy(decision.strategy))
-                ).numpy()
-            )
-            valid = self.task.label and asked["skill"] is not None
-            d["label_valid"].append(valid)
-            example = asked.get("action_label")
-            action = example["action"] if example is not None else None
-            d["label_action_valid"].append(valid and action is not None)
-            d["label_verb"].append(VERBS.index(action.verb) if action is not None else 0)
-            d["label_pointer"].append(
-                pointer_index(action.target) - POINTER_START
-                if action is not None and action.target is not None
-                else 0
-            )
-            # Where the teacher's action ends (pixels from Mario's feet).
-            outcome = example["outcome"] if example is not None else {"dx": 0, "dy": 0}
-            d["label_end_dx"].append(round(outcome["dx"]))
-            d["label_end_dy"].append(round(outcome["dy"]))
-            d["agreed"].append(valid and action is not None and mine == action)
-            d["teacher_verb"].append(VERBS.index(action.verb) if action is not None else -1)
-            d["same_as_teacher"].append(action is not None and mine == action)
-            # What was executed: the command, and the skill's own action
-            # (where the teacher played, its named choice is used: record).
-            d["command"].append(command_row(decision.skill))
-            own = decision.action
-            d["own_verb"].append(VERBS.index(own.verb) if own is not None else -1)
-            d["own_pointer"].append(
-                pointer_index(own.target) - POINTER_START
-                if own is not None and own.target is not None
-                else -1
-            )
-            return
-
-    def _note_tactic(self, decision) -> None:
-        """The tactic learner's decision: what its layer did (TacticStep), and the
-        teacher's labels: its tactic here, and whether the held tactic is
-        finished (the teacher's tactic is no longer it)."""
-        d, step = self.decisions, decision.tactic_step
-        teacher: TacticToken = self.asked["tactic"]
-        d["given"].append(encode_strategy(decision.strategy).numpy())
-        d["label_tactic"].append(TACTICS.index(teacher.stance))
-        d["label_end"].append(step.held is not None and teacher.stance != step.held)
-        d["label_valid"].append(True)
-        d["pick_tactic"].append(TACTICS.index(step.own))
-        d["log_prob"].append(step.choice_log_prob)
-        d["value"].append(0.0)
-        d["used"].append(encode_choice("tactic", decision.tactic).numpy())
-        d["tactic_held"].append(-1 if step.held is None else TACTICS.index(step.held))
-        d["tactic_actions"].append(step.actions)
-        d["tactic_frames"].append(step.frames)
-        d["tactic_started"].append(step.started)
-        d["tactic_used"].append(TACTICS.index(decision.tactic.stance))
-        d["tactic_own_end"].append(step.own_end)
-        d["tactic_end_probability"].append(
-            -1.0 if step.end_probability is None else step.end_probability
-        )
-        d["agreed"].append(step.own == teacher.stance)
-
-    def _executed_actions(self) -> dict:
-        """{"action_verb", "action_pointer"} per skill decision: the action
-        carried out (the teacher's choice as named, run-ups renamed, where it
-        played; else the skill's own); -1 unknown. Empty when not recorded."""
-        d = self.decisions
-        if not d["own_verb"]:
-            return {}
-        verb = np.asarray(d["own_verb"], np.int64)
-        pointer = np.asarray(d["own_pointer"], np.int64)
-        named = np.asarray(d["label_action_valid"], bool) & np.asarray(d["played_teacher"], bool)
-        verb[named] = np.asarray(d["label_verb"], np.int64)[named]
-        pointer[named] = np.asarray(d["label_pointer"], np.int64)[named]
-        unknown = np.asarray(d["played_teacher"], bool) & ~named
-        verb[unknown], pointer[unknown] = -1, -1
-        return {"action_verb": verb.astype(np.int8), "action_pointer": pointer.astype(np.int16)}
+        """Record a decision (EpisodeRecorder.note_decision) with the teacher's
+        answer at it."""
+        self.recorder.note_decision(learner, decision, self.asked)
 
     def record(self) -> EpisodeRecord:
-        d = self.decisions
-        count = len(d["frame"])
-        labels = {
-            name[len("label_") :]: np.asarray(d[name]) for name in d if name.startswith("label_")
-        }
-        labels.setdefault("valid", np.zeros(count, bool))
-        return EpisodeRecord(
-            family=self.task.family,
-            split=self.task.split,
-            sample_index=self.task.sample_index,
+        return self.recorder.record(
             won=self.goal > 0,
-            difficulty=self.task.difficulty,
             end=self.end,
-            src_a=np.asarray(self.frames["a"], np.int8).reshape(-1, SEQ_LEN_A),
-            src_b=np.asarray(self.frames["b"], np.int8).reshape(-1, SEQ_LEN_B),
-            src_c=np.asarray(self.frames["c"], np.float16).reshape(-1, SEQ_LEN_C),
-            buttons=np.asarray(self.frames["button"], np.int8),
-            decision_frames=np.asarray(d["frame"], np.int32),
-            given=_rows(d["given"], count),
-            labels=labels,
-            played_teacher=np.asarray(d["played_teacher"], bool),
-            agreed=np.asarray(d["agreed"], bool),
-            execution_feedback=(
-                np.asarray(d["execution_feedback"], np.float32) if d["execution_feedback"] else None
-            ),
-            teacher_verb=np.asarray(d["teacher_verb"], np.int64) if d["teacher_verb"] else None,
             truth=self.truth.arrays() if self.truth is not None else None,
-            slot_match=(
-                np.asarray(self.frames["slot_match"], np.int16) if self.truth is not None else None
-            ),
-            sprite_kinematics=(
-                np.asarray(self.frames["sprite_kinematics"], np.float16)
-                if self.truth is not None
-                else None
-            ),
-            mario_kinematics=(
-                np.asarray(self.frames["mario_kinematics"], np.float16)
-                if self.truth is not None
-                else None
-            ),
-            slot_identity=(
-                np.asarray(self.frames["slot_identity"], np.int32) if self.truth is not None else None
-            ),
-            enemy_context=(
-                np.asarray(self.frames["enemy_context"], np.float16)
-                if self.truth is not None
-                else None
-            ),
-            mario_position=(
-                np.asarray(self.frames["mario_position"], np.float32)
-                if self.truth is not None
-                else None
-            ),
-            ended=np.asarray(self.frames["ended"], np.int8),
-            commands=np.asarray(d["command"], np.int16).reshape(-1, len(COMMAND_FIELDS))
-            if d["command"]
-            else None,
-            **self._executed_actions(),
-            same_as_teacher=(
-                np.asarray(d["same_as_teacher"], bool) if d["same_as_teacher"] else None
-            ),
             last_action_ended=self.last_action_ended,
-            rewards=np.asarray(self.frames["reward"], np.float32),
-            terminal=self.end
-            in ("goal", "death", "off_route", "missed_objective", "failed_attempt"),
-            explored=self.task.explore,
-            picks={
-                name[len("pick_") :]: np.asarray(d[name], np.int64)
-                for name in d
-                if name.startswith("pick_")
-            },
-            old_log_prob=np.asarray(d["log_prob"], np.float32),
-            old_value=np.asarray(d["value"], np.float32),
-            used=_rows(d["used"], count),
-            potentials=np.asarray(self.frames["potential"], np.float32),
-            weight=self.task.weight,
-            actions=np.asarray(d["actions"], np.float32) if self.task.record_actions else None,
-            tactic={
-                name[len("tactic_") :]: np.asarray(d[name])
-                for name in d
-                if name.startswith("tactic_")
-            },
         )
 
 
@@ -2650,16 +2685,20 @@ class Predictions:
     episodes (stages/block_smb/world_model_train, tracker_train): each
     episode is turned into their inputs and labels once, kept as long as the
     layer's replay keeps episodes, and both learn PREDICTION_EPOCHS passes a
-    round. The world model reads the scene encoder without changing it."""
+    round. The world model reads the scene encoder without changing it.
+    ``tracker``: trackers already trained, to go on training (Full SMB);
+    else new ones."""
 
-    def __init__(self, policy, config, device, output):
+    def __init__(self, policy, config, device, output, tracker=None):
         from .tracker_train import TrackerConfig
         from .world_model_train import WorldModelConfig
         from retroagi.core.target_tracker import CollisionTracker
 
         self.policy, self.config, self.device, self.output = policy, config, device, output
         self.world_settings, self.tracker_settings = WorldModelConfig(), TrackerConfig()
-        self.tracker = CollisionTracker(self.tracker_settings.width).to(device)
+        self.tracker = (
+            tracker if tracker is not None else CollisionTracker(self.tracker_settings.width)
+        ).to(device)
         self.tracker_optimizer = torch.optim.AdamW(
             self.tracker.parameters(),
             lr=self.tracker_settings.learning_rate,

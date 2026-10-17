@@ -82,13 +82,13 @@ def test_a_recorded_playthrough_has_what_the_trainers_read():
     from retroagi.core.smb_observer import VisionObserver
     from retroagi.core.target_tracker import CollisionTracker
     from retroagi.stages.block_smb.tracker_train import track_sequences
-    from retroagi.stages.block_smb.world_model_train import episode_data
-    from retroagi.stages.full_smb.practice import play_recorded
+    from retroagi.stages.block_smb.world_model_train import episode_data, kept
+    from retroagi.stages.full_smb.practice import frame_reward, play_recorded
     from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, load_full_vit_checkpoint
 
     torch.manual_seed(0)
     vision = load_full_vit_checkpoint(DEFAULT_FULL_VIT_CHECKPOINT, device="cpu").model
-    # Untrained networks: the recording, not the play, is tested.
+    # Untrained networks, a few seconds of play: the recording is tested.
     agents = SMBAgents(
         VisionObserver(vision),
         LayeredSMBPolicy().eval(),
@@ -96,13 +96,31 @@ def test_a_recorded_playthrough_has_what_the_trainers_read():
         tracker=CollisionTracker(8),
         world_model=True,
     )
-    played = play_recorded(agents, "Level1-1", frames=150)
-    frames = len(played.sprite_kinematics)
-    assert len(played.truth["mario"]) == frames + 1 and len(played.ended) == frames
-    assert played.slot_match.shape == (frames, 9) and len(played.decision_frames) > 0
-    assert played.commands.shape == (len(played.decision_frames), 6)
-    assert len(played.rows[0]) == len(played.decision_frames)
-    assert not np.isnan(played.predicted).any()
-    track_sequences(played)  # the trackers' trainer reads it
-    data = episode_data(played)  # and the world model's
-    assert len(data["executed"]) == len(played.decision_frames)
+    played = play_recorded(agents, "Level1-1", mode="speed_run", frames=150, label_every=50)
+    skill = played.skill
+    frames = skill.frames
+    assert len(skill.truth["mario"]) == frames + 1 and len(skill.ended) == frames
+    assert skill.slot_match.shape == (frames, 9) and len(skill.decision_frames) > 0
+    assert skill.commands.shape == (len(skill.decision_frames), 6)
+    assert len(skill.rewards) == frames and skill.explored is False
+    assert played.summary["mode"] == "speed_run" and played.summary["vision_labels"] >= 1
+    track_sequences(skill)  # the trackers' trainer reads it
+    data = episode_data(kept(skill))  # and the world model's
+    assert len(data["executed"]) == len(skill.decision_frames)
+
+
+def test_each_mode_pays_for_what_it_is_after():
+    from retroagi.stages.full_smb.practice import frame_reward
+
+    still = {"level_x": 40, "score": 0, "dying": False, "finished": False, "time": 400}
+    stomp = {**still, "score": 100}
+    speed, _ = frame_reward("speed_run", still, stomp, 40, 400)
+    points, _ = frame_reward("max_points", still, stomp, 40, 400)
+    # Points pay only in max points; time costs five times as much in speed run.
+    assert points == -0.01 + 12.5 and speed == -0.05
+    ahead, furthest = frame_reward("speed_run", still, {**still, "level_x": 50}, 40, 400)
+    assert furthest == 50 and abs(ahead - (0.5 - 0.05)) < 1e-9
+    # The goal: speed run is paid again for the timer left.
+    goal = {**still, "finished": True, "time": 200}
+    assert frame_reward("speed_run", still, goal, 40, 400)[0] == -0.05 + 50 * 1.5
+    assert frame_reward("max_points", still, goal, 40, 400)[0] == -0.01 + 50

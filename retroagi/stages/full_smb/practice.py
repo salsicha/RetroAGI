@@ -1,182 +1,270 @@
-"""Recorded Full SMB playthroughs: the data the collision trackers and the
-world model keep learning from in Full SMB, and the rewards the skill and
-tactic layers will learn from (user, 2026-10-15: Full SMB played many times,
-learning on every playthrough; speed mode rewarded by time to each
-checkpoint, points mode by points).
+"""Recorded Full SMB playthroughs: what every network keeps learning from in
+Full SMB (user, 2026-10-17: all models engaged and continuing to train;
+played in max points and speed run modes; training continues on the success
+in the strategy mode being played).
 
 play_recorded plays one level from its start with copy 0 of the agents
-(core.smb_agent.SMBAgents, as deployed: no teacher), and keeps, as Block SMB's
-recordings do with record_truth (stages/block_smb/layered_train), what the
-networks' trainers read: the game's truth every frame (full_smb/truth), which
-true enemy each scene slot shows, the executor's kinematics, each decision's
-scene rows, action, command and feedback; and per frame the level's progress
-(Mario's distance into it, score, time) for the rewards. Nothing recorded
-reaches the agent while it plays.
+(core.smb_agent.SMBAgents, as deployed: no teacher; the world model carries
+out the skill's actions, the collision trackers end waits and aim stomps)
+in one strategy mode, and records, through Block SMB's EpisodeRecorder
+(stages/block_smb/layered_train), an episode for the skill layer and one for
+the tactic layer: every frame's scene rows, button and reward, the game's
+truth read from its memory (full_smb/truth), which true enemy each scene
+slot shows and the executor's kinematics (the world model's and the
+trackers' data), and each decision's choices (the reward learning's data).
+It also labels every ``label_every``-th frame from game memory for the
+vision network (pixel_labels.label_frame), and, when the level is finished,
+can capture the next level's start. Nothing recorded reaches the agent while
+it plays.
+
+Each frame's reward follows the mode, in Block SMB's units (block_smb/env
+STRATEGY_REWARDS): progress into the level, a cost per frame (five times as
+much in speed run), points (max points only), a loss at death, and the goal
+at the level's end (in speed run, again times the share of the game's timer
+left).
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
 
-from retroagi.core.action_tokens import VERBS, pointer_index
-from retroagi.core.layered_policy import POINTER_START
 from retroagi.core.smb_observer import SCENE_SLOTS
-from retroagi.core.tokens import command_row
 
 from .play import FullSMBGame
 from .truth import FullTruthRecorder, match_slots, true_frame
 
-# A checkpoint every this many pixels of Mario's distance into the level
-# (speed mode is rewarded by the time to each).
+# A checkpoint every this many pixels of Mario's distance into the level: the
+# speed run is measured by the frames to each, max points by the points
+# gained between them.
 CHECKPOINT_PIXELS = 500
-END_REASONS = ("", "landed", "done", "threat", "hold_recheck", "arrived", "no_progress")
+MODES = ("speed_run", "max_points")
+# Block SMB's reward terms (env.BlockSMBRewardConfig) and each mode's
+# multipliers (env.STRATEGY_REWARDS); points at Block SMB's rate (a stomp,
+# 100 points, pays as a Block SMB stomp; a coin, 200 points, as a coin).
+PROGRESS_PER_PIXEL = 0.05
+FRAME_PENALTY = -0.01
+DEATH = -10.0
+GOAL = 50.0
+POINT = 0.125
+MODE_REWARDS = {
+    "speed_run": {"frame_penalty": 5.0, "points": 0.0, "time_bonus": 1.0},
+    "max_points": {"frame_penalty": 1.0, "points": 1.0, "time_bonus": 0.0},
+}
+# A playthrough that gets no further into the level for this many frames
+# ends as a timeout (Block SMB's STALL_FRAMES).
+STALL_FRAMES = 400
 
 
 @dataclass
 class Playthrough:
-    """One recorded playthrough, with the fields the trainers read
-    (tracker_train.track_sequences, world_model_train.episode_data)."""
+    """One recorded playthrough: the skill's and the tactic layer's episodes
+    (layered_train.EpisodeRecord), what it achieved, the vision labels made
+    from it, and the next level's start when it finished the level (its
+    name and emulator state: FullSMBGame.next_level_state)."""
 
-    family: str  # the level
-    split: str
-    sample_index: int  # which playthrough
-    difficulty: Optional[str]
-    won: bool  # left the level (the flagpole, a pipe to the next)
-    end: str  # "finished", "death" or "timeout"
-    decision_frames: np.ndarray
-    truth: dict
-    slot_match: np.ndarray
-    sprite_kinematics: np.ndarray
-    mario_kinematics: np.ndarray
-    slot_identity: np.ndarray
-    enemy_context: np.ndarray
-    mario_position: np.ndarray
-    action_verb: np.ndarray
-    action_pointer: np.ndarray
-    commands: np.ndarray
-    ended: np.ndarray
-    execution_feedback: np.ndarray
-    played_teacher: np.ndarray
-    rows: tuple  # the scene rows at each decision (src_a, src_b, src_c)
-    actions: Optional[np.ndarray] = None  # no teacher: no tried actions
-    picks: dict = field(default_factory=dict)
-    log_prob: Optional[np.ndarray] = None
-    value: Optional[np.ndarray] = None
-    predicted: Optional[np.ndarray] = None  # the world model's outcome per decision
-
-    @property
-    def checkpoint_frames(self) -> list:
-        """The frame Mario first reached each CHECKPOINT_PIXELS of the level."""
-        level_x = self.truth["level_x"]
-        out = []
-        for mark in range(CHECKPOINT_PIXELS, int(level_x.max()) + 1, CHECKPOINT_PIXELS):
-            out.append(int(np.argmax(level_x >= mark)))
-        return out
+    skill: object
+    tactic: Optional[object]
+    summary: dict
+    labelled: list = field(default_factory=list)
+    next_state: Optional[tuple] = None
 
 
-def play_recorded(agents, level: str, *, frames: int, index: int = 0, split: str = "full") -> Playthrough:
-    """Play ``level`` from its start with copy 0 of ``agents`` until Mario
-    dies, leaves the level or ``frames`` pass, recording it (module notes)."""
-    game = FullSMBGame(level)
-    recorder = FullTruthRecorder()
-    per_frame = {name: [] for name in ("match", "sprites", "mario", "identity", "context", "position", "ended")}
-    decisions = {name: [] for name in ("frame", "verb", "pointer", "command", "feedback", "rows", "predicted")}
-    picks, log_prob, value = {}, [], []
-    end = "timeout"
-    try:
-        screen = game.reset()
-        agents.reset(0)
-        copy = agents.copies[0]
-        for frame in range(frames):
-            step = agents.act([screen], [0])[0]
-            # The game's state behind this picture (before its button).
-            truth = true_frame(game.env.get_ram(), game.start)
-            ids = recorder.add(truth)
-            scene = step.scene
-            # The kinematics the trackers and the world model read this frame.
-            sprites, mario, identities, context = copy.kinematics
-            per_frame["match"].append(match_slots(scene, truth, ids))
-            per_frame["sprites"].append(sprites)
-            per_frame["mario"].append(mario)
-            per_frame["identity"].append(identities)
-            per_frame["context"].append(context)
-            feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
-            per_frame["position"].append((copy.spatial.displacement, feet))
-            per_frame["ended"].append(END_REASONS.index(step.ended) if step.ended in END_REASONS else 0)
-            decision = step.decision
-            if decision is not None:
-                action = decision.action
-                decisions["frame"].append(frame)
-                decisions["verb"].append(VERBS.index(action.verb) if action is not None else -1)
-                decisions["pointer"].append(
-                    pointer_index(action.target) - POINTER_START
-                    if action is not None and action.target is not None
-                    else -1
-                )
-                decisions["command"].append(command_row(decision.skill))
-                decisions["feedback"].append(decision.execution_feedback)
-                decisions["rows"].append(step.rows)
-                predicted = decision.predicted
-                decisions["predicted"].append(
-                    predicted["mean"].detach().cpu().numpy() if predicted else np.full(5, np.nan)
-                )
-                for head, pick in decision.picks.get("skill", {}).items():
-                    picks.setdefault(head, []).append(pick)
-                log_prob.append(decision.log_prob.get("skill", 0.0))
-                value.append(decision.value.get("skill", 0.0))
-            screen, outcome = game.step(step.button)
-            if outcome.finished:
-                end = "finished"
-                break
-            if outcome.dying:
-                end = "death"
-                break
-        recorder.add(true_frame(game.env.get_ram(), game.start))
-    finally:
-        game.close()
-    truth = recorder.arrays()
+def frame_reward(mode: str, before: dict, after: dict, furthest: int, start_time: int) -> tuple:
+    """The reward for one frame (module notes) from the game's truth before
+    and after it, and Mario's furthest distance so far: (reward, furthest)."""
+    weights = MODE_REWARDS[mode]
+    reward = FRAME_PENALTY * weights["frame_penalty"]
+    if after["level_x"] > furthest:
+        reward += PROGRESS_PER_PIXEL * (after["level_x"] - furthest)
+        furthest = after["level_x"]
+    reward += POINT * weights["points"] * max(0, after["score"] - before["score"])
+    if after["dying"] and not before["dying"]:
+        reward += DEATH
+    if after["finished"]:
+        reward += GOAL * (1.0 + weights["time_bonus"] * after["time"] / max(1, start_time))
+    return reward, furthest
+
+
+def _enemy_indices(recorder: FullTruthRecorder, per_frame: list) -> list:
+    """Each frame's scene-slot matches (recorder columns) as enemy (or lift)
+    indices, as truth_recording's are."""
     columns = recorder.enemy_columns()
     lifts = [c for c, k in enumerate(recorder.kinds) if k[2]]
     lift_index = {c: i for i, c in enumerate(lifts)}
-    match = np.asarray(per_frame["match"], np.int64)
-    # Recorder columns to enemy (or lift) indices, as truth_recording's are.
     enemy_slots = SCENE_SLOTS["enemies"]
-    as_index = np.full(match.shape, -1, np.int16)
-    for t, row in enumerate(match):
+    out = []
+    for row in per_frame:
+        converted = np.full(len(row), -1, np.int16)
         for s, c in enumerate(row):
             if c < 0:
                 continue
             if s < enemy_slots and columns[c] >= 0:
-                as_index[t, s] = columns[c]
+                converted[s] = columns[c]
             elif s >= enemy_slots and c in lift_index:
-                as_index[t, s] = lift_index[c]
-    rows = decisions["rows"]
-    count = len(decisions["frame"])
-    return Playthrough(
+                converted[s] = lift_index[c]
+        out.append(converted)
+    return out
+
+
+def play_recorded(
+    agents,
+    level: str,
+    *,
+    mode: str,
+    frames: int,
+    index: int = 0,
+    start_state: Optional[bytes] = None,
+    explore: bool = False,
+    label_every: int = 0,
+    capture_next: bool = False,
+) -> Playthrough:
+    """Play ``level`` (from its saved start, or ``start_state``) in ``mode``
+    with copy 0 of ``agents`` (its switch set to the mode, the goal to the
+    right), sampling the layers' choices when ``explore``, until Mario dies,
+    leaves the level, stalls or ``frames`` pass; recorded (module notes)."""
+    from retroagi.core.tokens import StrategyToken
+    from retroagi.stages.block_smb import layered_train as lt
+
+    from .pixel_labels import Unexplained, label_frame
+
+    game = FullSMBGame(level, start_state)
+    recorder = FullTruthRecorder()
+    task = lt.EpisodeTask(
+        index=index,
         family=level,
-        split=split,
+        split="full",
+        seed=0,
         sample_index=index,
-        difficulty=None,
-        won=end == "finished",
-        end=end,
-        decision_frames=np.asarray(decisions["frame"], np.int32),
-        truth=truth,
-        slot_match=as_index,
-        sprite_kinematics=np.asarray(per_frame["sprites"], np.float16),
-        mario_kinematics=np.asarray(per_frame["mario"], np.float16),
-        slot_identity=np.asarray(per_frame["identity"], np.int32),
-        enemy_context=np.asarray(per_frame["context"], np.float16),
-        mario_position=np.asarray(per_frame["position"], np.float32),
-        action_verb=np.asarray(decisions["verb"], np.int8),
-        action_pointer=np.asarray(decisions["pointer"], np.int16),
-        commands=np.asarray(decisions["command"], np.int16).reshape(count, 6),
-        ended=np.asarray(per_frame["ended"], np.int8),
-        execution_feedback=np.asarray(decisions["feedback"], np.float32),
-        played_teacher=np.zeros(count, bool),
-        rows=tuple(np.asarray([r[i] for r in rows]) for i in range(3)) if rows else ((), (), ()),
-        picks={head: np.asarray(v) for head, v in picks.items()},
-        log_prob=np.asarray(log_prob, np.float32),
-        value=np.asarray(value, np.float32),
-        predicted=np.asarray(decisions["predicted"], np.float32) if count else None,
+        teacher_share=0.0,
+        label=False,
+        frames=frames,
+        difficulty=mode,  # the strategy mode played
+        explore=explore,
+        record_truth=True,
+    )
+    shared = defaultdict(list)
+    skill = lt.EpisodeRecorder(task, shared)
+    tactic = lt.EpisodeRecorder(task, shared)
+    labelled, refused = [], 0
+    end, next_state = "timeout", None
+    sample = ("skill", "tactic") if explore else ()
+    last_action_ended = False
+    try:
+        screen = game.reset()
+        agents.reset(0, StrategyToken(mode, 1))
+        copy = agents.copies[0]
+        before = true_frame(game.env.get_ram(), game.start)
+        start_time, start_score = before["time"], before["score"]
+        furthest, progressed = before["level_x"], 0
+        earlier_ram = None
+        for frame in range(frames):
+            step = agents.act([screen], [0], sample=sample)[0]
+            ids = recorder.add(before)
+            scene = step.scene
+            for name, value in zip("abc", step.rows):
+                shared[name].append(value)
+            # The kinematics the trackers and the world model read this frame.
+            sprites, mario, identities, context = copy.kinematics
+            shared["slot_match"].append(match_slots(scene, before, ids))
+            shared["sprite_kinematics"].append(sprites)
+            shared["mario_kinematics"].append(mario)
+            shared["slot_identity"].append(identities)
+            shared["enemy_context"].append(context)
+            feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
+            shared["mario_position"].append((copy.spatial.displacement, feet))
+            shared["ended"].append(
+                lt.END_REASONS.index(step.ended) if step.ended in lt.END_REASONS else 0
+            )
+            decision = step.decision
+            if decision is not None:
+                skill.note_decision("skill", decision, lt.NO_TEACHER)
+                if decision.tactic_step is not None:
+                    tactic.note_decision("tactic", decision, lt.NO_TEACHER)
+            shared["button"].append(step.button)
+            label = bool(label_every) and frame % label_every == 0
+            ram_now = game.env.get_ram().copy()
+            state_before = game.env.em.get_state() if label else None
+            screen, outcome = game.step(step.button)
+            if label:
+                try:
+                    labelled.append(
+                        label_frame(
+                            game.raw,
+                            state_before,
+                            game.env.em.get_state(),
+                            family=level,
+                            earlier_ram=earlier_ram,
+                        )
+                    )
+                except Unexplained:
+                    refused += 1
+            earlier_ram = ram_now
+            after = true_frame(game.env.get_ram(), game.start)
+            reward, reached = frame_reward(mode, before, after, furthest, start_time)
+            if reached > furthest:
+                progressed = frame
+            furthest = reached
+            shared["reward"].append(float(reward))
+            shared["potential"].append(0.0)
+            before = after
+            if outcome.finished:
+                end = "goal"
+                if capture_next:
+                    next_state = game.next_level_state()
+                break
+            if outcome.dying:
+                end = "death"
+                break
+            if frame - progressed > STALL_FRAMES:
+                break
+        recorder.add(before)  # the state the last button left
+        executor = copy.executor
+        last_action_ended = bool(end != "timeout" or executor.finished or executor.reconsider)
+    finally:
+        game.close()
+    truth = recorder.arrays()
+    shared["slot_match"] = _enemy_indices(recorder, shared["slot_match"])
+    won = end == "goal"
+    records = {
+        name: rec.record(won=won, end=end, truth=truth, last_action_ended=last_action_ended)
+        for name, rec in (("skill", skill), ("tactic", tactic))
+    }
+    level_x, score = truth["level_x"], truth["score"]
+    checkpoints = (
+        [
+            int(np.argmax(level_x >= mark))
+            for mark in range(CHECKPOINT_PIXELS, int(level_x.max()) + 1, CHECKPOINT_PIXELS)
+        ]
+        if len(level_x)
+        else []
+    )
+    marks = [0] + checkpoints + [max(0, len(score) - 1)]
+    summary = {
+        "level": level,
+        "mode": mode,
+        "index": index,
+        "finished": won,
+        "end": end,
+        "frames": len(shared["button"]),
+        "furthest_x": int(level_x.max()) if len(level_x) else 0,
+        "points": int(score[-1] - start_score) if len(score) else 0,
+        # Frames to reach each checkpoint, and the points gained before each
+        # (the last: from the last checkpoint to the end).
+        "checkpoint_frames": checkpoints,
+        "checkpoint_points": [int(score[b] - score[a]) for a, b in zip(marks, marks[1:])]
+        if len(score)
+        else [],
+        "decisions": len(records["skill"].decision_frames),
+        "return": float(np.sum(records["skill"].rewards)),
+        "vision_labels": len(labelled),
+        "vision_refused": refused,
+    }
+    return Playthrough(
+        skill=records["skill"],
+        tactic=records["tactic"] if len(records["tactic"].decision_frames) else None,
+        summary=summary,
+        labelled=labelled,
+        next_state=next_state,
     )
