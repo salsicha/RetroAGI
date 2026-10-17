@@ -40,10 +40,11 @@ while skills and tactics are also trained."
   learns its choices. There are no held-out validation layouts and no
   per-round evaluation (`validation_layouts_per_difficulty` became
   `evaluation_layouts_per_difficulty`).
-- **Agreement on new layouts steers practice.** Each round reports how often
-  the layer's own choice, before learning from that round, was the
-  teacher's on the round's new layouts; a family that agrees less gets more
-  layouts next round (`focus_layouts`).
+- **Agreement after learning steers practice.** Each round reports how
+  often the layer's choice, after learning from that round, is the
+  teacher's over the round's teacher episodes (user: "made AFTER learning
+  from that round"; their recorded decisions read again, nothing played); a
+  family that agrees less gets more layouts next round (`focus_layouts`).
 - **One evaluation, after training,** on freshly generated layouts (sample
   indices from `EVALUATION_FIRST`, each evaluation its own): the layer plays
   them itself, the teacher carrying out the skill's actions. Its wins per

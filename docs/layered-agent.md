@@ -271,9 +271,10 @@ change:
   scene encoder without changing it; the trackers are saved as `tracker.pt`
   beside the run's checkpoints.
 
-Each round's agreement is the layer's own choice, as it was before learning
-from that round, against the teacher's on the round's new layouts; a family
-that agrees less gets more layouts the next round (`focus_layouts`). After
+Each round's agreement is the layer's choice after learning from that round
+against the teacher's, over the round's teacher episodes (their recorded
+decisions read again; nothing is played); a family that agrees less gets
+more layouts the next round (`focus_layouts`). After
 the imitation rounds (and each reward round) the layer plays freshly
 generated layouts once, itself (the teacher carrying out the skill's
 actions): its wins per family decide the gate, and the world model and the

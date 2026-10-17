@@ -2407,9 +2407,9 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             started = time.time()
             predicted = predictions.train(played) if predictions is not None else {}
             predict_time = time.time() - started
-            # Agreement: the layer's own choice, as it was before learning from
-            # this round, against the teacher's on this round's new layouts.
-            agreement = _agreement(played)
+            # Agreement: the layer's choice after learning from this round
+            # against the teacher's, on this round's teacher episodes.
+            agreement = _agreement(policy, config.learner, played, config, device)
             focus = {
                 family: round(config.focus_layouts * (1.0 - value))
                 for family, value in agreement["families"].items()
@@ -2535,13 +2535,44 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     return {"evaluation_success": best, "history": history, "evaluations": evaluations}
 
 
-def _agreement(played) -> dict:
-    """How often the layer's own choice was the teacher's, over the
-    decisions the teacher labelled: overall and per family."""
+@torch.no_grad()
+def _agreement(policy, learner: str, played, config, device) -> dict:
+    """How often the layer's choice, after learning from the round, is the
+    teacher's over the decisions the teacher labelled in the round's
+    episodes (their recorded inputs read again; nothing is played): overall
+    and per family. The skill's: its verb and, for a run or a jump, the
+    object (read with the teacher's verb); the tactic layer's: its tactic."""
+    policy.eval()
     by_family: dict = defaultdict(list)
-    for e in played:
-        valid = e.labels["valid"].astype(bool)
-        by_family[e.family] += [bool(x) for x in e.agreed[valid]]
+    episodes = [e for e in played if len(e.decision_frames)]
+    for batch in _batches(episodes, config.batch_frames, random.Random(0)):
+        if learner == "tactic":
+            made = tactic_forward(policy, batch, config, device, memory_grad=False)
+            if made is None:
+                continue
+            d, out = made
+            m = d["labelled"]
+            same = out["choose"]["tactic"].argmax(-1) == d["label_tactic"]
+        else:
+            d = _decisions(batch, device, learner)
+            if d is None:
+                continue
+            m = d["labelled"] & d["label_action_valid"].bool()
+            e, f = d["episode"], d["frame"]
+            a, b, c, _, _, _ = _padded(batch, device)
+            verb = d["label_verb"].long()
+            out = policy.run_skill(
+                policy.encode_scene((a[e, f], b[e, f], c[e, f])),
+                d["given"],
+                choice_history(d["used"], e),
+                feedback=d["execution_feedback"],
+                picks={"verb": verb},
+            )
+            same = (out["verb"].argmax(-1) == verb) & (
+                (verb == VERBS.index("wait")) | (out["pointer"].argmax(-1) == d["label_pointer"].long())
+            )
+        for i in m.nonzero().squeeze(1).tolist():
+            by_family[batch[int(d["episode"][i])].family].append(bool(same[i]))
     every = [x for values in by_family.values() for x in values]
     return {
         "overall": float(np.mean(every)) if every else None,
@@ -2709,7 +2740,7 @@ def _round_line(learner: str, entry: dict) -> str:
     return (
         f"[{learner}] round {entry['round']:02d}{' (reward)' if entry['by_reward'] else ''}: "
         f"teacher wins {entry['train_success']:.2f}, "
-        f"agrees with teacher on new layouts {agreement if agreement is None else round(agreement, 3)} "
+        f"agrees with teacher after learning {agreement if agreement is None else round(agreement, 3)} "
         f"(weakest {', '.join(f'{f} {v:.2f}' for f, v in weakest)}); {losses}"
         f"{'; ' + side if side else ''}; seconds {entry['seconds']}"
     )
