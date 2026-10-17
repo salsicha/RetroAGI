@@ -345,7 +345,7 @@ def collect(
 
     every = families or [f for f in BLOCK_SMB_MC_FAMILIES if f not in STRATEGY_TACTIC_FAMILIES]
     policy, saved = lt.load_layered_checkpoint(Path(source), "cpu")
-    settings = dict(saved["config"])
+    settings = lt.saved_settings(saved["config"])
     settings.update(
         learner="skill",
         families=tuple(every),

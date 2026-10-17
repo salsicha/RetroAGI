@@ -285,7 +285,7 @@ def train_world_model(config: WorldModelConfig) -> dict:
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)
     reads = scene_digest(policy)
-    layer_config = lt.LayeredTrainConfig(**{**saved["config"], "output": str(output)})
+    layer_config = lt.LayeredTrainConfig(**{**lt.saved_settings(saved["config"]), "output": str(output)})
     history, best = [], None
     for epoch in range(config.epochs):
         started = time.time()
@@ -357,7 +357,7 @@ def collect(
     from .monte_carlo import BLOCK_SMB_MC_FAMILIES
 
     policy, saved = lt.load_layered_checkpoint(Path(source), "cpu")
-    settings = dict(saved["config"])
+    settings = lt.saved_settings(saved["config"])
     settings.update(
         learner="skill",
         families=tuple(families or lt.learner_families("skill", BLOCK_SMB_MC_FAMILIES)),

@@ -24,6 +24,41 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-17 — The teacher generates the training data; predictions learn alongside (user decision; built)
+
+User: "The untrained skill network never picks anything. The teacher is
+generating data to train the networks. The skill families generate data to
+train the skill network ... Don't hold out anything. If you need to evaluate
+the skill network then randomly generate skill layouts. But this should
+only happen after skill training is completed", and "The vision network is
+trained first, but then the lstm and target tracking network is trained
+while skills and tactics are also trained."
+
+- **Imitation rounds play only the teacher.** The teacher's share no longer
+  shrinks across rounds (`teacher_share_start` / `teacher_share_end` are
+  gone): every round the teacher plays that round's layouts and the layer
+  learns its choices. There are no held-out validation layouts and no
+  per-round evaluation (`validation_layouts_per_difficulty` became
+  `evaluation_layouts_per_difficulty`).
+- **Agreement on new layouts steers practice.** Each round reports how often
+  the layer's own choice, before learning from that round, was the
+  teacher's on the round's new layouts; a family that agrees less gets more
+  layouts next round (`focus_layouts`).
+- **One evaluation, after training,** on freshly generated layouts (sample
+  indices from `EVALUATION_FIRST`, each evaluation its own): the layer plays
+  them itself, the teacher carrying out the skill's actions. Its wins per
+  family and its collapse check decide the gate; `best.pt` and `passed.pt`
+  come from it. A tactic run evaluates after its imitation rounds and after
+  each reward round (its critic's readiness is measured there).
+- **The world model and the collision trackers learn alongside** the skill
+  and the tactic layer (`layered_train.Predictions`): each round's episodes
+  are recorded with the simulator's truth (the skill's also with the
+  teacher's tried actions), and both networks make four passes over the
+  kept episodes after the layer's own. They are measured per verb on the
+  evaluation's episodes; the world model's report goes into the checkpoint,
+  the trackers into `tracker.pt`. The separate Phase 2 collection and its
+  held-out split are not used.
+
 ## 2026-10-17 — Three verbs: run, jump and wait (user decision; built)
 
 User: "What is 'approach / run_to'? Do you have the same action with

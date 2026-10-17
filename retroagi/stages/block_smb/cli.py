@@ -56,7 +56,7 @@ def _run_train_layer(args: argparse.Namespace) -> dict[str, Any]:
         elif value is None and name != "init":
             settings.pop(name)
     summary = train_layer(LayeredTrainConfig(**settings))
-    return {"best_validation_success": summary["best_validation_success"]}
+    return {"evaluation_success": summary["evaluation_success"]}
 
 
 def build_parser() -> argparse.ArgumentParser:

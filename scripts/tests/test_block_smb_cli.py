@@ -17,7 +17,7 @@ def test_train_layer_passes_every_given_setting_to_the_trainer():
 
     def train_layer(config):
         seen["config"] = config
-        return {"best_validation_success": 0.5}
+        return {"evaluation_success": 0.5}
 
     with patch("retroagi.stages.block_smb.layered_train.train_layer", train_layer):
         result = cli.run(
@@ -37,7 +37,7 @@ def test_train_layer_passes_every_given_setting_to_the_trainer():
             )
         )
     config = seen["config"]
-    assert result == {"best_validation_success": 0.5}
+    assert result == {"evaluation_success": 0.5}
     assert config.learner == "tactic"
     assert config.init == "runs/action/passed.pt"
     assert config.families == ("flat_run", "single_gap")

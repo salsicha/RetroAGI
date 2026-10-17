@@ -86,10 +86,7 @@ def test_tactic_qualification_runs_spatial_teacher_instead_of_learned_skill():
     assert pool.play([task()], teacher_only=True) == ["demonstration"]
 
 
-@pytest.mark.parametrize("failed_split", ["validation", "train"])
-def test_training_stops_before_updates_when_qualification_fails(
-    monkeypatch, tmp_path, failed_split
-):
+def test_training_stops_before_updates_when_qualification_fails(monkeypatch, tmp_path):
     from retroagi.stages.block_smb import teacher_qualification
 
     calls = []
@@ -111,11 +108,8 @@ def test_training_stops_before_updates_when_qualification_fails(
             calls.append("close")
 
     def qualify(pool, tasks, report):
-        split = tasks[0].split
-        calls.append(split)
-        if split == failed_split:
-            raise RuntimeError("Teacher qualification failed")
-        return []
+        calls.append(tasks[0].split)
+        raise RuntimeError("Teacher qualification failed")
 
     def update(*args, **kwargs):
         pytest.fail("Weights must not change before qualification passes")
@@ -131,8 +125,8 @@ def test_training_stops_before_updates_when_qualification_fails(
     )
     with pytest.raises(RuntimeError, match="Teacher qualification failed"):
         lt.train_layer(config)
-    expected = ["validation"] + (["train"] if failed_split == "train" else []) + ["close"]
-    assert calls == expected
+    # Nothing is held out: the first round's layouts are qualified first.
+    assert calls == ["train", "close"]
 
 
 def test_actual_episode_stall_limit_also_fails_teacher_qualification(monkeypatch, tmp_path):

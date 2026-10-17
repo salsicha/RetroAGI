@@ -121,9 +121,11 @@ now, how long it has run; an action aimed at an enemy sends him to the
 enemy's point when it began, never to the teacher's command, which was aimed
 with the enemy's true future). Their labels are made from recorded real
 paths (`core/collision_labels.py`): Mario's path until his action ends, then
-standing, against the enemy's; unknown past a recording's end. They are
-trained by `stages/block_smb/tracker_train.py`; until then the simulator's
-truth stands in (`stages/block_smb/collision_truth.py`). Watched frames
+standing, against the enemy's; unknown past a recording's end. They learn
+alongside the skill and tactic layers from the same teacher episodes
+(`layered_train.Predictions`, with `stages/block_smb/tracker_train.py`'s
+loss); until they are shown accurate the simulator's truth stands in
+(`stages/block_smb/collision_truth.py`). Watched frames
 before a lesson's first decision let the tracks see enemies move.
 
 Without the teacher (deployed play, `SMBAgents(world_model=True)`), the
@@ -137,7 +139,7 @@ a hit within the lead a jump over that enemy needs, plus 5 frames
 jumps still clears the enemy coming at its estimated speed, so a faster enemy
 is jumped from farther away; within 48 frames when no jump clears it; never in
 the air. `exam-layer --execution teacher | world_model | trackers | deployed`
-plays the same held-out layouts with each network carrying out its part, so
+plays the same freshly generated layouts with each network carrying out its part, so
 what each costs is measured apart.
 
 In Block SMB training a wait is one action: the teacher's hold lasts until it
@@ -245,21 +247,39 @@ whether to continue holding every frame.
 
 ## Training
 
-Train **skill → tactic**. Skill can start from scratch or a compatible warm start;
-tactic requires a qualified skill checkpoint. Only the stage's parameters change:
+The vision network is trained first. Then train **skill → tactic**; the
+world model (the policy's LSTM) and the collision trackers learn alongside
+each, from the same teacher episodes (user, 2026-10-17). Skill can start from
+scratch or a compatible warm start; tactic requires a qualified skill
+checkpoint. Only the stage's parameters and the two prediction networks
+change:
 
 - **Skill:** the skill transformer (and, with `--train-reading`, the scene
-  encoder). Teacher supplies the tactic and its own commands, labelled as
-  actions. The executor executes the teacher's commands and the skill's own
-  actions, which the teacher carries out (its best-ranked version of each, or
-  a move straight at the action's object where it tries none, whatever follows:
-  the skill imitates the teacher; `teacher_actions.carry_out`).
+  encoder). The skill families generate its data: every round the teacher
+  plays that round's layouts, supplying the tactic and its own commands,
+  labelled as actions, and the skill learns them. Nothing is held out.
 - **Tactic:** tactic transformer and tactic memory. Skill and scene encoder
-  stay frozen. Teacher labels tactic choice/termination and return
-  targets train the critic.
+  stay frozen. The teacher plays the tactic, and carries out the frozen
+  skill's actions (its best-ranked version of each, or a move straight at
+  where it ends where it tries none, whatever follows:
+  `teacher_actions.carry_out`); it labels tactic choice and termination, and
+  return targets train the critic.
+- **World model and collision trackers** (`layered_train.Predictions`): each
+  round's episodes are recorded with the simulator's truth (and, for the
+  skill, the teacher's tried actions); both networks make four passes over
+  the kept episodes after the layer's own passes. The world model reads the
+  scene encoder without changing it; the trackers are saved as `tracker.pt`
+  beside the run's checkpoints.
 
-Teacher-controlled execution decreases across imitation rounds. Reward rounds
-use sampled choices, a clipped policy-gradient objective, and an entropy bonus.
+Each round's agreement is the layer's own choice, as it was before learning
+from that round, against the teacher's on the round's new layouts; a family
+that agrees less gets more layouts the next round (`focus_layouts`). After
+the imitation rounds (and each reward round) the layer plays freshly
+generated layouts once, itself (the teacher carrying out the skill's
+actions): its wins per family decide the gate, and the world model and the
+trackers are measured per verb on the same episodes. Reward rounds use
+sampled choices, a clipped policy-gradient objective, and an entropy
+bonus.
 
 **No single values; ends explained by the scene.** No kind of action may end
 at one value whatever the scene. Teacher qualification (before learning and
@@ -268,20 +288,18 @@ of a verb (within 2 pixels) covers more than 40% of that verb's labels (at
 least 6). A single family may concentrate on one end where its scenes call
 for it (a pit nearly as wide as the longest jump is crossed by the longest
 jump); whether they do is to be measured on the world model, which learns
-ends from scenes of every family. After every round, the skill's own choices
-on held-out layouts are compared with the teacher's choice at the same
-moments (recorded at each decision; carry_out asks for it). Each round's
+ends from scenes of every family. At the evaluation after training, the
+skill's own choices are compared with the teacher's choice at the same
+moments (recorded at each decision; carry_out asks for it). The evaluation's
 line reports per family how many it matched (verb and object) and how it
-differed ("jump for run", "run at another object"), worst families first; the history and
-the fresh evaluation keep the whole report (`choices_against_teacher`). A
-family where the skill picks one verb at more than 40% of its decisions and
-more than 20 points above the teacher's share at those decisions collapses,
-and a round with a collapsed family cannot pass the gate. The skill picks
+differed ("jump for run", "run at another object"), worst families first;
+the history keeps the whole report (`choices_against_teacher`). A family
+where the skill picks one verb at more than 40% of its decisions and more
+than 20 points above the teacher's share at those decisions collapses, and
+an evaluation with a collapsed family cannot pass the gate. The skill picks
 only the action; how far it goes is the teacher's version (carry_out), so
 where its actions ended is not judged (it measured the teacher's run-ups:
-enemy_hop's 20-pixel run-ups were all the teacher's own, 2026-10-16). The
-tactic layer's held-out tactics are still compared with the teacher's labels
-in the round's training episodes. The decision layers are
+enemy_hop's 20-pixel run-ups were all the teacher's own, 2026-10-16).  The decision layers are
 regularized: dropout of 0.1 in the skill and tactic transformers while
 training (`PolicySettings.decision_dropout`) and weight decay 0.05
 (`LayeredTrainConfig.weight_decay`).
@@ -476,12 +494,12 @@ limit; max-points qualification requires the specified points objective.
 
 ## Evaluation and checkpoints
 
-Every family must meet its configured success threshold (90% by default).
-Tactic additionally has a termination-boundary agreement gate. `passed.pt`
-qualifies the next stage; `best.pt` is best overall; `last.pt` is latest.
-Validation drawn from the exhaustive generator space is not an unseen-layout
-generalization test. Report complete-sweep and composed-task performance
-separately from the small validation sample.
+Every family must meet its configured success threshold (90% by default) on
+the evaluation's freshly generated layouts, played after training. Tactic
+additionally has a termination-boundary agreement gate. `passed.pt`
+qualifies the next stage; `best.pt` is the best evaluation; `last.pt` is
+latest. Report complete-sweep and composed-task performance separately from
+the evaluation sample.
 
 Checkpoints store observation layout, strategy/tactic vocabularies, executor
 buttons, skill coordinate schema, history length, and predictive-executor version.
@@ -490,7 +508,8 @@ preserving skill, tactic, scene encoder, and memories. New checkpoints contain
 no action network and list only skill/tactic as trained layers. Incompatible
 observation or token layouts are rejected. Older skill strategy-context inputs
 can still migrate with zero-initialized added context weights.
-Validation history includes per-family end reasons and training label coverage.
+The history keeps each round's agreement, losses and label coverage and each
+evaluation's per-family end reasons.
 An unsuccessful single-jump landing is a terminal failed attempt, not a timeout.
 
 ```bash
@@ -605,9 +624,8 @@ and retreat use separate destinations. None of these checks is an executor veto
 or a policy input. The executor and its four-frame initial duration search are
 unchanged.
 
-Before any learning, `train-layer` qualifies the exact held-out layouts through
-the production episode pipeline. It also qualifies each round's prepared
-training layouts before updating weights. Each family draws its training
+`train-layer` qualifies each round's prepared training layouts through the
+production episode pipeline before updating weights. Each family draws its training
 difficulties from its own random sequence, and a weak family's extra layouts
 follow its usual ones, so every layout a round can use (at most
 `train_layouts_per_family + focus_layouts` per family) is known in advance

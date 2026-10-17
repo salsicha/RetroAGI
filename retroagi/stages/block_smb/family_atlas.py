@@ -819,8 +819,8 @@ def make_policy_atlas(out: Path, checkpoint: str, families, workers=8):
     from . import layered_train as lt
 
     _, saved = lt.load_layered_checkpoint(checkpoint, "cpu")
-    config = lt.LayeredTrainConfig(**{**saved["config"], "families": tuple(families)})
-    tasks = lt._tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
+    config = lt.LayeredTrainConfig(**{**lt.saved_settings(saved["config"]), "families": tuple(families)})
+    tasks = lt._tasks(config, "validation", config.evaluation_layouts_per_difficulty, 0, 0.0, False)
     jobs, count = [], {}
     for task in sorted(tasks, key=lambda t: (t.family, DIFFICULTIES.index(t.difficulty), t.sample_index)):
         key = (task.family, task.difficulty)

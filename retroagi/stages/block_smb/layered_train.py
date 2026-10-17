@@ -101,8 +101,9 @@ class LayeredTrainConfig:
     families: tuple[str, ...] = tuple(BLOCK_SMB_MC_FAMILIES)
     rounds: int = 12
     train_layouts_per_family: int = 8
-    # Extra layouts next round for a family that lost validation episodes:
-    # this many times its share of losses.
+    # Extra layouts next round for a family where the layer's own choices
+    # differed from the teacher's on this round's new layouts: this many
+    # times the share that differed.
     focus_layouts: int = 8
     # Extra layouts every round for named families, "family=count,...": more
     # practice where the skill is weakest (extra_layouts_of).
@@ -113,15 +114,18 @@ class LayeredTrainConfig:
     # A family and difficulty with more combinations than this is not made: the
     # run stops and names it (its parameters need a smaller space first).
     sweep_limit: int = 20_000
-    # Held-out layouts per family and difficulty (easy, medium, hard), fixed for the run.
-    validation_layouts_per_difficulty: int = 3
+    # Layouts per family and difficulty (easy, medium, hard) the layer plays
+    # itself after training, freshly generated (nothing is held out while it
+    # trains).
+    evaluation_layouts_per_difficulty: int = 3
     # Training layouts' difficulty: easy, medium and hard in these proportions.
     difficulty_weights: tuple[float, float, float] = (2.0, 2.0, 1.0)
     # ... and a family's extra layouts' (extra_layouts, focus_layouts): the
     # same by default; more hard ones where the skill fails on hard layouts.
     extra_difficulty_weights: tuple[float, float, float] = (2.0, 2.0, 1.0)
-    teacher_share_start: float = 1.0  # chance a decision plays the teacher's choice, first round
-    teacher_share_end: float = 0.0  # ... and last round
+    # The world model and the collision trackers learn alongside the layer
+    # from the same teacher episodes (user, 2026-10-17).
+    train_predictions: bool = True
     epochs_per_round: int = 8
     batch_frames: int = 8192
     learning_rate: float = 3e-4
@@ -2019,6 +2023,20 @@ def _file_digest(path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def saved_settings(settings: dict) -> dict:
+    """A saved run's settings (a checkpoint's "config") as this code's
+    LayeredTrainConfig fields: settings since removed are dropped (the
+    teacher's shrinking share; the held-out layouts, now the evaluation's
+    freshly generated ones)."""
+    settings = dict(settings)
+    if "validation_layouts_per_difficulty" in settings:
+        settings.setdefault(
+            "evaluation_layouts_per_difficulty", settings.pop("validation_layouts_per_difficulty")
+        )
+    known = {f.name for f in dataclasses.fields(LayeredTrainConfig)}
+    return {name: value for name, value in settings.items() if name in known}
+
+
 def save_layered_checkpoint(
     path, policy, config, trained_layers, history, world_model=None
 ) -> None:
@@ -2260,9 +2278,6 @@ def train_layer(config: LayeredTrainConfig) -> dict:
         learning, lr=config.learning_rate, weight_decay=config.weight_decay
     )
     pool = EpisodePool(config, policy.settings)
-    validation_tasks = pool.with_scenarios(
-        _tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
-    )
     sweep = config.learner == "skill" and config.sweep
     combinations: list[EpisodeTask] = []
     if sweep:
@@ -2277,38 +2292,36 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             + ", ".join(f"{f} {n}" for f, n in per_family.items()),
             flush=True,
         )
+    # The world model (the policy's LSTM) and the collision trackers learn
+    # from the same teacher episodes as the layer (user, 2026-10-17).
+    predictions = Predictions(policy, config, device, output) if config.train_predictions else None
     replay: list[EpisodeRecord] = []
-    focus: dict[str, int] = {}  # extra layouts per family, from the last validation
+    focus: dict[str, int] = {}  # extra layouts per family, from the last round's agreement
     fixed = extra_layouts_of(config)  # and every round, for named families
     history: list[dict] = []
+    evaluations: list[dict] = []
     best = best_passed = -1.0
     tactic = config.learner == "tactic"
-    critic_ready = False  # the tactic critic predicts held-out returns well enough
+    critic_ready = False  # the tactic critic predicts fresh layouts' returns well enough
     try:
         from .teacher_qualification import qualify_teachers
 
-        pool.publish(policy)
-        qualify_teachers(
-            pool, validation_tasks, output / "teacher_qualification" / "validation.json"
-        )
         for round_index in range(config.rounds + config.reward_rounds):
             started = time.time()
-            # Imitation rounds, the teacher's share shrinking; then reward rounds,
-            # in which the learner samples its own choices and learns from what
-            # they earn (on that round's episodes only).
+            # Imitation rounds: the teacher plays every decision and the layer
+            # learns its choices (user, 2026-10-17: the teacher generates the
+            # data; nothing is held out). Then reward rounds, in which the
+            # learner samples its own choices and learns from what they earn
+            # (on that round's episodes only).
             by_reward = round_index >= config.rounds
             if by_reward and round_index == config.rounds:
                 learning = learn_only(list(getattr(policy, config.learner).parameters()))
+                if predictions is not None:
+                    predictions.learn()
                 optimizer = torch.optim.AdamW(
                     learning, lr=config.reward_learning_rate, weight_decay=config.weight_decay
                 )
-            fraction = min(1.0, round_index / max(1, config.rounds - 1))
-            share = (
-                0.0
-                if by_reward
-                else config.teacher_share_start
-                + fraction * (config.teacher_share_end - config.teacher_share_start)
-            )
+            share = 0.0 if by_reward else 1.0
             pool.publish(policy)
             if sweep:
                 # Every combination, every round.
@@ -2334,15 +2347,22 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                         f: focus.get(f, 0) + fixed.get(f, 0) for f in set(focus) | set(fixed)
                     },
                 )
+            if predictions is not None:
+                tasks = [
+                    dataclasses.replace(
+                        t, record_truth=True, record_actions=config.learner == "skill"
+                    )
+                    for t in tasks
+                ]
             tasks = pool.with_scenarios(tasks)
             demonstrated = qualify_teachers(
                 pool, tasks, output / "teacher_qualification" / f"train_{round_index:02d}.json"
             )
-            # Round zero already plays only the teacher. Reuse the exact
-            # qualified records instead of executing those episodes twice.
+            # The skill's imitation rounds play only the teacher: the qualified
+            # records are its data (not played twice).
             played = (
                 demonstrated
-                if config.learner == "skill" and share == 1.0 and not by_reward
+                if config.learner == "skill" and not by_reward
                 else pool.play(tasks)
             )
             replay = kept_episodes(replay, played, config.replay_episodes)
@@ -2384,166 +2404,357 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                         totals[name].append(float(value))
             policy.eval()
             learn_time = time.time() - started
-
             started = time.time()
-            pool.publish(policy)
-            validation = pool.play(validation_tasks)
-            evaluate_time = time.time() - started
-            per_family = family_success(validation)
+            predicted = predictions.train(played) if predictions is not None else {}
+            predict_time = time.time() - started
+            # Agreement: the layer's own choice, as it was before learning from
+            # this round, against the teacher's on this round's new layouts.
+            agreement = _agreement(played)
             focus = {
-                family: round(config.focus_layouts * (1.0 - success))
-                for family, success in per_family.items()
+                family: round(config.focus_layouts * (1.0 - value))
+                for family, value in agreement["families"].items()
             }
-            mean = float(np.mean(list(per_family.values())))
-            agreed = [bool(x) for e in played for x in e.agreed[e.labels["valid"].astype(bool)]]
-            collapsed = output_collapse(validation, played, config.learner)
             entry = {
                 "round": round_index,
                 "by_reward": by_reward,
                 "teacher_share": share,
                 "train_success": float(np.mean([e.won for e in played])),
                 "train_families": family_success(played),
-                "agreement": float(np.mean(agreed)) if agreed else None,
-                "validation_success": mean,
-                "validation_families": per_family,
-                "validation_difficulties": family_success(validation, by_difficulty=True),
-                "validation_outcomes": {
-                    family: dict(Counter(e.end for e in validation if e.family == family))
-                    for family in per_family
-                },
+                "agreement": agreement["overall"],
+                "agreement_families": agreement["families"],
                 "train_label_coverage": {
                     family: float(
                         np.mean(
-                            [
-                                valid
-                                for e in played
-                                if e.family == family
-                                for valid in e.labels["valid"]
-                            ]
+                            [valid for e in played if e.family == family for valid in e.labels["valid"]]
                         )
                     )
-                    for family in per_family
+                    for family in sorted({e.family for e in played})
                     if any(e.family == family and len(e.labels["valid"]) for e in played)
                 },
-                "action_durations": {
-                    "train": action_duration_summary(played),
-                    "validation": action_duration_summary(validation),
-                },
+                "action_durations": {"train": action_duration_summary(played)},
                 "losses": {
                     name: float(
                         max(values) if name == "max_end_duration_frames" else np.mean(values)
                     )
                     for name, values in totals.items()
                 },
+                "predictions": predicted,
                 "replay_episodes": len(replay),
-                # The skill's own held-out choices against the teacher's at
-                # the same moments.
+                "seconds": {
+                    "play": round(play_time, 1),
+                    "learn": round(learn_time, 1),
+                    "predictions": round(predict_time, 1),
+                },
+            }
+            history.append(entry)
+            print(_round_line(config.learner, entry), flush=True)
+            last = round_index == config.rounds + config.reward_rounds - 1
+            if not (by_reward or round_index == config.rounds - 1):
+                save_layered_checkpoint(
+                    output / "last.pt", policy, config, trained_layers, history, world_model
+                )
+                (output / "history.json").write_text(json.dumps(history, indent=2))
+                continue
+            # After the imitation rounds (and each reward round): the layer
+            # plays freshly generated layouts itself, once (user, 2026-10-17:
+            # evaluate on new random layouts only after training). Its
+            # wins decide the gate; the world model and the trackers are
+            # measured on the same episodes.
+            started = time.time()
+            evaluation = _evaluation_play(pool, policy, config, len(evaluations), predictions)
+            per_family = family_success(evaluation)
+            mean = float(np.mean(list(per_family.values())))
+            collapsed = output_collapse(evaluation, played, config.learner)
+            result = {
+                "after_round": round_index,
+                "success": mean,
+                "families": per_family,
+                "difficulties": family_success(evaluation, by_difficulty=True),
+                "outcomes": {
+                    family: dict(Counter(e.end for e in evaluation if e.family == family))
+                    for family in per_family
+                },
+                "action_durations": action_duration_summary(evaluation),
                 **(
-                    {"against_teacher": choices_against_teacher(validation)}
+                    {"against_teacher": choices_against_teacher(evaluation)}
                     if config.learner == "skill"
                     else {}
                 ),
-                # Families whose own held-out choices collapse on one value.
                 "collapsed": {
                     family: {kind: list(v) for kind, v in kinds.items()}
                     for family, kinds in collapsed.items()
                 },
-                "seconds": {
-                    "play": round(play_time, 1),
-                    "learn": round(learn_time, 1),
-                    "evaluate": round(evaluate_time, 1),
-                },
             }
             ends_agree = None
             if tactic:
-                # The critic's held-out accuracy decides whether reward rounds may
-                # change choices and the end check; agreement on where tactics
-                # change is part of the gate.
-                explained = critic_check(policy, validation, config, device)
+                # The critic's accuracy on fresh layouts decides whether reward
+                # rounds may change choices and the end check; agreement on
+                # where tactics change is part of the gate.
+                explained = critic_check(policy, evaluation, config, device)
                 critic_ready = explained is not None and explained >= config.critic_ready
-                agreement = end_agreement(validation, config.end_tolerance)
-                ends_agree = agreement["overall"]
-                entry["critic_explained_variance"] = explained
-                entry["critic_ready"] = critic_ready
-                entry["end_agreement"] = ends_agree
-                entry["end_agreement_families"] = agreement["families"]
-            # The whole agent without the teacher (every token its own) needs
-            # the world model to carry out its actions: not built yet
-            # (docs/design-decisions.md 2026-10-15).
-            history.append(entry)
-            print(_round_line(config.learner, entry), flush=True)
+                ends = end_agreement(evaluation, config.end_tolerance)
+                ends_agree = ends["overall"]
+                result.update(
+                    critic_explained_variance=explained,
+                    critic_ready=critic_ready,
+                    end_agreement=ends_agree,
+                    end_agreement_families=ends["families"],
+                )
+            if predictions is not None:
+                result["predictions"] = predictions.report(evaluation)
+                world_model = predictions.world_model(result["predictions"])
+            result["seconds"] = round(time.time() - started, 1)
+            evaluations.append(result)
+            print(_evaluation_line(config.learner, result), flush=True)
             # The gate also needs no family whose choices collapse on one value.
             gate_met = not collapsed and all(
                 value >= config.family_gate for value in per_family.values()
             )
             if tactic:
                 gate_met = gate_met and ends_agree is not None and ends_agree >= config.end_gate
+            result["gate_met"] = gate_met
             layers = trained_layers + ([config.learner] if gate_met else [])
-            save_layered_checkpoint(
-                output / "last.pt", policy, config, layers, history, world_model
-            )
-            # Of equally good rounds the latest is kept: it has learned from
-            # more episodes, more of them its own play.
+            summary = {"rounds": history, "evaluations": evaluations}
+            save_layered_checkpoint(output / "last.pt", policy, config, layers, summary, world_model)
             if mean >= best:
                 best = mean
                 save_layered_checkpoint(
-                    output / "best.pt", policy, config, layers, history, world_model
+                    output / "best.pt", policy, config, layers, summary, world_model
                 )
             if gate_met and mean >= best_passed:
-                # The best round that met the gate: the next layer starts from it.
+                # The best evaluation that met the gate: the next layer starts from it.
                 best_passed = mean
                 save_layered_checkpoint(
-                    output / "passed.pt", policy, config, layers, history, world_model
+                    output / "passed.pt", policy, config, layers, summary, world_model
                 )
-            (output / "history.json").write_text(json.dumps(history, indent=2))
+            (output / "history.json").write_text(json.dumps(summary, indent=2))
+            if last:
+                break
     finally:
         pool.close()
-    return {"best_validation_success": best, "history": history}
+    return {"evaluation_success": best, "history": history, "evaluations": evaluations}
+
+
+def _agreement(played) -> dict:
+    """How often the layer's own choice was the teacher's, over the
+    decisions the teacher labelled: overall and per family."""
+    by_family: dict = defaultdict(list)
+    for e in played:
+        valid = e.labels["valid"].astype(bool)
+        by_family[e.family] += [bool(x) for x in e.agreed[valid]]
+    every = [x for values in by_family.values() for x in values]
+    return {
+        "overall": float(np.mean(every)) if every else None,
+        "families": {f: float(np.mean(v)) for f, v in sorted(by_family.items()) if v},
+    }
+
+
+# Evaluation layouts start at this sample index (each evaluation its own
+# thousand): never the ones trained on.
+EVALUATION_FIRST = 100
+
+
+def _evaluation_play(pool, policy, config, number: int, predictions) -> list:
+    """The layer plays freshly generated layouts itself (the teacher carrying
+    out the skill's actions), with the simulator's truth recorded when the
+    predictions are measured on them."""
+    tasks = [
+        dataclasses.replace(
+            task,
+            sample_index=EVALUATION_FIRST + 1000 * number + task.sample_index,
+            record_truth=predictions is not None,
+        )
+        for task in _tasks(config, "validation", config.evaluation_layouts_per_difficulty, 0, 0.0, False)
+    ]
+    pool.publish(policy)
+    return pool.play(pool.with_scenarios(tasks))
+
+
+class Predictions:
+    """The world model (the policy's LSTM, ``policy.memory``) and the
+    collision trackers, learning alongside a layer from its rounds' recorded
+    episodes (stages/block_smb/world_model_train, tracker_train): each
+    episode is turned into their inputs and labels once, kept as long as the
+    layer's replay keeps episodes, and both learn PREDICTION_EPOCHS passes a
+    round. The world model reads the scene encoder without changing it."""
+
+    def __init__(self, policy, config, device, output):
+        from .tracker_train import TrackerConfig
+        from .world_model_train import WorldModelConfig
+        from retroagi.core.target_tracker import CollisionTracker
+
+        self.policy, self.config, self.device, self.output = policy, config, device, output
+        self.world_settings, self.tracker_settings = WorldModelConfig(), TrackerConfig()
+        self.tracker = CollisionTracker(self.tracker_settings.width).to(device)
+        self.tracker_optimizer = torch.optim.AdamW(
+            self.tracker.parameters(),
+            lr=self.tracker_settings.learning_rate,
+            weight_decay=self.tracker_settings.weight_decay,
+        )
+        self.learn()
+        self.world_optimizer = torch.optim.AdamW(
+            policy.memory.parameters(),
+            lr=self.world_settings.learning_rate,
+            weight_decay=self.world_settings.weight_decay,
+        )
+        self.kept: list = []  # (world model data or None, track sequences) per episode
+        self.history: list = []
+
+    def learn(self) -> None:
+        """The world model's weights learn (the layer's learn_only stops
+        every weight but the layer's)."""
+        for parameter in self.policy.memory.parameters():
+            parameter.requires_grad_(True)
+
+    @staticmethod
+    def _data(record):
+        from . import world_model_train as wm
+        from .tracker_train import track_sequences
+
+        world = wm.episode_data(wm.kept(record)) if len(record.decision_frames) else None
+        return world, track_sequences(record)
+
+    def train(self, played) -> dict:
+        from . import world_model_train as wm
+        from .tracker_train import batch_loss
+
+        self.kept = (self.kept + [self._data(e) for e in played])[
+            -max(self.config.replay_episodes, len(played)) :
+        ]
+        world = [w for w, _ in self.kept if w is not None]
+        tracks = [s for _, sequences in self.kept for s in sequences]
+        rng = random.Random(len(self.history))
+        world_losses, tracker_losses = [], []
+        model = self.policy.memory
+        for _ in range(PREDICTION_EPOCHS):
+            model.train()
+            rng.shuffle(world)
+            size = self.world_settings.batch_episodes
+            for start in range(0, len(world), size):
+                loss = wm._forward(
+                    self.policy, world[start : start + size], self.device, self.world_settings.tried_weight
+                )
+                self.world_optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                self.world_optimizer.step()
+                world_losses.append(float(loss))
+            self.tracker.train()
+            rng.shuffle(tracks)
+            size = self.tracker_settings.batch_tracks
+            for start in range(0, len(tracks), size):
+                loss, _ = batch_loss(self.tracker, tracks[start : start + size], self.device)
+                self.tracker_optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.tracker.parameters(), 1.0)
+                self.tracker_optimizer.step()
+                tracker_losses.append(float(loss))
+        model.eval()
+        self.tracker.eval()
+        entry = {
+            "world_model_loss": float(np.mean(world_losses)) if world_losses else None,
+            "tracker_loss": float(np.mean(tracker_losses)) if tracker_losses else None,
+            "episodes": len(self.kept),
+            "tracks": len(tracks),
+        }
+        self.history.append(entry)
+        self.save()
+        return entry
+
+    def report(self, episodes) -> dict:
+        """Per verb: the world model's errors and the trackers' accuracy on
+        ``episodes`` (the evaluation's, never trained on)."""
+        from . import world_model_train as wm
+        from .tracker_train import evaluate, track_sequences
+
+        world = [wm.episode_data(wm.kept(e)) for e in episodes if len(e.decision_frames)]
+        tracks = [s for e in episodes for s in track_sequences(e)]
+        return {
+            "world_model": wm.evaluate(self.policy, world, self.device) if world else None,
+            "trackers": evaluate(self.tracker, tracks, self.device) if tracks else None,
+        }
+
+    def world_model(self, report) -> dict:
+        """What a checkpoint records of its world model: the scene encoder
+        it read, its report and its training."""
+        from retroagi.core.world_model import scene_digest
+
+        measured = report.get("world_model") or {}
+        return {
+            "reads": scene_digest(self.policy),
+            "report": measured.get("by_verb"),
+            "passed": measured.get("passed"),
+            "history": self.history,
+            "trained_with": "layer_rounds_v1",
+        }
+
+    def save(self) -> None:
+        from .tracker_train import save_tracker
+
+        save_tracker(self.output / "tracker.pt", self.tracker, self.tracker_settings, self.history)
+
+
+# Passes over the kept episodes the world model and the trackers make each round.
+PREDICTION_EPOCHS = 4
 
 
 def _round_line(learner: str, entry: dict) -> str:
     losses = " ".join(f"{name}={value:.3f}" for name, value in entry["losses"].items())
-    weakest = sorted(entry["validation_families"].items(), key=lambda item: item[1])[:4]
+    weakest = sorted(entry["agreement_families"].items(), key=lambda item: item[1])[:4]
     agreement = entry["agreement"]
-    tactic = ""
-    if "end_agreement" in entry:
-        ends, explained = entry["end_agreement"], entry["critic_explained_variance"]
-        tactic = (
+    predicted = entry.get("predictions") or {}
+    side = ", ".join(
+        f"{name} {value:.3f}" for name, value in predicted.items() if name.endswith("loss") and value is not None
+    )
+    return (
+        f"[{learner}] round {entry['round']:02d}{' (reward)' if entry['by_reward'] else ''}: "
+        f"teacher wins {entry['train_success']:.2f}, "
+        f"agrees with teacher on new layouts {agreement if agreement is None else round(agreement, 3)} "
+        f"(weakest {', '.join(f'{f} {v:.2f}' for f, v in weakest)}); {losses}"
+        f"{'; ' + side if side else ''}; seconds {entry['seconds']}"
+    )
+
+
+def _evaluation_line(learner: str, result: dict) -> str:
+    weakest = sorted(result["families"].items(), key=lambda item: item[1])[:4]
+    extra = ""
+    if "end_agreement" in result:
+        ends, explained = result["end_agreement"], result["critic_explained_variance"]
+        extra = (
             f", tactic changes agree {ends if ends is None else round(ends, 3)}, "
             f"critic explains {explained if explained is None else round(explained, 3)}"
         )
-    against = entry.get("against_teacher") or {}
+    against = result.get("against_teacher") or {}
     differing = sorted(
         ((f, v) for f, v in against.items() if v["differ"]), key=lambda item: item[1]["agreed"]
     )
     if differing:
-        # Where the skill's own held-out choices were not the teacher's at
-        # the same moments (worst four families).
-        tactic += "; differs from teacher " + ", ".join(
+        # Where the skill's own choices were not the teacher's at the same
+        # moments (worst four families).
+        extra += "; differs from teacher " + ", ".join(
             f"{family} {round(v['agreed'] * v['decisions'])}/{v['decisions']} ("
             + ", ".join(f"{pair} x{n}" for pair, n in list(v["differ"].items())[:2])
             + ")"
             for family, v in differing[:4]
         )
-    collapsed = entry.get("collapsed") or {}
+    collapsed = result.get("collapsed") or {}
     if collapsed:
         def value(v):
             if v[0] is None:
                 return ""
             return f" {tuple(v[0]) if isinstance(v[0], (list, tuple)) else v[0]}"
 
-        tactic += "; COLLAPSED " + ", ".join(
+        extra += "; COLLAPSED " + ", ".join(
             f"{family} {kind}{value(v)} {v[1]:.0%} (teacher {v[2]:.0%})"
             for family, kinds in collapsed.items()
             for kind, v in kinds.items()
         )
+    passed = ((result.get("predictions") or {}).get("world_model") or {}).get("passed")
     return (
-        f"[{learner}] round {entry['round']:02d} teacher share {entry['teacher_share']:.2f}: "
-        f"train wins {entry['train_success']:.2f}, "
-        f"agrees with teacher {agreement if agreement is None else round(agreement, 3)}, "
-        f"validation wins {entry['validation_success']:.3f} "
-        f"(weakest {', '.join(f'{f} {v:.2f}' for f, v in weakest)}){tactic}; {losses}; "
-        f"seconds {entry['seconds']}"
+        f"[{learner}] evaluation after round {result['after_round']:02d} on fresh layouts: "
+        f"wins {result['success']:.3f} "
+        f"(weakest {', '.join(f'{f} {v:.2f}' for f, v in weakest)}){extra}"
+        f"{f'; world model bars met {passed}' if passed is not None else ''}; seconds {result['seconds']}"
     )
 
 
