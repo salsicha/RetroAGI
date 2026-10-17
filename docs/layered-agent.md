@@ -240,9 +240,9 @@ tactic requires a qualified skill checkpoint. Only the stage's parameters change
 - **Skill:** the skill transformer (and, with `--train-reading`, the scene
   encoder). Teacher supplies the tactic and its own commands, labelled as
   actions. The executor executes the teacher's commands and the skill's own
-  actions, which the teacher carries out (its best safe version of each, the
-  ground truth the world model will predict; a choice it has none of loses the
-  episode; `teacher_actions.carry_out`).
+  actions, which the teacher carries out (its best-ranked version of each, or
+  a move straight at the action's object where it tries none, whatever follows:
+  the skill imitates the teacher; `teacher_actions.carry_out`).
 - **Tactic:** tactic transformer and tactic memory. Skill and scene encoder
   stay frozen. Teacher labels tactic choice/termination and return
   targets train the critic.

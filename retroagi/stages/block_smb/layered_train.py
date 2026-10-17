@@ -408,7 +408,6 @@ class _Lane:
         self.end = ""
         # The skill chose an action the teacher has no safe version of
         # (carry_out): the episode ends as lost.
-        self.unsafe_choice = False
         # The teacher played a decision and had no command: the episode ends
         # there (the decision has no label, so teacher qualification fails the
         # layout either way; held and asked again every frame until the stall
@@ -437,8 +436,8 @@ class _Lane:
     def carry_out(self, action):
         """The executor's destination for the skill's own ``action`` here: the
         teacher's version of it (teacher_actions.carry_out), used instead of
-        the world model, which is not used while the layers train. None when the teacher
-        has no safe version: the episode then ends as lost.
+        the world model, which is not used while the layers train. Always a
+        command: the skill's action is carried out whatever follows.
 
         The teacher's own choice is asked for first when it was not (an
         unlabelled episode): its command is the version of that action (its
@@ -463,10 +462,7 @@ class _Lane:
 
             # The teacher's hold, played: as long as its whole wait.
             self.asked["skill"] = whole_wait(self.env, self.teacher, self.asked.get("skill"))
-        command = carry_out(self.env, self.teacher, action, label, self.asked.get("skill"))
-        if command is None:
-            self.unsafe_choice = True
-        return command
+        return carry_out(self.env, self.teacher, action, label, self.asked.get("skill"))
 
     def stalled(self) -> bool:
         """Whether the episode has made no progress for STALL_FRAMES frames."""
@@ -757,7 +753,7 @@ class _Lane:
             last_action_ended=self.last_action_ended,
             rewards=np.asarray(self.frames["reward"], np.float32),
             terminal=self.end
-            in ("goal", "death", "off_route", "missed_objective", "failed_attempt", "unsafe_choice"),
+            in ("goal", "death", "off_route", "missed_objective", "failed_attempt"),
             explored=self.task.explore,
             picks={
                 name[len("pick_") :]: np.asarray(d[name], np.int64)
@@ -939,7 +935,6 @@ def play_episodes(
             if (
                 len(lane.frames["button"]) >= lane.frame_limit
                 or lane.stalled()
-                or lane.unsafe_choice
                 or lane.no_teacher_command
             ):
                 truncated = True
@@ -947,8 +942,6 @@ def play_episodes(
                 lane.end = (
                     "goal"
                     if lane.goal > 0
-                    else "unsafe_choice"
-                    if lane.unsafe_choice
                     else "no_teacher_command"
                     if lane.no_teacher_command
                     else (
@@ -1965,10 +1958,6 @@ def _choices(episode, learner: str, source: str) -> dict:
         if episode.used is None or "verb" not in episode.picks:
             return out
         own = ~np.asarray(episode.played_teacher, bool)
-        if getattr(episode, "end", "") == "unsafe_choice" and own.any():
-            # Its last own choice had no safe version (the teacher carried
-            # nothing out; Mario held): it sent him nowhere.
-            own[np.flatnonzero(own)[-1]] = False
         used = np.asarray(episode.used)[own]
         rows = zip(
             np.asarray(episode.picks["verb"])[own],

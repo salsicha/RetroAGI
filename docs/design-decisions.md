@@ -23,6 +23,23 @@ commit). How the parts work is described in the
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-17 — The skill's action is always carried out (user decision; built)
+
+User: "What is 'unsafe choice'? Turn it off ... Remove any reference to 'safe'
+and 'unsafe'. The policy is just learning to imitate the teacher, it either
+imitates the teacher or it doesn't." In training the teacher carries out the
+skill's chosen action (`teacher_actions.carry_out`): its own command where the
+action is its choice, else of the versions it tries that it names as this
+action the one it ranks best, else a move straight at the action's object.
+It always returns a command, whatever follows from it (a fall, a hit); a
+choice no longer ends the episode at the choice. The skill's best (round 7)
+lost one single_gap layout of nine that way.
+
+The skill continues (user: "Continue the skill first"): skill_waits_20261015
+never met its gate (round 7 best, 0.967; eight families below 0.9), so the
+tactic run refused it. skill_continue_20261017 resumes from that best; the
+tactic run starts by itself from a skill checkpoint that records the gate met.
+
 ## 2026-10-16 — Phase 2: the executor's kinematics, collision trackers and the world model (user decision; building)
 
 Approved plan (`/home/amoran/.claude/plans/resilient-wobbling-abelson.md`):
@@ -552,8 +569,9 @@ policies still see only vision): its own command when the action is its
 choice, else the best safe version of that action it tries
 (`teacher_actions.carry_out`: a jump of its jump table, a run it screens, a
 run-up before a jump aimed at the action's object). A choice it has no safe
-version of ends the episode as lost (`unsafe_choice`), so validation measures
-the skill's choices alone. Training without `--predictor` does this; an agent
+version of ends the episode as lost (`unsafe_choice`; removed 2026-10-17: the
+skill's action is now always carried out), so validation measures the skill's
+choices alone. Training without `--predictor` does this; an agent
 played as deployed still needs a predictor. The predictor is developed
 separately and switched on only when the skill's validation through it
 matches its validation with the teacher carrying out its actions. With the

@@ -24,7 +24,15 @@ buffer centred on Mario, as wide as the gap to the walker when he jumped
 (its trigger distance at its speed; a colour for each walker).
 
 atlas.json also lists, per layout, the moves the teacher passed over for
-failing when started a little later (controller_teacher._tolerant).
+failing when started a little later (controller_teacher._tolerant). The
+pictures are also tiled one sheet a family (sheets/), a row a difficulty and a
+column a quantile. The networks run on the GPU where there is one.
+
+With ``--policy CHECKPOINT`` the atlas shows a trained skill instead: its own
+play on its run's validation layouts (the teacher carrying out its actions,
+as in training), each decision green where it chose the teacher's action at
+that moment and red where it chose another (both listed), and a cross where a
+lost episode ended.
 
 Training-only diagnostic: nothing learns from it.
 
@@ -71,6 +79,10 @@ ON_ENEMY = (0, 160, 150)
 IN_AIR = (220, 0, 220)
 # A dodge hold's trigger box, one colour for each walker.
 TRIGGER = ((46, 139, 87), (40, 90, 200), (190, 110, 0))
+# A trained skill's decision (policy_atlas): the teacher's action at that
+# moment, or another.
+AGREES = (34, 160, 70)
+DIFFERS = (220, 30, 30)
 
 
 class QuantileDraws(CombinationDraws):
@@ -232,6 +244,8 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
     Mario's path (world middle x, feet y per frame), and at each decision of
     the skill where Mario is, whether he stands, has just stomped or is in the
     air, and the action taught there (after run-ups are named)."""
+    import torch
+
     from retroagi.core.action_tokens import VERBS, pointer_target
     from retroagi.core.layered_policy import POINTER_START, LayeredSMBPolicy
 
@@ -295,12 +309,18 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
             label=True,
             scenario=scenario,
         )
+        # The networks on the GPU where there is one; the simulator on the CPU.
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if "vision" not in _OBSERVER:
+            observer = reference_vision()[0]
+            observer.vision.to(device)
+            _OBSERVER["vision"] = observer
         record = lt.play_episodes(
-            _OBSERVER.setdefault("vision", reference_vision()[0]),
-            LayeredSMBPolicy().eval(),
+            _OBSERVER["vision"],
+            LayeredSMBPolicy().to(device).eval(),
             "skill",
             [task],
-            "cpu",
+            device,
             1,
         )[0]
     finally:
@@ -328,6 +348,95 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
 
 
 _OBSERVER: dict = {}
+_POLICIES: dict = {}
+
+
+def _named(action):
+    """An Action as (verb, (kind, slot)) for action_words (None: none)."""
+    if action is None:
+        return None
+    if action.verb == "hold" or action.target is None:
+        return ("hold", ("surfaces", 0))
+    return (action.verb, list(action.target))
+
+
+def play_policy(scenario: dict, family: str, difficulty: str, checkpoint: str):
+    """A trained skill's own episode on ``scenario`` through the training
+    pipeline: its own choices (teacher share 0), carried out by the teacher as
+    in training. Mario's path, and at each decision where Mario is, the skill's
+    action and the teacher's at the same moment (whether they agree)."""
+    import torch
+
+    from . import layered_train as lt
+    from .teacher_replay import reference_vision
+
+    path, decisions = [], []
+    original_potential, original_note = lt._potential, lt._Lane.note_decision
+    original_init = lt._Lane.__init__
+
+    def init(self, task, copy):
+        original_init(self, task, copy)
+        m = self.env.mario
+        path.append((m["x"] + m["w"] / 2, m["y"] + m["h"]))
+
+    def potential(env):
+        m = env.mario
+        path.append((m["x"] + m["w"] / 2, m["y"] + m["h"]))
+        return original_potential(env)
+
+    def note(self, learner, decision):
+        env, m = self.env, self.env.mario
+        example = self.asked.get("action_label")
+        teacher = example["action"] if example is not None else None
+        own = decision.chosen.get(learner)
+        decisions.append(
+            {
+                "frame": len(self.frames["button"]),
+                "x": m["x"] + m["w"] / 2,
+                "feet": m["y"] + m["h"],
+                "place": "ground" if m["on_ground"] else "enemy" if on_enemy(env) else "air",
+                "command": str(decision.skill),
+                "half": m["w"] / 2,
+                "action": _named(own),
+                "teacher": _named(teacher),
+                "agrees": teacher is not None and own == teacher,
+            }
+        )
+        return original_note(self, learner, decision)
+
+    lt._potential, lt._Lane.note_decision, lt._Lane.__init__ = potential, note, init
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if "vision" not in _OBSERVER:
+            observer = reference_vision()[0]
+            observer.vision.to(device)
+            _OBSERVER["vision"] = observer
+        if checkpoint not in _POLICIES:
+            _POLICIES[checkpoint] = lt.load_layered_checkpoint(checkpoint, device)[0].eval()
+        task = lt.EpisodeTask(
+            index=0,
+            family=family,
+            split="validation",
+            seed=0,
+            sample_index=0,
+            difficulty=difficulty,
+            teacher_share=0.0,
+            label=True,
+            scenario=scenario,
+        )
+        record = lt.play_episodes(
+            _OBSERVER["vision"], _POLICIES[checkpoint], "skill", [task], device, 1
+        )[0]
+    finally:
+        lt._potential, lt._Lane.note_decision = original_potential, original_note
+        lt._Lane.__init__ = original_init
+    return {
+        "path": path,
+        "decisions": decisions,
+        "won": bool(record.won),
+        "end": record.end,
+        "fragile_moves": [],
+    }
 
 
 def action_words(action) -> str:
@@ -425,8 +534,13 @@ def draw(world: dict, played: dict, title: str, path: Path) -> None:
         gap = f" (trigger {d['trigger'][0]:.0f} px)" if d.get("trigger") else ""
         if d.get("hold_frames"):
             gap = f" ({d['hold_frames']} frames)"
+        teacher = (
+            f" (teacher: {action_words(d.get('teacher'))})"
+            if "agrees" in d and not d["agrees"]
+            else ""
+        )
         item = (
-            f"{number} {action_words(d.get('action'))}"
+            f"{number} {action_words(d.get('action'))}{teacher}"
             f"{' (keeps its speed)' if keeps_speed(d) else ''}"
             f"{PLACES[d['place']]}{f' x{count}' if count > 1 else ''}{gap}"
         )
@@ -469,7 +583,10 @@ def draw(world: dict, played: dict, title: str, path: Path) -> None:
                 width=2,
             )
     for number, (d, _) in enumerate(groups, 1):
-        color = {"ground": ON_GROUND, "enemy": ON_ENEMY, "air": IN_AIR}[d["place"]]
+        if "agrees" in d:
+            color = AGREES if d["agrees"] else DIFFERS
+        else:
+            color = {"ground": ON_GROUND, "enemy": ON_ENEMY, "air": IN_AIR}[d["place"]]
         cx, cy = at(d["x"], d["feet"])
         for radius, alpha in ((14, 50), (9, 90), (5, 210)):
             pen.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=color + (alpha,))
@@ -485,6 +602,11 @@ def draw(world: dict, played: dict, title: str, path: Path) -> None:
             pen.line([cx - 7, cy - 7, cx + 7, cy + 7], fill=(0, 0, 0), width=2)
             pen.line([cx - 7, cy + 7, cx + 7, cy - 7], fill=(0, 0, 0), width=2)
         pen.text((cx - 4, cy - 30 - 12 * (number % 2)), str(number), fill=(20, 20, 20), font=small)
+    if not played.get("won", True) and played["path"]:
+        # Where a lost episode ended.
+        cx, cy = at(*played["path"][-1])
+        pen.line([cx - 11, cy - 22, cx + 11, cy], fill=(0, 0, 0), width=4)
+        pen.line([cx - 11, cy, cx + 11, cy - 22], fill=(0, 0, 0), width=4)
     pen.text((6, 5), title, fill=(20, 20, 20), font=font)
     y = head + (height - top) * SCALE + 6
     for text in lines:
@@ -564,6 +686,154 @@ def make_atlas(out: Path, families, quantiles=QUANTILES, difficulties=DIFFICULTI
         r.pop("fingerprint", None)
         entries.append(r)
     (out / "atlas.json").write_text(json.dumps(entries, indent=1) + "\n")
+    family_sheets(out, entries)
+    return entries
+
+
+def family_sheets(out: Path, entries: list, columns: Optional[str] = None) -> list:
+    """One sheet a family under ``out``/sheets: its pictures tiled with a
+    row a difficulty and a column for each entry's "column" (its quantile
+    when it has none), the layouts the generator does not draw (their reason)
+    and those made twice left blank. ``columns`` says what the columns are in
+    the heading. Returns the sheets' paths."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    def column(e):
+        return e.get("column", e.get("quantile"))
+
+    def label(e):
+        return e.get("column_label") or f"{e['quantile']:.0%}"
+
+    font = ImageFont.load_default(size=16)
+    (out / "sheets").mkdir(parents=True, exist_ok=True)
+    by_family: dict = {}
+    for e in entries:
+        by_family.setdefault(e["family"], []).append(e)
+    paths = []
+    for family, rows in by_family.items():
+        played = [e for e in rows if "image" in e]
+        if not played:
+            continue
+        images = {
+            (e["difficulty"], column(e)): Image.open(out / e["image"]).convert("RGB") for e in played
+        }
+        blank = {(e["difficulty"], column(e)): e for e in rows if "image" not in e}
+        cols = sorted({column(e) for e in rows})
+        difficulties = [d for d in DIFFICULTIES if any(e["difficulty"] == d for e in rows)]
+        width = max(i.width for i in images.values())
+        height = max(i.height for i in images.values())
+        pad, head = 8, 32
+        sheet = Image.new(
+            "RGB",
+            (len(cols) * (width + pad) + pad, head + len(difficulties) * (height + pad) + pad),
+            BACKGROUND,
+        )
+        pen = ImageDraw.Draw(sheet)
+        won = sum(bool(e.get("won")) for e in played)
+        who = "the skill" if any("agreement" in e for e in played) else "the teacher"
+        rejected = sum(bool(e.get("rejected")) for e in rows)
+        heading = columns or "draws at " + ", ".join(
+            label(e) for e in sorted({column(e): e for e in rows}.values(), key=column)
+        ) + " of their ranges"
+        pen.text(
+            (pad, 8),
+            f"{family}: {who} won {won} of {len(played)} layouts"
+            f"{f'; {rejected} not drawn by the generator' if rejected else ''}"
+            f" (rows {', '.join(difficulties)}; columns: {heading})",
+            fill=(0, 0, 0),
+            font=font,
+        )
+        for r, difficulty in enumerate(difficulties):
+            for c, key in enumerate(cols):
+                x, y = pad + c * (width + pad), head + pad + r * (height + pad)
+                picture = images.get((difficulty, key))
+                if picture is not None:
+                    sheet.paste(picture, (x, y))
+                    continue
+                pen.rectangle([x, y, x + width, y + height], outline=(200, 200, 200))
+                e = blank.get((difficulty, key))
+                why = e.get("rejected") if e else None
+                pen.text(
+                    (x + 12, y + 12),
+                    f"{difficulty}, {label(e)}: not drawn by the generator ({why})"
+                    if why
+                    else f"{difficulty}: the same layout as another, or none",
+                    fill=(110, 110, 110),
+                    font=font,
+                )
+        path = out / "sheets" / f"{family}.png"
+        sheet.save(path)
+        paths.append(path)
+    return paths
+
+
+def _policy_job(job):
+    family, difficulty, column, task, checkpoint, out = job
+    from . import layered_train as lt
+
+    scenario = lt.task_scenario(task)
+    frames = max(BLUR_FRAMES, int(scenario.get("frame_budget", 0) or 0)) + int(
+        scenario.get("watch_frames", 0) or 0
+    )
+    world = occupancy(scenario, frames)
+    if scenario.get("goal_on_stomp"):
+        world["goal"] = None
+    played = play_policy(scenario, family, difficulty, checkpoint)
+    agree = sum(d["agrees"] for d in played["decisions"])
+    total = len(played["decisions"])
+    name = f"{family}/{difficulty}_{column}.png"
+    (out / family).mkdir(parents=True, exist_ok=True)
+    title = (
+        f"{family} · {difficulty} · validation layout {task.sample_index} · the skill "
+        f"{'won' if played['won'] else 'LOST (' + played['end'] + ')'} · the teacher's action "
+        f"at {agree} of {total} decisions (green: the same, red: another)"
+    )
+    draw(world, played, title, out / name)
+    return {
+        "family": family,
+        "difficulty": difficulty,
+        "column": column,
+        "column_label": f"layout {task.sample_index}",
+        "sample_index": task.sample_index,
+        "image": name,
+        "won": played["won"],
+        "end": played["end"],
+        "agreement": [agree, total],
+        "decisions": [
+            {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items()}
+            for d in played["decisions"]
+        ],
+    }
+
+
+def make_policy_atlas(out: Path, checkpoint: str, families, workers=8):
+    """The trained skill in ``checkpoint`` on its run's validation layouts of
+    ``families`` (the run's own seed and count), one picture a layout: its own
+    choices, green where it chose the teacher's action at that moment, red
+    where it chose another, a cross where a lost episode ended. Sheets and
+    policy.json as make_atlas's."""
+    import multiprocessing
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+
+    from . import layered_train as lt
+
+    _, saved = lt.load_layered_checkpoint(checkpoint, "cpu")
+    config = lt.LayeredTrainConfig(**{**saved["config"], "families": tuple(families)})
+    tasks = lt._tasks(config, "validation", config.validation_layouts_per_difficulty, 0, 0.0, False)
+    jobs, count = [], {}
+    for task in sorted(tasks, key=lambda t: (t.family, DIFFICULTIES.index(t.difficulty), t.sample_index)):
+        key = (task.family, task.difficulty)
+        jobs.append((task.family, task.difficulty, count.get(key, 0), task, str(checkpoint), out))
+        count[key] = count.get(key, 0) + 1
+    out.mkdir(parents=True, exist_ok=True)
+    os.environ.update(OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1")
+    with ProcessPoolExecutor(
+        workers, mp_context=multiprocessing.get_context("spawn"), initializer=_one_thread
+    ) as pool:
+        entries = list(pool.map(_policy_job, jobs))
+    (out / "policy.json").write_text(json.dumps(entries, indent=1) + "\n")
+    family_sheets(out, entries, columns="its run's validation layouts")
     return entries
 
 
@@ -574,11 +844,34 @@ def main(argv: Optional[list] = None) -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--families", nargs="*", default=None)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument(
+        "--policy",
+        default=None,
+        help="a trained skill's checkpoint: draw its own play on its run's validation layouts instead",
+    )
     args = parser.parse_args(argv)
     families = args.families or lt.learner_families("skill", BLOCK_SMB_MC_FAMILIES)
+    if args.policy:
+        entries = make_policy_atlas(Path(args.out), args.policy, families, workers=args.workers)
+        lost = [f"{e['family']} {e['difficulty']} layout {e['sample_index']} ({e['end']})" for e in entries if not e["won"]]
+        agree = sum(e["agreement"][0] for e in entries)
+        total = sum(e["agreement"][1] for e in entries)
+        print(
+            f"{len(entries)} layouts, {len(lost)} lost by the skill{': ' + ', '.join(lost) if lost else ''}; "
+            f"the teacher's action at {agree} of {total} decisions: {Path(args.out) / 'policy.json'}; "
+            f"one sheet a family in {Path(args.out) / 'sheets'}"
+        )
+        return
     entries = make_atlas(Path(args.out), families, workers=args.workers)
     air = sum(d["place"] == "air" for e in entries for d in e.get("decisions", ()))
-    print(f"{len(entries)} layouts, {air} decisions in the air: {Path(args.out) / 'atlas.json'}")
+    played = [e for e in entries if "image" in e]
+    lost = [f"{e['family']} {e['difficulty']} {e['quantile']:.0%}" for e in played if not e["won"]]
+    print(
+        f"{len(played)} layouts played ({len(entries) - len(played)} not drawn by the generator), "
+        f"{len(lost)} lost by the teacher{': ' + ', '.join(lost) if lost else ''}; "
+        f"{air} decisions in the air: {Path(args.out) / 'atlas.json'}; one sheet a family in "
+        f"{Path(args.out) / 'sheets'}"
+    )
 
 
 if __name__ == "__main__":

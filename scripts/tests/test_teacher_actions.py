@@ -135,11 +135,11 @@ def test_a_run_up_is_named_after_what_its_jump_is_aimed_at():
         state.notes["planned_jump"] = (step, SkillToken("jump", 30, 0), m["x"] + 8, [("enemy", 0)])
         assert teacher_action(env, state, step).verb == "run_to"
         # Before a jump back onto the surface it starts on, a run is a plain run,
-        # and approaching that surface has no version.
+        # and approaching that surface goes nowhere: a hold.
         landing = [("point", cx - 32, feet)]
         state.notes["planned_jump"] = (run, SkillToken("jump", -40, 0), m["x"] + 8, landing)
         assert teacher_action(env, state, run) == ActionToken("run_to", ("surfaces", 0))
-        assert carry_out(env, state, ActionToken("approach", ("surfaces", 0))) is None
+        assert carry_out(env, state, ActionToken("approach", ("surfaces", 0))).mode == "hold"
     with Decision("action_jump_gap") as d:
         env, state = d.env, d.state
         m = env.mario
@@ -213,12 +213,17 @@ def test_the_teacher_carries_out_the_skills_chosen_action():
         # Its own choice, already found, is carried out as it is.
         mine = SkillToken("jump", 30, 0)
         assert carry_out(d.env, d.state, safe[0], safe[0], mine) == mine
-        # A hold holds; an object the vision does not report has no version.
+        # A hold holds; an object the vision does not report is a hold.
         assert carry_out(d.env, d.state, ActionToken("hold")).mode == "hold"
-        assert carry_out(d.env, d.state, ActionToken("land_on", ("surfaces", 13))) is None
-        # Nor does an action aimed at a gap: the teacher names none.
-        assert carry_out(d.env, d.state, ActionToken("approach", ("gaps", 0))) is None
-        assert carry_out(d.env, d.state, ActionToken("jump_over", ("gaps", 0))) is None
+        assert carry_out(d.env, d.state, ActionToken("land_on", ("surfaces", 13))).mode == "hold"
+        # An action the teacher names no version of (it names none aimed at a
+        # gap) is still carried out, straight at its object (user,
+        # 2026-10-17: the unsafe choice no longer ends the episode).
+        m = d.env.mario
+        approach = carry_out(d.env, d.state, ActionToken("approach", ("gaps", 0)))
+        assert approach.mode == "run" and approach.carry and approach.x > 0
+        over = carry_out(d.env, d.state, ActionToken("jump_over", ("gaps", 0)))
+        assert over.mode == "jump" and over.x > approach.x
 
 
 @pytest.mark.timeout(600)

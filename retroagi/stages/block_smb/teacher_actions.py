@@ -422,8 +422,8 @@ def tried_runs(env, state, target=None) -> list:
     """The teacher's version (carry_out) of running to each reported surface
     Mario can run to, those its screening ranks best first (at most
     RUN_SURFACES), and of backing away from the nearest enemy, as actions
-    with their outcomes: [{"action", "outcome"}]. On the ground only; an
-    action with no safe version is left out. (Its jumps are tried_actions.)"""
+    with their outcomes: [{"action", "outcome"}]. On the ground only. (Its
+    jumps are tried_actions.)"""
     from .controller_teacher import _screened_runs, teacher_target
 
     m = env.mario
@@ -452,8 +452,6 @@ def tried_runs(env, state, target=None) -> list:
     out = []
     for action in actions:
         command = carry_out(env, state, action)
-        if command is None:
-            continue
         result = _trial_of(env, state, command)
         verb, thing, slot = _classify(env, state, command, result)
         if slot is not None and ActionToken(verb, slot) == action:
@@ -487,24 +485,26 @@ def action_rows(env, state, command):
 
 def carry_out(env, state, action, teacher_label=None, teacher_command=None):
     """The teacher's version of the skill's own chosen ``action`` from here,
-    as the executor's destination, or None when it has no safe version (the
-    choice then counts as a failure). Training only: the simulator finds and
-    tries it. Used instead of the action predictor until that predicts well
+    as the executor's destination. Training only: the simulator finds and
+    tries it. Used instead of the world model while the layers train
     (docs/design-decisions.md).
 
     The teacher's own command when the action is the teacher's choice
     (``teacher_label``, ``teacher_command``); else, of the versions the
-    teacher tries that it names as this action and that are safe, the one it
-    ranks best: a jump of its jump table (land_on, stomp, jump_over), a run
-    it screens (run_to, back_away), or a run-up before a jump aimed at the
-    action's object (approach); in the air, a steer of any verb.
+    teacher tries that it names as this action, the one it ranks best: a jump
+    of its jump table (land_on, stomp, jump_over), a run it screens (run_to,
+    back_away), or a run-up before a jump aimed at the action's object
+    (approach); in the air, a steer of any verb. Where none is named as it, a
+    move straight at its object (_straight_at). The skill learns to imitate
+    the teacher: its action is carried out whatever follows (user,
+    2026-10-17).
 
-    An approach to the surface Mario stands on has none: a run before a jump
+    An approach to the surface Mario stands on is a hold: a run before a jump
     back onto it is named a plain run (run_up_slot).
     """
     from retroagi.core.tokens import SkillToken
 
-    from .controller_teacher import _air_options, _jump_table, _rank, teacher_target
+    from .controller_teacher import _rank
 
     if action.verb == "hold":
         # As long as the teacher's own wait (its length the simulator's
@@ -519,11 +519,23 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
     if action.verb == "approach" and action.target == surface_slot(
         env, _scene(env, state), m["x"] + m["w"] / 2, m["y"] + m["h"]
     ):
-        return None
+        return SkillToken("hold", 0, 0)  # a run-up onto the surface he stands on: nowhere to go
     if action.verb == "approach" and _runs_up_to(env, state, action, teacher_command):
         # The teacher's run toward the object, stopping before it: a run-up
         # (the jump that follows is the next decision's).
         return teacher_command
+    named = _named_versions(env, state, action)
+    if named:
+        return max(named, key=lambda v: _rank(*v))[0]
+    return _straight_at(env, state, action)
+
+
+def _named_versions(env, state, action):
+    """The versions of ``action`` the teacher tries from here and names as
+    it: [(command, result)] (carry_out)."""
+    from .controller_teacher import _air_options, _jump_table, teacher_target
+
+    m = env.mario
     target = teacher_target(env)
     memo = {}
     if not m["on_ground"]:
@@ -537,15 +549,52 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
         candidates = _approach_versions(env, state, target, memo, action)
     else:
         candidates = _run_versions(env, state, target, memo, action)
-    found = []
+    out = []
     for command, result in candidates:
         verb, _, slot = _classify(env, state, command, result)
         named = ActionToken("hold") if verb == "hold" else ActionToken(verb, slot) if slot else None
-        if named == action and (result.safe or result.won):
-            found.append((command, result))
-    if not found:
-        return None
-    return max(found, key=lambda v: _rank(*v))[0]
+        if named == action:
+            out.append((command, result))
+    return out
+
+
+def _straight_at(env, state, action):
+    """A move straight at ``action``'s object, where no version the teacher
+    tries is named as it (carry_out): a run along to it (run_to; approach,
+    keeping the speed), 32 pixels away from it (back_away), a jump onto it
+    (land_on, stomp) or past it (jump_over); a hold where it names nothing
+    reported."""
+    from retroagi.core.tokens import SkillToken
+
+    m = env.mario
+    cx, feet, half = m["x"] + m["w"] / 2, m["y"] + m["h"], m["w"] / 2
+    kind, slot = action.target
+    lists = packed_lists(_scene(env, state))
+    if slot >= len(lists[kind]):
+        return SkillToken("hold", 0, 0)
+    item = lists[kind][slot]
+    if kind in ("surfaces", "gaps"):
+        x0, x1 = item.x0, item.x1
+        top = getattr(item, "top", feet)
+    else:
+        box = item.box if kind in ("blocks", "enemies") else item
+        x0, top, x1 = box[0], box[1], box[2]
+    x0, x1 = x0 + env.camera_x, x1 + env.camera_x  # the scene's x is the screen's
+    side = 1 if (x0 + x1) / 2 >= cx else -1
+    if action.verb == "back_away":
+        return SkillToken("run", -side * 32, 0)
+    if action.verb == "jump_over":
+        aim = x1 + half + 8 if side > 0 else x0 - half - 8
+        return SkillToken("jump", round(aim - cx), 0)
+    if kind == "gaps":
+        # Into the gap: its middle, at the floor's height.
+        if action.verb in ("land_on", "stomp"):
+            return SkillToken("jump", round((x0 + x1) / 2 - cx), 0)
+        return SkillToken("run", round((x0 + x1) / 2 - cx), 0, carry=action.verb == "approach")
+    aim = min(max(cx, x0 + half), x1 - half)  # its nearest point Mario fits on
+    if action.verb in ("land_on", "stomp"):
+        return SkillToken("jump", round(aim - cx), round(top - feet))
+    return SkillToken("run", round(aim - cx), round(top - feet), carry=action.verb == "approach")
 
 
 def _runs_up_to(env, state, action, command) -> bool:
@@ -652,8 +701,8 @@ def _approach_versions(env, state, target, memo, action):
         for t in range(-48, REACH + 1)
         if t and floor.left + half + 2 <= cx + t * side <= floor.right - half - 2
     ]
-    best = _best_certified(
-        env, state, target, memo, side, travels, wanted, lambda r: r.won or r.safe
-    )
+    # Any run-up into a jump at the object is a version of it: the skill's
+    # action is carried out whatever follows (carry_out).
+    best = _best_certified(env, state, target, memo, side, travels, wanted, lambda r: True)
     return [best] if best is not None else []
 
