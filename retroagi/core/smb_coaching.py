@@ -65,6 +65,21 @@ def segment_stomp(env):
     )
 
 
+def bridge_objective(env):
+    """Standing on the moving bridge, where the goal counts only after a
+    crossing on it: until Mario has boarded it, it is the target. Aimed at the
+    floor beyond, a jump over the whole gap, where the gap was narrow enough,
+    was taught, and the goal was never credited (moving_bridge, 2026-10-17)."""
+    index = next((i for i, p in enumerate(env.platforms) if p.get("moving")), None)
+    if index is None:
+        return None
+    r, m = env.platforms[index]["rect"], env.mario
+    direction = 1 if r.centerx >= m["x"] + m["w"] / 2 else -1
+    return LocalObjective(
+        "mount", r.left, r.right, r.top, platform_index=index, direction=direction, stand=True
+    )
+
+
 def training_target(env):
     if getattr(env, "_bridge_jump_task", None):
         # The jump task succeeds only on the required collision landing.
@@ -77,6 +92,10 @@ def training_target(env):
     target = segment_stomp(env)
     if target is not None:
         return target
+    if env._require_bridge_before_goal and not env._bridge_boarded:
+        target = bridge_objective(env)
+        if target is not None:
+            return target
     # The layout's tactic segment: its route's next platform, or its retreat line.
     target = route_objective(env) or retreat_objective(env)
     if target is not None:

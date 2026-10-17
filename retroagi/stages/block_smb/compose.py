@@ -360,6 +360,16 @@ def compose(rng: random.Random, difficulty: str, parts: list) -> tuple[dict, dic
         x += section.width
     if not schedule:
         schedule.append(segment("advance", 1))
+    # A segment keeps off what the next one avoids, unless its own route needs
+    # it: from the top of a stairs section the teacher jumped onto a dead end's
+    # high path, which the next segment (into the dead end's corridor) avoids;
+    # Mario was on it before that segment began, and the retreat out of the
+    # corridor left him sliding off its edge (tactics_bridge_then_gap,
+    # 2026-10-17).
+    for here, after in zip(schedule, schedule[1:]):
+        here["avoid"] = here["avoid"] + [
+            i for i in after["avoid"] if i not in here["route"] and i not in here["avoid"]
+        ]
     # Only the last segment ends at the goal.
     if any("goal" in seg["end"] for seg in schedule[:-1]):
         raise ValueError("a section ended its tactics at the goal")

@@ -317,6 +317,13 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                 objective = (
                     env.enemies[target.enemy_index]["dead"]
                     if target.kind == "stomp" and target.enemy_index is not None
+                    # A coin is the target for its point: collected, it is
+                    # reached, wherever the move stopped. The last coin at the
+                    # screen's left edge was collected by a run stopped there
+                    # short of its aim, and no move was taught
+                    # (max_points_hold_ground, 2026-10-17).
+                    else env.points() > points
+                    if target.kind == "coin"
                     else target.reached(env)
                 )
                 enemy_gap, edge, outcome, distances = _measured(env, watch, alive, mark)
@@ -2495,6 +2502,14 @@ def teacher_target(env):
     return target
 
 
+# A route platform still ahead must keep room for Mario wholly in view on it:
+# vision does not see the screen's 8 leftmost columns (the NES hides them).
+# Left with one Mario-width on screen, the step back up to a dead end's high
+# path showed only 2 pixels of him, and every action there ended at once
+# (tactics_bridge_then_gap, 2026-10-17).
+ROUTE_VISIBLE = 12
+
+
 def route_available(env):
     """Do not scroll an unfinished route or required reward off the left edge."""
     edge = env.camera_x
@@ -2505,7 +2520,7 @@ def route_available(env):
         route = segment.get("route", ())
         if offset == 0:
             route = route[env._route_done :]
-        if any(env.platforms[i]["rect"].right - half < edge + half for i in route):
+        if any(env.platforms[i]["rect"].right - half < edge + half + ROUTE_VISIBLE for i in route):
             return False
         end = segment.get("end", {})
         if segment["direction"] < 0 and end.get("reach_x", edge) < edge:
@@ -2622,7 +2637,12 @@ def stop_safe(env, spatial, executor):
         and abs(e["y"] + e["h"] - feet) < 20
         and abs(e["x"] + e["w"] / 2 - middle) < BRAKE_WATCH
     ]
-    if not plant and not near:
+    # Landing fast, the slide may carry the screen on (it never scrolls back)
+    # and leave a platform the route still needs out of view: a jump down into
+    # a dead end's corridor slid 30 pixels on, and the step back out of it was
+    # left off the screen (tactics_bridge_then_gap, 2026-10-17).
+    fast = m["on_ground"] and abs(m["vx"]) >= 1.0
+    if not plant and not near and not fast:
         return True
     if plant and on_plant_mouth(env):
         return False
@@ -2640,7 +2660,7 @@ def stop_safe(env, spatial, executor):
         scene = scene_from_labels(env.scene_labels())
         plan = feedback.begin(SkillToken("hold", 0, 0), scene)
         control.start(plan, flight=feedback.flight, travel=feedback.travel)
-        for frame in range(BRAKE_FRAMES if near else 6):
+        for frame in range(BRAKE_FRAMES if near or fast else 6):
             if frame:
                 control.end("hold_recheck")
                 plan = feedback.begin(SkillToken("hold", 0, 0), scene)
@@ -2657,6 +2677,8 @@ def stop_safe(env, spatial, executor):
                 break  # stopped
             scene = scene_from_labels(env.scene_labels())
             feedback.observe(scene)
+        if not route_available(env):
+            return False
     return True
 
 
@@ -2664,6 +2686,12 @@ def stop_safe(env, spatial, executor):
 # before the pipe: room for a run-up into the jump over it (the old button
 # teacher's staging spot, piranha_tactics.staging_x).
 PLANT_STAGING = 32
+# Farther back by this much (pixels) after a low phase in which no crossing
+# was found from the staging spot, at most PLANT_STAGING_MOST; decided when at
+# most PLANT_LATE frames of the low phase are left.
+PLANT_STAGING_STEP = 16
+PLANT_STAGING_MOST = 96
+PLANT_LATE = 16
 # A crossing is searched for only when the plant will be hidden within this
 # many frames (a run-up and a jump take about that long); before that it
 # cannot work, and each search costs seconds.
@@ -2729,15 +2757,36 @@ def plant_destination(env, state):
         state.notes["plant_destination"] = (env.steps, goal)
         return goal
 
+    memo = {}
+    direction = target.direction if target.direction in (-1, 1) else 1
+    rects = [p["rect"] for p in env.platforms]
+
     def crosses(index):
-        ends = env.platforms[index]["rect"] if index is not None else None
-        return ends is not None and (ends == pipe or ends.left >= pipe.right - 2)
+        """Whether a landing there may cross the pipe: on it, or on a floor
+        reaching past it. Often that is the floor Mario stands on, the pipe
+        standing on it: counted only as the pipe or a platform wholly past it,
+        no crossing was ever found, and Mario held before the pipe until the
+        episode ran out (mixed_section, 2026-10-17)."""
+        ends = rects[index] if index is not None else None
+        return ends is not None and (
+            ends == pipe
+            or (ends.right >= pipe.right + 2 if direction > 0 else ends.left <= pipe.left - 2)
+        )
+
+    def past(x):
+        """Whether Mario standing at ``x`` (his left side) is past the pipe."""
+        return x >= pipe.right if direction > 0 else x + m["w"] <= pipe.left
 
     def works(result):
         return result.won or result.safe and result.clearance >= 8
 
-    memo = {}
-    direction = target.direction if target.direction in (-1, 1) else 1
+    # Where Mario waits for the plant to go down: PLANT_STAGING pixels before
+    # the pipe, or farther where no crossing was found from there.
+    staging_key = ("plant_staging", pipe.x, pipe.y)
+    staging = state.notes.get(staging_key, PLANT_STAGING)
+
+    def staging_spot(distance):
+        return pipe.left - distance - m["w"] if direction > 0 else pipe.right + distance
     front = (
         pipe.left - (m["x"] + m["w"]) if direction > 0 else m["x"] - pipe.right
     )
@@ -2750,16 +2799,24 @@ def plant_destination(env, state):
             travels = [0] + [t for t in range(MIN_RUN, math.floor(front) + 1)]
 
             def wanted(option, landing, killed):
-                return crosses(landing)
+                if not crosses(landing):
+                    return False
+                if rects[landing] == pipe or option.command is not None:
+                    return True  # where it lands is checked by its trial
+                # A run-up's jump: its predicted path says where it lands.
+                end = _path_landing(option.free_path, rects)
+                start = option.free_path[0]
+                return end is None or past((start[0] + start[2]) / 2 + end[1] - m["w"] / 2)
 
             def check(r):
                 landing = r.outcome[1] if r.outcome else None
-                return r.won or (
-                    crosses(landing)
-                    and r.safe
-                    and r.clearance >= 8
-                    and (env.platforms[landing]["rect"] != pipe or leaves_in_time(r))
-                )
+                if r.won:
+                    return True
+                if not (crosses(landing) and r.safe and r.clearance >= 8):
+                    return False
+                if rects[landing] == pipe:
+                    return leaves_in_time(r)
+                return past(m["x"] + r.start_dx + r.end_dx)
 
             def leaves_in_time(r):
                 # Landed on the pipe: the plant must stay down while he walks
@@ -2777,10 +2834,21 @@ def plant_destination(env, state):
             best = _best_certified(env, state, target, memo, direction, travels, wanted, check)
             if best is not None:
                 return remember(best[0])
+            if (
+                _frames_until_hidden(plant) == 0
+                and _down_for(plant, 0) <= PLANT_LATE
+                and abs(m["x"] - staging_spot(staging)) <= 4
+                and staging < PLANT_STAGING_MOST
+            ):
+                # The plant down and nearly up again, Mario waiting at the
+                # staging spot, and no crossing: wait farther back. From 32
+                # pixels before a 26-pixel pipe, every jump high enough to
+                # pass it hit its corner, and Mario waited there through every
+                # low phase until the episode ran out (mixed_section, 2026-10-17).
+                staging += PLANT_STAGING_STEP
+                state.notes[staging_key] = staging
         # Not yet: wait where a run-up still fits.
-        spot = (
-            pipe.left - PLANT_STAGING - m["w"] if direction > 0 else pipe.right + PLANT_STAGING
-        )
+        spot = staging_spot(staging)
         offset = round(spot - m["x"])
         if abs(offset) >= MIN_RUN:
             goal = SkillToken("run", offset, 0)
@@ -2802,6 +2870,11 @@ def plant_destination(env, state):
     if trial(env, state, hold, target).safe:
         return remember(hold)
     return None
+
+
+# A jump over a monster that lands past it while it walks away from Mario
+# needs only this much room from it (pixels; monster_destination).
+MONSTER_RECEDING = 2
 
 
 def monster_destination(env, state):
@@ -2841,6 +2914,16 @@ def monster_destination(env, state):
 
     gap = (enemy["x"] - m["x"] - m["w"]) if side > 0 else m["x"] - enemy["x"] - enemy["w"]
     line = segment.get("keep_behind", floor.right if side > 0 else floor.left)
+
+    def clear_of(result):
+        """Room enough from the monster where the jump lands past it: 8
+        pixels, or MONSTER_RECEDING when it walks toward where Mario was, away
+        from him. Out of its tunnel, coming, it left him 7.8 pixels as it walked
+        on, and every jump over it was refused; Mario backed away until it
+        went back in and the episode stalled (chained_enemy_gauntlet,
+        2026-10-17)."""
+        receding = enemy["direction"] == -side and enemy["speed"] > 0
+        return result.clearance >= (MONSTER_RECEDING if receding else 8)
     near_opening = (enemy["x"] - line) * side <= 16
     if gap < 96 and near_opening:
         # Of every jump Mario can make that clears the monster onto his floor,
@@ -2854,14 +2937,14 @@ def monster_destination(env, state):
         for option in _jump_table(env, state, target, {}, (side,)):
             result = option.result
             index = result.outcome[1] if result.outcome else None
-            if not (result.won or (result.safe and result.advanced and result.clearance >= 8)):
+            if not (result.won or (result.safe and result.advanced and clear_of(result))):
                 continue
             if not result.won and (index is None or index != floor_index):
                 continue
             working.append((_rank(option.command, result), option.command))
         for _, goal in sorted(working, key=lambda w: w[0], reverse=True)[:CERTIFY]:
             result = trial(env, state, goal, target)
-            if result.won or (result.safe and result.advanced and result.clearance >= 8):
+            if result.won or (result.safe and result.advanced and clear_of(result)):
                 return remember(goal)
     # Reveal the monster with small supported approaches. Do not spend the
     # runway needed to brake and retreat outside the low tunnel.

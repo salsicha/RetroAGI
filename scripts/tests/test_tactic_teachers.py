@@ -144,3 +144,35 @@ def test_no_run_is_aimed_into_the_goal_before_the_points_are_collected():
         assert any(env.goal.left - m["w"] < m["x"] + run.x < env.goal.right for run in runs)
     finally:
         env.close()
+
+
+@pytest.mark.timeout(900)
+def test_the_bridge_is_boarded_before_the_goal():
+    # The goal counts only after a crossing on the bridge. Aimed at the floor
+    # beyond, a jump over this hard layout's 116-pixel gap was taught, and
+    # Mario stood in the goal uncredited until the time ran out.
+    scenario = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=2026101201, sample_index=8, family="moving_bridge", difficulty="hard"
+    ).scenario
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        target = ct.teacher_target(env)
+        bridge = next(i for i, p in enumerate(env.platforms) if p.get("moving"))
+        assert (target.kind, target.platform_index, target.stand) == ("mount", bridge, True)
+    finally:
+        env.close()
+    played = replay(scenario, family="moving_bridge", max_frames=600)
+    assert played["won"]
+
+
+def test_a_segment_keeps_off_what_the_next_one_avoids():
+    # From the top of a stairs section the teacher jumped onto the dead end's
+    # high path, which the next segment avoids (tactics_bridge_then_gap).
+    tactics = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=2026101201, sample_index=0, family="tactics_bridge_then_gap", difficulty="easy"
+    ).scenario["tactics"]
+    # The advance into the dead end's corridor comes just before its retreat.
+    corridor = next(i for i, seg in enumerate(tactics) if seg["stance"] == "retreat") - 1
+    assert tactics[corridor]["avoid"]
+    assert set(tactics[corridor]["avoid"]) <= set(tactics[corridor - 1]["avoid"])

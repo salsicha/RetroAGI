@@ -69,7 +69,7 @@ fresh stages (user, 2026-10-17; chained). Then the Full SMB loop.
   two modes, the skill's and tactic's reward rounds) is to be settled with the
   user once the networks' first results exist.
 
-## 2026-10-16 — The tactic re-check's lost layouts (built; being re-qualified)
+## 2026-10-16 — The tactic re-check's lost layouts (built)
 
 The re-check of the tactic layouts (validation stage) passed 357 of 378: the
 teacher lost 21 in the production pipeline (vision, executor), 6 by timeout,
@@ -103,9 +103,41 @@ the losses come from what vision and the executor do. Causes found and fixed
   the edge (Full SMB 1-1, read from its memory): the edge, and the world's
   right end, now stop him as a wall does.
 
-Still open: max_points_climb_backward, max_points_hold_ground, and the
-timeouts (moving_bridge, chained_enemy_gauntlet, mixed_section,
-tactics_mixed_sequence, tactics_bridge_then_gap).
+A re-check of the 21 on those fixes (2026-10-17, after the machine went down:
+the eGPU's link dropped at 18:17 and the NUC's power brick failed) won 13. The
+other 8, fixed on 2026-10-17:
+
+- **The bridge before the goal** (moving_bridge; `smb_coaching.bridge_objective`).
+  Where the goal counts only after a crossing on the bridge, the bridge is the
+  target until Mario has boarded it. Aimed at the floor beyond, a jump over a
+  narrow enough gap was taught, and Mario stood in the goal uncredited.
+- **A monster walking away** (chained_enemy_gauntlet). A jump landing past a
+  monster that walks toward where Mario was needs 2 pixels of room from it,
+  not 8: every jump over it as it came out of its tunnel left 3-8 pixels, all
+  were refused, and Mario backed away until it went back in.
+- **A plant's pipe on Mario's own floor** (mixed_section). A crossing may end
+  on any floor reaching past the pipe, provided Mario ends past it (the pipe
+  stands on the floor he walks on: only a platform wholly past it counted).
+  Where no crossing is found from the staging spot during a low phase, Mario
+  waits 16 pixels farther back (up to 96): from 32 pixels before a 26-pixel
+  pipe every jump high enough hit its corner.
+- **A coin is reached when collected** (max_points_hold_ground). A coin target's
+  trial counts as reaching it when the score rises, wherever the move
+  stopped: the last coin, at the screen's left edge, was collected by a run
+  stopped there short of its aim, and nothing was taught.
+- **A segment keeps off what the next avoids** (tactics_bridge_then_gap;
+  `compose.py`). From the top of a stairs section the teacher jumped onto a
+  dead end's high path, which the next segment avoids; the retreat out of the
+  corridor then left Mario sliding off its edge.
+- **The route ahead stays in view** (tactics_bridge_then_gap). A platform the
+  route still needs must keep room for Mario wholly in view on it (vision does
+  not see the screen's 8 leftmost columns), and a fast landing's slide is
+  braked in a probe and judged the same way: a jump down into the dead end's
+  corridor slid on, the screen followed (it never scrolls back), and on the
+  step back out Mario showed as 2 pixels; every action there ended at once.
+
+All 21 win through the production pipeline on these fixes, and the tactic run
+checks the teacher on all 378 validation layouts before it learns.
 
 ## 2026-10-16 — Stomp variety; the plant and monster teachers win their lessons (user decision; built)
 
