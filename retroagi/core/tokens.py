@@ -205,9 +205,10 @@ def token_layout() -> dict:
         "skill": {
             "strategy_context": "strategy_switch_v1",
             "execution_feedback": list(EXECUTION_FEEDBACK),
-            # An action: a verb and a pointer to one of the objects reported
-            # (core/action_tokens), executed at its ground-truth end (the
-            # teacher's version of it) until the world model predicts it.
+            # An action: a verb (run, jump or wait) and a pointer to the
+            # reported object a run or a jump ends on (core/action_tokens),
+            # executed at its ground-truth end (the teacher's version of it)
+            # until the world model predicts it.
             "actions": list(VERBS),
             "pointer": dict(SCENE_SLOTS),
             "executed_by": "ground_truth_v1",

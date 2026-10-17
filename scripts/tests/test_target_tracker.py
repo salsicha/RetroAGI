@@ -70,9 +70,16 @@ def test_the_features_the_agent_tracked_with_are_the_recordings():
             record_truth=True,
         )
         torch.manual_seed(0)
+        policy = LayeredSMBPolicy().eval()
+        # The untrained skill runs: a wait the teacher would not make lasts a
+        # frame, and each frame's decision asks the teacher again (seconds).
+        with torch.no_grad():
+            policy.skill.heads["verb"].weight.zero_()
+            policy.skill.heads["verb"].bias.fill_(-20)
+            policy.skill.heads["verb"].bias[VERBS.index("run")] = 20
         record = lt.play_episodes(
             reference_vision()[0],
-            LayeredSMBPolicy().eval(),
+            policy,
             "skill",
             [task],
             "cpu",
@@ -202,15 +209,15 @@ def test_an_enemy_aimed_actions_destination_is_the_enemy_seen_not_the_command():
     sprites[1] = (1.0, 40.0, -6.0, -0.5, 0.0, 1.0)
     identities = np.zeros(SPRITE_SLOTS, np.int32)
     identities[1] = 7
-    stomp = VERBS.index("stomp")
+    stomp = VERBS.index("jump")  # a jump onto the enemy
     pointer = pointer_index(("enemies", 1)) - POINTER_START
     one = action_state(stomp, pointer, [1, 31, -10, 0, 0, 0], sprites, identities, (0, 0), 3)
     other = action_state(stomp, pointer, [1, 52, -10, 0, 0, 0], sprites, identities, (0, 0), 3)
     assert one == other and one.destination == (40.0, -6.0) and one.target == 7
-    # A hold's length and threat (the teacher's truth) are never inputs.
-    hold = VERBS.index("hold")
-    short = action_state(hold, -1, [2, 0, 0, 0, 3, 0], sprites, identities, (0, 0), 3)
-    long = action_state(hold, -1, [2, 0, 0, 0, 90, 1], sprites, identities, (0, 0), 3)
+    # A wait's length and threat (the teacher's truth) are never inputs.
+    wait = VERBS.index("wait")
+    short = action_state(wait, -1, [2, 0, 0, 0, 3, 0], sprites, identities, (0, 0), 3)
+    long = action_state(wait, -1, [2, 0, 0, 0, 90, 1], sprites, identities, (0, 0), 3)
     assert short == long and short.destination == (0.0, 0.0)
     features = frame_features(
         sprites, np.zeros(3), np.zeros((6, 8)), identities, (10.0, 0.0), 5, one

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from retroagi.core.action_tokens import VERBS, ActionToken
+from retroagi.core.action_tokens import ActionToken
 from retroagi.core.layered_policy import LayeredSMBPolicy
 from retroagi.core.smb_agent import SMBAgents, destination_of
 from retroagi.core.smb_observer import VisionObserver
@@ -25,17 +25,18 @@ from retroagi.core.tokens import SkillToken, tactic_token
 
 def test_a_predicted_outcome_is_the_executors_destination():
     outcome = [37.4, -10.2, 0.0, 0.0, 41.6]
-    assert destination_of(ActionToken("hold"), outcome) == SkillToken("hold", 0, 0, frames=42)
-    run = ActionToken("run_to", ("surfaces", 0))
+    # A wait lasts as long as predicted (at most 255 frames).
+    assert destination_of(ActionToken("wait"), outcome) == SkillToken("hold", 0, 0, frames=42)
+    assert destination_of(ActionToken("wait"), [0, 0, 0, 0, 900.0]).frames == 255
+    run = ActionToken("run", ("surfaces", 0))
     assert destination_of(run, outcome) == SkillToken("run", 37, -10)
-    approach = ActionToken("approach", ("surfaces", 1))
-    assert destination_of(approach, outcome) == SkillToken("run", 37, -10, carry=True)
-    jump = ActionToken("jump_over", ("enemies", 0))
+    jump = ActionToken("jump", ("surfaces", 1))
     assert destination_of(jump, outcome) == SkillToken("jump", 37, -10)
-    # A stomp goes where the trackers expect to meet the enemy.
-    stomp = ActionToken("stomp", ("enemies", 0))
+    # A jump onto an enemy (a stomp) goes where the trackers expect to meet
+    # it.
+    stomp = ActionToken("jump", ("enemies", 0))
     assert destination_of(stomp, outcome, contact=(44.0, -8.0)) == SkillToken("jump", 44, -8)
-    assert destination_of(ActionToken("hold"), [0, 0, 0, 0, 900.0]).frames == 255
+    assert destination_of(stomp, outcome) == SkillToken("jump", 37, -10)
 
 
 def scene(enemy_x=None, air=False):
@@ -79,7 +80,10 @@ def test_the_world_model_steps_once_per_action_and_its_state_carries():
     agents = SMBAgents(VisionObserver(Pictures([scene()])), policy, "cpu", world_model=True)
     made = [
         SimpleNamespace(
-            action=ActionToken("hold"), skill=None, execution_feedback=[0.0] * 9, predicted=None
+            action=ActionToken("wait"),
+            skill=None,
+            execution_feedback=[0.0] * 9,
+            predicted=None,
         )
     ]
     from retroagi.core.smb_agent import scene_rows, stack_rows

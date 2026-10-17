@@ -8,8 +8,8 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import numpy as np
 import pytest
 
-from retroagi.core.action_tokens import VERBS
-from retroagi.core.layered_policy import LayeredSMBPolicy
+from retroagi.core.action_tokens import VERBS, pointer_target
+from retroagi.core.layered_policy import POINTER_START, LayeredSMBPolicy
 from retroagi.core.smb_kinematics import SPRITE_SLOTS
 from retroagi.stages.block_smb import layered_train as lt
 from retroagi.stages.block_smb.env import MarioScenarioEnv
@@ -69,7 +69,9 @@ def test_executed_commands_and_the_actions_they_carried_out_are_kept(stomp):
     # The teacher played every decision: its named choice is the action.
     named = stomp.labels["action_valid"].astype(bool)
     assert (stomp.action_verb[named] == stomp.labels["verb"][named]).all()
-    assert VERBS[stomp.action_verb[named][-1]] == "stomp"
+    # The last: a jump onto the walker (a stomp).
+    assert VERBS[stomp.action_verb[named][-1]] == "jump"
+    assert pointer_target(int(stomp.action_pointer[named][-1]) + POINTER_START)[0] == "enemies"
     # A decision comes when the action before it ended.
     for frame in stomp.decision_frames[1:]:
         assert stomp.ended[frame] > 0

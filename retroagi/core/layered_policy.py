@@ -334,16 +334,17 @@ def _pick(logits, sample: bool):
 
 
 class SkillLayer(_Layer):
-    """The skill layer: it chooses an action, a verb and then the object it is
-    aimed at (docs/action-predictor-controller.md).
+    """The skill layer: it chooses an action, a verb (run, jump or wait) and
+    then, for a run or a jump, the object it ends on (core/action_tokens).
 
-    The verb first (a verb with nothing in view it can aim at is excluded);
-    then the pointer, reading the chosen verb: the decision token, adjusted by
-    the verb, scored against each object's scene token after the blocks
-    (absent objects, and kinds the verb cannot aim at, are excluded; a hold
-    aims at nothing). Where the action ends (the executor's destination) is
-    the teacher's ground truth in training, the world model's prediction
-    later; the layer reads neither.
+    The verb first (a run or a jump with nothing in view it can end on is
+    excluded); then the pointer, reading the chosen verb: the decision
+    token, adjusted by the verb, scored against each object's scene token
+    after the blocks (absent objects, and kinds the verb cannot aim at, are
+    excluded; a wait aims at nothing). Where exactly the action ends and how
+    long it takes (the executor's destination) is the teacher's ground truth
+    in training, the world model's prediction later; the layer reads
+    neither.
     """
 
     def __init__(self, settings: PolicySettings, above_width: int):
@@ -369,14 +370,14 @@ class SkillLayer(_Layer):
         """The verb's logits [B, len(VERBS)]; ``present`` [B, POINTER_TOKENS]:
         the objects in view."""
         usable = (present[:, None, :] & self.allowed[None]).any(-1)
-        usable[:, VERBS.index("hold")] = True
+        usable[:, VERBS.index("wait")] = True
         return self.heads["verb"](decision).masked_fill(~usable, -1e4)
 
     def pointer_logits(self, decision, objects, present, verb):
         """The pointer's logits [B, POINTER_TOKENS] over the object tokens
         ``objects`` [B, POINTER_TOKENS, width] (the scene's, after the
         blocks), for the chosen verbs [B]: absent objects, and kinds the verb
-        cannot aim at, are excluded (hold aims at nothing: all excluded)."""
+        cannot aim at, are excluded (a wait aims at nothing: all excluded)."""
         chosen = F.one_hot(verb.long(), len(VERBS)).to(decision.dtype)
         query = self.pointer_query(self.given_verb(decision, chosen))
         logits = torch.einsum("bw,bnw->bn", query, self.pointer_key(objects))
@@ -655,8 +656,8 @@ def token_from_picks(layer: str, picks: Mapping[str, int]):
         return TACTICS[picks["tactic"]]
     if layer == "skill":
         verb = VERBS[picks["verb"]]
-        if verb == "hold":
-            return ActionToken("hold")
+        if verb == "wait":
+            return ActionToken("wait")
         return ActionToken(verb, pointer_target(picks["pointer"] + POINTER_START))
     raise ValueError(f"unknown learned layer {layer!r}")
 
@@ -666,7 +667,7 @@ def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[
 
     For the skill, ``out`` must be read with these picks as chosen (the
     pointer's logits are then those for the picked verb, and the sum is the
-    whole action's log-probability); a hold's pointer is not a choice.
+    whole action's log-probability); a wait's pointer is not a choice.
     """
     distributions = _distributions(layer, out)
     log_prob = entropy = 0.0
@@ -675,7 +676,7 @@ def choice_log_prob(layer: str, out: Mapping[str, torch.Tensor], picks: Mapping[
         head_log_prob = distributions[head].log_prob(value)
         head_entropy = distributions[head].entropy()
         if layer == "skill" and head == "pointer":
-            aimed = (picks["verb"].long() != VERBS.index("hold")).to(head_log_prob.dtype)
+            aimed = (picks["verb"].long() != VERBS.index("wait")).to(head_log_prob.dtype)
             head_log_prob, head_entropy = head_log_prob * aimed, head_entropy * aimed
         log_prob = log_prob + head_log_prob
         entropy = entropy + head_entropy

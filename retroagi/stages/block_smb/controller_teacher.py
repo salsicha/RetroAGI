@@ -1615,10 +1615,7 @@ def _certify(env, state, target, direction, travel, wait, option, check):
     then ``option``'s
     jump from where that leaves Mario (_same_jump), as the screen assumed. ``check(jump result)`` must hold for the jump.
     Returns (first command, its result, the jump's result, the plan) or None;
-    the plan, after a run or a wait: (the jump, Mario's x where it starts,
-    what it is aimed at from there: teacher_actions.jump_aim)."""
-    from .teacher_actions import jump_aim
-
+    the plan, after a run or a wait: (the jump, Mario's x where it starts)."""
     if not travel and not wait:
         confirmed = trial(env, state, option.command, target)
         if (
@@ -1659,13 +1656,12 @@ def _certify(env, state, target, direction, travel, wait, option, check):
                 return None
             jump, landed = aimed, again
         stop = env.mario["x"]
-        aim = jump_aim(env, landed)
         over = not landed.won and _overshoots_goal(env, landed)
     landed.started, landed.start_dx = moved.frames, stop - start_x
     if not _works_now(landed) or not check(landed) or over:
         return None
     combined = Result(**{**vars(moved), "distances": _combine(moved.distances, landed.distances)})
-    return first, combined, landed, (jump, stop, aim)
+    return first, combined, landed, (jump, stop)
 
 
 def _pit_takeoff(env, state, target, goal, result, memo):
@@ -1902,7 +1898,7 @@ def _committed(env, state, target):
     planned = state.notes.pop("planned_jump", None)
     if planned is None or not env.mario["on_ground"]:
         return None
-    first, jump, stop, _ = planned
+    first, jump, stop = planned
     spatial = getattr(state, "execution", None)
     if spatial is None or spatial.destination != first:
         return None  # what was executed was not the planned run-up

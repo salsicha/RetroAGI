@@ -14,7 +14,8 @@ What it reads at an action's start:
   collision trackers read): each tracked sprite's velocity added to its
   token, Mario's to his (one picture cannot show motion);
 - the last execution feedback (how the previous action went);
-- the chosen action: its verb and its object's token (Mario's for a hold);
+- the chosen action: its verb and the token of where it ends (Mario's for a
+  wait);
 - its own state, carried from action to action.
 
 What it predicts (OUTCOME_FIELDS, pixels from Mario's feet at the start and
@@ -43,18 +44,19 @@ OUTCOME_WIDTH = len(OUTCOME_FIELDS)
 # Each field's unit while learning (pixels, pixels, ..., frames).
 OUTCOME_SCALE = (64.0, 64.0, 64.0, 64.0, 32.0)
 # One action as numbers: its verb (-1: none, padding) and the scene token its
-# pointer names (MARIO_TOKEN for hold), its outcome, whether it has a moving
-# object, whether Mario survived it and did what it says ("safe"), whether
-# the lesson was won by it, the room it kept from every enemy (pixels, at
-# most 64), whether it was the teacher's choice, whether it was the action
-# actually carried out (else one the teacher tried), and whether its frames
-# are only a lower bound (a one-frame teacher hold not played as a wait).
+# pointer names (MARIO_TOKEN for a wait), its outcome, whether it has a
+# moving object, whether Mario survived it and did what it says ("success"),
+# whether the lesson was won by it, the room it kept from every enemy
+# (pixels, at most 64), whether it was the teacher's choice, whether it was
+# the action actually carried out (else one the teacher tried), and whether
+# its frames are only a lower bound (a one-frame teacher wait not played
+# out).
 ACTION_RECORD = (
     "verb",
     "pointer",
     *OUTCOME_FIELDS,
     "has_object",
-    "safe",
+    "success",
     "won",
     "room",
     "chosen",
@@ -65,7 +67,7 @@ COLUMN = {name: i for i, name in enumerate(ACTION_RECORD)}
 # Actions recorded per decision (the teacher's choice first; then every
 # distinct action its jump table tried).
 ACTIONS_PER_DECISION = 16
-# The scene token a hold points at: Mario's.
+# The scene token a wait points at: Mario's.
 MARIO_TOKEN = 1
 # The scene tokens of the sprite slots smb_kinematics orders (enemies, then
 # moving platforms).
@@ -90,13 +92,13 @@ def action_record(action, outcome: dict, chosen: bool) -> np.ndarray:
         row[COLUMN["object_dx"]] = outcome["object_dx"]
         row[COLUMN["object_dy"]] = outcome["object_dy"]
         row[COLUMN["has_object"]] = 1.0
-    row[COLUMN["safe"]] = float(outcome["safe"])
+    row[COLUMN["success"]] = float(outcome["success"])
     row[COLUMN["won"]] = float(outcome["won"])
     row[COLUMN["room"]] = outcome["room"]
     row[COLUMN["chosen"]] = float(chosen)
-    # A one-frame hold of the teacher's is a wait it did not play out: its
+    # A one-frame wait of the teacher's is one it did not play out: its
     # length is at least that.
-    row[COLUMN["frames_censored"]] = float(action.verb == "hold" and outcome["frames"] <= 1)
+    row[COLUMN["frames_censored"]] = float(action.verb == "wait" and outcome["frames"] <= 1)
     return row
 
 
@@ -212,17 +214,17 @@ def outcome_loss(predicted, records):
     uncertainty alone would let a wide one excuse a poor value). Frames known
     only as a lower bound count only when the prediction is below it.
     Returns (loss, stats with mean errors in pixels and frames)."""
-    safe = records[:, COLUMN["safe"]] > 0.5
-    loss = F.binary_cross_entropy_with_logits(predicted["success"], safe.float())
+    success = records[:, COLUMN["success"]] > 0.5
+    loss = F.binary_cross_entropy_with_logits(predicted["success"], success.float())
     stats = {
         "actions": int(len(records)),
-        "safe_share": float(safe.float().mean()),
-        "success_accuracy": float(((predicted["success"] > 0) == safe).float().mean()),
+        "success_share": float(success.float().mean()),
+        "success_accuracy": float(((predicted["success"] > 0) == success).float().mean()),
     }
-    if safe.any():
-        rows = records[safe]
+    if success.any():
+        rows = records[success]
         target = rows[:, [COLUMN[name] for name in OUTCOME_FIELDS]]
-        mean, sigma = predicted["mean"][safe], predicted["sigma"][safe]
+        mean, sigma = predicted["mean"][success], predicted["sigma"][success]
         scale = mean.new_tensor(OUTCOME_SCALE)
         fit = ((mean - target) / scale).square()
         spread = 0.5 * ((mean.detach() - target) / sigma).square() + (sigma / scale).log()

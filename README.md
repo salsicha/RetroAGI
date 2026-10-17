@@ -10,8 +10,9 @@ The hierarchy is **strategy → tactic → skill → predictive executor**:
    in its categorical token.
 3. **Skill:** reads the tactic, strategy context, ViT scene, its last 16
    actions and the executor's feedback; no prediction. Chooses an action: a
-   verb (hold, run to, approach, land on, jump over, stomp, back away), then
-   the object it is aimed at, one of the objects the vision reports.
+   verb (run, jump or wait), then for a run or a jump where Mario ends up,
+   one of the objects the vision reports (a surface, or an enemy he lands
+   on).
 4. **Executor:** carries the action out to its end: predicts movement,
    chooses buttons and jump duration, brakes on arrival, and holds a spot
    relative to a moving platform. A wait is one action, as long as until a

@@ -41,9 +41,9 @@ def test_skill_chooses_an_action_and_the_executor_gets_a_relative_pixel_destinat
         "verb": torch.full((len(VERBS),), -9.0),
         "pointer": torch.full((POINTER_TOKENS,), -9.0),
     }
-    logits["verb"][VERBS.index("land_on")] = 9
+    logits["verb"][VERBS.index("jump")] = 9
     logits["pointer"][pointer_index(("surfaces", 1)) - POINTER_START] = 9
-    assert choose("skill", logits)[0] == ActionToken("land_on", ("surfaces", 1))
+    assert choose("skill", logits)[0] == ActionToken("jump", ("surfaces", 1))
 
 
 @pytest.mark.timeout(600)
@@ -115,7 +115,7 @@ def test_teacher_collection_and_learning_use_the_new_layer_contract(
         # ground truth). Unlabelled, a fixed stand-in: no teacher is asked.
         if label:
             return lane.carry_out(action)
-        return SkillToken("hold", 0, 0) if action.verb == "hold" else SkillToken("run", 16, 0)
+        return SkillToken("hold", 0, 0) if action.verb == "wait" else SkillToken("run", 16, 0)
 
     agent = SMBAgents(Observer(), policy, "cpu", carry_out=carry_out)
     given = _teacher_given(learner, {0: lane})

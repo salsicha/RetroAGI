@@ -123,8 +123,8 @@ def test_a_stomp_in_progress_is_labelled_a_stomp_at_the_kill(stomp):
 def test_the_executed_stomps_outcome_is_measured_where_the_walker_died(stomp):
     outcomes = executed_outcomes(stomp, lt.END_REASONS.index("no_progress"))
     last = outcomes[-1]
-    assert VERBS[int(last[COLUMN["verb"]])] == "stomp"
-    assert last[COLUMN["safe"]] == 1.0 and last[COLUMN["won"]] == 1.0
+    assert VERBS[int(last[COLUMN["verb"]])] == "jump"
+    assert last[COLUMN["success"]] == 1.0 and last[COLUMN["won"]] == 1.0
     frames = len(stomp.buttons)
     start = int(stomp.decision_frames[-1])
     assert last[COLUMN["frames"]] == frames - start

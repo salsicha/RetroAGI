@@ -15,7 +15,7 @@ value), at each difficulty; one picture a layout. Each picture shows:
   the air, with a black cross where the teacher's choice names no action and
   an arrow where it is a run-up that keeps its speed into the jump after it;
 - each decision's number and the action taught there (the same action
-  decided again where Mario stands still, as holds are, numbered once).
+  decided again where Mario stands still, as waits are, numbered once).
 
 A lesson won by stomping its enemy shows no goal box. Nor does a hold with
 walkers coming (a ``dodge`` hold: anywhere on the floor at the end wins);
@@ -243,7 +243,7 @@ def play_teacher(scenario: dict, family: str, difficulty: str):
     """The teacher's episode on ``scenario`` through the training pipeline:
     Mario's path (world middle x, feet y per frame), and at each decision of
     the skill where Mario is, whether he stands, has just stomped or is in the
-    air, and the action taught there (after run-ups are named)."""
+    air, and the action taught there."""
     import torch
 
     from retroagi.core.action_tokens import VERBS, pointer_target
@@ -355,8 +355,8 @@ def _named(action):
     """An Action as (verb, (kind, slot)) for action_words (None: none)."""
     if action is None:
         return None
-    if action.verb == "hold" or action.target is None:
-        return ("hold", ("surfaces", 0))
+    if action.target is None:
+        return ("wait", ("surfaces", 0))
     return (action.verb, list(action.target))
 
 
@@ -440,14 +440,14 @@ def play_policy(scenario: dict, family: str, difficulty: str, checkpoint: str):
 
 
 def action_words(action) -> str:
-    """An action as words: "run_to", ("surfaces", 0) -> "run_to surface 0"."""
+    """An action as words: "run", ("surfaces", 0) -> "run surface 0"."""
     if action is None:
         return "no command"
     if action == "unnamed":
         return "no name"
     verb, (kind, slot) = action
-    if verb == "hold":
-        return "hold"  # aimed at nothing: its pointer slot is unused
+    if verb == "wait":
+        return "wait"  # aimed at nothing: its pointer slot is unused
     return f"{verb} {SINGULAR.get(kind, kind)} {slot}"
 
 

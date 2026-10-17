@@ -50,7 +50,7 @@ def scene(policy, count=2):
 def test_an_untrained_world_model_is_unsure():
     policy = LayeredSMBPolicy().eval()
     tokens, present, sprites, mario, feedback = scene(policy)
-    verbs = torch.tensor([VERBS.index("hold"), VERBS.index("run_to")])
+    verbs = torch.tensor([VERBS.index("wait"), VERBS.index("run")])
     pointers = torch.tensor([MARIO_TOKEN, MARIO_TOKEN])
     out, state = policy.memory.predict(
         tokens, present, sprites, mario, feedback, verbs, pointers, policy.memory.initial(2, "cpu")
@@ -68,22 +68,22 @@ def test_trying_another_action_does_not_advance_the_state():
     tokens, present, sprites, mario, feedback = scene(policy, 1)
     tokens = model.with_motion(tokens, sprites, mario)
     before = tuple(torch.randn(1, model.width) for _ in range(2))
-    hold, run = torch.tensor([VERBS.index("hold")]), torch.tensor([VERBS.index("run_to")])
+    wait, run = torch.tensor([VERBS.index("wait")]), torch.tensor([VERBS.index("run")])
     pointer = torch.tensor([MARIO_TOKEN])
-    executed = model.advance(tokens, feedback, hold, pointer, before)
+    executed = model.advance(tokens, feedback, wait, pointer, before)
     tried = model.advance(tokens, feedback, run, pointer, before)
-    again = model.advance(tokens, feedback, hold, pointer, before)
+    again = model.advance(tokens, feedback, wait, pointer, before)
     assert all(torch.equal(a, b) for a, b in zip(executed, again))
     assert not torch.equal(executed[0], tried[0])
 
 
 def test_a_lower_bound_on_frames_is_wrong_only_when_predicted_below_it():
-    hold = action_record(
-        ActionToken("hold"),
-        {"dx": 0, "dy": 0, "frames": 1, "safe": True, "won": False, "room": 64},
-        chosen=True,
-    )
-    assert hold[COLUMN["frames_censored"]] == 1.0
+    # A one-frame wait of the teacher's: one it did not play out.
+    outcome = {"dx": 0, "dy": 0, "frames": 1, "success": True, "won": False, "room": 64}
+    hold = action_record(ActionToken("wait"), outcome, chosen=True)
+    assert hold[COLUMN["frames_censored"]] == 1.0 and hold[COLUMN["pointer"]] == MARIO_TOKEN
+    run = action_record(ActionToken("run", ("surfaces", 0)), outcome, chosen=True)
+    assert run[COLUMN["frames_censored"]] == 0.0
     records = torch.as_tensor(np.stack([hold, hold]))
     records[1, COLUMN["frames"]] = 40.0  # a bound of 40 frames
     mean = torch.tensor([[0.0, 0, 0, 0, 30.0], [0.0, 0, 0, 0, 30.0]], requires_grad=True)

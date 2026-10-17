@@ -15,13 +15,53 @@ commit). How the parts work is described in the
 - **The tactic layer is an option-critic.** It holds a tactic over many
   actions and checks at every action boundary whether to end it.
 - **The skill names an action; the executor reaches its end.** The skill
-  chooses a verb aimed at an object it sees; the action predictor gives where
-  the action ends, and the executor, which has no learned weights and never
-  refuses a destination, goes there. Until the predictor predicts well, the
-  teacher carries out the skill's actions in training instead (2026-10-11).
+  chooses a verb (run, jump or wait) and, for a run or a jump, the object it
+  sees that Mario ends on; the world model will give where exactly the
+  action ends and how long it takes, and the executor, which has no learned
+  weights and never refuses a destination, goes there. Until the world model predicts well, the teacher
+  carries out the skill's actions in training instead (2026-10-11).
 - **Every teacher label is certified through the same executor** the agent
   uses. A run stops when the teacher cannot finish a layout; a failed gate is
   fixed in the teacher or the policy, never bypassed.
+
+## 2026-10-17 — Three verbs: run, jump and wait (user decision; built)
+
+User: "What is 'approach / run_to'? Do you have the same action with
+different names? Get rid of the duplicates ... The only verbs should be run
+and jump, and maybe shoot if he can do that on later levels", then "make
+wait an action. Running with zero distance would just end immediately. Make
+wait a separate action." Every mistake the skill made on the round 7
+layouts followed a swap between verbs that name the same movement (approach
+or run to; land on, jump over or stomp), and which name the teacher gave
+depended on things the scene does not show (whether it had planned the jump
+after a run, which side the goal is on).
+
+- **Three verbs.** `VERBS = ("run", "jump", "wait")`. A hold is a wait, a
+  jump a jump, any other command a run: along a floor or off its end, or a
+  steer in the air. A run's or a jump's pointer names where Mario ends up:
+  the enemy it kills (he lands on it), else the surface (floor, pipe, block
+  top or moving platform) it ends on. Nothing points at a gap: a jump across
+  one ends on the floor beyond it; a jump over an enemy ends on the floor
+  piece past it. A wait aims at nothing.
+- **How long a wait lasts is part of carrying it out** (the teacher's whole
+  wait in training, the world model's predicted frames later). So is keeping
+  a run's speed into the jump after it: the teacher's run-up is how its
+  choice is carried out, not a separate "approach". The renaming of run-ups
+  after the jump that follows (`_name_run_ups`, `approach_slot`) and "back
+  away" are gone; the teacher's remembered plan no longer carries what its
+  jump is aimed at.
+- **Carrying out** (`teacher_actions.carry_out`): the teacher's own command
+  where the action is its choice (a wait: its whole wait); a wait where the
+  teacher would move holds for one frame; else the best-ranked version it
+  names as the action (its jumps; its runs; steers in the air); else a run
+  or jump straight at where it ends.
+- **The world model's records** say "success" for survived and did what it
+  says (an action ending on an enemy killed it).
+- **Checkpoints.** A skill trained on the seven verbs loads with every
+  tensor whose shape follows the verb list started afresh (the verb head,
+  the pointer's and the history's reading of the verb, the world model) and
+  its trained layers cleared: it is trained again, the rest of it a warm
+  start (`load_layered_checkpoint`, "verbs_replaced").
 
 ## 2026-10-17 — The skill's action is always carried out (user decision; built)
 

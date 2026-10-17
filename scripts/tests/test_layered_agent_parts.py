@@ -287,14 +287,15 @@ def test_the_skills_own_hold_is_carried_out_with_the_teachers_length():
 
     def carry_out(number, action):
         asked.append(action)
-        return SkillToken("hold", 0, 0, frames=30) if action.verb == "hold" else None
+        return SkillToken("hold", 0, 0, frames=30)
 
     agents = SMBAgents(
         VisionObserver(SceneList([scene()])), LayeredSMBPolicy().eval(), "cpu", carry_out=carry_out
     )
-    made = [SimpleNamespace(action=ActionToken("hold"), skill=None)]
+    wait = ActionToken("wait")
+    made = [SimpleNamespace(action=wait, skill=None)]
     agents._actions([None], made, [0], [0])
-    assert asked == [ActionToken("hold")]
+    assert asked == [wait]
     assert made[0].skill == SkillToken("hold", 0, 0, frames=30)
 
 
@@ -358,7 +359,7 @@ def test_given_tokens_replace_the_policy_only_where_given():
 
     def carry_out(number, action):
         # The teacher's version of the skill's own action (its ground truth).
-        return SkillToken("hold", 0, 0) if action.verb == "hold" else SkillToken("run", 16, 0)
+        return SkillToken("hold", 0, 0) if action.verb == "wait" else SkillToken("run", 16, 0)
 
     torch.manual_seed(0)
     agents = SMBAgents(
@@ -401,9 +402,10 @@ def _record(learner: str, frames: int = 30):
     decisions = np.array([0, 10, 20], np.int32)
     width = {"skill": TACTIC_WIDTH, "tactic": STRATEGY_WIDTH}[learner]
     labels = {
-        # A hold, a landing on the second surface, a stomp of the first enemy.
+        # A wait, a jump onto the first surface, a jump onto the first enemy
+        # (a stomp).
         "skill": {
-            "verb": np.array([0, 3, 5]),
+            "verb": np.array([2, 1, 1]),
             "pointer": np.array([0, 41, 0]),
             "action_valid": np.ones(3, bool),
             "end_dx": np.array([0, 40, 30]),
@@ -591,8 +593,8 @@ def test_the_skill_layer_reads_its_own_previous_destinations():
 
     from retroagi.core.action_tokens import ActionToken
 
-    walk = (ActionToken("run_to", ("surfaces", 0)), SkillToken("run", 24, 0))
-    jump = (ActionToken("land_on", ("surfaces", 1)), SkillToken("jump", 40, -24))
+    walk = (ActionToken("run", ("surfaces", 0)), SkillToken("run", 24, 0))
+    jump = (ActionToken("jump", ("surfaces", 1)), SkillToken("jump", 40, -24))
     nothing = action_scores([])
     walked = action_scores([walk] * 3)
     jumped = action_scores([jump] * 3)
@@ -680,13 +682,13 @@ def _held_agents(end_bias: float, copies: int = 1, pictures=None):
     policy = LayeredSMBPolicy().eval()
     policy.tactic.heads["end"].bias.data.fill_(end_bias)
     # These tests exercise tactic persistence on a static fake scene. Force a
-    # one-frame hold so action boundaries do not depend on random skill weights.
+    # one-frame wait so action boundaries do not depend on random skill weights.
     from retroagi.core.action_tokens import VERBS
 
     with torch.no_grad():
         policy.skill.heads["verb"].weight.zero_()
         policy.skill.heads["verb"].bias.fill_(-20)
-        policy.skill.heads["verb"].bias[VERBS.index("hold")] = 20
+        policy.skill.heads["verb"].bias[VERBS.index("wait")] = 20
     vision = SceneList(pictures) if pictures is not None else SceneEcho(scene())
     return SMBAgents(VisionObserver(vision), policy, "cpu", copies)
 
@@ -965,3 +967,42 @@ def test_a_checkpoint_with_other_tokens_is_refused_unless_only_untrained_layers_
     old_actions = {**token_layout(), "executor_actions": token_layout()["executor_actions"][:-1]}
     with pytest.raises(ValueError, match="different tokens"):
         load_layered_checkpoint(saved(old_actions, ["action"], "buttons_only"))
+
+
+def test_a_skill_of_other_verbs_loads_with_its_verb_readings_started_afresh(tmp_path):
+    from dataclasses import asdict
+
+    from retroagi.core.action_tokens import VERBS
+    from retroagi.core.smb_observer import observation_layout
+    from retroagi.core.tokens import token_layout
+    from retroagi.stages.block_smb.layered_train import load_layered_checkpoint
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy()
+    seven = ["hold", "run_to", "approach", "land_on", "jump_over", "stomp", "back_away"]
+    state = dict(policy.state_dict())
+    width = state["skill.heads.verb.weight"].shape[1]
+    state["skill.heads.verb.weight"] = torch.randn(len(seven), width)
+    state["skill.heads.verb.bias"] = torch.randn(len(seven))
+    layout = token_layout()
+    layout["skill"] = {**layout["skill"], "actions": seven}
+    path = tmp_path / "seven.pt"
+    torch.save(
+        {
+            "settings": asdict(policy.settings),
+            "state_dict": state,
+            "observation_layout": observation_layout(),
+            "token_layout": layout,
+            "trained_layers": ["skill"],
+            "memory_version": 5,
+        },
+        path,
+    )
+    loaded, checkpoint = load_layered_checkpoint(path)
+    # The verb head is new (three verbs); everything else is kept as a warm
+    # start; the skill is to be trained again.
+    assert loaded.skill.heads["verb"].weight.shape[0] == len(VERBS)
+    assert torch.equal(loaded.scene.mario.weight, policy.scene.mario.weight)
+    assert torch.equal(loaded.skill.pointer_key.weight, policy.skill.pointer_key.weight)
+    assert checkpoint["trained_layers"] == [] and checkpoint["world_model"] is None
+    assert "verbs_replaced" in checkpoint["load_migrations"]

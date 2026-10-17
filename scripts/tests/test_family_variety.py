@@ -111,17 +111,20 @@ def episode(family, verbs, xs, *, labelled=True):
 def test_one_end_for_a_verb_over_every_family_collapses():
     assert top_share([(72, 0), (73, 0), (70, -2), (40, 0)]) == ((72, 0), 0.75)
     assert top_share([72, 73, 70, 40]) == (72, 0.75)
-    varied = [episode("a", ["land_on"] * 4, [40, 52, 61, 75]) for _ in range(1)]
-    varied += [episode("a", ["land_on"] * 4, [44, 57, 66, 80])]
+    varied = [episode("a", ["jump"] * 4, [40, 52, 61, 75]) for _ in range(1)]
+    varied += [episode("a", ["jump"] * 4, [44, 57, 66, 80])]
     # A family may teach one end where its scenes call for it: judged over
     # every family's labels together, one end of a verb among varied ones is
     # not a collapse...
-    single = [episode("b", ["land_on", "run_to"], [72, 30 + i * 9]) for i in range(2)]
+    single = [episode("b", ["jump", "run"], [72, 30 + i * 9]) for i in range(2)]
     assert label_collapse(varied + single, "skill") == {}
     # ...one end for most of a verb's labels over every family is.
-    single = [episode("b", ["land_on", "run_to"], [72, 30 + i * 9]) for i in range(12)]
+    single = [episode("b", ["jump", "run"], [72, 30 + i * 9]) for i in range(12)]
     found = label_collapse(varied + single, "skill")["all families"]
-    assert found["land_on"][0] == (72, 0) and "run_to" not in found
+    assert found["jump"][0] == (72, 0) and "run" not in found
+    # Waits have no end: their length is what varies.
+    waits = [episode("c", ["wait"] * 4, [0] * 4) for _ in range(12)]
+    assert "wait" not in label_collapse(varied + waits, "skill").get("all families", {})
 
 
 def own_choices(family, verbs, teacher_verbs, same=None):
@@ -139,21 +142,21 @@ def own_choices(family, verbs, teacher_verbs, same=None):
 def test_a_skill_that_picks_one_verb_where_the_teacher_would_not_collapses():
     # Judged at the same moments as the teacher's choices (its run lengths
     # are the teacher's: carry_out), not by where its actions ended.
-    teacher = ["approach", "jump_over", "run_to", "approach"]
-    own = [own_choices("a", ["jump_over"] * 4, teacher) for _ in range(3)]
+    teacher = ["run", "jump", "run", "run"]
+    own = [own_choices("a", ["jump"] * 4, teacher) for _ in range(3)]
     found = output_collapse(own, [], "skill")
-    assert found == {"a": {"jump_over": (None, 1.0, 0.25)}}
+    assert found == {"a": {"jump": (None, 1.0, 0.25)}}
     # Picking what the teacher picks there is no collapse, however often.
-    same = [own_choices("a", ["jump_over"] * 4, ["jump_over"] * 4) for _ in range(3)]
+    same = [own_choices("a", ["jump"] * 4, ["jump"] * 4) for _ in range(3)]
     assert output_collapse(same, [], "skill") == {}
 
 
 def test_the_skills_choices_are_compared_with_the_teachers_at_the_same_moments():
     episodes = [
-        own_choices("enemy_hop", ["jump_over", "run_to"], ["jump_over", "run_to"]),
+        own_choices("enemy_hop", ["jump", "run"], ["jump", "run"]),
         # The same verb aimed at another object is not the teacher's choice.
-        own_choices("enemy_hop", ["jump_over", "approach"], ["jump_over", "approach"], [True, False]),
-        own_choices("enemy_hop", ["stomp", "jump_over"], ["stomp", "approach"]),
+        own_choices("enemy_hop", ["jump", "run"], ["jump", "run"], [True, False]),
+        own_choices("enemy_hop", ["jump", "jump"], ["jump", "run"]),
     ]
     # A decision the teacher played, or where it had no named choice, is not
     # the skill's own: left out.
@@ -164,6 +167,6 @@ def test_the_skills_choices_are_compared_with_the_teachers_at_the_same_moments()
         "enemy_hop": {
             "decisions": 4,
             "agreed": 0.5,
-            "differ": {"approach at another object": 1, "jump_over for approach": 1},
+            "differ": {"run at another object": 1, "jump for run": 1},
         }
     }

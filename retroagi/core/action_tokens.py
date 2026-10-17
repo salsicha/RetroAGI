@@ -1,12 +1,13 @@
-"""Actions: a verb aimed at one object the vision reports.
+"""Actions: a verb (run, jump or wait) and, for a run or a jump, the object
+the vision reports that it ends on.
 
-The skill chooses an action; the action predictor gives the action's
-successful end state; the target tracker says where its object will be; the
-predictive controller computes the buttons that reach it
-(docs/action-predictor-controller.md).
+The skill chooses an action; in training the teacher carries it out, later
+the world model predicts where it ends and how long it takes
+(core/world_model) and the executor reaches that.
 
-An action's object is a (list, slot) pair of smb_observer.packed_lists: slot i
-of a list is item i there, the same slot the scene encoder makes a token of.
+An action's object is a (list, slot) pair of smb_observer.packed_lists: slot
+i of a list is item i there, the same slot the scene encoder makes a token
+of.
 """
 
 from dataclasses import dataclass
@@ -14,37 +15,24 @@ from typing import Optional
 
 from .smb_observer import SCENE_SLOTS
 
-VERBS = ("hold", "run_to", "approach", "land_on", "jump_over", "stomp", "back_away")
+# Three verbs (user, 2026-10-17): run (on the ground, along or off a floor;
+# in the air, a steer), jump and wait (stay where Mario is). A run's or a
+# jump's pointer names where Mario ends up: the surface he ends on, or the
+# enemy he lands on (a stomp). A wait aims at nothing. How long a wait
+# lasts, like whether a run keeps its speed into the jump after it, is part
+# of carrying the action out.
+VERBS = ("run", "jump", "wait")
 
-# What each verb may aim at (hold aims at nothing).
+# What each verb may aim at: where Mario can end up (a wait: nothing).
 SURFACE_LISTS = ("surfaces", "moving_platforms", "pipes", "blocks")
 VERB_TARGETS = {
-    "hold": (),
-    # Walk or run to a point on a surface (on the floor Mario stands on, or
-    # one he walks off onto).
-    "run_to": SURFACE_LISTS,
-    # Run up to the object of the next jump and stop at the best takeoff.
-    "approach": (*SURFACE_LISTS, "enemies", "gaps"),
-    # Jump onto a surface.
-    "land_on": SURFACE_LISTS,
-    # Jump past an enemy or across a gap.
-    "jump_over": ("enemies", "gaps"),
-    # Jump onto an enemy.
-    "stomp": ("enemies",),
-    # Retreat from an enemy.
-    "back_away": ("enemies",),
+    "run": (*SURFACE_LISTS, "enemies"),
+    "jump": (*SURFACE_LISTS, "enemies"),
+    "wait": (),
 }
 
 # The executor's movement mode for each verb.
-VERB_MODES = {
-    "hold": "hold",
-    "run_to": "run",
-    "approach": "run",
-    "back_away": "run",
-    "land_on": "jump",
-    "jump_over": "jump",
-    "stomp": "jump",
-}
+VERB_MODES = {"run": "run", "jump": "jump", "wait": "hold"}
 
 # The scene encoder's token order: a summary, Mario, then every slot of every
 # list in SCENE_SLOTS order (SceneEncoder._objects), then the picture bands.
@@ -76,7 +64,7 @@ def pointer_target(index: int):
 
 @dataclass(frozen=True)
 class ActionToken:
-    """A verb and the scene slot it is aimed at (None for hold)."""
+    """A verb and the scene slot of where it ends (None for a wait)."""
 
     verb: str
     target: Optional[tuple] = None
@@ -84,9 +72,9 @@ class ActionToken:
     def __post_init__(self):
         if self.verb not in VERBS:
             raise ValueError(f"unknown verb {self.verb!r}")
-        if self.verb == "hold":
+        if self.verb == "wait":
             if self.target is not None:
-                raise ValueError("hold aims at nothing")
+                raise ValueError("a wait aims at nothing")
             return
         if self.target is None:
             raise ValueError(f"{self.verb} needs an object")
@@ -106,7 +94,7 @@ def allowed_lists(verb: str) -> tuple:
 
 # The verb an executor command was made with, for commands that carry no
 # action (the teacher's own, given in training): its mode's plain verb.
-MODE_VERBS = {"hold": "hold", "run": "run_to", "jump": "land_on"}
+MODE_VERBS = {"hold": "wait", "run": "run", "jump": "jump"}
 # An action as numbers in the skill's history (encode_action).
 ACTION_WIDTH = len(VERBS) + 2
 

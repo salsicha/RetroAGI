@@ -1,8 +1,8 @@
 """Vision-only agent: strategy -> tactic -> skill -> predictive executor.
 
 At each action boundary the option-critic checks the held tactic, and the
-skill chooses an action (a verb aimed at an object it sees) from the scene,
-the tactic, the strategy, its 16 previous actions and the executor's
+skill chooses an action (run or jump to an object it sees, or wait) from the
+scene, the tactic, the strategy, its 16 previous actions and the executor's
 feedback. Neither reads a prediction (user, 2026-10-15). Where the action
 ends, the executor's destination, is the teacher's ground truth in training
 (``carry_out``); later the world model will predict it, run once at the
@@ -23,7 +23,7 @@ from typing import Callable, Mapping, Optional, Sequence
 import numpy as np
 import torch
 
-from .action_tokens import VERBS, ActionToken, pointer_index
+from .action_tokens import VERB_MODES, VERBS, ActionToken, pointer_index
 from .actions import SMBAction
 from .layered_policy import (
     CHOICE_WIDTH,
@@ -45,6 +45,7 @@ from .smb_spatial_feedback import SpatialFeedback
 from .tokens import (
     DEFAULT_STRATEGY,
     EXECUTION_WIDTH,
+    SKILL_MODES,
     SkillToken,
     StrategyToken,
     TacticToken,
@@ -98,17 +99,16 @@ class Decision:
 def destination_of(action: ActionToken, outcome, contact=None) -> SkillToken:
     """The executor's destination for an action from its predicted outcome
     (core/world_model OUTCOME_FIELDS: dx, dy, object_dx, object_dy, frames):
-    a hold lasts the predicted frames (a wait, 1 to HOLD_FRAMES); runs (a
-    run-up keeps its speed) and jumps go to the predicted end; a stomp to
+    a wait holds for the predicted frames (1 to HOLD_FRAMES); a run or a jump
+    goes to the predicted end, one that ends on an enemy (a stomp) to
     ``contact`` (the collision trackers' meeting point) when given."""
-    if action.verb == "hold":
+    if action.verb == "wait":
         return SkillToken("hold", 0, 0, frames=int(min(HOLD_FRAMES, max(1, round(outcome[4])))))
-    dx, dy = contact if (action.verb == "stomp" and contact is not None) else outcome[:2]
+    stomp = action.target[0] == "enemies"
+    dx, dy = contact if (stomp and contact is not None) else outcome[:2]
     x = int(min(256, max(-256, round(dx))))
     y = int(min(240, max(-240, round(dy))))
-    if action.verb in ("land_on", "jump_over", "stomp"):
-        return SkillToken("jump", x, y)
-    return SkillToken("run", x, y, carry=action.verb == "approach")
+    return SkillToken(VERB_MODES[action.verb], x, y)
 
 
 def scene_rows(scenes: Sequence[SceneObservation]) -> list[tuple]:
@@ -368,7 +368,9 @@ class _Copy:
     # ActionState), set when one starts.
     action_now: object = None
     # This frame's kinematics (smb_kinematics: per sprite slot, Mario's), the
-    # sprite slots' identities, and what vision shows of the enemies.
+    # sprite slots' identities, and what vision shows of the enemies: made
+    # once a frame, as soon as the executor has seen the picture, and read
+    # by the trackers, the world model and the recordings alike.
     kinematics: tuple = ()
     # Without the teacher: the world model's state (hidden, cell), carried
     # from action to action, and the watch that ends a wait or a ground move
@@ -462,17 +464,26 @@ class SMBAgents:
             threat_watch=ThreatWatch() if self.watch_threats and self.tracker is not None else None,
         )
 
+    @staticmethod
+    def _kinematics(copy: _Copy, scene) -> None:
+        """This frame's kinematics of the copy (_Copy.kinematics)."""
+        from .smb_kinematics import enemy_context, kinematics, slot_identities
+
+        sprites, mario = kinematics(scene, copy.spatial)
+        copy.kinematics = (
+            sprites,
+            mario,
+            slot_identities(scene, copy.spatial),
+            enemy_context(scene),
+        )
+
     def _track(self, copy: _Copy, scene) -> None:
         """Step the copy's collision trackers on this frame: the executor's
         kinematics, what vision shows of the enemies, and the action in
         progress."""
-        from .smb_kinematics import enemy_context, kinematics, slot_identities
         from .target_tracker import frame_features
 
-        sprites, mario = kinematics(scene, copy.spatial)
-        identities = slot_identities(scene, copy.spatial)
-        context = enemy_context(scene)
-        copy.kinematics = (sprites, mario, identities, context)
+        sprites, mario, identities, context = copy.kinematics
         copy.trackers.observe(
             frame_features(
                 sprites,
@@ -523,12 +534,12 @@ class SMBAgents:
         teacher's version of it (``carry_out``; ``numbers``: the deciding
         copies' numbers). Without the teacher, the world model's predicted
         outcome (``world_model``; ``now``: the encoded scenes, ``scenes``:
-        what vision shows): one step of it per action. Else a hold holds and
+        what vision shows): one step of it per action. Else a wait holds and
         any other action raises (nothing can carry it out)."""
         chosen = [i for i in own if made[i].action is not None]
         if self.carry_out is not None:
-            # Holds too: the teacher's version of a hold lasts as long as its
-            # true wait (a wait is one action; teacher_actions.carry_out).
+            # A wait lasts as long as the teacher's true wait (a wait is one
+            # action; teacher_actions.carry_out).
             for i in chosen:
                 destination = self.carry_out(numbers[i], made[i].action)
                 made[i].skill = destination or SkillToken("hold", 0, 0)
@@ -536,9 +547,9 @@ class SMBAgents:
         if self.world_model and chosen:
             self._predicted(starting, made, chosen, now, scenes)
             return
-        for i in [i for i in chosen if made[i].action.verb == "hold"]:
+        for i in [i for i in chosen if made[i].action.verb == "wait"]:
             made[i].skill = SkillToken("hold", 0, 0)
-        if any(made[i].action.verb != "hold" for i in chosen):
+        if any(made[i].action.verb != "wait" for i in chosen):
             raise RuntimeError(
                 "the skill chose an action: playing it without the teacher needs the world "
                 "model (SMBAgents(world_model=True), a trained one: world_model_train)"
@@ -549,12 +560,14 @@ class SMBAgents:
         its copy's state, as the executor's destination (destination_of); a
         stomp aimed at the collision trackers' contact point when they expect
         one."""
-        from .smb_kinematics import kinematics
         from .world_model import MARIO_TOKEN
 
         tokens, present = now
         rows = torch.as_tensor(chosen, device=self.device)
-        moving = [kinematics(scenes[i], starting[i].spatial) for i in chosen]
+        for i in chosen:
+            if not starting[i].kinematics:  # not yet made this frame (act makes it)
+                self._kinematics(starting[i], scenes[i])
+        moving = [starting[i].kinematics for i in chosen]
         sprites = torch.as_tensor(np.stack([m[0] for m in moving]), device=self.device)
         mario = torch.as_tensor(np.stack([m[1] for m in moving]), device=self.device)
         feedback = torch.as_tensor(
@@ -581,10 +594,16 @@ class SMBAgents:
             made[i].skill = destination_of(actions[j], mean, self._contact(copy, actions[j], scenes[i]))
 
     def _contact(self, copy: _Copy, action, scene):
-        """Where the collision trackers expect a stomp ``action`` to meet its
-        enemy (pixels from Mario's feet), asked with the stomp as the action
-        in progress; None when they expect none or do not track it."""
-        if action.verb != "stomp" or copy.trackers is None or not copy.kinematics:
+        """Where the collision trackers expect ``action``, ending on an enemy
+        (a stomp), to meet it (pixels from Mario's feet), asked with it as
+        the action in progress; None when they expect none or do not track
+        it."""
+        if (
+            action.target is None
+            or action.target[0] != "enemies"
+            or copy.trackers is None
+            or not copy.kinematics
+        ):
             return None
         from .target_tracker import action_state, frame_features
 
@@ -596,7 +615,13 @@ class SMBAgents:
             return None
         position = self._position(copy, scene)
         stomp = action_state(
-            VERBS.index("stomp"), pointer, [1, 0, 0, 0, 0, 0], sprites, identities, position, copy.frame
+            VERBS.index(action.verb),
+            pointer,
+            [SKILL_MODES.index(VERB_MODES[action.verb]), 0, 0, 0, 0, 0],
+            sprites,
+            identities,
+            position,
+            copy.frame,
         )
         features = frame_features(sprites, mario, context, identities, position, copy.frame, stomp)
         estimate = copy.trackers.estimate(identity, features[slot])
@@ -751,6 +776,7 @@ class SMBAgents:
         ended = []
         for copy, scene in zip(playing, scenes):
             copy.spatial.observe(scene)
+            self._kinematics(copy, scene)
             if copy.trackers is not None:
                 self._track(copy, scene)
             landed = copy.landing.landed(scene)

@@ -13,9 +13,8 @@ end), in EXECUTED fields:
   moving platform's left edge and top), from Mario's feet at f;
   has_object: 1 for those;
 - frames: how long the action lasted;
-- safe: Mario lived through it and it did what its verb says (a stomp
-  killed its enemy; a jump over left its enemy alive behind him; any other
-  action did not stall);
+- success: Mario lived through it and it did what it says (one ending on an
+  enemy killed it; any other did not stall);
 - won: the episode was won as it ended;
 - room: the closest Mario came to a live enemy during it (box gap, pixels,
   at most 64).
@@ -23,7 +22,7 @@ end), in EXECUTED fields:
 
 import numpy as np
 
-from .action_tokens import VERBS, pointer_target
+from .action_tokens import pointer_target
 from .layered_policy import POINTER_START
 from .smb_observer import SCENE_SLOTS
 
@@ -36,7 +35,7 @@ EXECUTED = (
     "object_dy",
     "frames",
     "has_object",
-    "safe",
+    "success",
     "won",
     "room",
 )
@@ -95,16 +94,11 @@ def executed_outcomes(record, no_progress_code: int) -> np.ndarray:
             row[COLUMN["object_dx"] : COLUMN["object_dy"] + 1] = point - origin
             row[COLUMN["has_object"]] = 1.0
         lived = not (died and e == last)
-        name = VERBS[verb] if verb >= 0 else None
-        if name == "stomp":
+        if kind == "enemy":
             did = killed
-        elif name == "jump_over" and kind == "enemy" and target is not None and target >= 0:
-            before = mario[f, 0] < enemies[f, target, 0]
-            after = mario[e, 0] < enemies[e, target, 0]
-            did = state[e, target] == ALIVE and before != after
         else:
             did = e == last or int(record.ended[e]) != no_progress_code
-        row[COLUMN["safe"]] = float(lived and did)
+        row[COLUMN["success"]] = float(lived and did)
         row[COLUMN["won"]] = float(record.won and e == last)
         room = ROOM
         for t in range(f, e + 1):

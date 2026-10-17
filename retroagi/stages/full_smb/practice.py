@@ -21,7 +21,6 @@ import numpy as np
 
 from retroagi.core.action_tokens import VERBS, pointer_index
 from retroagi.core.layered_policy import POINTER_START
-from retroagi.core.smb_kinematics import enemy_context, kinematics, slot_identities
 from retroagi.core.smb_observer import SCENE_SLOTS
 from retroagi.core.tokens import command_row
 
@@ -95,12 +94,13 @@ def play_recorded(agents, level: str, *, frames: int, index: int = 0, split: str
             truth = true_frame(game.env.get_ram(), game.start)
             ids = recorder.add(truth)
             scene = step.scene
-            sprites, mario = kinematics(scene, copy.spatial)
+            # The kinematics the trackers and the world model read this frame.
+            sprites, mario, identities, context = copy.kinematics
             per_frame["match"].append(match_slots(scene, truth, ids))
             per_frame["sprites"].append(sprites)
             per_frame["mario"].append(mario)
-            per_frame["identity"].append(slot_identities(scene, copy.spatial))
-            per_frame["context"].append(enemy_context(scene))
+            per_frame["identity"].append(identities)
+            per_frame["context"].append(context)
             feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
             per_frame["position"].append((copy.spatial.displacement, feet))
             per_frame["ended"].append(END_REASONS.index(step.ended) if step.ended in END_REASONS else 0)

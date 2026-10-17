@@ -48,7 +48,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from retroagi.core.action_tokens import VERB_TARGETS, VERBS, ActionToken, pointer_index
+from retroagi.core.action_tokens import VERBS, pointer_index
 from retroagi.core.actions import SMBAction
 from retroagi.core.layered_policy import (
     CHOICE_WIDTH,
@@ -457,7 +457,7 @@ class _Lane:
             self.asked["skill"] = own
             self.asked["action_label"] = self._as_action(own) if own is not None else None
         label = (self.asked.get("action_label") or {}).get("action")
-        if action.verb == "hold":
+        if action.verb == "wait":
             from .teacher_tokens import whole_wait
 
             # The teacher's hold, played: as long as its whole wait.
@@ -503,12 +503,11 @@ class _Lane:
             if self.task.label and asked["skill"] is not None:
                 from .teacher_actions import _trial_of
 
-                # The same choice as an action (a verb aimed at a reported
-                # object; None when its object is not reported) and where it
-                # ends; its trial, made before it is executed, is kept for
-                # naming run-ups (_name_run_ups).
-                asked["label_result"] = _trial_of(self.env, self.teacher, asked["skill"])
-                asked["action_label"] = self._as_action(asked["skill"], asked["label_result"])
+                # The same choice as an action (a verb and the reported
+                # object it ends on; None when that is not reported) and
+                # where it ends.
+                result = _trial_of(self.env, self.teacher, asked["skill"])
+                asked["action_label"] = self._as_action(asked["skill"], result)
             if self.task.record_actions and self.task.label and asked["skill"] is not None:
                 from .teacher_actions import action_rows
 
@@ -573,79 +572,7 @@ class _Lane:
                 if own is not None and own.target is not None
                 else -1
             )
-            if self.task.label:
-                self._name_run_ups(d, asked, decision)
             return
-
-    def _name_run_ups(self, d, asked, decision) -> None:
-        """A run-up of the teacher's (a run that keeps its speed) that its next
-        command follows with a jump in the same direction is named after that
-        jump: approaching what the
-        jump is aimed at, in the run's own scene (teacher_actions.approach_slot,
-        the rule the teacher's remembered plans and its executor use too), or
-        a plain run to where it ends when the jump lands back on the surface
-        the run started on. Without this, whether such a run was labelled an
-        approach depended on whether the teacher had planned the jump before
-        running (its committed plan), which the scene does not show. Called
-        at each decision of a labelled skill episode, after its labels are
-        recorded."""
-        from .teacher_actions import approach_slot, run_context, surface_slot
-
-        env, command = self.env, asked.get("skill")
-        pending, self._pending_run = getattr(self, "_pending_run", None), None
-        # The jump's trial made before it started (ask_teacher): its execution
-        # has begun by now.
-        result = asked.get("label_result")
-        if (
-            pending is not None
-            and command is not None
-            and result is not None
-            and command.mode == "jump"
-            and command.x != 0
-            and (command.x > 0) == pending["right"]
-            and env.mario["on_ground"]
-        ):
-            slot = approach_slot(pending["context"], env, result)
-            if slot is not None and slot[0] in VERB_TARGETS["approach"]:
-                action = ActionToken("approach", slot)
-            else:
-                action = pending["plain"]
-            if action is not None:
-                t = pending["index"]
-                d["label_verb"][t] = VERBS.index(action.verb)
-                d["label_pointer"][t] = pointer_index(action.target) - POINTER_START
-                d["agreed"][t] = pending["mine"] == action
-        example = asked.get("action_label")
-        action = example["action"] if example is not None else None
-        if (
-            action is not None
-            and action.verb in ("run_to", "approach")
-            and command is not None
-            and command.carry  # a run-up: one that stops is a plain run
-            and command.x != 0
-            and decision.skill == command
-            and env.mario["on_ground"]
-        ):
-            context = run_context(env, self.teacher)
-            plain = action if action.verb == "run_to" else None
-            run = asked.get("label_result")
-            if plain is None and run is not None:
-                # The same run as a plain run: to the surface it ends on.
-                m = env.mario
-                slot = surface_slot(
-                    env,
-                    context["scene"],
-                    m["x"] + m["w"] / 2 + run.end_dx,
-                    m["y"] + m["h"] + run.end_dy,
-                )
-                plain = ActionToken("run_to", slot) if slot is not None else None
-            self._pending_run = {
-                "index": len(d["label_verb"]) - 1,
-                "context": context,
-                "right": command.x > 0,
-                "mine": decision.chosen["skill"],
-                "plain": plain,
-            }
 
     def _note_tactic(self, decision) -> None:
         """The tactic learner's decision: what its layer did (TacticStep), and the
@@ -896,23 +823,19 @@ def play_episodes(
                 lane.frames[name].append(value)
             spatial = agents.copies[lane.copy].spatial
             if lane.truth is not None:
-                from retroagi.core.smb_kinematics import (
-                    enemy_context,
-                    kinematics,
-                    slot_identities,
-                )
-
                 from .truth_recording import match_slots
 
                 # The state behind this picture (a watched one's was kept at reset).
                 frame = lane.watched_truth.pop(0) if lane.watching else lane.env.true_frame()
                 lane.truth.add(frame)
-                sprites, mario = kinematics(step.scene, spatial)
+                # The kinematics the trackers and the world model read this
+                # frame (made before the executor stepped).
+                sprites, mario, identities, context = agents.copies[lane.copy].kinematics
                 lane.frames["sprite_kinematics"].append(sprites)
                 lane.frames["mario_kinematics"].append(mario)
                 lane.frames["slot_match"].append(match_slots(step.scene, frame))
-                lane.frames["slot_identity"].append(slot_identities(step.scene, spatial))
-                lane.frames["enemy_context"].append(enemy_context(step.scene))
+                lane.frames["slot_identity"].append(identities)
+                lane.frames["enemy_context"].append(context)
                 feet = step.scene.mario.box[3] if step.scene.mario.box is not None else 0.0
                 lane.frames["mario_position"].append((spatial.displacement, feet))
             lane.frames["ended"].append(
@@ -1286,9 +1209,9 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     stats = {"decisions": int(len(e))}
     imitation = 1.0 if rl is None else rl.imitation_weight
     if acted.any() and imitation > 0:
-        # The action: its verb, and (except hold, which aims at nothing) the
-        # object it is aimed at among those in view. A useful next action at
-        # a failed command counts more, instead of letting the many easy
+        # The action: its verb and (except a wait, which aims at nothing) the
+        # object it ends on among those in view. A useful next action at a
+        # failed command counts more, instead of letting the many easy
         # approach decisions drown out the stall-repair examples.
         weight = d["weight"][acted]
         stalled = d["execution_feedback"][acted, 1] > 0.5
@@ -1298,7 +1221,7 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
             F.cross_entropy(out["verb"][acted], verb, reduction="none"), weight
         )
         stats["verb_accuracy"] = float((out["verb"][acted].argmax(-1) == verb).float().mean())
-        aimed = verb != VERBS.index("hold")
+        aimed = verb != VERBS.index("wait")
         if aimed.any():
             pointer = d["label_pointer"][acted][aimed].long()
             logits = out["pointer"][acted][aimed]
@@ -1931,7 +1854,7 @@ def top_share(values) -> tuple:
 
 def _choices(episode, learner: str, source: str) -> dict:
     """An episode's choices by kind: for the skill, where each action sent
-    Mario (pixels from his feet, (x, y)) by verb (a hold has no end); tactic
+    Mario (pixels from his feet, (x, y)) by verb (a wait has no end); tactic
     names for the tactic layer. ``source``: "picks" (the learner's own, where
     it played its own choice) or "labels" (the teacher's, where valid)."""
     out: dict = defaultdict(list)
@@ -1966,7 +1889,7 @@ def _choices(episode, learner: str, source: str) -> dict:
         )
     for verb, dx, dy in rows:
         name = VERBS[int(verb)]
-        if name != "hold":
+        if name != "wait":
             out[name].append((int(dx), int(dy)))
     return out
 
@@ -2169,6 +2092,14 @@ def load_layered_checkpoint(path, device="cpu"):
     if destination_skill:
         saved_skill = dict(now["skill"])
         checkpoint["trained_layers"] = []
+    # A skill that chose among other verbs (the seven before run and jump,
+    # user 2026-10-17): every tensor whose shape follows the verb list (the
+    # verb head, the pointer's and history's readings of the verb, the world
+    # model's verb input) starts untrained, and the layers are trained again.
+    other_verbs = saved_skill.get("actions") != now["skill"]["actions"]
+    if other_verbs:
+        saved_skill["actions"] = now["skill"]["actions"]
+        checkpoint["trained_layers"] = []
     other_strategies = saved.get("strategies") != now["strategies"]
     if (
         saved_skill != now["skill"]
@@ -2257,6 +2188,16 @@ def load_layered_checkpoint(path, device="cpu"):
         for name, value in fresh.items():
             state.setdefault(name, value)
         checkpoint.setdefault("load_migrations", []).append("skill_actions_initialized")
+    if other_verbs:
+        state = {
+            name: value
+            for name, value in state.items()
+            if name in fresh and value.shape == fresh[name].shape and not name.startswith("memory.")
+        }
+        for name, value in fresh.items():
+            state.setdefault(name, value)
+        checkpoint["world_model"] = None
+        checkpoint.setdefault("load_migrations", []).append("verbs_replaced")
     policy.load_state_dict(state)
     return policy, checkpoint
 

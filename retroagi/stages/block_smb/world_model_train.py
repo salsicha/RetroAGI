@@ -25,8 +25,9 @@ import numpy as np
 import torch
 
 from retroagi.core.action_outcomes import COLUMN as EXECUTED, executed_outcomes
-from retroagi.core.action_tokens import VERBS
+from retroagi.core.action_tokens import MODE_VERBS, VERBS
 from retroagi.core.layered_policy import POINTER_START
+from retroagi.core.tokens import SKILL_MODES
 from retroagi.core.world_model import (
     ACTION_RECORD,
     COLUMN,
@@ -39,7 +40,6 @@ from retroagi.core.world_model import (
 # The proposed bars (plan, step 6): the median end error of jumps and runs
 # (pixels), and the share of waits whose length is within 4 frames.
 BARS = {"end_error_median": 6.0, "wait_within_4": 0.8}
-JUMPS_AND_RUNS = ("land_on", "jump_over", "stomp", "run_to", "approach", "back_away")
 # The fields kept of each collected episode: the scene rows only at its
 # decisions.
 KEPT = (
@@ -62,7 +62,6 @@ KEPT = (
     "actions",
     "played_teacher",
 )
-MODE_VERBS = {0: "run_to", 1: "land_on", 2: "hold"}  # a command's mode, when unnamed
 
 
 @dataclass
@@ -100,7 +99,7 @@ def executed_rows(record) -> np.ndarray:
 
     measured = executed_outcomes(record, lt.END_REASONS.index("no_progress"))
     rows = np.zeros((len(measured), len(ACTION_RECORD)), np.float32)
-    for name in ("verb", *OUTCOME_FIELDS, "has_object", "safe", "won", "room"):
+    for name in ("verb", *OUTCOME_FIELDS, "has_object", "success", "won", "room"):
         rows[:, COLUMN[name]] = measured[:, EXECUTED[name]]
     pointer = measured[:, EXECUTED["pointer"]]
     rows[:, COLUMN["pointer"]] = np.where(pointer >= 0, pointer + POINTER_START, MARIO_TOKEN)
@@ -116,11 +115,14 @@ def episode_data(record) -> dict:
     executed = executed_rows(record)
     steps = executed[:, COLUMN["verb"]].astype(np.int64)
     unnamed = steps < 0
-    steps[unnamed] = [VERBS.index(MODE_VERBS.get(int(m), "hold")) for m in record.commands[unnamed, 0]]
+    # An unnamed command steps the LSTM with its mode's verb.
+    steps[unnamed] = [
+        VERBS.index(MODE_VERBS[SKILL_MODES[int(m)]] if 0 <= int(m) < len(SKILL_MODES) else "wait")
+        for m in record.commands[unnamed, 0]
+    ]
     tried = record.actions if record.actions is not None else np.zeros((len(executed), 0, len(ACTION_RECORD)), np.float32)
-    if tried.shape[-1] < len(ACTION_RECORD):  # recorded before the last two columns
-        pad = np.zeros(tried.shape[:-1] + (len(ACTION_RECORD) - tried.shape[-1],), np.float32)
-        tried = np.concatenate((tried, pad), -1)
+    if tried.shape[-1] != len(ACTION_RECORD):
+        raise ValueError("episodes recorded with another action record (an older vocabulary): collect again")
     tried = tried.copy()
     for k in range(len(executed)):
         same = (tried[k, :, COLUMN["verb"]] == executed[k, COLUMN["verb"]]) & (
@@ -224,38 +226,36 @@ def evaluate(policy, episodes, device) -> dict:
         _forward(policy, episodes[start : start + 16], device, collect=collected)
     groups = defaultdict(list)
     for source, family, mean, record, success in collected:
-        verb = VERBS[int(record[COLUMN["verb"]])]
-        for key in ((verb, source), (verb, "all"), ("all", source), ("all", "all")):
-            groups[key].append((mean.cpu().numpy(), record.cpu().numpy(), float(success)))
+        for verb in (VERBS[int(record[COLUMN["verb"]])], "all"):
+            for key in ((verb, source), (verb, "all")):
+                groups[key].append((mean.cpu().numpy(), record.cpu().numpy(), float(success)))
     report = {}
     for (verb, source), items in groups.items():
         means = np.stack([m for m, _, _ in items])
         records = np.stack([r for _, r, _ in items])
         success = np.asarray([s for _, _, s in items])
-        safe = records[:, COLUMN["safe"]] > 0.5
-        entry = {"count": len(items), "success_brier": float(np.mean((success - safe) ** 2))}
-        if safe.any():
-            target = records[safe][:, [COLUMN[n] for n in OUTCOME_FIELDS]]
-            error = np.abs(means[safe] - target)
+        succeeded = records[:, COLUMN["success"]] > 0.5
+        entry = {"count": len(items), "success_brier": float(np.mean((success - succeeded) ** 2))}
+        if succeeded.any():
+            target = records[succeeded][:, [COLUMN[n] for n in OUTCOME_FIELDS]]
+            error = np.abs(means[succeeded] - target)
             end = np.hypot(error[:, 0], error[:, 1])
             entry["end_error_median"] = float(np.median(end))
             entry["end_error_p90"] = float(np.percentile(end, 90))
-            has = records[safe][:, COLUMN["has_object"]] > 0.5
+            has = records[succeeded][:, COLUMN["has_object"]] > 0.5
             if has.any():
                 entry["object_error_median"] = float(np.median(np.hypot(error[has, 2], error[has, 3])))
-            exact = records[safe][:, COLUMN["frames_censored"]] < 0.5
+            exact = records[succeeded][:, COLUMN["frames_censored"]] < 0.5
             if exact.any():
                 entry["frames_error_median"] = float(np.median(error[exact, 4]))
-                if verb == "hold":
+                if verb == "wait":
                     entry["wait_within_4"] = float(np.mean(error[exact, 4] <= 4))
         report[f"{verb}/{source}"] = entry
-    passed = {}
-    for verb in VERBS:
-        entry = report.get(f"{verb}/all", {})
-        if verb == "hold":
-            passed[verb] = entry.get("wait_within_4", 0.0) >= BARS["wait_within_4"]
-        elif verb in JUMPS_AND_RUNS:
-            passed[verb] = entry.get("end_error_median", 1e9) <= BARS["end_error_median"]
+    passed = {
+        verb: report.get(f"{verb}/all", {}).get("end_error_median", 1e9) <= BARS["end_error_median"]
+        for verb in ("run", "jump")
+    }
+    passed["wait"] = report.get("wait/all", {}).get("wait_within_4", 0.0) >= BARS["wait_within_4"]
     return {"by_verb": report, "passed": passed}
 
 

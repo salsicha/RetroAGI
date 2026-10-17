@@ -52,6 +52,12 @@ get there.
 
 ## 1. Actions
 
+Superseded (2026-10-17): the seven verbs below became three, run, jump and
+wait, with a run's or a jump's pointer naming where Mario ends up (a
+surface, or an enemy he lands on); an approach or a back-away is a run, and
+jumps over, onto or across things are jumps to where they land
+([design decisions](design-decisions.md)).
+
 An action is a verb and the object it is aimed at, one of the objects the
 vision sees (a surface, an enemy, the edge of a gap). The verbs
 (`core/action_tokens.py`):

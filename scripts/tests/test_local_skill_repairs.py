@@ -87,12 +87,12 @@ def test_a_hold_jumps_a_walker_at_a_trigger_distance_that_grows_with_its_speed()
         played = play_teacher(scenario, "choice_hold_area", "easy")
         assert played["won"]
         jumps = [d["trigger"][0] for d in played["decisions"] if d.get("trigger")]
-        assert jumps and all(d["action"][0] == "jump_over" for d in played["decisions"] if d.get("trigger"))
+        assert jumps and all(d["action"][0] == "jump" for d in played["decisions"] if d.get("trigger"))
         gaps[speed] = jumps[0]
         # Each wait is one action, as long as the frames until the jump is
         # due (user, 2026-10-15): a few decisions, not one a frame.
         first = played["decisions"][0]
-        assert first["action"][0] == "hold" and first["hold_frames"] > 1
+        assert first["action"][0] == "wait" and first["hold_frames"] > 1
         assert len(played["decisions"]) <= 6
     assert gaps[0.8] > gaps[0.35] > 0
 

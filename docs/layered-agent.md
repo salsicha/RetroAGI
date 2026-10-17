@@ -31,30 +31,37 @@ The seven tactics are `advance`, `retreat`, `climb_forward`,
 The tactic token is one-hot with no separate direction field. Forward means
 right; backward means left. The strategy switch separately carries the goal side.
 
-The skill chooses an **action**: a verb (hold, run to, approach, land on,
-jump over, stomp, back away) and a pointer to one of the objects the vision
-reports (a surface, an enemy, a gap, a pipe, a block or a moving platform:
-one of 60 scene slots). It chooses in order: the verb first (a verb with
-nothing in view it can aim at is excluded), then the pointer reading the
-verb (the decision token, adjusted by the verb, scored against each object's
-scene token; absent objects and kinds the verb cannot aim at are excluded).
-A floor is reported cut where an enemy stands on it, so each piece is the
-floor between two threats, and an action aimed at a piece names where it
-ends. The action's end, in the verb's mode, is the executor's destination: a
-location relative to the center of Mario's feet (x positive right, y
-positive down). In Block SMB training it is the teacher's version of the
-action (`teacher_actions.carry_out`: the ground truth the world model will
-predict). A hold anchors the current platform-relative spot and lasts as
-long as its wait: one action whose length is the ground truth in training
-(`SkillToken.frames`). A jump at a walking enemy aims where it really is when
-Mario lands (`tracks.exact`), the place the trackers will predict.
+The skill chooses an **action**: a verb, **run**, **jump** or **wait** (user,
+2026-10-17; shoot may follow on later levels), and for a run or a jump a
+pointer to where Mario ends up, one of the objects the vision reports: a
+surface, a pipe, a block or a moving platform he ends on, or an enemy he
+lands on (a stomp); one of the scene slots other than the gaps. It chooses
+in order: the verb first (a run or a jump with nothing in view to end on is
+excluded; a wait is always a choice), then the pointer reading the verb (the
+decision token, adjusted by the verb, scored against each object's scene
+token; absent objects and gaps are excluded; a wait aims at nothing). A
+floor is reported cut where an enemy stands on it, so each piece is the
+floor between two threats: a jump over an enemy is a jump to the piece
+beyond it. A run is any move that is not a jump: along a floor or off its
+end, or a steer in the air. How long a wait lasts, and whether a run keeps
+its speed into the jump after it, are part of carrying the action out, not
+other actions. The action's end, in the verb's mode (a wait: a hold), is the
+executor's destination: a location relative to the center of Mario's feet (x positive
+right, y positive down). In Block SMB training it is the teacher's version
+of the action (`teacher_actions.carry_out`: the ground truth the world model
+will predict). A hold anchors the current platform-relative spot and lasts
+as long as its wait: one action whose length is the ground truth in
+training (`SkillToken.frames`). A jump at a walking enemy aims where it
+really is when Mario lands (`tracks.exact`), the place the trackers will
+predict.
 
 The skill uses a transformer with positional encoding and a context of its
 last **16 actions**, each with where it sent the executor (teacher commands
 in training are kept as their mode's verb). History is newest first, marked
 by decision age, and reset between episodes. It is taught by imitation: the
-teacher's command named as an action (`teacher_actions`): its verb, and
-(except hold) the object it is aimed at.
+teacher's command named as an action (`teacher_actions`): its verb (a hold
+is a wait, a jump a jump, any other command a run) and, for a run or a
+jump, where it ends (the enemy it kills, else the surface it ends on).
 
 Strategy context distinguishes otherwise identical inputs with conflicting
 demonstrations: the same retreat or climb tactic can require different
@@ -94,7 +101,11 @@ speed, his feet's movement, whether he stands). Vision reports boxes only;
 a sprite missed for up to 8 frames keeps its identity and velocity. Both
 prediction networks read these same estimates, per scene slot
 (`core/smb_kinematics.py`): the trackers every frame, the world model at each
-action's start (user, 2026-10-16). Collection episodes record the simulator's
+action's start (user, 2026-10-16). They are made once a frame, as soon as the
+executor has seen the picture and before it steps (`SMBAgents._kinematics`),
+and the recordings keep exactly those (made after the step, Mario's speed was
+a frame newer on some frames than what the trackers had read). Collection
+episodes record the simulator's
 truth with them (`EpisodeTask.record_truth`, `truth_recording.py`): every
 frame's true boxes and one more after the last button, which true enemy each
 scene slot shows, why each action ended, and each executed command and the
@@ -261,7 +272,7 @@ ends from scenes of every family. After every round, the skill's own choices
 on held-out layouts are compared with the teacher's choice at the same
 moments (recorded at each decision; carry_out asks for it). Each round's
 line reports per family how many it matched (verb and object) and how it
-differed ("jump_over for approach"), worst families first; the history and
+differed ("jump for run", "run at another object"), worst families first; the history and
 the fresh evaluation keep the whole report (`choices_against_teacher`). A
 family where the skill picks one verb at more than 40% of its decisions and
 more than 20 points above the teacher's share at those decisions collapses,
