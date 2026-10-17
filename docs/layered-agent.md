@@ -165,6 +165,24 @@ labels train the same networks; `stages/full_smb/practice.py` records a
 playthrough of the deployed agent, with a checkpoint every 500 pixels of
 Mario's distance into the level.
 
+Full SMB learning (`stages/full_smb/learn.py`, user 2026-10-17) starts from
+the tactic run's checkpoint and trackers once both layers have met their
+gates. Every network is engaged and goes on learning: each round the agent
+plays the current level as deployed, eight playthroughs in speed run mode
+and eight in max points mode, sampling its choices. Each playthrough is
+recorded through Block SMB's `EpisodeRecorder` (one episode for the skill,
+one for the tactic layer) with rewards in Block SMB's units that follow the
+mode played: progress into the level, a cost per frame (five times as much
+in speed run), points (max points only), a loss at death, and the goal (in
+speed run, again times the share of the timer left). The skill and tactic
+layers learn from those rewards by Block SMB's reward learning; the world
+model and the trackers from the recorded truth; the vision network from
+every eighth frame labelled from game memory. 1-1 is played until both
+modes have finished it; then the next level, from a start captured when a
+playthrough finished the one before. The history records, per round and
+mode, finishes, distance, frames to each checkpoint and points, and per
+level and mode the playthroughs until the first finish.
+
 Ground movement uses **eight-frame model-predictive control**: simulate Mario's
 response to candidate button sequences, apply only the first button, then observe
 and replan. A terminal braking-distance cost accounts for momentum. The executor

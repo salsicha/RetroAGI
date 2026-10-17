@@ -26,6 +26,37 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-17 — Full SMB: every network engaged and learning, in both modes (user decision; built)
+
+User: "Finish training, record the evaluation results, and then start the
+full smb runs. All models should be engaged and continue training. full smb
+will be played in max points and speed run modes, and the training will
+continue based on the success in the strategy mode the policy is
+attempting"; then "1-1 only first" and "Train on all".
+
+- **Played as deployed**, every network engaged: vision, the tactic and
+  skill layers (sampling their choices), the world model carrying out the
+  skill's actions, the trackers ending waits and aiming stomps
+  (`stages/full_smb/learn.py`, `practice.play_recorded`).
+- **Rewards follow the mode played**, in Block SMB's units: progress, a cost
+  per frame (five times as much in speed run), points (max points only), a
+  loss at death, the goal (speed run: plus the share of the timer left).
+  The skill and tactic layers learn from them by Block SMB's reward
+  learning; the world model and the trackers from the game's truth; the
+  vision network from frames labelled from game memory.
+- **1-1 first**, eight playthroughs a mode a round, until both modes have
+  finished it; then the next level, from a start captured at a finish.
+  Nothing is held out (the two test levels are no longer kept out).
+- **Measured**: per round and mode, finishes, distance, frames to each
+  500-pixel checkpoint, points; per level and mode, the playthroughs until
+  the first finish.
+- **Starts after training**: the skill run, then the tactic run (continuing
+  the skill run's trackers), each evaluated on fresh layouts and recorded
+  (`artifacts/full_smb/learn_20261018/block_smb_evaluations.json`); Full SMB
+  starts only from a tactic checkpoint that met its gate.
+- Block SMB's episode recording moved into `EpisodeRecorder`, shared by
+  Block SMB's lanes and Full SMB's playthroughs.
+
 ## 2026-10-17 — The teacher generates the training data; predictions learn alongside (user decision; built)
 
 User: "The untrained skill network never picks anything. The teacher is
