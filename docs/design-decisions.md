@@ -69,6 +69,44 @@ fresh stages (user, 2026-10-17; chained). Then the Full SMB loop.
   two modes, the skill's and tactic's reward rounds) is to be settled with the
   user once the networks' first results exist.
 
+## 2026-10-16 — The tactic re-check's lost layouts (built; being re-qualified)
+
+The re-check of the tactic layouts (validation stage) passed 357 of 378: the
+teacher lost 21 in the production pipeline (vision, executor), 6 by timeout,
+15 with no command. Replays from the simulator's own labels win most of them:
+the losses come from what vision and the executor do. Causes found and fixed
+(`controller_teacher.py`):
+
+- **A landing seen a frame early** (tall_pipe_jump). Vision's contact sees
+  Mario on a pipe top while his feet are a row above it, and the jump ends
+  there. Asked in the air, the teacher only steers within 32 pixels: at 2.5
+  pixels a frame every such run slid off a 30-pixel pipe. When no steering is
+  safe, the runs from the platform he lands on within 4 frames are tried too,
+  and a run off it, which ends where he lands below, is aimed again where it
+  landed (up to 3 times: a nearer aim brakes sooner).
+- **A plant crossing that lands on the plant's pipe** (full_smb_opening_proxy,
+  tactics_obstacle_sequence). Certified on its landing alone, it put Mario on
+  the pipe's edge as the plant rose (or beside it, risen): he could neither
+  stay nor leave. A landing on the pipe now counts only if the plant stays down
+  while he walks past its mouth (1.5 pixels a frame). The plant teacher also
+  read Mario's and the plant's state after its trials had moved them (a trial
+  restores new copies): it now reads them before.
+- **Runs into the goal before the points** (max_points_retreat). Reaching the
+  goal without the strategy's points ends the lesson as missed; ranked first,
+  such runs took every trial, the runs to the coins beside Mario were never
+  tried, and a jump off the coin platform stranded its coins. They are no
+  longer screened while points are due.
+- **The screen's left edge kept Mario's speed** (max_points_descend_forward;
+  `env.py`). A stomp's bounce left him pinned against it still moving left;
+  a run back right first spent 13 frames undoing that speed, and the executor
+  ended every such run as making no progress. In the game his speed is 0 at
+  the edge (Full SMB 1-1, read from its memory): the edge, and the world's
+  right end, now stop him as a wall does.
+
+Still open: max_points_climb_backward, max_points_hold_ground, and the
+timeouts (moving_bridge, chained_enemy_gauntlet, mixed_section,
+tactics_mixed_sequence, tactics_bridge_then_gap).
+
 ## 2026-10-16 — Stomp variety; the plant and monster teachers win their lessons (user decision; built)
 
 skill_waits_20261015 stopped at round 11's teacher qualification: 29 of the

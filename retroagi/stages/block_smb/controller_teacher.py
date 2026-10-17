@@ -68,6 +68,10 @@ class Result:
     # ending nearest the box's middle is taught (_rank): the lowest climb
     # onto a wide step had landed on its near edge (user, 2026-10-14).
     goal_offset: float = 0.0
+    # A jump certified after a run-up or a wait (_certify): when it started
+    # (frames from the decision) and where (Mario's x from the decision's).
+    started: int = 0
+    start_dx: float = 0.0
 
     @property
     def margin(self) -> float:
@@ -372,6 +376,9 @@ MOVING = 0.5
 SETTLE_FRAMES = 4
 # Screened options certified by a trial, best first.
 CERTIFY = 6
+# A run off the platform Mario is landing on is aimed again where it landed,
+# at most this many times (_run_options).
+RE_AIMS = 3
 # No run shorter than this is proposed by the general search (_run_options):
 # such a run creeps. A run-up or wait before a jump can be any length: the
 # jump is remembered and taken at the next decision (_commit), so it is not
@@ -989,22 +996,70 @@ def _run_options(env, state, target, memo):
     """Runs to every pixel Mario can walk to within REACH pixels, screened by
     where they end (in the goal first, then the most progress toward the
     target per frame, then the most room), the best CERTIFY tried:
-    [(command, result)]."""
+    [(command, result)]. In the air: steering (_air_options), and when none
+    is safe, the runs from the platform he lands on within SETTLE_FRAMES."""
+    landing = None
     if not env.mario["on_ground"]:
-        return _air_options(env, state, target, memo)
-    out = []
-    for goal in _screened_runs(env, state, target)[:CERTIFY]:
+        out = _air_options(env, state, target, memo)
+        # Vision can see a landing a frame before the simulator makes it (his
+        # feet a row above a pipe's top at the top of a jump), and the action
+        # ends there. The runs he would be taught standing on it are tried
+        # too: steering within 32 pixels, at 2.5 pixels a frame, every run
+        # slid off a 30-pixel pipe, and none was taught (tall_pipe_jump,
+        # 2026-10-16). Only when no steering is safe: elsewhere the lessons
+        # stay as they were.
+        if any(result.safe or result.won for _, result in out):
+            return out
+        landing = _landing_support(env)
+        if landing is None:
+            return out
+    else:
+        out = []
+    for goal in _screened_runs(env, state, target, landing)[:CERTIFY]:
         if goal not in memo:
             memo[goal] = _trial(env, state, goal, target)
         out.append((goal, memo[goal]))
+    if landing is not None:
+        # Off the platform he is landing on, a run ends where he lands below:
+        # aimed farther (the screen ranks the farthest first), none reached
+        # its point. Each such run is aimed again where it landed, up to
+        # RE_AIMS times (a nearer aim brakes sooner: aimed 77 pixels on he
+        # landed 59 on, aimed 59 he landed 53 on; tall_pipe_jump).
+        for goal, result in list(out[-CERTIFY:]):
+            for _ in range(RE_AIMS):
+                if result.reached or result.end_dy <= 2 or goal.mode != "run":
+                    break
+                goal = SkillToken("run", round(result.end_dx), round(result.end_dy))
+                if goal in memo:
+                    break  # aimed there already
+                memo[goal] = result = _trial(env, state, goal, target)
+                out.append((goal, result))
     return out
 
 
-def _screened_runs(env, state, target):
-    """Every run _run_options screens (Mario standing), best first, untried:
-    [command]."""
+def _landing_support(env):
+    """The platform Mario, in the air, lands on within SETTLE_FRAMES frames
+    pressing nothing (None: not that soon)."""
+    with probe_state(env):
+        for _ in range(SETTLE_FRAMES):
+            _, _, done, truncated, _ = env.step(0)
+            if done or truncated:
+                return None
+            if env.mario["on_ground"]:
+                support = env.mario.get("_platform")
+                # The probe's platforms are restored as new objects: by index.
+                index = next((i for i, p in enumerate(env.platforms) if p is support), None)
+                break
+        else:
+            return None
+    return None if index is None else env.platforms[index]
+
+
+def _screened_runs(env, state, target, support=None):
+    """Every run _run_options screens (Mario standing, or on ``support``, the
+    platform he is landing on), best first, untried: [command]."""
     m = env.mario
-    support = m.get("_platform")
+    support = m.get("_platform") if support is None else support
     if support is None:
         return []
     start = _body(env)
@@ -1014,6 +1069,7 @@ def _screened_runs(env, state, target):
     enemies = _enemy_paths(env, 300)
     forbidden = set(tactic_schedule.current(env).get("forbidden", ()))
     before = distance(env, target)
+    points_due = env.points() < env._strategy_objective.get("points", 0)
     # Solids standing on his floor as high as his body (a pipe, a step): a
     # run along it ends before them, it cannot pass through. Unscreened, the
     # runs ranked first by progress were aimed into or behind a plant's pipe,
@@ -1068,6 +1124,12 @@ def _screened_runs(env, state, target):
             goal_in = env.goal is not None and env.goal.colliderect(
                 type(env.goal)(body[0], body[1], body[2] - body[0], body[3] - body[1])
             )
+            if goal_in and points_due:
+                # The goal reached without the strategy's points ends the
+                # lesson as missed. Ranked first, such runs took every trial,
+                # and the runs to the coins beside Mario were never tried
+                # (max_points_retreat, 2026-10-16).
+                continue
             progress = before - _distance_at(env, target, x, r.top)
             room = min(
                 [d for d in walk.values()] + [x - half - r.left, r.right - x - half], default=999.0
@@ -1567,6 +1629,7 @@ def _certify(env, state, target, direction, travel, wait, option, check):
         if travel
         else SkillToken("hold", 0, 0)
     )
+    start_x = env.mario["x"]
     moved = _trial(env, state, first, target, save=True)
     if not moved.safe or moved.snapshot is None:
         return None
@@ -1591,6 +1654,7 @@ def _certify(env, state, target, direction, travel, wait, option, check):
         stop = env.mario["x"]
         aim = jump_aim(env, landed)
         over = not landed.won and _overshoots_goal(env, landed)
+    landed.started, landed.start_dx = moved.frames, stop - start_x
     if not _works_now(landed) or not check(landed) or over:
         return None
     combined = Result(**{**vars(moved), "distances": _combine(moved.distances, landed.distances)})
@@ -2604,6 +2668,9 @@ PLANT_STAGING = 32
 # many frames (a run-up and a jump take about that long); before that it
 # cannot work, and each search costs seconds.
 PLANT_LEAD = 64
+# A crossing that lands on the pipe counts only if the plant stays down while
+# Mario walks past its mouth at this speed (pixels a frame, a walk from rest).
+PLANT_WALK = 1.5
 
 
 def _frames_until_hidden(plant) -> int:
@@ -2612,6 +2679,15 @@ def _frames_until_hidden(plant) -> int:
     rise, exposed, hidden = plant["rise_frames"], plant["exposed_frames"], plant["hidden_frames"]
     phase = plant["plant_tick"] % (2 * rise + exposed + hidden)
     return max(0, 2 * rise + exposed - phase)
+
+
+def _down_for(plant, later: int) -> int:
+    """Frames the plant stays fully down in its pipe from ``later`` frames
+    from now (0: it is not down then), by its cycle."""
+    rise, exposed, hidden = plant["rise_frames"], plant["exposed_frames"], plant["hidden_frames"]
+    cycle = 2 * rise + exposed + hidden
+    phase = (plant["plant_tick"] + later) % cycle
+    return cycle - phase if phase >= 2 * rise + exposed else 0
 
 
 def plant_destination(env, state):
@@ -2645,6 +2721,9 @@ def plant_destination(env, state):
     )
     if pipe is None:
         return None
+    # Trials move the simulator's Mario and enemies in place and restore new
+    # copies: what is read after one is read from these.
+    m, plant = dict(m), dict(plant)
 
     def remember(goal):
         state.notes["plant_destination"] = (env.steps, goal)
@@ -2674,11 +2753,26 @@ def plant_destination(env, state):
                 return crosses(landing)
 
             def check(r):
+                landing = r.outcome[1] if r.outcome else None
                 return r.won or (
-                    crosses(r.outcome[1] if r.outcome else None)
+                    crosses(landing)
                     and r.safe
                     and r.clearance >= 8
+                    and (env.platforms[landing]["rect"] != pipe or leaves_in_time(r))
                 )
+
+            def leaves_in_time(r):
+                # Landed on the pipe: the plant must stay down while he walks
+                # past its mouth. A crossing certified on landing alone put him
+                # on the pipe's edge 3 frames before it rose; he could neither
+                # stay nor leave (full_smb_opening_proxy, 2026-10-16).
+                x = m["x"] + r.start_dx + r.end_dx
+                past = (
+                    plant["x"] + plant["w"] + 2 - x
+                    if direction > 0
+                    else x + m["w"] - (plant["x"] - 2)
+                )
+                return past <= 0 or _down_for(plant, r.started + r.frames) >= past / PLANT_WALK
 
             best = _best_certified(env, state, target, memo, direction, travels, wanted, check)
             if best is not None:

@@ -730,10 +730,22 @@ class MarioScenarioEnv:
         self.camera_x = max(0.0, min(self.camera_x, self.world_width - self.width))
 
         # ── 11. World boundaries ──────────────────────────────────────────────
-        if self.mario["x"] < self.camera_x:
+        # The screen's left edge (the camera never scrolls back) and the
+        # world's right end stop Mario as a wall does: his speed is lost. In
+        # the game, pinned at the left edge his speed is 0 (Full SMB, 1-1);
+        # kept here, a run back from the edge first spent 13 frames undoing
+        # it, and the executor gave up on it (max_points_descend_forward,
+        # 2026-10-16).
+        if self.mario["x"] <= self.camera_x:
             self.mario["x"] = self.camera_x
-        if self.mario["x"] > self.world_width - self.mario["w"]:
+            if self.motion.x_speed < 0:
+                self.mario["vx"] = 0
+                self.motion.wall_contact()
+        if self.mario["x"] >= self.world_width - self.mario["w"]:
             self.mario["x"] = self.world_width - self.mario["w"]
+            if self.motion.x_speed > 0:
+                self.mario["vx"] = 0
+                self.motion.wall_contact()
         mario_rect.x = self.mario["x"]
 
         # ── 12. Rightward-progress reward ─────────────────────────────────────

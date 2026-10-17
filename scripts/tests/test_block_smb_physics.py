@@ -64,6 +64,32 @@ class TestBlockSMBPhysics(unittest.TestCase):
         finally:
             env.close()
 
+    def test_the_screens_left_edge_stops_mario_as_a_wall_does(self):
+        # In the game, Mario pinned at the left edge has no speed (Full SMB,
+        # 1-1): pressing right he starts at once, with no leftward speed to
+        # undo first.
+        env = self.make_env(
+            {
+                "world_width": 600,
+                "mario": [200, 208],
+                "platforms": [[0, 220, 600, 20]],
+                "goal": [560, 200, 16, 20],
+            }
+        )
+        try:
+            for _ in range(60):
+                env.step(1)  # right: the camera scrolls on
+            for _ in range(200):
+                env.step(3)  # left, into the screen's edge
+            self.assertGreater(env.camera_x, 0.0)
+            self.assertEqual(env.mario["x"], env.camera_x)
+            self.assertEqual(env.motion.x_speed, 0)
+            for _ in range(3):  # the game too speeds up from the second frame on
+                env.step(1)
+            self.assertGreater(env.motion.x_speed, 0)
+        finally:
+            env.close()
+
     def test_gap_fall_eventually_terminates_with_death_penalty(self):
         env = self.make_env(
             {
