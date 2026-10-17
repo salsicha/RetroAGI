@@ -21,8 +21,10 @@ commit). How the parts work is described in the
   weights and never refuses a destination, goes there. Until the world model predicts well, the teacher
   carries out the skill's actions in training instead (2026-10-11).
 - **Every teacher label is certified through the same executor** the agent
-  uses. A run stops when the teacher cannot finish a layout; a failed gate is
-  fixed in the teacher or the policy, never bypassed.
+  uses. A layout the teacher cannot finish is recorded and left out of
+  training (user, 2026-10-17: "record the failure and don't add its data to
+  the training set"); the recorded failures are fixed in the teacher. A
+  failed gate is fixed in the teacher or the policy, never bypassed.
 
 ## 2026-10-17 — The teacher generates the training data; predictions learn alongside (user decision; built)
 
@@ -51,6 +53,9 @@ while skills and tactics are also trained."
   family and its collapse check decide the gate; `best.pt` and `passed.pt`
   come from it. A tactic run evaluates after its imitation rounds and after
   each reward round (its critic's readiness is measured there).
+- **A layout that misses its objective is left out.** The teacher's failed
+  layouts (and, in tactic rounds, the learner's own episodes that miss) are
+  recorded with their layouts and not trained on; the run goes on.
 - **The world model and the collision trackers learn alongside** the skill
   and the tactic layer (`layered_train.Predictions`): each round's episodes
   are recorded with the simulator's truth (the skill's also with the

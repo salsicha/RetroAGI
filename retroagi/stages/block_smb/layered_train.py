@@ -2355,16 +2355,27 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     for t in tasks
                 ]
             tasks = pool.with_scenarios(tasks)
-            demonstrated = qualify_teachers(
+            # The teacher plays every layout first; one it fails is recorded
+            # and left out (user, 2026-10-17).
+            demonstrated_tasks, demonstrated = qualify_teachers(
                 pool, tasks, output / "teacher_qualification" / f"train_{round_index:02d}.json"
             )
+            excluded = Counter(t.family for t in tasks) - Counter(t.family for t in demonstrated_tasks)
             # The skill's imitation rounds play only the teacher: the qualified
             # records are its data (not played twice).
-            played = (
-                demonstrated
-                if config.learner == "skill" and not by_reward
-                else pool.play(tasks)
-            )
+            if config.learner == "skill" and not by_reward:
+                played = demonstrated
+            else:
+                played = pool.play(demonstrated_tasks)
+                # An episode that does not reach its objective is not learned
+                # from either; it is recorded with its layout.
+                missed = [
+                    (t, r) for t, r in zip(demonstrated_tasks, played) if not _reached(r, by_reward)
+                ]
+                if missed:
+                    _record_missed(output / "missed" / f"train_{round_index:02d}.json", missed)
+                    excluded.update(t.family for t, _ in missed)
+                    played = [r for r in played if _reached(r, by_reward)]
             replay = kept_episodes(replay, played, config.replay_episodes)
             play_time = time.time() - started
 
@@ -2439,6 +2450,8 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     for name, values in totals.items()
                 },
                 "predictions": predicted,
+                # Layouts whose episodes missed their objective: left out.
+                "excluded": dict(sorted(excluded.items())),
                 "replay_episodes": len(replay),
                 "seconds": {
                     "play": round(play_time, 1),
@@ -2533,6 +2546,36 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     finally:
         pool.close()
     return {"evaluation_success": best, "history": history, "evaluations": evaluations}
+
+
+def _reached(record, by_reward: bool) -> bool:
+    """Whether an episode reached its objective with every decision the
+    teacher played labelled (a reward round's episodes are the learner's
+    own: they are learned from either way, their rewards say how they went)."""
+    if by_reward:
+        return True
+    valid = record.labels.get("valid", ())
+    return bool(record.won) and len(valid) > 0 and bool(np.asarray(valid).all())
+
+
+def _record_missed(path, missed) -> None:
+    """The episodes left out of a round, with their layouts."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "family": t.family,
+            "split": t.split,
+            "seed": t.seed,
+            "sample_index": t.sample_index,
+            "difficulty": t.difficulty,
+            "end": r.end,
+            "frames": r.frames,
+            "won": bool(r.won),
+            "scenario": t.scenario,
+        }
+        for t, r in missed
+    ]
+    path.write_text(json.dumps({"missed": len(rows), "episodes": rows}, indent=2) + "\n")
 
 
 @torch.no_grad()
@@ -2742,7 +2785,9 @@ def _round_line(learner: str, entry: dict) -> str:
         f"teacher wins {entry['train_success']:.2f}, "
         f"agrees with teacher after learning {agreement if agreement is None else round(agreement, 3)} "
         f"(weakest {', '.join(f'{f} {v:.2f}' for f, v in weakest)}); {losses}"
-        f"{'; ' + side if side else ''}; seconds {entry['seconds']}"
+        f"{'; ' + side if side else ''}"
+        f"{'; left out ' + ', '.join(f'{f} {n}' for f, n in entry['excluded'].items()) if entry.get('excluded') else ''}"
+        f"; seconds {entry['seconds']}"
     )
 
 

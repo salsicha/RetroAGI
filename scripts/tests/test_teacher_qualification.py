@@ -48,10 +48,10 @@ def test_failed_or_unlabelled_demonstration_blocks_qualification_and_saves_layou
         return [record]
 
     report = tmp_path / "qualification.json"
-    with pytest.raises(RuntimeError, match="Teacher qualification failed"):
-        qualify_teachers(SimpleNamespace(play=play), [original], report)
+    # A failed layout is recorded and left out of training (user, 2026-10-17).
+    assert qualify_teachers(SimpleNamespace(play=play), [original], report) == ([], [])
     saved = json.loads(report.read_text())
-    assert not saved["all_passed"]
+    assert not saved["all_passed"] and len(saved["failed"]) == 1
     assert saved["episodes"][0]["scenario"] == original.scenario
     assert saved["episodes"][0]["frame_limit"] == 600
     assert original.teacher_share == 0 and not original.label
@@ -149,9 +149,10 @@ def test_actual_episode_stall_limit_also_fails_teacher_qualification(monkeypatch
         return lt.play_episodes(observer, policy, "skill", tasks, "cpu", 1)
 
     report = tmp_path / "stall.json"
-    with pytest.raises(RuntimeError, match="timeout"):
-        qualify_teachers(SimpleNamespace(play=play), [task()], report)
-    episode = json.loads(report.read_text())["episodes"][0]
+    assert qualify_teachers(SimpleNamespace(play=play), [task()], report) == ([], [])
+    saved = json.loads(report.read_text())
+    assert "timeout" in saved["failed"][0]
+    episode = saved["episodes"][0]
     assert episode["frames"] == lt.STALL_FRAMES + 2
     assert episode["frames"] < episode["frame_limit"]
 
@@ -177,8 +178,7 @@ def test_a_teacher_without_a_command_fails_qualification_instead_of_crashing(
         return lt.play_episodes(observer, policy, "skill", tasks, "cpu", 1)
 
     report = tmp_path / "unlabelled.json"
-    with pytest.raises(RuntimeError, match="Teacher qualification failed"):
-        qualify_teachers(SimpleNamespace(play=play), [task()], report)
+    assert qualify_teachers(SimpleNamespace(play=play), [task()], report) == ([], [])
     episode = json.loads(report.read_text())["episodes"][0]
     assert not episode["complete_labels"] and not episode["passed"]
     # It ends there, not after holding until the stall limit.
@@ -238,7 +238,7 @@ def test_ledge_teacher_never_falls_back_to_policy(family, split, index, difficul
         assert teacher_only
         return lt.play_episodes(observer, policy, "skill", tasks, "cpu", 1)
 
-    records = qualify_teachers(SimpleNamespace(play=play), [original], tmp_path / "edges.json")
+    _, records = qualify_teachers(SimpleNamespace(play=play), [original], tmp_path / "edges.json")
     assert records[0].frames < 150
 
 

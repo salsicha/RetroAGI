@@ -633,8 +633,12 @@ follow its usual ones, so every layout a round can use (at most
 and can be qualified before a run starts. These checks use the same episode
 budget and 400-frame progress timeout as learner episodes, production vision,
 and spatial teacher destinations. Every episode must finish with valid teacher
-labels throughout. A failure stops the run and saves its layout and outcome in
-`teacher_qualification/`; it never redraws the layout or enlarges its budget.
+labels throughout. A layout the teacher fails (its objective not reached, or
+a decision left without a label) is recorded with its layout and outcome in
+`teacher_qualification/` and left out of training; the run goes on (user,
+2026-10-17). It never redraws the layout or enlarges its budget. In tactic
+rounds the tactic learner's own episodes that miss their objective are left
+out the same way (`missed/`).
 This applies to both skill and tactic training, with teacher destinations used
 to qualify tactic layouts independently of the learned skill. The first fully
 teacher-driven skill round reuses these demonstrations. Qualification covers
