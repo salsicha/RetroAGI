@@ -1,0 +1,30 @@
+{
+  "source": "/home/amoran/repos/RetroAGI/artifacts/block_smb/skill_continue_20261017/best.pt",
+  "tracker": "/home/amoran/repos/RetroAGI/artifacts/block_smb/skill_continue_20261017/tracker.pt",
+  "output": "/home/amoran/repos/RetroAGI/artifacts/block_smb/collision_20261018",
+  "families": [
+    "collide_wait_walker",
+    "collide_wait_monster",
+    "collide_wait_plant",
+    "collide_wait_walker_drops",
+    "collide_run_walker",
+    "collide_run_monster",
+    "collide_run_plant",
+    "collide_run_off_ledge",
+    "collide_run_under_drop",
+    "collide_jump_walker",
+    "collide_jump_monster",
+    "collide_jump_up_onto",
+    "collide_jump_plant",
+    "collide_jump_down_onto",
+    "collide_jump_short"
+  ],
+  "epochs": 40,
+  "batch_tracks": 128,
+  "learning_rate": 0.001,
+  "measure_per_difficulty": 10,
+  "workers": 8,
+  "lanes": 8,
+  "device": "cuda",
+  "seed": 0
+}
