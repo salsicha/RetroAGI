@@ -46,6 +46,7 @@ from .tokens import (
     DEFAULT_STRATEGY,
     EXECUTION_WIDTH,
     SKILL_MODES,
+    TACTIC_WIDTH,
     SkillToken,
     StrategyToken,
     TacticToken,
@@ -583,8 +584,23 @@ class SMBAgents:
         empty = model.initial(1, self.device)
         hidden = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[0] for i in chosen])
         cell = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[1] for i in chosen])
+        # What each action was chosen under: its tactic and strategy switch.
+        context = torch.stack(
+            [
+                torch.cat(
+                    (
+                        encode_tactic(made[i].tactic)
+                        if made[i].tactic is not None
+                        else torch.zeros(TACTIC_WIDTH),
+                        encode_strategy(made[i].strategy),
+                    )
+                )
+                for i in chosen
+            ]
+        ).to(self.device)
         out, (hidden, cell) = model.predict(
-            tokens[rows], present[rows], sprites, mario, feedback, verbs, pointers, (hidden, cell)
+            tokens[rows], present[rows], sprites, mario, feedback, verbs, pointers, (hidden, cell),
+            context=context,
         )
         for j, i in enumerate(chosen):
             copy = starting[i]

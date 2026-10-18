@@ -26,6 +26,33 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-18 — No gate between the layers; the training data is saved (user decision; built)
+
+User, after the skill missed its gate by one layout in each of four families
+(0.989 on fresh layouts): "Remove the tactics gate. Run the skills and
+tactics and save the data. For failed layouts don't save the data, but
+record the failure for debugging later"; "Once the training dataset is
+generated it shouldn't have to be regenerated"; "Break the dataset into
+separate files by family"; "Commit and push the dataset when it is ready".
+
+- **No gate between layers.** A layer trains on the layers below as they are
+  (`train_layer` no longer refuses a skill that has not met its gate); each
+  evaluation still records whether its gate was met, and a run goes on from
+  `passed.pt` when there is one, else `best.pt`.
+- **The dataset is saved.** Every imitation round's episodes are saved in
+  `episodes/round_NN/`, one gzip-compressed file per family, with
+  `complete.json` (episodes per family, layouts left out) written last; a
+  round already saved is read back instead of played again
+  (`save_round`, `load_round`). A failed layout is not saved: it is
+  recorded in `teacher_qualification/` (and `missed/` for a tactic learner's
+  own episode). The skill families' dataset is made again once
+  (`skill_data_20261018`: the trained skill continued with the same seed, so
+  the same layouts), since the run before kept its episodes in memory only.
+- **The world model reads the tactic and the strategy switch** each action
+  was chosen under (user, 2026-10-18), its reading starting at zero; old
+  checkpoints load unchanged. A tactic run's episodes record the skill's
+  executed actions too, so the world model and the trackers learn from them.
+
 ## 2026-10-17 — Full SMB: every network engaged and learning, in both modes (user decision; built)
 
 User: "Finish training, record the evaluation results, and then start the

@@ -171,3 +171,57 @@ def test_a_small_world_model_learns_a_recorded_episodes_outcomes():
         loss.backward()
         optimizer.step()
     assert float(_forward(policy, [data], "cpu")) < 0.5 * first
+
+
+@torch.no_grad()
+def test_the_tactic_and_strategy_read_starts_with_no_influence():
+    from retroagi.core.world_model import CONTEXT_WIDTH
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy().eval()
+    model = policy.memory
+    # A world model that has learned (an untrained one's outputs start at
+    # zero whatever it reads), but not yet to read the tactic and strategy.
+    for parameter in model.parameters():
+        parameter.normal_(0.0, 0.1)
+    model.context.weight.zero_()
+    model.context.bias.zero_()
+    tokens, present, sprites, mario, feedback = scene(policy, 2)
+    verbs = torch.tensor([VERBS.index("wait"), VERBS.index("run")])
+    pointers = torch.tensor([MARIO_TOKEN, MARIO_TOKEN])
+    state = model.initial(2, "cpu")
+    plain, _ = model.predict(tokens, present, sprites, mario, feedback, verbs, pointers, state)
+    context = torch.rand(2, CONTEXT_WIDTH)
+    read, _ = model.predict(tokens, present, sprites, mario, feedback, verbs, pointers, state, context=context)
+    assert torch.equal(plain["mean"], read["mean"])
+    # Once it has learned, the tactic and the strategy change the outcome.
+    model.context.weight.normal_()
+    changed, _ = model.predict(tokens, present, sprites, mario, feedback, verbs, pointers, state, context=context)
+    assert not torch.equal(plain["mean"], changed["mean"])
+
+
+def test_a_world_model_saved_before_it_read_the_tactic_loads_unchanged(tmp_path):
+    from dataclasses import asdict
+
+    from retroagi.stages.block_smb.layered_train import load_layered_checkpoint
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy()
+    state = {k: v for k, v in policy.state_dict().items() if not k.startswith("memory.context.")}
+    path = tmp_path / "before.pt"
+    torch.save(
+        {
+            "settings": asdict(policy.settings),
+            "state_dict": state,
+            "observation_layout": observation_layout(),
+            "token_layout": token_layout(),
+            "trained_layers": ["skill"],
+            "memory_version": 5,
+        },
+        path,
+    )
+    loaded, checkpoint = load_layered_checkpoint(path)
+    assert "world_model_reads_tactic_and_strategy" in checkpoint["load_migrations"]
+    assert checkpoint["trained_layers"] == ["skill"]
+    assert torch.equal(loaded.memory.cell.weight_ih, policy.memory.cell.weight_ih)
+    assert not loaded.memory.context.weight.any()

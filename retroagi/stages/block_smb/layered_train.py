@@ -271,6 +271,9 @@ class EpisodeRecord:
     # [D, ACTIONS_PER_DECISION, len(ACTION_RECORD)] (core/world_model),
     # with EpisodeTask.record_actions; else None.
     actions: Optional[np.ndarray] = None
+    # [D, world_model.CONTEXT_WIDTH] per decision, the tactic and the
+    # strategy switch its action was chosen under (the world model reads it).
+    action_context: Optional[np.ndarray] = None
     # With EpisodeTask.record_truth: the simulator's state each frame and one
     # more after the last button (truth_recording.TruthRecorder.arrays), the
     # true enemy (or moving platform) each sprite slot shows [T, SPRITE_SLOTS]
@@ -433,6 +436,7 @@ class EpisodeRecorder:
                     (encode_tactic(decision.tactic), encode_strategy(decision.strategy))
                 ).numpy()
             )
+            d["action_context"].append(d["given"][-1])
             valid = self.task.label and asked["skill"] is not None
             d["label_valid"].append(valid)
             example = asked.get("action_label")
@@ -489,16 +493,33 @@ class EpisodeRecorder:
             -1.0 if step.end_probability is None else step.end_probability
         )
         d["agreed"].append(teacher is not None and step.own == teacher.stance)
+        # The skill's action at this decision, as executed, for the world
+        # model and the trackers (the skill plays its own choices here).
+        own = decision.action
+        d["command"].append(command_row(decision.skill))
+        d["own_verb"].append(VERBS.index(own.verb) if own is not None else -1)
+        d["own_pointer"].append(
+            pointer_index(own.target) - POINTER_START
+            if own is not None and own.target is not None
+            else -1
+        )
+        d["execution_feedback"].append(decision.execution_feedback)
+        d["action_context"].append(
+            torch.cat((encode_tactic(decision.tactic), encode_strategy(decision.strategy))).numpy()
+        )
 
     def _executed_actions(self) -> dict:
-        """{"action_verb", "action_pointer"} per skill decision: the action
-        carried out (the teacher's choice as named, run-ups renamed, where it
-        played; else the skill's own); -1 unknown. Empty when not recorded."""
+        """{"action_verb", "action_pointer"} per decision: the action carried
+        out (for the skill learner, the teacher's choice as named where it
+        played; else the skill's own: always in a tactic learner's episode);
+        -1 unknown. Empty when not recorded."""
         d = self.decisions
         if not d["own_verb"]:
             return {}
         verb = np.asarray(d["own_verb"], np.int64)
         pointer = np.asarray(d["own_pointer"], np.int64)
+        if not d["label_action_valid"]:
+            return {"action_verb": verb.astype(np.int8), "action_pointer": pointer.astype(np.int16)}
         named = np.asarray(d["label_action_valid"], bool) & np.asarray(d["played_teacher"], bool)
         verb[named] = np.asarray(d["label_verb"], np.int64)[named]
         pointer[named] = np.asarray(d["label_pointer"], np.int64)[named]
@@ -585,6 +606,7 @@ class EpisodeRecorder:
             potentials=np.asarray(self.frames["potential"], np.float32),
             weight=self.task.weight,
             actions=np.asarray(d["actions"], np.float32) if self.task.record_actions else None,
+            action_context=_rows(d["action_context"], count) if d["action_context"] else None,
             tactic={
                 name[len("tactic_") :]: np.asarray(d[name])
                 for name in d
@@ -2229,6 +2251,12 @@ def load_layered_checkpoint(path, device="cpu"):
         state.update({name: value for name, value in fresh.items() if name.startswith("memory.")})
         checkpoint["world_model"] = None
         checkpoint.setdefault("load_migrations", []).append("world_model_reshaped")
+    if "memory.context.weight" not in state:
+        # The world model reads the tactic and the strategy switch each action
+        # was chosen under (user, 2026-10-18): that reading starts at zero, so
+        # what it learned predicts as it did.
+        state.update({name: value for name, value in fresh.items() if name.startswith("memory.context.")})
+        checkpoint.setdefault("load_migrations", []).append("world_model_reads_tactic_and_strategy")
     if destination_skill or "skill.heads.verb.weight" not in state:
         # The skill's action heads (a verb and the object it is aimed at) and
         # its history of actions are new: every skill tensor that is no longer
@@ -2288,10 +2316,9 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 tactic_memory_width=config.policy_tactic_memory_width,
             )
         ).to(device)
-    below = LEARNERS[: LEARNERS.index(config.learner)]
-    missing = [layer for layer in below if layer not in trained_layers]
-    if missing:
-        raise ValueError(f"train the {', '.join(missing)} layer(s) first (pass --init)")
+    # A layer trains on the layers below as they are, gate met or not (user,
+    # 2026-10-18: "Remove the tactics gate"); the checkpoint records which
+    # met theirs.
 
     # Only the learner changes; every other part stays exactly as it was. In
     # reward rounds only the learner's own layer changes.
@@ -2397,28 +2424,18 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     )
                     for t in tasks
                 ]
-            tasks = pool.with_scenarios(tasks)
-            # The teacher plays every layout first; one it fails is recorded
-            # and left out (user, 2026-10-17).
-            demonstrated_tasks, demonstrated = qualify_teachers(
-                pool, tasks, output / "teacher_qualification" / f"train_{round_index:02d}.json"
-            )
-            excluded = Counter(t.family for t in tasks) - Counter(t.family for t in demonstrated_tasks)
-            # The skill's imitation rounds play only the teacher: the qualified
-            # records are its data (not played twice).
-            if config.learner == "skill" and not by_reward:
-                played = demonstrated
+            saved = output / "episodes" / f"round_{round_index:02d}"
+            if not by_reward and (saved / ROUND_COMPLETE).exists():
+                # This round's episodes were played and saved before: the
+                # dataset is not made again (user, 2026-10-18).
+                played, excluded = load_round(saved)
             else:
-                played = pool.play(demonstrated_tasks)
-                # An episode that does not reach its objective is not learned
-                # from either; it is recorded with its layout.
-                missed = [
-                    (t, r) for t, r in zip(demonstrated_tasks, played) if not _reached(r, by_reward)
-                ]
-                if missed:
-                    _record_missed(output / "missed" / f"train_{round_index:02d}.json", missed)
-                    excluded.update(t.family for t, _ in missed)
-                    played = [r for r in played if _reached(r, by_reward)]
+                tasks = pool.with_scenarios(tasks)
+                played, excluded = _round_episodes(
+                    pool, tasks, config, output, round_index, by_reward, qualify_teachers
+                )
+                if not by_reward:
+                    save_round(saved, played, excluded)
             replay = kept_episodes(replay, played, config.replay_episodes)
             play_time = time.time() - started
 
@@ -2589,6 +2606,71 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     finally:
         pool.close()
     return {"evaluation_success": best, "history": history, "evaluations": evaluations}
+
+
+def _round_episodes(pool, tasks, config, output, round_index, by_reward, qualify_teachers):
+    """A round's episodes to learn from, and how many layouts per family were
+    left out: the teacher plays every layout first, and one it fails is
+    recorded and left out (user, 2026-10-17). The skill's imitation rounds
+    learn from those teacher episodes (not played twice); otherwise the
+    learner plays the layouts the teacher finished, and an episode that
+    misses its objective is recorded and left out too."""
+    demonstrated_tasks, demonstrated = qualify_teachers(
+        pool, tasks, output / "teacher_qualification" / f"train_{round_index:02d}.json"
+    )
+    excluded = Counter(t.family for t in tasks) - Counter(t.family for t in demonstrated_tasks)
+    if config.learner == "skill" and not by_reward:
+        return demonstrated, excluded
+    played = pool.play(demonstrated_tasks)
+    missed = [(t, r) for t, r in zip(demonstrated_tasks, played) if not _reached(r, by_reward)]
+    if missed:
+        _record_missed(output / "missed" / f"train_{round_index:02d}.json", missed)
+        excluded.update(t.family for t, _ in missed)
+        played = [r for r in played if _reached(r, by_reward)]
+    return played, excluded
+
+
+# Written last in a saved round's folder: the round is whole.
+ROUND_COMPLETE = "complete.json"
+
+
+def save_round(folder, played, excluded) -> None:
+    """A round's episodes, the training dataset, one gzip-compressed file per
+    family (user, 2026-10-18: "Break the dataset into separate files by
+    family"): only the episodes learned from (failed layouts are recorded in
+    teacher_qualification/ and missed/, not saved here). The layouts left out
+    per family and the families' episode counts go in ROUND_COMPLETE, written
+    last."""
+    import gzip
+    import pickle
+
+    folder.mkdir(parents=True, exist_ok=True)
+    by_family: dict = defaultdict(list)
+    for episode in played:
+        by_family[episode.family].append(episode)
+    for family, episodes in sorted(by_family.items()):
+        spare = folder / f"{family}.tmp"
+        with gzip.open(spare, "wb", compresslevel=6) as handle:
+            pickle.dump(episodes, handle, protocol=5)
+        spare.replace(folder / f"{family}.pkl.gz")
+    summary = {
+        "families": {family: len(episodes) for family, episodes in sorted(by_family.items())},
+        "excluded": dict(sorted(excluded.items())),
+    }
+    (folder / ROUND_COMPLETE).write_text(json.dumps(summary, indent=2) + "\n")
+
+
+def load_round(folder) -> tuple:
+    """(episodes, layouts left out per family) of a saved round (save_round)."""
+    import gzip
+    import pickle
+
+    summary = json.loads((folder / ROUND_COMPLETE).read_text())
+    episodes = []
+    for family in summary["families"]:
+        with gzip.open(folder / f"{family}.pkl.gz", "rb") as handle:
+            episodes += pickle.load(handle)
+    return episodes, Counter(summary["excluded"])
 
 
 def _reached(record, by_reward: bool) -> bool:

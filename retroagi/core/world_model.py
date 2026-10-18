@@ -14,6 +14,8 @@ What it reads at an action's start:
   collision trackers read): each tracked sprite's velocity added to its
   token, Mario's to his (one picture cannot show motion);
 - the last execution feedback (how the previous action went);
+- the tactic and the strategy switch the action was chosen under (user,
+  2026-10-18: the same action is carried out differently under each);
 - the chosen action: its verb and the token of where it ends (Mario's for a
   wait);
 - its own state, carried from action to action.
@@ -37,7 +39,7 @@ import torch.nn.functional as F
 from .action_tokens import VERBS, pointer_index
 from .smb_kinematics import MARIO_STATE, SPRITE_SLOTS
 from .smb_observer import SCENE_SLOTS
-from .tokens import EXECUTION_WIDTH
+from .tokens import EXECUTION_WIDTH, STRATEGY_WIDTH, TACTIC_WIDTH
 
 OUTCOME_FIELDS = ("dx", "dy", "object_dx", "object_dy", "frames")
 OUTCOME_WIDTH = len(OUTCOME_FIELDS)
@@ -75,6 +77,9 @@ SPRITE_TOKENS = [pointer_index(("enemies", i)) for i in range(SCENE_SLOTS["enemi
     pointer_index(("moving_platforms", i)) for i in range(SCENE_SLOTS["moving_platforms"])
 ]
 assert len(SPRITE_TOKENS) == SPRITE_SLOTS
+# What an action was chosen under: the tactic (one-hot) and the strategy
+# switch (tokens.encode_tactic, encode_strategy), side by side.
+CONTEXT_WIDTH = TACTIC_WIDTH + STRATEGY_WIDTH
 # The kinematics added to a sprite's token: its velocity and how many
 # sightings it rests on (smb_kinematics.SPRITE_STATE "vx", "vy", "seen").
 SPRITE_MOTION = slice(3, 6)
@@ -131,7 +136,8 @@ class WorldModel(nn.Module):
         self.sprite_motion = nn.Linear(SPRITE_MOTION.stop - SPRITE_MOTION.start, width)
         self.mario_motion = nn.Linear(len(MARIO_STATE), width)
         self.feedback = nn.Linear(EXECUTION_WIDTH, width)
-        for layer in (self.sprite_motion, self.mario_motion, self.feedback):
+        self.context = nn.Linear(CONTEXT_WIDTH, width)
+        for layer in (self.sprite_motion, self.mario_motion, self.feedback, self.context):
             nn.init.zeros_(layer.weight)
             nn.init.zeros_(layer.bias)
         self.cell = nn.LSTMCell(width, memory_width)
@@ -166,24 +172,28 @@ class WorldModel(nn.Module):
         tokens[:, MARIO_TOKEN] = tokens[:, MARIO_TOKEN] + self.mario_motion(mario)
         return tokens
 
-    def _query(self, tokens, verbs, pointers, rows):
-        return self.verb(verbs) + tokens[rows, pointers]
+    def _query(self, tokens, verbs, pointers, rows, context):
+        query = self.verb(verbs) + tokens[rows, pointers]
+        return query if context is None else query + self.context(context)
 
-    def advance(self, tokens, feedback, verbs, pointers, state, rows=None):
+    def advance(self, tokens, feedback, verbs, pointers, state, rows=None, context=None):
         """One LSTM step for N actions from ``state`` ([N, memory width] each
         of hidden and cell): the scene's summary token, the action's verb and
-        object token, the feedback. ``rows`` [N]: each action's scene (default:
-        one each). Returns the state after the step."""
+        object token, what it was chosen under (``context`` [N,
+        CONTEXT_WIDTH]: the tactic and the strategy switch), the feedback.
+        ``rows`` [N]: each action's scene (default: one each). Returns the
+        state after the step."""
         rows = torch.arange(len(verbs), device=verbs.device) if rows is None else rows
-        step = tokens[rows, 0] + self._query(tokens, verbs, pointers, rows) + self.feedback(feedback[rows])
+        query = self._query(tokens, verbs, pointers, rows, context)
+        step = tokens[rows, 0] + query + self.feedback(feedback[rows])
         return self.cell(step, state)
 
-    def readout(self, tokens, present, hidden, verbs, pointers, rows=None) -> dict:
+    def readout(self, tokens, present, hidden, verbs, pointers, rows=None, context=None) -> dict:
         """Each action's outcome from its LSTM ``hidden`` state: {"mean",
         "sigma"} [N, OUTCOME_WIDTH] in pixels and frames, and "success" [N]
         logits."""
         rows = torch.arange(len(verbs), device=verbs.device) if rows is None else rows
-        query = (self._query(tokens, verbs, pointers, rows) + self.state(hidden)).unsqueeze(1)
+        query = (self._query(tokens, verbs, pointers, rows, context) + self.state(hidden)).unsqueeze(1)
         keys = self.key_norm(tokens)[rows]
         attended, _ = self.attention(
             self.query_norm(query), keys, keys, key_padding_mask=~present[rows]
@@ -197,12 +207,12 @@ class WorldModel(nn.Module):
         sigma = raw[:, OUTCOME_WIDTH : 2 * OUTCOME_WIDTH].clamp(-6, 2).exp() * self.scale
         return {"mean": mean, "sigma": sigma, "success": raw[:, -1]}
 
-    def predict(self, tokens, present, sprites, mario, feedback, verbs, pointers, state):
+    def predict(self, tokens, present, sprites, mario, feedback, verbs, pointers, state, context=None):
         """At play: the outcome of each copy's chosen action and its state
         after the step (one step per action)."""
         tokens = self.with_motion(tokens, sprites, mario)
-        state = self.advance(tokens, feedback, verbs, pointers, state)
-        return self.readout(tokens, present, state[0], verbs, pointers), state
+        state = self.advance(tokens, feedback, verbs, pointers, state, context=context)
+        return self.readout(tokens, present, state[0], verbs, pointers, context=context), state
 
 
 def outcome_loss(predicted, records):

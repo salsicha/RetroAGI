@@ -261,3 +261,26 @@ def test_the_skill_plays_its_own_choice_unless_the_teacher_plays_the_decision():
     # Its own (None: the policy chooses), the teacher's, and a hold where the
     # teacher plays but has no command (that decision has no label).
     assert tokens["skill"] == [None, command, SkillToken("hold", 0, 0)]
+
+
+def test_a_rounds_episodes_are_saved_by_family_and_read_back(tmp_path):
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from retroagi.stages.block_smb import layered_train as lt
+
+    episodes = [
+        SimpleNamespace(family="single_gap", frames=np.arange(5)),
+        SimpleNamespace(family="enemy_hop", frames=np.arange(3)),
+        SimpleNamespace(family="single_gap", frames=np.arange(2)),
+    ]
+    folder = tmp_path / "episodes" / "round_00"
+    lt.save_round(folder, episodes, Counter({"enemy_hop": 1}))
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "complete.json", "enemy_hop.pkl.gz", "single_gap.pkl.gz"
+    ]
+    loaded, excluded = lt.load_round(folder)
+    assert sorted((e.family, len(e.frames)) for e in loaded) == [
+        ("enemy_hop", 3), ("single_gap", 2), ("single_gap", 5)
+    ]
+    assert excluded == Counter({"enemy_hop": 1})
