@@ -26,6 +26,44 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-18 — Collision lessons for the collision trackers (user decision; built)
+
+User: "The gru is probably failing because it doesn't have data. Make a new
+set of families for all the ways that mario can collide with an enemy ...
+we only want to use this new dataset to train the gru and nothing else. We
+only care about single actions for mario ... run, jump, and wait. But it has
+to include all the types of ways mario can hit or be hit by an enemy ...
+parameterized so the layouts can sweep the parameter space"; "The collision
+must happen during the action"; "If Mario isn't hit during his action then
+the layout was a failure" (hits and stomps both count); then "the gru should
+know when no collision will happen, so include misses".
+
+- **Fifteen collision families** (`stages/block_smb/collision_families.py`),
+  each one scripted action against an enemy: waits (a walker or a monster
+  walking into Mario, a plant rising under him on its pipe, a walker
+  dropping onto him from a ledge), runs (into a walker or a monster coming
+  or going, across a pipe as its plant rises, off a ledge onto a walker,
+  under a ledge as a walker drops), jumps (onto a walker, onto a monster, up
+  onto a ledge a walker walks on, over a pipe as its plant rises, down from
+  a ledge onto a walker, too short to clear one). Every parameter is drawn
+  from a short list, so the full sweep makes every combination: 6,708
+  layouts over three difficulties (enemy speeds; how fast a plant rises).
+  They are not Block SMB families the layers train on.
+- **One action, then the end.** The scenario's `scripted_action` is given
+  at the first decision; the lesson ends when the action ends
+  (`action_done`), at a hit, or at a stomp (which ends it as won).
+- **Kept:** a contact during the action (a hit or a stomp, at the frame the
+  truth's contact labels show it) or a miss (the action ends with none).
+  **Failed** (recorded with its layout, not kept): a contact before the
+  action, a death with no enemy contact, a timeout.
+- **Dataset and training** (`stages/block_smb/collision_train.py`): kept
+  lessons saved one gzip-compressed file per family; the trackers, from the
+  skill run's, learn from them alone; then measured on freshly drawn layouts
+  of each family. The tactic run and Full SMB go on from these trackers.
+- Seen in the pilot: during a wait beside an approaching monster the
+  executor's hold drifts Mario away from it (from x 120 to 73 in 88
+  frames), so the monster does not reach him; to be looked into.
+
 ## 2026-10-18 — No gate between the layers; the training data is saved (user decision; built)
 
 User, after the skill missed its gate by one layout in each of four families

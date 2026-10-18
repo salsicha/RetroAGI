@@ -646,6 +646,10 @@ class _Lane:
         # layout either way; held and asked again every frame until the stall
         # limit, one such layout took an hour and a half).
         self.no_teacher_command = False
+        # A collision lesson (collision_families): one scripted action, given
+        # at the first decision; the episode ends when it ends ("action_done").
+        self.scripted = scenario.get("scripted_action")
+        self.action_done = False
         self.recorder = EpisodeRecorder(task)
         self.frames, self.decisions = self.recorder.frames, self.recorder.decisions
         # The simulator's truth (EpisodeTask.record_truth); the watched
@@ -715,6 +719,8 @@ class _Lane:
         """
         from .teacher_tokens import teacher_plan, teacher_skill, teacher_tactic
 
+        if self.scripted is not None:
+            return self._ask_script(learner)
         asked = {
             "tactic": teacher_tactic(self.env, self.teacher),
             "action": None,
@@ -745,6 +751,37 @@ class _Lane:
                 from .teacher_actions import action_rows
 
                 asked["actions"] = action_rows(self.env, self.teacher, asked["skill"])
+        self.asked = asked
+        return asked
+
+    def _ask_script(self, learner: str) -> dict:
+        """A collision lesson's answer: its one scripted action at the first
+        decision (named as an action, as the teacher's choices are), nothing
+        after it: the action has ended and so does the episode."""
+        from retroagi.core.tokens import tactic_token
+
+        action = self.scripted
+        skill = None
+        if not self.action_done and not self.recorder.decisions["frame"]:
+            skill = SkillToken(
+                action["mode"], int(action.get("x", 0)), int(action.get("y", 0)),
+                frames=int(action.get("frames", 0)),
+            )
+        else:
+            self.action_done = True
+        x = int(action.get("x", 0))
+        stance = "hold_ground" if action["mode"] == "hold" else "advance" if x >= 0 else "retreat"
+        asked = {
+            "tactic": tactic_token(stance),
+            "action": None,
+            "skill": skill,
+            "holds": (),
+            "plays_teacher": True,
+        }
+        if learner == "skill" and self.task.label and skill is not None:
+            from .teacher_actions import _trial_of
+
+            asked["action_label"] = self._as_action(skill, _trial_of(self.env, self.teacher, skill))
         self.asked = asked
         return asked
 
@@ -926,6 +963,8 @@ def play_episodes(
                 lane.end = (
                     "goal"
                     if lane.goal > 0
+                    else "action_done"
+                    if lane.action_done
                     else "no_teacher_command"
                     if lane.no_teacher_command
                     else (
