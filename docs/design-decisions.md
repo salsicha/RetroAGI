@@ -26,6 +26,24 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-19 — The simulator's scenes, faster (user decision; built)
+
+User: "ok, apply the speedup". A profile of a long tactic episode
+(`mixed_section`, 25 decisions) showed 85% of the time in the teacher's
+1,273 simulated moves, and 35% in building the simulator's scene on each of
+their 73,000 frames.
+
+- **One drawing for both label pictures**: the pixel types and the object
+  numbers are drawn together ("labels" mode: type in red, object number in
+  green and blue), and read from one pixel array, where they were drawn
+  twice.
+- **The structure is found once per terrain**: floors, gaps, blocks and
+  pipes depend only on the window's terrain behind objects and its brick,
+  question block and pipe pixels; they are kept by those (the last 32,768),
+  and about three quarters of the frames repeat one.
+- Both are exact (tests compare them with the old way on five families'
+  frames); the same episode took 134 s against 225 s on the same machine.
+
 ## 2026-10-18 — The tactic data is the teacher's; datasets first, then the models (user decision; built)
 
 In the tactic run's round 0 the trained skill chose the actions under the

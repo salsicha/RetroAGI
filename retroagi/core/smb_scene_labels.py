@@ -31,6 +31,8 @@ window the NES shows (smb_pixel_types.VISIBLE_ROWS / VISIBLE_COLUMNS) is
 measured; outside it pictures and labels only repeat its edge.
 """
 
+import hashlib
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
@@ -331,9 +333,37 @@ def _shift(box: Box, dx: int, dy: int) -> Box:
     return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
 
 
+# The structure a window shows depends only on its terrain behind objects and
+# its brick, question block and pipe pixels: found once for each (the
+# teacher's trials build a scene every simulated frame, most of them over the
+# same terrain; user, 2026-10-19), the last STRUCTURE_KEPT kept.
+STRUCTURE_KEPT = 32768
+_STRUCTURES: "OrderedDict[bytes, dict]" = OrderedDict()
+_BLOCK_IDS = [TYPE_ID["brick"], TYPE_ID["question_block"], TYPE_ID["pipe"]]
+
+
 def _window_structure(types: np.ndarray) -> dict:
     """structure_from_types inside the visible window, in window coordinates."""
     terrain = _terrain_behind_objects(types)
+    blocks = np.where(np.isin(types, _BLOCK_IDS), types, 0).astype(np.uint8)
+    key = hashlib.blake2b(
+        repr(terrain.shape).encode() + terrain.tobytes() + blocks.tobytes(), digest_size=20
+    ).digest()
+    found = _STRUCTURES.get(key)
+    if found is None:
+        found = _structure_of(terrain, blocks)
+        _STRUCTURES[key] = found
+        if len(_STRUCTURES) > STRUCTURE_KEPT:
+            _STRUCTURES.popitem(last=False)
+    else:
+        _STRUCTURES.move_to_end(key)
+    return found
+
+
+def _structure_of(terrain: np.ndarray, blocks: np.ndarray) -> dict:
+    """The structure of a window's terrain behind objects (``terrain``) and its
+    brick, question block and pipe pixels (``blocks``: their types, 0
+    elsewhere)."""
     moving = terrain == TYPE_ID["moving_platform"]
     standable = _fill_thin_holes(np.isin(terrain, _STANDABLE_IDS))
     below = np.vstack((standable, np.ones((MIN_SURFACE_DEPTH - 1, standable.shape[1]), bool)))
@@ -351,16 +381,16 @@ def _window_structure(types: np.ndarray) -> dict:
     surfaces = [s for s in _joined_surfaces(pieces) if s.x1 - s.x0 >= MIN_SURFACE_WIDTH]
     floor = standable[FLOOR_BAND[0] - VISIBLE_ROWS[0] : FLOOR_BAND[1] - VISIBLE_ROWS[0]].any(axis=0)
     gaps = [Gap(x0, x1) for x0, x1 in _runs(~floor) if x1 - x0 >= MIN_GAP_WIDTH]
-    blocks = [
+    found_blocks = [
         BlockView(box, kind)
         for kind in ("brick", "question_block")
-        for box in _component_boxes(types == TYPE_ID[kind])
+        for box in _component_boxes(blocks == TYPE_ID[kind])
     ]
     return {
         "surfaces": tuple(sorted(surfaces, key=lambda s: (s.x0, s.top))),
         "gaps": tuple(gaps),
-        "blocks": tuple(sorted(blocks, key=lambda b: (b.box[0], b.box[1]))),
-        "pipes": _left_to_right(_component_boxes(types == TYPE_ID["pipe"])),
+        "blocks": tuple(sorted(found_blocks, key=lambda b: (b.box[0], b.box[1]))),
+        "pipes": _left_to_right(_component_boxes(blocks == TYPE_ID["pipe"])),
     }
 
 

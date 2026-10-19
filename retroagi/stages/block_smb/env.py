@@ -109,10 +109,12 @@ class _Canvas:
 
     In "instances" mode the number of the object being drawn (``instance``,
     0 for none) is written into the red and green channels (low and high byte).
+    In "labels" mode both at once: the type id in red, the object's number in
+    green and blue (low and high byte), so one drawing gives both.
     """
 
     def __init__(self, surface, mode="colour"):
-        if mode not in ("colour", "types", "instances"):
+        if mode not in ("colour", "types", "instances", "labels"):
             raise ValueError(f"unknown drawing mode {mode!r}")
         self.surface = surface
         self.mode = mode
@@ -123,6 +125,8 @@ class _Canvas:
             return (TYPE_ID[kind],) * 3
         if self.mode == "instances":
             return (self.instance & 0xFF, self.instance >> 8, 0)
+        if self.mode == "labels":
+            return (TYPE_ID[kind], self.instance & 0xFF, self.instance >> 8)
         return color
 
     def fill(self, color, kind):
@@ -973,8 +977,7 @@ class MarioScenarioEnv:
         The same shapes as render(), in the same order, so every pixel carries
         the type of the shape drawn on top of it. Eyes belong to their owner.
         """
-        self._draw(_Canvas(self._label_screen, "types"))
-        return np.ascontiguousarray(pygame.surfarray.array_red(self._label_screen).T)
+        return self._render_types_and_instances()[0]
 
     def render_instances(self) -> np.ndarray:
         """Which object drew each pixel, as an (H, W) int32 array (-1 for none).
@@ -983,10 +986,17 @@ class MarioScenarioEnv:
         the object drawn on top of it. Object numbers are those of
         instance_meta(); terrain other than moving platforms belongs to none.
         """
-        self._draw(_Canvas(self._label_screen, "instances"))
-        red = pygame.surfarray.array_red(self._label_screen).T.astype(np.int32)
-        green = pygame.surfarray.array_green(self._label_screen).T.astype(np.int32)
-        return red + (green << 8) - 1
+        return self._render_types_and_instances()[1]
+
+    def _render_types_and_instances(self) -> tuple:
+        """(render_labels(), render_instances()) from one drawing ("labels":
+        the type in red, the object's number in green and blue)."""
+        self._draw(_Canvas(self._label_screen, "labels"))
+        pixels = pygame.surfarray.pixels3d(self._label_screen)
+        types = np.ascontiguousarray(pixels[:, :, 0].T)
+        instances = pixels[:, :, 1].T.astype(np.int32) + (pixels[:, :, 2].T.astype(np.int32) << 8) - 1
+        del pixels  # the surface stays locked while its pixels are viewed
+        return types, instances
 
     def instance_meta(self) -> tuple[dict[int, str], dict[int, str]]:
         """(category, enemy kind) of every object number render_instances() can show."""
@@ -1008,9 +1018,10 @@ class MarioScenarioEnv:
         from retroagi.core.smb_scene_labels import SceneLabels
 
         categories, kinds = self.instance_meta()
+        types, instances = self._render_types_and_instances()
         return SceneLabels(
-            types=visible_window(self.render_labels()),
-            instances=visible_window(self.render_instances()),
+            types=visible_window(types),
+            instances=visible_window(instances),
             categories=categories,
             kinds=kinds,
             standing=bool(self.mario["on_ground"]),
