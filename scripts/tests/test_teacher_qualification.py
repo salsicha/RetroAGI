@@ -284,3 +284,31 @@ def test_a_rounds_episodes_are_saved_by_family_and_read_back(tmp_path):
         ("enemy_hop", 3), ("single_gap", 2), ("single_gap", 5)
     ]
     assert excluded == Counter({"enemy_hop": 1})
+
+
+def test_in_the_tactic_layers_data_the_teacher_plays_the_skills_actions_too():
+    from types import SimpleNamespace
+
+    from retroagi.core.tokens import SkillToken, tactic_token
+
+    class Lane:
+        def __init__(self, asked):
+            self.teacher = SimpleNamespace()
+            self.asked = asked
+            self.no_teacher_command = False
+
+        def ask_teacher(self, learner, scene):
+            return self.asked
+
+    advance, command = tactic_token("advance"), SkillToken("run", 24, 0)
+    lanes = {
+        0: Lane({"tactic": advance, "skill": None, "plays_teacher": True}),  # the skill's own
+        1: Lane({"tactic": advance, "skill": command, "skill_given": True, "plays_teacher": True}),
+        2: Lane({"tactic": advance, "skill": None, "skill_given": True, "plays_teacher": True}),
+    }
+    tokens = lt._teacher_given("tactic", lanes)([0, 1, 2], [None, None, None])
+    assert tokens["tactic"] == [advance, advance, advance]
+    # The teacher's command where it plays the skill; a hold (and the end)
+    # where it has none.
+    assert tokens["skill"] == [None, command, SkillToken("hold", 0, 0)]
+    assert lanes[2].no_teacher_command and not lanes[1].no_teacher_command

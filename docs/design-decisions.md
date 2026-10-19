@@ -26,6 +26,30 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-18 — The tactic data is the teacher's; datasets first, then the models (user decision; built)
+
+In the tactic run's round 0 the trained skill chose the actions under the
+teacher's tactics, and half the episodes missed their objective (whole
+families lost every layout). User: "Teacher plays both"; then "After the
+tactics run is done then the models need to be trained".
+
+- **The teacher plays the tactic and the skill's actions** in the tactic
+  layer's imitation data (`EpisodeTask.teacher_skill`): every layout it wins
+  is data; the episode records the tactic decisions and the teacher's named
+  actions (for the world model and the trackers). Played once a round (the
+  teacher's own run is the qualification); a layout it does not win is
+  recorded in `missed/` and left out.
+- **Datasets first.** `train_layer --generate-only true` makes and saves the
+  imitation rounds' episodes and learns nothing (`tactic_data_20261018`: 12
+  rounds). Then the models are trained from the saved datasets: the world
+  model and the collision trackers by `dataset_train` (the world model on
+  the skill and tactic datasets; the trackers on those and the collision
+  lessons), then the tactic layer by `train_layer` reading the saved rounds,
+  its reward rounds and its evaluation on fresh layouts; then Full SMB.
+- A tactic round is slow because the teacher simulates every candidate move
+  at every decision of long, composed layouts (about 6 hours a round with 15
+  workers, against 45 minutes for a skill round).
+
 ## 2026-10-18 — Collision lessons for the collision trackers (user decision; built)
 
 User: "The gru is probably failing because it doesn't have data. Make a new

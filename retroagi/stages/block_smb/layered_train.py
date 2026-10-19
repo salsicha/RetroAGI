@@ -126,6 +126,10 @@ class LayeredTrainConfig:
     # The world model and the collision trackers learn alongside the layer
     # from the same teacher episodes (user, 2026-10-17).
     train_predictions: bool = True
+    # Only make and save the imitation rounds' dataset (episodes/), learning
+    # nothing: the models are trained from it afterwards (user, 2026-10-18:
+    # "After the tactics run is done then the models need to be trained").
+    generate_only: bool = False
     epochs_per_round: int = 8
     batch_frames: int = 8192
     learning_rate: float = 3e-4
@@ -213,6 +217,9 @@ class EpisodeTask:
     # world model, with the collision trackers ending waits and walks and
     # aiming stomps, or both.
     execution: str = "teacher"
+    # The tactic learner's imitation data: the teacher also plays the skill's
+    # actions, so every layout it wins is data (user, 2026-10-18).
+    teacher_skill: bool = False
 
 
 # How the skill's own actions are carried out (EpisodeTask.execution):
@@ -494,8 +501,11 @@ class EpisodeRecorder:
         )
         d["agreed"].append(teacher is not None and step.own == teacher.stance)
         # The skill's action at this decision, as executed, for the world
-        # model and the trackers (the skill plays its own choices here).
+        # model and the trackers: the skill's own, or the teacher's as named
+        # where the teacher played it (EpisodeTask.teacher_skill).
         own = decision.action
+        if own is None and asked.get("skill_given"):
+            own = (asked.get("action_label") or {}).get("action")
         d["command"].append(command_row(decision.skill))
         d["own_verb"].append(VERBS.index(own.verb) if own is not None else -1)
         d["own_pointer"].append(
@@ -728,7 +738,8 @@ class _Lane:
             "holds": (),
             "plays_teacher": self.rng.random() < self.task.teacher_share,
         }
-        if learner == "skill" and (self.task.label or asked["plays_teacher"]):
+        teacher_plays_skill = learner == "tactic" and self.task.teacher_skill and asked["plays_teacher"]
+        if (learner == "skill" and (self.task.label or asked["plays_teacher"])) or teacher_plays_skill:
             if self.teacher.family != "enemy_patrol":
                 asked["action"], asked["holds"] = teacher_plan(
                     self.env, self.teacher, certify_holds=False
@@ -739,6 +750,7 @@ class _Lane:
 
                 # Played: a hold as long as its whole wait.
                 asked["skill"] = whole_wait(self.env, self.teacher, asked["skill"])
+            asked["skill_given"] = teacher_plays_skill
             if self.task.label and asked["skill"] is not None:
                 from .teacher_actions import _trial_of
 
@@ -747,7 +759,12 @@ class _Lane:
                 # where it ends.
                 result = _trial_of(self.env, self.teacher, asked["skill"])
                 asked["action_label"] = self._as_action(asked["skill"], result)
-            if self.task.record_actions and self.task.label and asked["skill"] is not None:
+            if (
+                learner == "skill"
+                and self.task.record_actions
+                and self.task.label
+                and asked["skill"] is not None
+            ):
                 from .teacher_actions import action_rows
 
                 asked["actions"] = action_rows(self.env, self.teacher, asked["skill"])
@@ -816,6 +833,19 @@ def _teacher_given(learner: str, lanes: dict, agents=None):
             asked = lanes[copy].ask_teacher(learner, scene)
             if above:
                 tokens[above].append(asked[above])
+            if learner == "tactic" and asked.get("skill_given"):
+                # The teacher plays the skill's actions too (EpisodeTask.
+                # teacher_skill); none: hold, and the episode ends.
+                command = asked["skill"]
+                if command is None:
+                    from retroagi.core.tokens import SkillToken
+
+                    command = SkillToken("hold", 0, 0)
+                    lanes[copy].no_teacher_command = True
+                tokens.setdefault("skill", [None] * len(tokens[learner]))
+                tokens["skill"].append(command)
+            elif learner == "tactic" and "skill" in tokens:
+                tokens["skill"].append(None)
             choice = asked[learner] if asked["plays_teacher"] else None
             if choice is None and learner == "skill" and asked["plays_teacher"]:
                 # The teacher plays this decision but has no command: hold, and
@@ -2475,6 +2505,16 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 )
                 if not by_reward:
                     save_round(saved, played, excluded)
+            if config.generate_only:
+                left = ", ".join(f"{f} {n}" for f, n in sorted(excluded.items()))
+                print(
+                    f"[{config.learner}] round {round_index:02d} saved: {len(played)} episodes"
+                    f"{'; left out ' + left if left else ''}; seconds {round(time.time() - started, 1)}",
+                    flush=True,
+                )
+                if round_index == config.rounds - 1:
+                    break
+                continue
             replay = kept_episodes(replay, played, config.replay_episodes)
             play_time = time.time() - started
 
@@ -2651,9 +2691,21 @@ def _round_episodes(pool, tasks, config, output, round_index, by_reward, qualify
     """A round's episodes to learn from, and how many layouts per family were
     left out: the teacher plays every layout first, and one it fails is
     recorded and left out (user, 2026-10-17). The skill's imitation rounds
-    learn from those teacher episodes (not played twice); otherwise the
-    learner plays the layouts the teacher finished, and an episode that
-    misses its objective is recorded and left out too."""
+    learn from those teacher episodes (not played twice); the tactic layer's
+    from episodes in which the teacher plays the tactic and the skill's
+    actions (played once, recording the tactic decisions); in reward rounds
+    the learner plays the layouts the teacher finished."""
+    if config.learner == "tactic" and not by_reward:
+        # The tactic layer's imitation data: the teacher plays the tactic and
+        # the skill's actions (user, 2026-10-18), once; a layout it does not
+        # win is recorded and left out.
+        tasks = [dataclasses.replace(t, teacher_share=1.0, teacher_skill=True) for t in tasks]
+        played = pool.play(tasks)
+        missed = [(t, r) for t, r in zip(tasks, played) if not _reached(r, by_reward)]
+        if missed:
+            _record_missed(output / "missed" / f"train_{round_index:02d}.json", missed)
+        excluded = Counter(t.family for t, _ in missed)
+        return [r for r in played if _reached(r, by_reward)], excluded
     demonstrated_tasks, demonstrated = qualify_teachers(
         pool, tasks, output / "teacher_qualification" / f"train_{round_index:02d}.json"
     )
