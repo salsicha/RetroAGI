@@ -312,3 +312,29 @@ def test_in_the_tactic_layers_data_the_teacher_plays_the_skills_actions_too():
     # where it has none.
     assert tokens["skill"] == [None, command, SkillToken("hold", 0, 0)]
     assert lanes[2].no_teacher_command and not lanes[1].no_teacher_command
+
+
+def test_a_layout_that_cannot_be_made_is_recorded_and_left_out(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+
+    def made(task):
+        if task.family == "speed_run_descend_forward":
+            raise RuntimeError("spatial reference failed after 95 frames")
+        return {"family": task.family}
+
+    monkeypatch.setattr(lt, "task_scenario", made)
+    pool = lt.EpisodePool.__new__(lt.EpisodePool)
+    pool.pool = ThreadPoolExecutor(2)
+    pool.config = SimpleNamespace(learner="tactic")
+    tasks = [
+        replace(task(), family=family, scenario=None, sample_index=i)
+        for i, family in enumerate(("stair_climb", "speed_run_descend_forward", "wait_timing"))
+    ]
+    failed = []
+    kept = pool.with_scenarios(tasks, failed)
+    assert [t.family for t in kept] == ["stair_climb", "wait_timing"]
+    assert failed[0]["family"] == "speed_run_descend_forward" and "95 frames" in failed[0]["error"]
+    with pytest.raises(RuntimeError):
+        pool.with_scenarios(tasks)  # without a record, the error stops it
+    pool.pool.shutdown()

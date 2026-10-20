@@ -1094,23 +1094,48 @@ class EpisodePool:
                 reported = time.monotonic()
         return records
 
-    def with_scenarios(self, tasks: Sequence[EpisodeTask]) -> list[EpisodeTask]:
-        """The tasks with their layouts made once (for sets played every round)."""
+    def with_scenarios(self, tasks: Sequence[EpisodeTask], failed: Optional[list] = None) -> list[EpisodeTask]:
+        """The tasks with their layouts made once (for sets played every round).
+
+        With ``failed`` (a list), a layout that cannot be made (its sampler
+        raises: a speed run's deadline cannot be measured, say) is recorded
+        there and its task left out (user, 2026-10-17: a failed layout is
+        recorded, not learned from); without it, the error stops the call."""
         order = list(range(len(tasks)))
         random.Random(len(tasks)).shuffle(order)  # slow families spread over the workers
         pending = {
             self.pool.submit(task_scenario, tasks[i]): i for i in order if tasks[i].scenario is None
         }
         made = {i: task.scenario for i, task in enumerate(tasks) if task.scenario is not None}
+        lost: set[int] = set()
         reported = time.monotonic()
         for future in as_completed(pending):
-            made[pending[future]] = future.result()
-            if time.monotonic() - reported >= 60 or len(made) == len(tasks):
+            i = pending[future]
+            try:
+                made[i] = future.result()
+            except Exception as error:  # a layout's own failure, recorded
+                if failed is None:
+                    raise
+                lost.add(i)
+                task = tasks[i]
+                failed.append(
+                    {
+                        "family": task.family,
+                        "split": task.split,
+                        "seed": task.seed,
+                        "sample_index": task.sample_index,
+                        "difficulty": task.difficulty,
+                        "error": f"{type(error).__name__}: {error}",
+                    }
+                )
+            if time.monotonic() - reported >= 60 or len(made) + len(lost) == len(tasks):
                 print(
-                    f"[{self.config.learner}] layouts {len(made)}/{len(tasks)} prepared", flush=True
+                    f"[{self.config.learner}] layouts {len(made)}/{len(tasks)} prepared"
+                    + (f" ({len(lost)} could not be made)" if lost else ""),
+                    flush=True,
                 )
                 reported = time.monotonic()
-        return [dataclasses.replace(t, scenario=made[i]) for i, t in enumerate(tasks)]
+        return [dataclasses.replace(t, scenario=made[i]) for i, t in enumerate(tasks) if i not in lost]
 
     def close(self) -> None:
         self.pool.shutdown(cancel_futures=True)
@@ -2499,10 +2524,17 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                 # dataset is not made again (user, 2026-10-18).
                 played, excluded = load_round(saved)
             else:
-                tasks = pool.with_scenarios(tasks)
+                unmade: list = []
+                tasks = pool.with_scenarios(tasks, unmade)
                 played, excluded = _round_episodes(
                     pool, tasks, config, output, round_index, by_reward, qualify_teachers
                 )
+                if unmade:
+                    # Layouts that could not be made: recorded, left out.
+                    folder = output / "unmade"
+                    folder.mkdir(parents=True, exist_ok=True)
+                    (folder / f"train_{round_index:02d}.json").write_text(json.dumps(unmade, indent=1) + "\n")
+                    excluded.update(row["family"] for row in unmade)
                 if not by_reward:
                     save_round(saved, played, excluded)
             if config.generate_only:
