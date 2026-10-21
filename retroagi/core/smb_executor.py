@@ -21,6 +21,11 @@ from .actions import SMB_JUMP_ACTIONS, SMBAction
 from .smb_pixel_types import VISIBLE_COLUMNS
 from .smb_scene_labels import SceneObservation, Surface, fixed_surfaces
 
+# Within this many pixels of a surface's end, and reaching down to within
+# ENEMY_REACH of its top (vision's enemy boxes do not always reach its feet),
+# an enemy stands at it (GroundHold.enemy_stands_at).
+ENEMY_AT_END = 4
+ENEMY_REACH = 20
 # Controller actions are not emulator buttons. Only press() translates these
 # into the six shared SMBAction values.
 HOLD_GROUND = 6
@@ -62,6 +67,7 @@ class GroundHold:
 
     Surfaces have no identity in vision, so match by geometry between frames.
     Missing/ambiguous support releases buttons without acquiring a new anchor.
+    An end where an enemy stands is not held against (enemy_stands_at).
     """
 
     surface: Optional[Surface] = None
@@ -80,6 +86,25 @@ class GroundHold:
         if self.right_edge:
             return surface.x0 + self.width if surface.x1 >= VISIBLE_COLUMNS[1] else surface.x1
         return surface.x1 - self.width if surface.x0 <= VISIBLE_COLUMNS[0] else surface.x0
+
+    def _held_end(self, surface: Surface) -> float:
+        """The end of ``surface`` reference() measures from."""
+        if self.right_edge:
+            return surface.x0 if surface.x1 >= VISIBLE_COLUMNS[1] else surface.x1
+        return surface.x1 if surface.x0 <= VISIBLE_COLUMNS[0] else surface.x0
+
+    @staticmethod
+    def enemy_stands_at(x: float, surface: Surface, scene: SceneObservation) -> bool:
+        """Whether an enemy stands at a surface's end at ``x``: vision may have
+        found the end where the enemy's feet hide the surface, and then it
+        walks with the enemy, so it is no landmark (a hold against it follows
+        the enemy)."""
+        return any(
+            e.box[1] <= surface.top + 4
+            and e.box[3] >= surface.top - ENEMY_REACH
+            and (abs(e.box[0] - x) <= ENEMY_AT_END or abs(e.box[2] - x) <= ENEMY_AT_END)
+            for e in scene.enemies
+        )
 
     def press(self, scene: Optional[SceneObservation]) -> int:
         if scene is None or scene.mario.box is None:
@@ -110,7 +135,17 @@ class GroundHold:
             if scene.mario.support == "air" or not candidates:
                 return int(SMBAction.NOOP)
             support = min(candidates, key=lambda s: abs(s.top - feet))
-            self.right_edge = support.x0 <= VISIBLE_COLUMNS[0]
+            # Held against an end in view where no enemy stands (the left one
+            # when both are); with neither, nothing is held against.
+            left = support.x0 > VISIBLE_COLUMNS[0] and not self.enemy_stands_at(
+                support.x0, support, scene
+            )
+            right = support.x1 < VISIBLE_COLUMNS[1] and not self.enemy_stands_at(
+                support.x1, support, scene
+            )
+            if not (left or right):
+                return int(SMBAction.NOOP)
+            self.right_edge = not left
             self.offset = center - self.reference(support)
         else:
             old = self.surface
@@ -136,6 +171,11 @@ class GroundHold:
                 return int(SMBAction.NOOP)
             support = candidates[0]
         self.surface = support
+        if self.enemy_stands_at(self._held_end(support), support, scene):
+            # An enemy has come to the end held against: it is no landmark
+            # while it is there.
+            self.previous = None
+            return int(SMBAction.NOOP)
         current = center - self.reference(support)
         velocity = 0.0 if self.previous is None else current - self.previous
         self.previous = current

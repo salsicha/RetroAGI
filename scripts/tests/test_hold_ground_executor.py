@@ -7,8 +7,14 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import pytest
 
 from retroagi.core.actions import SMBAction
-from retroagi.core.smb_executor import HOLD_GROUND, ActionPlan, SMBExecutor
-from retroagi.core.smb_scene_labels import MarioView, SceneObservation, Surface, scene_from_labels
+from retroagi.core.smb_executor import HOLD_GROUND, ActionPlan, GroundHold, SMBExecutor
+from retroagi.core.smb_scene_labels import (
+    EnemyView,
+    MarioView,
+    SceneObservation,
+    Surface,
+    scene_from_labels,
+)
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
 
@@ -106,3 +112,50 @@ def test_hold_recovers_from_drift_on_static_and_reversing_platforms(moving, dire
         assert max(errors[-40:]) <= 2
     finally:
         env.close()
+
+
+# An end where an enemy stands is no landmark: vision may find the end where
+# the enemy's feet hide the surface, and it walks with the enemy (2026-10-21:
+# a hold against it backed Mario away from a monster at its own speed, so the
+# monster never reached him).
+
+
+def _standing(mario_x, floor, enemies=()):
+    surface = Surface(*floor, 220, False)
+    return SceneObservation(
+        mario=MarioView(box=(mario_x, 208, mario_x + 10, 220), facing_right=True, support="ground",
+                        on_something=True),
+        enemies=tuple(EnemyView(box, "other") for box in enemies),
+        surfaces=(surface,),
+        uncut_surfaces=(surface,),
+    )
+
+
+def test_a_hold_does_not_follow_a_floor_end_where_an_enemy_stands():
+    # The floor runs off the left edge; its right end is where a monster's
+    # feet hide it, and it walks left with the monster.
+    hold = GroundHold()
+    presses = []
+    for t in range(40):
+        monster = 134 - t
+        presses.append(hold.press(_standing(85, (8, monster), [(monster, 200, monster + 16, 220)])))
+    assert presses == [int(SMBAction.NOOP)] * 40
+    assert hold.surface is None
+
+
+def test_a_hold_lets_go_of_its_end_while_an_enemy_stands_there():
+    hold = GroundHold()
+    # Held against a real end (a ledge's), then a walker comes to stand at it.
+    assert hold.press(_standing(85, (8, 134))) == int(SMBAction.NOOP)
+    assert hold.surface is not None and hold.right_edge
+    assert hold.press(_standing(85, (8, 130), [(130, 210, 140, 220)])) == int(SMBAction.NOOP)
+    # Gone again: the end holds as before, and Mario pushed off his place
+    # (the end now 10 pixels nearer) is brought back.
+    assert hold.press(_standing(85, (8, 124))) == int(SMBAction.LEFT)
+
+
+def test_a_hold_with_no_enemy_at_its_ends_keeps_its_place_as_before():
+    hold = GroundHold()
+    assert hold.press(_standing(85, (40, 134))) == int(SMBAction.NOOP)
+    assert not hold.right_edge  # the left end, in view
+    assert hold.press(_standing(80, (40, 134))) == int(SMBAction.RIGHT)

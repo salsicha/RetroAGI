@@ -63,7 +63,11 @@ right, y positive down). In Block SMB training it is the teacher's version
 of the action (`teacher_actions.carry_out`: the ground truth the world model
 will predict). A hold anchors the current platform-relative spot and lasts
 as long as its wait: one action whose length is the ground truth in
-training (`SkillToken.frames`). A jump at a walking enemy aims where it
+training (`SkillToken.frames`). It holds against an end of the surface in
+view where no enemy stands: vision may find an end where an enemy's feet
+hide the surface, and that end walks with the enemy (2026-10-21: holding
+against it, Mario backed away from a monster at its own speed); with no
+such end Mario stands without correction. A jump at a walking enemy aims where it
 really is when Mario lands (`tracks.exact`), the place the trackers will
 predict.
 
