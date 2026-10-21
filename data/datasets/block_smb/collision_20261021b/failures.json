@@ -1,0 +1,3313 @@
+[
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 24,
+   "speed": 0.4,
+   "wait": 92,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 55,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     152,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 92
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 24,
+   "speed": 0.4,
+   "wait": 156,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 55,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     152,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 156
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 48,
+   "speed": 0.4,
+   "wait": 152,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 115,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     176,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 152
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 48,
+   "speed": 0.4,
+   "wait": 216,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 115,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     176,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 216
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 72,
+   "speed": 0.4,
+   "wait": 212,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 175,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     200,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 212
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 72,
+   "speed": 0.4,
+   "wait": 255,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 175,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     200,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 255
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 96,
+   "speed": 0.4,
+   "wait": 255,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 235,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     224,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 255
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_walker",
+  "params": {
+   "side": 1,
+   "gap": 96,
+   "speed": 0.4,
+   "wait": 255,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 235,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     224,
+     206,
+     0,
+     512,
+     0.4,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 255
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 24,
+   "speed": 0.3,
+   "wait": 128,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 70,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 151,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.3,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 128
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 24,
+   "speed": 0.3,
+   "wait": 208,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 70,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 151,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.3,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 208
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 48,
+   "speed": 0.4,
+   "wait": 168,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 115,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 175,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 168
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 48,
+   "speed": 0.4,
+   "wait": 248,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 115,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 175,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 248
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 72,
+   "speed": 0.4,
+   "wait": 228,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 185,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 199,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 228
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 72,
+   "speed": 0.4,
+   "wait": 255,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 185,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 199,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 255
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 96,
+   "speed": 0.4,
+   "wait": 255,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 250,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 223,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 255
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 96,
+   "speed": 0.4,
+   "wait": 255,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 250,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 223,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 255
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 24,
+   "speed": 1.05,
+   "wait": 70,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 151,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 1.05,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 70
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_wait_monster",
+  "params": {
+   "side": 1,
+   "gap": 24,
+   "speed": 1.05,
+   "wait": 150,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 151,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 1.05,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "hold",
+    "x": 0,
+    "y": 0,
+    "frames": 150
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_wait_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_walker",
+  "params": {
+   "side": 1,
+   "gap": 96,
+   "speed": 0.3,
+   "toward": true,
+   "beyond": -24,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 80,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     224,
+     206,
+     0,
+     512,
+     0.3,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 72,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_walker",
+  "params": {
+   "side": 1,
+   "gap": 32,
+   "speed": 0.8,
+   "toward": true,
+   "beyond": -24,
+   "difficulty": "medium"
+  },
+  "end": "death",
+  "frames": 30,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     160,
+     206,
+     0,
+     512,
+     0.8,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 8,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_walker",
+  "params": {
+   "side": 1,
+   "gap": 64,
+   "speed": 0.8,
+   "toward": true,
+   "beyond": -24,
+   "difficulty": "medium"
+  },
+  "end": "death",
+  "frames": 45,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     192,
+     206,
+     0,
+     512,
+     0.8,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 40,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_walker",
+  "params": {
+   "side": 1,
+   "gap": 128,
+   "speed": 1.05,
+   "toward": true,
+   "beyond": -24,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 60,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     256,
+     206,
+     0,
+     512,
+     1.05,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 104,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_walker"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_monster",
+  "params": {
+   "side": 1,
+   "gap": 32,
+   "speed": 0.4,
+   "toward": true,
+   "beyond": 16,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 35,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 159,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 48,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_monster",
+  "params": {
+   "side": 1,
+   "gap": 32,
+   "speed": 0.4,
+   "toward": true,
+   "beyond": 48,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 35,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 159,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 80,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_monster",
+  "params": {
+   "side": 1,
+   "gap": 64,
+   "speed": 0.4,
+   "toward": true,
+   "beyond": -24,
+   "difficulty": "easy"
+  },
+  "end": "death",
+  "frames": 60,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 191,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.4,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 40,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_monster",
+  "params": {
+   "side": 1,
+   "gap": 64,
+   "speed": 0.8,
+   "toward": true,
+   "beyond": -24,
+   "difficulty": "medium"
+  },
+  "end": "death",
+  "frames": 60,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 191,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.8,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 40,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_monster",
+  "params": {
+   "side": 1,
+   "gap": 96,
+   "speed": 0.7,
+   "toward": false,
+   "beyond": 16,
+   "difficulty": "medium"
+  },
+  "end": "death",
+  "frames": 100,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 223,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.7,
+     "direction": 1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 112,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_monster",
+  "params": {
+   "side": 1,
+   "gap": 96,
+   "speed": 0.8,
+   "toward": true,
+   "beyond": 16,
+   "difficulty": "medium"
+  },
+  "end": "death",
+  "frames": 55,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 223,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 0.8,
+     "direction": -1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 112,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_monster",
+  "params": {
+   "side": 1,
+   "gap": 64,
+   "speed": 1.2,
+   "toward": false,
+   "beyond": 16,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 125,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    {
+     "kind": "monster",
+     "x": 191,
+     "y": 200,
+     "patrol_min": 0,
+     "patrol_max": 512,
+     "speed": 1.2,
+     "direction": 1
+    }
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 80,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_monster"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 24,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 24,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    180
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     196,
+     141,
+     24
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 40,
+    "y": 24,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 24,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 40,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    180
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     196,
+     141,
+     24
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 56,
+    "y": 24,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 24,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 56,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    180
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     196,
+     141,
+     24
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 72,
+    "y": 24,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 40,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 24,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    164
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     180,
+     141,
+     40
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 40,
+    "y": 40,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 40,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 40,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    164
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     180,
+     141,
+     40
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 56,
+    "y": 40,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 40,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 56,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    164
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     180,
+     141,
+     40
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 72,
+    "y": 40,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 56,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 24,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    148
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     164,
+     141,
+     56
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 40,
+    "y": 56,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 56,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 40,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    148
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     164,
+     141,
+     56
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 56,
+    "y": 56,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_run_off_ledge",
+  "params": {
+   "ledge_height": 56,
+   "beyond": 8,
+   "speed": 0.9,
+   "toward": true,
+   "run": 56,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 20,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    148
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     0,
+     164,
+     141,
+     56
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     149,
+     206,
+     0,
+     512,
+     0.9,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "run",
+    "x": 72,
+    "y": 56,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_run_off_ledge"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_jump_up_onto",
+  "params": {
+   "ledge_height": 24,
+   "ahead": 32,
+   "along": 24,
+   "speed": 0.6,
+   "toward": true,
+   "miss": 8,
+   "difficulty": "medium"
+  },
+  "end": "death",
+  "frames": 56,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     157,
+     196,
+     128,
+     8
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     181,
+     182,
+     157,
+     285,
+     0.6,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "jump",
+    "x": 69,
+    "y": -30,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_jump_up_onto"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_jump_up_onto",
+  "params": {
+   "ledge_height": 32,
+   "ahead": 32,
+   "along": 24,
+   "speed": 0.6,
+   "toward": true,
+   "miss": -8,
+   "difficulty": "medium"
+  },
+  "end": "goal",
+  "frames": 56,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     157,
+     188,
+     128,
+     8
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     181,
+     174,
+     157,
+     285,
+     0.6,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "jump",
+    "x": 53,
+    "y": -38,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_jump_up_onto"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_jump_up_onto",
+  "params": {
+   "ledge_height": 32,
+   "ahead": 32,
+   "along": 24,
+   "speed": 0.6,
+   "toward": true,
+   "miss": 0,
+   "difficulty": "medium"
+  },
+  "end": "goal",
+  "frames": 56,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     157,
+     188,
+     128,
+     8
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     181,
+     174,
+     157,
+     285,
+     0.6,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "jump",
+    "x": 61,
+    "y": -38,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_jump_up_onto"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_jump_up_onto",
+  "params": {
+   "ledge_height": 32,
+   "ahead": 32,
+   "along": 24,
+   "speed": 0.6,
+   "toward": true,
+   "miss": 8,
+   "difficulty": "medium"
+  },
+  "end": "goal",
+  "frames": 56,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     157,
+     188,
+     128,
+     8
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     181,
+     174,
+     157,
+     285,
+     0.6,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "jump",
+    "x": 69,
+    "y": -38,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_jump_up_onto"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_jump_up_onto",
+  "params": {
+   "ledge_height": 24,
+   "ahead": 16,
+   "along": 40,
+   "speed": 1.2,
+   "toward": true,
+   "miss": -8,
+   "difficulty": "hard"
+  },
+  "end": "death",
+  "frames": 59,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ],
+    [
+     141,
+     196,
+     128,
+     8
+    ]
+   ],
+   "platform_kinds": [
+    "ground",
+    "brick"
+   ],
+   "enemies": [
+    [
+     181,
+     182,
+     141,
+     269,
+     1.2,
+     -1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "jump",
+    "x": 53,
+    "y": -30,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_jump_up_onto"
+    }
+   }
+  }
+ },
+ {
+  "family": "collide_jump_short",
+  "params": {
+   "gap": 56,
+   "speed": 0.6,
+   "short": 8,
+   "side": -1,
+   "difficulty": "medium"
+  },
+  "end": "goal",
+  "frames": 50,
+  "scenario": {
+   "world_width": 512,
+   "mario": [
+    120,
+    204
+   ],
+   "platforms": [
+    [
+     0,
+     220,
+     512,
+     20
+    ]
+   ],
+   "enemies": [
+    [
+     56,
+     206,
+     0,
+     512,
+     0.6,
+     1
+    ]
+   ],
+   "goal": [
+    488,
+    200,
+    16,
+    20
+   ],
+   "goal_on_stomp": true,
+   "watch_frames": 12,
+   "frame_budget": 312,
+   "tactics": [
+    {
+     "stance": "advance",
+     "direction": 1,
+     "kind": "plain",
+     "route": [],
+     "forbidden": [],
+     "avoid": [],
+     "keep_alive": [],
+     "end": {
+      "goal": true
+     }
+    }
+   ],
+   "scripted_action": {
+    "mode": "jump",
+    "x": -48,
+    "y": 0,
+    "frames": 0
+   },
+   "metadata": {
+    "block_smb_monte_carlo": {
+     "family": "collide_jump_short"
+    }
+   }
+  }
+ }
+]

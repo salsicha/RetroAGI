@@ -30,3 +30,7 @@ lessons:
   settings.
 
 Read back with `collision_train.make_dataset` (or `gzip` + `pickle`).
+
+Replaced by `collision_20261021b`: these were recorded before a hold
+stopped holding against a surface end where an enemy stands (commit
+ba22288), so in the monster waits Mario backed away and was hardly reached.
