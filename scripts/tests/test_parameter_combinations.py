@@ -90,6 +90,7 @@ def test_every_random_test_layout_is_one_the_sweep_covers():
         assert (sample.parameters["drop_height"], sample.parameters["edge_distance"]) in swept
 
 
+@pytest.mark.timeout(300)
 def test_a_family_split_by_its_first_draws_makes_the_same_layouts():
     whole, _ = block_smb_parameter_combinations(SMALL, "medium")
     prefixes = combination_prefixes(SMALL, "medium", at_least=4)
