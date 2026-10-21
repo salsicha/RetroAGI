@@ -20,7 +20,7 @@ from retroagi.core.smb_observer import VisionObserver
 from retroagi.core.smb_scene_labels import EnemyView, MarioView, SceneObservation, Surface
 from retroagi.core.smb_threat import THREAT_SLACK, jump_lead
 from retroagi.core.target_tracker import BINS, Collision, CollisionTracker, CollisionTrackers
-from retroagi.core.tokens import SkillToken, tactic_token
+from retroagi.core.tokens import DEFAULT_STRATEGY, SkillToken, tactic_token
 
 
 def test_a_predicted_outcome_is_the_executors_destination():
@@ -70,9 +70,9 @@ def test_the_world_model_steps_once_per_action_and_its_state_carries():
     calls = []
     original = policy.memory.predict
 
-    def predict(*args):
+    def predict(*args, **kwargs):
         calls.append(len(args[5]))
-        out, state = original(*args)
+        out, state = original(*args, **kwargs)
         out["mean"] = out["mean"] * 0 + torch.tensor([20.0, 0.0, 0.0, 0.0, 30.0])
         return out, state
 
@@ -84,6 +84,8 @@ def test_the_world_model_steps_once_per_action_and_its_state_carries():
             skill=None,
             execution_feedback=[0.0] * 9,
             predicted=None,
+            tactic=tactic_token("hold_ground"),
+            strategy=DEFAULT_STRATEGY,
         )
     ]
     from retroagi.core.smb_agent import scene_rows, stack_rows
@@ -197,7 +199,7 @@ def test_each_execution_plays_and_only_the_teachers_uses_the_teacher(monkeypatch
             difficulty="easy",
             teacher_share=0.0,
             label=False,
-            frames=90,
+            frames=12,  # enough for actions to be carried out; bounded whatever the random policy does
             execution=execution,
         )
         (record,) = lt.play_episodes(

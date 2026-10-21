@@ -41,7 +41,8 @@ from .smb_observer import (
     SEQ_LEN_B,
     SEQ_LEN_C,
 )
-from .world_model import WorldModel
+from .smb_kinematics import MARIO_STATE
+from .world_model import SPRITE_MOTION, WorldModel, add_motion
 from .tokens import (
     DEFAULT_STRATEGY,
     EXECUTION_WIDTH,
@@ -271,14 +272,27 @@ class _Layer(nn.Module):
         self.norm = nn.LayerNorm(width)
         self.heads = nn.ModuleDict({name: nn.Linear(width, size) for name, size in outputs.items()})
         self.value = nn.Linear(width, 1)
+        # Motion (user, 2026-10-21): the executor's estimates from what vision
+        # reported over the frames before (each sprite's velocity, Mario's),
+        # added to the scene's sprite and Mario tokens, as the world model
+        # reads them; starting with no influence.
+        self.sprite_motion = nn.Linear(SPRITE_MOTION.stop - SPRITE_MOTION.start, width)
+        self.mario_motion = nn.Linear(len(MARIO_STATE), width)
+        for layer in (self.sprite_motion, self.mario_motion):
+            nn.init.zeros_(layer.weight)
+            nn.init.zeros_(layer.bias)
 
-    def encode(self, scene_tokens, present, above=None, history=None, more=()):
+    def encode(self, scene_tokens, present, above=None, history=None, more=(), motion=None):
         """Returns the decision token and the current scene's tokens after the blocks.
 
         ``history``: (choices [B, HISTORY, choice width], present [B, HISTORY]),
         the layer's own previous choices, the most recent first; None for none.
         ``more``: further (tokens [B, n, width], present [B, n]) groups.
+        ``motion``: (sprite kinematics [B, SPRITE_SLOTS, 6], Mario's [B, 3]),
+        added to their tokens; None for none.
         """
+        if motion is not None:
+            scene_tokens = add_motion(scene_tokens, *motion, self.sprite_motion, self.mario_motion)
         batch = scene_tokens.shape[0]
         extra = [self.query.expand(batch, -1, -1)]
         if self.above is not None:
@@ -395,14 +409,14 @@ class SkillLayer(_Layer):
         }
 
     def forward(
-        self, scene_tokens, present, above=None, history=None, picks=None, sample=False
+        self, scene_tokens, present, above=None, history=None, picks=None, sample=False, motion=None
     ) -> dict[str, torch.Tensor]:
         """Logits of each head, the pointer's for the verb chosen (or, given
         ``picks`` as index tensors [B] with a verb, for that one: teaching with
         the teacher's choice, or scoring the layer's own); "picks", the index
         tensors used; "decision", the decision token; "objects" and
         "object_present", the object tokens read; and the value estimate."""
-        decision, seen = self.encode(scene_tokens, present, above, history)
+        decision, seen = self.encode(scene_tokens, present, above, history, motion=motion)
         span = slice(POINTER_START, POINTER_START + POINTER_TOKENS)
         objects, object_present = seen[:, span], present[:, span]
         verb_logits = self.verb_logits(decision, object_present)
@@ -501,22 +515,36 @@ class TacticLayer(_Layer):
         width = settings.width
         self.held = nn.Linear(HELD_WIDTH, width)
         self.recalled = nn.Linear(settings.tactic_memory_width, width)
+        # How the last action went (the executor's report, as the skill reads
+        # it; user, 2026-10-21), read with the held tactic; starting with no
+        # influence.
+        self.feedback = nn.Linear(EXECUTION_WIDTH, width)
+        nn.init.zeros_(self.feedback.weight)
+        nn.init.zeros_(self.feedback.bias)
         # Marks the tokens of the scene expected when the tactic ends.
         self.end_marker = nn.Parameter(torch.zeros(1, 1, width))
 
-    def forward(self, scene_tokens, present, switch, held, recalled, expected_end):
+    def forward(
+        self, scene_tokens, present, switch, held, recalled, expected_end, motion=None, feedback=None
+    ):
         """``held`` [B, HELD_WIDTH]; ``recalled`` [B, tactic memory width] (the
         tactic memory's state); ``expected_end``: the encoded scene it expects
-        when the tactic ends (tokens, present)."""
+        when the tactic ends (tokens, present); ``motion``: the kinematics
+        (_Layer.encode); ``feedback`` [B, EXECUTION_WIDTH]: how the last action
+        went (None: none)."""
         batch = scene_tokens.shape[0]
         everyone = torch.ones(batch, 1, dtype=torch.bool, device=present.device)
         end_tokens, end_present = expected_end
+        held_token = self.held(held)
+        if feedback is not None:
+            held_token = held_token + self.feedback(feedback)
         decision, _ = self.encode(
             scene_tokens,
             present,
             switch,
+            motion=motion,
             more=(
-                (self.held(held).unsqueeze(1), everyone),
+                (held_token.unsqueeze(1), everyone),
                 (self.recalled(recalled).unsqueeze(1), everyone),
                 (end_tokens + self.end_marker, end_present),
             ),
@@ -571,13 +599,16 @@ class LayeredSMBPolicy(nn.Module):
             state = self.tactic_memory.initial(summary.shape[0], summary.device)
         return self.tactic_memory(self.tactic_memory.step_inputs(summary, ended), state)
 
-    def tactic_outputs(self, encoded, switch, held, recalled):
+    def tactic_outputs(self, encoded, switch, held, recalled, motion=None, feedback=None):
         """The tactic layer's outputs (TacticLayer) from the encoded scene, the
-        encoded switch [B, STRATEGY_WIDTH], the held tactic [B, HELD_WIDTH] and
-        the tactic memory's hidden state [B, tactic memory width]."""
+        encoded switch [B, STRATEGY_WIDTH], the held tactic [B, HELD_WIDTH],
+        the tactic memory's hidden state [B, tactic memory width], the
+        kinematics (``motion``) and how the last action went (``feedback``)."""
         scene_tokens, present = encoded
         expected_end = self.scene.expected(self.tactic_memory.expected_scene(recalled))
-        return self.tactic(scene_tokens, present, switch, held, recalled, expected_end)
+        return self.tactic(
+            scene_tokens, present, switch, held, recalled, expected_end, motion=motion, feedback=feedback
+        )
 
     def encode_scene(self, inputs):
         """Batched PolicyInput rows (src_a, src_b, src_c) -> scene tokens and their mask."""
@@ -592,6 +623,7 @@ class LayeredSMBPolicy(nn.Module):
         feedback=None,
         picks=None,
         sample=False,
+        motion=None,
     ):
         """Choose an action using the tactic and its strategy context.
 
@@ -609,7 +641,7 @@ class LayeredSMBPolicy(nn.Module):
         if feedback is None:
             feedback = tactic.new_zeros((len(tactic), EXECUTION_WIDTH))
         tactic = torch.cat((tactic, feedback), dim=-1)
-        return self.skill(scene_tokens, present, tactic, history, picks=picks, sample=sample)
+        return self.skill(scene_tokens, present, tactic, history, picks=picks, sample=sample, motion=motion)
 
 
 # ── Choosing from the outputs ─────────────────────────────────────────────────

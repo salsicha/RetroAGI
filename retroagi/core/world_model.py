@@ -85,6 +85,21 @@ CONTEXT_WIDTH = TACTIC_WIDTH + STRATEGY_WIDTH
 SPRITE_MOTION = slice(3, 6)
 
 
+def add_motion(tokens, sprites, mario, sprite_layer, mario_layer):
+    """Scene tokens [B, T, width] with the executor's first-order kinematics
+    (smb_kinematics: each sprite slot's [B, SPRITE_SLOTS, 6], Mario's [B, 3])
+    read by ``sprite_layer`` (the velocity and sightings) and ``mario_layer``
+    and added to the sprites' tokens and Mario's: what one picture cannot
+    show, estimated from what vision reported over the frames before. The
+    world model and the decision layers read motion this way."""
+    tokens = tokens.clone()
+    index = torch.as_tensor(SPRITE_TOKENS, device=tokens.device)
+    motion = sprite_layer(sprites[..., SPRITE_MOTION]) * sprites[..., :1]
+    tokens[:, index] = tokens[:, index] + motion
+    tokens[:, MARIO_TOKEN] = tokens[:, MARIO_TOKEN] + mario_layer(mario)
+    return tokens
+
+
 def action_record(action, outcome: dict, chosen: bool) -> np.ndarray:
     """[len(ACTION_RECORD)] numbers for an action the teacher tried and its
     outcome (teacher_actions.action_outcome)."""
@@ -165,12 +180,7 @@ class WorldModel(nn.Module):
     def with_motion(self, tokens, sprites, mario):
         """``tokens`` [B, T, width] with each sprite slot's kinematics
         ([B, SPRITE_SLOTS, 6]) added to its token and Mario's ([B, 3]) to his."""
-        tokens = tokens.clone()
-        index = torch.as_tensor(SPRITE_TOKENS, device=tokens.device)
-        motion = self.sprite_motion(sprites[..., SPRITE_MOTION]) * sprites[..., :1]
-        tokens[:, index] = tokens[:, index] + motion
-        tokens[:, MARIO_TOKEN] = tokens[:, MARIO_TOKEN] + self.mario_motion(mario)
-        return tokens
+        return add_motion(tokens, sprites, mario, self.sprite_motion, self.mario_motion)
 
     def _query(self, tokens, verbs, pointers, rows, context):
         query = self.verb(verbs) + tokens[rows, pointers]

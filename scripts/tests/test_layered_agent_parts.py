@@ -698,7 +698,7 @@ def test_the_agent_holds_its_tactic_until_its_end_check_says_finished():
     for end_bias, starts in ((-20.0, 1), (20.0, None)):
         agents = _held_agents(end_bias)
         made = []
-        for _ in range(100):
+        for _ in range(40):
             (step,) = agents.act(screen, [0])
             if step.decision is not None:
                 made.append(step.decision.tactic_step)

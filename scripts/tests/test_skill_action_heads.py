@@ -73,3 +73,36 @@ def test_action_heads_learn_the_teachers_action():
     picks = run(policy, rows)["picks"]
     assert picks["verb"].tolist() == verbs.tolist()
     assert picks["pointer"].tolist() == pointers.tolist()
+
+
+@torch.no_grad()
+def test_the_decision_layers_read_motion_from_no_influence():
+    from retroagi.core.smb_kinematics import MARIO_STATE, SPRITE_SLOTS, SPRITE_STATE
+    from retroagi.core.tokens import EXECUTION_WIDTH, encode_strategy, DEFAULT_STRATEGY
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy(PolicySettings()).eval()
+    rows = scene()
+    encoded = policy.encode_scene(rows)
+    tactic = torch.stack([encode_tactic(tactic_token("advance"))] * 2)
+    sprites = torch.rand(2, SPRITE_SLOTS, len(SPRITE_STATE))
+    sprites[..., 0] = 1.0  # tracked
+    motion = (sprites, torch.rand(2, len(MARIO_STATE)))
+    still = policy.run_skill(encoded, tactic)["verb"]
+    assert torch.equal(still, policy.run_skill(encoded, tactic, motion=motion)["verb"])
+    policy.skill.sprite_motion.weight.normal_()
+    policy.skill.mario_motion.weight.normal_()
+    assert not torch.equal(still, policy.run_skill(encoded, tactic, motion=motion)["verb"])
+    # The tactic layer too, and it reads how the last action went.
+    switch = encode_strategy(DEFAULT_STRATEGY).expand(2, -1)
+    from retroagi.core.layered_policy import held_features
+
+    held = held_features(None).expand(2, -1)
+    memory = torch.zeros(2, policy.tactic_memory.width)
+    feedback = torch.rand(2, EXECUTION_WIDTH)
+    base = policy.tactic_outputs(encoded, switch, held, memory)["tactic"]
+    same = policy.tactic_outputs(encoded, switch, held, memory, motion=motion, feedback=feedback)["tactic"]
+    assert torch.equal(base, same)
+    policy.tactic.feedback.weight.normal_()
+    moved = policy.tactic_outputs(encoded, switch, held, memory, feedback=feedback)["tactic"]
+    assert not torch.equal(base, moved)

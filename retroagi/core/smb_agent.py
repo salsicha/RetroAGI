@@ -152,6 +152,7 @@ def decide(
     histories: Optional[Mapping[str, tuple]] = None,
     tactic_steps: Optional[Sequence[Optional[TacticStep]]] = None,
     execution_feedback=None,
+    motion=None,
 ) -> list[Decision]:
     """Skill destinations and action plans for pictures under ``tactics``
     (each held by the tactic layer, or given).
@@ -199,6 +200,7 @@ def decide(
             strategy=_encoded(encode_strategy, switches, device),
             feedback=execution_feedback,
             sample=layer in sample,
+            motion=motion,
         )
         made = [choose(layer, _one(out, i), sample=layer in sample) for i in range(count)]
         chosen[layer] = [token for token, _ in made]
@@ -654,7 +656,19 @@ class SMBAgents:
         return (plan.action == HOLD_GROUND and plan.wait) or copy.executor.travel is not None
 
     @torch.no_grad()
-    def _tactics(self, starting, now, given, run_given, sample):
+    def _motion(self, copies) -> tuple:
+        """The copies' kinematics this frame (_Copy.kinematics: each sprite
+        slot's, Mario's) as tensors, for the decision layers."""
+        from .smb_kinematics import MARIO_STATE, SPRITE_SLOTS, SPRITE_STATE
+
+        sprites = np.zeros((len(copies), SPRITE_SLOTS, len(SPRITE_STATE)), np.float32)
+        mario = np.zeros((len(copies), len(MARIO_STATE)), np.float32)
+        for i, copy in enumerate(copies):
+            if copy.kinematics:
+                sprites[i], mario[i] = copy.kinematics[0], copy.kinematics[1]
+        return (torch.as_tensor(sprites, device=self.device), torch.as_tensor(mario, device=self.device))
+
+    def _tactics(self, starting, now, given, run_given, sample, motion=None, feedback=None):
         """The tactic each deciding copy uses for its next action, and what the
         tactic layer did (TacticStep, None where it did not run).
 
@@ -705,6 +719,8 @@ class SMBAgents:
                 switches[index],
                 held_rows[index],
                 hidden[index],
+                motion=None if motion is None else (motion[0][index], motion[1][index]),
+                feedback=None if feedback is None else feedback[index],
             )
             chance = torch.sigmoid(out["end"])
             ends = torch.bernoulli(chance) > 0.5 if explore else chance > 0.5
@@ -739,7 +755,14 @@ class SMBAgents:
         if choosing:
             index = torch.tensor(choosing, device=device)
             none = held_features(None).to(device).expand(len(choosing), -1)
-            out = policy.tactic_outputs(part(index, now), switches[index], none, hidden[index])
+            out = policy.tactic_outputs(
+                part(index, now),
+                switches[index],
+                none,
+                hidden[index],
+                motion=None if motion is None else (motion[0][index], motion[1][index]),
+                feedback=None if feedback is None else feedback[index],
+            )
             for k, i in enumerate(choosing):
                 stance, picks = choose("tactic", {"tactic": out["tactic"][k]}, sample=explore)
                 own[i] = stance
@@ -851,7 +874,17 @@ class SMBAgents:
                 if needs_context
                 else None
             )
-            tactics, tactic_steps = self._tactics(starting, now, extra, run_given, sample)
+            # What the decision layers read beside the picture: how the last
+            # action went (the executor's report) and the motion the executor
+            # estimated from what vision reported (user, 2026-10-21).
+            reports = torch.tensor(
+                [copy.spatial.report(scene) for copy, scene in zip(starting, picked)],
+                device=self.device,
+            )
+            motion = self._motion(starting)
+            tactics, tactic_steps = self._tactics(
+                starting, now, extra, run_given, sample, motion=motion, feedback=reports
+            )
             made = decide(
                 self.policy,
                 picked,
@@ -865,10 +898,8 @@ class SMBAgents:
                 now,
                 choice_histories(starting, self.device),
                 tactic_steps,
-                torch.tensor(
-                    [copy.spatial.report(scene) for copy, scene in zip(starting, picked)],
-                    device=self.device,
-                ),
+                reports,
+                motion=motion,
             )
             own = [
                 j

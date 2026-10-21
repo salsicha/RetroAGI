@@ -1258,6 +1258,9 @@ def _decisions(
         parts["labelled"].append(e.labels["valid"].astype(bool))
         parts["explored"].append(np.full(count, e.explored) & ~e.played_teacher)
         parts["weight"].append(np.full(count, e.weight, np.float32))
+        sprites, mario = _decision_motion(e, count)
+        parts["sprites"].append(sprites)
+        parts["mario"].append(mario)
         for name, value in e.labels.items():
             if name != "valid":
                 parts[f"label_{name}"].append(np.asarray(value))
@@ -1284,6 +1287,8 @@ def _decisions(
         "used",
         "weight",
         "execution_feedback",
+        "sprites",
+        "mario",
     )
     return {
         name: torch.as_tensor(
@@ -1297,6 +1302,24 @@ def _decisions(
         )
         for name, values in parts.items()
     }
+
+
+def _decision_motion(e, count: int) -> tuple:
+    """(sprite kinematics [count, SPRITE_SLOTS, 6], Mario's [count, 3]) at an
+    episode's decisions: the motion the decision layers read (zeros where the
+    episode recorded none)."""
+    from retroagi.core.smb_kinematics import MARIO_STATE, SPRITE_SLOTS, SPRITE_STATE
+
+    if e.sprite_kinematics is None or e.mario_kinematics is None:
+        return (
+            np.zeros((count, SPRITE_SLOTS, len(SPRITE_STATE)), np.float32),
+            np.zeros((count, len(MARIO_STATE)), np.float32),
+        )
+    frames = np.asarray(e.decision_frames, np.int64)
+    return (
+        np.asarray(e.sprite_kinematics[frames], np.float32),
+        np.asarray(e.mario_kinematics[frames], np.float32),
+    )
 
 
 def _weighted_mean(values, weights):
@@ -1377,6 +1400,7 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
         choice_history(d["used"], e),
         feedback=d["execution_feedback"],
         picks=teaching,
+        motion=(d["sprites"], d["mario"]),
     )
     stats = {"decisions": int(len(e))}
     imitation = 1.0 if rl is None else rl.imitation_weight
@@ -1479,9 +1503,17 @@ def tactic_batch(episodes: Sequence[EpisodeRecord], config, device):
         parts["old_log_prob"].append(e.old_log_prob)
         for name in ("held", "actions", "frames", "started", "used"):
             parts[name].append(e.tactic[name])
+        sprites, mario = _decision_motion(e, count)
+        parts["sprites"].append(sprites)
+        parts["mario"].append(mario)
+        parts["feedback"].append(
+            np.asarray(e.execution_feedback, np.float32)
+            if e.execution_feedback is not None and len(e.execution_feedback) == count
+            else np.zeros((count, EXECUTION_WIDTH), np.float32)
+        )
     if not parts:
         return None
-    floats = ("switch", "earned", "old_log_prob", "actions", "frames")
+    floats = ("switch", "earned", "old_log_prob", "actions", "frames", "sprites", "mario", "feedback")
     flags = ("last", "terminal", "labelled", "label_end", "teacher", "explored", "started")
     return {
         name: torch.as_tensor(
@@ -1570,6 +1602,8 @@ def tactic_forward(policy, episodes, config, device, memory_grad: bool):
             d["switch"][index],
             rows[index],
             memory[index],
+            motion=(d["sprites"][index], d["mario"][index]),
+            feedback=d["feedback"][index],
         )
 
     everyone = torch.arange(len(e), device=e.device)
@@ -2362,6 +2396,21 @@ def load_layered_checkpoint(path, device="cpu"):
         state.update({name: value for name, value in fresh.items() if name.startswith("memory.")})
         checkpoint["world_model"] = None
         checkpoint.setdefault("load_migrations", []).append("world_model_reshaped")
+    if "skill.sprite_motion.weight" not in state:
+        # The decision layers read motion (the executor's estimates) and the
+        # tactic layer the executor's report (user, 2026-10-21): those
+        # readings start at zero, so what the layers learned chooses as it did.
+        state.update(
+            {
+                name: value
+                for name, value in fresh.items()
+                if name.startswith(
+                    ("skill.sprite_motion.", "skill.mario_motion.", "tactic.sprite_motion.",
+                     "tactic.mario_motion.", "tactic.feedback.")
+                )
+            }
+        )
+        checkpoint.setdefault("load_migrations", []).append("layers_read_motion_and_feedback")
     if "memory.context.weight" not in state:
         # The world model reads the tactic and the strategy switch each action
         # was chosen under (user, 2026-10-18): that reading starts at zero, so
@@ -2875,6 +2924,7 @@ def _agreement(policy, learner: str, played, config, device) -> dict:
                 choice_history(d["used"], e),
                 feedback=d["execution_feedback"],
                 picks={"verb": verb},
+                motion=(d["sprites"], d["mario"]),
             )
             same = (out["verb"].argmax(-1) == verb) & (
                 (verb == VERBS.index("wait")) | (out["pointer"].argmax(-1) == d["label_pointer"].long())
