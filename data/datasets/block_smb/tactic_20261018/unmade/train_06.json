@@ -1,0 +1,10 @@
+[
+ {
+  "family": "speed_run_descend_forward",
+  "split": "train",
+  "seed": 2026101201,
+  "sample_index": 6006,
+  "difficulty": "hard",
+  "error": "RuntimeError: speed_run_descend_forward: spatial reference failed after 95 frames"
+ }
+]
