@@ -16,6 +16,7 @@ from typing import Any, Optional
 import torch
 
 from retroagi.core.scene_vision import load_scene_vision_checkpoint
+from retroagi.core.smb_scene_labels import OBJECT_TYPE_SLOTS
 from retroagi.core.vision import SceneVisionTransformer
 
 DEFAULT_FULL_VIT_CHECKPOINT = Path("data/full_vit/full_vit_scene.pth")
@@ -23,10 +24,15 @@ FULL_VIT_NAME = "full_smb_vit"
 
 
 class FullVisionTransformer(SceneVisionTransformer):
-    """The shared scene vision transformer under the Full SMB checkpoint name."""
+    """The shared scene vision transformer under the Full SMB checkpoint name,
+    with the object type head: Full SMB's labels tell each enemy's type
+    (pixel_labels.ENEMY_TYPE_NUMBERS). A checkpoint from before it loads
+    without one (its scenes' types are not told)."""
 
     def __init__(self, **settings: Any):
-        super().__init__(**{**settings, "name": FULL_VIT_NAME})
+        super().__init__(
+            **{"object_types": OBJECT_TYPE_SLOTS, **settings, "name": FULL_VIT_NAME}
+        )
 
 
 @dataclass(frozen=True)

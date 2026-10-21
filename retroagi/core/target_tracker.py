@@ -49,6 +49,7 @@ from .action_tokens import VERBS, pointer_target
 from .collision_labels import HORIZON, KINDS
 from .layered_policy import POINTER_START
 from .smb_kinematics import (
+    CONTEXT,
     ENEMY_SLOTS,
     MARIO_STATE,
     MEMORY_SLOTS,
@@ -156,6 +157,16 @@ def frame_features(state, identities, mario, position, frame, action: ActionStat
     return out
 
 
+def record_context(record) -> np.ndarray:
+    """A recorded episode's enemy context [T, ENEMY_SLOTS, len(CONTEXT)]; one
+    recorded before object types (eight numbers an enemy) has none told."""
+    context = record.enemy_context.astype(np.float32)
+    missing = len(CONTEXT) - context.shape[-1]
+    if missing:
+        context = np.concatenate((context, np.zeros(context.shape[:-1] + (missing,), np.float32)), -1)
+    return context
+
+
 def record_memory(record):
     """A recorded episode's remembered enemies per frame ([T, MEMORY_SLOTS,
     len(TRACKED)], [T, MEMORY_SLOTS]); none (zeros) for one recorded
@@ -179,7 +190,7 @@ def record_features(record) -> np.ndarray:
     starts = {int(f): k for k, f in enumerate(record.decision_frames)}
     sprites = record.sprite_kinematics.astype(np.float32)
     mario = record.mario_kinematics.astype(np.float32)
-    context = record.enemy_context.astype(np.float32)
+    context = record_context(record)
     memory, memory_identity = record_memory(record)
     out = np.zeros((frames, ROWS, FEATURES), np.float32)
     action = ActionState()

@@ -188,6 +188,24 @@ ENEMY_KIND_CLASSES = {
     0x1D: "other",  # fire bar
     0x33: "other",  # Bullet Bill
 }
+# Which of the game's own object types each enemy is, as the vision is told it
+# (smb_scene_labels.OBJECT_TYPE_SLOTS numbers; the networks learn what each
+# means): one number per enemy code, the two fire bars (one turning each way,
+# alike in any one picture) sharing one, and Hammer Bro's hammers their own.
+ENEMY_TYPE_NUMBERS = {
+    0x00: 0,  # green Koopa Troopa
+    0x02: 1,  # Buzzy Beetle
+    0x05: 2,  # Hammer Bro
+    0x06: 3,  # Goomba
+    0x0D: 4,  # Piranha Plant
+    0x0E: 5,  # green Koopa Paratroopa
+    0x11: 6,  # Lakitu
+    0x12: 7,  # Spiny and its falling egg
+    0x1B: 8,  # fire bar
+    0x1D: 8,  # fire bar
+    0x33: 9,  # Bullet Bill
+}
+HAMMER_TYPE_NUMBER = 10
 # Sprite drawings that are never an object's body: the floating score numbers
 # ("00", "10", "20", "40", "50", "80", "0", "1U", "P").
 SCORE_DIGITS = frozenset((0x50, *range(0xF6, 0xFC), 0xFD, 0xFE))
@@ -636,7 +654,7 @@ def frame_scene_labels(built: dict, labels: np.ndarray, stomping: bool = False) 
     ram = built["ram"]
     piece = built["piece"][VISIBLE]
     instances = np.full(piece.shape, -1, dtype=np.int32)
-    numbers, categories, kinds = {}, {}, {}
+    numbers, categories, kinds, types = {}, {}, {}, {}
 
     def number(key, category, kind=None):
         if key not in numbers:
@@ -650,6 +668,12 @@ def frame_scene_labels(built: dict, labels: np.ndarray, stomping: bool = False) 
         category, kind = object_of(owner, slot, ram)
         if category is not None:
             instances[piece == k] = number((owner, slot), category, kind)
+            if category == "enemy":
+                types[numbers[(owner, slot)]] = (
+                    HAMMER_TYPE_NUMBER
+                    if owner == "hammer"
+                    else ENEMY_TYPE_NUMBERS[int(owner[6:], 16)]
+                )
     coin = (built["labels"][VISIBLE] == TYPE_ID["coin"]) & (piece < 0)
     squares = built["square_ids"][VISIBLE]
     for square in np.unique(squares[coin]).tolist():
@@ -662,6 +686,7 @@ def frame_scene_labels(built: dict, labels: np.ndarray, stomping: bool = False) 
         standing=int(ram[PLAYER_FLOAT_STATE]) == 0,
         facing_right=int(ram[PLAYER_FACING]) == 1,
         stomping=stomping,
+        enemy_types=types,
     )
 
 

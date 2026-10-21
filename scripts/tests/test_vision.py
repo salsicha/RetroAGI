@@ -16,7 +16,13 @@ from retroagi.core.scene_vision import (
     train_scene_vision,
 )
 from retroagi.core.smb_pixel_types import PIXEL_TYPES, TYPE_ID, visible_window
-from retroagi.core.smb_scene_labels import ENEMY_KINDS, SUPPORTS, SceneObservation, scene_targets
+from retroagi.core.smb_scene_labels import (
+    ENEMY_KINDS,
+    OBJECT_TYPE_SLOTS,
+    SUPPORTS,
+    SceneObservation,
+    scene_targets,
+)
 from retroagi.core.vision import SceneVisionTransformer
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.vision import BlockVisionTransformer
@@ -120,6 +126,7 @@ class TestVisionInterface(unittest.TestCase):
             {
                 "pixel_logits",
                 "kind_logits",
+                "type_logits",
                 "facing_logits",
                 "support_logits",
                 "on_something_logits",
@@ -231,11 +238,18 @@ class TestFullSMBVision(unittest.TestCase):
         picture = np.zeros((1, 240, 256, 3), dtype=np.uint8)
         with torch.no_grad():
             full, practice = encoder.heads(picture), block.heads(picture)
-        # Same class, same outputs: only the learned numbers differ.
+        # Same class, same outputs, but for the object types Full SMB's labels
+        # tell (Block SMB's do not): only the learned numbers differ.
         self.assertEqual(set(full), set(practice))
+        self.assertIsNone(practice["type_logits"])
+        self.assertEqual(full["type_logits"].shape[1:], (OBJECT_TYPE_SLOTS, 30, 32))
         for name in full:
-            self.assertEqual(full[name].shape, practice[name].shape, name)
-        self.assertEqual(encoder.architecture()["metadata"], block.architecture()["metadata"])
+            if name != "type_logits":
+                self.assertEqual(full[name].shape, practice[name].shape, name)
+        self.assertEqual(
+            {**encoder.architecture()["metadata"], "object_types": 0},
+            block.architecture()["metadata"],
+        )
 
     def test_full_vit_loader_names_the_trainer_when_the_checkpoint_is_missing(self):
         with TemporaryDirectory() as tmpdir:

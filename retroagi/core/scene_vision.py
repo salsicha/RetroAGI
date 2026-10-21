@@ -37,7 +37,16 @@ MATCH_OVERLAP = 0.5
 SURFACE_HEIGHT_TOLERANCE = 2
 # ── Targets and batches ───────────────────────────────────────────────────────
 
-TARGET_KEYS = ("types", "kind", "facing", "support", "on_something", "stomping", "mario_present")
+TARGET_KEYS = (
+    "types",
+    "kind",
+    "enemy_type",
+    "facing",
+    "support",
+    "on_something",
+    "stomping",
+    "mario_present",
+)
 # A picture of Mario landing on an enemy counts this many times in the
 # feet-on-something loss: such pictures are rare and look like being in the air.
 # Pictures of Mario landing on an enemy he stomps count this many times in the
@@ -91,6 +100,8 @@ def scene_losses(
 
     - pixels: per-pixel cross-entropy on the types (rare types weighted up);
     - kind: enemy kind in every cell holding enemy pixels;
+    - enemy_type: the enemy's object type in every such cell whose labels
+      tell it (a model with a type head only);
     - facing, support, feet on something: Mario's, over frames that show him
       (pictures of a stomp weighted up by ``stomp_weight``).
     """
@@ -104,6 +115,13 @@ def scene_losses(
         losses["kind"] = F.cross_entropy(kind_logits, targets["kind"][enemy_cells])
     else:
         losses["kind"] = nothing
+    if out.get("type_logits") is not None:
+        told = targets["enemy_type"] >= 0
+        if told.any():
+            type_logits = out["type_logits"].float().permute(0, 2, 3, 1)[told]
+            losses["enemy_type"] = F.cross_entropy(type_logits, targets["enemy_type"][told])
+        else:
+            losses["enemy_type"] = nothing
     mario = targets["mario_present"].bool()
     if mario.any():
         losses["facing"] = F.cross_entropy(
@@ -408,6 +426,11 @@ def compare_scenes(found: SceneObservation, true: SceneObservation, tallies: dic
     tallies["enemy_kind"]["correct"] += sum(
         found.enemies[i].kind == true.enemies[j].kind for i, j in pairs
     )
+    told = [(i, j) for i, j in pairs if true.enemies[j].type >= 0]
+    tallies["enemy_type"]["matched"] += len(told)
+    tallies["enemy_type"]["correct"] += sum(
+        found.enemies[i].type == true.enemies[j].type for i, j in told
+    )
     for name in ("coins", "power_ups", "moving_platforms", "pipes"):
         tallies[name].add(
             list(getattr(found, name)), list(getattr(true, name)), _box_match, lambda b: b
@@ -439,6 +462,7 @@ def _new_tallies() -> dict:
             "stomps_seen": 0,
         },
         "enemy_kind": {"matched": 0, "correct": 0},
+        "enemy_type": {"matched": 0, "correct": 0},
     }
     for name in (
         "enemy",
@@ -484,6 +508,11 @@ def _report(tallies: dict, frames: int, pixels_correct: Optional[float]) -> dict
         "enemy_kind_accuracy": (
             tallies["enemy_kind"]["correct"] / tallies["enemy_kind"]["matched"]
             if tallies["enemy_kind"]["matched"]
+            else None
+        ),
+        "enemy_type_accuracy": (
+            tallies["enemy_type"]["correct"] / tallies["enemy_type"]["matched"]
+            if tallies["enemy_type"]["matched"]
             else None
         ),
     }

@@ -16,8 +16,8 @@ the per-pixel types it predicts, by the same rules for both games: each
 object (Mario, enemy, coin, power-up, moving platform) is a group of touching
 pixels of its type (objects_from_types), and surfaces, gaps, blocks and pipes
 come from structure_from_types. Only Mario's facing, his support, whether his
-feet are on something (the landing signal) and each
-enemy's kind are read from its other outputs. Exact visual support beneath
+feet are on something (the landing signal), each enemy's kind and (for a
+model trained with them) its object type are read from its other outputs. Exact visual support beneath
 his feet establishes standing even when the contact head disagrees. A box
 that sinks at most SINK_ROWS rows into a surface he mostly covers is support
 read as Mario: its bottom is raised to the surface, where he stands. Other
@@ -33,7 +33,7 @@ measured; outside it pictures and labels only repeat its edge.
 
 import hashlib
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
 import numpy as np
@@ -48,6 +48,13 @@ OBJECT_CATEGORIES = ("mario", "enemy", "coin", "power_up", "moving_platform")
 # What an enemy looks like it is: a walker (Goomba-like, stompable in Block
 # SMB), a plant (out of a pipe), anything else, or one already defeated.
 ENEMY_KINDS = ("walker", "plant", "other", "defeated")
+# Which of its game's own object types an enemy is: one of OBJECT_TYPE_SLOTS
+# numbers, as the game's labels number them (Full SMB: the game's enemy codes,
+# full_smb/pixel_labels.ENEMY_TYPE_NUMBERS). What each number stands for is
+# the game's; the networks reading it learn what it means (user, 2026-10-21:
+# the complexities of a game are in the models). -1: not told (labels without
+# types, and vision models trained without them, as Block SMB's).
+OBJECT_TYPE_SLOTS = 16
 SUPPORTS = ("air", "ground", "moving_platform")
 # Pixel types Mario can stand on.
 STANDABLE_TYPES = ("ground", "brick", "question_block", "pipe", "moving_platform")
@@ -107,6 +114,7 @@ class MarioView:
 class EnemyView:
     box: Box
     kind: str  # one of ENEMY_KINDS
+    type: int = -1  # its object type (OBJECT_TYPE_SLOTS), -1 not told
 
 
 @dataclass(frozen=True)
@@ -163,6 +171,8 @@ class SceneLabels:
     standing: bool  # the game's own flag: Mario stands on something
     facing_right: bool  # Mario as drawn
     stomping: bool  # the game's own event: this picture shows Mario landing on an enemy
+    # enemy object number -> its object type (OBJECT_TYPE_SLOTS); none told: empty
+    enemy_types: Mapping[int, int] = field(default_factory=dict)
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -470,7 +480,7 @@ def scene_from_labels(labels: SceneLabels) -> SceneObservation:
         kind = labels.kinds.get(number)
         if kind not in ENEMY_KINDS:
             raise ValueError(f"enemy object {number} has no known kind: {kind!r}")
-        enemies.append(EnemyView(boxes[number], kind))
+        enemies.append(EnemyView(boxes[number], kind, int(labels.enemy_types.get(number, -1))))
     structure = structure_from_types(labels.types)
     structure["uncut_surfaces"] = structure["surfaces"]
     structure["surfaces"] = split_at_enemies(structure["surfaces"], enemies)
@@ -529,7 +539,9 @@ _GROUPED = {
 }
 
 
-def objects_from_types(types: np.ndarray, kind_probability: np.ndarray) -> dict:
+def objects_from_types(
+    types: np.ndarray, kind_probability: np.ndarray, type_probability=None
+) -> dict:
     """Mario, enemies, coins, power-ups and moving platforms from per-pixel types.
 
     Each object is a group of touching pixels of its type (pieces at most
@@ -537,25 +549,29 @@ def objects_from_types(types: np.ndarray, kind_probability: np.ndarray) -> dict:
     specks), its box the group's extent, inside the visible window. Mario is
     the largest group of Mario pixels. An enemy's kind is the most likely one
     over its pixels, from ``kind_probability`` [ENEMY_KINDS, 30, 32]: the kind
-    the vision transformer sees in each 8x8 cell.
+    the vision transformer sees in each 8x8 cell; its object type likewise
+    from ``type_probability`` [OBJECT_TYPE_SLOTS, 30, 32] (None: not told).
     """
     types = np.asarray(types)
     (top, bottom), (left, right) = VISIBLE_ROWS, VISIBLE_COLUMNS
     window = types[top:bottom, left:right]
     found: dict[str, list] = {}
+
+    def most_likely(probability, box, pixels) -> int:
+        cells = np.repeat(np.repeat(probability, OBJECT_CELL, 1), OBJECT_CELL, 2)
+        cells = cells[:, top:bottom, left:right]
+        return int(cells[:, box[1] : box[3], box[0] : box[2]][:, pixels].sum(1).argmax())
+
     for name, type_name in _GROUPED.items():
         groups = _object_groups(window == TYPE_ID[type_name])
         if name == "mario":
             groups = groups[:1]
         if name == "enemies" and groups:
-            cells = np.repeat(np.repeat(kind_probability, OBJECT_CELL, 1), OBJECT_CELL, 2)
-            cells = cells[:, top:bottom, left:right]
             found[name] = [
                 EnemyView(
                     _shift(box, left, top),
-                    ENEMY_KINDS[
-                        int(cells[:, box[1] : box[3], box[0] : box[2]][:, pixels].sum(1).argmax())
-                    ],
+                    ENEMY_KINDS[most_likely(kind_probability, box, pixels)],
+                    -1 if type_probability is None else most_likely(type_probability, box, pixels),
                 )
                 for box, pixels in groups
             ]
@@ -575,6 +591,7 @@ def scene_targets(labels: SceneLabels) -> dict[str, np.ndarray]:
 
     types [240, 256]; kind [30, 32]: in each 8x8 cell holding enemy pixels,
     the ENEMY_KINDS index of the enemy drawing most of them (-1 elsewhere);
+    enemy_type [30, 32]: that enemy's object type (-1 elsewhere or not told);
     facing (1 = right), support (SUPPORTS index), on_something (1 = his feet
     are on something), stomping (1 = on an enemy: weighted up, being rare) and
     mario_present are numbers.
@@ -583,6 +600,7 @@ def scene_targets(labels: SceneLabels) -> dict[str, np.ndarray]:
     rows, columns = CELL_GRID
     instances = np.asarray(labels.instances)
     kind = np.full((rows, columns), -1, np.int64)
+    enemy_type = np.full((rows, columns), -1, np.int64)
     enemies = [n for n, category in labels.categories.items() if category == "enemy"]
     if enemies:
         # Pixels drawn by each enemy, counted per cell; each cell takes the enemy with most.
@@ -596,9 +614,12 @@ def scene_targets(labels: SceneLabels) -> dict[str, np.ndarray]:
         drawn = counts.max(0) > 0
         kinds = np.array([ENEMY_KINDS.index(labels.kinds[number]) for number in enemies])
         kind[drawn] = kinds[most[drawn]]
+        told = np.array([int(labels.enemy_types.get(number, -1)) for number in enemies])
+        enemy_type[drawn] = told[most[drawn]]
     return {
         "types": np.asarray(labels.types, np.uint8),
         "kind": kind,
+        "enemy_type": enemy_type,
         "facing": np.int64(scene.mario.facing_right),
         "support": np.int64(SUPPORTS.index(scene.mario.support)),
         "on_something": np.int64(scene.mario.on_something),
@@ -649,11 +670,20 @@ def decode_scene(heads: Mapping[str, "object"]) -> list:
 
     types = chosen("pixel_logits")
     kind_probability = torch.softmax(heads["kind_logits"].float(), dim=1).cpu().numpy()
+    type_probability = (
+        torch.softmax(heads["type_logits"].float(), dim=1).cpu().numpy()
+        if heads.get("type_logits") is not None
+        else None
+    )
     facing, support = chosen("facing_logits"), chosen("support_logits")
     on_something = chosen("on_something_logits")
     scenes = []
     for b in range(types.shape[0]):
-        objects = objects_from_types(types[b], kind_probability[b])
+        objects = objects_from_types(
+            types[b],
+            kind_probability[b],
+            None if type_probability is None else type_probability[b],
+        )
         structure = structure_from_types(types[b])
         box = objects.pop("mario")
         # Resolve contradictory vision heads here, before any policy/controller

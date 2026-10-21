@@ -408,8 +408,16 @@ def collect(
 
 # collision_v2 (2026-10-21): the observation gained "unseen" (how long the
 # enemy has been out of sight; smb_kinematics.TRACKED), after the sprite's
-# kinematics. A collision_v1 tracker loads with that input reading nothing.
-LAYOUT = "collision_v2"
+# kinematics. collision_v3 (2026-10-21): its context gained the enemy's object
+# type (type_0 ...), before Mario's kinematics. An earlier tracker loads with
+# those inputs reading nothing (zero weights).
+LAYOUT = "collision_v3"
+# Each layout's step to the next: the inputs it added (their first column in
+# TRACKED, and how many).
+_ADDED = {
+    "collision_v1": ("collision_v2", "unseen", 1),
+    "collision_v2": ("collision_v3", "type_0", len(TRACKED) - TRACKED.index("type_0")),
+}
 
 
 def save_tracker(path, model, config: TrackerConfig, history) -> None:
@@ -425,28 +433,28 @@ def save_tracker(path, model, config: TrackerConfig, history) -> None:
     )
 
 
-def _with_unseen(state: dict, width: int) -> dict:
-    """A collision_v1 tracker's weights with the "unseen" input added (zero
-    weights: it reads nothing until trained), for the GRU's input and the
-    head's (which reads the GRU state, then the frame's inputs)."""
-    from retroagi.core.smb_kinematics import TRACKED
-
-    column = TRACKED.index("unseen")
+def _with_inputs(state: dict, width: int, column: int, count: int) -> dict:
+    """A tracker's weights with ``count`` inputs added at ``column`` of the
+    observation (zero weights: they read nothing until trained), for the GRU's
+    input and the head's (which reads the GRU state, then the frame's inputs)."""
     state = dict(state)
     for name, at in (("gru.weight_ih_l0", column), ("head.0.weight", width + column)):
         w = state[name]
-        state[name] = torch.cat((w[:, :at], torch.zeros_like(w[:, :1]), w[:, at:]), 1)
+        added = torch.zeros(w.shape[0], count, dtype=w.dtype, device=w.device)
+        state[name] = torch.cat((w[:, :at], added, w[:, at:]), 1)
     return state
 
 
 def load_tracker(path, device="cpu") -> CollisionTracker:
     saved = torch.load(path, map_location=device, weights_only=False)
-    if saved.get("layout") not in ("collision_v1", LAYOUT):
+    layout = saved.get("layout")
+    if layout not in (*_ADDED, LAYOUT):
         raise ValueError(f"{path} is not a collision tracker (the old target tracker?)")
     model = CollisionTracker(saved["width"]).to(device)
     state = saved["tracker"]
-    if saved["layout"] == "collision_v1":
-        state = _with_unseen(state, saved["width"])
+    while layout != LAYOUT:
+        layout, first, count = _ADDED[layout]
+        state = _with_inputs(state, saved["width"], TRACKED.index(first), count)
     model.load_state_dict(state)
     return model
 

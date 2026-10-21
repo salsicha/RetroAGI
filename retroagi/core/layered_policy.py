@@ -42,6 +42,7 @@ from .smb_observer import (
     SEQ_LEN_C,
 )
 from .smb_kinematics import MARIO_STATE
+from .smb_scene_labels import OBJECT_TYPE_SLOTS
 from .world_model import SPRITE_MOTION, WorldModel, add_motion
 from .tokens import (
     DEFAULT_STRATEGY,
@@ -169,6 +170,11 @@ class SceneEncoder(nn.Module):
         self.slot_position = nn.ParameterDict(
             {name: nn.Parameter(torch.zeros(SCENE_SLOTS[name], width)) for name in SCENE_SLOTS}
         )
+        # Each enemy's object type as vision tells it (smb_observer's
+        # "c_enemy_types": its number plus one, 0 not told): what each number
+        # means is learned; it starts with no influence.
+        self.enemy_type = nn.Embedding(OBJECT_TYPE_SLOTS + 1, width)
+        nn.init.zeros_(self.enemy_type.weight)
         self.codes = nn.Embedding(len(COLUMN_CODES), width)
         self.band_position = nn.Parameter(torch.zeros(SEQ_LEN_A + SEQ_LEN_B, width))
         self.summary_token = nn.Parameter(torch.zeros(1, 1, width))
@@ -194,7 +200,11 @@ class SceneEncoder(nn.Module):
         present.append(everyone)
         for name in SCENE_SLOTS:
             slots = src_c[:, slice(*C_SPANS[f"c_{name}"])].view(batch, SCENE_SLOTS[name], -1)
-            tokens.append(self.lists[name](self.waves[name](slots)) + self.slot_position[name])
+            token = self.lists[name](self.waves[name](slots)) + self.slot_position[name]
+            if name == "enemies":
+                told = src_c[:, slice(*C_SPANS["c_enemy_types"])].round().long()
+                token = token + self.enemy_type(told.clamp(0, OBJECT_TYPE_SLOTS))
+            tokens.append(token)
             present.append(slots[..., 0] > 0.5)
         return tokens, present
 

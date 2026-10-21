@@ -65,6 +65,9 @@ class Track:
     missed: int = 0
     # Its box when last seen (moved with the camera's scroll since).
     seen_box: Optional[tuple] = None
+    # Its object type as vision last told it (smb_scene_labels.EnemyView.type;
+    # -1 not told, and for moving platforms).
+    type: int = -1
 
     def coast(self, scroll):
         """One frame out of sight: moved on by its velocity while it has been
@@ -170,6 +173,10 @@ class VisualTracks:
                 ):
                     kept.append(old)
             self.lost = kept
+        # Each sighting made one track, in order: each keeps its object type.
+        types = [e.type for e in scene.enemies if e.kind != "defeated"]
+        for track, told in zip(updated, types + [-1] * len(scene.moving_platforms)):
+            track.type = told
         self.tracks = updated
 
     def _found_again(self, box, kind, lost, found):

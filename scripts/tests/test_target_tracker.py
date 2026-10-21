@@ -14,6 +14,7 @@ from retroagi.core.action_tokens import VERBS, pointer_index
 from retroagi.core.collision_labels import action_ends, collision_labels
 from retroagi.core.layered_policy import POINTER_START, LayeredSMBPolicy
 from retroagi.core.smb_kinematics import (
+    CONTEXT,
     MEMORY_SLOTS,
     SPRITE_SLOTS,
     SPRITE_STATE,
@@ -224,7 +225,7 @@ def test_an_enemy_aimed_actions_destination_is_the_enemy_seen_not_the_command():
     short = action_state(wait, -1, [2, 0, 0, 0, 3, 0], sprites, identities, (0, 0), 3)
     long = action_state(wait, -1, [2, 0, 0, 0, 90, 1], sprites, identities, (0, 0), 3)
     assert short == long and short.destination == (0.0, 0.0)
-    state, followed = tracked_rows(sprites, identities, np.zeros((6, 8)))
+    state, followed = tracked_rows(sprites, identities, np.zeros((6, len(CONTEXT))))
     features = frame_features(state, followed, np.zeros(3), (10.0, 0.0), 5, one)
     assert features.shape == (ROWS, FEATURES) and features[1, -1] == 1.0 and not features[0].any()
 
@@ -251,7 +252,7 @@ def test_a_remembered_enemy_is_followed_after_the_seen_ones():
     sprites[0] = (1.0, 30.0, -6.0, -0.5, 0.0, 1.0)
     identities = np.zeros(SPRITE_SLOTS, np.int32)
     identities[0] = 3
-    context = np.zeros((6, 8), np.float32)
+    context = np.zeros((6, len(CONTEXT)), np.float32)
     memory = np.zeros((MEMORY_SLOTS, len(TRACKED)), np.float32)
     memory[0, :6] = (1.0, 50.0, 0.0, 0.0, 0.0, 0.5)
     memory[0, TRACKED.index("unseen")] = 0.25
@@ -282,7 +283,7 @@ def test_an_episode_recorded_before_memory_gives_its_old_inputs():
     features = record_features(record)
     assert features.shape == (frames, ROWS, FEATURES)
     assert not features[:, 6:].any() and not features[:, :, TRACKED.index("unseen")].any()
-    assert (features[:, 0, len(SPRITE_STATE) + 1 : len(TRACKED)] == 1.0).all()
+    assert (features[:, 0, len(SPRITE_STATE) + 1 : TRACKED.index("type_0")] == 1.0).all()
 
 
 def test_a_tracker_trained_before_memory_loads_and_answers_as_it_did(tmp_path):
@@ -290,26 +291,30 @@ def test_a_tracker_trained_before_memory_loads_and_answers_as_it_did(tmp_path):
 
     torch.manual_seed(0)
     new = CollisionTracker(16)
-    unseen = TRACKED.index("unseen")
+    unseen, types = TRACKED.index("unseen"), TRACKED.index("type_0")
     state = new.state_dict()
-    for name, at in (("gru.weight_ih_l0", unseen), ("head.0.weight", 16 + unseen)):
-        state[name] = torch.cat((state[name][:, :at], state[name][:, at + 1 :]), 1)
+    for name, at in (("gru.weight_ih_l0", 0), ("head.0.weight", 16)):
+        # A collision_v1 tracker: neither "unseen" nor the object types.
+        keep = [c for c in range(state[name].shape[1]) if not (
+            c - at == unseen or types <= c - at < len(TRACKED))]
+        state[name] = state[name][:, keep]
     torch.save({"tracker": state, "width": 16, "layout": "collision_v1", "config": {},
                 "history": []}, tmp_path / "old.pt")
     loaded = load_tracker(tmp_path / "old.pt")
+    added = [unseen, *range(types, len(TRACKED))]
     observations = torch.randn(2, 5, OBSERVATION_WIDTH)
-    observations[..., unseen] = 0.0
+    observations[..., added] = 0.0
     features = torch.cat((observations, torch.randn(2, 5, FEATURES - OBSERVATION_WIDTH)), -1)
     with torch.no_grad():
-        old_gru = torch.nn.GRU(OBSERVATION_WIDTH - 1, 16, batch_first=True)
+        kept = [i for i in range(OBSERVATION_WIDTH) if i not in added]
+        old_gru = torch.nn.GRU(len(kept), 16, batch_first=True)
         old_gru.load_state_dict({k[4:]: v for k, v in state.items() if k.startswith("gru.")})
-        kept = [i for i in range(OBSERVATION_WIDTH) if i != unseen]
         expected, _ = old_gru(observations[..., kept])
         assert torch.allclose(loaded.observe(observations), expected, atol=1e-5)
         out = loaded.answer(loaded.observe(observations), features)
-        head = torch.nn.Sequential(*[torch.nn.Linear(16 + FEATURES - 1, 128), torch.nn.GELU(),
+        rest = [i for i in range(FEATURES) if i not in added]
+        head = torch.nn.Sequential(*[torch.nn.Linear(16 + len(rest), 128), torch.nn.GELU(),
                                      torch.nn.Linear(128, CLASSES + 4)])
         head.load_state_dict({k[5:]: v for k, v in state.items() if k.startswith("head.")})
-        rest = [i for i in range(FEATURES) if i != unseen]
         old_out = head(torch.cat((expected, features[..., rest]), -1))
         assert torch.allclose(out["logits"], old_out[..., :CLASSES], atol=1e-5)

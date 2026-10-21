@@ -68,6 +68,7 @@ from retroagi.core.smb_observer import (
     SEQ_LEN_B,
     SEQ_LEN_C,
     VisionObserver,
+    before_enemy_types,
     observation_layout,
 )
 from retroagi.core.smb_executor import HOLD_FRAMES
@@ -2313,7 +2314,8 @@ def load_layered_checkpoint(path, device="cpu"):
     strategy inputs may migrate, while qualified layers require matching tokens.
     """
     checkpoint = torch.load(path, map_location=device, weights_only=False)
-    if checkpoint["observation_layout"] != observation_layout():
+    before_types = before_enemy_types(checkpoint["observation_layout"])
+    if checkpoint["observation_layout"] != observation_layout() and not before_types:
         raise ValueError(f"{path} was trained on a different observation layout")
     saved, now = checkpoint["token_layout"], token_layout()
     old_executor = saved.get("executor", "predictive_spatial_v1") in (
@@ -2453,6 +2455,18 @@ def load_layered_checkpoint(path, device="cpu"):
             }
         )
         checkpoint.setdefault("load_migrations", []).append("layers_read_motion_and_feedback")
+    if before_types:
+        # The scene encoder reads each enemy's object type (user, 2026-10-21:
+        # Full SMB's vision tells them); the reading starts at zero, so the
+        # policy (and the world model reading its encoder) acts as it did.
+        from retroagi.core.world_model import scene_digest
+
+        unchanged = (checkpoint.get("world_model") or {}).get("reads") == scene_digest(state)
+        state.update({name: value for name, value in fresh.items() if name.startswith("scene.enemy_type.")})
+        checkpoint["observation_layout"] = observation_layout()
+        if unchanged:
+            checkpoint["world_model"]["reads"] = scene_digest(state)
+        checkpoint.setdefault("load_migrations", []).append("scene_reads_enemy_types")
     if "memory.context.weight" not in state:
         # The world model reads the tactic and the strategy switch each action
         # was chosen under (user, 2026-10-18): that reading starts at zero, so

@@ -130,11 +130,12 @@ def empty_records() -> np.ndarray:
 
 
 def scene_digest(policy) -> str:
-    """A fingerprint of what the world model reads from a policy: its scene
-    encoder's weights. A world model is trained on one encoder; it must stay
-    as it was wherever the world model is used."""
+    """A fingerprint of what the world model reads from a policy (or its
+    state dict): its scene encoder's weights. A world model is trained on one
+    encoder; it must stay as it was wherever the world model is used."""
     digest = hashlib.sha256()
-    for name, value in sorted(policy.state_dict().items()):
+    state = policy if isinstance(policy, dict) else policy.state_dict()
+    for name, value in sorted(state.items()):
         if name.startswith("scene."):
             digest.update(name.encode())
             digest.update(value.detach().cpu().contiguous().numpy().tobytes())

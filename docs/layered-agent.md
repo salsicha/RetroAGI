@@ -19,12 +19,24 @@ Decisions behind this design, with their reasons and status, are listed in
 
 | Component | Inputs | Output |
 |---|---|---|
-| Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact |
+| Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact; each enemy's kind and, where its game's labels tell them (Full SMB), its object type |
 | Tactic | Strategy, current scene, the executor's kinematics, held tactic/age, the executor's report on the last action, tactic memory | Persistent categorical tactic, termination probability, option values |
 | Skill | Tactic, strategy context, current scene, the executor's kinematics, last 16 actions, measured execution feedback | An action: a verb and a pointer to one object it sees |
 | World model (LSTM; not used in Block SMB training) | The chosen action, the tactic and strategy it was chosen under, the scene at its start, the executor's kinematics, the last feedback, its own state from earlier actions | The action's outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds |
 | Collision trackers (not used in Block SMB training) | Every frame: the executor's kinematics of each enemy (seen, or remembered out of sight) and of Mario, what vision shows (or last showed) of the enemy, how long it has been out of sight, the action in progress | When and where that enemy and Mario will touch, and whether as a stomp or a hit |
 | Executor | The action's end as its destination (in Block SMB training: the teacher's ground-truth version of the action), per-frame vision | One of six emulator button combinations |
+
+Vision names each enemy's kind as a viewer would (walker, plant, other,
+defeated) and, for a model trained on labels that tell them, its object
+type: one of 16 numbers its game's labels assign (Full SMB's are the game's
+own enemy codes, `full_smb/pixel_labels.ENEMY_TYPE_NUMBERS`: a Goomba and a
+Koopa Troopa are both walkers, but a stomped Koopa leaves a shell; a Spiny
+cannot be stomped at all). No code names what a
+number means: the scene encoder (an embedding per number) and the
+collision trackers (one input per number) learn it, both starting with no
+influence (user, 2026-10-21: the complexities of a game are in the models).
+Block SMB's labels tell no types and its vision has no type head; its rows
+hold 0 there, as every row recorded before did.
 
 The seven tactics are `advance`, `retreat`, `climb_forward`,
 `climb_backward`, `descend_forward`, `descend_backward`, and `hold_ground`.
@@ -127,9 +139,10 @@ goes on stepping while a plant is down in its pipe and can learn when it
 comes back. Each predicts whether that enemy and Mario will touch
 within 96 frames, when (in two-frame bins), where (from Mario's feet), and
 as a stomp or a hit. They read the executor's kinematics of the enemy and of
-Mario, what vision shows of the enemy (kind, size, the surface it walks on;
-for a remembered one its kind and size when last seen), how long it has been
-out of sight, and the action in progress (its verb, where it sends Mario from where he is
+Mario, what vision shows of the enemy (kind, size, the surface it walks on,
+its object type where vision tells it; for a remembered one its kind, size
+and type when last seen), how long it has been out of sight, and the action
+in progress (its verb, where it sends Mario from where he is
 now, how long it has run; an action aimed at an enemy sends him to the
 enemy's point when it began, never to the teacher's command, which was aimed
 with the enemy's true future). Their labels are made from recorded real

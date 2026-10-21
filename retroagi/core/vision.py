@@ -102,7 +102,9 @@ class SceneVisionTransformer(SquareTransformer):
       (smb_scene_labels: objects are groups of touching pixels of a type;
       surfaces, gaps, blocks and pipes follow from structure_from_types);
     - for each of its four 8x8 cells, the kind of enemy drawn there (walker,
-      plant, other, defeated);
+      plant, other, defeated), and, for a model built with ``object_types``
+      (trained on labels that tell them: Full SMB's), which of its game's
+      object types it is (smb_scene_labels.OBJECT_TYPE_SLOTS);
     - Mario's facing, his support (air, ground or moving platform), and
       whether his feet are on something - the ground, a moving platform or an
       enemy he is stomping: the land detector, whose turning on after he was
@@ -123,6 +125,7 @@ class SceneVisionTransformer(SquareTransformer):
         patch_size: int = 16,
         drop: float = 0.0,
         refine_dim: int = 32,
+        object_types: int = 0,
     ):
         super().__init__(SCREEN_SHAPE, patch_size, dim, depth, heads, 4.0, drop)
         if patch_size % OBJECT_CELL:
@@ -140,8 +143,13 @@ class SceneVisionTransformer(SquareTransformer):
             nn.GELU(),
             nn.Conv2d(refine_dim, types, kernel_size=1),
         )
-        # Per 8x8 cell: the enemy kind scores.
+        # Per 8x8 cell: the enemy kind scores, and the object type scores
+        # (none for a model whose labels do not tell types).
         self.kind_head = nn.Linear(dim, self.cells * self.cells * len(ENEMY_KINDS))
+        self.object_types = int(object_types)
+        self.type_head = (
+            nn.Linear(dim, self.cells * self.cells * self.object_types) if self.object_types else None
+        )
         # Mario's facing (left, right) and support.
         # Mario's facing (left, right), support, and feet on something (no, yes).
         self.mario_head = nn.Linear(dim, 2 + len(MARIO_SUPPORTS) + 2)
@@ -150,6 +158,7 @@ class SceneVisionTransformer(SquareTransformer):
         """Every head's raw output for a batch of pictures.
 
         pixel_logits [B, types, 240, 256]; kind_logits [B, kinds, 30, 32];
+        type_logits [B, object_types, 30, 32] (None without a type head);
         facing_logits [B, 2] (left, right); support_logits [B, 3];
         on_something_logits [B, 2] (no, yes: his feet are on something).
         """
@@ -161,10 +170,17 @@ class SceneVisionTransformer(SquareTransformer):
         logits = logits.permute(0, 3, 1, 4, 2, 5).reshape(batch, types, *self.image_size)
         pixel_logits = logits + self.refine(torch.cat((logits, image), dim=1))
 
-        cells, kinds = self.cells, len(ENEMY_KINDS)
-        kind_logits = self.kind_head(tokens).view(batch, grid_h, grid_w, cells, cells, kinds)
-        kind_logits = kind_logits.permute(0, 5, 1, 3, 2, 4).reshape(
-            batch, kinds, grid_h * cells, grid_w * cells
+        cells = self.cells
+
+        def per_cell(head, classes):
+            out = head(tokens).view(batch, grid_h, grid_w, cells, cells, classes)
+            return out.permute(0, 5, 1, 3, 2, 4).reshape(
+                batch, classes, grid_h * cells, grid_w * cells
+            )
+
+        kind_logits = per_cell(self.kind_head, len(ENEMY_KINDS))
+        type_logits = (
+            per_cell(self.type_head, self.object_types) if self.type_head is not None else None
         )
 
         # Mario's state from the squares, weighted by how strongly each shows Mario.
@@ -175,6 +191,7 @@ class SceneVisionTransformer(SquareTransformer):
         return {
             "pixel_logits": pixel_logits,
             "kind_logits": kind_logits,
+            "type_logits": type_logits,
             "facing_logits": mario_state[:, :2],
             "support_logits": mario_state[:, 2 : 2 + len(MARIO_SUPPORTS)],
             "on_something_logits": mario_state[:, 2 + len(MARIO_SUPPORTS) :],
@@ -214,6 +231,7 @@ class SceneVisionTransformer(SquareTransformer):
                 "mario_supports": list(MARIO_SUPPORTS),
                 "mario_on_something": True,
                 "object_cell": OBJECT_CELL,
+                "object_types": self.object_types,
             },
         }
 
@@ -239,4 +257,6 @@ class SceneVisionTransformer(SquareTransformer):
             patch_size=int(settings["patch_size"]),
             drop=float(settings["dropout"]),
             refine_dim=int(metadata["refine_dim"]),
+            # Checkpoints from before object types have none.
+            object_types=int(metadata.get("object_types", 0)),
         )

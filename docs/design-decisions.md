@@ -50,9 +50,18 @@ out of sight; some parts were not given these.
   ones, reading how long each has been out of sight, so the GRU goes on
   stepping while a plant is down in its pipe. The plant collision lessons
   gain plants seen going down before the action (`gone`).
+- **Vision tells each enemy's object type** where its game's labels tell
+  it: one of 16 numbers (Full SMB's labels number the game's own enemy
+  codes, `full_smb/pixel_labels.ENEMY_TYPE_NUMBERS`; a Goomba and a Koopa
+  are both walkers, a Spiny cannot be stomped). No code says what a number
+  means: the scene encoder (an embedding per number, in what was spare room
+  of the scene row) and the collision trackers (one input per number) learn
+  it. Block SMB's labels and vision tell none (0 in the row, as in every
+  row recorded before). The Full SMB vision is trained again with the type
+  head. Mario's size needs nothing new: his box is in his row.
 - All new readings start with no influence: checkpoints load and act as
-  before (migration `layers_read_motion_and_feedback`; trackers
-  `collision_v2`). The recorded skill and tactic datasets stay valid (they
+  before (migrations `layers_read_motion_and_feedback`,
+  `scene_reads_enemy_types`; trackers `collision_v3`). The recorded skill and tactic datasets stay valid (they
   hold the motion estimates and the reports; they have no remembered rows,
   which the trackers then do without); the collision lessons are recorded
   again.

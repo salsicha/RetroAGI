@@ -9,8 +9,11 @@ transformer reports and the policy's three inputs packed from it:
   box, facing, standing / in the air / on a moving platform), then fixed-length
   lists of enemies, coins, power-ups, moving platforms, pipes, blocks,
   surfaces and gaps, each slot "present" plus the thing's position relative
-  to Mario. There is no speed, no motion and nothing from earlier frames:
-  anything over time is the policy's own memory.
+  to Mario; then each enemy slot's object type as vision tells it (its
+  OBJECT_TYPE_SLOTS number plus one; 0 not told), in what was spare room
+  (2026-10-21: rows recorded before hold 0 there). There is no speed, no
+  motion and nothing from earlier frames: anything over time is the policy's
+  own memory.
 - src_a, src_b: a code for each of 8 (A) and 16 (B) vertical screen bands,
   the most important thing drawn in the band (COLUMN_CODES).
 
@@ -28,7 +31,7 @@ import numpy as np
 import torch
 
 from .smb_pixel_types import SCREEN_SHAPE, visible_window
-from .smb_scene_labels import ENEMY_KINDS, SUPPORTS, Box, SceneObservation
+from .smb_scene_labels import ENEMY_KINDS, OBJECT_TYPE_SLOTS, SUPPORTS, Box, SceneObservation
 
 # How many of each thing the policy is told about (data/scene_slot_survey.json).
 SCENE_SLOTS = {
@@ -63,6 +66,7 @@ def _spans() -> dict[str, tuple[int, int]]:
     for name, width in (
         ("c_mario", MARIO_WIDTH),
         *((f"c_{name}", SCENE_SLOTS[name] * _SLOT_WIDTH[name]) for name in SCENE_SLOTS),
+        ("c_enemy_types", SCENE_SLOTS["enemies"]),
     ):
         spans[name] = (offset, offset + width)
         offset += width
@@ -113,14 +117,26 @@ class PolicyInput:
 def observation_layout() -> dict:
     """The layout of the policy's inputs, stored with checkpoints and compared on load."""
     return {
-        "version": 2,
+        "version": 3,
         "scene_slots": dict(SCENE_SLOTS),
         "c_spans": {name: list(span) for name, span in C_SPANS.items()},
         "column_codes": list(COLUMN_CODES),
         "enemy_kinds": list(ENEMY_KINDS),
+        "object_type_slots": OBJECT_TYPE_SLOTS,
         "supports": list(SUPPORTS),
         "seq_len": [SEQ_LEN_A, SEQ_LEN_B, SEQ_LEN_C],
     }
+
+
+def before_enemy_types(saved: dict) -> bool:
+    """Whether ``saved`` is the layout from before the enemies' object types
+    (version 2): the same in every span, the types' room then spare (zeros)."""
+    now = observation_layout()
+    spans = dict(now["c_spans"])
+    spans["c_reserved"] = [spans.pop("c_enemy_types")[0], SEQ_LEN_C]
+    earlier = {**now, "version": 2, "c_spans": spans}
+    earlier.pop("object_type_slots")
+    return saved == earlier
 
 
 # ── Packing ───────────────────────────────────────────────────────────────────
@@ -214,6 +230,9 @@ def pack_c(scene: SceneObservation) -> np.ndarray:
             for e in lists["enemies"]
         ],
     )
+    begin, _ = C_SPANS["c_enemy_types"]
+    for index, e in enumerate(lists["enemies"]):
+        row[begin + index] = float(e.type + 1)
     for name in ("coins", "power_ups", "moving_platforms", "pipes"):
         fill(name, [[1.0, *_relative_box(box, mx, my)] for box in lists[name]])
     fill(

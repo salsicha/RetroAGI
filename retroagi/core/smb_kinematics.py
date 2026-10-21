@@ -27,6 +27,7 @@ seen first.
 import numpy as np
 
 from .smb_observer import SCENE_SLOTS, packed_lists
+from .smb_scene_labels import OBJECT_TYPE_SLOTS
 from .smb_trajectory import ESTIMATE_SAMPLES, LOST_FRAMES, MEMORY_FRAMES
 
 SPRITE_STATE = ("present", "x", "y", "vx", "vy", "seen")
@@ -34,9 +35,14 @@ MARIO_STATE = ("vx", "vy", "grounded")
 SPRITE_SLOTS = SCENE_SLOTS["enemies"] + SCENE_SLOTS["moving_platforms"]
 ENEMY_SLOTS = SCENE_SLOTS["enemies"]
 # What vision shows of an enemy besides where it is (enemy_context): its kind,
-# its box's size (/16), and the surface it walks on (the far ends of the
-# pieces on either side of it, from its middle, /64; supported 0 when none).
-CONTEXT = ("walker", "plant", "other", "width", "height", "supported", "left", "right")
+# its box's size (/16), the surface it walks on (the far ends of the pieces on
+# either side of it, from its middle, /64; supported 0 when none), and its
+# object type where vision tells it (smb_scene_labels.OBJECT_TYPE_SLOTS, one
+# of type_0 ...; none when not told; 2026-10-21, recordings from before hold
+# only the first eight).
+CONTEXT = ("walker", "plant", "other", "width", "height", "supported", "left", "right") + tuple(
+    f"type_{number}" for number in range(OBJECT_TYPE_SLOTS)
+)
 # Each enemy the collision trackers follow: its kinematics, how long it has
 # been out of sight (frames / MEMORY_FRAMES; 0 seen now) and what vision
 # shows (or last showed) of it.
@@ -118,6 +124,8 @@ def enemy_context(scene) -> np.ndarray:
         row[CONTEXT.index(enemy.kind)] = 1.0
         row[CONTEXT.index("width")] = (x1 - x0) / 16
         row[CONTEXT.index("height")] = (y1 - y0) / 16
+        if enemy.type >= 0:
+            row[CONTEXT.index(f"type_{enemy.type}")] = 1.0
         # The surface it walks on is cut at it (smb_scene_labels.
         # split_at_enemies): its ends are the far ends of the pieces on
         # either side.
@@ -138,7 +146,8 @@ def remembered(scene, spatial) -> tuple[np.ndarray, np.ndarray]:
     from Mario's feet, the velocity that expectation moves by (none once it
     is held: smb_trajectory.Track.coast), the sightings its velocity rested
     on, how long it has been out of sight, and its kind and size when last
-    seen (the surface it walked on is not known out of sight)."""
+    seen, and its object type when told (the surface it walked on is not
+    known out of sight)."""
     rows = np.zeros((MEMORY_SLOTS, len(TRACKED)), np.float32)
     identities = np.zeros(MEMORY_SLOTS, np.int32)
     if scene.mario.box is None:
@@ -163,5 +172,7 @@ def remembered(scene, spatial) -> tuple[np.ndarray, np.ndarray]:
         last = track.seen_box or b
         row[column["width"]] = (last[2] - last[0]) / 16
         row[column["height"]] = (last[3] - last[1]) / 16
+        if track.type >= 0:
+            row[column[f"type_{track.type}"]] = 1.0
     identities[: min(len(lost), MEMORY_SLOTS)] = [t.identity for t in lost[:MEMORY_SLOTS]]
     return rows, identities
