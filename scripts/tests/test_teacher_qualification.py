@@ -98,7 +98,7 @@ def test_training_stops_before_updates_when_qualification_fails(monkeypatch, tmp
         def publish(self, *args):
             pass
 
-        def with_scenarios(self, tasks):
+        def with_scenarios(self, tasks, failed=None):
             return [replace(t, scenario=task().scenario) for t in tasks]
 
         def play(self, *args, **kwargs):
@@ -338,3 +338,28 @@ def test_a_layout_that_cannot_be_made_is_recorded_and_left_out(monkeypatch):
     with pytest.raises(RuntimeError):
         pool.with_scenarios(tasks)  # without a record, the error stops it
     pool.pool.shutdown()
+
+
+def test_a_teacher_error_ends_only_that_layouts_episode():
+    from types import SimpleNamespace
+
+    from retroagi.core.tokens import SkillToken
+
+    class Lane:
+        def __init__(self, fails):
+            self.teacher = SimpleNamespace()
+            self.task = SimpleNamespace(family="mixed_section", sample_index=7, difficulty="hard")
+            self.fails = fails
+            self.no_teacher_command = False
+            self.teacher_error = ""
+
+        def ask_teacher(self, learner, scene):
+            if self.fails:
+                raise ValueError("skill destination must be integer pixels within the local screen")
+            return {"tactic": None, "skill": SkillToken("run", 16, 0), "plays_teacher": True}
+
+    lanes = {0: Lane(True), 1: Lane(False)}
+    tokens = lt._teacher_given("skill", lanes)([0, 1], [None, None])
+    assert tokens["skill"] == [SkillToken("hold", 0, 0), SkillToken("run", 16, 0)]
+    assert lanes[0].no_teacher_command and "integer pixels" in lanes[0].teacher_error
+    assert not lanes[1].no_teacher_command and not lanes[1].teacher_error

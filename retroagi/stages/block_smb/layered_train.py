@@ -656,6 +656,9 @@ class _Lane:
         # layout either way; held and asked again every frame until the stall
         # limit, one such layout took an hour and a half).
         self.no_teacher_command = False
+        # The teacher raised an error on this layout: the episode ends there
+        # as a failed layout ("teacher_error", the error kept), the run goes on.
+        self.teacher_error = ""
         # A collision lesson (collision_families): one scripted action, given
         # at the first decision; the episode ends when it ends ("action_done").
         self.scripted = scenario.get("scripted_action")
@@ -830,7 +833,19 @@ def _teacher_given(learner: str, lanes: dict, agents=None):
             lanes[copy].teacher.controller = agents.copies[copy].executor if agents else None
             lanes[copy].teacher.scene = scene
             lanes[copy].teacher.visual_observer = agents.observer if agents else None
-            asked = lanes[copy].ask_teacher(learner, scene)
+            try:
+                asked = lanes[copy].ask_teacher(learner, scene)
+            except Exception as error:  # the teacher's failure on this layout
+                lane = lanes[copy]
+                lane.teacher_error = f"{type(error).__name__}: {error}"
+                print(
+                    f"[teacher error] {lane.task.family}[{lane.task.sample_index}] "
+                    f"{lane.task.difficulty}: {lane.teacher_error}",
+                    flush=True,
+                )
+                lane.no_teacher_command = True
+                asked = {"tactic": None, "skill": None, "plays_teacher": True, "skill_given": learner == "tactic"}
+                lane.asked = asked
             if above:
                 tokens[above].append(asked[above])
             if learner == "tactic" and asked.get("skill_given"):
@@ -991,7 +1006,9 @@ def play_episodes(
                 truncated = True
             if terminated or truncated:
                 lane.end = (
-                    "goal"
+                    "teacher_error"
+                    if lane.teacher_error
+                    else "goal"
                     if lane.goal > 0
                     else "action_done"
                     if lane.action_done

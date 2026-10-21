@@ -1585,12 +1585,10 @@ def _trial_later(env, state, target, command, delay):
         later = copy(state)
         later.execution, later.controller, later.scene = spatial, None, scene
         m = env.mario
-        moved = SkillToken(
-            command.mode,
-            round(aim_x - m["x"]),
-            round(aim_feet - (m["y"] + m["h"])),
-            carry=command.carry,
-        )
+        dx, dy = round(aim_x - m["x"]), round(aim_feet - (m["y"] + m["h"]))
+        if dx not in SKILL_X or dy not in SKILL_Y:
+            return None  # the point cannot be aimed at from where he is then
+        moved = SkillToken(command.mode, dx, dy, carry=command.carry)
         return _trial(env, later, moved, target)
 
 
