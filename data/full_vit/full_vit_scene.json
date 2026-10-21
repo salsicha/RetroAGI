@@ -3,11 +3,11 @@
   "checkpoint_kind": "vision_encoder",
   "checkpoint_schema_version": 1,
   "code_revision": {
-    "branch": "main",
+    "branch": null,
     "dirty": true,
-    "revision": "5b8d57e992104c7bbeecf607ea971c155201360a",
-    "root": "/home/amoran/repos/RetroAGI",
-    "short_revision": "5b8d57e",
+    "revision": "6cc36967380bc99c4d96439e6d1cdf853c637648",
+    "root": "/tmp/claude-1001/-home-amoran-repos-RetroAGI/30dc6aa2-f479-4291-8ed0-27f6d1795fee/scratchpad/fix4_tree",
+    "short_revision": "6cc3696",
     "system": "git"
   },
   "config": {
@@ -15,7 +15,7 @@
       "best_metric": "held_out_total_loss",
       "best_mode": "min",
       "metadata": {},
-      "output_path": "/home/amoran/repos/RetroAGI/data/full_vit/full_vit_scene.pth",
+      "output_path": "/home/amoran/repos/RetroAGI/artifacts/full_smb/vision_types_20261021/full_vit_scene.pth",
       "resume_path": null,
       "save_interval_epochs": 1
     },
@@ -79,6 +79,7 @@
           "moving_platform"
         ],
         "object_cell": 8,
+        "object_types": 16,
         "pixel_types": [
           "background",
           "mario",
@@ -100,7 +101,7 @@
     "name": "full_vit_training",
     "training": {
       "batch_size": 48,
-      "device": "auto",
+      "device": "cuda",
       "epochs": 40,
       "gradient_clip_norm": 1.0,
       "learning_rate": 0.001,
@@ -114,9 +115,9 @@
     "platform": {
       "machine": "x86_64",
       "processor": "x86_64",
-      "release": "6.8.0-138-generic",
+      "release": "6.8.0-147-generic",
       "system": "Linux",
-      "version": "#138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026"
+      "version": "#147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026"
     },
     "python": {
       "executable": "/home/amoran/venv/bin/python",
@@ -131,24 +132,24 @@
       "version": "2.2.0+cu121"
     }
   },
-  "epoch": 38,
+  "epoch": 40,
   "global_step": 0,
   "metadata": {
     "code_revision": {
-      "branch": "main",
+      "branch": null,
       "dirty": true,
-      "revision": "5b8d57e992104c7bbeecf607ea971c155201360a",
-      "root": "/home/amoran/repos/RetroAGI",
-      "short_revision": "5b8d57e",
+      "revision": "6cc36967380bc99c4d96439e6d1cdf853c637648",
+      "root": "/tmp/claude-1001/-home-amoran-repos-RetroAGI/30dc6aa2-f479-4291-8ed0-27f6d1795fee/scratchpad/fix4_tree",
+      "short_revision": "6cc3696",
       "system": "git"
     },
     "runtime_environment": {
       "platform": {
         "machine": "x86_64",
         "processor": "x86_64",
-        "release": "6.8.0-138-generic",
+        "release": "6.8.0-147-generic",
         "system": "Linux",
-        "version": "#138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026"
+        "version": "#147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026"
       },
       "python": {
         "executable": "/home/amoran/venv/bin/python",
@@ -166,25 +167,27 @@
     "trainer": "scripts.vit.train_full_vit"
   },
   "metrics": {
-    "epoch": 38,
-    "frames_seen": 1521216,
+    "epoch": 40,
+    "frames_seen": 1601280,
     "held_out": {
-      "facing": 0.008313266236917116,
-      "kind": 0.021502757894806563,
-      "on_something": 0.024206308988543847,
-      "pixels": 0.0016355992980922262,
-      "support": 0.008170364087757965,
-      "total": 0.06382829580083489
+      "enemy_type": 0.018710776755586266,
+      "facing": 0.008026337511759872,
+      "kind": 0.017425057693074147,
+      "on_something": 0.02584400216730622,
+      "pixels": 0.001497152649797499,
+      "support": 0.009735923639421041,
+      "total": 0.08123925091822942
     },
-    "learned_numbers": 1259809,
-    "minutes": 78.09773034652075,
+    "learned_numbers": 1268065,
+    "minutes": 66.04738808870316,
     "train": {
-      "facing": 0.012575783216300112,
-      "kind": 0.009500551836997273,
-      "on_something": 0.018000006061499388,
-      "pixels": 0.002216315795460881,
-      "support": 0.01145899969186293,
-      "total": 0.05375165679258664
+      "enemy_type": 0.01541898065190201,
+      "facing": 0.00963880460825994,
+      "kind": 0.013162287851844139,
+      "on_something": 0.014740452765929639,
+      "pixels": 0.0016638211325903673,
+      "support": 0.0065683453103701946,
+      "total": 0.06119269222577776
     }
   },
   "model_name": "full_smb_vit",

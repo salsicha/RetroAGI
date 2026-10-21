@@ -1,5 +1,5 @@
 {
-  "checkpoint": "data/full_vit/full_vit_scene.pth",
+  "checkpoint": "artifacts/full_smb/vision_types_20261021/full_vit_scene.pth",
   "levels": [
     "Level1-1",
     "Level1-4",
@@ -16,201 +16,202 @@
   "plays": 10,
   "every": 4,
   "refused_frames": {},
-  "learned_numbers": 1259809,
-  "seconds": 239.2,
+  "learned_numbers": 1268065,
+  "seconds": 223.4,
   "frames": 20110,
-  "pixels_correct": 0.9995384805075064,
+  "pixels_correct": 0.9995681804391324,
   "mario": {
     "frames": 19539,
-    "found": 0.997594554480782,
-    "false_in_frames_without_mario": 25,
+    "found": 0.9968780387942064,
+    "false_in_frames_without_mario": 23,
     "edge_error_px": {
-      "mean": 0.3489123743074082,
-      "p95": 2.0,
-      "max": 15.0
+      "mean": 0.6347674299209365,
+      "p95": 3.0,
+      "max": 16.0
     },
-    "facing": 0.9988228670863402,
-    "support": 0.9984646092430524,
+    "facing": 0.997799273248375,
+    "support": 0.9892522647013665,
     "support_confusion": {
       "air": {
-        "air": 12895,
-        "ground": 18,
-        "moving_platform": 1
+        "air": 12729,
+        "ground": 182,
+        "moving_platform": 3
       },
       "ground": {
-        "air": 7,
-        "ground": 6609,
-        "moving_platform": 1
+        "air": 21,
+        "ground": 6593,
+        "moving_platform": 3
       },
       "moving_platform": {
-        "air": 1,
-        "ground": 2,
-        "moving_platform": 5
+        "air": 0,
+        "ground": 1,
+        "moving_platform": 7
       }
     },
-    "on_something": 0.9974921950969855,
+    "on_something": 0.986744459798352,
     "stomp_pictures": 96,
-    "stomps_seen": 0.90625
+    "stomps_seen": 0.40625
   },
-  "enemy_kind_accuracy": 0.9961238761238761,
+  "enemy_kind_accuracy": 0.9968604697373127,
+  "enemy_type_accuracy": 0.9980129555299447,
   "enemies": {
     "true": 27194,
-    "found": 26610,
-    "recall": 0.9202397587703169,
-    "precision": 0.9404359263434799,
+    "found": 26422,
+    "recall": 0.9253144075899096,
+    "precision": 0.9523503141321626,
     "edge_error_px": {
-      "mean": 0.8877522477522477,
+      "mean": 0.7881810594921115,
       "p95": 4.0,
-      "max": 19.0
+      "max": 18.0
     }
   },
   "coins": {
     "true": 24427,
-    "found": 24472,
+    "found": 24441,
     "recall": 0.9966430589102223,
-    "precision": 0.9948103955541027,
+    "precision": 0.9960721738063091,
     "edge_error_px": {
-      "mean": 0.020209488601355515,
+      "mean": 0.02140069829533785,
       "p95": 0.0,
       "max": 8.0
     }
   },
   "power_ups": {
     "true": 100,
-    "found": 192,
-    "recall": 0.9,
-    "precision": 0.46875,
+    "found": 168,
+    "recall": 0.93,
+    "precision": 0.5535714285714286,
     "edge_error_px": {
-      "mean": 0.9555555555555556,
+      "mean": 0.8602150537634409,
       "p95": 3.0,
       "max": 7.0
     }
   },
   "moving_platforms": {
     "true": 290,
-    "found": 346,
+    "found": 323,
     "recall": 0.9724137931034482,
-    "precision": 0.815028901734104,
+    "precision": 0.8730650154798761,
     "edge_error_px": {
-      "mean": 0.6063829787234043,
-      "p95": 4.0,
-      "max": 21.0
+      "mean": 0.7411347517730497,
+      "p95": 5.0,
+      "max": 22.0
     }
   },
   "pipes": {
     "true": 7704,
-    "found": 7935,
-    "recall": 0.9990913811007269,
-    "precision": 0.9700063011972275,
+    "found": 7983,
+    "recall": 0.9992211838006231,
+    "precision": 0.9642991356632845,
     "edge_error_px": {
-      "mean": 0.0967909575159153,
-      "p95": 1.0,
-      "max": 10.0
+      "mean": 0.08287866978435958,
+      "p95": 0.0,
+      "max": 16.0
     }
   },
   "blocks": {
     "true": 16832,
-    "found": 17191,
-    "recall": 0.9979800380228137,
-    "precision": 0.9771392007445756,
+    "found": 17255,
+    "recall": 0.9976235741444867,
+    "precision": 0.9731671979136483,
     "edge_error_px": {
-      "mean": 0.2521133468270032,
+      "mean": 0.25464506908051454,
       "p95": 1.0,
       "max": 35.0
     }
   },
   "surfaces": {
-    "true": 81203,
-    "found": 81326,
-    "recall": 0.9957021292316787,
-    "precision": 0.9941961980178541,
+    "true": 90837,
+    "found": 90295,
+    "recall": 0.9874720653478208,
+    "precision": 0.9933994130350517,
     "edge_error_px": {
-      "mean": 0.14585549261632078,
-      "p95": 0.0,
+      "mean": 0.19424965718681367,
+      "p95": 1.0,
       "max": 120.0
     }
   },
   "gaps": {
     "true": 11686,
-    "found": 11669,
-    "recall": 0.9962348108848195,
-    "precision": 0.9976861770503043,
+    "found": 11673,
+    "recall": 0.996149238404929,
+    "precision": 0.99725863102887,
     "edge_error_px": {
-      "mean": 0.09336883696959285,
+      "mean": 0.14268533631131347,
       "p95": 0.0,
       "max": 119.0
     }
   },
   "families": {
     "Level1-1": {
-      "mario_found": 0.9968152866242038,
-      "support": 0.9990900818926297,
-      "enemy_recall": 0.9352459016393443,
-      "surface_recall": 0.9981525468461335,
+      "mario_found": 0.9954504094631483,
+      "support": 0.9872611464968153,
+      "enemy_recall": 0.9450819672131148,
+      "surface_recall": 0.9947618467535632,
       "gap_recall": 1.0
     },
     "Level1-4": {
       "mario_found": 0.99860853432282,
-      "support": 0.9990723562152134,
-      "enemy_recall": 0.9713971397139713,
-      "surface_recall": 0.9953469552903095,
+      "support": 0.9948979591836735,
+      "enemy_recall": 0.9757975797579758,
+      "surface_recall": 0.9962597402597403,
       "gap_recall": 1.0
     },
     "Level2-1": {
-      "mario_found": 0.9968694096601073,
-      "support": 0.9995527728085868,
-      "enemy_recall": 0.8799892125134844,
-      "surface_recall": 0.9990854216206329,
+      "mario_found": 0.9955277280858676,
+      "support": 0.9923971377459749,
+      "enemy_recall": 0.8880798274002157,
+      "surface_recall": 0.9832561728395062,
       "gap_recall": 1.0
     },
     "Level2-1-clouds": {
-      "mario_found": 0.9968065693430657,
-      "support": 0.9995437956204379,
+      "mario_found": 0.9972627737226277,
+      "support": 0.9990875912408759,
       "enemy_recall": null,
-      "surface_recall": 0.9978165938864629,
-      "gap_recall": 0.9988532110091743
+      "surface_recall": 0.9982532751091703,
+      "gap_recall": 0.9954128440366973
     },
     "Level3-1": {
-      "mario_found": 0.9972862957937585,
-      "support": 0.9959294436906377,
-      "enemy_recall": 0.9130994528484069,
-      "surface_recall": 0.992495164410058,
+      "mario_found": 0.9963817277250113,
+      "support": 0.984622342831298,
+      "enemy_recall": 0.9185709687801737,
+      "surface_recall": 0.9849882050182286,
       "gap_recall": 0.9995056846267919
     },
     "Level4-1": {
       "mario_found": 0.997979797979798,
-      "support": 1.0,
-      "enemy_recall": 0.8387395736793327,
-      "surface_recall": 0.9979291302346985,
+      "support": 0.9787878787878788,
+      "enemy_recall": 0.8392029657089898,
+      "surface_recall": 0.9923680305278779,
       "gap_recall": 1.0
     },
     "Level5-1": {
-      "mario_found": 0.9995571302037201,
-      "support": 0.9995571302037201,
-      "enemy_recall": 0.9388861508132085,
-      "surface_recall": 0.9970384995064165,
+      "mario_found": 0.9968999114260407,
+      "support": 0.9906997342781222,
+      "enemy_recall": 0.9430754066042385,
+      "surface_recall": 0.985799029300737,
       "gap_recall": 1.0
     },
     "Level6-1": {
-      "mario_found": 0.9968777876895629,
-      "support": 1.0,
-      "enemy_recall": 0.9614540896270761,
-      "surface_recall": 0.9984744004393726,
-      "gap_recall": 0.9834303627407076
+      "mario_found": 0.9950936663693131,
+      "support": 0.9946476360392507,
+      "enemy_recall": 0.9641178314008148,
+      "surface_recall": 0.994220342012751,
+      "gap_recall": 0.9838781907747425
     },
     "Level7-1": {
-      "mario_found": 0.9952324195470799,
-      "support": 0.9928486293206198,
-      "enemy_recall": 0.8557504873294347,
-      "surface_recall": 0.9796654640865857,
-      "gap_recall": 1.0
+      "mario_found": 0.99880810488677,
+      "support": 0.9547079856972587,
+      "enemy_recall": 0.8542884990253411,
+      "surface_recall": 0.9752269579935374,
+      "gap_recall": 0.9933774834437086
     },
     "Level8-1": {
       "mario_found": 0.9986468200270636,
-      "support": 0.9963915200721696,
-      "enemy_recall": 0.9413888888888889,
-      "surface_recall": 0.9987046632124352,
-      "gap_recall": 0.9964763918252291
+      "support": 0.9882724402345512,
+      "enemy_recall": 0.9533333333333334,
+      "surface_recall": 0.975004900999804,
+      "gap_recall": 0.9978858350951374
     }
   }
 }
