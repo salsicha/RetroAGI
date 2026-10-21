@@ -90,33 +90,38 @@ def jump_lead(closing, width, height, mario_size, speed, direction):
 class ThreatWatch:
     """Whether a coming enemy needs a move now (module notes)."""
 
-    def due(self, trackers, kinematics, scene) -> bool:
+    def due(self, trackers, kinematics, scene, memory=None) -> bool:
         """``trackers``: the copy's CollisionTrackers; ``kinematics``: its
         (sprites, mario, identities, context) this frame; ``scene``: what
-        vision shows (only a standing Mario is checked)."""
+        vision shows (only a standing Mario is checked); ``memory``: the
+        enemies remembered out of sight (smb_kinematics.remembered), checked
+        as the seen ones."""
         box = scene.mario.box
         grounded = box is not None and scene.mario.on_something and scene.mario.support != "air"
         if not grounded or trackers is None or not kinematics:
             return False
-        from .smb_kinematics import CONTEXT, SPRITE_STATE
+        from .smb_kinematics import TRACKED
+        from .target_tracker import tracked_rows
 
         sprites, mario, identities, context = kinematics
-        x, vx = SPRITE_STATE.index("x"), SPRITE_STATE.index("vx")
-        for slot in range(len(context)):
-            identity = int(identities[slot])
-            if not identity or sprites[slot, 0] <= 0:
+        state, followed = tracked_rows(sprites, identities, context, memory)
+        x, vx = TRACKED.index("x"), TRACKED.index("vx")
+        width, height = TRACKED.index("width"), TRACKED.index("height")
+        for slot in range(len(state)):
+            identity = int(followed[slot])
+            if not identity or state[slot, 0] <= 0:
                 continue
             estimate = trackers.estimate(identity)
             if estimate is None:
                 continue
-            side = 1 if sprites[slot, x] > 0 else -1
-            closing = -sprites[slot, vx] * side + mario[0] * side
+            side = 1 if state[slot, x] > 0 else -1
+            closing = -state[slot, vx] * side + mario[0] * side
             if closing <= 0.05:
                 closing = NOMINAL_CLOSING
             lead = jump_lead(
                 closing,
-                context[slot, CONTEXT.index("width")] * 16,
-                context[slot, CONTEXT.index("height")] * 16,
+                state[slot, width] * 16,
+                state[slot, height] * 16,
                 (box[2] - box[0], box[3] - box[1]),
                 mario[0] * side,
                 side,

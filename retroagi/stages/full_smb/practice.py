@@ -30,6 +30,7 @@ from typing import Optional
 
 import numpy as np
 
+from retroagi.core.smb_kinematics import MEMORY_SLOTS
 from retroagi.core.smb_observer import SCENE_SLOTS
 
 from .play import FullSMBGame
@@ -87,13 +88,15 @@ def frame_reward(mode: str, before: dict, after: dict, furthest: int, start_time
     return reward, furthest
 
 
-def _enemy_indices(recorder: FullTruthRecorder, per_frame: list) -> list:
-    """Each frame's scene-slot matches (recorder columns) as enemy (or lift)
-    indices, as truth_recording's are."""
+def _enemy_indices(
+    recorder: FullTruthRecorder, per_frame: list, enemy_slots: int = SCENE_SLOTS["enemies"]
+) -> list:
+    """Each frame's matches (recorder columns) as enemy (or lift) indices, as
+    truth_recording's are: the first ``enemy_slots`` of each row are enemies
+    (the scene's enemy slots, or every remembered enemy), the rest lifts."""
     columns = recorder.enemy_columns()
     lifts = [c for c, k in enumerate(recorder.kinds) if k[2]]
     lift_index = {c: i for i, c in enumerate(lifts)}
-    enemy_slots = SCENE_SLOTS["enemies"]
     out = []
     for row in per_frame:
         converted = np.full(len(row), -1, np.int16)
@@ -159,6 +162,7 @@ def play_recorded(
         start_time, start_score = before["time"], before["score"]
         furthest, progressed = before["level_x"], 0
         earlier_ram = None
+        known = {}  # track identity -> the true enemy it last showed
         for frame in range(frames):
             step = agents.act([screen], [0], sample=sample)[0]
             ids = recorder.add(before)
@@ -166,14 +170,7 @@ def play_recorded(
             for name, value in zip("abc", step.rows):
                 shared[name].append(value)
             # The kinematics the trackers and the world model read this frame.
-            sprites, mario, identities, context = copy.kinematics
-            shared["slot_match"].append(match_slots(scene, before, ids))
-            shared["sprite_kinematics"].append(sprites)
-            shared["mario_kinematics"].append(mario)
-            shared["slot_identity"].append(identities)
-            shared["enemy_context"].append(context)
-            feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
-            shared["mario_position"].append((copy.spatial.displacement, feet))
+            lt.record_kinematics(shared, copy, match_slots(scene, before, ids), known, scene)
             shared["ended"].append(
                 lt.END_REASONS.index(step.ended) if step.ended in lt.END_REASONS else 0
             )
@@ -226,6 +223,7 @@ def play_recorded(
         game.close()
     truth = recorder.arrays()
     shared["slot_match"] = _enemy_indices(recorder, shared["slot_match"])
+    shared["memory_match"] = _enemy_indices(recorder, shared["memory_match"], MEMORY_SLOTS)
     won = end == "goal"
     records = {
         name: rec.record(won=won, end=end, truth=truth, last_action_ended=last_action_ended)

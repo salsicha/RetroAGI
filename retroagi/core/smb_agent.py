@@ -375,6 +375,9 @@ class _Copy:
     # once a frame, as soon as the executor has seen the picture, and read
     # by the trackers, the world model and the recordings alike.
     kinematics: tuple = ()
+    # ... and the enemies the executor remembers out of sight this frame
+    # (smb_kinematics.remembered: rows, identities), for the trackers.
+    memory: tuple = ()
     # Without the teacher: the world model's state (hidden, cell), carried
     # from action to action, and the watch that ends a wait or a ground move
     # when a coming enemy needs a move (smb_threat.ThreatWatch).
@@ -469,8 +472,8 @@ class SMBAgents:
 
     @staticmethod
     def _kinematics(copy: _Copy, scene) -> None:
-        """This frame's kinematics of the copy (_Copy.kinematics)."""
-        from .smb_kinematics import enemy_context, kinematics, slot_identities
+        """This frame's kinematics of the copy (_Copy.kinematics, .memory)."""
+        from .smb_kinematics import enemy_context, kinematics, remembered, slot_identities
 
         sprites, mario = kinematics(scene, copy.spatial)
         copy.kinematics = (
@@ -479,25 +482,21 @@ class SMBAgents:
             slot_identities(scene, copy.spatial),
             enemy_context(scene),
         )
+        copy.memory = remembered(scene, copy.spatial)
 
     def _track(self, copy: _Copy, scene) -> None:
         """Step the copy's collision trackers on this frame: the executor's
         kinematics, what vision shows of the enemies, and the action in
         progress."""
-        from .target_tracker import frame_features
+        from .target_tracker import frame_features, tracked_rows
 
         sprites, mario, identities, context = copy.kinematics
+        state, followed = tracked_rows(sprites, identities, context, copy.memory)
         copy.trackers.observe(
             frame_features(
-                sprites,
-                mario,
-                context,
-                identities,
-                self._position(copy, scene),
-                copy.frame,
-                copy.action_now,
+                state, followed, mario, self._position(copy, scene), copy.frame, copy.action_now
             ),
-            identities,
+            followed,
         )
 
     @staticmethod
@@ -508,7 +507,7 @@ class SMBAgents:
 
     def _began(self, copy: _Copy, decision: Decision, scene) -> None:
         """A new action began: the trackers read it from now on."""
-        from .target_tracker import action_state, frame_features
+        from .target_tracker import action_state, frame_features, tracked_rows
         from .tokens import command_row
 
         action = decision.action
@@ -523,11 +522,10 @@ class SMBAgents:
         copy.action_now = action_state(
             verb, pointer, command_row(decision.skill), sprites, identities, position, copy.frame
         )
+        state, followed = tracked_rows(sprites, identities, context, copy.memory)
         copy.trackers.refresh(
-            frame_features(
-                sprites, mario, context, identities, position, copy.frame, copy.action_now
-            ),
-            identities,
+            frame_features(state, followed, mario, position, copy.frame, copy.action_now),
+            followed,
         )
 
     @torch.no_grad()
@@ -623,7 +621,7 @@ class SMBAgents:
             or not copy.kinematics
         ):
             return None
-        from .target_tracker import action_state, frame_features
+        from .target_tracker import action_state, frame_features, tracked_rows
 
         sprites, mario, identities, context = copy.kinematics
         pointer = pointer_index(action.target) - POINTER_START
@@ -641,7 +639,8 @@ class SMBAgents:
             position,
             copy.frame,
         )
-        features = frame_features(sprites, mario, context, identities, position, copy.frame, stomp)
+        state, followed = tracked_rows(sprites, identities, context, copy.memory)
+        features = frame_features(state, followed, mario, position, copy.frame, stomp)
         estimate = copy.trackers.estimate(identity, features[slot])
         if estimate is None or estimate.stomp_within(96) < 0.5:
             return None
@@ -840,7 +839,7 @@ class SMBAgents:
                     reason is None
                     and copy.threat_watch is not None
                     and self._waiting_or_walking(copy)
-                    and copy.threat_watch.due(copy.trackers, copy.kinematics, scene)
+                    and copy.threat_watch.due(copy.trackers, copy.kinematics, scene, copy.memory)
                 ):
                     # A coming enemy needs a move now (smb_threat).
                     reason = "threat"

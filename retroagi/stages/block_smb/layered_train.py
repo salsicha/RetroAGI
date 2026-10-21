@@ -299,6 +299,14 @@ class EpisodeRecord:
     slot_identity: Optional[np.ndarray] = None
     enemy_context: Optional[np.ndarray] = None
     mario_position: Optional[np.ndarray] = None
+    # ... and the enemies the executor remembered out of sight each frame
+    # (smb_kinematics.remembered): their rows [T, MEMORY_SLOTS, len(TRACKED)],
+    # identities [T, MEMORY_SLOTS] (0: none) and the true enemy each stands
+    # for [T, MEMORY_SLOTS] (the one it showed when last seen; -1 none).
+    # None in an episode recorded before the executor remembered.
+    memory: Optional[np.ndarray] = None
+    memory_identity: Optional[np.ndarray] = None
+    memory_match: Optional[np.ndarray] = None
     # Always: why an action ended at each frame [T] (END_REASONS index; 0
     # none), and per decision of the skill learner the command executed [D, 6]
     # (COMMAND_FIELDS; mode -1 for an exact button plan) and the action it
@@ -397,6 +405,31 @@ def _rows(values, count: int) -> np.ndarray:
 # What the teacher said at a decision where there is none (Full SMB): nothing
 # is labelled and the agent plays its own choices.
 NO_TEACHER = {"plays_teacher": False, "tactic": None, "skill": None}
+
+
+def record_kinematics(frames: dict, copy, slot_match, known: dict, scene) -> None:
+    """Append this frame's inputs of the trackers and the world model to an
+    episode's per-frame lists: the copy's kinematics (smb_agent._Copy.
+    kinematics), what it remembers out of sight (.memory), the true enemy
+    each sprite slot shows (``slot_match``), the one each remembered enemy
+    stands for (the one its track showed when last seen: ``known``, track
+    identity -> true enemy, kept up to date here) and where Mario is (the
+    executor's world displacement and his feet's row)."""
+    sprites, mario, identities, context = copy.kinematics
+    memory, memory_identity = copy.memory
+    for identity, match in zip(identities, slot_match):
+        if identity and match >= 0:
+            known[int(identity)] = int(match)
+    frames["sprite_kinematics"].append(sprites)
+    frames["mario_kinematics"].append(mario)
+    frames["slot_match"].append(slot_match)
+    frames["slot_identity"].append(identities)
+    frames["enemy_context"].append(context)
+    frames["memory"].append(memory)
+    frames["memory_identity"].append(memory_identity)
+    frames["memory_match"].append([known.get(int(i), -1) if i else -1 for i in memory_identity])
+    feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
+    frames["mario_position"].append((copy.spatial.displacement, feet))
 
 
 class EpisodeRecorder:
@@ -593,6 +626,15 @@ class EpisodeRecorder:
                 if truth is not None
                 else None
             ),
+            memory=(
+                np.asarray(self.frames["memory"], np.float16) if truth is not None else None
+            ),
+            memory_identity=(
+                np.asarray(self.frames["memory_identity"], np.int32) if truth is not None else None
+            ),
+            memory_match=(
+                np.asarray(self.frames["memory_match"], np.int16) if truth is not None else None
+            ),
             ended=np.asarray(self.frames["ended"], np.int8),
             commands=np.asarray(d["command"], np.int16).reshape(-1, len(COMMAND_FIELDS))
             if d["command"]
@@ -673,6 +715,8 @@ class _Lane:
 
             self.truth = TruthRecorder()
         self.watched_truth = list(self.env.watched_truth)
+        # Track identity -> the true enemy it last showed (record_kinematics).
+        self.known: dict = {}
         self.asked: dict = {}
         self.progress, self.progressed = None, 0
 
@@ -964,7 +1008,6 @@ def play_episodes(
         for lane, step in zip(live, steps):
             for name, value in zip("abc", step.rows):
                 lane.frames[name].append(value)
-            spatial = agents.copies[lane.copy].spatial
             if lane.truth is not None:
                 from .truth_recording import match_slots
 
@@ -973,14 +1016,13 @@ def play_episodes(
                 lane.truth.add(frame)
                 # The kinematics the trackers and the world model read this
                 # frame (made before the executor stepped).
-                sprites, mario, identities, context = agents.copies[lane.copy].kinematics
-                lane.frames["sprite_kinematics"].append(sprites)
-                lane.frames["mario_kinematics"].append(mario)
-                lane.frames["slot_match"].append(match_slots(step.scene, frame))
-                lane.frames["slot_identity"].append(identities)
-                lane.frames["enemy_context"].append(context)
-                feet = step.scene.mario.box[3] if step.scene.mario.box is not None else 0.0
-                lane.frames["mario_position"].append((spatial.displacement, feet))
+                record_kinematics(
+                    lane.frames,
+                    agents.copies[lane.copy],
+                    match_slots(step.scene, frame),
+                    lane.known,
+                    step.scene,
+                )
             lane.frames["ended"].append(
                 END_REASONS.index(step.ended) if step.ended in END_REASONS else 0
             )

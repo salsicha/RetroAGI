@@ -51,3 +51,29 @@ def test_a_lesson_ending_with_its_action_is_a_miss_and_a_timeout_a_failure():
 
     assert touched(SimpleNamespace(end="action_done")) == "miss"
     assert touched(SimpleNamespace(end="timeout")) is None
+
+
+def test_a_plant_seen_going_down_is_out_of_sight_when_the_action_starts():
+    # The trackers must follow it from memory (user, 2026-10-21).
+    from retroagi.core.smb_scene_labels import scene_from_labels
+    from retroagi.stages.block_smb.env import MarioScenarioEnv
+
+    def plants(labels):
+        return [e for e in scene_from_labels(labels).enemies if e.kind == "plant"]
+
+    for family in ("collide_run_plant", "collide_jump_plant"):
+        seen = [(s, p) for s, p in every_layout(family, "medium") if p["gone"]]
+        assert seen and len(seen) * 2 == len(every_layout(family, "medium"))
+        scenario, params = seen[0]
+        env = MarioScenarioEnv()
+        try:
+            env.reset(scenario=scenario, seed=0)
+            watched = env.watched_labels
+            assert plants(watched[0])  # seen at first
+            assert not any(plants(labels) for labels in watched[-params["gone"] :])
+            assert not plants(env.scene_labels())  # still down as the action starts
+            for _ in range(params["after"] + 4):
+                env.step(0)
+            assert plants(env.scene_labels())  # risen ``after`` frames in
+        finally:
+            env.close()

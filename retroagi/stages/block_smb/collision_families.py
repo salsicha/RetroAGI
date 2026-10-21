@@ -27,6 +27,11 @@ The families, by Mario's action and what he meets:
   walker walks on; over a pipe as its plant rises; down from a ledge onto a
   walker; a jump too short to clear a walker coming at him.
 
+A plant Mario runs or jumps at is either never seen before it rises, or seen
+going down into its pipe in the watched pictures and out of sight for a
+while before the action (``gone``): the trackers follow it from memory
+(smb_kinematics.remembered; user, 2026-10-21).
+
 Difficulty sets the enemies' speeds (easy slow, hard fast) and how quickly a
 plant rises.
 """
@@ -49,10 +54,12 @@ RISES = {"easy": 20, "medium": 16, "hard": 12}
 SIDES = (1, -1)  # the enemy is to Mario's right (1) or left (-1)
 
 
-def _scenario(family, enemies, action, *, platforms=(), kinds=(), mario_x=MARIO_X, mario_top=FEET):
+def _scenario(
+    family, enemies, action, *, platforms=(), kinds=(), mario_x=MARIO_X, mario_top=FEET, watch=WATCH
+):
     """A collision lesson's scenario: a wide floor (and ``platforms``), Mario,
-    ``enemies``, the scripted ``action`` and a goal out of reach (a stomp
-    ends the lesson as won)."""
+    ``enemies``, the scripted ``action`` after ``watch`` watched pictures,
+    and a goal out of reach (a stomp ends the lesson as won)."""
     world = 512
     return {
         "world_width": world,
@@ -62,8 +69,8 @@ def _scenario(family, enemies, action, *, platforms=(), kinds=(), mario_x=MARIO_
         "enemies": enemies,
         "goal": [world - 24, FLOOR - 20, 16, 20],
         "goal_on_stomp": True,
-        "watch_frames": WATCH,
-        "frame_budget": WATCH + 300,
+        "watch_frames": watch,
+        "frame_budget": watch + 300,
         "tactics": [segment("advance", 1)],
         "scripted_action": action,
         "metadata": {"block_smb_monte_carlo": {"family": family}},
@@ -79,14 +86,30 @@ def _monster(x, speed, direction):
             "speed": speed, "direction": direction}
 
 
-def _plant(pipe_left, pipe_width, pipe_top, after, exposed, hidden, rise=16):
-    """A plant in its pipe, hidden, that starts rising ``after`` frames into
-    the action (its cycle: rise, exposed, fall, hidden; hidden must last past
-    the watched pictures and ``after``)."""
-    cycle = 2 * rise + exposed + hidden
+def _plant(pipe_left, pipe_width, pipe_top, after, exposed, hidden, rise=16, gone=0):
+    """A plant in its pipe that starts rising ``after`` frames into the
+    action (its cycle: rise, exposed, fall, hidden). With ``gone`` 0 it is
+    hidden through the WATCH watched pictures (``hidden`` must last past
+    them and ``after``); otherwise the watched pictures (plant_watch: its
+    fall, then ``gone`` frames out of sight) begin as it starts down from
+    full height, and it stays hidden ``gone + after`` frames."""
+    if gone:
+        hidden = gone + after
+        phase = rise + exposed  # its fall begins with the watched pictures
+    else:
+        phase = (2 * rise + exposed + hidden - (WATCH + after)) % (2 * rise + exposed + hidden)
     return {"kind": "piranha_plant", "x": pipe_left + (pipe_width - 12) // 2, "pipe_top": pipe_top,
             "plant_height": 20, "rise_frames": rise, "exposed_frames": exposed,
-            "hidden_frames": hidden, "phase": (cycle - (WATCH + after)) % cycle}
+            "hidden_frames": hidden, "phase": phase}
+
+
+def plant_watch(rise, gone) -> int:
+    """The watched pictures before a plant lesson's action: WATCH, or, for a
+    plant seen going down (``gone`` > 0), its fall and ``gone`` more."""
+    return rise + gone if gone else WATCH
+
+
+GONE = (0, 24)  # frames a plant was out of sight before the action (0: never seen)
 
 
 def _hold(frames):
@@ -197,13 +220,16 @@ def run_plant(rng, difficulty):
     hidden = 64
     phase = after
     start = rng.choice((4, 12))  # Mario's start from the pipe's left edge
+    gone = rng.choice(GONE)
     left = MARIO_X + 5 - start
     top = FLOOR - height
-    params = dict(pipe_height=height, pipe_width=width, exposed=exposed, after=after, start=start)
+    rise = RISES[difficulty]
+    params = dict(pipe_height=height, pipe_width=width, exposed=exposed, after=after, start=start,
+                  gone=gone)
     return (
-        _scenario("collide_run_plant", [_plant(left, width, top, phase, exposed, hidden, RISES[difficulty])],
+        _scenario("collide_run_plant", [_plant(left, width, top, phase, exposed, hidden, rise, gone)],
                   _move("run", width - start - 6), platforms=[[left, top, width, height]],
-                  kinds=["pipe"], mario_top=top - 16),
+                  kinds=["pipe"], mario_top=top - 16, watch=plant_watch(rise, gone)),
         params,
     )
 
@@ -301,14 +327,17 @@ def jump_plant(rng, difficulty):
     hidden = 64
     phase = after
     onto = rng.choice((0, 1))
+    gone = rng.choice(GONE)
     left = MARIO_X + 10 + gap
     top = FLOOR - height
+    rise = RISES[difficulty]
     aim = (gap + width // 2 + 5, -(height)) if onto else (gap + width + 24, 0)
     params = dict(pipe_height=height, pipe_width=width, gap=gap, exposed=exposed, after=after,
-                  onto=onto)
+                  onto=onto, gone=gone)
     return (
-        _scenario("collide_jump_plant", [_plant(left, width, top, phase, exposed, hidden, RISES[difficulty])],
-                  _move("jump", *aim), platforms=[[left, top, width, height]], kinds=["pipe"]),
+        _scenario("collide_jump_plant", [_plant(left, width, top, phase, exposed, hidden, rise, gone)],
+                  _move("jump", *aim), platforms=[[left, top, width, height]], kinds=["pipe"],
+                  watch=plant_watch(rise, gone)),
         params,
     )
 

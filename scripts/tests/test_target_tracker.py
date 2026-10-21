@@ -14,10 +14,13 @@ from retroagi.core.action_tokens import VERBS, pointer_index
 from retroagi.core.collision_labels import action_ends, collision_labels
 from retroagi.core.layered_policy import POINTER_START, LayeredSMBPolicy
 from retroagi.core.smb_kinematics import (
+    MEMORY_SLOTS,
     SPRITE_SLOTS,
     SPRITE_STATE,
+    TRACKED,
     enemy_context,
     kinematics,
+    remembered,
     slot_identities,
 )
 from retroagi.core.smb_scene_labels import scene_from_labels
@@ -28,6 +31,7 @@ from retroagi.core.target_tracker import (
     FEATURES,
     NONE,
     OBSERVATION_WIDTH,
+    ROWS,
     ActionState,
     CollisionTracker,
     CollisionTrackers,
@@ -36,6 +40,7 @@ from retroagi.core.target_tracker import (
     collision_loss,
     frame_features,
     record_features,
+    tracked_rows,
 )
 from retroagi.stages.block_smb import layered_train as lt
 from retroagi.stages.block_smb.env import MarioScenarioEnv
@@ -147,11 +152,11 @@ def walker_sequence(speed, start=110, frames=260):
             scene = scene_from_labels(env.scene_labels())
             spatial.observe(scene)
             sprites, mario = kinematics(scene, spatial)
-            identities = slot_identities(scene, spatial)
+            state, identities = tracked_rows(
+                sprites, slot_identities(scene, spatial), enemy_context(scene), remembered(scene, spatial)
+            )
             features.append(
-                frame_features(
-                    sprites, mario, enemy_context(scene), identities, (0.0, 204.0), t, ActionState()
-                )[0]
+                frame_features(state, identities, mario, (0.0, 204.0), t, ActionState())[0]
             )
             recorder.add(env.true_frame())
             spatial.executed(0, scene)
@@ -219,18 +224,17 @@ def test_an_enemy_aimed_actions_destination_is_the_enemy_seen_not_the_command():
     short = action_state(wait, -1, [2, 0, 0, 0, 3, 0], sprites, identities, (0, 0), 3)
     long = action_state(wait, -1, [2, 0, 0, 0, 90, 1], sprites, identities, (0, 0), 3)
     assert short == long and short.destination == (0.0, 0.0)
-    features = frame_features(
-        sprites, np.zeros(3), np.zeros((6, 8)), identities, (10.0, 0.0), 5, one
-    )
-    assert features.shape == (6, FEATURES) and features[1, -1] == 1.0 and not features[0].any()
+    state, followed = tracked_rows(sprites, identities, np.zeros((6, 8)))
+    features = frame_features(state, followed, np.zeros(3), (10.0, 0.0), 5, one)
+    assert features.shape == (ROWS, FEATURES) and features[1, -1] == 1.0 and not features[0].any()
 
 
 def test_runtime_estimates_and_forgetting():
     torch.manual_seed(0)
     trackers = CollisionTrackers(CollisionTracker(16))
-    features = np.zeros((6, FEATURES), np.float32)
+    features = np.zeros((ROWS, FEATURES), np.float32)
     features[0, 0] = 1.0
-    identities = [5, 0, 0, 0, 0, 0]
+    identities = [5] + [0] * (ROWS - 1)
     trackers.observe(features, identities)
     estimate = trackers.estimate(5)
     assert estimate is not None and trackers.estimate(6) is None
@@ -238,5 +242,74 @@ def test_runtime_estimates_and_forgetting():
     assert within == sorted(within) and 0.0 <= within[-1] <= 1.0
     assert estimate.contact < 0.5  # untrained: no contact
     for _ in range(97):
-        trackers.observe(np.zeros((6, FEATURES), np.float32), [0] * 6)
+        trackers.observe(np.zeros((ROWS, FEATURES), np.float32), [0] * ROWS)
     assert trackers.estimate(5) is None
+
+
+def test_a_remembered_enemy_is_followed_after_the_seen_ones():
+    sprites = np.zeros((SPRITE_SLOTS, len(SPRITE_STATE)), np.float32)
+    sprites[0] = (1.0, 30.0, -6.0, -0.5, 0.0, 1.0)
+    identities = np.zeros(SPRITE_SLOTS, np.int32)
+    identities[0] = 3
+    context = np.zeros((6, 8), np.float32)
+    memory = np.zeros((MEMORY_SLOTS, len(TRACKED)), np.float32)
+    memory[0, :6] = (1.0, 50.0, 0.0, 0.0, 0.0, 0.5)
+    memory[0, TRACKED.index("unseen")] = 0.25
+    memory[0, TRACKED.index("plant")] = 1.0
+    remembered_ids = np.array([9, 0, 0, 0], np.int32)
+    state, followed = tracked_rows(sprites, identities, context, (memory, remembered_ids))
+    assert state.shape == (ROWS, len(TRACKED)) and list(followed[[0, 6]]) == [3, 9]
+    assert state[0, TRACKED.index("unseen")] == 0.0 and state[6, TRACKED.index("unseen")] == 0.25
+    features = frame_features(state, followed, np.zeros(3), (0.0, 0.0), 0, ActionState())
+    trackers = CollisionTrackers(CollisionTracker(16))
+    trackers.observe(features, followed)
+    assert trackers.estimate(3) is not None and trackers.estimate(9) is not None
+
+
+def test_an_episode_recorded_before_memory_gives_its_old_inputs():
+    # Recorded without remembered enemies: no remembered rows, "unseen" 0.
+    frames = 3
+    record = type("Old", (), {})()
+    record.sprite_kinematics = np.zeros((frames, SPRITE_SLOTS, len(SPRITE_STATE)), np.float16)
+    record.sprite_kinematics[:, 0, 0] = 1.0
+    record.mario_kinematics = np.zeros((frames, 3), np.float16)
+    record.enemy_context = np.ones((frames, 6, 8), np.float16)
+    record.slot_identity = np.zeros((frames, SPRITE_SLOTS), np.int32)
+    record.slot_identity[:, 0] = 4
+    record.mario_position = np.zeros((frames, 2), np.float32)
+    record.decision_frames = np.array([0], np.int32)
+    record.action_verb = None
+    features = record_features(record)
+    assert features.shape == (frames, ROWS, FEATURES)
+    assert not features[:, 6:].any() and not features[:, :, TRACKED.index("unseen")].any()
+    assert (features[:, 0, len(SPRITE_STATE) + 1 : len(TRACKED)] == 1.0).all()
+
+
+def test_a_tracker_trained_before_memory_loads_and_answers_as_it_did(tmp_path):
+    from retroagi.stages.block_smb.tracker_train import TrackerConfig, load_tracker
+
+    torch.manual_seed(0)
+    new = CollisionTracker(16)
+    unseen = TRACKED.index("unseen")
+    state = new.state_dict()
+    for name, at in (("gru.weight_ih_l0", unseen), ("head.0.weight", 16 + unseen)):
+        state[name] = torch.cat((state[name][:, :at], state[name][:, at + 1 :]), 1)
+    torch.save({"tracker": state, "width": 16, "layout": "collision_v1", "config": {},
+                "history": []}, tmp_path / "old.pt")
+    loaded = load_tracker(tmp_path / "old.pt")
+    observations = torch.randn(2, 5, OBSERVATION_WIDTH)
+    observations[..., unseen] = 0.0
+    features = torch.cat((observations, torch.randn(2, 5, FEATURES - OBSERVATION_WIDTH)), -1)
+    with torch.no_grad():
+        old_gru = torch.nn.GRU(OBSERVATION_WIDTH - 1, 16, batch_first=True)
+        old_gru.load_state_dict({k[4:]: v for k, v in state.items() if k.startswith("gru.")})
+        kept = [i for i in range(OBSERVATION_WIDTH) if i != unseen]
+        expected, _ = old_gru(observations[..., kept])
+        assert torch.allclose(loaded.observe(observations), expected, atol=1e-5)
+        out = loaded.answer(loaded.observe(observations), features)
+        head = torch.nn.Sequential(*[torch.nn.Linear(16 + FEATURES - 1, 128), torch.nn.GELU(),
+                                     torch.nn.Linear(128, CLASSES + 4)])
+        head.load_state_dict({k[5:]: v for k, v in state.items() if k.startswith("head.")})
+        rest = [i for i in range(FEATURES) if i != unseen]
+        old_out = head(torch.cat((expected, features[..., rest]), -1))
+        assert torch.allclose(out["logits"], old_out[..., :CLASSES], atol=1e-5)

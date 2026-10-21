@@ -28,17 +28,19 @@ import torch
 
 from retroagi.core.action_tokens import VERBS
 from retroagi.core.collision_labels import KINDS, action_ends, collision_labels, slot_labels
-from retroagi.core.smb_kinematics import CONTEXT, ENEMY_SLOTS
+from retroagi.core.smb_kinematics import CONTEXT, ENEMY_SLOTS, MEMORY_SLOTS, TRACKED
 from retroagi.core.target_tracker import (
     BINS,
     CLASSES,
     NONE,
     OBSERVATION_WIDTH,
     POSITION_SCALE,
+    ROWS,
     CollisionTracker,
     allowed_classes,
     collision_loss,
     record_features,
+    record_memory,
 )
 
 # The horizons (frames) a hit within is measured at.
@@ -58,6 +60,9 @@ KEPT = (
     "mario_kinematics",
     "slot_identity",
     "enemy_context",
+    "memory",
+    "memory_identity",
+    "memory_match",
     "mario_position",
     "action_verb",
     "action_pointer",
@@ -93,23 +98,30 @@ def kept(record) -> Kept:
 
 def track_sequences(record) -> list:
     """One sequence per enemy track identity in a recorded episode: for each
-    frame it was seen, its inputs and labels: {"observations" [L,
+    frame it was followed (seen, or remembered out of sight:
+    target_tracker.tracked_rows), its inputs and labels: {"observations" [L,
     OBSERVATION_WIDTH], "features" [L, FEATURES], "allowed" [L, CLASSES],
     "place" [L, 2], "seen" [L] (a contact was seen), "labelled" [L] (its
     true enemy is known), "frames", "kind", "censor" [L], "verb" [L] (the
-    action in progress; -1 none), "enemy_kind" [L] (CONTEXT index)}."""
+    action in progress; -1 none), "enemy_kind" [L] (CONTEXT index),
+    "unseen" [L] (remembered out of sight)}."""
     features = record_features(record)
     frames = len(features)
+    memory, memory_identity = record_memory(record)
+    memory_match = getattr(record, "memory_match", None)
+    if memory_match is None:
+        memory_match = np.full((frames, MEMORY_SLOTS), -1, np.int16)
     labels = slot_labels(
         collision_labels(record.truth, action_ends(record.decision_frames, frames)),
-        record.slot_match,
-        ENEMY_SLOTS,
+        np.concatenate((record.slot_match[:, :ENEMY_SLOTS], memory_match), 1),
+        ROWS,
     )
     verb_now = np.full(frames, -1, np.int64)
     starts = [int(f) for f in record.decision_frames] + [frames]
     for k, (f, e) in enumerate(zip(starts, starts[1:])):
         verb_now[f:e] = int(record.action_verb[k]) if record.action_verb is not None else -1
-    identities = record.slot_identity[:, :ENEMY_SLOTS]
+    identities = np.concatenate((record.slot_identity[:, :ENEMY_SLOTS], memory_identity), 1)
+    kinds = features[:, :, TRACKED.index("walker") : TRACKED.index("other") + 1]
     out = []
     for identity in np.unique(identities[identities > 0]):
         t, slot = np.nonzero((identities == identity) & (features[:, :, 0] > 0))
@@ -128,9 +140,8 @@ def track_sequences(record) -> list:
                 "kind": kind,
                 "censor": censor,
                 "verb": verb_now[t],
-                "enemy_kind": np.argmax(
-                    record.enemy_context[t, slot, : CONTEXT.index("other") + 1], -1
-                ),
+                "enemy_kind": np.argmax(kinds[t, slot], -1),
+                "unseen": slot >= ENEMY_SLOTS,
             }
         )
     return out
@@ -173,7 +184,7 @@ def _baseline_hit_frames(features) -> np.ndarray:
     x = features[:, 1] * POSITION_SCALE
     y = features[:, 2] * POSITION_SCALE
     vx = features[:, 3]
-    width = features[:, len(("present", "x", "y", "vx", "vy", "seen")) + CONTEXT.index("width")] * 16
+    width = features[:, TRACKED.index("width")] * 16
     gap = np.abs(x) - (width / 2 + 5)
     closing = np.where(x > 0, -vx, vx)
     level = np.abs(y + 6) <= 12
@@ -183,7 +194,8 @@ def _baseline_hit_frames(features) -> np.ndarray:
 
 @torch.no_grad()
 def evaluate(model, sequences, device) -> dict:
-    """Per verb in progress × enemy kind ("all" × "all" included): for hits
+    """Per verb in progress × enemy kind ("all" × "all" included; and
+    "remembered" × "all", the rows of enemies out of sight): for hits
     within HIT_WITHIN frames, precision and recall (the trackers' and the
     baseline's); for seen contacts, the time error (median; shares within 2
     and 4 frames), the place error (median pixels) and stomp-or-hit
@@ -197,7 +209,7 @@ def evaluate(model, sequences, device) -> dict:
         place = out["place"][mask].cpu().numpy()
         keys = {
             name: np.concatenate([s[name][s["labelled"]] for s in batch])
-            for name in ("frames", "kind", "censor", "verb", "enemy_kind", "features")
+            for name in ("frames", "kind", "censor", "verb", "enemy_kind", "features", "unseen")
         }
         keys["place_label"] = np.concatenate([s["place"][s["labelled"]] for s in batch])
         hit_by = np.cumsum(probability[:, BINS:NONE], -1)
@@ -211,6 +223,8 @@ def evaluate(model, sequences, device) -> dict:
                 (VERBS[verb] if verb >= 0 else "none", "all"),
                 ("all", CONTEXT[int(keys["enemy_kind"][i])]),
             ]
+            if keys["unseen"][i]:
+                groups.append(("remembered", "all"))
             frames, kind, censor = int(keys["frames"][i]), int(keys["kind"][i]), int(keys["censor"][i])
             hit = frames > 0 and KINDS[kind] == "hit"
             for f in HIT_WITHIN:
@@ -392,12 +406,18 @@ def collect(
     return path
 
 
+# collision_v2 (2026-10-21): the observation gained "unseen" (how long the
+# enemy has been out of sight; smb_kinematics.TRACKED), after the sprite's
+# kinematics. A collision_v1 tracker loads with that input reading nothing.
+LAYOUT = "collision_v2"
+
+
 def save_tracker(path, model, config: TrackerConfig, history) -> None:
     torch.save(
         {
             "tracker": model.state_dict(),
             "width": model.width,
-            "layout": "collision_v1",
+            "layout": LAYOUT,
             "config": asdict(config),
             "history": history,
         },
@@ -405,12 +425,29 @@ def save_tracker(path, model, config: TrackerConfig, history) -> None:
     )
 
 
+def _with_unseen(state: dict, width: int) -> dict:
+    """A collision_v1 tracker's weights with the "unseen" input added (zero
+    weights: it reads nothing until trained), for the GRU's input and the
+    head's (which reads the GRU state, then the frame's inputs)."""
+    from retroagi.core.smb_kinematics import TRACKED
+
+    column = TRACKED.index("unseen")
+    state = dict(state)
+    for name, at in (("gru.weight_ih_l0", column), ("head.0.weight", width + column)):
+        w = state[name]
+        state[name] = torch.cat((w[:, :at], torch.zeros_like(w[:, :1]), w[:, at:]), 1)
+    return state
+
+
 def load_tracker(path, device="cpu") -> CollisionTracker:
     saved = torch.load(path, map_location=device, weights_only=False)
-    if saved.get("layout") != "collision_v1":
+    if saved.get("layout") not in ("collision_v1", LAYOUT):
         raise ValueError(f"{path} is not a collision tracker (the old target tracker?)")
     model = CollisionTracker(saved["width"]).to(device)
-    model.load_state_dict(saved["tracker"])
+    state = saved["tracker"]
+    if saved["layout"] == "collision_v1":
+        state = _with_unseen(state, saved["width"])
+    model.load_state_dict(state)
     return model
 
 

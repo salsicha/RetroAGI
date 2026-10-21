@@ -10,8 +10,8 @@ only:
 
 - the executor's first-order kinematics of it (core/smb_kinematics: where
   it is from Mario's feet, its velocity, how many sightings the velocity
-  rests on) and what vision shows of it (kind, size, the surface it walks
-  on);
+  rests on), how long it has been out of sight, and what vision shows of
+  it (kind, size, the surface it walks on);
 - the executor's kinematics of Mario (his speed, his feet's movement,
   whether he stands);
 - the action Mario is carrying out (ActionState): its verb, where it sends
@@ -23,9 +23,14 @@ action aimed at an enemy: there it is the enemy's point when the action
 began. The teacher aimed those with the enemy's true future, which no input
 may carry; a hold sends him nowhere (its length is the teacher's truth).
 
+The enemies followed (tracked_rows) are those in the scene's enemy slots
+and those the executor remembers out of sight (smb_kinematics.remembered: a
+plant gone into its pipe is still there; user, 2026-10-21), ROWS in all.
+
 One GRU (shared by every enemy, a state per track identity) reads the first
-OBSERVATION_WIDTH inputs every frame the enemy is seen: what one picture
-cannot show (a plant's phase, where a walker turns). A head reads its state
+OBSERVATION_WIDTH inputs every frame the enemy is seen or remembered: what
+one picture cannot show (a plant's phase, how long it has been hidden,
+where a walker turns). A head reads its state
 with all the frame's inputs; the action enters there only, so asking about
 another action needs no more GRU steps. It gives CLASSES logits (a stomp or
 a hit in each of BINS two-frame bins over HORIZON frames, or none) and the
@@ -43,7 +48,13 @@ import torch.nn as nn
 from .action_tokens import VERBS, pointer_target
 from .collision_labels import HORIZON, KINDS
 from .layered_policy import POINTER_START
-from .smb_kinematics import CONTEXT, ENEMY_SLOTS, MARIO_STATE, SPRITE_STATE
+from .smb_kinematics import (
+    ENEMY_SLOTS,
+    MARIO_STATE,
+    MEMORY_SLOTS,
+    SPRITE_STATE,
+    TRACKED,
+)
 from .tokens import SKILL_MODES
 
 BINS = HORIZON // 2
@@ -51,7 +62,9 @@ NONE = 2 * BINS  # the class "no contact within HORIZON"
 CLASSES = NONE + 1
 # Each input's unit (pixels and pixels a frame are scaled to about 1).
 POSITION_SCALE = 128.0
-OBSERVATION_WIDTH = len(SPRITE_STATE) + len(CONTEXT) + len(MARIO_STATE)
+OBSERVATION_WIDTH = len(TRACKED) + len(MARIO_STATE)
+# The enemies followed each frame: the enemy scene slots, then the remembered.
+ROWS = ENEMY_SLOTS + MEMORY_SLOTS
 ACTION_WIDTH = len(VERBS) + 1 + 2 + 1 + 1 + 1
 FEATURES = OBSERVATION_WIDTH + ACTION_WIDTH
 # The place's unit while learning (pixels).
@@ -99,19 +112,35 @@ def action_state(verb, pointer, command, sprites, identities, position, frame) -
     return ActionState(verb, destination, tuple(position), frame, carry, 0)
 
 
-def frame_features(sprites, mario, context, identities, position, frame, action: ActionState):
-    """[ENEMY_SLOTS, FEATURES] for one frame: the executor's kinematics of
-    each enemy slot ([SPRITE_SLOTS, len(SPRITE_STATE)]; only the enemy slots
-    are read) and of Mario, what vision shows of each enemy, each slot's
-    track identity, Mario's position (world displacement, feet row) and the
-    action in progress."""
-    out = np.zeros((ENEMY_SLOTS, FEATURES), np.float32)
-    enemy = np.asarray(sprites[:ENEMY_SLOTS], np.float32).copy()
-    enemy[:, 1:3] /= POSITION_SCALE
-    out[:, : len(SPRITE_STATE)] = enemy
+def tracked_rows(sprites, identities, context, memory=None) -> tuple[np.ndarray, np.ndarray]:
+    """The enemies the trackers follow this frame: ([ROWS, len(TRACKED)],
+    [ROWS] identities): each enemy scene slot (the executor's kinematics of
+    its sprite, [SPRITE_SLOTS, len(SPRITE_STATE)], and what vision shows of
+    it, [ENEMY_SLOTS, len(CONTEXT)]; seen now), then each one the executor
+    remembers out of sight (smb_kinematics.remembered: (rows, identities);
+    None or (): none)."""
+    state = np.zeros((ROWS, len(TRACKED)), np.float32)
+    out = np.zeros(ROWS, np.int32)
     k = len(SPRITE_STATE)
-    out[:, k : k + len(CONTEXT)] = context
-    k += len(CONTEXT)
+    state[:ENEMY_SLOTS, :k] = np.asarray(sprites[:ENEMY_SLOTS], np.float32)
+    state[:ENEMY_SLOTS, k + 1 :] = context
+    out[:ENEMY_SLOTS] = np.asarray(identities[:ENEMY_SLOTS])
+    if memory:
+        state[ENEMY_SLOTS:] = memory[0]
+        out[ENEMY_SLOTS:] = memory[1]
+    return state, out
+
+
+def frame_features(state, identities, mario, position, frame, action: ActionState):
+    """[ROWS, FEATURES] for one frame: each followed enemy (tracked_rows:
+    ``state`` [ROWS, len(TRACKED)], ``identities`` [ROWS]), the executor's
+    kinematics of Mario, his position (world displacement, feet row) and the
+    action in progress."""
+    out = np.zeros((ROWS, FEATURES), np.float32)
+    enemy = np.asarray(state, np.float32).copy()
+    enemy[:, 1:3] /= POSITION_SCALE
+    out[:, : len(TRACKED)] = enemy
+    k = len(TRACKED)
     out[:, k : k + len(MARIO_STATE)] = mario
     k += len(MARIO_STATE)
     out[:, k + (action.verb if action.verb >= 0 else len(VERBS))] = 1.0
@@ -121,14 +150,28 @@ def frame_features(sprites, mario, context, identities, position, frame, action:
     out[:, k + 1] = (action.destination[1] - moved[1]) / POSITION_SCALE
     out[:, k + 2] = min(frame - action.start_frame, HORIZON) / HORIZON
     out[:, k + 3] = float(action.carry)
-    out[:, k + 4] = (np.asarray(identities[:ENEMY_SLOTS]) == action.target) & (action.target > 0)
+    out[:, k + 4] = (np.asarray(identities) == action.target) & (action.target > 0)
     present = enemy[:, 0] > 0
     out[~present] = 0.0
     return out
 
 
+def record_memory(record):
+    """A recorded episode's remembered enemies per frame ([T, MEMORY_SLOTS,
+    len(TRACKED)], [T, MEMORY_SLOTS]); none (zeros) for one recorded
+    before the executor remembered (2026-10-21)."""
+    frames = len(record.sprite_kinematics)
+    memory = getattr(record, "memory", None)
+    if memory is None:
+        return (
+            np.zeros((frames, MEMORY_SLOTS, len(TRACKED)), np.float32),
+            np.zeros((frames, MEMORY_SLOTS), np.int32),
+        )
+    return memory.astype(np.float32), record.memory_identity.astype(np.int32)
+
+
 def record_features(record) -> np.ndarray:
-    """[T, ENEMY_SLOTS, FEATURES] for a recorded episode (EpisodeTask.
+    """[T, ROWS, FEATURES] for a recorded episode (EpisodeTask.
     record_truth): the inputs the trackers had at each frame, the action in
     progress being the one carried out from each decision (the teacher's
     choice as named where it played)."""
@@ -137,7 +180,8 @@ def record_features(record) -> np.ndarray:
     sprites = record.sprite_kinematics.astype(np.float32)
     mario = record.mario_kinematics.astype(np.float32)
     context = record.enemy_context.astype(np.float32)
-    out = np.zeros((frames, ENEMY_SLOTS, FEATURES), np.float32)
+    memory, memory_identity = record_memory(record)
+    out = np.zeros((frames, ROWS, FEATURES), np.float32)
     action = ActionState()
     for t in range(frames):
         k = starts.get(t)
@@ -151,15 +195,10 @@ def record_features(record) -> np.ndarray:
                 record.mario_position[t],
                 t,
             )
-        out[t] = frame_features(
-            sprites[t],
-            mario[t],
-            context[t],
-            record.slot_identity[t],
-            record.mario_position[t],
-            t,
-            action,
+        state, identities = tracked_rows(
+            sprites[t], record.slot_identity[t], context[t], (memory[t], memory_identity[t])
         )
+        out[t] = frame_features(state, identities, mario[t], record.mario_position[t], t, action)
     return out
 
 
@@ -294,7 +333,8 @@ def collision_of(out: dict) -> Collision:
 
 class CollisionTrackers:
     """The trackers at play: a GRU state per track identity, stepped each
-    frame its enemy is seen (forgotten after HORIZON frames unseen)."""
+    frame its enemy is followed (seen or remembered: tracked_rows; forgotten
+    after HORIZON frames not followed)."""
 
     def __init__(self, model: CollisionTracker, device="cpu"):
         self.model = model.eval()
@@ -306,11 +346,11 @@ class CollisionTrackers:
 
     @torch.no_grad()
     def observe(self, features: np.ndarray, identities) -> None:
-        """One frame: frame_features and each enemy slot's identity."""
+        """One frame: frame_features and each followed enemy's identity."""
         self.frame += 1
         present = [
             (slot, int(identities[slot]))
-            for slot in range(ENEMY_SLOTS)
+            for slot in range(ROWS)
             if identities[slot] and features[slot, 0] > 0
         ]
         if present:
@@ -336,7 +376,7 @@ class CollisionTrackers:
     def refresh(self, features: np.ndarray, identities) -> None:
         """This frame's inputs again after a new action began (no GRU step:
         the action enters the head only)."""
-        for slot in range(ENEMY_SLOTS):
+        for slot in range(ROWS):
             i = int(identities[slot])
             if i in self.features and features[slot, 0] > 0:
                 self.features[i] = features[slot]

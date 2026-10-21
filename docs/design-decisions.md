@@ -26,6 +26,37 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-21 — Every learned part gets what a human sees (user decision; built)
+
+User: "do the layers with learned parameters have all the information they
+need to learn the expected behavior? ... the policy will only have the
+information available that a human user would"; then "apply all your
+suggested fixes above" and "be careful that you aren't writing an smb
+specific code ... the complexities of a particular game are in the models."
+A human sees motion, knows how the last move went, and remembers what went
+out of sight; some parts were not given these.
+
+- **The skill and tactic layers read motion**: the executor's estimates
+  from what vision reported (each sprite's velocity added to its scene
+  token, Mario's to his), the same ones the world model and the trackers
+  read. Earlier the "no speed" rule kept them from the decision layers.
+- **The tactic layer reads the executor's report** on the last action (the
+  execution feedback the skill already read).
+- **The executor remembers what went out of sight**: any tracked object,
+  past the 8 frames of a short miss, is kept where it was last expected for
+  up to 192 frames and found again, with its identity, near there or where
+  it was last seen; vision showing it defeated there ends the memory. The
+  collision trackers follow up to four remembered enemies beside the seen
+  ones, reading how long each has been out of sight, so the GRU goes on
+  stepping while a plant is down in its pipe. The plant collision lessons
+  gain plants seen going down before the action (`gone`).
+- All new readings start with no influence: checkpoints load and act as
+  before (migration `layers_read_motion_and_feedback`; trackers
+  `collision_v2`). The recorded skill and tactic datasets stay valid (they
+  hold the motion estimates and the reports; they have no remembered rows,
+  which the trackers then do without); the collision lessons are recorded
+  again.
+
 ## 2026-10-19 — The simulator's scenes, faster (user decision; built)
 
 User: "ok, apply the speedup". A profile of a long tactic episode
