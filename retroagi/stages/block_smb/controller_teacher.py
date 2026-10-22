@@ -29,6 +29,7 @@ from retroagi.core.tokens import SKILL_X, SKILL_Y, SkillToken
 
 from . import tactic_schedule
 from .env_state import restore_env_state, snapshot_env_state
+from .piranha import WAITS_NEAR
 
 
 @dataclass
@@ -650,12 +651,16 @@ def _enemy_paths(env, frames):
             continue
         if plant:
             # Its rise and fall by its own cycle (piranha.position_plant),
-            # hidden frames included (no height: it touches nothing).
-            from .piranha import position_plant
+            # hidden frames included (no height: it touches nothing); it
+            # stays down while Mario is near it, taken to stay where he is
+            # (piranha.stays_down_near).
+            from .piranha import position_plant, stays_down_near
 
+            middle = env.mario["x"] + env.mario["w"] / 2
             future, boxes = dict(e), []
             for k in range(frames + 1):
-                future["plant_tick"] = e["plant_tick"] + k
+                if k and not stays_down_near(future, middle):
+                    future["plant_tick"] += 1
                 position_plant(future)
                 boxes.append(
                     (future["x"], future["y"], future["x"] + future["w"], future["y"] + future["h"])
@@ -2816,14 +2821,20 @@ def plant_destination(env, state):
                 # Landed on the pipe: the plant must stay down while he walks
                 # past its mouth. A crossing certified on landing alone put him
                 # on the pipe's edge 3 frames before it rose; he could neither
-                # stay nor leave (full_smb_opening_proxy, 2026-10-16).
+                # stay nor leave (full_smb_opening_proxy, 2026-10-16). Down as
+                # he lands within its reach of waiting, it stays down while he
+                # walks past (piranha.WAITS_NEAR).
                 x = m["x"] + r.start_dx + r.end_dx
                 past = (
                     plant["x"] + plant["w"] + 2 - x
                     if direction > 0
                     else x + m["w"] - (plant["x"] - 2)
                 )
-                return past <= 0 or _down_for(plant, r.started + r.frames) >= past / PLANT_WALK
+                if past <= 0:
+                    return True
+                down = _down_for(plant, r.started + r.frames)
+                near = abs(x + m["w"] / 2 - (plant["x"] + plant["w"] / 2)) <= WAITS_NEAR
+                return down > 0 and near or down >= past / PLANT_WALK
 
             best = _best_certified(env, state, target, memo, direction, travels, wanted, check)
             if best is not None:

@@ -230,7 +230,7 @@ class MarioScenarioEnv:
                     [x, y, patrol_min, patrol_max, speed] or
                     dict with keys x,y,patrol_min,patrol_max,speed,edge_aware;
                     a piranha_plant uses kind,x,pipe_top and optional cycle durations
-                    (and waits_near: it stays down while Mario is that near);
+                    (it stays down while Mario is near it: piranha.WAITS_NEAR);
                     kind "monster" is a large walker that cannot be stomped
     goal          : [x, y, w, h]
     optional_bridge: a moving platform Mario may ride or not (its crossing is

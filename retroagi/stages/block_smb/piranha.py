@@ -1,8 +1,16 @@
 """Pipe-bound, non-stompable hazards for generated avoidance practice.
 
-This is a Block-physics proxy, not a reproduction of NES plant timing. Only
-the exposed part collides or appears in observations; cycle phase never enters policy inputs or duration certification.
+Each plant rises, stays up, sinks and stays down by its own cycle, and, as
+the NES's plants do, does not come up while Mario's middle is within
+WAITS_NEAR pixels of its own: it stays down until he is farther (user,
+2026-10-21: every Block SMB plant follows the real game's rule; a Full SMB
+plant stayed down 6,202 frames while Mario stood by its pipe). Only the
+exposed part collides or appears in observations; cycle phase never enters
+policy inputs or duration certification.
 """
+
+# The NES plant does not rise while Mario is within 0x21 pixels of it.
+WAITS_NEAR = 33
 
 
 def position_plant(enemy):
@@ -28,10 +36,8 @@ def position_plant(enemy):
 
 def stays_down_near(enemy, mario_middle: float) -> bool:
     """Whether a plant at the end of its time down stays down this frame:
-    one made to wait (``waits_near``) with Mario's middle that near its own."""
-    near = enemy.get("waits_near", 0)
-    if not near:
-        return False
+    Mario's middle is within its ``waits_near`` of its own."""
+    near = enemy.get("waits_near", WAITS_NEAR)
     cycle = 2 * enemy["rise_frames"] + enemy["exposed_frames"] + enemy["hidden_frames"]
     last_down = enemy["plant_tick"] % cycle == cycle - 1
     return last_down and abs(enemy["x"] + enemy["w"] / 2 - mario_middle) <= near
@@ -69,10 +75,9 @@ def parse_plant(spec):
         on_ground=False,
         dead=False,
         timed_crossing=bool(spec.get("timed_crossing", False)),
-        # As the NES plant does, it does not come up while Mario's middle is
-        # within this many pixels of its own (0: it keeps its cycle whatever
-        # Mario does): it stays down until he is farther (stays_down_near).
-        waits_near=float(spec.get("waits_near", 0)),
+        # It does not come up while Mario's middle is this near its own
+        # (stays_down_near).
+        waits_near=float(WAITS_NEAR),
     )
     position_plant(enemy)
     return enemy

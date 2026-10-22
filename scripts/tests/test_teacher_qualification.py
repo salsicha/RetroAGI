@@ -363,3 +363,26 @@ def test_a_teacher_error_ends_only_that_layouts_episode():
     assert tokens["skill"] == [SkillToken("hold", 0, 0), SkillToken("run", 16, 0)]
     assert lanes[0].no_teacher_command and "integer pixels" in lanes[0].teacher_error
     assert not lanes[1].no_teacher_command and not lanes[1].teacher_error
+
+
+def test_the_tactic_layer_alone_plays_its_own_tactics_while_the_teacher_plays_the_actions(monkeypatch):
+    # EpisodeTask.teacher_skill with no teacher share: the tactic layer
+    # measured alone (2026-10-22).
+    from retroagi.core.layered_policy import LayeredSMBPolicy
+    from retroagi.core.smb_scene_labels import scene_from_labels
+    from retroagi.core.tokens import SkillToken
+    from retroagi.stages.block_smb import teacher_tokens
+    from retroagi.stages.block_smb.env import MarioScenarioEnv
+
+    env = MarioScenarioEnv()
+    env.reset(scenario=task().scenario)
+    scene = scene_from_labels(env.scene_labels())
+    env.close()
+    observer = SimpleNamespace(observe=lambda screens: [scene for _ in screens])
+    policy = LayeredSMBPolicy().eval()
+    monkeypatch.setattr(teacher_tokens, "teacher_skill", lambda *args: SkillToken("run", 7, 0))
+    (record,) = lt.play_episodes(
+        observer, policy, "tactic", [task(teacher_skill=True, frames=40)], "cpu", 1
+    )
+    assert len(record.decision_frames) and not np.asarray(record.played_teacher).any()
+    assert (record.commands[:, 1] == 7).all()  # every action the teacher's

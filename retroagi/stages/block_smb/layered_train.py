@@ -218,8 +218,10 @@ class EpisodeTask:
     # world model, with the collision trackers ending waits and walks and
     # aiming stomps, or both.
     execution: str = "teacher"
-    # The tactic learner's imitation data: the teacher also plays the skill's
-    # actions, so every layout it wins is data (user, 2026-10-18).
+    # The tactic learner: the teacher plays the skill's actions, whoever plays
+    # the tactics (teacher_share): the imitation data (the teacher playing
+    # both, so every layout it wins is data; user, 2026-10-18), or the tactic
+    # layer measured alone (its own tactics; 2026-10-22).
     teacher_skill: bool = False
 
 
@@ -762,14 +764,17 @@ class _Lane:
             "holds": (),
             "plays_teacher": self.rng.random() < self.task.teacher_share,
         }
-        teacher_plays_skill = learner == "tactic" and self.task.teacher_skill and asked["plays_teacher"]
+        # The teacher plays the skill's actions whoever plays the tactic
+        # (EpisodeTask.teacher_skill): with the tactic layer's own tactics, it
+        # measures the tactic layer alone.
+        teacher_plays_skill = learner == "tactic" and self.task.teacher_skill
         if (learner == "skill" and (self.task.label or asked["plays_teacher"])) or teacher_plays_skill:
             if self.teacher.family != "enemy_patrol":
                 asked["action"], asked["holds"] = teacher_plan(
                     self.env, self.teacher, certify_holds=False
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
-            if asked["plays_teacher"]:
+            if asked["plays_teacher"] or teacher_plays_skill:
                 from .teacher_tokens import whole_wait
 
                 # Played: a hold as long as its whole wait.

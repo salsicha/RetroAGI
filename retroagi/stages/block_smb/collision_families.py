@@ -16,12 +16,13 @@ through ``rng`` from a short list (choice), so a full sweep
 
 The families, by Mario's action and what he meets:
 
-- wait: a walker or a monster walking into him from either side; a plant
-  rising under him as he stands over its pipe; a walker dropping onto him
-  from a ledge above;
+- wait: a walker or a monster walking into him from either side; standing
+  on a pipe over its plant's mouth or beside it (the plant, due up, stays
+  down while he is there: every plant waits for Mario, as the NES's do); a
+  walker dropping onto him from a ledge above;
 - run: into a walker or a monster coming at him or walking away; across a
-  pipe whose plant is rising; off a ledge onto a walker below; under a
-  ledge as a walker drops off it;
+  pipe whose plant is due up (down while he is near); off a ledge onto a
+  walker below; under a ledge as a walker drops off it;
 - jump: onto a walker (a stomp, or a hit when it is mistimed), coming at him
   or walking away; onto a monster (it cannot be stomped); up onto a ledge a
   walker walks on; over a pipe as its plant rises; down from a ledge onto a
@@ -30,9 +31,9 @@ The families, by Mario's action and what he meets:
 A plant Mario runs or jumps at is either never seen before it rises, or seen
 going down into its pipe in the watched pictures and out of sight for a
 while before the action (``gone``): the trackers follow it on the list of
-tracked things (user, 2026-10-21). In the pipe-wait lessons the plant, as
-the NES's does, stays down while Mario is near it (``waits_near``): Mario
-watches it go down and waits, near it or farther, for seconds, then jumps
+tracked things (user, 2026-10-21). Every plant, as the NES's do, stays down
+while Mario is near it (piranha.WAITS_NEAR): in the pipe-wait lessons Mario
+watches one go down and waits, near it or farther, for seconds, then jumps
 onto its pipe or runs across it and off.
 
 held_out_layouts draws every lesson's numbers between those of the sweep
@@ -118,11 +119,6 @@ def plant_watch(rise, gone) -> int:
 GONE = (0, 24)  # frames a plant was out of sight before the action (0: never seen)
 
 
-# How near (pixels, its middle to Mario's) a pipe-wait lesson's plant stays
-# down: the NES plant's (it does not rise within 0x21 of Mario).
-PLANT_WAITS_NEAR = 33
-
-
 def _hold(frames):
     return {"mode": "hold", "x": 0, "y": 0, "frames": frames}
 
@@ -151,7 +147,8 @@ def wait_monster(rng, difficulty):
 
 
 def wait_plant(rng, difficulty):
-    """Mario stands on a pipe, over its mouth or beside it, as its plant rises."""
+    """Mario stands on a pipe, over its mouth or beside it, as its plant is due
+    up: it stays down while he is near (piranha.WAITS_NEAR)."""
     height, width = rng.choice((24, 32, 40)), rng.choice((32, 40))
     offset = rng.choice((-6, 0, 6))  # Mario's middle from the mouth's middle
     exposed, after = rng.choice((32, 48)), rng.choice((4, 16, 32))  # it rises ``after`` frames in
@@ -225,7 +222,8 @@ def run_monster(rng, difficulty):
 
 
 def run_plant(rng, difficulty):
-    """Mario runs across a pipe's top as its plant rises."""
+    """Mario runs across a pipe's top as its plant is due up: it stays down
+    while he is near, and rises once he is past (piranha.WAITS_NEAR)."""
     height, width = rng.choice((24, 32)), rng.choice((48, 64))
     exposed, after = rng.choice((32, 48)), rng.choice((0, 4, 8, 16))
     hidden = 64
@@ -333,7 +331,8 @@ def jump_up_onto(rng, difficulty):
 
 
 def jump_plant(rng, difficulty):
-    """Mario jumps over a pipe, or onto it, as its plant rises."""
+    """Mario jumps over a pipe, or onto it, as its plant is due up (it stays
+    down if he is near it then: piranha.WAITS_NEAR)."""
     height, width = rng.choice((24, 32, 40)), rng.choice((32, 40))
     gap = rng.choice((16, 32, 48))  # the pipe's left edge ahead of Mario
     exposed, after = rng.choice((32, 48)), rng.choice((0, 8, 16))
@@ -377,7 +376,7 @@ def pipe_wait(rng, difficulty):
         action, mario_top = _move("jump", stand, -height), FEET
         params = dict(on_pipe=0, stand=stand)
     plant = _plant(left, width, top, 0, exposed, hidden, rise)
-    plant.update(phase=rise + exposed, hidden_frames=hidden, waits_near=PLANT_WAITS_NEAR)
+    plant.update(phase=rise + exposed, hidden_frames=hidden)
     params.update(pipe_height=height, pipe_width=width, exposed=exposed, hidden=hidden, wait=wait)
     return (
         _scenario("collide_pipe_wait", [plant], action, platforms=[[left, top, width, height]],

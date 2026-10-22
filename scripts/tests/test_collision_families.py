@@ -74,7 +74,11 @@ def test_a_plant_seen_going_down_is_out_of_sight_when_the_action_starts():
             assert not plants(env.scene_labels())  # still down as the action starts
             for _ in range(params["after"] + 4):
                 env.step(0)
-            assert plants(env.scene_labels())  # risen ``after`` frames in
+            # Due up ``after`` frames in: up unless Mario, standing, is near
+            # it (it waits for him, as the NES's plants do).
+            plant, mario = env.enemies[0], env.mario
+            near = abs(plant["x"] + plant["w"] / 2 - (mario["x"] + mario["w"] / 2)) <= 33
+            assert bool(plants(env.scene_labels())) != near
         finally:
             env.close()
 
@@ -89,13 +93,13 @@ def test_held_out_layouts_are_none_of_the_sweeps():
         assert held == held_out_layouts(family, "medium", 6, seed=0)  # the same each time
 
 
-def test_a_waiting_plant_stays_down_while_mario_is_near_and_keeps_its_cycle_otherwise():
+def test_a_plant_stays_down_while_mario_is_near_and_keeps_its_cycle_otherwise():
+    # Every Block SMB plant, as the NES's (user, 2026-10-21).
     from retroagi.stages.block_smb.env import MarioScenarioEnv
 
     def time_up(mario_x):
         plant = {"kind": "piranha_plant", "x": 150, "pipe_top": 196, "plant_height": 20,
-                 "rise_frames": 8, "exposed_frames": 16, "hidden_frames": 16, "phase": 0,
-                 "waits_near": 33}
+                 "rise_frames": 8, "exposed_frames": 16, "hidden_frames": 16, "phase": 0}
         env = MarioScenarioEnv()
         try:
             env.reset(scenario={"world_width": 400, "mario": [mario_x, 204],
@@ -120,5 +124,5 @@ def test_pipe_wait_lessons_watch_the_plant_go_down_and_wait():
     assert waits == {60, 90, 120, 150, 210, 300}
     for scenario, params in layouts[:8]:
         (plant,) = scenario["enemies"]
-        assert plant["waits_near"] == 33 and scenario["watch_frames"] == plant["rise_frames"] + params["wait"]
+        assert scenario["watch_frames"] == plant["rise_frames"] + params["wait"]
         assert plant["phase"] == plant["rise_frames"] + plant["exposed_frames"]  # starts going down
