@@ -29,8 +29,14 @@ The families, by Mario's action and what he meets:
 
 A plant Mario runs or jumps at is either never seen before it rises, or seen
 going down into its pipe in the watched pictures and out of sight for a
-while before the action (``gone``): the trackers follow it from memory
-(smb_kinematics.remembered; user, 2026-10-21).
+while before the action (``gone``): the trackers follow it on the list of
+tracked things (user, 2026-10-21). In the pipe-wait lessons the plant, as
+the NES's does, stays down while Mario is near it (``waits_near``): Mario
+watches it go down and waits, near it or farther, for seconds, then jumps
+onto its pipe or runs across it and off.
+
+held_out_layouts draws every lesson's numbers between those of the sweep
+(OffGridDraws): layouts no lesson trained on, to measure the trackers by.
 
 Difficulty sets the enemies' speeds (easy slow, hard fast) and how quickly a
 plant rises.
@@ -110,6 +116,11 @@ def plant_watch(rise, gone) -> int:
 
 
 GONE = (0, 24)  # frames a plant was out of sight before the action (0: never seen)
+
+
+# How near (pixels, its middle to Mario's) a pipe-wait lesson's plant stays
+# down: the NES plant's (it does not rise within 0x21 of Mario).
+PLANT_WAITS_NEAR = 33
 
 
 def _hold(frames):
@@ -273,8 +284,10 @@ def run_under_drop(rng, difficulty):
 
 
 def jump_walker(rng, difficulty):
-    """A jump aimed at a walker's top, or a little short or long of it."""
-    side, gap, speed = rng.choice(SIDES), rng.choice((24, 48, 72, 96)), rng.choice(SPEEDS[difficulty])
+    """A jump aimed at a walker's top, or a little short or long of it; from
+    near (12 to 20 pixels: a late jump, which a walker coming at Mario hits
+    as he rises, 2026-10-21) or farther."""
+    side, gap, speed = rng.choice(SIDES), rng.choice((12, 16, 20, 24, 48, 72, 96)), rng.choice(SPEEDS[difficulty])
     toward = rng.choice((True, False))
     miss = rng.choice((-16, -8, 0, 8, 40))  # the aim from the walker's start (40: well past it)
     x = MARIO_X + 5 + side * (gap + 8) - 5
@@ -342,6 +355,37 @@ def jump_plant(rng, difficulty):
     )
 
 
+def pipe_wait(rng, difficulty):
+    """Mario watches a plant go down into its pipe and waits, near it (it
+    stays down) or farther (it comes up on its own time), then jumps onto
+    the pipe over it, or, from the pipe's top beside it, runs across it and
+    off the far side."""
+    height, width = rng.choice((24, 32)), rng.choice((40, 56))
+    exposed, hidden = rng.choice((32, 48)), rng.choice((32, 64))
+    wait = rng.choice((60, 90, 120, 150, 210, 300))  # frames out of sight before the action
+    on_pipe = rng.choice((0, 1))
+    rise = RISES[difficulty]
+    top = FLOOR - height
+    if on_pipe:
+        start = rng.choice((4, 10))  # Mario's middle from the pipe's left edge
+        left = MARIO_X + 5 - start
+        action, mario_top = _move("run", width - start + 24), top - 16
+        params = dict(on_pipe=1, start=start)
+    else:
+        stand = rng.choice((20, 28, 44, 64))  # the plant's middle from Mario's
+        left = MARIO_X + 5 + stand - width // 2
+        action, mario_top = _move("jump", stand, -height), FEET
+        params = dict(on_pipe=0, stand=stand)
+    plant = _plant(left, width, top, 0, exposed, hidden, rise)
+    plant.update(phase=rise + exposed, hidden_frames=hidden, waits_near=PLANT_WAITS_NEAR)
+    params.update(pipe_height=height, pipe_width=width, exposed=exposed, hidden=hidden, wait=wait)
+    return (
+        _scenario("collide_pipe_wait", [plant], action, platforms=[[left, top, width, height]],
+                  kinds=["pipe"], mario_top=mario_top, watch=rise + wait),
+        params,
+    )
+
+
 def jump_down_onto(rng, difficulty):
     """Mario jumps from a ledge down onto a walker below."""
     height = rng.choice((24, 40, 56))
@@ -390,6 +434,7 @@ GENERATORS = {
     "collide_jump_plant": jump_plant,
     "collide_jump_down_onto": jump_down_onto,
     "collide_jump_short": jump_short,
+    "collide_pipe_wait": pipe_wait,
 }
 COLLISION_FAMILIES = tuple(GENERATORS)
 DIFFICULTIES = tuple(SPEEDS)
@@ -415,6 +460,36 @@ def every_layout(family: str, difficulty: str) -> list:
         out.append(collision_scenario(family, draws, difficulty))
         path = draws.next_path()
     return out
+
+
+class OffGridDraws:
+    """Draws off the sweep's grid: a choice among numbers takes a value
+    strictly between two neighbouring ones (a whole number when they are
+    whole; where none fits, one of them); a choice of side or yes/no (values
+    within -1, 0, 1) one of its values."""
+
+    def __init__(self, rng):
+        self.rng = rng
+
+    def choice(self, values):
+        values = list(values)
+        if len(values) < 2 or all(isinstance(v, bool) for v in values) or set(values) <= {-1, 0, 1}:
+            return self.rng.choice(values)
+        ordered = sorted(values)
+        k = self.rng.randrange(len(ordered) - 1)
+        low, high = ordered[k], ordered[k + 1]
+        if all(isinstance(v, int) for v in values):
+            return self.rng.randint(low + 1, high - 1) if high - low >= 2 else self.rng.choice(values)
+        return round(low + (high - low) * self.rng.uniform(0.1, 0.9), 3)
+
+
+def held_out_layouts(family: str, difficulty: str, count: int, seed: int) -> list:
+    """``count`` layouts drawn off the sweep's grid (OffGridDraws): none of
+    them a lesson trained on."""
+    import random
+
+    rng = OffGridDraws(random.Random(f"held out:{family}:{difficulty}:{seed}"))
+    return [collision_scenario(family, rng, difficulty) for _ in range(count)]
 
 
 def random_layouts(family: str, difficulty: str, count: int, seed: int) -> list:

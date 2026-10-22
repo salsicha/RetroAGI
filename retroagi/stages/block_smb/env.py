@@ -229,7 +229,8 @@ class MarioScenarioEnv:
     enemies       : list of [x, y, patrol_min, patrol_max] or
                     [x, y, patrol_min, patrol_max, speed] or
                     dict with keys x,y,patrol_min,patrol_max,speed,edge_aware;
-                    a piranha_plant uses kind,x,pipe_top and optional cycle durations;
+                    a piranha_plant uses kind,x,pipe_top and optional cycle durations
+                    (and waits_near: it stays down while Mario is that near);
                     kind "monster" is a large walker that cannot be stomped
     goal          : [x, y, w, h]
     optional_bridge: a moving platform Mario may ride or not (its crossing is
@@ -1332,9 +1333,10 @@ class MarioScenarioEnv:
     def _update_enemy(self, enemy: dict, platform_rects: list):
         """Move enemy, apply gravity, resolve platform collisions, patrol logic."""
         if enemy.get("kind") == "piranha_plant":
-            from .piranha import position_plant
+            from .piranha import position_plant, stays_down_near
 
-            enemy["plant_tick"] += 1
+            if not stays_down_near(enemy, self.mario["x"] + self.mario["w"] / 2):
+                enemy["plant_tick"] += 1
             position_plant(enemy)
             return
         if enemy.get("kind") == "monster" and not enemy.get("awake"):

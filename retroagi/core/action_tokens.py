@@ -34,6 +34,16 @@ VERB_TARGETS = {
 # The executor's movement mode for each verb.
 VERB_MODES = {"run": "run", "jump": "jump", "wait": "hold"}
 
+
+def executed_pointer(verb: int, pointer: int) -> int:
+    """An executed action's pointer slot as recorded (EpisodeRecord.
+    action_pointer), -1 for a verb that aims at nothing (a wait): episodes
+    recorded before 2026-10-21 stored a teacher's wait with slot 0, the
+    placeholder its pointer label has."""
+    if 0 <= verb < len(VERBS) and not VERB_TARGETS[VERBS[verb]]:
+        return -1
+    return pointer
+
 # The scene encoder's token order: a summary, Mario, then every slot of every
 # list in SCENE_SLOTS order (SceneEncoder._objects), then the picture bands.
 POINTER_LISTS = tuple(SCENE_SLOTS)

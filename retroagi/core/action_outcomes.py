@@ -22,7 +22,7 @@ end), in EXECUTED fields:
 
 import numpy as np
 
-from .action_tokens import pointer_target
+from .action_tokens import executed_pointer, pointer_target
 from .layered_policy import POINTER_START
 from .smb_observer import SCENE_SLOTS
 
@@ -65,7 +65,8 @@ def executed_outcomes(record, no_progress_code: int) -> np.ndarray:
     out = np.zeros((len(starts), len(EXECUTED)), np.float32)
     died = record.end == "death"
     for k, (f, e) in enumerate(zip(starts, starts[1:] + [last])):
-        verb, pointer = int(record.action_verb[k]), int(record.action_pointer[k])
+        verb = int(record.action_verb[k])
+        pointer = executed_pointer(verb, int(record.action_pointer[k]))
         row = out[k]
         row[COLUMN["verb"]], row[COLUMN["pointer"]] = verb, pointer
         origin = _feet(mario[f])

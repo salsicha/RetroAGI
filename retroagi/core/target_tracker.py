@@ -45,7 +45,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .action_tokens import VERBS, pointer_target
+from .action_tokens import VERBS, executed_pointer, pointer_target
 from .collision_labels import HORIZON, KINDS
 from .layered_policy import POINTER_START
 from .smb_kinematics import MARIO_STATE, TRACKED
@@ -159,9 +159,10 @@ def record_features(record) -> tuple:
     for t in range(frames):
         k = starts.get(t)
         if k is not None and record.action_verb is not None:
+            verb = int(record.action_verb[k])
             action = action_state(
-                int(record.action_verb[k]),
-                int(record.action_pointer[k]),
+                verb,
+                executed_pointer(verb, int(record.action_pointer[k])),
                 record.commands[k],
                 sprites[t],
                 objects["slot_keys"][t],

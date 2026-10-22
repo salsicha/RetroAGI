@@ -552,6 +552,8 @@ class EpisodeRecorder:
         named = np.asarray(d["label_action_valid"], bool) & np.asarray(d["played_teacher"], bool)
         verb[named] = np.asarray(d["label_verb"], np.int64)[named]
         pointer[named] = np.asarray(d["label_pointer"], np.int64)[named]
+        # A wait aims at nothing (its pointer label's 0 is a placeholder).
+        pointer[verb == VERBS.index("wait")] = -1
         unknown = np.asarray(d["played_teacher"], bool) & ~named
         verb[unknown], pointer[unknown] = -1, -1
         return {"action_verb": verb.astype(np.int8), "action_pointer": pointer.astype(np.int16)}

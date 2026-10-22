@@ -26,6 +26,17 @@ def position_plant(enemy):
     enemy["y"] = enemy["pipe_top"] - enemy["h"]
 
 
+def stays_down_near(enemy, mario_middle: float) -> bool:
+    """Whether a plant at the end of its time down stays down this frame:
+    one made to wait (``waits_near``) with Mario's middle that near its own."""
+    near = enemy.get("waits_near", 0)
+    if not near:
+        return False
+    cycle = 2 * enemy["rise_frames"] + enemy["exposed_frames"] + enemy["hidden_frames"]
+    last_down = enemy["plant_tick"] % cycle == cycle - 1
+    return last_down and abs(enemy["x"] + enemy["w"] / 2 - mario_middle) <= near
+
+
 def parse_plant(spec):
     rise = int(spec.get("rise_frames", 16))
     exposed = int(spec.get("exposed_frames", 48))
@@ -58,6 +69,10 @@ def parse_plant(spec):
         on_ground=False,
         dead=False,
         timed_crossing=bool(spec.get("timed_crossing", False)),
+        # As the NES plant does, it does not come up while Mario's middle is
+        # within this many pixels of its own (0: it keeps its cycle whatever
+        # Mario does): it stays down until he is farther (stays_down_near).
+        waits_near=float(spec.get("waits_near", 0)),
     )
     position_plant(enemy)
     return enemy

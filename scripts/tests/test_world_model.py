@@ -288,3 +288,31 @@ def test_a_world_model_saved_before_the_list_learns_again(tmp_path):
     assert "world_model_reads_the_tracked_list" in checkpoint["load_migrations"]
     assert checkpoint["world_model"] is None and checkpoint["trained_layers"] == ["skill"]
     assert torch.equal(loaded.memory.cell.weight_ih, policy.memory.cell.weight_ih)
+
+
+def test_a_teachers_wait_is_recorded_aimed_at_nothing_and_counts_when_survived():
+    from retroagi.core.action_outcomes import COLUMN as EXECUTED, executed_outcomes
+    from retroagi.core.action_tokens import executed_pointer
+    from retroagi.stages.block_smb.teacher_replay import reference_vision
+
+    # Recorded before 2026-10-21: a teacher's wait stored with slot 0.
+    assert executed_pointer(VERBS.index("wait"), 0) == -1
+    assert executed_pointer(VERBS.index("jump"), 0) == 0
+    task = lt.EpisodeTask(
+        index=0,
+        family="action_wait",
+        split="validation",
+        seed=0,
+        sample_index=0,
+        difficulty="easy",
+        teacher_share=1.0,
+        label=True,
+        record_truth=True,
+    )
+    torch.manual_seed(0)
+    (record,) = lt.play_episodes(reference_vision()[0], LayeredSMBPolicy().eval(), "skill", [task], "cpu", 1)
+    waits = np.flatnonzero(record.action_verb == VERBS.index("wait"))
+    assert len(waits) and (record.action_pointer[waits] == -1).all()
+    outcomes = executed_outcomes(record, lt.END_REASONS.index("no_progress"))
+    assert record.won and (outcomes[waits, EXECUTED["success"]] == 1.0).all()
+    assert not outcomes[waits, EXECUTED["has_object"]].any()

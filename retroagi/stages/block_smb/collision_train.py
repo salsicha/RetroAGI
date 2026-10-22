@@ -17,10 +17,10 @@ collision lessons, used to train them and nothing else).
    (dataset/<family>.pkl.gz, with dataset/complete.json written last), and
    read back instead of played again.
 4. The collision trackers (the GRU and its head), from the given trackers,
-   learn from every kept lesson; then they are measured on freshly drawn
-   layouts of each family, played the same way, per family, contact kind
-   and Mario's action (tracker_train.evaluate), against the constant-speed
-   baseline.
+   learn from every kept lesson; then they are measured on layouts drawn off
+   the sweep's grid (collision_families.held_out_layouts: none trained on),
+   played the same way, per family, contact kind and Mario's action
+   (tracker_train.evaluate), against the constant-speed baseline.
 
 Example:
     python -m retroagi.stages.block_smb.collision_train \\
@@ -43,7 +43,7 @@ from typing import Optional, Sequence
 import numpy as np
 import torch
 
-from .collision_families import COLLISION_FAMILIES, DIFFICULTIES, every_layout, random_layouts
+from .collision_families import COLLISION_FAMILIES, DIFFICULTIES, every_layout, held_out_layouts
 
 
 @dataclass
@@ -223,13 +223,14 @@ def train(config: CollisionConfig) -> dict:
             history.append({"epoch": epoch, "loss": float(np.mean(losses)), "seconds": round(time.time() - started, 1)})
             print(json.dumps(history[-1]), flush=True)
             save_tracker(output / "tracker.pt", tracker, TrackerConfig(width=tracker.width), history)
-        # Measured after training, on freshly drawn layouts (never trained on).
+        # Measured after training, on layouts drawn off the sweep's grid
+        # (held_out_layouts: never trained on; the sweep's own were, 2026-10-21).
         measured = {}
         for family in config.families:
             layouts = [
                 layout
                 for d in DIFFICULTIES
-                for layout in random_layouts(family, d, config.measure_per_difficulty, seed=1)
+                for layout in held_out_layouts(family, d, config.measure_per_difficulty, seed=1)
             ]
             layouts = [layout for layout in layouts if _starts(layout[0])]
             records = [r for r in _play(pool, layouts, offset=100_000) if touched(r) is not None]
